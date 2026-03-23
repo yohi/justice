@@ -232,7 +232,7 @@ and update plan.md."
 
 ## Directory Structure
 
-```
+```text
 justice/
 ├── .devcontainer/
 │   ├── devcontainer.json
@@ -307,13 +307,15 @@ in `oh-my-opencode.jsonc`:
 - Compaction protection: compaction-protector.ts hook
 - Tests: Unit tests for all core logic + test fixtures
 
-### Phase 2 — Task Delegation Bridge (Current Scope)
+### Phase 2 — Task Delegation Bridge (Next Scope)
 
+*Planned for the next sprint following the completion of core logic.*
 - Bridge hook: plan-bridge.ts (Message + PreToolUse)
 - Integration tests with mocked OmO API
 
-### Phase 3 — Feedback Loop (Current Scope)
+### Phase 3 — Feedback Loop (Next Scope)
 
+*Depends on Phase 2 stability and successful integration tests.*
 - Feedback: feedback-formatter.ts, task-feedback.ts
 - plan.md auto-update: checkbox ON/OFF + error note appending
 

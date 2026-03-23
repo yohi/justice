@@ -23,13 +23,13 @@
 **Step 1: Initialize package.json**
 
 ```bash
-cd /home/y_ohi/program/justice && bun init -y
+cd "$(git rev-parse --show-toplevel)" && bun init -y
 ```
 
 **Step 2: Install dependencies**
 
 ```bash
-cd /home/y_ohi/program/justice && bun add -d typescript vitest @types/node eslint prettier eslint-config-prettier @typescript-eslint/eslint-plugin @typescript-eslint/parser
+cd "$(git rev-parse --show-toplevel)" && bun add -d typescript vitest @types/node eslint prettier eslint-config-prettier @typescript-eslint/eslint-plugin @typescript-eslint/parser
 ```
 
 **Step 3: Create tsconfig.json**
@@ -118,7 +118,7 @@ export default defineConfig({
 
 **Step 7: Create .gitignore**
 
-```
+```text
 node_modules/
 dist/
 coverage/
@@ -146,13 +146,13 @@ Add these scripts to package.json:
 
 **Step 9: Verify setup**
 
-Run: `cd /home/y_ohi/program/justice && bun run typecheck`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run typecheck`
 Expected: No errors (no source files yet, should pass cleanly)
 
 **Step 10: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: プロジェクト足場の構築 (package.json, tsconfig, vitest, eslint)"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: プロジェクト足場の構築 (package.json, tsconfig, vitest, eslint)"
 ```
 
 ---
@@ -168,11 +168,7 @@ cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: プロジ�
 Create `.devcontainer/Dockerfile`:
 
 ```dockerfile
-FROM node:22-slim
-
-# Install bun
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+FROM oven/bun:1
 
 # Install development tools
 RUN apt-get update && apt-get install -y \
@@ -217,7 +213,7 @@ Create `.devcontainer/devcontainer.json`:
 **Step 3: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: Devcontainer環境の構築"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: Devcontainer環境の構築"
 ```
 
 ---
@@ -339,7 +335,7 @@ describe("Core Types", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: FAIL — Cannot find module `../../src/core/types`
 
 **Step 3: Write minimal implementation**
@@ -448,13 +444,13 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: PASS — All 7 tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: コアデータモデルの型定義"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: コアデータモデルの型定義"
 ```
 
 ---
@@ -569,7 +565,7 @@ Component B processes requests and returns results.
 **Step 4: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "test: テストフィクスチャの追加"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "test: テストフィクスチャの追加"
 ```
 
 ---
@@ -716,7 +712,7 @@ describe("PlanParser", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: FAIL — Cannot find module `../../src/core/plan-parser`
 
 **Step 3: Write minimal implementation**
@@ -861,13 +857,13 @@ export class PlanParser {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: PASS — All PlanParser tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: PlanParserの実装 (plan.mdパース・チェックボックス操作)"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: PlanParserの実装 (plan.mdパース・チェックボックス操作)"
 ```
 
 ---
@@ -993,7 +989,7 @@ describe("TaskPackager", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: FAIL — Cannot find module `../../src/core/task-packager`
 
 **Step 3: Write minimal implementation**
@@ -1111,13 +1107,13 @@ export class TaskPackager {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: PASS — All TaskPackager tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: TaskPackagerの実装 (タスク→DelegationRequest変換)"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: TaskPackagerの実装 (タスク→DelegationRequest変換)"
 ```
 
 ---
@@ -1241,7 +1237,7 @@ describe("ErrorClassifier", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: FAIL — Cannot find module `../../src/core/error-classifier`
 
 **Step 3: Write minimal implementation**
@@ -1352,13 +1348,13 @@ export class ErrorClassifier {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: PASS — All ErrorClassifier tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: ErrorClassifierの実装 (エラー分類・リトライ判定)"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: ErrorClassifierの実装 (エラー分類・リトライ判定)"
 ```
 
 ---
@@ -1451,7 +1447,7 @@ describe("CompactionProtector", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: FAIL — Cannot find module `../../src/hooks/compaction-protector`
 
 **Step 3: Write minimal implementation**
@@ -1557,13 +1553,13 @@ export class CompactionProtector {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /home/y_ohi/program/justice && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test`
 Expected: PASS — All CompactionProtector tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: CompactionProtectorの実装 (Compaction保護フック)"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: CompactionProtectorの実装 (Compaction保護フック)"
 ```
 
 ---
@@ -1671,13 +1667,13 @@ See `docs/plans/2026-03-24-justice-plugin-design.md` for the full design.
 
 **Step 4: Verify full build**
 
-Run: `cd /home/y_ohi/program/justice && bun run typecheck && bun run test`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run typecheck && bun run test`
 Expected: No type errors, all tests pass
 
 **Step 5: Commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: エントリポイント・AGENTS.md・READMEの追加"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "feat: エントリポイント・AGENTS.md・READMEの追加"
 ```
 
 ---
@@ -1686,21 +1682,21 @@ cd /home/y_ohi/program/justice && git add -A && git commit -m "feat: エント�
 
 **Step 1: Run full test suite with coverage**
 
-Run: `cd /home/y_ohi/program/justice && bun run test:coverage`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run test:coverage`
 Expected: All tests pass, coverage report generated
 
 **Step 2: Run linting**
 
-Run: `cd /home/y_ohi/program/justice && bun run lint`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run lint`
 Expected: No lint errors
 
 **Step 3: Run type checking**
 
-Run: `cd /home/y_ohi/program/justice && bun run typecheck`
+Run: `cd "$(git rev-parse --show-toplevel)" && bun run typecheck`
 Expected: No type errors
 
 **Step 4: Final commit**
 
 ```bash
-cd /home/y_ohi/program/justice && git add -A && git commit -m "chore: Phase 1完了 — 全テスト・Lint・型チェック通過"
+cd "$(git rev-parse --show-toplevel)" && git add -A && git commit -m "chore: Phase 1完了 — 全テスト・Lint・型チェック通過"
 ```
