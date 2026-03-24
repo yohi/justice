@@ -3,7 +3,6 @@ import type {
   FileWriter,
   HookEvent,
   HookResponse,
-  PostToolUsePayload,
   FeedbackAction,
 } from "../core/types";
 import { FeedbackFormatter } from "../core/feedback-formatter";
@@ -154,6 +153,7 @@ export class TaskFeedbackHandler {
         return this.handleEscalation(action, session);
       default: {
         const _exhaustiveCheck: never = action;
+        void _exhaustiveCheck;
         return PROCEED;
       }
     }

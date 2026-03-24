@@ -122,9 +122,36 @@ export interface PostToolUseEvent {
   readonly sessionId: string;
 }
 
+/** OmO Event のペイロード Discriminated Union */
+export type EventPayload =
+  | LoopDetectorPayload
+  | CompactionPayload
+  | GenericEventPayload;
+
+/** OmO loop-detector イベントのペイロード */
+export interface LoopDetectorPayload {
+  readonly eventType: "loop-detector";
+  readonly sessionId: string;
+  readonly message: string;
+  readonly detectedPattern?: string;
+}
+
+/** OmO compaction イベントのペイロード */
+export interface CompactionPayload {
+  readonly eventType: "compaction";
+  readonly sessionId: string;
+  readonly reason: string;
+}
+
+/** 汎用イベントペイロード (フォールバック) */
+export interface GenericEventPayload {
+  readonly eventType: string;
+  readonly [key: string]: unknown;
+}
+
 export interface EventEvent {
   readonly type: "Event";
-  readonly payload: unknown;
+  readonly payload: EventPayload;
   readonly sessionId: string;
 }
 

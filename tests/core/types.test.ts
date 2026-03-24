@@ -3,6 +3,8 @@ import type {
   HookEvent,
   HookResponse,
   PostToolUsePayload,
+  LoopDetectorPayload,
+  CompactionPayload,
   FileWriter,
   FeedbackAction,
 } from "../../src/core/types";
@@ -99,5 +101,25 @@ describe("Phase 3 types", () => {
     expect(success.type).toBe("success");
     expect(retry.type).toBe("retry");
     expect(escalate.type).toBe("escalate");
+  });
+});
+
+describe("Phase 4 types", () => {
+  it("should accept LoopDetectorPayload", () => {
+    const payload: LoopDetectorPayload = {
+      eventType: "loop-detector",
+      sessionId: "s-1",
+      message: "Same edit applied 3 times",
+    };
+    expect(payload.eventType).toBe("loop-detector");
+  });
+
+  it("should accept CompactionPayload", () => {
+    const payload: CompactionPayload = {
+      eventType: "compaction",
+      sessionId: "s-2",
+      reason: "context window limit reached",
+    };
+    expect(payload.eventType).toBe("compaction");
   });
 });
