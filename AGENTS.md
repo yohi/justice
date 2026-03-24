@@ -48,13 +48,15 @@ Default to using Bun instead of Node.js.
 
 ### Testing
 
-Use `bun test` to run tests.
+Use `bun run test` to run tests (this project uses Vitest).
 
 ```ts#index.test.ts
-import { test, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 
-test("hello world", () => {
-  expect(1).toBe(1);
+describe("hello world", () => {
+  it("should work", () => {
+    expect(1).toBe(1);
+  });
 });
 ```
 
