@@ -96,3 +96,37 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxRetries: 3,
   retryableErrors: Object.freeze(["syntax_error", "type_error"]),
 };
+
+/** OmO Hook イベントの汎用型 */
+export interface HookEvent<T = unknown> {
+  readonly type: HookEventType;
+  readonly payload: T;
+  readonly sessionId: string;
+}
+
+export type HookEventType = "Message" | "PreToolUse" | "PostToolUse" | "Event";
+
+/** Message イベントのペイロード */
+export interface MessagePayload {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
+/** PreToolUse イベントのペイロード */
+export interface PreToolUsePayload {
+  readonly toolName: string;
+  readonly toolInput: Record<string, unknown>;
+}
+
+/** フックのレスポンス */
+export interface HookResponse {
+  readonly action: "proceed" | "skip" | "inject";
+  readonly modifiedPayload?: unknown;
+  readonly injectedContext?: string;
+}
+
+/** ファイルシステムアクセスの抽象化（テスト可能にするため） */
+export interface FileReader {
+  readFile(path: string): Promise<string>;
+  fileExists(path: string): Promise<boolean>;
+}

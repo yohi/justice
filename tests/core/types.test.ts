@@ -7,6 +7,11 @@ import type {
   ErrorClass,
   TaskCategory,
   ProtectedContext,
+  HookEvent,
+  MessagePayload,
+  PreToolUsePayload,
+  HookResponse,
+  FileReader,
 } from "../../src/core/types";
 
 describe("Core Types", () => {
@@ -97,5 +102,51 @@ describe("Core Types", () => {
       activePlanPath: "docs/plans/plan.md",
     };
     expect(ctx.currentTaskId).toBe("task-1");
+  });
+});
+
+describe("Hook API types", () => {
+  it("should accept valid HookEvent with Message payload", () => {
+    const event: HookEvent<MessagePayload> = {
+      type: "Message",
+      payload: {
+        role: "assistant",
+        content: "Please delegate the next task from docs/plans/plan.md",
+      },
+      sessionId: "session-123",
+    };
+    expect(event.type).toBe("Message");
+    expect(event.payload.content).toContain("plan.md");
+  });
+
+  it("should accept valid HookEvent with PreToolUse payload", () => {
+    const event: HookEvent<PreToolUsePayload> = {
+      type: "PreToolUse",
+      payload: {
+        toolName: "task",
+        toolInput: { prompt: "implement feature X" },
+      },
+      sessionId: "session-456",
+    };
+    expect(event.type).toBe("PreToolUse");
+    expect(event.payload.toolName).toBe("task");
+  });
+
+  it("should accept valid HookResponse", () => {
+    const response: HookResponse = {
+      action: "proceed",
+      modifiedPayload: undefined,
+      injectedContext: "Additional context here",
+    };
+    expect(response.action).toBe("proceed");
+  });
+
+  it("should enforce FileReader interface shape", () => {
+    const reader: FileReader = {
+      readFile: async (path: string) => `# Plan\n- [ ] Task 1`,
+      fileExists: async (path: string) => true,
+    };
+    expect(reader.readFile).toBeDefined();
+    expect(reader.fileExists).toBeDefined();
   });
 });
