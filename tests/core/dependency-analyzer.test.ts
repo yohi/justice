@@ -111,5 +111,23 @@ describe("DependencyAnalyzer", () => {
       expect(indexOf("task-2")).toBeLessThan(indexOf("task-4"));
       expect(indexOf("task-3")).toBeLessThan(indexOf("task-4"));
     });
+
+    it("should throw an Error if circular dependencies are detected", () => {
+      const tasks: PlanTask[] = [
+        {
+          id: "task-1",
+          title: "A",
+          steps: [{ id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 }],
+          status: "pending",
+        },
+        {
+          id: "task-2",
+          title: "B",
+          steps: [{ id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 }],
+          status: "pending",
+        },
+      ];
+      expect(() => analyzer.buildExecutionOrder(tasks)).toThrow("Circular dependency detected");
+    });
   });
 });

@@ -5,9 +5,6 @@ import type {
   HookEvent,
   PreToolUseEvent,
 } from "../../src/core/types";
-import { DependencyAnalyzer } from "../../src/core/dependency-analyzer";
-import { CategoryClassifier } from "../../src/core/category-classifier";
-import { ProgressReporter } from "../../src/core/progress-reporter";
 
 const samplePlanContent = [
   "## Task 1: Setup",

@@ -32,6 +32,12 @@ describe("CategoryClassifier", () => {
     expect(classifier.classify(task)).toBe("quick");
   });
 
+  it("should not classify as quick if it has more than QUICK_MAX_STEPS (1)", () => {
+    // "Fix typo in code" is a quick keyword, but 2 steps > 1
+    const task = makeTask("Fix typo in code", ["Correct spelling", "Update version"]);
+    expect(classifier.classify(task)).toBe("deep");
+  });
+
   it("should classify writing/docs tasks as writing", () => {
     const task = makeTask("Write API documentation", ["Document endpoints", "Add examples"]);
     expect(classifier.classify(task)).toBe("writing");

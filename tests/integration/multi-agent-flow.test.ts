@@ -68,7 +68,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       // Assert Dependency-Aware Parallel Execution suggestion
       // Task 1 and 2 are completed.
       // Task 3 depends on 2 (completed) -> Parallelizable
-      // Task 4 has no inter-task deps (its step 2 says depends: task-4, so just self) -> Parallelizable
+      // Task 4 has no inter-task deps -> Parallelizable
       // The currently delegated task is Task 3. So Task 4 should be suggested as parallel.
       expect(ctx).toContain("**Parallel:** The following tasks can also be run in parallel: task-4");
       expect(ctx).not.toContain("task-5"); // task-5 depends on 3 and 4
@@ -84,6 +84,58 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       expect(ctx).toContain("⬜ Implement Database Layer");
       expect(ctx).toContain("⬜ UI Design System");
       expect(ctx).toContain("⬜ Integration Tests");
+    }
+  });
+
+  it("should select the first executable task based on DAG dependencies, not just plan order", async () => {
+    // New plan where Task 1 depends on Task 2 (both pending).
+    // Task 3 is independent.
+    // Plan order: 1, 2, 3.
+    // Dependency order: 2 -> 1, 3 (parallel).
+    // Selection should pick 2 (the first dependency) or 3.
+    const complexPlan = [
+      "# Dependency Plan",
+      "",
+      "## Task 1: Dependent Task",
+      "- [ ] Step A (depends: task-2)",
+      "",
+      "## Task 2: Base Task",
+      "- [ ] Step B",
+      "",
+      "## Task 3: Independent Task",
+      "- [ ] Step C",
+    ].join("\n");
+
+    const mockReader: FileReader = {
+      readFile: vi.fn().mockResolvedValue(complexPlan),
+      fileExists: vi.fn().mockResolvedValue(true),
+    };
+
+    const bridge = new PlanBridge(mockReader);
+
+    // 1. Initial trigger
+    await bridge.handleMessage({
+      type: "Message",
+      payload: { role: "assistant", content: "Delegate from plan.md" },
+      sessionId: "dag-session",
+    });
+
+    // 2. Delegation
+    const event: PreToolUseEvent = {
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: { prompt: "Next task" } },
+      sessionId: "dag-session",
+    };
+
+    const response = await bridge.handlePreToolUse(event);
+
+    expect(response.action).toBe("inject");
+    if (response.action === "inject") {
+      const ctx = response.injectedContext;
+      // Task 2 should be the primary task because Task 1 is blocked by it.
+      // Task 3 is also parallelizable.
+      expect(ctx).toContain("**Task ID**: task-2");
+      expect(ctx).toContain("**Parallel:** The following tasks can also be run in parallel: task-3");
     }
   });
 });

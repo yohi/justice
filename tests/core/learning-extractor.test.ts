@@ -132,6 +132,24 @@ describe("LearningExtractor", () => {
         expect(entry?.content).toContain("****[MASKED]****");
       });
 
+      it("should mask URL-embedded passwords while preserving protocol and username", () => {
+        const feedback: TaskFeedback = {
+          taskId: "task-10",
+          status: "failure",
+          retryCount: 0,
+          errorClassification: "timeout",
+        };
+
+        const urlOutput = "Failed to fetch from https://user:pass123@api.example.com and git@gituser:secret@github.com";
+        const entries = (extractor as any).extract(feedback, urlOutput);
+
+        const entry = entries[0];
+        expect(entry?.content).toContain("https://user:****[MASKED]****@api.example.com");
+        expect(entry?.content).toContain("git@gituser:****[MASKED]****@github.com");
+        expect(entry?.content).not.toContain("pass123");
+        expect(entry?.content).not.toContain("secret");
+      });
+
       it("should truncate very long raw output", () => {
         const feedback: TaskFeedback = {
           taskId: "task-9",

@@ -109,20 +109,9 @@ export class PlanBridge {
     // Set as active plan for PreToolUse context injection
     this.setActivePlan(event.sessionId, planRef.planPath);
 
-    const tasks = this.parser.parse(planContent);
-    const report = this.progressReporter.generateReport(tasks);
-    const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
-    const otherParallel = parallelizable.filter(t => t.id !== delegation.context.taskId);
-
-    let injectedContext = this.formatDelegationContext(delegation);
-    injectedContext += `\n\n${this.progressReporter.formatAsMarkdown(report)}`;
-    if (otherParallel.length > 0) {
-      injectedContext += `\n\n**Parallel:** The following tasks can also be run in parallel: ${otherParallel.map(t => t.id).join(", ")}`;
-    }
-
     return {
       action: "inject",
-      injectedContext,
+      injectedContext: this.buildInjectedContext(planContent, delegation),
     };
   }
 
@@ -168,6 +157,16 @@ export class PlanBridge {
       return PROCEED;
     }
 
+    return {
+      action: "inject",
+      injectedContext: this.buildInjectedContext(planContent, delegation),
+    };
+  }
+
+  /**
+   * Internal helper to build injected context for task delegation.
+   */
+  private buildInjectedContext(planContent: string, delegation: DelegationRequest): string {
     const tasks = this.parser.parse(planContent);
     const report = this.progressReporter.generateReport(tasks);
     const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
@@ -178,11 +177,7 @@ export class PlanBridge {
     if (otherParallel.length > 0) {
       injectedContext += `\n\n**Parallel:** The following tasks can also be run in parallel: ${otherParallel.map(t => t.id).join(", ")}`;
     }
-
-    return {
-      action: "inject",
-      injectedContext,
-    };
+    return injectedContext;
   }
 
   /**
