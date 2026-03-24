@@ -1,8 +1,26 @@
 {
-  "name": "justice",
-  "module": "index.ts",
+  "name": "justice-plugin",
+  "version": "0.1.0",
+  "description": "OpenCode plugin bridging Superpowers and oh-my-openagent",
+  "module": "dist/index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
-  "private": true,
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./runtime": {
+      "import": "./dist/runtime/node-file-system.js",
+      "types": "./dist/runtime/node-file-system.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -10,7 +28,8 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/ tests/",
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

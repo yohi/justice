@@ -66,6 +66,13 @@ export class JusticePlugin {
   }
 
   /**
+   * Get the CompactionProtector instance.
+   */
+  getCompactionProtector(): CompactionProtector {
+    return this.compactionProtector;
+  }
+
+  /**
    * Route Event-type events based on eventType payload.
    */
   private async handleEventType(event: HookEvent): Promise<HookResponse> {
