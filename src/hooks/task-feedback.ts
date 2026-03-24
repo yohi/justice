@@ -10,6 +10,8 @@ import { ErrorClassifier } from "../core/error-classifier";
 import { PlanParser } from "../core/plan-parser";
 import { SmartRetryPolicy } from "../core/smart-retry-policy";
 import { TaskSplitter } from "../core/task-splitter";
+import { WisdomStore } from "../core/wisdom-store";
+import { LearningExtractor } from "../core/learning-extractor";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -33,9 +35,11 @@ export class TaskFeedbackHandler {
   private readonly parser: PlanParser;
   private readonly retryPolicy: SmartRetryPolicy;
   private readonly splitter: TaskSplitter;
+  private readonly wisdomStore: WisdomStore;
+  private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
 
-  constructor(fileReader: FileReader, fileWriter: FileWriter) {
+  constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStore) {
     this.fileReader = fileReader;
     this.fileWriter = fileWriter;
     this.formatter = new FeedbackFormatter();
@@ -43,6 +47,15 @@ export class TaskFeedbackHandler {
     this.parser = new PlanParser();
     this.retryPolicy = new SmartRetryPolicy();
     this.splitter = new TaskSplitter();
+    this.wisdomStore = wisdomStore ?? new WisdomStore();
+    this.learningExtractor = new LearningExtractor();
+  }
+
+  /**
+   * Returns the internal WisdomStore for external persistence or inspection.
+   */
+  getWisdomStore(): WisdomStore {
+    return this.wisdomStore;
   }
 
   /**
@@ -194,6 +207,9 @@ export class TaskFeedbackHandler {
   }
 
   private async handleSuccess(session: SessionState): Promise<HookResponse> {
+    // Determine retryCount from accumulated retryCounts
+    const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
+
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
       const tasks = this.parser.parse(planContent);
@@ -211,6 +227,16 @@ export class TaskFeedbackHandler {
       }
     } catch (err) {
       console.warn(`[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`, err);
+    }
+
+    // Extract and accumulate learnings from success
+    const successFeedback = this.formatter.format(session.activeTaskId, "All steps completed successfully.", false);
+    const learnings = this.learningExtractor.extract({
+      ...successFeedback,
+      retryCount: totalRetries,
+    });
+    for (const learning of learnings) {
+      this.wisdomStore.add(learning);
     }
 
     return {
@@ -244,6 +270,17 @@ export class TaskFeedbackHandler {
       
     } catch (err) {
       console.warn(`[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`, err);
+    }
+
+    // Extract and accumulate learnings from escalation
+    const learnings = this.learningExtractor.extract({
+      taskId: action.taskId,
+      status: "failure",
+      retryCount: 0,
+      errorClassification: action.errorClass,
+    });
+    for (const learning of learnings) {
+      this.wisdomStore.add(learning);
     }
 
     return {

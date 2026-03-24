@@ -64,8 +64,7 @@ describe("Feedback Flow Integration", () => {
       const maxRetries = DEFAULT_RETRY_POLICY.maxRetries;
 
       // Simulate retryable errors until exhaustion
-      // retry 0: strategy "none" → proceed
-      // retry 1+: strategy "reduce_steps" → inject (context reduction)
+      // retry 0 → none (proceed), retry 1+: without referenceFiles/rolePrompt → none (proceed)
       for (let i = 0; i < maxRetries; i++) {
         const event: PostToolUseEvent = {
           type: "PostToolUse",
@@ -77,11 +76,7 @@ describe("Feedback Flow Integration", () => {
           sessionId: "int-2",
         };
         const r = await handler.handlePostToolUse(event);
-        if (i === 0) {
-          expect(r.action).toBe("proceed"); // 1st retry: Layer 1 auto-fix (no reduction)
-        } else {
-          expect(r.action).toBe("inject"); // 2nd+ retry: context reduction applied
-        }
+        expect(r.action).toBe("proceed"); // Layer 1 auto-fix (no context reduction without referenceFiles)
       }
 
       // Next attempt: should escalate
