@@ -13,7 +13,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       "",
       "## Task 1: Project Setup",
       "- [x] Initialize repository",
-      "- [x] Configure linter (depends: task-1)", // Self dependency? Just a note.
+      "- [x] Configure linter (depends: task-1)", // Self-loop dependency, but task is already completed
       "",
       "## Task 2: Core Architecture Design",
       "- [x] Write architectural spec",

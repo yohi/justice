@@ -79,6 +79,8 @@ export class DependencyAnalyzer {
       for (const depId of taskDeps) {
         if (taskMap.has(depId)) {
           visit(depId);
+        } else {
+          console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
         }
       }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { DependencyAnalyzer } from "../../src/core/dependency-analyzer";
 import type { PlanTask } from "../../src/core/types";
 
@@ -128,6 +128,23 @@ describe("DependencyAnalyzer", () => {
         },
       ];
       expect(() => analyzer.buildExecutionOrder(tasks)).toThrow("Circular dependency detected");
+    });
+
+    it("should warn if a dependency is missing from the task map", () => {
+      const tasks: PlanTask[] = [
+        {
+          id: "task-1",
+          title: "A",
+          steps: [{ id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 }],
+          status: "pending",
+        },
+      ];
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      analyzer.buildExecutionOrder(tasks);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Task 'task-1' depends on unknown task 'task-999'"),
+      );
+      warnSpy.mockRestore();
     });
   });
 });

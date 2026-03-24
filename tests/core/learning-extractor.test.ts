@@ -150,6 +150,24 @@ describe("LearningExtractor", () => {
         expect(entry?.content).not.toContain("secret");
       });
 
+      it("should mask credentials with special characters in URL and SSH forms", () => {
+        const feedback: TaskFeedback = {
+          taskId: "task-11",
+          status: "failure",
+          retryCount: 0,
+          errorClassification: "timeout",
+        };
+
+        const urlOutput = "Error: https://user:pa%ss!word@example.com or git@gituser:pa:ss!word@example.com";
+        const entries = (extractor as any).extract(feedback, urlOutput);
+
+        const entry = entries[0];
+        expect(entry?.content).toContain("https://user:****[MASKED]****@example.com");
+        expect(entry?.content).toContain("git@gituser:****[MASKED]****@example.com");
+        expect(entry?.content).not.toContain("pa%ss!word");
+        expect(entry?.content).not.toContain("pa:ss!word");
+      });
+
       it("should truncate very long raw output", () => {
         const feedback: TaskFeedback = {
           taskId: "task-9",

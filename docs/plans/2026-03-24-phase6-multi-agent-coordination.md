@@ -150,7 +150,7 @@ Create `src/core/dependency-analyzer.ts`:
 ```typescript
 import type { PlanTask } from "./types";
 
-const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/gi;
+const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
 
 export class DependencyAnalyzer {
   /**
@@ -163,7 +163,7 @@ export class DependencyAnalyzer {
     for (const task of tasks) {
       const taskDeps = new Set<string>();
       for (const step of task.steps) {
-        const matches = step.description.matchAll(DEPENDS_REGEX);
+        const matches = step.description.matchAll(new RegExp(DEPENDS_REGEX.source, "gi"));
         for (const match of matches) {
           if (match[1]) {
             const ids = match[1].split(",").map((s) => s.trim());
