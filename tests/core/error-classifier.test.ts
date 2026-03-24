@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { ErrorClassifier } from "../../src/core/error-classifier";
-import type { ErrorClass } from "../../src/core/types";
 
 describe("ErrorClassifier", () => {
   const classifier = new ErrorClassifier();
@@ -12,9 +11,7 @@ describe("ErrorClassifier", () => {
     });
 
     it("should classify type errors", () => {
-      const result = classifier.classify(
-        "TypeError: Property 'foo' does not exist on type 'Bar'",
-      );
+      const result = classifier.classify("TypeError: Property 'foo' does not exist on type 'Bar'");
       expect(result).toBe("type_error");
     });
 

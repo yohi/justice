@@ -17,7 +17,7 @@ export class PlanParser {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (line === undefined) continue;
-      
+
       const lineNumber = i + 1; // 1-indexed
 
       const taskMatch = line.match(TASK_HEADING_REGEX);

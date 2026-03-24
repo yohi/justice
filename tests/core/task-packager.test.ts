@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { TaskPackager } from "../../src/core/task-packager";
-import type { PlanTask, PlanStep } from "../../src/core/types";
+import type { PlanTask } from "../../src/core/types";
 
 describe("TaskPackager", () => {
   const packager = new TaskPackager();

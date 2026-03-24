@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { CompactionProtector } from "../../src/hooks/compaction-protector";
 import type { ProtectedContext } from "../../src/core/types";
 

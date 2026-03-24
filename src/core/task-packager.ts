@@ -1,9 +1,4 @@
-import type {
-  PlanTask,
-  DelegationRequest,
-  DelegationContext,
-  TaskCategory,
-} from "./types";
+import type { PlanTask, DelegationRequest, DelegationContext, TaskCategory } from "./types";
 
 export interface PackageOptions {
   planFilePath: string;
