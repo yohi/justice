@@ -97,14 +97,38 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryableErrors: Object.freeze(["syntax_error", "type_error"]),
 };
 
-/** OmO Hook イベントの汎用型 */
-export interface HookEvent<T = unknown> {
-  readonly type: HookEventType;
-  readonly payload: T;
+/** OmO Hook イベントの Discriminated Union */
+export type HookEvent =
+  | MessageEvent
+  | PreToolUseEvent
+  | PostToolUseEvent
+  | EventEvent;
+
+export interface MessageEvent {
+  readonly type: "Message";
+  readonly payload: MessagePayload;
   readonly sessionId: string;
 }
 
-export type HookEventType = "Message" | "PreToolUse" | "PostToolUse" | "Event";
+export interface PreToolUseEvent {
+  readonly type: "PreToolUse";
+  readonly payload: PreToolUsePayload;
+  readonly sessionId: string;
+}
+
+export interface PostToolUseEvent {
+  readonly type: "PostToolUse";
+  readonly payload: unknown; // 必要に応じて具体的な型を定義
+  readonly sessionId: string;
+}
+
+export interface EventEvent {
+  readonly type: "Event";
+  readonly payload: unknown;
+  readonly sessionId: string;
+}
+
+export type HookEventType = HookEvent["type"];
 
 /** Message イベントのペイロード */
 export interface MessagePayload {
@@ -118,11 +142,26 @@ export interface PreToolUsePayload {
   readonly toolInput: Record<string, unknown>;
 }
 
-/** フックのレスポンス */
-export interface HookResponse {
-  readonly action: "proceed" | "skip" | "inject";
-  readonly modifiedPayload?: unknown;
+/** フックのレスポンスの Discriminated Union */
+export type HookResponse =
+  | ProceedResponse
+  | SkipResponse
+  | InjectResponse;
+
+export interface ProceedResponse {
+  readonly action: "proceed";
+  readonly modifiedPayload?: never;
   readonly injectedContext?: string;
+}
+
+export interface SkipResponse {
+  readonly action: "skip";
+}
+
+export interface InjectResponse {
+  readonly action: "inject";
+  readonly injectedContext: string;
+  readonly modifiedPayload?: unknown;
 }
 
 /** ファイルシステムアクセスの抽象化（テスト可能にするため） */

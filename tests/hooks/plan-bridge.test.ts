@@ -3,8 +3,6 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
-  MessagePayload,
-  PreToolUsePayload,
 } from "../../src/core/types";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -53,7 +51,7 @@ describe("PlanBridge", () => {
       });
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<MessagePayload> = {
+      const event: HookEvent = {
         type: "Message",
         payload: {
           role: "assistant",
@@ -71,7 +69,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<MessagePayload> = {
+      const event: HookEvent = {
         type: "Message",
         payload: {
           role: "assistant",
@@ -88,7 +86,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<MessagePayload> = {
+      const event: HookEvent = {
         type: "Message",
         payload: {
           role: "assistant",
@@ -107,7 +105,7 @@ describe("PlanBridge", () => {
       });
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<MessagePayload> = {
+      const event: HookEvent = {
         type: "Message",
         payload: {
           role: "assistant",
@@ -125,7 +123,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<MessagePayload> = {
+      const event: HookEvent = {
         type: "Message",
         payload: {
           role: "user",
@@ -149,7 +147,7 @@ describe("PlanBridge", () => {
       // Set the active plan via setter
       bridge.setActivePlan("docs/plans/sample-plan.md");
 
-      const event: HookEvent<PreToolUsePayload> = {
+      const event: HookEvent = {
         type: "PreToolUse",
         payload: {
           toolName: "task",
@@ -167,7 +165,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<PreToolUsePayload> = {
+      const event: HookEvent = {
         type: "PreToolUse",
         payload: {
           toolName: "bash",
@@ -184,7 +182,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader);
 
-      const event: HookEvent<PreToolUsePayload> = {
+      const event: HookEvent = {
         type: "PreToolUse",
         payload: {
           toolName: "task",

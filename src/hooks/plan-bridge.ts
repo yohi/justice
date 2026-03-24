@@ -2,8 +2,6 @@ import type {
   FileReader,
   HookEvent,
   HookResponse,
-  MessagePayload,
-  PreToolUsePayload,
   DelegationRequest,
 } from "../core/types";
 import { TriggerDetector } from "../core/trigger-detector";
@@ -41,16 +39,14 @@ export class PlanBridge {
    * Handle Message event: detect plan references and delegation intent.
    */
   async handleMessage(
-    event: HookEvent<MessagePayload>,
+    event: HookEvent,
   ): Promise<HookResponse> {
     // Only react to assistant messages
-    if (event.payload.role !== "assistant") return PROCEED;
+    if (event.type !== "Message" || event.payload.role !== "assistant") return PROCEED;
 
     const content = event.payload.content;
-    if (!this.triggerDetector.shouldTrigger(content)) return PROCEED;
-
-    const planRef = this.triggerDetector.detectPlanReference(content);
-    if (!planRef) return PROCEED;
+    const { shouldTrigger, planRef } = this.triggerDetector.analyzeTrigger(content);
+    if (!shouldTrigger || !planRef) return PROCEED;
 
     // Check if the plan file exists
     const exists = await this.fileReader.fileExists(planRef.planPath);
@@ -60,7 +56,7 @@ export class PlanBridge {
     const planContent = await this.fileReader.readFile(planRef.planPath);
 
     // Set as active plan for PreToolUse context injection
-    this.activePlanPath = planRef.planPath;
+    this.setActivePlan(planRef.planPath);
 
     // Build delegation request
     const delegation = this.core.buildDelegationFromPlan(planContent, {
@@ -85,10 +81,10 @@ export class PlanBridge {
    * Handle PreToolUse event: inject plan context when task() is called.
    */
   async handlePreToolUse(
-    event: HookEvent<PreToolUsePayload>,
+    event: HookEvent,
   ): Promise<HookResponse> {
     // Only intercept task() tool calls
-    if (event.payload.toolName !== "task") return PROCEED;
+    if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
     // Need an active plan to provide context
     if (!this.activePlanPath) return PROCEED;

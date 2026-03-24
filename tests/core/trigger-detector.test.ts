@@ -5,7 +5,7 @@ describe("TriggerDetector", () => {
   const detector = new TriggerDetector();
 
   describe("detectPlanReference", () => {
-    it("should detect explicit plan.md file path", () => {
+    it("should detect explicit plan file path docs/plans/feature.md", () => {
       const result = detector.detectPlanReference(
         "Please look at docs/plans/feature.md and delegate tasks",
       );
@@ -19,6 +19,19 @@ describe("TriggerDetector", () => {
       );
       expect(result).not.toBeNull();
       expect(result!.planPath).toContain("phase2.md");
+    });
+
+    it("should reject absolute paths", () => {
+      expect(detector.detectPlanReference("/etc/passwd/plan.md")).toBeNull();
+    });
+
+    it("should reject path traversal with ..", () => {
+      expect(detector.detectPlanReference("../../plan.md")).toBeNull();
+      expect(detector.detectPlanReference("docs/../plan.md")).toBeNull();
+    });
+
+    it("should reject backslashes", () => {
+      expect(detector.detectPlanReference("docs\\plans\\plan.md")).toBeNull();
     });
 
     it("should return null when no plan reference exists", () => {

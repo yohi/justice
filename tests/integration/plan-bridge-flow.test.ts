@@ -3,8 +3,6 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
-  MessagePayload,
-  PreToolUsePayload,
 } from "../../src/core/types";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -53,7 +51,7 @@ describe("Plan Bridge Integration Flow", () => {
     const bridge = new PlanBridge(reader);
 
     // Step 1: Agent sends message referencing the plan
-    const messageEvent: HookEvent<MessagePayload> = {
+    const messageEvent: HookEvent = {
       type: "Message",
       payload: {
         role: "assistant",
@@ -73,7 +71,7 @@ describe("Plan Bridge Integration Flow", () => {
     expect(bridge.getActivePlan()).toBe(planPath);
 
     // Step 3: task() is about to be called, inject context
-    const toolEvent: HookEvent<PreToolUsePayload> = {
+    const toolEvent: HookEvent = {
       type: "PreToolUse",
       payload: {
         toolName: "task",
@@ -102,7 +100,7 @@ describe("Plan Bridge Integration Flow", () => {
     const reader = createMockFileReader({ [planPath]: partialPlan });
     const bridge = new PlanBridge(reader);
 
-    const event: HookEvent<MessagePayload> = {
+    const event: HookEvent = {
       type: "Message",
       payload: {
         role: "assistant",
@@ -129,7 +127,7 @@ describe("Plan Bridge Integration Flow", () => {
     };
     const bridge = new PlanBridge(reader);
 
-    const event: HookEvent<MessagePayload> = {
+    const event: HookEvent = {
       type: "Message",
       payload: {
         role: "assistant",
