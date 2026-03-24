@@ -17,3 +17,8 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: justice-dist
+          path: dist/
