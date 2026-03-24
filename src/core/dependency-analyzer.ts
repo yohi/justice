@@ -9,11 +9,12 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
+    const dependsRegex = new RegExp(DEPENDS_REGEX.source, "gi");
 
     for (const task of tasks) {
       const taskDeps = new Set<string>();
       for (const step of task.steps) {
-        const matches = step.description.matchAll(new RegExp(DEPENDS_REGEX.source, "gi"));
+        const matches = step.description.matchAll(dependsRegex);
         for (const match of matches) {
           if (match[1]) {
             const ids = match[1].split(",").map((s) => s.trim());
@@ -39,6 +40,7 @@ export class DependencyAnalyzer {
     const deps = this.extractDependencies(tasks);
     const completedIds = new Set(tasks.filter((t) => t.status === "completed").map((t) => t.id));
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    const unknownDepsReported = new Set<string>();
 
     // Detect circular dependencies
     const circularIds = this.detectCircular(deps, taskMap);
@@ -50,8 +52,12 @@ export class DependencyAnalyzer {
       const taskDeps = deps.get(task.id) ?? [];
       return taskDeps.every((depId) => {
         if (!taskMap.has(depId)) {
-          console.warn(`Warning: Task '${task.id}' depends on unknown task '${depId}'`);
+          if (!unknownDepsReported.has(depId)) {
+            console.warn(`Warning: Task '${task.id}' depends on unknown task '${depId}'`);
+            unknownDepsReported.add(depId);
+          }
         }
+        // Unknown dependencies will never be in completedIds, effectively blocking the task
         return completedIds.has(depId);
       });
     });
@@ -60,6 +66,7 @@ export class DependencyAnalyzer {
   /**
    * Returns tasks in topological execution order.
    * Completed tasks come first, then by dependency depth.
+   * Unknown dependencies will emit a warning and are ignored (processing continues).
    * Throws an Error if circular dependencies are detected.
    */
   buildExecutionOrder(tasks: PlanTask[]): PlanTask[] {
