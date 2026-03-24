@@ -241,3 +241,19 @@ export interface EscalateAction {
   readonly errorClass: ErrorClass;
   readonly message: string;
 }
+
+/** 学習エントリ (Phase 5) */
+export interface WisdomEntry {
+  readonly id: string;
+  readonly taskId: string;
+  readonly category: WisdomCategory;
+  readonly content: string;
+  readonly errorClass?: ErrorClass;
+  readonly timestamp: string;
+}
+
+export type WisdomCategory =
+  | "success_pattern"     // 成功した実装パターン
+  | "failure_gotcha"      // 失敗時の落とし穴
+  | "design_decision"     // 重要な設計判断
+  | "environment_quirk";  // 環境固有の注意事項
