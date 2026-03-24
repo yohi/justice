@@ -7,6 +7,9 @@ import type {
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { WisdomStore } from "../core/wisdom-store";
+import { PlanParser } from "../core/plan-parser";
+import { ProgressReporter } from "../core/progress-reporter";
+import { DependencyAnalyzer } from "../core/dependency-analyzer";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -14,6 +17,9 @@ export class PlanBridge {
   private readonly fileReader: FileReader;
   private readonly triggerDetector: TriggerDetector;
   private readonly core: PlanBridgeCore;
+  private readonly parser: PlanParser;
+  private readonly progressReporter: ProgressReporter;
+  private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly activePlanPaths: Map<string, string> = new Map();
   private readonly wisdomStore: WisdomStore | null;
 
@@ -21,6 +27,9 @@ export class PlanBridge {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
     this.core = new PlanBridgeCore();
+    this.parser = new PlanParser();
+    this.progressReporter = new ProgressReporter();
+    this.dependencyAnalyzer = new DependencyAnalyzer();
     this.wisdomStore = wisdomStore ?? null;
   }
 
@@ -102,7 +111,7 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: this.formatDelegationContext(delegation),
+      injectedContext: this.buildInjectedContext(planContent, delegation),
     };
   }
 
@@ -150,8 +159,25 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: this.formatDelegationContext(delegation),
+      injectedContext: this.buildInjectedContext(planContent, delegation),
     };
+  }
+
+  /**
+   * Internal helper to build injected context for task delegation.
+   */
+  private buildInjectedContext(planContent: string, delegation: DelegationRequest): string {
+    const tasks = this.parser.parse(planContent);
+    const report = this.progressReporter.generateReport(tasks);
+    const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
+    const otherParallel = parallelizable.filter(t => t.id !== delegation.context.taskId);
+
+    let injectedContext = this.formatDelegationContext(delegation);
+    injectedContext += `\n\n${this.progressReporter.formatAsMarkdown(report)}`;
+    if (otherParallel.length > 0) {
+      injectedContext += `\n\n**Parallel:** The following tasks can also be run in parallel: ${otherParallel.map(t => t.id).join(", ")}`;
+    }
+    return injectedContext;
   }
 
   /**
