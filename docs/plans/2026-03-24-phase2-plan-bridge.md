@@ -10,108 +10,53 @@
 
 ---
 
-## Task 1: OmO Hook API 型定義を追加
+### Hook API Types (Updated)
 
-**Files:**
-
-- Modify: `src/core/types.ts`
-- Test: `tests/core/types.test.ts`
-
-**Step 1: Write the failing test for new hook types**
+Phase 2 uses Discriminated Unions for event and response types to ensure type safety.
 
 ```typescript
-// tests/core/types.test.ts — append to existing tests
-describe("Hook API types", () => {
-  it("should accept valid HookEvent with Message payload", () => {
-    const event: HookEvent<MessagePayload> = {
-      type: "Message",
-      payload: {
-        role: "assistant",
-        content: "Please delegate the next task from docs/plans/plan.md",
-      },
-      sessionId: "session-123",
-    };
-    expect(event.type).toBe("Message");
-    expect(event.payload.content).toContain("plan.md");
-  });
+export type HookEvent =
+  | MessageEvent
+  | PreToolUseEvent
+  | PostToolUseEvent
+  | EventEvent;
 
-  it("should accept valid HookEvent with PreToolUse payload", () => {
-    const event: HookEvent<PreToolUsePayload> = {
-      type: "PreToolUse",
-      payload: {
-        toolName: "task",
-        toolInput: { prompt: "implement feature X" },
-      },
-      sessionId: "session-456",
-    };
-    expect(event.type).toBe("PreToolUse");
-    expect(event.payload.toolName).toBe("task");
-  });
-
-  it("should accept valid HookResponse", () => {
-    const response: HookResponse = {
-      action: "proceed",
-      modifiedPayload: undefined,
-      injectedContext: "Additional context here",
-    };
-    expect(response.action).toBe("proceed");
-  });
-
-  it("should enforce FileReader interface shape", () => {
-    const reader: FileReader = {
-      readFile: async (path: string) => `# Plan\n- [ ] Task 1`,
-      fileExists: async (path: string) => true,
-    };
-    expect(reader.readFile).toBeDefined();
-    expect(reader.fileExists).toBeDefined();
-  });
-});
-```
-
-**Step 2: Run tests to verify they fail**
-
-Run: `bun run test tests/core/types.test.ts`
-Expected: FAIL — `HookEvent`, `MessagePayload`, `PreToolUsePayload`, `HookResponse`, `FileReader` not found
-
-**Step 3: Implement the types**
-
-```typescript
-// src/core/types.ts — append after existing types
-
-/** OmO Hook イベントの汎用型 */
-export interface HookEvent<T = unknown> {
-  readonly type: HookEventType;
-  readonly payload: T;
+export interface MessageEvent {
+  readonly type: "Message";
+  readonly payload: MessagePayload;
   readonly sessionId: string;
 }
 
-export type HookEventType = "Message" | "PreToolUse" | "PostToolUse" | "Event";
+// ... other events ...
 
-/** Message イベントのペイロード */
-export interface MessagePayload {
-  readonly role: "user" | "assistant";
-  readonly content: string;
-}
+export type HookResponse =
+  | ProceedResponse
+  | SkipResponse
+  | InjectResponse;
 
-/** PreToolUse イベントのペイロード */
-export interface PreToolUsePayload {
-  readonly toolName: string;
-  readonly toolInput: Record<string, unknown>;
-}
-
-/** フックのレスポンス */
-export interface HookResponse {
-  readonly action: "proceed" | "skip" | "inject";
-  readonly modifiedPayload?: unknown;
-  readonly injectedContext?: string;
-}
-
-/** ファイルシステムアクセスの抽象化（テスト可能にするため） */
-export interface FileReader {
-  readFile(path: string): Promise<string>;
-  fileExists(path: string): Promise<boolean>;
+export interface InjectResponse {
+  readonly action: "inject";
+  readonly injectedContext: string;
 }
 ```
+
+### Trigger Detection Logic
+
+The `TriggerDetector` now uses `analyzeTrigger()` to perform both intent detection and plan path extraction in a single pass.
+
+```typescript
+export interface TriggerAnalysis {
+  readonly shouldTrigger: boolean;
+  readonly planRef: PlanReference | null;
+}
+
+// Inside TriggerDetector
+analyzeTrigger(message: string): TriggerAnalysis { ... }
+```
+
+### Session Management
+
+`PlanBridge` maintains active plan paths using a `Map<sessionId, planPath>` to prevent cross-session state leakage.
 
 **Step 4: Run tests to verify they pass**
 
