@@ -8,7 +8,7 @@ Superpowers (declarative planning via Markdown) with oh-my-openagent
 
 ## Architecture
 
-```
+```text
 src/
 ├── core/      — Pure business logic, no OmO dependency
 ├── hooks/     — OmO lifecycle hook implementations
@@ -76,7 +76,7 @@ bun run build         # Build to dist/
 
 ### Hook Event Routing
 
-```
+```text
 Message          → PlanBridge.handleMessage()
 PreToolUse       → PlanBridge.handlePreToolUse()
 PostToolUse      → TaskFeedbackHandler.handlePostToolUse()

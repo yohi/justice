@@ -36,7 +36,7 @@ Justice は以下の手順でこのギャップを埋めます：
 
 ### 2.1 レイヤーモデル
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │  Superpowers (頭脳)                                 │
 │  plan.md  /  design.md  /  role-prompt.md           │
@@ -206,7 +206,7 @@ interface ProtectedContext {
 
 **Message イベントの流れ（フロー）:**
 
-1. `TriggerDetector.shouldTrigger(content)` — プランの参照と委譲の意図を検出する
+1. `TriggerDetector.analyzeTrigger(content)` — プランの参照と委譲の意図を検出する（`src/hooks/plan-bridge.ts` で実行）
 2. `FileReader.fileExists(planPath)` — プランファイルが存在することを確認する
 3. `FileReader.readFile(planPath)` — プランのコンテンツを読み込む
 4. `DependencyAnalyzer.getParallelizable(tasks)` — 並行処理可能なタスクを特定する
@@ -217,8 +217,8 @@ interface ProtectedContext {
 
 **セッション状態:**
 
-- `Map<sessionId, planPath>` — セッションごとに状態を分離
-- 有効期限 (TTL): 30分; LRUによる最大保持数: 50セッション
+- `Map<sessionId, planPath>` — セッションごとに状態を分離（`PlanBridge.activePlanPaths`）
+- ※ `PlanBridge` では TTL/LRU によるクリーンアップは実施されません。この管理責務は `TaskFeedbackHandler` または他のコンポーネントに委ねられます。
 
 **委譲キーワード (英語/日本語対応):**
 
@@ -233,6 +233,12 @@ interface ProtectedContext {
 |----------|-------|
 | OmO イベント | `PostToolUse` |
 | トリガー | `toolName === "task"` であり、*かつ* アクティブなセッションが存在する場合 |
+
+**セッション管理:**
+
+- 有効期限 (TTL): 30分
+- LRUによる最大保持数: 50セッション
+- `TaskFeedbackHandler` が中心となってセッションのライフサイクルを管理します。
 
 **フロー:**
 
@@ -314,7 +320,7 @@ interface ProtectedContext {
 
 **生成されるプロンプトの構成:**
 
-```
+```text
 [役割のプロンプト (任意指定)]
 ## 実行タスク: <title>
 ## ステップ一覧: <ステップのリスト>
@@ -414,7 +420,7 @@ interface ProtectedContext {
 
 **バックオフの計算式:**
 
-```
+```text
 delay = min(baseDelay × 2^retryCount + jitter, maxDelay)
 jitter = random(0, baseDelay × 0.5)
 ```
@@ -554,7 +560,7 @@ interface FileWriter {
 
 ### 7.1 定められた2層エラー戦略
 
-```
+```text
 タスク `task()` 実行内でエラーが発生
         │
         ▼

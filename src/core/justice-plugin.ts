@@ -1,4 +1,11 @@
-import type { FileReader, FileWriter, HookEvent, HookResponse, EventEvent } from "./types";
+import type {
+  FileReader,
+  FileWriter,
+  HookEvent,
+  HookResponse,
+  EventEvent,
+  CompactionPayload,
+} from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -109,7 +116,7 @@ export class JusticePlugin {
             // extract them if they were part of the event payload.
             // For now, we provide the plan content to ensure the protector can snapshot it.
             this.compactionProtector.setActivePlan(activePlan);
-            const compactionPayload = event.payload as import("./types").CompactionPayload;
+            const compactionPayload = event.payload as CompactionPayload;
             const snapshot = this.compactionProtector.createSnapshot({
               planContent,
               currentTaskId: "unknown", // Ideal integration would pass these from state
