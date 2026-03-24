@@ -13,7 +13,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       "",
       "## Task 1: Project Setup",
       "- [x] Initialize repository",
-      "- [x] Configure linter (depends: task-1)", // Self-loop dependency, but task is already completed
+      "- [x] Configure linter (depends: task-1)", // (depends: task-1) is intentionally a self-dependency edge case and the task is already completed), so reviewers know it’s deliberate and not a mistake in the test data.
       "",
       "## Task 2: Core Architecture Design",
       "- [x] Write architectural spec",

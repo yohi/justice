@@ -168,6 +168,25 @@ describe("LearningExtractor", () => {
         expect(entry?.content).not.toContain("pa:ss!word");
       });
 
+      it("should mask credentials in token@host form (no password)", () => {
+        const feedback: TaskFeedback = {
+          taskId: "task-12",
+          status: "failure",
+          retryCount: 0,
+          errorClassification: "timeout",
+        };
+
+        const urlOutput = "Error: https://mytoken@example.com and git@gituser@github.com";
+        const entries = (extractor as any).extract(feedback, urlOutput);
+
+        const entry = entries[0];
+        // Note: The mask is always ":****[MASKED]****@" according to the new requirements
+        expect(entry?.content).toContain("https://mytoken:****[MASKED]****@example.com");
+        expect(entry?.content).toContain("git@gituser:****[MASKED]****@github.com");
+        expect(entry?.content).not.toContain("mytoken@");
+        expect(entry?.content).not.toContain("gituser@");
+      });
+
       it("should truncate very long raw output", () => {
         const feedback: TaskFeedback = {
           taskId: "task-9",

@@ -48,7 +48,12 @@ export class DependencyAnalyzer {
       if (circularIds.has(task.id)) return false;
 
       const taskDeps = deps.get(task.id) ?? [];
-      return taskDeps.every((depId) => completedIds.has(depId));
+      return taskDeps.every((depId) => {
+        if (!taskMap.has(depId)) {
+          console.warn(`Warning: Task '${task.id}' depends on unknown task '${depId}'`);
+        }
+        return completedIds.has(depId);
+      });
     });
   }
 

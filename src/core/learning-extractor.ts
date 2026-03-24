@@ -139,7 +139,7 @@ export class LearningExtractor {
       .replace(/(?:api[_-]?key|secret|password|token|auth|access[_-]?token)["']?\s*[:=]\s*["']?([a-zA-Z0-9._-]{8,})["']?/gi, (match, group) => {
         return match.replace(group, "****[MASKED]****");
       })
-      .replace(/((?:https?:\/\/|git@)[a-zA-Z0-9._-]+):[^@]+@/gi, "$1:****[MASKED]****@");
+      .replace(/((?:https?:\/\/|git@)[a-zA-Z0-9._-]+)(?::[^@]+)?@/gi, "$1:****[MASKED]****@");
 
     // 2. Truncate if exceeding maxLength
     if (sanitized.length > maxLength) {

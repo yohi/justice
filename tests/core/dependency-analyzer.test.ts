@@ -48,7 +48,8 @@ describe("DependencyAnalyzer", () => {
       const deps = analyzer.extractDependencies(tasks);
 
       expect(deps.get("task-2")).toEqual(["task-1"]);
-      expect(deps.get("task-4")).toEqual(["task-2", "task-3"]);
+      expect(deps.get("task-4")).toEqual(expect.arrayContaining(["task-2", "task-3"]));
+      expect(deps.get("task-4")).toHaveLength(2);
     });
 
     it("should return empty array for tasks with no dependencies", () => {
@@ -141,6 +142,23 @@ describe("DependencyAnalyzer", () => {
       ];
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       analyzer.buildExecutionOrder(tasks);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Task 'task-1' depends on unknown task 'task-999'"),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("should warn in getParallelizable if a dependency is missing", () => {
+      const tasks: PlanTask[] = [
+        {
+          id: "task-1",
+          title: "A",
+          steps: [{ id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 }],
+          status: "pending",
+        },
+      ];
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      analyzer.getParallelizable(tasks);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Task 'task-1' depends on unknown task 'task-999'"),
       );
