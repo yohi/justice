@@ -1663,7 +1663,6 @@ development environment.
 ## Architecture
 
 See `docs/plans/2026-03-24-justice-plugin-design.md` for the full design.
-```
 
 **Step 4: Verify full build**
 
