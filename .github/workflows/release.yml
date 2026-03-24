@@ -1,0 +1,39 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: node
+          target-branch: master
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.release.outputs.release_created }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        if: ${{ steps.release.outputs.release_created }}
+      - name: Build
+        run: bun run build
+        if: ${{ steps.release.outputs.release_created }}
+      - name: Publish to GitHub Packages
+        run: |
+          npm config set //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+          npm publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: ${{ steps.release.outputs.release_created }}
