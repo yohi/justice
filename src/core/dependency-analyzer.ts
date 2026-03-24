@@ -2,6 +2,16 @@ import type { PlanTask } from "./types";
 
 const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
 
+/**
+ * 依存関係の解決中に発生したエラー。
+ */
+export class DependencyResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependencyResolutionError";
+  }
+}
+
 export class DependencyAnalyzer {
   /**
    * Extract explicit dependency declarations from step descriptions.
@@ -9,11 +19,12 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
+    const dependsRegex = new RegExp(DEPENDS_REGEX.source, "gi");
 
     for (const task of tasks) {
       const taskDeps = new Set<string>();
       for (const step of task.steps) {
-        const matches = step.description.matchAll(new RegExp(DEPENDS_REGEX.source, "gi"));
+        const matches = step.description.matchAll(dependsRegex);
         for (const match of matches) {
           if (match[1]) {
             const ids = match[1].split(",").map((s) => s.trim());
@@ -39,6 +50,7 @@ export class DependencyAnalyzer {
     const deps = this.extractDependencies(tasks);
     const completedIds = new Set(tasks.filter((t) => t.status === "completed").map((t) => t.id));
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    const unknownDepsReported = new Set<string>();
 
     // Detect circular dependencies
     const circularIds = this.detectCircular(deps, taskMap);
@@ -50,8 +62,12 @@ export class DependencyAnalyzer {
       const taskDeps = deps.get(task.id) ?? [];
       return taskDeps.every((depId) => {
         if (!taskMap.has(depId)) {
-          console.warn(`Warning: Task '${task.id}' depends on unknown task '${depId}'`);
+          if (!unknownDepsReported.has(depId)) {
+            console.warn(`Warning: Task '${task.id}' depends on unknown task '${depId}'`);
+            unknownDepsReported.add(depId);
+          }
         }
+        // Unknown dependencies will never be in completedIds, effectively blocking the task
         return completedIds.has(depId);
       });
     });
@@ -60,7 +76,8 @@ export class DependencyAnalyzer {
   /**
    * Returns tasks in topological execution order.
    * Completed tasks come first, then by dependency depth.
-   * Throws an Error if circular dependencies are detected.
+   * Unknown dependencies will emit a warning and are ignored (processing continues).
+   * Throws a DependencyResolutionError if circular dependencies are detected.
    */
   buildExecutionOrder(tasks: PlanTask[]): PlanTask[] {
     const deps = this.extractDependencies(tasks);
@@ -68,29 +85,45 @@ export class DependencyAnalyzer {
     const circularIds = this.detectCircular(deps, taskMap);
 
     if (circularIds.size > 0) {
-      throw new Error(
+      throw new DependencyResolutionError(
         `Circular dependency detected involving tasks: ${[...circularIds].join(", ")}`,
       );
     }
 
     const visited = new Set<string>();
+    const failedIds = new Set<string>();
     const result: PlanTask[] = [];
+    const unknownDepsReported = new Set<string>();
 
-    const visit = (id: string): void => {
-      if (visited.has(id)) return;
+    const visit = (id: string): boolean => {
+      if (failedIds.has(id)) return false;
+      if (visited.has(id)) return true;
       visited.add(id);
 
+      let canExecute = true;
       const taskDeps = deps.get(id) ?? [];
       for (const depId of taskDeps) {
         if (taskMap.has(depId)) {
-          visit(depId);
+          if (!visit(depId)) {
+            canExecute = false;
+          }
         } else {
-          console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
+          if (!unknownDepsReported.has(depId)) {
+            console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
+            unknownDepsReported.add(depId);
+          }
+          canExecute = false;
         }
       }
 
-      const task = taskMap.get(id);
-      if (task) result.push(task);
+      if (canExecute) {
+        const task = taskMap.get(id);
+        if (task) result.push(task);
+        return true;
+      } else {
+        failedIds.add(id);
+        return false;
+      }
     };
 
     for (const task of tasks) {
@@ -108,23 +141,30 @@ export class DependencyAnalyzer {
     const visiting = new Set<string>();
     const visited = new Set<string>();
 
-    const dfs = (id: string): boolean => {
-      if (visiting.has(id)) return true; // cycle detected
-      if (visited.has(id)) return false;
+    const dfs = (id: string): string | null => {
+      if (visiting.has(id)) {
+        circularIds.add(id);
+        return id; // cycle detected, returning root
+      }
+      if (visited.has(id)) return null;
 
       visiting.add(id);
       const taskDeps = deps.get(id) ?? [];
       for (const depId of taskDeps) {
-        if (taskMap.has(depId) && dfs(depId)) {
-          circularIds.add(id);
-          circularIds.add(depId);
-          visiting.delete(id);
-          return true;
+        if (taskMap.has(depId)) {
+          const cycleRoot = dfs(depId);
+          if (cycleRoot !== null) {
+            circularIds.add(id);
+            if (id !== cycleRoot) {
+              visiting.delete(id);
+              return cycleRoot;
+            }
+          }
         }
       }
       visiting.delete(id);
       visited.add(id);
-      return false;
+      return null;
     };
 
     for (const id of deps.keys()) {
