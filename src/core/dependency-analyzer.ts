@@ -134,6 +134,7 @@ export class DependencyAnalyzer {
           if (cycleRoot !== null) {
             circularIds.add(id);
             if (id !== cycleRoot) {
+              visiting.delete(id);
               return cycleRoot;
             }
           }

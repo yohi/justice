@@ -9,6 +9,7 @@ import { WisdomStore } from "./wisdom-store";
 const PROCEED: HookResponse = { action: "proceed" };
 
 export class JusticePlugin {
+  private readonly fileReader: FileReader;
   private readonly planBridge: PlanBridge;
   private readonly taskFeedback: TaskFeedbackHandler;
   private readonly compactionProtector: CompactionProtector;
@@ -16,6 +17,7 @@ export class JusticePlugin {
   private readonly wisdomStore: WisdomStore;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter) {
+    this.fileReader = fileReader;
     this.wisdomStore = new WisdomStore();
     this.planBridge = new PlanBridge(fileReader, this.wisdomStore);
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.wisdomStore);
@@ -86,11 +88,33 @@ export class JusticePlugin {
     switch (event.payload.eventType) {
       case "loop-detector":
         return this.loopHandler.handleEvent(event);
-      case "compaction":
-        // CompactionProtector is stateful but passive —
-        // it requires external orchestration to snapshot/restore.
-        // For now, proceed and let the host application manage it.
+      case "compaction": {
+        const activePlan = this.planBridge.getActivePlan(event.sessionId);
+        if (activePlan) {
+          this.compactionProtector.setActivePlan(activePlan);
+          try {
+            const planContent = await this.fileReader.readFile(activePlan);
+            
+            // Note: Since JusticePlugin doesn't directly track currentTaskId/currentStepId
+            // in a strict way outside of what's passed to tools, we use placeholders or 
+            // extract them if they were part of the event payload.
+            // For now, we provide the plan content to ensure the protector can snapshot it.
+            const snapshot = this.compactionProtector.createSnapshot({
+              planContent,
+              currentTaskId: "unknown", // Ideal integration would pass these from state
+              currentStepId: "unknown",
+              learnings: event.payload.reason || "", // Provide compaction reason as context
+            });
+            
+            const injectedContext = this.compactionProtector.formatForInjection(snapshot);
+            return { action: "inject", injectedContext };
+          } catch (error) {
+            // Ignore file read errors and proceed
+            console.warn(`Failed to create compaction snapshot for ${activePlan}:`, error);
+          }
+        }
         return PROCEED;
+      }
       default:
         return PROCEED;
     }

@@ -10,6 +10,7 @@ export interface PlanStatus {
   readonly progress: ProgressReport;
   readonly parallelizable: PlanTask[];
   readonly executionOrder: PlanTask[];
+  readonly executionOrderError?: string;
   readonly categoryMap: Map<string, string>;
 }
 
@@ -39,11 +40,12 @@ export class StatusCommand {
     const parallelizable = this.analyzer.getParallelizable(tasks);
     
     let executionOrder: PlanTask[] = [];
+    let executionOrderError: string | undefined;
     try {
       executionOrder = this.analyzer.buildExecutionOrder(tasks);
     } catch (err) {
-      console.warn(`Could not build execution order for ${planPath}: ${err instanceof Error ? err.message : String(err)}`);
-      // executionOrder remains empty in case of circular dependencies
+      executionOrderError = err instanceof Error ? err.message : String(err);
+      console.warn(`Could not build execution order for ${planPath}: ${executionOrderError}`);
     }
 
     const categoryMap = new Map<string, string>();
@@ -51,7 +53,7 @@ export class StatusCommand {
       categoryMap.set(task.id, this.classifier.classify(task));
     }
 
-    return { planPath, tasks, progress, parallelizable, executionOrder, categoryMap };
+    return { planPath, tasks, progress, parallelizable, executionOrder, executionOrderError, categoryMap };
   }
 
   /**
@@ -84,10 +86,16 @@ export class StatusCommand {
     // Execution Order
     lines.push("## 📐 Execution Order");
     lines.push("");
-    for (let i = 0; i < status.executionOrder.length; i++) {
-      const task = status.executionOrder[i]!;
-      const icon = task.status === "completed" ? "✅" : "⬜";
-      lines.push(`${i + 1}. ${icon} ${task.title}`);
+    if (status.executionOrderError) {
+      lines.push(`**Error determining execution order:** ${status.executionOrderError}`);
+    } else if (status.executionOrder.length === 0) {
+      lines.push("No tasks found.");
+    } else {
+      for (let i = 0; i < status.executionOrder.length; i++) {
+        const task = status.executionOrder[i]!;
+        const icon = task.status === "completed" ? "✅" : "⬜";
+        lines.push(`${i + 1}. ${icon} ${task.title}`);
+      }
     }
 
     return lines.join("\n");
