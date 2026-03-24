@@ -1,5 +1,6 @@
 import { PlanParser } from "./plan-parser";
 import { TaskPackager, type PackageOptions } from "./task-packager";
+import { CategoryClassifier } from "./category-classifier";
 import type { DelegationRequest, TaskCategory } from "./types";
 
 export interface BuildDelegationOptions {
@@ -15,10 +16,12 @@ export interface BuildDelegationOptions {
 export class PlanBridgeCore {
   private readonly parser: PlanParser;
   private readonly packager: TaskPackager;
+  private readonly classifier: CategoryClassifier;
 
   constructor() {
     this.parser = new PlanParser();
     this.packager = new TaskPackager();
+    this.classifier = new CategoryClassifier();
   }
 
   /**
@@ -34,13 +37,15 @@ export class PlanBridgeCore {
 
     if (!nextTask) return null;
 
+    const category = options.category ?? this.classifier.classify(nextTask);
+
     const packageOptions: PackageOptions = {
       planFilePath: options.planFilePath,
       referenceFiles: options.referenceFiles,
       rolePrompt: options.rolePrompt,
       previousLearnings: options.previousLearnings,
       runInBackground: options.runInBackground ?? false,
-      category: options.category,
+      category: category,
       loadSkills: options.loadSkills,
     };
 

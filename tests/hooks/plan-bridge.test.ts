@@ -3,7 +3,11 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
+  PreToolUseEvent,
 } from "../../src/core/types";
+import { DependencyAnalyzer } from "../../src/core/dependency-analyzer";
+import { CategoryClassifier } from "../../src/core/category-classifier";
+import { ProgressReporter } from "../../src/core/progress-reporter";
 
 const samplePlanContent = [
   "## Task 1: Setup",
@@ -133,6 +137,78 @@ describe("PlanBridge", () => {
 
       const response = await bridge.handlePreToolUse(event);
       expect(response.action).toBe("proceed");
+    });
+  });
+
+  describe("Multi-Agent Coordination", () => {
+    it("should include auto-classified category in delegation context", async () => {
+      const planContent = [
+        "### Task 1: Write API documentation",
+        "- [ ] Document endpoints",
+      ].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader);
+      bridge.setActivePlan("s-1", "plan.md");
+
+      const event: PreToolUseEvent = {
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: {} },
+        sessionId: "s-1",
+      };
+      const response = await bridge.handlePreToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action === "inject") {
+        expect(response.injectedContext).toContain("writing");
+      }
+    });
+
+    it("should include progress summary in delegation context", async () => {
+      const planContent = [
+        "### Task 1: Setup",
+        "- [x] Init project",
+        "### Task 2: Implement",
+        "- [ ] Write code",
+      ].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader);
+      bridge.setActivePlan("s-1", "plan.md");
+
+      const event: PreToolUseEvent = {
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: {} },
+        sessionId: "s-1",
+      };
+      const response = await bridge.handlePreToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action === "inject") {
+        expect(response.injectedContext).toContain("Progress");
+        expect(response.injectedContext).toContain("50%");
+      }
+    });
+
+    it("should identify parallelizable tasks and mention them in context", async () => {
+      const planContent = [
+        "### Task 1: Setup",
+        "- [x] Init project",
+        "### Task 2: Implement feature A",
+        "- [ ] Write code",
+        "### Task 3: Write docs",
+        "- [ ] Write README",
+      ].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader);
+      bridge.setActivePlan("s-1", "plan.md");
+
+      const event: PreToolUseEvent = {
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: {} },
+        sessionId: "s-1",
+      };
+      const response = await bridge.handlePreToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action === "inject") {
+        expect(response.injectedContext).toContain("Parallel");
+      }
     });
   });
 });
