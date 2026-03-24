@@ -1,5 +1,4 @@
-import type { TaskFeedback, ErrorClass } from "./types";
-import type { WisdomEntry } from "./types";
+import type { TaskFeedback, ErrorClass, WisdomEntry } from "./types";
 
 type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp">;
 
@@ -66,6 +65,17 @@ export class LearningExtractor {
 
     if (errorClass === "unknown") {
       return results;
+    }
+
+    if (errorClass === "timeout") {
+      results.push({
+        taskId: feedback.taskId,
+        category: "environment_quirk",
+        errorClass,
+        content: rawOutput
+          ? `Task timed out — potentially too complex or resource-intensive:\n${rawOutput}`
+          : `Task ${feedback.taskId} timed out during execution.`,
+      });
     }
 
     if (errorClass === "loop_detected") {

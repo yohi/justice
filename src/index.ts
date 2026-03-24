@@ -24,17 +24,3 @@ export { WisdomPersistence } from "./core/wisdom-persistence";
 
 export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
-
-// Explicit public API exports for better discoverability
-export type {
-  PostToolUsePayload,
-  LoopDetectorPayload,
-  EventPayload,
-  FileWriter,
-  FeedbackAction,
-  SuccessAction,
-  RetryAction,
-  EscalateAction,
-  WisdomEntry,
-  WisdomCategory,
-} from "./core/types";
