@@ -120,13 +120,25 @@ export class JusticePlugin {
             return { action: "inject", injectedContext };
           } catch (error) {
             // Use provided logger or error handler if available
+            // Wrap in individual try/catch to ensure we still return PROCEED
             if (this.options.logger) {
-              this.options.logger.error(`Failed to create compaction snapshot for ${activePlan}:`, error);
+              try {
+                this.options.logger.error(`Failed to create compaction snapshot for ${activePlan}:`, error);
+              } catch (logError) {
+                // Ignore logger errors to avoid breaking the flow
+              }
             }
             if (this.options.onError) {
-              this.options.onError(error);
+              try {
+                this.options.onError(error);
+              } catch (handlerError) {
+                // Ignore handler errors to avoid breaking the flow
+              }
             }
           }
+        } else {
+          // Clear any stale state if no active plan is found
+          this.compactionProtector.clearActivePlan();
         }
         return PROCEED;
       }
