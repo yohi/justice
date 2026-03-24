@@ -18,7 +18,7 @@ describe("WisdomStore", () => {
       expect(entry.taskId).toBe("task-1");
       expect(entry.category).toBe("success_pattern");
       expect(entry.content).toBe("Used Promise.all for parallel fetching");
-      
+
       const entries = store.getByTaskId("task-1");
       expect(entries).toHaveLength(1);
       expect(entries[0]).toEqual(entry);
@@ -26,19 +26,19 @@ describe("WisdomStore", () => {
 
     it("should limit entries to maxEntries and evict oldest first", () => {
       const store = new WisdomStore(2); // max 2 entries
-      
+
       store.add({ taskId: "t1", category: "success_pattern", content: "first" });
       store.add({ taskId: "t2", category: "failure_gotcha", content: "second" });
       expect(store.getRelevant()).toHaveLength(2);
 
       // This should evict the first one
       store.add({ taskId: "t3", category: "design_decision", content: "third" });
-      
+
       const all = store.getRelevant();
       expect(all).toHaveLength(2);
-      expect(all.some(e => e.taskId === "t1")).toBe(false); // First is gone
-      expect(all.some(e => e.taskId === "t2")).toBe(true);
-      expect(all.some(e => e.taskId === "t3")).toBe(true);
+      expect(all.some((e) => e.taskId === "t1")).toBe(false); // First is gone
+      expect(all.some((e) => e.taskId === "t2")).toBe(true);
+      expect(all.some((e) => e.taskId === "t3")).toBe(true);
     });
   });
 
@@ -51,7 +51,7 @@ describe("WisdomStore", () => {
 
       const results = store.getByTaskId("common-task");
       expect(results).toHaveLength(2);
-      expect(results.every(r => r.taskId === "common-task")).toBe(true);
+      expect(results.every((r) => r.taskId === "common-task")).toBe(true);
     });
 
     it("should return empty array for unknown task", () => {
@@ -64,15 +64,30 @@ describe("WisdomStore", () => {
     it("should return all entries when no options are specified", () => {
       const store = new WisdomStore();
       store.add({ taskId: "t1", category: "success_pattern", content: "A" });
-      store.add({ taskId: "t2", category: "failure_gotcha", content: "B", errorClass: "syntax_error" });
-      
+      store.add({
+        taskId: "t2",
+        category: "failure_gotcha",
+        content: "B",
+        errorClass: "syntax_error",
+      });
+
       expect(store.getRelevant()).toHaveLength(2);
     });
 
     it("should return entries matching the given errorClass", () => {
       const store = new WisdomStore();
-      store.add({ taskId: "t1", category: "failure_gotcha", content: "A", errorClass: "syntax_error" });
-      store.add({ taskId: "t2", category: "failure_gotcha", content: "B", errorClass: "type_error" });
+      store.add({
+        taskId: "t1",
+        category: "failure_gotcha",
+        content: "A",
+        errorClass: "syntax_error",
+      });
+      store.add({
+        taskId: "t2",
+        category: "failure_gotcha",
+        content: "B",
+        errorClass: "type_error",
+      });
       store.add({ taskId: "t3", category: "success_pattern", content: "C" });
 
       const results = store.getRelevant({ errorClass: "syntax_error" });
@@ -103,12 +118,12 @@ describe("WisdomStore", () => {
         category: "failure_gotcha",
         content: "Don't forget to await the database connection.",
         errorClass: "type_error",
-        timestamp: "2024-01-01T00:00:00Z"
+        timestamp: "2024-01-01T00:00:00Z",
       };
 
       const formatted = store.formatForInjection([entry]);
-      
-      expect(formatted).toContain("Failure/Gotcha");    // human-readable label
+
+      expect(formatted).toContain("Failure/Gotcha"); // human-readable label
       expect(formatted).toContain("Don't forget to await");
       expect(formatted).toContain("type_error");
       expect(formatted).toContain("task-test");
@@ -124,18 +139,23 @@ describe("WisdomStore", () => {
     it("should round-trip through JSON serialization", () => {
       const original = new WisdomStore(50);
       original.add({ taskId: "t1", category: "success_pattern", content: "Great code" });
-      original.add({ taskId: "t2", category: "failure_gotcha", content: "Bad code", errorClass: "syntax_error" });
+      original.add({
+        taskId: "t2",
+        category: "failure_gotcha",
+        content: "Bad code",
+        errorClass: "syntax_error",
+      });
 
       const json = original.serialize();
       expect(typeof json).toBe("string");
 
       const restored = WisdomStore.deserialize(json);
-      
+
       const allRestored = restored.getRelevant();
       expect(allRestored).toHaveLength(2);
       expect(allRestored[0]?.content).toBe("Great code");
       expect(allRestored[1]?.errorClass).toBe("syntax_error");
-      
+
       // Check maxEntries was restored or kept
       restored.add({ taskId: "t3", category: "design_decision", content: "New code" });
       expect(restored.getRelevant()).toHaveLength(3);

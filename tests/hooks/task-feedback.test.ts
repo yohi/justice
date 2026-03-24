@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TaskFeedbackHandler } from "../../src/hooks/task-feedback";
-import type {
-  PostToolUseEvent,
-} from "../../src/core/types";
+import type { PostToolUseEvent } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
 
@@ -57,7 +55,8 @@ describe("TaskFeedbackHandler", () => {
         type: "PostToolUse",
         payload: {
           toolName: "task",
-          toolResult: "FAIL tests/setup.test.ts\nExpected: 42\nReceived: undefined\nTests: 0 passed, 1 failed",
+          toolResult:
+            "FAIL tests/setup.test.ts\nExpected: 42\nReceived: undefined\nTests: 0 passed, 1 failed",
           error: true,
         },
         sessionId: "session-2",

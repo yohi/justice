@@ -16,7 +16,12 @@ const makeTasks = (): PlanTask[] => [
     id: "task-2",
     title: "Implement core logic",
     steps: [
-      { id: "task-2-step-1", description: "Write parser (depends: task-1)", checked: false, lineNumber: 10 },
+      {
+        id: "task-2-step-1",
+        description: "Write parser (depends: task-1)",
+        checked: false,
+        lineNumber: 10,
+      },
       { id: "task-2-step-2", description: "Write tests", checked: false, lineNumber: 11 },
     ],
     status: "pending",
@@ -24,16 +29,19 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-3",
     title: "Add documentation",
-    steps: [
-      { id: "task-3-step-1", description: "Write README", checked: false, lineNumber: 15 },
-    ],
+    steps: [{ id: "task-3-step-1", description: "Write README", checked: false, lineNumber: 15 }],
     status: "pending",
   },
   {
     id: "task-4",
     title: "Integration testing",
     steps: [
-      { id: "task-4-step-1", description: "E2E tests (depends: task-2, task-3)", checked: false, lineNumber: 20 },
+      {
+        id: "task-4-step-1",
+        description: "E2E tests (depends: task-2, task-3)",
+        checked: false,
+        lineNumber: 20,
+      },
     ],
     status: "pending",
   },
@@ -75,9 +83,7 @@ describe("DependencyAnalyzer", () => {
     });
 
     it("should return empty array when all tasks are completed", () => {
-      const tasks: PlanTask[] = [
-        { id: "task-1", title: "Done", steps: [], status: "completed" },
-      ];
+      const tasks: PlanTask[] = [{ id: "task-1", title: "Done", steps: [], status: "completed" }];
       const parallel = analyzer.getParallelizable(tasks);
       expect(parallel).toHaveLength(0);
     });
@@ -87,13 +93,17 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
-          steps: [{ id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 }],
+          steps: [
+            { id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 },
+          ],
           status: "pending",
         },
         {
           id: "task-2",
           title: "B",
-          steps: [{ id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 }],
+          steps: [
+            { id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 },
+          ],
           status: "pending",
         },
       ];
@@ -118,13 +128,17 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
-          steps: [{ id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 }],
+          steps: [
+            { id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 },
+          ],
           status: "pending",
         },
         {
           id: "task-2",
           title: "B",
-          steps: [{ id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 }],
+          steps: [
+            { id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 },
+          ],
           status: "pending",
         },
       ];
@@ -136,7 +150,9 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
-          steps: [{ id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 }],
+          steps: [
+            { id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 },
+          ],
           status: "pending",
         },
       ];
@@ -153,7 +169,9 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
-          steps: [{ id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 }],
+          steps: [
+            { id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 },
+          ],
           status: "pending",
         },
       ];

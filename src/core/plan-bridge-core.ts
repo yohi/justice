@@ -36,17 +36,17 @@ export class PlanBridgeCore {
     options: BuildDelegationOptions,
   ): DelegationRequest | null {
     const tasks = this.parser.parse(planContent);
-    
+
     // Select the first executable task (no unresolved dependencies)
     const executableTasks = this.dependencyAnalyzer.getParallelizable(tasks);
     if (executableTasks.length === 0) {
       // If no tasks are executable, but some are incomplete, there might be a cycle
       // or simply nothing left but blocked tasks. Fallback to parser's default if needed
-      // or return null to stop. 
+      // or return null to stop.
       // For now, we strictly pick the first executable task.
       const anyIncomplete = this.parser.getNextIncompleteTask(tasks);
       if (!anyIncomplete) return null;
-      
+
       // If there are incomplete tasks but none are executable (e.g. all blocked),
       // we might want to return the first incomplete one anyway to let the agent fail
       // with a dependency error message, or just return null.

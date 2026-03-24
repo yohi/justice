@@ -62,9 +62,7 @@ describe("FeedbackFormatter", () => {
 
   describe("parseTestResults", () => {
     it("should parse 'Tests: N passed, M failed' format", () => {
-      const result = formatter.parseTestResults(
-        "Tests: 10 passed, 2 failed, 3 skipped",
-      );
+      const result = formatter.parseTestResults("Tests: 10 passed, 2 failed, 3 skipped");
       expect(result).not.toBeNull();
       expect(result!.passed).toBe(10);
       expect(result!.failed).toBe(2);
@@ -72,9 +70,7 @@ describe("FeedbackFormatter", () => {
     });
 
     it("should parse Vitest-style output", () => {
-      const result = formatter.parseTestResults(
-        "Tests  12 passed (12)",
-      );
+      const result = formatter.parseTestResults("Tests  12 passed (12)");
       expect(result).not.toBeNull();
       expect(result!.passed).toBe(12);
       expect(result!.failed).toBe(0);

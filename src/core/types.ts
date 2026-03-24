@@ -98,11 +98,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 };
 
 /** OmO Hook イベントの Discriminated Union */
-export type HookEvent =
-  | MessageEvent
-  | PreToolUseEvent
-  | PostToolUseEvent
-  | EventEvent;
+export type HookEvent = MessageEvent | PreToolUseEvent | PostToolUseEvent | EventEvent;
 
 export interface MessageEvent {
   readonly type: "Message";
@@ -123,10 +119,7 @@ export interface PostToolUseEvent {
 }
 
 /** OmO Event のペイロード Discriminated Union */
-export type EventPayload =
-  | LoopDetectorPayload
-  | CompactionPayload
-  | GenericEventPayload;
+export type EventPayload = LoopDetectorPayload | CompactionPayload | GenericEventPayload;
 
 /** OmO loop-detector イベントのペイロード */
 export interface LoopDetectorPayload {
@@ -170,10 +163,7 @@ export interface PreToolUsePayload {
 }
 
 /** フックのレスポンスの Discriminated Union */
-export type HookResponse =
-  | ProceedResponse
-  | SkipResponse
-  | InjectResponse;
+export type HookResponse = ProceedResponse | SkipResponse | InjectResponse;
 
 export interface ProceedResponse {
   readonly action: "proceed";
@@ -206,7 +196,7 @@ export interface PostToolUsePayload {
 
 /** ファイル書き込みアクセスの抽象化 */
 export interface FileWriter {
-  /** 
+  /**
    * 指定されたパスにデータを書き込みます。
    * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）しなければなりません。
    */
@@ -220,10 +210,7 @@ export interface ContextReduction {
 }
 
 /** フィードバックアクションの Discriminated Union */
-export type FeedbackAction =
-  | SuccessAction
-  | RetryAction
-  | EscalateAction;
+export type FeedbackAction = SuccessAction | RetryAction | EscalateAction;
 
 export interface SuccessAction {
   readonly type: "success";
@@ -257,7 +244,7 @@ export interface WisdomEntry {
 }
 
 export type WisdomCategory =
-  | "success_pattern"     // 成功した実装パターン
-  | "failure_gotcha"      // 失敗時の落とし穴
-  | "design_decision"     // 重要な設計判断
-  | "environment_quirk";  // 環境固有の注意事項
+  | "success_pattern" // 成功した実装パターン
+  | "failure_gotcha" // 失敗時の落とし穴
+  | "design_decision" // 重要な設計判断
+  | "environment_quirk"; // 環境固有の注意事項

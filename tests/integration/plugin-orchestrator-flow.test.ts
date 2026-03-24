@@ -31,7 +31,11 @@ describe("Phase 7: Plugin Orchestrator Flow", () => {
     // 3. Process successful task result
     const postEvent: PostToolUseEvent = {
       type: "PostToolUse",
-      payload: { toolName: "task", toolResult: "All tests passed. Implementation complete.", error: false },
+      payload: {
+        toolName: "task",
+        toolResult: "All tests passed. Implementation complete.",
+        error: false,
+      },
       sessionId: "flow-session",
     };
     const feedbackResponse = await plugin.handleEvent(postEvent);

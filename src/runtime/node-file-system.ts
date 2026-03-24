@@ -30,7 +30,12 @@ export class NodeFileSystem implements FileReader, FileWriter {
       await stat(safePath);
       return true;
     } catch (err: unknown) {
-      if (err instanceof Error && "code" in err && ((err as NodeJS.ErrnoException).code === "ENOENT" || (err as NodeJS.ErrnoException).code === "ENOTDIR")) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        ((err as NodeJS.ErrnoException).code === "ENOENT" ||
+          (err as NodeJS.ErrnoException).code === "ENOTDIR")
+      ) {
         return false;
       }
       throw err;
@@ -54,23 +59,17 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    try {
-      const realRoot = await realpath(this.rootDir);
-      const realPath = await realpath(resolved);
-      const realRel = relative(realRoot, realPath);
-      
-      if (realRel.startsWith("..") || isAbsolute(realRel)) {
-        throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
-      }
-      
-      return realPath;
-    } catch (err: unknown) {
-      // If realpath fails, it might be because the file doesn't exist yet.
-      // But for reads and exists, we need it to exist or fail safely.
-      throw err;
+    const realRoot = await realpath(this.rootDir);
+    const realPath = await realpath(resolved);
+    const realRel = relative(realRoot, realPath);
+
+    if (realRel.startsWith("..") || isAbsolute(realRel)) {
+      throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
     }
+
+    return realPath;
   }
-  
+
   /**
    * Like resolveSafely, but allows resolving paths where the leaf file doesn't exist yet.
    */
@@ -92,19 +91,23 @@ export class NodeFileSystem implements FileReader, FileWriter {
       // Resolve the parent directory since the file might not exist
       const realParent = await realpath(parentDir);
       const realRel = relative(realRoot, realParent);
-      
+
       if (realRel.startsWith("..") || isAbsolute(realRel)) {
         throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
       }
-      
-      // If the parent is safe, resolving the file inside it is safe 
+
+      // If the parent is safe, resolving the file inside it is safe
       // (assuming the leaf is not a symlink pointing outside, but if we overwrite it we might follow it.
       // However, if we write, we might overwrite a symlink. To be fully safe against overwriting symlinks
       // we'd need to lstat the leaf if it exists. For now, this meets the symlink parent check).
       return resolved;
     } catch (err: unknown) {
-      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        // If parent doesn't exist, we can't fully realpath it. 
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        // If parent doesn't exist, we can't fully realpath it.
         // We rely on the lexical check for safety in this case.
         return resolved;
       }

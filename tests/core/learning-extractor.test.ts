@@ -123,7 +123,8 @@ describe("LearningExtractor", () => {
           errorClassification: "design_error",
         };
 
-        const secretOutput = "Connection failed with apiKey: abc123def4567890 and password=mysecretpassword";
+        const secretOutput =
+          "Connection failed with apiKey: abc123def4567890 and password=mysecretpassword";
         const entries = extractor.extract(feedback, secretOutput);
 
         const entry = entries[0];
@@ -140,8 +141,9 @@ describe("LearningExtractor", () => {
           errorClassification: "timeout",
         };
 
-        const urlOutput = "Failed to fetch from https://user:pass123@api.example.com and git@gituser:secret@github.com";
-        const entries = (extractor as any).extract(feedback, urlOutput);
+        const urlOutput =
+          "Failed to fetch from https://user:pass123@api.example.com and git@gituser:secret@github.com";
+        const entries = extractor.extract(feedback, urlOutput);
 
         const entry = entries[0];
         expect(entry?.content).toContain("https://user:****[MASKED]****@api.example.com");
@@ -158,8 +160,9 @@ describe("LearningExtractor", () => {
           errorClassification: "timeout",
         };
 
-        const urlOutput = "Error: https://user:pa%ss!word@example.com or git@gituser:pa:ss!word@example.com";
-        const entries = (extractor as any).extract(feedback, urlOutput);
+        const urlOutput =
+          "Error: https://user:pa%ss!word@example.com or git@gituser:pa:ss!word@example.com";
+        const entries = extractor.extract(feedback, urlOutput);
 
         const entry = entries[0];
         expect(entry?.content).toContain("https://user:****[MASKED]****@example.com");
@@ -177,7 +180,7 @@ describe("LearningExtractor", () => {
         };
 
         const urlOutput = "Error: https://mytoken@example.com and git@gituser@github.com";
-        const entries = (extractor as any).extract(feedback, urlOutput);
+        const entries = extractor.extract(feedback, urlOutput);
 
         const entry = entries[0];
         // Note: The mask is always ":****[MASKED]****@" according to the new requirements

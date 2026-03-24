@@ -1,4 +1,11 @@
-import type { FileReader, FileWriter, HookEvent, HookResponse, EventEvent } from "./types";
+import type {
+  FileReader,
+  FileWriter,
+  HookEvent,
+  HookResponse,
+  EventEvent,
+  CompactionPayload,
+} from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -103,19 +110,20 @@ export class JusticePlugin {
         if (activePlan) {
           try {
             const planContent = await this.fileReader.readFile(activePlan);
-            
+
             // Note: Since JusticePlugin doesn't directly track currentTaskId/currentStepId
-            // in a strict way outside of what's passed to tools, we use placeholders or 
+            // in a strict way outside of what's passed to tools, we use placeholders or
             // extract them if they were part of the event payload.
             // For now, we provide the plan content to ensure the protector can snapshot it.
             this.compactionProtector.setActivePlan(activePlan);
+            const compactionPayload = event.payload as CompactionPayload;
             const snapshot = this.compactionProtector.createSnapshot({
               planContent,
               currentTaskId: "unknown", // Ideal integration would pass these from state
               currentStepId: "unknown",
-              learnings: event.payload.reason || "", // Provide compaction reason as context
+              learnings: compactionPayload.reason || "", // Provide compaction reason as context
             });
-            
+
             const injectedContext = this.compactionProtector.formatForInjection(snapshot);
             return { action: "inject", injectedContext };
           } catch (error) {
@@ -123,15 +131,18 @@ export class JusticePlugin {
             // Wrap in individual try/catch to ensure we still return PROCEED
             if (this.options.logger) {
               try {
-                this.options.logger.error(`Failed to create compaction snapshot for ${activePlan}:`, error);
-              } catch (logError) {
+                this.options.logger.error(
+                  `Failed to create compaction snapshot for ${activePlan}:`,
+                  error,
+                );
+              } catch {
                 // Ignore logger errors to avoid breaking the flow
               }
             }
             if (this.options.onError) {
               try {
                 this.options.onError(error);
-              } catch (handlerError) {
+              } catch {
                 // Ignore handler errors to avoid breaking the flow
               }
             }

@@ -4,16 +4,16 @@ import type { EventEvent, LoopDetectorPayload } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
-const samplePlan = [
-  "## Task 1: Refactor",
-  "- [ ] Step A",
-  "- [ ] Step B",
-].join("\n");
+const samplePlan = ["## Task 1: Refactor", "- [ ] Step A", "- [ ] Step B"].join("\n");
 
 describe("LoopDetectionHandler", () => {
   describe("handleEvent", () => {
     it("should proceed for non-Event events", async () => {
-      const handler = new LoopDetectionHandler(createMockFileReader({}), createMockFileWriter(), new TaskSplitter());
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
       const response = await handler.handleEvent({
         type: "Message",
         payload: { role: "user", content: "hi" },
@@ -23,7 +23,11 @@ describe("LoopDetectionHandler", () => {
     });
 
     it("should proceed for non-loop-detector events", async () => {
-      const handler = new LoopDetectionHandler(createMockFileReader({}), createMockFileWriter(), new TaskSplitter());
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
       const event: EventEvent = {
         type: "Event",
         payload: { eventType: "compaction", sessionId: "s", reason: "full" },
@@ -34,7 +38,11 @@ describe("LoopDetectionHandler", () => {
     });
 
     it("should proceed if no active plan for session", async () => {
-      const handler = new LoopDetectionHandler(createMockFileReader({}), createMockFileWriter(), new TaskSplitter());
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
       const payload: LoopDetectorPayload = {
         eventType: "loop-detector",
         sessionId: "s-1",
@@ -69,12 +77,16 @@ describe("LoopDetectionHandler", () => {
 
       expect(response.action === "inject").toBe(true);
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("⚠️ **JUSTICE プロテクター**: 無限ループを検知しました（OmO loop-detector）");
+        expect(response.injectedContext).toContain(
+          "⚠️ **JUSTICE プロテクター**: 無限ループを検知しました（OmO loop-detector）",
+        );
         expect(response.injectedContext).toContain("Task task-1.1: Step: Step A");
       }
 
       // Should append error note
-      expect(writer.writtenFiles["plan.md"]).toContain("⚠️ **Error**: loop_detected: Applied identical fix 3 times");
+      expect(writer.writtenFiles["plan.md"]).toContain(
+        "⚠️ **Error**: loop_detected: Applied identical fix 3 times",
+      );
     });
   });
 });

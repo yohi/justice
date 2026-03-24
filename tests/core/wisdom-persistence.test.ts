@@ -7,16 +7,17 @@ describe("WisdomPersistence", () => {
 
   it("should save and load wisdom entries round-trip", async () => {
     const writer = createMockFileWriter();
-    const persistence = new WisdomPersistence(
-      createMockFileReader({}),
-      writer,
-      defaultPath,
-    );
+    const persistence = new WisdomPersistence(createMockFileReader({}), writer, defaultPath);
 
     // Start with an empty store then populate it
     const store = await persistence.load();
     store.add({ taskId: "t1", category: "success_pattern", content: "Works!" });
-    store.add({ taskId: "t2", category: "failure_gotcha", content: "Careful with async", errorClass: "timeout" });
+    store.add({
+      taskId: "t2",
+      category: "failure_gotcha",
+      content: "Careful with async",
+      errorClass: "timeout",
+    });
 
     await persistence.save(store);
     expect(writer.writtenFiles[defaultPath]).toBeDefined();
@@ -37,8 +38,12 @@ describe("WisdomPersistence", () => {
   });
 
   it("should return empty WisdomStore when file does not exist", async () => {
-    const reader = createMockFileReader({});  // no files
-    const persistence = new WisdomPersistence(reader, createMockFileWriter(), ".justice/nonexistent.json");
+    const reader = createMockFileReader({}); // no files
+    const persistence = new WisdomPersistence(
+      reader,
+      createMockFileWriter(),
+      ".justice/nonexistent.json",
+    );
 
     const store = await persistence.load();
     expect(store.getRelevant()).toHaveLength(0);

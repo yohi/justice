@@ -37,15 +37,15 @@ describe("StatusCommand", () => {
     it("should include parallelizable tasks", async () => {
       const status = await command.getStatus("plan.md");
 
-      expect(status.parallelizable.map(t => t.id)).toContain("task-2");
-      expect(status.parallelizable.map(t => t.id)).toContain("task-3");
-      expect(status.parallelizable.map(t => t.id)).not.toContain("task-4");
+      expect(status.parallelizable.map((t) => t.id)).toContain("task-2");
+      expect(status.parallelizable.map((t) => t.id)).toContain("task-3");
+      expect(status.parallelizable.map((t) => t.id)).not.toContain("task-4");
     });
 
     it("should include execution order", async () => {
       const status = await command.getStatus("plan.md");
 
-      const ids = status.executionOrder.map(t => t.id);
+      const ids = status.executionOrder.map((t) => t.id);
       expect(ids.indexOf("task-1")).toBeLessThan(ids.indexOf("task-2"));
       expect(ids.indexOf("task-2")).toBeLessThan(ids.indexOf("task-4"));
     });

@@ -1,10 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
-import type {
-  FileReader,
-  HookEvent,
-  PreToolUseEvent,
-} from "../../src/core/types";
+import type { FileReader, HookEvent, PreToolUseEvent } from "../../src/core/types";
 
 const samplePlanContent = [
   "## Task 1: Setup",
@@ -49,7 +45,9 @@ describe("PlanBridge", () => {
     it("should return PROCEED when file read fails", async () => {
       const reader: FileReader = {
         fileExists: vi.fn(async () => true),
-        readFile: vi.fn(async () => { throw new Error("Read failed"); }),
+        readFile: vi.fn(async () => {
+          throw new Error("Read failed");
+        }),
       };
       const bridge = new PlanBridge(reader);
 
@@ -139,10 +137,9 @@ describe("PlanBridge", () => {
 
   describe("Multi-Agent Coordination", () => {
     it("should include auto-classified category in delegation context", async () => {
-      const planContent = [
-        "### Task 1: Write API documentation",
-        "- [ ] Document endpoints",
-      ].join("\n");
+      const planContent = ["### Task 1: Write API documentation", "- [ ] Document endpoints"].join(
+        "\n",
+      );
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader);
       bridge.setActivePlan("s-1", "plan.md");

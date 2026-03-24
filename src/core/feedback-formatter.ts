@@ -21,11 +21,7 @@ export class FeedbackFormatter {
   /**
    * Format raw task() output into structured TaskFeedback.
    */
-  format(
-    taskId: string,
-    rawOutput: string,
-    isError: boolean,
-  ): TaskFeedback {
+  format(taskId: string, rawOutput: string, isError: boolean): TaskFeedback {
     const testResults = this.parseTestResults(rawOutput) ?? undefined;
     const status = this.determineStatus(rawOutput, isError, testResults);
 

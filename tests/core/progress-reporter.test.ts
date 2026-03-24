@@ -4,21 +4,27 @@ import type { PlanTask } from "../../src/core/types";
 
 const makeTasks = (): PlanTask[] => [
   {
-    id: "task-1", title: "Setup", status: "completed",
+    id: "task-1",
+    title: "Setup",
+    status: "completed",
     steps: [
       { id: "s1", description: "Init", checked: true, lineNumber: 1 },
       { id: "s2", description: "Config", checked: true, lineNumber: 2 },
     ],
   },
   {
-    id: "task-2", title: "Implement", status: "in_progress",
+    id: "task-2",
+    title: "Implement",
+    status: "in_progress",
     steps: [
       { id: "s3", description: "Write tests", checked: true, lineNumber: 3 },
       { id: "s4", description: "Write code", checked: false, lineNumber: 4 },
     ],
   },
   {
-    id: "task-3", title: "Deploy", status: "pending",
+    id: "task-3",
+    title: "Deploy",
+    status: "pending",
     steps: [
       { id: "s5", description: "Build", checked: false, lineNumber: 5 },
       { id: "s6", description: "Push", checked: false, lineNumber: 6 },
@@ -40,10 +46,18 @@ describe("ProgressReporter", () => {
       const report = reporter.generateReport(makeTasks());
       expect(report.taskStatuses).toHaveLength(3);
       expect(report.taskStatuses[0]).toEqual({
-        taskId: "task-1", title: "Setup", status: "completed", completedSteps: 2, totalSteps: 2,
+        taskId: "task-1",
+        title: "Setup",
+        status: "completed",
+        completedSteps: 2,
+        totalSteps: 2,
       });
       expect(report.taskStatuses[1]).toEqual({
-        taskId: "task-2", title: "Implement", status: "in_progress", completedSteps: 1, totalSteps: 2,
+        taskId: "task-2",
+        title: "Implement",
+        status: "in_progress",
+        completedSteps: 1,
+        totalSteps: 2,
       });
     });
 

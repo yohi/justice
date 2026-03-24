@@ -1,9 +1,4 @@
-import type {
-  FileReader,
-  HookEvent,
-  HookResponse,
-  DelegationRequest,
-} from "../core/types";
+import type { FileReader, HookEvent, HookResponse, DelegationRequest } from "../core/types";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { WisdomStore } from "../core/wisdom-store";
@@ -64,9 +59,7 @@ export class PlanBridge {
   /**
    * Handle Message event: detect plan references and delegation intent.
    */
-  async handleMessage(
-    event: HookEvent,
-  ): Promise<HookResponse> {
+  async handleMessage(event: HookEvent): Promise<HookResponse> {
     // Only react to assistant messages
     if (event.type !== "Message" || event.payload.role !== "assistant") return PROCEED;
 
@@ -118,9 +111,7 @@ export class PlanBridge {
   /**
    * Handle PreToolUse event: inject plan context when task() is called.
    */
-  async handlePreToolUse(
-    event: HookEvent,
-  ): Promise<HookResponse> {
+  async handlePreToolUse(event: HookEvent): Promise<HookResponse> {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
@@ -170,12 +161,12 @@ export class PlanBridge {
     const tasks = this.parser.parse(planContent);
     const report = this.progressReporter.generateReport(tasks);
     const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
-    const otherParallel = parallelizable.filter(t => t.id !== delegation.context.taskId);
+    const otherParallel = parallelizable.filter((t) => t.id !== delegation.context.taskId);
 
     let injectedContext = this.formatDelegationContext(delegation);
     injectedContext += `\n\n${this.progressReporter.formatAsMarkdown(report)}`;
     if (otherParallel.length > 0) {
-      injectedContext += `\n\n**Parallel:** The following tasks can also be run in parallel: ${otherParallel.map(t => t.id).join(", ")}`;
+      injectedContext += `\n\n**Parallel:** The following tasks can also be run in parallel: ${otherParallel.map((t) => t.id).join(", ")}`;
     }
     return injectedContext;
   }

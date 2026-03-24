@@ -71,15 +71,18 @@ export class WisdomStore {
 
     for (const entry of entries) {
       const typeLabel =
-        entry.category === "success_pattern" ? "🟢 Success Pattern" :
-        entry.category === "design_decision" ? "🔵 Design Decision" :
-        entry.category === "environment_quirk" ? "🟡 Environment Quirk" :
-        "🔴 Failure/Gotcha";
+        entry.category === "success_pattern"
+          ? "🟢 Success Pattern"
+          : entry.category === "design_decision"
+            ? "🔵 Design Decision"
+            : entry.category === "environment_quirk"
+              ? "🟡 Environment Quirk"
+              : "🔴 Failure/Gotcha";
 
       const errClassStr = entry.errorClass ? ` (${entry.errorClass})` : "";
-      
+
       lines.push(`- **${typeLabel}** \`[${entry.taskId}]\`${errClassStr}:`);
-      
+
       // Indent the content
       const contentLines = entry.content.split("\n");
       for (const line of contentLines) {
@@ -117,7 +120,7 @@ export class WisdomStore {
 
     const maxEntries = data.maxEntries ?? 100;
     const store = new WisdomStore(maxEntries);
-    
+
     if (data.entries && Array.isArray(data.entries)) {
       // Push entries avoiding the add() method to keep original IDs and timestamps
       for (const entry of data.entries) {
@@ -126,7 +129,7 @@ export class WisdomStore {
         }
       }
     }
-    
+
     return store;
   }
 

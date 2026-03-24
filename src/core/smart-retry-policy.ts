@@ -20,7 +20,11 @@ export class SmartRetryPolicy {
    * Evaluates an error and returns a comprehensive retry decision
    * including delay and context shrinking strategies.
    */
-  evaluate(errorClass: ErrorClass, currentRetry: number, context?: DelegationContext): RetryDecision {
+  evaluate(
+    errorClass: ErrorClass,
+    currentRetry: number,
+    context?: DelegationContext,
+  ): RetryDecision {
     const shouldRetry = this.retryableErrors.includes(errorClass) && currentRetry < this.maxRetries;
 
     if (!shouldRetry) {

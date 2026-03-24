@@ -62,7 +62,12 @@ export class TaskFeedbackHandler {
   /**
    * Register the active plan and task for a session.
    */
-  setActivePlan(sessionId: string, planPath: string, taskId: string, referenceFiles: string[] = []): void {
+  setActivePlan(
+    sessionId: string,
+    planPath: string,
+    taskId: string,
+    referenceFiles: string[] = [],
+  ): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
@@ -95,11 +100,7 @@ export class TaskFeedbackHandler {
     session.lastAccess = Date.now();
 
     // Format the raw output into structured feedback
-    const feedback = this.formatter.format(
-      session.activeTaskId,
-      payload.toolResult,
-      payload.error,
-    );
+    const feedback = this.formatter.format(session.activeTaskId, payload.toolResult, payload.error);
 
     // Determine the action to take
     const action = this.determineAction(feedback, session, payload.toolResult);
@@ -136,8 +137,7 @@ export class TaskFeedbackHandler {
     }
 
     // Classify the error using the raw task logic or test failure details
-    const errorClass = feedback.errorClassification
-      ?? this.classifier.classify(rawResult);
+    const errorClass = feedback.errorClassification ?? this.classifier.classify(rawResult);
 
     // Check retry eligibility with SmartRetryPolicy
     const currentCount = session.retryCounts.get(errorClass) ?? 0;
@@ -179,13 +179,15 @@ export class TaskFeedbackHandler {
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
-        
+
         // Wait for exponential backoff delay if any
         if (action.delayMs > 0) {
           // NON-BLOCKING: Schedule the log message.
           // In a real environment, the actual tool retry would be managed by the orchestrator.
           setTimeout(() => {
-            console.log(`[JUSTICE] Retry delay of ${action.delayMs}ms reached for task ${action.taskId}`);
+            console.log(
+              `[JUSTICE] Retry delay of ${action.delayMs}ms reached for task ${action.taskId}`,
+            );
           }, action.delayMs);
         }
 
@@ -196,7 +198,7 @@ export class TaskFeedbackHandler {
             injectedContext: `⚠️ JUSTICE AI: リトライを実行します。コンテキスト縮小戦略を適用中 (\`${action.contextReduction.strategy}\`)。不要な制約を減らして再試行してください。`,
           };
         }
-        
+
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
@@ -233,7 +235,10 @@ export class TaskFeedbackHandler {
         await this.fileWriter.writeFile(session.planPath, updatedContent);
       }
     } catch (err) {
-      console.warn(`[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`, err);
+      console.warn(
+        `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
     }
 
     // Extract and accumulate learnings from success
@@ -260,7 +265,7 @@ export class TaskFeedbackHandler {
     let splitSuggestionContext = "";
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
-      
+
       const updatedContent = this.parser.appendErrorNote(
         planContent,
         action.taskId,
@@ -275,9 +280,11 @@ export class TaskFeedbackHandler {
         const suggestion = this.splitter.suggestSplit(activeTask, action.errorClass);
         splitSuggestionContext = "\n\n" + this.splitter.formatAsPlanMarkdown(suggestion);
       }
-      
     } catch (err) {
-      console.warn(`[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`, err);
+      console.warn(
+        `[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
     }
 
     // Extract and accumulate learnings from escalation
@@ -310,7 +317,7 @@ export class TaskFeedbackHandler {
 
   private cleanupSessions(): void {
     const now = Date.now();
-    
+
     // TTL Cleanup
     for (const [id, session] of this.sessions.entries()) {
       if (now - session.lastAccess > SESSION_TTL_MS) {
@@ -320,9 +327,10 @@ export class TaskFeedbackHandler {
 
     // Max Size Cleanup (LRU-ish)
     if (this.sessions.size >= MAX_SESSIONS) {
-      const sortedSessions = [...this.sessions.entries()]
-        .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
-      
+      const sortedSessions = [...this.sessions.entries()].sort(
+        (a, b) => a[1].lastAccess - b[1].lastAccess,
+      );
+
       const toRemove = this.sessions.size - MAX_SESSIONS + 1;
       for (let i = 0; i < toRemove; i++) {
         const entry = sortedSessions[i];

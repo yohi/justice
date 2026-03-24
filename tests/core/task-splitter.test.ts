@@ -79,7 +79,7 @@ describe("TaskSplitter", () => {
       };
       const suggestion = splitter.suggestSplit(task, "loop_detected");
       const markdown = splitter.formatAsPlanMarkdown(suggestion);
-      
+
       expect(markdown).toContain("## Task");
       expect(markdown).toContain("- [ ]");
       expect(markdown).toContain("Do something");

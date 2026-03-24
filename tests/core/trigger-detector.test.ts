@@ -14,9 +14,7 @@ describe("TriggerDetector", () => {
     });
 
     it("should detect plan path with various extensions", () => {
-      const result = detector.detectPlanReference(
-        "Refer to docs/plans/2026-03-24-phase2.md",
-      );
+      const result = detector.detectPlanReference("Refer to docs/plans/2026-03-24-phase2.md");
       expect(result).not.toBeNull();
       expect(result!.planPath).toContain("phase2.md");
     });
@@ -40,9 +38,7 @@ describe("TriggerDetector", () => {
     });
 
     it("should detect plan.md as a generic reference", () => {
-      const result = detector.detectPlanReference(
-        "Check the plan.md for the next task",
-      );
+      const result = detector.detectPlanReference("Check the plan.md for the next task");
       expect(result).not.toBeNull();
       expect(result!.planPath).toBe("plan.md");
     });
@@ -69,15 +65,11 @@ describe("TriggerDetector", () => {
 
   describe("shouldTrigger", () => {
     it("should return true when plan reference AND delegation intent exist", () => {
-      expect(
-        detector.shouldTrigger("Delegate the next task from plan.md"),
-      ).toBe(true);
+      expect(detector.shouldTrigger("Delegate the next task from plan.md")).toBe(true);
     });
 
     it("should return true when plan reference exists (implicit delegation)", () => {
-      expect(
-        detector.shouldTrigger("Check plan.md and run the next incomplete task"),
-      ).toBe(true);
+      expect(detector.shouldTrigger("Check plan.md and run the next incomplete task")).toBe(true);
     });
 
     it("should return false when neither exists", () => {
