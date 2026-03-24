@@ -10,7 +10,7 @@
 
 ---
 
-### Hook API Types (Updated)
+## Hook API Types (Updated)
 
 Phase 2 uses Discriminated Unions for event and response types to ensure type safety.
 
@@ -872,12 +872,17 @@ describe("Plan Bridge Integration Flow", () => {
       sessionId: "integration-3",
     };
 
-    // Should throw since readFile fails
-    await expect(bridge.handleMessage(event)).rejects.toThrow(
-      "Permission denied",
-    );
+    // Fail-open: should return proceed when file read fails
+    const response = await bridge.handleMessage(event);
+    expect(response.action).toBe("proceed");
   });
 });
+
+### Safety & Session Management
+
+- **Path Validation**: `setActivePlan()` is public for testing but enforces the same path-traversal protections as `TriggerDetector`.
+- **Session Isolation**: `activePlanPaths` uses a `Map<sessionId, planPath>` to ensure state is scoped per session.
+- **Fail-open I/O**: All file operations are wrapped in `try/catch` blocks. If an error occurs, the active plan is cleared and the hook returns `PROCEED`.
 ```
 
 **Step 2: Run tests to verify they fail**

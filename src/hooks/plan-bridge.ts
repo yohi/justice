@@ -23,14 +23,20 @@ export class PlanBridge {
 
   /**
    * Set the currently active plan path for a specific session.
-   * Internal method that ensures only valid paths (already detected/validated by TriggerDetector)
-   * are stored in the activePlanPaths map.
+   * Validates the path using TriggerDetector to prevent path traversal.
    */
-  private setActivePlan(sessionId: string, planPath: string | null): void {
-    const trimmed = planPath?.trim();
-    if (trimmed) {
-      this.activePlanPaths.set(sessionId, trimmed);
+  setActivePlan(sessionId: string, planPath: string | null): void {
+    if (!planPath) {
+      this.activePlanPaths.delete(sessionId);
+      return;
+    }
+
+    // Reuse TriggerDetector logic to ensure the path is safe
+    const validatedRef = this.triggerDetector.detectPlanReference(planPath);
+    if (validatedRef && validatedRef.planPath === planPath.trim()) {
+      this.activePlanPaths.set(sessionId, validatedRef.planPath);
     } else {
+      // If invalid, clear it to be safe
       this.activePlanPaths.delete(sessionId);
     }
   }
@@ -55,24 +61,11 @@ export class PlanBridge {
     const { shouldTrigger, planRef } = this.triggerDetector.analyzeTrigger(content);
     if (!shouldTrigger || !planRef) return PROCEED;
 
-    // Graceful error handling for all file I/O operations
     try {
-      // Check if the plan file exists
-      const exists = await this.fileReader.fileExists(planRef.planPath);
-      if (!exists) return PROCEED;
-
-      // Read the plan file
-      const planContent = await this.fileReader.readFile(planRef.planPath);
-
-      // Build delegation request
-      const delegation = this.core.buildDelegationFromPlan(planContent, {
-        planFilePath: planRef.planPath,
-        referenceFiles: [],
-      });
+      const delegation = await this.loadDelegationForPlan(event.sessionId, planRef.planPath);
 
       if (!delegation) {
-        // All tasks completed: clear active plan for this session
-        this.setActivePlan(event.sessionId, null);
+        // All tasks completed (loadDelegationForPlan returns null on no incomplete tasks)
         return {
           action: "inject",
           injectedContext: `[JUSTICE: All tasks in ${planRef.planPath} are already completed. No further delegation needed.]`,
@@ -87,7 +80,8 @@ export class PlanBridge {
         injectedContext: this.formatDelegationContext(delegation),
       };
     } catch (_error) {
-      // Log context (in a real scenario) and return PROCEED
+      // Fail-open on I/O error as per requirement
+      this.setActivePlan(event.sessionId, null);
       return PROCEED;
     }
   }
@@ -106,18 +100,10 @@ export class PlanBridge {
     if (!activePlanPath) return PROCEED;
 
     try {
-      const exists = await this.fileReader.fileExists(activePlanPath);
-      if (!exists) return PROCEED;
-
-      const planContent = await this.fileReader.readFile(activePlanPath);
-      const delegation = this.core.buildDelegationFromPlan(planContent, {
-        planFilePath: activePlanPath,
-        referenceFiles: [],
-      });
+      const delegation = await this.loadDelegationForPlan(event.sessionId, activePlanPath);
 
       if (!delegation) {
-        // Cleanup if plan is now done
-        this.setActivePlan(event.sessionId, null);
+        // Plan is now done: loadDelegationForPlan already cleared it
         return PROCEED;
       }
 
@@ -126,8 +112,38 @@ export class PlanBridge {
         injectedContext: this.formatDelegationContext(delegation),
       };
     } catch (_error) {
+      this.setActivePlan(event.sessionId, null);
       return PROCEED;
     }
+  }
+
+  /**
+   * Common logic to load and parse a plan file.
+   * Throws on I/O error, returns null if no incomplete tasks are found.
+   */
+  private async loadDelegationForPlan(
+    sessionId: string,
+    planPath: string,
+  ): Promise<DelegationRequest | null> {
+    // fileExists and readFile may throw, which will be caught by handlers
+    const exists = await this.fileReader.fileExists(planPath);
+    if (!exists) {
+      this.setActivePlan(sessionId, null);
+      throw new Error(`Plan file not found: ${planPath}`);
+    }
+
+    const planContent = await this.fileReader.readFile(planPath);
+    const delegation = this.core.buildDelegationFromPlan(planContent, {
+      planFilePath: planPath,
+      referenceFiles: [],
+    });
+
+    if (!delegation) {
+      this.setActivePlan(sessionId, null);
+      return null;
+    }
+
+    return delegation;
   }
 
   private formatDelegationContext(delegation: DelegationRequest): string {
