@@ -2,6 +2,16 @@ import type { PlanTask } from "./types";
 
 const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
 
+/**
+ * 依存関係の解決中に発生したエラー。
+ */
+export class DependencyResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependencyResolutionError";
+  }
+}
+
 export class DependencyAnalyzer {
   /**
    * Extract explicit dependency declarations from step descriptions.
@@ -67,7 +77,7 @@ export class DependencyAnalyzer {
    * Returns tasks in topological execution order.
    * Completed tasks come first, then by dependency depth.
    * Unknown dependencies will emit a warning and are ignored (processing continues).
-   * Throws an Error if circular dependencies are detected.
+   * Throws a DependencyResolutionError if circular dependencies are detected.
    */
   buildExecutionOrder(tasks: PlanTask[]): PlanTask[] {
     const deps = this.extractDependencies(tasks);
@@ -75,33 +85,45 @@ export class DependencyAnalyzer {
     const circularIds = this.detectCircular(deps, taskMap);
 
     if (circularIds.size > 0) {
-      throw new Error(
+      throw new DependencyResolutionError(
         `Circular dependency detected involving tasks: ${[...circularIds].join(", ")}`,
       );
     }
 
     const visited = new Set<string>();
+    const failedIds = new Set<string>();
     const result: PlanTask[] = [];
     const unknownDepsReported = new Set<string>();
 
-    const visit = (id: string): void => {
-      if (visited.has(id)) return;
+    const visit = (id: string): boolean => {
+      if (failedIds.has(id)) return false;
+      if (visited.has(id)) return true;
       visited.add(id);
 
+      let canExecute = true;
       const taskDeps = deps.get(id) ?? [];
       for (const depId of taskDeps) {
         if (taskMap.has(depId)) {
-          visit(depId);
+          if (!visit(depId)) {
+            canExecute = false;
+          }
         } else {
           if (!unknownDepsReported.has(depId)) {
             console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
             unknownDepsReported.add(depId);
           }
+          canExecute = false;
         }
       }
 
-      const task = taskMap.get(id);
-      if (task) result.push(task);
+      if (canExecute) {
+        const task = taskMap.get(id);
+        if (task) result.push(task);
+        return true;
+      } else {
+        failedIds.add(id);
+        return false;
+      }
     };
 
     for (const task of tasks) {

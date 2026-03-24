@@ -1,6 +1,6 @@
 import type { FileReader, PlanTask } from "./types";
 import { PlanParser } from "./plan-parser";
-import { DependencyAnalyzer } from "./dependency-analyzer";
+import { DependencyAnalyzer, DependencyResolutionError } from "./dependency-analyzer";
 import { ProgressReporter, type ProgressReport } from "./progress-reporter";
 import { CategoryClassifier } from "./category-classifier";
 
@@ -44,8 +44,12 @@ export class StatusCommand {
     try {
       executionOrder = this.analyzer.buildExecutionOrder(tasks);
     } catch (err) {
-      executionOrderError = err instanceof Error ? err.message : String(err);
-      console.warn(`Could not build execution order for ${planPath}: ${executionOrderError}`);
+      if (err instanceof DependencyResolutionError) {
+        executionOrderError = err.message;
+        console.warn(`Could not build execution order for ${planPath}: ${executionOrderError}`);
+      } else {
+        throw err;
+      }
     }
 
     const categoryMap = new Map<string, string>();

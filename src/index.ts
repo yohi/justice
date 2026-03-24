@@ -23,7 +23,7 @@ export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
 
 // Phase 6 Exports
-export { DependencyAnalyzer } from "./core/dependency-analyzer";
+export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
 
@@ -31,7 +31,7 @@ export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 
 // Phase 7 Exports
-export { JusticePlugin } from "./core/justice-plugin";
+export { JusticePlugin, type JusticePluginOptions } from "./core/justice-plugin";
 export { StatusCommand, type PlanStatus } from "./core/status-command";
 export { NodeFileSystem } from "./runtime/node-file-system";
 

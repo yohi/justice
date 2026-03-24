@@ -8,6 +8,14 @@ import { WisdomStore } from "./wisdom-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
+export interface JusticePluginOptions {
+  readonly logger?: {
+    error(message: string, ...args: unknown[]): void;
+    warn(message: string, ...args: unknown[]): void;
+  };
+  readonly onError?: (error: unknown) => void;
+}
+
 export class JusticePlugin {
   private readonly fileReader: FileReader;
   private readonly planBridge: PlanBridge;
@@ -15,9 +23,11 @@ export class JusticePlugin {
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
   private readonly wisdomStore: WisdomStore;
+  private readonly options: JusticePluginOptions;
 
-  constructor(fileReader: FileReader, fileWriter: FileWriter) {
+  constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
+    this.options = options;
     this.wisdomStore = new WisdomStore();
     this.planBridge = new PlanBridge(fileReader, this.wisdomStore);
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.wisdomStore);
@@ -109,8 +119,12 @@ export class JusticePlugin {
             const injectedContext = this.compactionProtector.formatForInjection(snapshot);
             return { action: "inject", injectedContext };
           } catch (error) {
-            // Ignore file read errors and proceed
-            console.warn(`Failed to create compaction snapshot for ${activePlan}:`, error);
+            // Use provided logger or error handler if available
+            if (this.options.logger) {
+              this.options.logger.error(`Failed to create compaction snapshot for ${activePlan}:`, error);
+            } else if (this.options.onError) {
+              this.options.onError(error);
+            }
           }
         }
         return PROCEED;
