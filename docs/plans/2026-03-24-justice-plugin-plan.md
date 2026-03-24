@@ -29,7 +29,7 @@ cd "$(git rev-parse --show-toplevel)" && bun init -y
 **Step 2: Install dependencies**
 
 ```bash
-cd "$(git rev-parse --show-toplevel)" && bun add -d typescript vitest @types/node eslint prettier eslint-config-prettier @typescript-eslint/eslint-plugin @typescript-eslint/parser
+cd "$(git rev-parse --show-toplevel)" && bun add -d typescript vitest @types/node eslint prettier eslint-config-prettier typescript-eslint
 ```
 
 **Step 3: Create tsconfig.json**
@@ -81,27 +81,24 @@ export default defineConfig({
 });
 ```
 
-**Step 5: Create .eslintrc.json**
+**Step 5: Create eslint.config.mjs**
 
-```json
-{
-  "root": true,
-  "parser": "@typescript-eslint/parser",
-  "parserOptions": {
-    "ecmaVersion": 2022,
-    "sourceType": "module"
+```javascript
+import eslint from "@eslint/js";
+import tseslint from "typescript-eslint";
+import prettierConfig from "eslint-config-prettier";
+
+export default tseslint.config(
+  eslint.configs.recommended,
+  ...tseslint.configs.recommended,
+  prettierConfig,
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/explicit-function-return-type": "warn",
+    },
   },
-  "plugins": ["@typescript-eslint"],
-  "extends": [
-    "eslint:recommended",
-    "plugin:@typescript-eslint/recommended",
-    "prettier"
-  ],
-  "rules": {
-    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-    "@typescript-eslint/explicit-function-return-type": "warn"
-  }
-}
+);
 ```
 
 **Step 6: Create .prettierrc**
