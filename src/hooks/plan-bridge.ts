@@ -13,7 +13,7 @@ export class PlanBridge {
   private readonly fileReader: FileReader;
   private readonly triggerDetector: TriggerDetector;
   private readonly core: PlanBridgeCore;
-  private activePlanPath: string | null = null;
+  private readonly activePlanPaths: Map<string, string> = new Map();
 
   constructor(fileReader: FileReader) {
     this.fileReader = fileReader;
@@ -22,17 +22,22 @@ export class PlanBridge {
   }
 
   /**
-   * Set the currently active plan path (for PreToolUse context injection).
+   * Set the currently active plan path for a specific session.
    */
-  setActivePlan(planPath: string): void {
-    this.activePlanPath = planPath.trim() || null;
+  setActivePlan(sessionId: string, planPath: string | null): void {
+    const trimmed = planPath?.trim();
+    if (trimmed) {
+      this.activePlanPaths.set(sessionId, trimmed);
+    } else {
+      this.activePlanPaths.delete(sessionId);
+    }
   }
 
   /**
-   * Get the current active plan path.
+   * Get the current active plan path for a specific session.
    */
-  getActivePlan(): string | null {
-    return this.activePlanPath;
+  getActivePlan(sessionId: string): string | null {
+    return this.activePlanPaths.get(sessionId) ?? null;
   }
 
   /**
@@ -52,11 +57,13 @@ export class PlanBridge {
     const exists = await this.fileReader.fileExists(planRef.planPath);
     if (!exists) return PROCEED;
 
-    // Read the plan file
-    const planContent = await this.fileReader.readFile(planRef.planPath);
-
-    // Set as active plan for PreToolUse context injection
-    this.setActivePlan(planRef.planPath);
+    // Read the plan file with graceful error handling
+    let planContent: string;
+    try {
+      planContent = await this.fileReader.readFile(planRef.planPath);
+    } catch {
+      return PROCEED; // Propagate nothing, let the conversation continue
+    }
 
     // Build delegation request
     const delegation = this.core.buildDelegationFromPlan(planContent, {
@@ -65,11 +72,16 @@ export class PlanBridge {
     });
 
     if (!delegation) {
+      // All tasks completed: clear active plan for this session
+      this.setActivePlan(event.sessionId, null);
       return {
-        action: "proceed",
-        injectedContext: `All tasks in ${planRef.planPath} are completed. No delegation needed.`,
+        action: "inject",
+        injectedContext: `[JUSTICE: All tasks in ${planRef.planPath} are already completed. No further delegation needed.]`,
       };
     }
+
+    // Set as active plan for PreToolUse context injection
+    this.setActivePlan(event.sessionId, planRef.planPath);
 
     return {
       action: "inject",
@@ -86,19 +98,30 @@ export class PlanBridge {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    // Need an active plan to provide context
-    if (!this.activePlanPath) return PROCEED;
+    // Need an active plan to provide context for this session
+    const activePlanPath = this.getActivePlan(event.sessionId);
+    if (!activePlanPath) return PROCEED;
 
-    const exists = await this.fileReader.fileExists(this.activePlanPath);
+    const exists = await this.fileReader.fileExists(activePlanPath);
     if (!exists) return PROCEED;
 
-    const planContent = await this.fileReader.readFile(this.activePlanPath);
+    let planContent: string;
+    try {
+      planContent = await this.fileReader.readFile(activePlanPath);
+    } catch {
+      return PROCEED;
+    }
+
     const delegation = this.core.buildDelegationFromPlan(planContent, {
-      planFilePath: this.activePlanPath,
+      planFilePath: activePlanPath,
       referenceFiles: [],
     });
 
-    if (!delegation) return PROCEED;
+    if (!delegation) {
+      // Cleanup if plan is now done
+      this.setActivePlan(event.sessionId, null);
+      return PROCEED;
+    }
 
     return {
       action: "inject",

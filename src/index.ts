@@ -1,25 +1,12 @@
-// Justice Plugin — Entry Point
-// The nervous system connecting Superpowers (brain) and oh-my-openagent (limbs)
-
+export { ErrorClassifier } from "./core/error-classifier";
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
-export type { PackageOptions } from "./core/task-packager";
-export { ErrorClassifier } from "./core/error-classifier";
-export { CompactionProtector } from "./hooks/compaction-protector";
+export * from "./core/types";
 
-export type {
-  PlanTask,
-  PlanStep,
-  PlanTaskStatus,
-  DelegationRequest,
-  DelegationContext,
-  TaskFeedback,
-  TaskFeedbackStatus,
-  TestSummary,
-  ErrorClass,
-  TaskCategory,
-  ProtectedContext,
-  RetryPolicy,
-} from "./core/types";
+// Phase 2 Exports
+export { TriggerDetector } from "./core/trigger-detector";
+export { PlanBridgeCore } from "./core/plan-bridge-core";
+export { PlanBridge } from "./hooks/plan-bridge";
 
-export { DEFAULT_RETRY_POLICY } from "./core/types";
+export type { BuildDelegationOptions } from "./core/plan-bridge-core";
+export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";

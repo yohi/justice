@@ -4,50 +4,28 @@ import type {
   FileReader,
   HookEvent,
 } from "../../src/core/types";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { mkdirSync } from "node:fs";
 
-// ESM dirname resolution
-import { fileURLToPath } from "node:url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Ensure the fixtures directory exists
-const fixturesDir = resolve(__dirname, "../fixtures");
-if (!existsSync(fixturesDir)) {
-  mkdirSync(fixturesDir, { recursive: true });
-}
-
-const samplePlanPath = resolve(fixturesDir, "sample-plan.md");
 const samplePlanContent = [
-  "## Setup",
+  "## Task 1: Setup",
   "- [x] Create project",
   "- [ ] Setup project structure",
 ].join("\n");
 
-if (!existsSync(samplePlanPath)) {
-  writeFileSync(samplePlanPath, samplePlanContent, "utf-8");
-}
-
-const samplePlan = readFileSync(samplePlanPath, "utf-8");
-
 function createMockFileReader(files: Record<string, string>): FileReader {
   return {
-    readFile: vi.fn(async (_path: string) => {
-      const content = files[_path];
-      if (content === undefined) throw new Error(`File not found: ${_path}`);
+    readFile: vi.fn(async (path: string) => {
+      const content = files[path];
+      if (content === undefined) throw new Error(`File not found: ${path}`);
       return content;
     }),
-    fileExists: vi.fn(async (_path: string) => _path in files),
+    fileExists: vi.fn(async (path: string) => path in files),
   };
 }
 
 describe("Plan Bridge Integration Flow", () => {
-  it("should complete full Message → Delegation flow", async () => {
+  it("should handle the full delegation flow correctly", async () => {
     const planPath = "docs/plans/sample-plan.md";
-    const reader = createMockFileReader({ [planPath]: samplePlan });
+    const reader = createMockFileReader({ [planPath]: samplePlanContent });
     const bridge = new PlanBridge(reader);
 
     // Step 1: Agent sends message referencing the plan
@@ -55,9 +33,9 @@ describe("Plan Bridge Integration Flow", () => {
       type: "Message",
       payload: {
         role: "assistant",
-        content: `I'll delegate the next task from ${planPath}`,
+        content: `I'll start by checking the plan in ${planPath} and delegate the next task.`,
       },
-      sessionId: "integration-1",
+      sessionId: "session-1",
     };
 
     const messageResponse = await bridge.handleMessage(messageEvent);
@@ -68,33 +46,31 @@ describe("Plan Bridge Integration Flow", () => {
     expect(messageResponse.injectedContext).toContain("Setup project structure");
 
     // Step 2: Verify active plan was set
-    expect(bridge.getActivePlan()).toBe(planPath);
+    expect(bridge.getActivePlan(messageEvent.sessionId)).toBe(planPath);
 
     // Step 3: task() is about to be called, inject context
     const toolEvent: HookEvent = {
       type: "PreToolUse",
       payload: {
         toolName: "task",
-        toolInput: { prompt: "implement feature" },
+        toolInput: { prompt: "setting up project structure" },
       },
-      sessionId: "integration-1",
+      sessionId: "session-1",
     };
 
     const toolResponse = await bridge.handlePreToolUse(toolEvent);
     expect(toolResponse.action).toBe("inject");
-    expect(toolResponse.injectedContext).toContain("Setup project structure");
+    expect(toolResponse.injectedContext).toContain("**Task ID**: task-1");
+    expect(toolResponse.injectedContext).toContain(
+      "**Plan File**: docs/plans/sample-plan.md",
+    );
   });
 
-  it("should handle partial progress plan correctly", async () => {
-    const planPath = "plan.md";
+  it("should handle completed plans correctly", async () => {
+    const planPath = "completed-plan.md";
     const partialPlan = [
       "## Task 1: Done",
-      "- [x] All complete",
-      "## Task 2: Next",
-      "- [ ] First step",
-      "- [ ] Second step",
-      "## Task 3: Later",
-      "- [ ] Future step",
+      "- [x] All finished",
     ].join("\n");
 
     const reader = createMockFileReader({ [planPath]: partialPlan });
@@ -104,26 +80,23 @@ describe("Plan Bridge Integration Flow", () => {
       type: "Message",
       payload: {
         role: "assistant",
-        content: `Execute the next task from ${planPath}`,
+        content: `Delegate the next task from ${planPath}.`,
       },
-      sessionId: "integration-2",
+      sessionId: "session-2",
     };
 
     const response = await bridge.handleMessage(event);
     expect(response.action).toBe("inject");
-    expect(response.injectedContext).toContain("First step");
-    // Task 1 is completed, so should delegate Task 2
-    expect(response.injectedContext).not.toContain(
-      "All complete",
-    );
+    expect(response.injectedContext).toContain("already completed");
+    expect(bridge.getActivePlan(event.sessionId)).toBeNull();
   });
 
-  it("should gracefully handle read errors", async () => {
+  it("should return PROCEED when file read fails during message handling", async () => {
     const reader: FileReader = {
+      fileExists: vi.fn(async () => true),
       readFile: vi.fn(async () => {
         throw new Error("Permission denied");
       }),
-      fileExists: vi.fn(async () => true),
     };
     const bridge = new PlanBridge(reader);
 
@@ -131,14 +104,13 @@ describe("Plan Bridge Integration Flow", () => {
       type: "Message",
       payload: {
         role: "assistant",
-        content: "Delegate task from plan.md",
+        content: "delegate from secure-plan.md",
       },
-      sessionId: "integration-3",
+      sessionId: "session-3",
     };
 
-    // Should throw since readFile fails
-    await expect(bridge.handleMessage(event)).rejects.toThrow(
-      "Permission denied",
-    );
+    // Should not throw, should return proceed
+    const response = await bridge.handleMessage(event);
+    expect(response.action).toBe("proceed");
   });
 });
