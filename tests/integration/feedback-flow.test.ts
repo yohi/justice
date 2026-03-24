@@ -64,6 +64,7 @@ describe("Feedback Flow Integration", () => {
       const maxRetries = DEFAULT_RETRY_POLICY.maxRetries;
 
       // Simulate retryable errors until exhaustion
+      // retry 0 → none (proceed), retry 1+: without referenceFiles/rolePrompt → none (proceed)
       for (let i = 0; i < maxRetries; i++) {
         const event: PostToolUseEvent = {
           type: "PostToolUse",
@@ -75,7 +76,7 @@ describe("Feedback Flow Integration", () => {
           sessionId: "int-2",
         };
         const r = await handler.handlePostToolUse(event);
-        expect(r.action).toBe("proceed"); // Layer 1 auto-fix
+        expect(r.action).toBe("proceed"); // proceed (no context reduction without referenceFiles)
       }
 
       // Next attempt: should escalate

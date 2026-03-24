@@ -206,6 +206,10 @@ export interface PostToolUsePayload {
 
 /** ファイル書き込みアクセスの抽象化 */
 export interface FileWriter {
+  /** 
+   * 指定されたパスにデータを書き込みます。
+   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）しなければなりません。
+   */
   writeFile(path: string, content: string): Promise<void>;
 }
 
@@ -241,3 +245,19 @@ export interface EscalateAction {
   readonly errorClass: ErrorClass;
   readonly message: string;
 }
+
+/** 学習エントリ (Phase 5) */
+export interface WisdomEntry {
+  readonly id: string;
+  readonly taskId: string;
+  readonly category: WisdomCategory;
+  readonly content: string;
+  readonly errorClass?: ErrorClass;
+  readonly timestamp: string;
+}
+
+export type WisdomCategory =
+  | "success_pattern"     // 成功した実装パターン
+  | "failure_gotcha"      // 失敗時の落とし穴
+  | "design_decision"     // 重要な設計判断
+  | "environment_quirk";  // 環境固有の注意事項

@@ -1,5 +1,6 @@
 import type { ProtectedContext } from "../core/types";
 import { PlanParser } from "../core/plan-parser";
+import { WisdomStore } from "../core/wisdom-store";
 
 interface SnapshotInput {
   planContent: string;
@@ -11,9 +12,11 @@ interface SnapshotInput {
 export class CompactionProtector {
   private activePlanPath: string | null = null;
   private readonly parser: PlanParser;
+  private readonly wisdomStore: WisdomStore | null;
 
-  constructor() {
+  constructor(wisdomStore?: WisdomStore) {
     this.parser = new PlanParser();
+    this.wisdomStore = wisdomStore ?? null;
   }
 
   /**
@@ -49,11 +52,34 @@ export class CompactionProtector {
    * Create a snapshot of the current plan state for compaction protection.
    */
   createSnapshot(input: SnapshotInput): ProtectedContext {
+    // Merge WisdomStore learnings with any explicit input learnings
+    const wisdomLearnings = this.wisdomStore
+      ? this.wisdomStore.formatForInjection(
+          this.wisdomStore.getRelevant({ maxEntries: 10 }),
+        )
+      : "";
+    
+    // Combine and deduplicate learnings blocks
+    const learningBlocks = [input.learnings, wisdomLearnings]
+      .filter((l) => l.trim() !== "")
+      .flatMap((l) => l.split("\n\n"))
+      .map((block) => block.trim())
+      .filter((block) => block !== "");
+
+    const uniqueBlocks: string[] = [];
+    for (const block of learningBlocks) {
+      if (!uniqueBlocks.includes(block)) {
+        uniqueBlocks.push(block);
+      }
+    }
+
+    const combinedLearnings = uniqueBlocks.join("\n\n");
+
     return {
       planSnapshot: input.planContent,
       currentTaskId: input.currentTaskId,
       currentStepId: input.currentStepId,
-      accumulatedLearnings: input.learnings,
+      accumulatedLearnings: combinedLearnings,
       timestamp: new Date().toISOString(),
       activePlanPath: this.activePlanPath,
     };
