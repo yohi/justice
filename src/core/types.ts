@@ -118,7 +118,7 @@ export interface PreToolUseEvent {
 
 export interface PostToolUseEvent {
   readonly type: "PostToolUse";
-  readonly payload: unknown; // 必要に応じて具体的な型を定義
+  readonly payload: PostToolUsePayload;
   readonly sessionId: string;
 }
 
@@ -168,4 +168,41 @@ export interface InjectResponse {
 export interface FileReader {
   readFile(path: string): Promise<string>;
   fileExists(path: string): Promise<boolean>;
+}
+
+/** PostToolUse イベントのペイロード */
+export interface PostToolUsePayload {
+  readonly toolName: string;
+  readonly toolResult: string;
+  readonly error: boolean;
+}
+
+/** ファイル書き込みアクセスの抽象化 */
+export interface FileWriter {
+  writeFile(path: string, content: string): Promise<void>;
+}
+
+/** フィードバックアクションの Discriminated Union */
+export type FeedbackAction =
+  | SuccessAction
+  | RetryAction
+  | EscalateAction;
+
+export interface SuccessAction {
+  readonly type: "success";
+  readonly taskId: string;
+}
+
+export interface RetryAction {
+  readonly type: "retry";
+  readonly taskId: string;
+  readonly errorClass: ErrorClass;
+  readonly retryCount: number;
+}
+
+export interface EscalateAction {
+  readonly type: "escalate";
+  readonly taskId: string;
+  readonly errorClass: ErrorClass;
+  readonly message: string;
 }
