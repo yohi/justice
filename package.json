@@ -1,7 +1,14 @@
 {
-  "name": "justice-plugin",
+  "name": "@yohi/justice",
   "version": "0.1.0",
   "description": "OpenCode plugin bridging Superpowers and oh-my-openagent",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yohi/justice.git"
+  },
   "module": "dist/index.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
