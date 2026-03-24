@@ -101,7 +101,6 @@ export class JusticePlugin {
       case "compaction": {
         const activePlan = this.planBridge.getActivePlan(event.sessionId);
         if (activePlan) {
-          this.compactionProtector.setActivePlan(activePlan);
           try {
             const planContent = await this.fileReader.readFile(activePlan);
             
@@ -109,6 +108,7 @@ export class JusticePlugin {
             // in a strict way outside of what's passed to tools, we use placeholders or 
             // extract them if they were part of the event payload.
             // For now, we provide the plan content to ensure the protector can snapshot it.
+            this.compactionProtector.setActivePlan(activePlan);
             const snapshot = this.compactionProtector.createSnapshot({
               planContent,
               currentTaskId: "unknown", // Ideal integration would pass these from state
@@ -122,7 +122,8 @@ export class JusticePlugin {
             // Use provided logger or error handler if available
             if (this.options.logger) {
               this.options.logger.error(`Failed to create compaction snapshot for ${activePlan}:`, error);
-            } else if (this.options.onError) {
+            }
+            if (this.options.onError) {
               this.options.onError(error);
             }
           }
