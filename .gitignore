@@ -8,3 +8,4 @@ coverage/
 *.log
 .vscode/
 Thumbs.db
+.worktrees/

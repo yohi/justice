@@ -1,101 +1,53 @@
 import { describe, it, expect } from "vitest";
 import type {
-  PlanTask,
-  PlanStep,
-  DelegationRequest,
-  TaskFeedback,
-  ErrorClass,
-  TaskCategory,
-  ProtectedContext,
+  HookEvent,
+  HookResponse,
 } from "../../src/core/types";
 
-describe("Core Types", () => {
-  it("should allow creating a valid PlanTask", () => {
-    const task: PlanTask = {
-      id: "task-1",
-      title: "Setup project",
-      steps: [],
-      status: "pending",
-    };
-    expect(task.id).toBe("task-1");
-    expect(task.status).toBe("pending");
+describe("Hook Types Validation", () => {
+  describe("HookEvent", () => {
+    it("should accept valid MessageEvent", () => {
+      const event: HookEvent = {
+        type: "Message",
+        payload: {
+          role: "user",
+          content: "Hello",
+        },
+        sessionId: "session-123",
+      };
+      expect(event.type).toBe("Message");
+      expect(event.payload.content).toBe("Hello");
+    });
+
+    it("should accept valid PreToolUseEvent", () => {
+      const event: HookEvent = {
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { taskId: "1" },
+        },
+        sessionId: "session-123",
+      };
+      expect(event.type).toBe("PreToolUse");
+      expect(event.payload.toolName).toBe("task");
+    });
   });
 
-  it("should allow creating a valid PlanStep", () => {
-    const step: PlanStep = {
-      id: "task-1-step-1",
-      description: "Create directory",
-      checked: false,
-      lineNumber: 5,
-    };
-    expect(step.checked).toBe(false);
-  });
+  describe("HookResponse", () => {
+    it("should accept valid ProceedResponse", () => {
+      const response: HookResponse = {
+        action: "proceed",
+      };
+      expect(response.action).toBe("proceed");
+    });
 
-  it("should allow creating a valid DelegationRequest", () => {
-    const req: DelegationRequest = {
-      category: "deep",
-      prompt: "Implement feature X",
-      loadSkills: ["git-master"],
-      runInBackground: false,
-      context: {
-        planFilePath: "docs/plans/plan.md",
-        taskId: "task-1",
-        referenceFiles: ["src/main.ts"],
-      },
-    };
-    expect(req.category).toBe("deep");
-    expect(req.context.referenceFiles).toHaveLength(1);
-  });
-
-  it("should allow creating a valid TaskFeedback", () => {
-    const feedback: TaskFeedback = {
-      taskId: "task-1",
-      status: "success",
-      retryCount: 0,
-      testResults: {
-        passed: 5,
-        failed: 0,
-        skipped: 1,
-      },
-    };
-    expect(feedback.status).toBe("success");
-  });
-
-  it("should allow all ErrorClass values", () => {
-    const errors: ErrorClass[] = [
-      "syntax_error",
-      "type_error",
-      "test_failure",
-      "design_error",
-      "timeout",
-      "loop_detected",
-      "unknown",
-    ];
-    expect(errors).toHaveLength(7);
-  });
-
-  it("should allow all TaskCategory values", () => {
-    const categories: TaskCategory[] = [
-      "visual-engineering",
-      "ultrabrain",
-      "deep",
-      "quick",
-      "unspecified-low",
-      "unspecified-high",
-      "writing",
-    ];
-    expect(categories).toHaveLength(7);
-  });
-
-  it("should allow creating a valid ProtectedContext", () => {
-    const ctx: ProtectedContext = {
-      planSnapshot: "# Plan\n- [ ] Task 1",
-      currentTaskId: "task-1",
-      currentStepId: "task-1-step-2",
-      accumulatedLearnings: "Use ESM imports",
-      timestamp: "2026-03-24T01:00:00Z",
-      activePlanPath: "docs/plans/plan.md",
-    };
-    expect(ctx.currentTaskId).toBe("task-1");
+    it("should accept valid InjectResponse", () => {
+      const response: HookResponse = {
+        action: "inject",
+        injectedContext: "Some context",
+      };
+      expect(response.action).toBe("inject");
+      expect(response.injectedContext).toBe("Some context");
+    });
   });
 });
