@@ -1,5 +1,5 @@
 import type { FileReader, FileWriter } from "../core/types";
-import { join, resolve, isAbsolute, relative } from "node:path";
+import { join, resolve, isAbsolute, relative, dirname } from "node:path";
 import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 
 export class NodeFileSystem implements FileReader, FileWriter {
@@ -18,7 +18,7 @@ export class NodeFileSystem implements FileReader, FileWriter {
     const safePath = this.resolveSafely(path);
 
     // Ensure parent directory exists
-    const parentDir = join(safePath, "..");
+    const parentDir = dirname(safePath);
     await mkdir(parentDir, { recursive: true });
 
     await writeFile(safePath, content, "utf-8");
@@ -29,8 +29,11 @@ export class NodeFileSystem implements FileReader, FileWriter {
     try {
       await stat(safePath);
       return true;
-    } catch {
-      return false;
+    } catch (err: unknown) {
+      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw err;
     }
   }
 

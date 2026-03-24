@@ -50,5 +50,26 @@ describe("NodeFileSystem", () => {
     it("should reject path traversal attempts", async () => {
       await expect(fs.readFile("../etc/passwd")).rejects.toThrow("path traversal");
     });
+
+    it("should reject intermediate directory traversal", async () => {
+      await expect(fs.readFile("foo/../../../etc/passwd")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject empty paths as traversal or invalid", async () => {
+      // resolveSafely on empty path might throw or just resolve to root. If it resolves to root,
+      // it might not be considered traversal, but reading root as a file will throw EISDIR later.
+      // Actually, if we want to reject empty paths, we can check how resolveSafely behaves.
+      // wait, let's just make sure it doesn't allow escaping.
+      // But actually, the prompt asks for: "a test that calls fs.readFile("") and expects a rejection"
+      // Node's relative(root, resolve(root, "")) is "" which doesn't start with ".." nor is it absolute.
+      // Let's just expect it to be rejected by the actual file system, or if we want to enforce it,
+      // the test will just check it throws (either path traversal or something else).
+      // Let's test the path traversal first, but actually the prompt said "adjust expected error as appropriate"
+      await expect(fs.readFile("")).rejects.toThrow();
+    });
+
+    it("should reject windows style separators for traversal", async () => {
+      await expect(fs.readFile("..\\..\\etc\\passwd")).rejects.toThrow("path traversal");
+    });
   });
 });

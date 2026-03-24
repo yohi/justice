@@ -37,7 +37,15 @@ export class StatusCommand {
 
     const progress = this.reporter.generateReport(tasks);
     const parallelizable = this.analyzer.getParallelizable(tasks);
-    const executionOrder = this.analyzer.buildExecutionOrder(tasks);
+    
+    let executionOrder: PlanTask[] = [];
+    try {
+      executionOrder = this.analyzer.buildExecutionOrder(tasks);
+    } catch (err) {
+      console.warn(`Could not build execution order for ${planPath}: ${err instanceof Error ? err.message : String(err)}`);
+      // executionOrder remains empty in case of circular dependencies
+    }
+
     const categoryMap = new Map<string, string>();
     for (const task of tasks) {
       categoryMap.set(task.id, this.classifier.classify(task));

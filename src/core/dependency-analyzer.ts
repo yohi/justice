@@ -82,6 +82,7 @@ export class DependencyAnalyzer {
 
     const visited = new Set<string>();
     const result: PlanTask[] = [];
+    const unknownDepsReported = new Set<string>();
 
     const visit = (id: string): void => {
       if (visited.has(id)) return;
@@ -92,7 +93,10 @@ export class DependencyAnalyzer {
         if (taskMap.has(depId)) {
           visit(depId);
         } else {
-          console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
+          if (!unknownDepsReported.has(depId)) {
+            console.warn(`Warning: Task '${id}' depends on unknown task '${depId}'`);
+            unknownDepsReported.add(depId);
+          }
         }
       }
 
@@ -115,23 +119,29 @@ export class DependencyAnalyzer {
     const visiting = new Set<string>();
     const visited = new Set<string>();
 
-    const dfs = (id: string): boolean => {
-      if (visiting.has(id)) return true; // cycle detected
-      if (visited.has(id)) return false;
+    const dfs = (id: string): string | null => {
+      if (visiting.has(id)) {
+        circularIds.add(id);
+        return id; // cycle detected, returning root
+      }
+      if (visited.has(id)) return null;
 
       visiting.add(id);
       const taskDeps = deps.get(id) ?? [];
       for (const depId of taskDeps) {
-        if (taskMap.has(depId) && dfs(depId)) {
-          circularIds.add(id);
-          circularIds.add(depId);
-          visiting.delete(id);
-          return true;
+        if (taskMap.has(depId)) {
+          const cycleRoot = dfs(depId);
+          if (cycleRoot !== null) {
+            circularIds.add(id);
+            if (id !== cycleRoot) {
+              return cycleRoot;
+            }
+          }
         }
       }
       visiting.delete(id);
       visited.add(id);
-      return false;
+      return null;
     };
 
     for (const id of deps.keys()) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import type { FileReader, FileWriter, HookEvent, MessageEvent, PreToolUseEvent, PostToolUseEvent, EventEvent } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";

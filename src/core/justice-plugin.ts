@@ -1,4 +1,4 @@
-import type { FileReader, FileWriter, HookEvent, HookResponse } from "./types";
+import type { FileReader, FileWriter, HookEvent, HookResponse, EventEvent } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -73,11 +73,16 @@ export class JusticePlugin {
   }
 
   /**
+   * Get the LoopDetectionHandler instance.
+   */
+  getLoopHandler(): LoopDetectionHandler {
+    return this.loopHandler;
+  }
+
+  /**
    * Route Event-type events based on eventType payload.
    */
-  private async handleEventType(event: HookEvent): Promise<HookResponse> {
-    if (event.type !== "Event") return PROCEED;
-
+  private async handleEventType(event: EventEvent): Promise<HookResponse> {
     switch (event.payload.eventType) {
       case "loop-detector":
         return this.loopHandler.handleEvent(event);

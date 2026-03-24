@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { StatusCommand } from "../../src/core/status-command";
 import { createMockFileReader } from "../helpers/mock-file-system";
+import type { FileReader } from "../../src/core/types";
 
 describe("StatusCommand", () => {
   const planContent = [
@@ -16,8 +17,13 @@ describe("StatusCommand", () => {
     "- [ ] E2E tests (depends: task-2, task-3)",
   ].join("\n");
 
-  const reader = createMockFileReader({ "plan.md": planContent });
-  const command = new StatusCommand(reader);
+  let reader: FileReader;
+  let command: StatusCommand;
+
+  beforeEach(() => {
+    reader = createMockFileReader({ "plan.md": planContent });
+    command = new StatusCommand(reader);
+  });
 
   describe("getStatus", () => {
     it("should return structured status with progress", async () => {

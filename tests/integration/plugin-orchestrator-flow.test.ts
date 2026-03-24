@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { StatusCommand } from "../../src/core/status-command";
 import type { MessageEvent, PostToolUseEvent } from "../../src/core/types";
