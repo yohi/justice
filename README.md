@@ -1,15 +1,24 @@
-# justice
+# Justice Plugin
 
-To install dependencies:
+> The nervous system connecting Superpowers and oh-my-openagent.
+
+## Overview
+
+Justice translates Superpowers' declarative intent (plan.md, design.md)
+into oh-my-openagent's event-driven API (task(), hooks, compaction).
+
+## Quick Start
 
 ```bash
 bun install
+bun run test
 ```
 
-To run:
+## Development (Devcontainer)
 
-```bash
-bun run index.ts
-```
+Open in VS Code with Remote Containers extension for a fully isolated
+development environment.
 
-This project was created using `bun init` in bun v1.2.19. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+## Architecture
+
+See `docs/plans/2026-03-24-justice-plugin-design.md` for the full design.

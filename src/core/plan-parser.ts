@@ -1,8 +1,6 @@
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^###\s+Task\s+(\d+):\s*(.+)$/;
-const CHECKBOX_UNCHECKED_REGEX = /^-\s+\[ \]\s+(.+)$/;
-const CHECKBOX_CHECKED_REGEX = /^-\s+\[x\]\s+(.+)$/;
 const CHECKBOX_ANY_REGEX = /^-\s+\[([ x])\]\s+(.+)$/;
 
 export class PlanParser {
@@ -18,10 +16,12 @@ export class PlanParser {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      if (line === undefined) continue;
+      
       const lineNumber = i + 1; // 1-indexed
 
       const taskMatch = line.match(TASK_HEADING_REGEX);
-      if (taskMatch) {
+      if (taskMatch && taskMatch[1] !== undefined && taskMatch[2] !== undefined) {
         if (currentTask) {
           tasks.push(this.buildTask(currentTask));
         }
@@ -35,7 +35,7 @@ export class PlanParser {
 
       if (currentTask) {
         const checkboxMatch = line.match(CHECKBOX_ANY_REGEX);
-        if (checkboxMatch) {
+        if (checkboxMatch && checkboxMatch[1] !== undefined && checkboxMatch[2] !== undefined) {
           const stepNum = currentTask.steps.length + 1;
           currentTask.steps.push({
             id: `task-${currentTask.taskNum}-step-${stepNum}`,
@@ -66,7 +66,7 @@ export class PlanParser {
     }
 
     const line = lines[index];
-    if (!CHECKBOX_ANY_REGEX.test(line)) {
+    if (line === undefined || !CHECKBOX_ANY_REGEX.test(line)) {
       throw new Error(`Line ${lineNumber} is not a checkbox: "${line}"`);
     }
 
@@ -89,11 +89,14 @@ export class PlanParser {
     let inserted = false;
 
     for (let i = 0; i < lines.length; i++) {
-      result.push(lines[i]);
+      const line = lines[i];
+      if (line !== undefined) {
+        result.push(line);
+      }
 
-      if (!inserted) {
-        const taskMatch = lines[i].match(TASK_HEADING_REGEX);
-        if (taskMatch && parseInt(taskMatch[1], 10) === taskNum) {
+      if (!inserted && line !== undefined) {
+        const taskMatch = line.match(TASK_HEADING_REGEX);
+        if (taskMatch && taskMatch[1] !== undefined && parseInt(taskMatch[1], 10) === taskNum) {
           result.push("");
           result.push(`> ⚠️ **Error**: ${errorMessage}`);
           result.push("");
