@@ -72,7 +72,7 @@ export class PlanBridge {
         return PROCEED;
       }
       planContent = content;
-    } catch (_ioError) {
+    } catch {
       this.setActivePlan(event.sessionId, null);
       return PROCEED;
     }
@@ -124,7 +124,7 @@ export class PlanBridge {
         return PROCEED;
       }
       planContent = content;
-    } catch (_ioError) {
+    } catch {
       this.setActivePlan(event.sessionId, null);
       return PROCEED;
     }

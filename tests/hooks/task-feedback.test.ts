@@ -4,7 +4,6 @@ import type {
   FileReader,
   FileWriter,
   PostToolUseEvent,
-  HookResponse,
 } from "../../src/core/types";
 
 const samplePlan = [
