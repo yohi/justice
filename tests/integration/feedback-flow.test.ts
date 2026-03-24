@@ -76,7 +76,7 @@ describe("Feedback Flow Integration", () => {
           sessionId: "int-2",
         };
         const r = await handler.handlePostToolUse(event);
-        expect(r.action).toBe("proceed"); // Layer 1 auto-fix (no context reduction without referenceFiles)
+        expect(r.action).toBe("proceed"); // proceed (no context reduction without referenceFiles)
       }
 
       // Next attempt: should escalate

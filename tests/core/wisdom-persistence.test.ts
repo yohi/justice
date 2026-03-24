@@ -28,8 +28,12 @@ describe("WisdomPersistence", () => {
 
     const all = restored.getRelevant();
     expect(all).toHaveLength(2);
-    expect(all[0]?.taskId).toBe("t1");
-    expect(all[1]?.errorClass).toBe("timeout");
+    expect(all).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "t1", category: "success_pattern" }),
+        expect.objectContaining({ taskId: "t2", errorClass: "timeout" }),
+      ]),
+    );
   });
 
   it("should return empty WisdomStore when file does not exist", async () => {

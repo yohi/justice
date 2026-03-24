@@ -4,6 +4,7 @@ import type {
   HookEvent,
   HookResponse,
   FeedbackAction,
+  TaskFeedback,
 } from "../core/types";
 import { FeedbackFormatter } from "../core/feedback-formatter";
 import { ErrorClassifier } from "../core/error-classifier";
@@ -104,7 +105,7 @@ export class TaskFeedbackHandler {
     const action = this.determineAction(feedback, session, payload.toolResult);
 
     // Execute the action
-    return this.executeAction(action, session);
+    return this.executeAction(action, feedback, session, payload.toolResult);
   }
 
   private determineAction(
@@ -168,11 +169,13 @@ export class TaskFeedbackHandler {
 
   private async executeAction(
     action: FeedbackAction,
+    feedback: TaskFeedback,
     session: SessionState,
+    rawResult: string,
   ): Promise<HookResponse> {
     switch (action.type) {
       case "success":
-        return this.handleSuccess(session);
+        return this.handleSuccess(session, feedback, rawResult);
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
@@ -197,7 +200,7 @@ export class TaskFeedbackHandler {
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
-        return this.handleEscalation(action, session);
+        return this.handleEscalation(action, feedback, session, rawResult);
       default: {
         const _exhaustiveCheck: never = action;
         void _exhaustiveCheck;
@@ -206,7 +209,11 @@ export class TaskFeedbackHandler {
     }
   }
 
-  private async handleSuccess(session: SessionState): Promise<HookResponse> {
+  private async handleSuccess(
+    session: SessionState,
+    feedback: TaskFeedback,
+    rawResult: string,
+  ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
 
@@ -230,11 +237,10 @@ export class TaskFeedbackHandler {
     }
 
     // Extract and accumulate learnings from success
-    const successFeedback = this.formatter.format(session.activeTaskId, "All steps completed successfully.", false);
-    const learnings = this.learningExtractor.extract({
-      ...successFeedback,
-      retryCount: totalRetries,
-    });
+    const learnings = this.learningExtractor.extract(
+      { ...feedback, retryCount: totalRetries },
+      rawResult,
+    );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
     }
@@ -247,7 +253,9 @@ export class TaskFeedbackHandler {
 
   private async handleEscalation(
     action: Extract<FeedbackAction, { type: "escalate" }>,
+    feedback: TaskFeedback,
     session: SessionState,
+    rawResult: string,
   ): Promise<HookResponse> {
     let splitSuggestionContext = "";
     try {
@@ -273,12 +281,14 @@ export class TaskFeedbackHandler {
     }
 
     // Extract and accumulate learnings from escalation
-    const learnings = this.learningExtractor.extract({
-      taskId: action.taskId,
-      status: "failure",
-      retryCount: 0,
-      errorClassification: action.errorClass,
-    });
+    const learnings = this.learningExtractor.extract(
+      {
+        ...feedback,
+        status: "failure", // Force status to capture escalation intent if timeout, etc
+        errorClassification: action.errorClass,
+      },
+      rawResult,
+    );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
     }

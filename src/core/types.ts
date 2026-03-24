@@ -206,6 +206,10 @@ export interface PostToolUsePayload {
 
 /** ファイル書き込みアクセスの抽象化 */
 export interface FileWriter {
+  /** 
+   * 指定されたパスにデータを書き込みます。
+   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）しなければなりません。
+   */
   writeFile(path: string, content: string): Promise<void>;
 }
 

@@ -17,6 +17,11 @@ export { SmartRetryPolicy } from "./core/smart-retry-policy";
 export { TaskSplitter } from "./core/task-splitter";
 export { LoopDetectionHandler } from "./hooks/loop-handler";
 
+// Phase 5 Exports
+export { WisdomStore } from "./core/wisdom-store";
+export { LearningExtractor } from "./core/learning-extractor";
+export { WisdomPersistence } from "./core/wisdom-persistence";
+
 export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 
@@ -30,4 +35,6 @@ export type {
   SuccessAction,
   RetryAction,
   EscalateAction,
+  WisdomEntry,
+  WisdomCategory,
 } from "./core/types";

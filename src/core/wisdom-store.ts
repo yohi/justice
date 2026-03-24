@@ -53,7 +53,7 @@ export class WisdomStore {
     }
 
     // Return the most recent entries up to maxEntries
-    const limit = options?.maxEntries ?? results.length;
+    const limit = options?.maxEntries ?? 10;
     return results.slice(-limit); // slice from the end to get the most recent
   }
 
@@ -121,10 +121,24 @@ export class WisdomStore {
     if (data.entries && Array.isArray(data.entries)) {
       // Push entries avoiding the add() method to keep original IDs and timestamps
       for (const entry of data.entries) {
-        store.entries.push(entry);
+        if (WisdomStore.isValidEntry(entry)) {
+          store.entries.push(entry);
+        }
       }
     }
     
     return store;
+  }
+
+  private static isValidEntry(e: unknown): e is WisdomEntry {
+    return (
+      typeof e === "object" &&
+      e !== null &&
+      typeof (e as WisdomEntry).id === "string" &&
+      typeof (e as WisdomEntry).taskId === "string" &&
+      typeof (e as WisdomEntry).category === "string" &&
+      typeof (e as WisdomEntry).content === "string" &&
+      typeof (e as WisdomEntry).timestamp === "string"
+    );
   }
 }

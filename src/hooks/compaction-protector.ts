@@ -58,9 +58,22 @@ export class CompactionProtector {
           this.wisdomStore.getRelevant({ maxEntries: 10 }),
         )
       : "";
-    const combinedLearnings = [input.learnings, wisdomLearnings]
-      .filter(Boolean)
-      .join("\n\n");
+    
+    // Combine and deduplicate learnings blocks
+    const learningBlocks = [input.learnings, wisdomLearnings]
+      .filter((l) => l.trim() !== "")
+      .flatMap((l) => l.split("\n\n"))
+      .map((block) => block.trim())
+      .filter((block) => block !== "");
+
+    const uniqueBlocks: string[] = [];
+    for (const block of learningBlocks) {
+      if (!uniqueBlocks.includes(block)) {
+        uniqueBlocks.push(block);
+      }
+    }
+
+    const combinedLearnings = uniqueBlocks.join("\n\n");
 
     return {
       planSnapshot: input.planContent,

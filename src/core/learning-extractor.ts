@@ -24,9 +24,15 @@ export class LearningExtractor {
       case "compaction_risk":
         // No specific learning from compaction risk
         break;
+      default:
+        this.assertUnreachable(feedback.status);
     }
 
     return results;
+  }
+
+  private assertUnreachable(x: never): never {
+    throw new Error(`Unexpected status encountered: ${JSON.stringify(x)}`);
   }
 
   private extractFromSuccess(feedback: TaskFeedback): WisdomEntryDraft[] {
@@ -60,6 +66,17 @@ export class LearningExtractor {
 
     if (errorClass === "unknown") {
       return results;
+    }
+
+    if (errorClass === "loop_detected") {
+      results.push({
+        taskId: feedback.taskId,
+        category: "failure_gotcha",
+        errorClass,
+        content: rawOutput
+          ? `Loop detected during execution — implementation hit a repetitive pattern:\n${rawOutput}`
+          : `Loop detected in ${feedback.taskId}.`,
+      });
     }
 
     if (errorClass === "test_failure") {
@@ -106,7 +123,7 @@ export class LearningExtractor {
       {
         taskId: feedback.taskId,
         category: "environment_quirk",
-        errorClass: "timeout" as ErrorClass,
+        errorClass: "timeout",
         content: `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
       },
     ];
