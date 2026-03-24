@@ -48,7 +48,7 @@ export class TaskSplitter {
       };
     }
 
-    if (errorClass === "timeout" || uncompletedSteps.some(s => /test|spec/i.test(s))) {
+    if (errorClass === "timeout") {
       // Split into Implementation and Testing
       const testSteps = uncompletedSteps.filter(s => /test|spec/i.test(s));
       const implSteps = uncompletedSteps.filter(s => !/test|spec/i.test(s));
@@ -56,7 +56,7 @@ export class TaskSplitter {
       if (testSteps.length > 0 && implSteps.length > 0) {
         return {
           originalTaskId: task.id,
-          rationale: "Timeout or test failures. Splitting into Implementation and Testing phases.",
+          rationale: "Task timed out. Splitting implementation and testing steps to reduce complexity.",
           suggestedSubTasks: [
             {
               title: `${task.title} (実装 / Implementation)`,

@@ -346,7 +346,7 @@ export class SmartRetryPolicy {
 
 ### バックオフ計算式
 
-```
+```text
 delay = min(baseDelay * 2^retryCount + jitter, maxDelay)
 jitter = random(0, baseDelay * 0.5)
 ```

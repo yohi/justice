@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
-import { DelegationContext } from "../../src/core/types";
+import type { DelegationContext } from "../../src/core/types";
 
 describe("SmartRetryPolicy", () => {
   const policy = new SmartRetryPolicy(1000, 30000, 3, ["syntax_error", "type_error"]);
@@ -19,8 +19,9 @@ describe("SmartRetryPolicy", () => {
       expect(decision.delayMs).toBe(0);
     });
 
-    it("should return shouldRetry:false if maxRetries exceeded", () => {
-      const decision = policy.evaluate("syntax_error", 4, mockContext);
+    it("should return shouldRetry:false if maxRetries reached (currentRetry >= maxRetries)", () => {
+      // With maxRetries = 3, retry 3 should be disallowed if we use "<"
+      const decision = policy.evaluate("syntax_error", 3, mockContext);
       expect(decision.shouldRetry).toBe(false);
     });
 
@@ -28,6 +29,9 @@ describe("SmartRetryPolicy", () => {
       const decision = policy.evaluate("type_error", 1, mockContext);
       expect(decision.shouldRetry).toBe(true);
       expect(decision.retryCount).toBe(1);
+
+      const decision2 = policy.evaluate("type_error", 2, mockContext);
+      expect(decision2.shouldRetry).toBe(true);
     });
   });
 

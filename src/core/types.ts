@@ -209,6 +209,12 @@ export interface FileWriter {
   writeFile(path: string, content: string): Promise<void>;
 }
 
+/** コンテキスト削減戦略 */
+export interface ContextReduction {
+  readonly strategy: "none" | "trim_reference_files" | "simplify_prompt" | "reduce_steps";
+  readonly removedItems?: string[];
+}
+
 /** フィードバックアクションの Discriminated Union */
 export type FeedbackAction =
   | SuccessAction
@@ -226,9 +232,7 @@ export interface RetryAction {
   readonly errorClass: ErrorClass;
   readonly retryCount: number;
   readonly delayMs: number;
-  readonly contextReduction: {
-    readonly strategy: string;
-  };
+  readonly contextReduction: ContextReduction;
 }
 
 export interface EscalateAction {

@@ -20,6 +20,7 @@ const MAX_SESSIONS = 50;
 interface SessionState {
   planPath: string;
   activeTaskId: string;
+  referenceFiles: string[];
   retryCounts: Map<string, number>; // errorClass -> count
   lastAccess: number;
 }
@@ -47,11 +48,12 @@ export class TaskFeedbackHandler {
   /**
    * Register the active plan and task for a session.
    */
-  setActivePlan(sessionId: string, planPath: string, taskId: string): void {
+  setActivePlan(sessionId: string, planPath: string, taskId: string, referenceFiles: string[] = []): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
       activeTaskId: taskId,
+      referenceFiles,
       retryCounts: new Map(),
       lastAccess: Date.now(),
     });
@@ -114,8 +116,8 @@ export class TaskFeedbackHandler {
       return {
         type: "escalate",
         taskId: feedback.taskId,
-        errorClass: "loop_detected",
-        message: this.classifier.getEscalationMessage("loop_detected"),
+        errorClass: "unknown",
+        message: this.classifier.getEscalationMessage("unknown"),
       };
     }
 
@@ -125,10 +127,10 @@ export class TaskFeedbackHandler {
 
     // Check retry eligibility with SmartRetryPolicy
     const currentCount = session.retryCounts.get(errorClass) ?? 0;
-    const decision = this.retryPolicy.evaluate(errorClass, currentCount + 1, {
+    const decision = this.retryPolicy.evaluate(errorClass, currentCount, {
       taskId: session.activeTaskId,
       planFilePath: session.planPath,
-      referenceFiles: [],
+      referenceFiles: session.referenceFiles,
     });
 
     if (decision.shouldRetry) {
@@ -136,7 +138,7 @@ export class TaskFeedbackHandler {
         type: "retry",
         taskId: feedback.taskId,
         errorClass,
-        retryCount: decision.retryCount,
+        retryCount: currentCount + 1,
         delayMs: decision.delayMs,
         contextReduction: decision.contextReduction,
       };
@@ -164,7 +166,11 @@ export class TaskFeedbackHandler {
         
         // Wait for exponential backoff delay if any
         if (action.delayMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, action.delayMs));
+          // NON-BLOCKING: Schedule the log message.
+          // In a real environment, the actual tool retry would be managed by the orchestrator.
+          setTimeout(() => {
+            console.log(`[JUSTICE] Retry delay of ${action.delayMs}ms reached for task ${action.taskId}`);
+          }, action.delayMs);
         }
 
         // Apply context reduction by injecting a message if requested

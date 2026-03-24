@@ -173,7 +173,7 @@ describe("TaskFeedbackHandler", () => {
       const response = await handler.handlePostToolUse(event);
       expect(response.action).toBe("inject");
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("loop_detected");
+        expect(response.injectedContext).toContain("unknown");
       }
     });
   });

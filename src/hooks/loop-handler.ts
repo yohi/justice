@@ -47,15 +47,15 @@ export class LoopDetectionHandler {
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === session.activeTaskId);
 
-      // Append error note to plan.md
-      const updatedPlan = this.parser.appendErrorNote(
-        planContent,
-        session.activeTaskId,
-        `loop_detected: ${event.payload.message}`,
-      );
-      await this.fileWriter.writeFile(session.planPath, updatedPlan);
-
       if (activeTask) {
+        // Append error note to plan.md
+        const updatedPlan = this.parser.appendErrorNote(
+          planContent,
+          session.activeTaskId,
+          `loop_detected: ${event.payload.message}`,
+        );
+        await this.fileWriter.writeFile(session.planPath, updatedPlan);
+
         // Generate split suggestion
         const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);

@@ -11,7 +11,7 @@ describe("Advanced Error Flow Integration", () => {
     vi.spyOn(SmartRetryPolicy.prototype, "calculateDelay").mockReturnValue(0);
     // Mock determineReduction to simulate context shrinking without needing real context fields
     vi.spyOn(SmartRetryPolicy.prototype, "determineReduction").mockImplementation((retryCount) => {
-      if (retryCount === 2) return { strategy: "none", removedItems: [] };
+      if (retryCount === 2) return { strategy: "trim_reference_files", removedItems: ["ref.ts"] };
       if (retryCount === 3) return { strategy: "simplify_prompt", removedItems: [] };
       return { strategy: "none" };
     });
@@ -47,9 +47,12 @@ describe("Advanced Error Flow Integration", () => {
     const resp1 = await simulateFailure("SyntaxError: parse error");
     expect(resp1.action).toBe("proceed"); // retryCount: 1, strategy: 'none'
 
-    // Attempt 2: Fails again. Policy tries to trim_reference_files, but none exist, so defaults to 'none'.
+    // Attempt 2: Fails again. Policy triggers trim_reference_files.
     const resp2 = await simulateFailure("SyntaxError: parse error");
-    expect(resp2.action).toBe("proceed");
+    expect(resp2.action).toBe("inject");
+    if (resp2.action === "inject") {
+      expect(resp2.injectedContext).toContain("trim_reference_files");
+    }
 
     // Attempt 3: Fails again. Policy triggers 'simplify_prompt' on retryCount >= 3
     const resp3 = await simulateFailure("SyntaxError: parse error");

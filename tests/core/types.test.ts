@@ -107,13 +107,15 @@ describe("Phase 3 types", () => {
 });
 
 describe("Phase 4 types", () => {
-  it("should accept LoopDetectorPayload", () => {
+  it("should accept LoopDetectorPayload with optional detectedPattern", () => {
     const payload: LoopDetectorPayload = {
       eventType: "loop-detector",
       sessionId: "s-1",
       message: "Same edit applied 3 times",
+      detectedPattern: "repeat-edit-file.ts",
     };
     expect(payload.eventType).toBe("loop-detector");
+    expect(payload.detectedPattern).toBe("repeat-edit-file.ts");
   });
 
   it("should accept CompactionPayload", () => {

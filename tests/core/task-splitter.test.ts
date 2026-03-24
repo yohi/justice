@@ -36,7 +36,9 @@ describe("TaskSplitter", () => {
       const suggestion = splitter.suggestSplit(task, "timeout");
       const hasImpl = suggestion.suggestedSubTasks.some((st) => st.title.includes("実装"));
       const hasTest = suggestion.suggestedSubTasks.some((st) => st.title.includes("テスト"));
-      expect(hasImpl || hasTest).toBe(true);
+      expect(hasImpl).toBe(true);
+      expect(hasTest).toBe(true);
+      expect(suggestion.suggestedSubTasks).toHaveLength(2);
     });
 
     it("should split loop_detected into individual steps", () => {

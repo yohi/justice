@@ -67,9 +67,9 @@ describe("LoopDetectionHandler", () => {
         sessionId: "s-2",
       });
 
-      expect(response.action).toBe("inject");
+      expect(response.action === "inject").toBe(true);
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("ループを検知しました");
+        expect(response.injectedContext).toContain("⚠️ **JUSTICE プロテクター**: 無限ループを検知しました（OmO loop-detector）");
         expect(response.injectedContext).toContain("Task task-1.1: Step: Step A");
       }
 
