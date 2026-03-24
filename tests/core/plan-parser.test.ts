@@ -118,7 +118,7 @@ describe("PlanParser", () => {
       const content = "### Task 1: Do something\n\n- [ ] Step 1\n\n### Task 2: Other\n";
       const updated = parser.appendErrorNote(content, "task-1", "Test failed: assertion error");
       expect(updated).toContain(
-        "### Task 1: Do something\n\n> ⚠️ **Error**: Test failed: assertion error\n\n\n- [ ] Step 1",
+        "### Task 1: Do something\n\n> ⚠️ **Error**: Test failed: assertion error\n\n- [ ] Step 1"
       );
     });
 

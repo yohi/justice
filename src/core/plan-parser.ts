@@ -83,6 +83,10 @@ export class PlanParser {
 
   /**
    * Append an error note after a specific task heading.
+   *
+   * NOTE: This method inserts lines into the content, which invalidates any `lineNumber`
+   * values obtained from a previous `parse()` call. Callers should re-parse the returned
+   * content if they need accurate line numbers.
    */
   appendErrorNote(content: string, taskId: string, errorMessage: string): string {
     const idMatch = taskId.match(/^task-(\d+)$/);
@@ -105,7 +109,13 @@ export class PlanParser {
         if (taskMatch && taskMatch[1] !== undefined && parseInt(taskMatch[1], 10) === taskNum) {
           result.push("");
           result.push(`> ⚠️ **Error**: ${errorMessage}`);
-          result.push("");
+
+          // Only add trailing blank if the next line isn't already blank
+          const nextLine = lines[i + 1];
+          if (nextLine !== undefined && nextLine.trim() !== "") {
+            result.push("");
+          }
+
           inserted = true;
         }
       }
@@ -115,10 +125,10 @@ export class PlanParser {
   }
 
   /**
-   * Get the next incomplete task (first non-completed task).
+   * Get the next incomplete task (pending or in_progress).
    */
   getNextIncompleteTask(tasks: PlanTask[]): PlanTask | undefined {
-    return tasks.find((t) => t.status !== "completed");
+    return tasks.find((t) => t.status === "pending" || t.status === "in_progress");
   }
 
   private buildTask(raw: { title: string; taskNum: number; steps: PlanStep[] }): PlanTask {
