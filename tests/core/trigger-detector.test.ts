@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { TriggerDetector } from "../../src/core/trigger-detector";
-import type { PlanReference } from "../../src/core/trigger-detector";
 
 describe("TriggerDetector", () => {
   const detector = new TriggerDetector();

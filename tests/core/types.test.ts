@@ -143,8 +143,8 @@ describe("Hook API types", () => {
 
   it("should enforce FileReader interface shape", () => {
     const reader: FileReader = {
-      readFile: async (path: string) => `# Plan\n- [ ] Task 1`,
-      fileExists: async (path: string) => true,
+      readFile: async (_path: string) => `# Plan\n- [ ] Task 1`,
+      fileExists: async (_path: string) => true,
     };
     expect(reader.readFile).toBeDefined();
     expect(reader.fileExists).toBeDefined();

@@ -37,12 +37,12 @@ const samplePlan = readFileSync(samplePlanPath, "utf-8");
 
 function createMockFileReader(files: Record<string, string>): FileReader {
   return {
-    readFile: vi.fn(async (path: string) => {
-      const content = files[path];
-      if (content === undefined) throw new Error(`File not found: ${path}`);
+    readFile: vi.fn(async (_path: string) => {
+      const content = files[_path];
+      if (content === undefined) throw new Error(`File not found: ${_path}`);
       return content;
     }),
-    fileExists: vi.fn(async (path: string) => path in files),
+    fileExists: vi.fn(async (_path: string) => _path in files),
   };
 }
 
