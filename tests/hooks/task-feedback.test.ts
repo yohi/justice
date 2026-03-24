@@ -1,10 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { TaskFeedbackHandler } from "../../src/hooks/task-feedback";
 import type {
-  FileReader,
-  FileWriter,
   PostToolUseEvent,
 } from "../../src/core/types";
+import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
 const samplePlan = [
   "## Task 1: Setup",
@@ -13,27 +12,6 @@ const samplePlan = [
   "## Task 2: Implement",
   "- [ ] Write code",
 ].join("\n");
-
-function createMockFileReader(files: Record<string, string>): FileReader {
-  return {
-    readFile: vi.fn(async (_path: string) => {
-      const content = files[_path];
-      if (content === undefined) throw new Error(`File not found: ${_path}`);
-      return content;
-    }),
-    fileExists: vi.fn(async (_path: string) => _path in files),
-  };
-}
-
-function createMockFileWriter(): FileWriter & { writtenFiles: Record<string, string> } {
-  const writtenFiles: Record<string, string> = {};
-  return {
-    writtenFiles,
-    writeFile: vi.fn(async (path: string, content: string) => {
-      writtenFiles[path] = content;
-    }),
-  };
-}
 
 describe("TaskFeedbackHandler", () => {
   describe("handlePostToolUse", () => {
@@ -164,6 +142,30 @@ describe("TaskFeedbackHandler", () => {
       expect(response.action).toBe("inject");
       if (response.action === "inject") {
         expect(response.injectedContext).toContain("split");
+      }
+    });
+
+    it("should escalate on compaction_risk", async () => {
+      const reader = createMockFileReader({ "plan.md": samplePlan });
+      const writer = createMockFileWriter();
+      const handler = new TaskFeedbackHandler(reader, writer);
+
+      handler.setActivePlan("session-7", "plan.md", "task-1");
+
+      const event: PostToolUseEvent = {
+        type: "PostToolUse",
+        payload: {
+          toolName: "task",
+          toolResult: "Context window is 95% full. Compaction may occur.",
+          error: false,
+        },
+        sessionId: "session-7",
+      };
+
+      const response = await handler.handlePostToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action === "inject") {
+        expect(response.injectedContext).toContain("loop_detected");
       }
     });
   });

@@ -12,10 +12,15 @@ import { PlanParser } from "../core/plan-parser";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
+// Session lifecycle configuration
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_SESSIONS = 50;
+
 interface SessionState {
   planPath: string;
   activeTaskId: string;
   retryCounts: Map<string, number>; // errorClass -> count
+  lastAccess: number;
 }
 
 export class TaskFeedbackHandler {
@@ -38,10 +43,12 @@ export class TaskFeedbackHandler {
    * Register the active plan and task for a session.
    */
   setActivePlan(sessionId: string, planPath: string, taskId: string): void {
+    this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
       activeTaskId: taskId,
       retryCounts: new Map(),
+      lastAccess: Date.now(),
     });
   }
 
@@ -58,11 +65,13 @@ export class TaskFeedbackHandler {
   async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "PostToolUse") return PROCEED;
 
-    const payload = event.payload as PostToolUsePayload;
+    const payload = event.payload;
     if (payload.toolName !== "task") return PROCEED;
 
     const session = this.sessions.get(event.sessionId);
     if (!session) return PROCEED;
+
+    session.lastAccess = Date.now();
 
     // Format the raw output into structured feedback
     const feedback = this.formatter.format(
@@ -88,12 +97,21 @@ export class TaskFeedbackHandler {
     }
 
     if (feedback.status === "timeout") {
-        return {
-          type: "escalate",
-          taskId: feedback.taskId,
-          errorClass: "timeout",
-          message: this.classifier.getEscalationMessage("timeout"),
-        };
+      return {
+        type: "escalate",
+        taskId: feedback.taskId,
+        errorClass: "timeout",
+        message: this.classifier.getEscalationMessage("timeout"),
+      };
+    }
+
+    if (feedback.status === "compaction_risk") {
+      return {
+        type: "escalate",
+        taskId: feedback.taskId,
+        errorClass: "loop_detected",
+        message: this.classifier.getEscalationMessage("loop_detected"),
+      };
     }
 
     // Classify the error using the raw task logic or test failure details
@@ -103,7 +121,6 @@ export class TaskFeedbackHandler {
     // Check retry eligibility
     const currentCount = session.retryCounts.get(errorClass) ?? 0;
     if (this.classifier.shouldRetry(errorClass, currentCount)) {
-      session.retryCounts.set(errorClass, currentCount + 1);
       return {
         type: "retry",
         taskId: feedback.taskId,
@@ -129,10 +146,16 @@ export class TaskFeedbackHandler {
       case "success":
         return this.handleSuccess(session);
       case "retry":
+        // Increment retry count
+        session.retryCounts.set(action.errorClass, action.retryCount);
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
         return this.handleEscalation(action, session);
+      default: {
+        const _exhaustiveCheck: never = action;
+        return PROCEED;
+      }
     }
   }
 
@@ -152,8 +175,8 @@ export class TaskFeedbackHandler {
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
       }
-    } catch {
-      // Fail-open on I/O errors
+    } catch (err) {
+      console.warn(`[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`, err);
     }
 
     return {
@@ -174,8 +197,8 @@ export class TaskFeedbackHandler {
         `${action.errorClass}: ${action.message}`,
       );
       await this.fileWriter.writeFile(session.planPath, updatedContent);
-    } catch {
-      // Fail-open on I/O errors
+    } catch (err) {
+      console.warn(`[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`, err);
     }
 
     return {
@@ -190,5 +213,30 @@ export class TaskFeedbackHandler {
         "---",
       ].join("\n"),
     };
+  }
+
+  private cleanupSessions(): void {
+    const now = Date.now();
+    
+    // TTL Cleanup
+    for (const [id, session] of this.sessions.entries()) {
+      if (now - session.lastAccess > SESSION_TTL_MS) {
+        this.sessions.delete(id);
+      }
+    }
+
+    // Max Size Cleanup (LRU-ish)
+    if (this.sessions.size >= MAX_SESSIONS) {
+      const sortedSessions = [...this.sessions.entries()]
+        .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+      
+      const toRemove = this.sessions.size - MAX_SESSIONS + 1;
+      for (let i = 0; i < toRemove; i++) {
+        const entry = sortedSessions[i];
+        if (entry) {
+          this.sessions.delete(entry[0]);
+        }
+      }
+    }
   }
 }
