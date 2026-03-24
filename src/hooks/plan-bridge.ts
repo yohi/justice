@@ -34,6 +34,7 @@ export class PlanBridge {
     // Reuse TriggerDetector logic to ensure the path is safe
     const validatedRef = this.triggerDetector.detectPlanReference(planPath);
     if (validatedRef) {
+      // Trust the validated and normalized path
       this.activePlanPaths.set(sessionId, validatedRef.planPath);
     } else {
       // If invalid, clear it to be safe
@@ -64,8 +65,12 @@ export class PlanBridge {
     // Fail-open ONLY on I/O error
     let planContent: string;
     try {
-      const content = await this.readPlanFile(event.sessionId, planRef.planPath);
-      if (content === null) return PROCEED;
+      const content = await this.readPlanFile(planRef.planPath);
+      if (content === null) {
+        // File missing: clear state and fail-open
+        this.setActivePlan(event.sessionId, null);
+        return PROCEED;
+      }
       planContent = content;
     } catch (_ioError) {
       this.setActivePlan(event.sessionId, null);
@@ -112,8 +117,12 @@ export class PlanBridge {
     // Fail-open ONLY on I/O error
     let planContent: string;
     try {
-      const content = await this.readPlanFile(event.sessionId, activePlanPath);
-      if (content === null) return PROCEED;
+      const content = await this.readPlanFile(activePlanPath);
+      if (content === null) {
+        // File missing: clear state and fail-open
+        this.setActivePlan(event.sessionId, null);
+        return PROCEED;
+      }
       planContent = content;
     } catch (_ioError) {
       this.setActivePlan(event.sessionId, null);
@@ -140,13 +149,12 @@ export class PlanBridge {
 
   /**
    * Internal helper to read a plan file with I/O error handling.
-   * Returns null if file not found (fail-open path).
+   * Returns null if file not found.
    * Throws on other I/O errors (which will be caught by handlers to fail-open).
    */
-  private async readPlanFile(sessionId: string, planPath: string): Promise<string | null> {
+  private async readPlanFile(planPath: string): Promise<string | null> {
     const exists = await this.fileReader.fileExists(planPath);
     if (!exists) {
-      this.setActivePlan(sessionId, null);
       return null;
     }
 
