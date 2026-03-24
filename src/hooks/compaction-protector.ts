@@ -54,6 +54,7 @@ export class CompactionProtector {
       currentStepId: input.currentStepId,
       accumulatedLearnings: input.learnings,
       timestamp: new Date().toISOString(),
+      activePlanPath: this.activePlanPath,
     };
   }
 
@@ -69,7 +70,7 @@ export class CompactionProtector {
       "---",
       "[JUSTICE: Protected Context Restored]",
       "",
-      `**Active Plan**: ${this.activePlanPath ?? "unknown"}`,
+      `**Active Plan**: ${snapshot.activePlanPath ?? "unknown"}`,
       `**Current Task**: ${snapshot.currentTaskId}`,
       `**Current Step**: ${snapshot.currentStepId}`,
       `**Progress**: ${completedCount}/${totalCount} tasks completed`,

@@ -32,9 +32,12 @@ export class ErrorClassifier {
   private readonly maxRetries: number;
   private readonly retryableErrors: Set<ErrorClass>;
 
-  constructor(maxRetries = DEFAULT_RETRY_POLICY.maxRetries) {
+  constructor(
+    maxRetries = DEFAULT_RETRY_POLICY.maxRetries,
+    retryableErrors = DEFAULT_RETRY_POLICY.retryableErrors,
+  ) {
     this.maxRetries = maxRetries;
-    this.retryableErrors = new Set(DEFAULT_RETRY_POLICY.retryableErrors);
+    this.retryableErrors = new Set(retryableErrors);
   }
 
   /**

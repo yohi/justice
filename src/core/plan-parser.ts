@@ -83,7 +83,11 @@ export class PlanParser {
    * Append an error note after a specific task heading.
    */
   appendErrorNote(content: string, taskId: string, errorMessage: string): string {
-    const taskNum = parseInt(taskId.replace("task-", ""), 10);
+    const idMatch = taskId.match(/^task-(\d+)$/);
+    if (!idMatch || idMatch[1] === undefined) {
+      throw new Error(`Invalid taskId format: ${taskId}`);
+    }
+    const taskNum = parseInt(idMatch[1], 10);
     const lines = content.split("\n");
     const result: string[] = [];
     let inserted = false;

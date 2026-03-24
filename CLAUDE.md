@@ -3,7 +3,7 @@
 Default to using Bun instead of Node.js.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
+- Use `bun run test` (this project uses Vitest) instead of `bun test` directly unless you're writing simple local tests.
 - Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
 - Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
 - Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
@@ -13,8 +13,8 @@ Default to using Bun instead of Node.js.
 
 - `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
 - `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
+- `Bun.redis` for Redis. Don't use `ioredis`. Note: `Bun.redis` Pub/Sub is experimental (since 1.2.23) and features like Redis Cluster, Sentinel, and MULTI/EXEC are not supported. Use a dedicated client if needed.
+- `Bun.sql` for Postgres (production-ready). Don't use `pg` or `postgres.js`.
 - `WebSocket` is built-in. Don't use `ws`.
 - Prefer `Bun.file` over `node:fs`'s readFile/writeFile
 - Bun.$`ls` instead of execa.

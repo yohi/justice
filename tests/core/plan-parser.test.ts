@@ -105,7 +105,16 @@ describe("PlanParser", () => {
     it("should append an error note after a specific task heading", () => {
       const content = "### Task 1: Do something\n\n- [ ] Step 1\n\n### Task 2: Other\n";
       const updated = parser.appendErrorNote(content, "task-1", "Test failed: assertion error");
-      expect(updated).toContain("> ⚠️ **Error**: Test failed: assertion error");
+      expect(updated).toContain(
+        "### Task 1: Do something\n\n> ⚠️ **Error**: Test failed: assertion error\n\n\n- [ ] Step 1",
+      );
+    });
+
+    it("should throw an error for invalid taskId format", () => {
+      const content = "### Task 1: Do something\n";
+      expect(() => parser.appendErrorNote(content, "task-1-step-1", "Error")).toThrow(
+        "Invalid taskId format",
+      );
     });
   });
 

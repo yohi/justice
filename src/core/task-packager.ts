@@ -57,8 +57,12 @@ export class TaskPackager {
     // Steps
     sections.push("**STEPS**:");
     const incompleteSteps = task.steps.filter((s) => !s.checked);
-    for (const step of incompleteSteps) {
-      sections.push(`- ${step.description}`);
+    if (incompleteSteps.length === 0) {
+      sections.push("すべてのステップが完了しました");
+    } else {
+      for (const step of incompleteSteps) {
+        sections.push(`- ${step.description}`);
+      }
     }
     sections.push("");
 

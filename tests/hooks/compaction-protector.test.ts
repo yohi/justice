@@ -6,6 +6,7 @@ describe("CompactionProtector", () => {
   describe("createSnapshot", () => {
     it("should create a snapshot of current plan state", () => {
       const protector = new CompactionProtector();
+      protector.setActivePlan("docs/plans/plan.md");
       const planContent = "# Plan\n- [ ] Task 1\n- [x] Task 2\n";
 
       const snapshot = protector.createSnapshot({
@@ -20,9 +21,9 @@ describe("CompactionProtector", () => {
       expect(snapshot.currentStepId).toBe("task-1-step-1");
       expect(snapshot.accumulatedLearnings).toBe("Use strict mode");
       expect(snapshot.timestamp).toBeDefined();
+      expect(snapshot.activePlanPath).toBe("docs/plans/plan.md");
     });
   });
-
   describe("formatForInjection", () => {
     it("should format a snapshot for post-compaction injection", () => {
       const protector = new CompactionProtector();
@@ -31,7 +32,8 @@ describe("CompactionProtector", () => {
         currentTaskId: "task-2",
         currentStepId: "task-2-step-1",
         accumulatedLearnings: "Use ESM imports",
-        timestamp: "2026-03-24T01:00:00Z",
+        timestamp: "2026-03-24T01:00:00.000Z",
+        activePlanPath: "docs/plans/plan.md",
       };
 
       const formatted = protector.formatForInjection(snapshot);
@@ -40,6 +42,10 @@ describe("CompactionProtector", () => {
       expect(formatted).toContain("task-2");
       expect(formatted).toContain("task-2-step-1");
       expect(formatted).toContain("Use ESM imports");
+      expect(formatted).toContain("**Timestamp**: 2026-03-24T01:00:00.000Z");
+      expect(formatted).toContain(
+        "**Plan Snapshot**:\n```markdown\n# Plan\n- [ ] Step 1\n- [x] Step 2\n- [x] Step 3\n\n```",
+      );
     });
 
     it("should include progress summary", () => {
@@ -50,14 +56,14 @@ describe("CompactionProtector", () => {
         currentTaskId: "task-2",
         currentStepId: "task-2-step-1",
         accumulatedLearnings: "",
-        timestamp: "2026-03-24T01:00:00Z",
+        timestamp: "2026-03-24T01:00:00.000Z",
+        activePlanPath: "docs/plans/plan.md",
       };
 
       const formatted = protector.formatForInjection(snapshot);
-      expect(formatted).toContain("Progress");
+      expect(formatted).toContain("**Progress**: 1/3 tasks completed");
     });
   });
-
   describe("shouldProtect", () => {
     it("should return true when there is an active plan", () => {
       const protector = new CompactionProtector();

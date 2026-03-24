@@ -94,6 +94,7 @@ describe("Core Types", () => {
       currentStepId: "task-1-step-2",
       accumulatedLearnings: "Use ESM imports",
       timestamp: "2026-03-24T01:00:00Z",
+      activePlanPath: "docs/plans/plan.md",
     };
     expect(ctx.currentTaskId).toBe("task-1");
   });

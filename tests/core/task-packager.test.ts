@@ -57,7 +57,13 @@ describe("TaskPackager", () => {
     });
 
     it("should include step descriptions in prompt", () => {
-      const task = makeTask();
+      const task = makeTask({
+        steps: [
+          { id: "task-1-step-1", description: "Write test", checked: false, lineNumber: 5 },
+          { id: "task-1-step-2", description: "Implement code", checked: false, lineNumber: 6 },
+          { id: "task-1-step-3", description: "Already done", checked: true, lineNumber: 7 },
+        ],
+      });
       const request = packager.package(task, {
         planFilePath: "plan.md",
         referenceFiles: [],
@@ -65,6 +71,7 @@ describe("TaskPackager", () => {
 
       expect(request.prompt).toContain("Write test");
       expect(request.prompt).toContain("Implement code");
+      expect(request.prompt).not.toContain("Already done");
     });
 
     it("should allow background execution override", () => {

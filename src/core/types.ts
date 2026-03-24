@@ -82,6 +82,7 @@ export interface ProtectedContext {
   readonly currentStepId: string;
   readonly accumulatedLearnings: string;
   readonly timestamp: string;
+  readonly activePlanPath: string | null;
 }
 
 /** リトライポリシー */
