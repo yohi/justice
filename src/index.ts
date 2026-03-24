@@ -29,3 +29,9 @@ export { ProgressReporter } from "./core/progress-reporter";
 
 export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
+
+// Phase 7 Exports
+export { JusticePlugin } from "./core/justice-plugin";
+export { StatusCommand, type PlanStatus } from "./core/status-command";
+export { NodeFileSystem } from "./runtime/node-file-system";
+
