@@ -3,12 +3,13 @@ import type {
   FileWriter,
   HookEvent,
   HookResponse,
-  PostToolUsePayload,
   FeedbackAction,
 } from "../core/types";
 import { FeedbackFormatter } from "../core/feedback-formatter";
 import { ErrorClassifier } from "../core/error-classifier";
 import { PlanParser } from "../core/plan-parser";
+import { SmartRetryPolicy } from "../core/smart-retry-policy";
+import { TaskSplitter } from "../core/task-splitter";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -19,6 +20,7 @@ const MAX_SESSIONS = 50;
 interface SessionState {
   planPath: string;
   activeTaskId: string;
+  referenceFiles: string[];
   retryCounts: Map<string, number>; // errorClass -> count
   lastAccess: number;
 }
@@ -29,6 +31,8 @@ export class TaskFeedbackHandler {
   private readonly formatter: FeedbackFormatter;
   private readonly classifier: ErrorClassifier;
   private readonly parser: PlanParser;
+  private readonly retryPolicy: SmartRetryPolicy;
+  private readonly splitter: TaskSplitter;
   private readonly sessions: Map<string, SessionState> = new Map();
 
   constructor(fileReader: FileReader, fileWriter: FileWriter) {
@@ -37,16 +41,19 @@ export class TaskFeedbackHandler {
     this.formatter = new FeedbackFormatter();
     this.classifier = new ErrorClassifier();
     this.parser = new PlanParser();
+    this.retryPolicy = new SmartRetryPolicy();
+    this.splitter = new TaskSplitter();
   }
 
   /**
    * Register the active plan and task for a session.
    */
-  setActivePlan(sessionId: string, planPath: string, taskId: string): void {
+  setActivePlan(sessionId: string, planPath: string, taskId: string, referenceFiles: string[] = []): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
       activeTaskId: taskId,
+      referenceFiles,
       retryCounts: new Map(),
       lastAccess: Date.now(),
     });
@@ -109,8 +116,8 @@ export class TaskFeedbackHandler {
       return {
         type: "escalate",
         taskId: feedback.taskId,
-        errorClass: "loop_detected",
-        message: this.classifier.getEscalationMessage("loop_detected"),
+        errorClass: "unknown",
+        message: this.classifier.getEscalationMessage("unknown"),
       };
     }
 
@@ -118,14 +125,22 @@ export class TaskFeedbackHandler {
     const errorClass = feedback.errorClassification
       ?? this.classifier.classify(rawResult);
 
-    // Check retry eligibility
+    // Check retry eligibility with SmartRetryPolicy
     const currentCount = session.retryCounts.get(errorClass) ?? 0;
-    if (this.classifier.shouldRetry(errorClass, currentCount)) {
+    const decision = this.retryPolicy.evaluate(errorClass, currentCount, {
+      taskId: session.activeTaskId,
+      planFilePath: session.planPath,
+      referenceFiles: session.referenceFiles,
+    });
+
+    if (decision.shouldRetry) {
       return {
         type: "retry",
         taskId: feedback.taskId,
         errorClass,
         retryCount: currentCount + 1,
+        delayMs: decision.delayMs,
+        contextReduction: decision.contextReduction,
       };
     }
 
@@ -148,12 +163,31 @@ export class TaskFeedbackHandler {
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
+        
+        // Wait for exponential backoff delay if any
+        if (action.delayMs > 0) {
+          // NON-BLOCKING: Schedule the log message.
+          // In a real environment, the actual tool retry would be managed by the orchestrator.
+          setTimeout(() => {
+            console.log(`[JUSTICE] Retry delay of ${action.delayMs}ms reached for task ${action.taskId}`);
+          }, action.delayMs);
+        }
+
+        // Apply context reduction by injecting a message if requested
+        if (action.contextReduction.strategy !== "none") {
+          return {
+            action: "inject",
+            injectedContext: `⚠️ JUSTICE AI: リトライを実行します。コンテキスト縮小戦略を適用中 (\`${action.contextReduction.strategy}\`)。不要な制約を減らして再試行してください。`,
+          };
+        }
+        
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
         return this.handleEscalation(action, session);
       default: {
         const _exhaustiveCheck: never = action;
+        void _exhaustiveCheck;
         return PROCEED;
       }
     }
@@ -189,14 +223,25 @@ export class TaskFeedbackHandler {
     action: Extract<FeedbackAction, { type: "escalate" }>,
     session: SessionState,
   ): Promise<HookResponse> {
+    let splitSuggestionContext = "";
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
+      
       const updatedContent = this.parser.appendErrorNote(
         planContent,
         action.taskId,
         `${action.errorClass}: ${action.message}`,
       );
       await this.fileWriter.writeFile(session.planPath, updatedContent);
+
+      // Generate split suggestion
+      const tasks = this.parser.parse(planContent);
+      const activeTask = tasks.find((t) => t.id === action.taskId);
+      if (activeTask) {
+        const suggestion = this.splitter.suggestSplit(activeTask, action.errorClass);
+        splitSuggestionContext = "\n\n" + this.splitter.formatAsPlanMarkdown(suggestion);
+      }
+      
     } catch (err) {
       console.warn(`[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`, err);
     }
@@ -210,6 +255,7 @@ export class TaskFeedbackHandler {
         `**Task**: ${action.taskId}`,
         `**Error Class**: ${action.errorClass}`,
         `**Action Required**: ${action.message}`,
+        splitSuggestionContext,
         "---",
       ].join("\n"),
     };

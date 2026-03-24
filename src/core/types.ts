@@ -122,9 +122,36 @@ export interface PostToolUseEvent {
   readonly sessionId: string;
 }
 
+/** OmO Event のペイロード Discriminated Union */
+export type EventPayload =
+  | LoopDetectorPayload
+  | CompactionPayload
+  | GenericEventPayload;
+
+/** OmO loop-detector イベントのペイロード */
+export interface LoopDetectorPayload {
+  readonly eventType: "loop-detector";
+  readonly sessionId: string;
+  readonly message: string;
+  readonly detectedPattern?: string;
+}
+
+/** OmO compaction イベントのペイロード */
+export interface CompactionPayload {
+  readonly eventType: "compaction";
+  readonly sessionId: string;
+  readonly reason: string;
+}
+
+/** 汎用イベントペイロード (フォールバック) */
+export interface GenericEventPayload {
+  readonly eventType: string;
+  readonly [key: string]: unknown;
+}
+
 export interface EventEvent {
   readonly type: "Event";
-  readonly payload: unknown;
+  readonly payload: EventPayload;
   readonly sessionId: string;
 }
 
@@ -182,6 +209,12 @@ export interface FileWriter {
   writeFile(path: string, content: string): Promise<void>;
 }
 
+/** コンテキスト削減戦略 */
+export interface ContextReduction {
+  readonly strategy: "none" | "trim_reference_files" | "simplify_prompt" | "reduce_steps";
+  readonly removedItems?: string[];
+}
+
 /** フィードバックアクションの Discriminated Union */
 export type FeedbackAction =
   | SuccessAction
@@ -198,6 +231,8 @@ export interface RetryAction {
   readonly taskId: string;
   readonly errorClass: ErrorClass;
   readonly retryCount: number;
+  readonly delayMs: number;
+  readonly contextReduction: ContextReduction;
 }
 
 export interface EscalateAction {
