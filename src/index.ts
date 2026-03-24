@@ -12,10 +12,17 @@ export { PlanBridge } from "./hooks/plan-bridge";
 export { FeedbackFormatter } from "./core/feedback-formatter";
 export { TaskFeedbackHandler } from "./hooks/task-feedback";
 
+// Phase 4 Exports
+export { SmartRetryPolicy } from "./core/smart-retry-policy";
+export { TaskSplitter } from "./core/task-splitter";
+export { LoopDetectionHandler } from "./hooks/loop-handler";
+
 export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 export type {
   PostToolUsePayload,
+  LoopDetectorPayload,
+  EventPayload,
   FileWriter,
   FeedbackAction,
   SuccessAction,
