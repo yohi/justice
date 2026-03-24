@@ -1,7 +1,7 @@
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
-const CHECKBOX_ANY_REGEX = /^-\s+\[([ x])\]\s+(.+)$/;
+const CHECKBOX_ANY_REGEX = /^(\s*-\s+\[)([ xX])(\]\s+.+)$/;
 
 export class PlanParser {
   /**
@@ -35,12 +35,12 @@ export class PlanParser {
 
       if (currentTask) {
         const checkboxMatch = line.match(CHECKBOX_ANY_REGEX);
-        if (checkboxMatch && checkboxMatch[1] !== undefined && checkboxMatch[2] !== undefined) {
+        if (checkboxMatch && checkboxMatch[2] !== undefined && checkboxMatch[3] !== undefined) {
           const stepNum = currentTask.steps.length + 1;
           currentTask.steps.push({
             id: `task-${currentTask.taskNum}-step-${stepNum}`,
-            description: checkboxMatch[2].trim(),
-            checked: checkboxMatch[1] === "x",
+            description: checkboxMatch[3].replace(/^\]\s+/, "").trim(),
+            checked: checkboxMatch[2].toLowerCase() === "x",
             lineNumber,
           });
         }
@@ -66,15 +66,17 @@ export class PlanParser {
     }
 
     const line = lines[index];
-    if (line === undefined || !CHECKBOX_ANY_REGEX.test(line)) {
+    if (line === undefined) {
+      throw new Error(`Line number ${lineNumber} is undefined`);
+    }
+
+    const match = line.match(CHECKBOX_ANY_REGEX);
+    if (!match || match[1] === undefined || match[3] === undefined) {
       throw new Error(`Line ${lineNumber} is not a checkbox: "${line}"`);
     }
 
-    if (checked) {
-      lines[index] = line.replace("- [ ]", "- [x]");
-    } else {
-      lines[index] = line.replace("- [x]", "- [ ]");
-    }
+    const newChar = checked ? "x" : " ";
+    lines[index] = `${match[1]}${newChar}${match[3]}`;
 
     return lines.join("\n");
   }

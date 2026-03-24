@@ -24,6 +24,7 @@ describe("CompactionProtector", () => {
       expect(snapshot.activePlanPath).toBe("docs/plans/plan.md");
     });
   });
+
   describe("formatForInjection", () => {
     it("should format a snapshot for post-compaction injection", () => {
       const protector = new CompactionProtector();
@@ -64,11 +65,20 @@ describe("CompactionProtector", () => {
       expect(formatted).toContain("**Progress**: 1/3 tasks completed");
     });
   });
+
   describe("shouldProtect", () => {
     it("should return true when there is an active plan", () => {
       const protector = new CompactionProtector();
       protector.setActivePlan("docs/plans/plan.md");
       expect(protector.shouldProtect()).toBe(true);
+    });
+
+    it("should return false when planPath is empty or whitespace", () => {
+      const protector = new CompactionProtector();
+      protector.setActivePlan("");
+      expect(protector.shouldProtect()).toBe(false);
+      protector.setActivePlan("   ");
+      expect(protector.shouldProtect()).toBe(false);
     });
 
     it("should return false when there is no active plan", () => {

@@ -29,6 +29,12 @@ describe("PlanParser", () => {
       expect(tasks[0].steps[2].checked).toBe(true);
     });
 
+    it("should handle uppercase X as checked", () => {
+      const content = "## Task 1: Test\n- [X] Uppercase step";
+      const tasks = parser.parse(content);
+      expect(tasks[0].steps[0].checked).toBe(true);
+    });
+
     it("should derive task status from step completion", () => {
       const content = readFileSync(resolve(FIXTURES_DIR, "sample-plan-partial.md"), "utf-8");
       const tasks = parser.parse(content);
@@ -75,6 +81,12 @@ describe("PlanParser", () => {
       const content = "- [ ] Step 1\n- [ ] Step 2\n";
       const updated = parser.updateCheckbox(content, 1, true);
       expect(updated).toBe("- [x] Step 1\n- [ ] Step 2\n");
+    });
+
+    it("should preserve leading whitespace and formatting", () => {
+      const content = "  - [ ] Indented step\n\t- [x] Tabbed step";
+      const updated = parser.updateCheckbox(content, 1, true);
+      expect(updated).toBe("  - [x] Indented step\n\t- [x] Tabbed step");
     });
 
     it("should uncheck a checked step", () => {

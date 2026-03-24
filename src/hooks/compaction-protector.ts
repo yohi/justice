@@ -20,7 +20,8 @@ export class CompactionProtector {
    * Set the currently active plan file path.
    */
   setActivePlan(planPath: string): void {
-    this.activePlanPath = planPath;
+    const normalized = planPath.trim();
+    this.activePlanPath = normalized === "" ? null : normalized;
   }
 
   /**
