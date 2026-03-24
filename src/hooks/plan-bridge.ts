@@ -6,6 +6,7 @@ import type {
 } from "../core/types";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
+import { WisdomStore } from "../core/wisdom-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -14,11 +15,13 @@ export class PlanBridge {
   private readonly triggerDetector: TriggerDetector;
   private readonly core: PlanBridgeCore;
   private readonly activePlanPaths: Map<string, string> = new Map();
+  private readonly wisdomStore: WisdomStore | null;
 
-  constructor(fileReader: FileReader) {
+  constructor(fileReader: FileReader, wisdomStore?: WisdomStore) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
     this.core = new PlanBridgeCore();
+    this.wisdomStore = wisdomStore ?? null;
   }
 
   /**
@@ -78,9 +81,11 @@ export class PlanBridge {
     }
 
     // Logic errors from core should propagate
+    const previousLearnings = this.getRelevantLearnings();
     const delegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: planRef.planPath,
       referenceFiles: [],
+      previousLearnings,
     });
 
     if (!delegation) {
@@ -130,9 +135,11 @@ export class PlanBridge {
     }
 
     // Logic errors from core should propagate
+    const previousLearnings = this.getRelevantLearnings();
     const delegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
+      previousLearnings,
     });
 
     if (!delegation) {
@@ -177,5 +184,15 @@ export class PlanBridge {
     ];
 
     return sections.join("\n");
+  }
+
+  /**
+   * Returns formatted learnings from the WisdomStore for injection into delegation context.
+   */
+  private getRelevantLearnings(): string | undefined {
+    if (!this.wisdomStore) return undefined;
+    const entries = this.wisdomStore.getRelevant({ maxEntries: 5 });
+    if (entries.length === 0) return undefined;
+    return this.wisdomStore.formatForInjection(entries);
   }
 }
