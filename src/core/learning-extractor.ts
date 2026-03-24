@@ -67,13 +67,15 @@ export class LearningExtractor {
       return results;
     }
 
+    const sanitizedOutput = rawOutput ? this.sanitizeRawOutput(rawOutput) : undefined;
+
     if (errorClass === "timeout") {
       results.push({
         taskId: feedback.taskId,
         category: "environment_quirk",
         errorClass,
-        content: rawOutput
-          ? `Task timed out — potentially too complex or resource-intensive:\n${rawOutput}`
+        content: sanitizedOutput
+          ? `Task timed out — potentially too complex or resource-intensive:\n${sanitizedOutput}`
           : `Task ${feedback.taskId} timed out during execution.`,
       });
     }
@@ -83,15 +85,15 @@ export class LearningExtractor {
         taskId: feedback.taskId,
         category: "failure_gotcha",
         errorClass,
-        content: rawOutput
-          ? `Loop detected during execution — implementation hit a repetitive pattern:\n${rawOutput}`
+        content: sanitizedOutput
+          ? `Loop detected during execution — implementation hit a repetitive pattern:\n${sanitizedOutput}`
           : `Loop detected in ${feedback.taskId}.`,
       });
     }
 
     if (errorClass === "test_failure") {
       const details = feedback.testResults?.failureDetails ?? [];
-      const detail = rawOutput ?? (details.length > 0 ? details.join("\n") : undefined);
+      const detail = sanitizedOutput ?? (details.length > 0 ? details.join("\n") : undefined);
 
       results.push({
         taskId: feedback.taskId,
@@ -104,7 +106,7 @@ export class LearningExtractor {
     }
 
     if (errorClass === "design_error") {
-      const detail = rawOutput ?? "";
+      const detail = sanitizedOutput ?? "";
       results.push({
         taskId: feedback.taskId,
         category: "design_decision",
@@ -126,6 +128,27 @@ export class LearningExtractor {
     }
 
     return results;
+  }
+
+  /**
+   * Masks secrets and truncates long raw output to keep wisdom store lean and secure.
+   */
+  private sanitizeRawOutput(raw: string, maxLength = 500): string {
+    // 1. Mask potential secrets (e.g., API keys, auth tokens, passwords)
+    let sanitized = raw
+      .replace(/(?:api[_-]?key|secret|password|token|auth|access[_-]?token)["']?\s*[:=]\s*["']?([a-zA-Z0-9._-]{8,})["']?/gi, (match, group) => {
+        return match.replace(group, "****[MASKED]****");
+      })
+      .replace(/(?:https?:\/\/|git@)[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+@/gi, (match) => {
+        return match.split("@")[0]!.split(":")[0]! + ":****[MASKED]****@";
+      });
+
+    // 2. Truncate if exceeding maxLength
+    if (sanitized.length > maxLength) {
+      sanitized = sanitized.substring(0, maxLength) + " ... (truncated)";
+    }
+
+    return sanitized;
   }
 
   private extractFromTimeout(feedback: TaskFeedback): WisdomEntryDraft[] {

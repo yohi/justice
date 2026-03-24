@@ -113,5 +113,40 @@ describe("LearningExtractor", () => {
       // Unknown errors don't produce specific learnings
       expect(entries.length).toBe(0);
     });
+
+    describe("sanitization", () => {
+      it("should mask secrets in raw output", () => {
+        const feedback: TaskFeedback = {
+          taskId: "task-8",
+          status: "failure",
+          retryCount: 0,
+          errorClassification: "design_error",
+        };
+
+        const secretOutput = "Connection failed with apiKey: abc123def4567890 and password=mysecretpassword";
+        const entries = extractor.extract(feedback, secretOutput);
+
+        const entry = entries[0];
+        expect(entry?.content).not.toContain("abc123def4567890");
+        expect(entry?.content).not.toContain("mysecretpassword");
+        expect(entry?.content).toContain("****[MASKED]****");
+      });
+
+      it("should truncate very long raw output", () => {
+        const feedback: TaskFeedback = {
+          taskId: "task-9",
+          status: "failure",
+          retryCount: 0,
+          errorClassification: "test_failure",
+        };
+
+        const longOutput = "A".repeat(1000);
+        const entries = extractor.extract(feedback, longOutput);
+
+        const entry = entries[0];
+        expect(entry?.content.length).toBeLessThan(600); // 500 + prefix/suffix
+        expect(entry?.content).toContain("(truncated)");
+      });
+    });
   });
 });
