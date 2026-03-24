@@ -1,12 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TaskFeedbackHandler } from "../../src/hooks/task-feedback";
 import { DEFAULT_RETRY_POLICY } from "../../src/core/types";
 import type {
   PostToolUseEvent,
 } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
 
 describe("Feedback Flow Integration", () => {
+  beforeEach(() => {
+    vi.spyOn(SmartRetryPolicy.prototype, "calculateDelay").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it("should complete full success flow: task() → format → classify → checkbox update",
     async () => {
       const plan = [

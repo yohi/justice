@@ -91,6 +91,8 @@ describe("Phase 3 types", () => {
       taskId: "task-1",
       errorClass: "syntax_error",
       retryCount: 1,
+      delayMs: 1000,
+      contextReduction: { strategy: "trim_reference_files" },
     };
     const escalate: FeedbackAction = {
       type: "escalate",

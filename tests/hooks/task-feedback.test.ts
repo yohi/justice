@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TaskFeedbackHandler } from "../../src/hooks/task-feedback";
 import type {
   PostToolUseEvent,
 } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
 
 const samplePlan = [
   "## Task 1: Setup",
@@ -14,6 +15,13 @@ const samplePlan = [
 ].join("\n");
 
 describe("TaskFeedbackHandler", () => {
+  beforeEach(() => {
+    vi.spyOn(SmartRetryPolicy.prototype, "calculateDelay").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   describe("handlePostToolUse", () => {
     it("should update checkbox on success", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });

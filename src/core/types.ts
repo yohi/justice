@@ -225,6 +225,10 @@ export interface RetryAction {
   readonly taskId: string;
   readonly errorClass: ErrorClass;
   readonly retryCount: number;
+  readonly delayMs: number;
+  readonly contextReduction: {
+    readonly strategy: string;
+  };
 }
 
 export interface EscalateAction {
