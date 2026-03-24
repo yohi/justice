@@ -1,6 +1,6 @@
 # デザインドキュメント: GitHub Actions と Release Please による自動公開設定
 
-> **日付**: 2026-03-25
+> **承認日**: 2026-03-25
 > **ステータス**: 承認済み
 > **著者**: Gemini CLI
 
@@ -50,7 +50,14 @@
 
 ## 4. セキュリティと認証
 - GitHub Packages への公開には `GITHUB_TOKEN` を使用します。
-- ワークフローの権限 (`permissions`) を適切に設定し、`contents: write` と `packages: write` を許可します。
+- ワークフローの権限 (`permissions`) を適切に設定し、`contents: write`, `packages: write`, および `pull-requests: write` を許可します。
+- **権限設定例**:
+  ```yaml
+  permissions:
+    contents: write
+    pull-requests: write
+    packages: write
+  ```
 
 ## 5. 移行計画
 1. `package.json` の更新とコミット。

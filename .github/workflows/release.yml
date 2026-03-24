@@ -32,8 +32,8 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
       - name: Publish to GitHub Packages
         run: |
-          npm config set //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-          npm publish
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --ignore-scripts
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         if: ${{ steps.release.outputs.release_created }}
