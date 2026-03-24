@@ -40,7 +40,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
 
   it("should inject all multi-agent features into context correctly", async () => {
     // 1. Trigger the bridge to process the plan and set the active plan
-    const msgRes = await planBridge.handleMessage({
+    await planBridge.handleMessage({
       type: "Message",
       payload: { role: "assistant", content: "Delegate the next task from plan.md" },
       sessionId: "integration-session",
@@ -57,7 +57,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
 
     // 3. Verify the outcome
     expect(response.action).toBe("inject");
-    
+
     if (response.action === "inject") {
       const ctx = response.injectedContext;
 
@@ -70,7 +70,9 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       // Task 3 depends on 2 (completed) -> Parallelizable
       // Task 4 has no inter-task deps -> Parallelizable
       // The currently delegated task is Task 3. So Task 4 should be suggested as parallel.
-      expect(ctx).toContain("**Parallel:** The following tasks can also be run in parallel: task-4");
+      expect(ctx).toContain(
+        "**Parallel:** The following tasks can also be run in parallel: task-4",
+      );
       expect(ctx).not.toContain("task-5"); // task-5 depends on 3 and 4
 
       // Assert Progress Reporting
@@ -135,7 +137,9 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       // Task 2 should be the primary task because Task 1 is blocked by it.
       // Task 3 is also parallelizable.
       expect(ctx).toContain("**Task ID**: task-2");
-      expect(ctx).toContain("**Parallel:** The following tasks can also be run in parallel: task-3");
+      expect(ctx).toContain(
+        "**Parallel:** The following tasks can also be run in parallel: task-3",
+      );
     }
   });
 });

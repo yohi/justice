@@ -1,9 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
-import type {
-  FileReader,
-  HookEvent,
-} from "../../src/core/types";
+import type { FileReader, HookEvent } from "../../src/core/types";
 
 const samplePlanContent = [
   "## Task 1: Setup",
@@ -40,9 +37,7 @@ describe("Plan Bridge Integration Flow", () => {
 
     const messageResponse = await bridge.handleMessage(messageEvent);
     expect(messageResponse.action).toBe("inject");
-    expect(messageResponse.injectedContext).toContain(
-      "Task Delegation Context",
-    );
+    expect(messageResponse.injectedContext).toContain("Task Delegation Context");
     expect(messageResponse.injectedContext).toContain("Setup project structure");
 
     // Step 2: Verify active plan was set
@@ -61,17 +56,12 @@ describe("Plan Bridge Integration Flow", () => {
     const toolResponse = await bridge.handlePreToolUse(toolEvent);
     expect(toolResponse.action).toBe("inject");
     expect(toolResponse.injectedContext).toContain("**Task ID**: task-1");
-    expect(toolResponse.injectedContext).toContain(
-      "**Plan File**: docs/plans/sample-plan.md",
-    );
+    expect(toolResponse.injectedContext).toContain("**Plan File**: docs/plans/sample-plan.md");
   });
 
   it("should handle completed plans correctly", async () => {
     const planPath = "completed-plan.md";
-    const partialPlan = [
-      "## Task 1: Done",
-      "- [x] All finished",
-    ].join("\n");
+    const partialPlan = ["## Task 1: Done", "- [x] All finished"].join("\n");
 
     const reader = createMockFileReader({ [planPath]: partialPlan });
     const bridge = new PlanBridge(reader);

@@ -21,11 +21,9 @@ describe("Advanced Error Flow Integration", () => {
     vi.restoreAllMocks();
   });
 
-  const samplePlan = [
-    "## Task 1: Complex Implementation",
-    "- [ ] Step A",
-    "- [ ] Step B",
-  ].join("\n");
+  const samplePlan = ["## Task 1: Complex Implementation", "- [ ] Step A", "- [ ] Step B"].join(
+    "\n",
+  );
 
   it("should incrementally reduce context and ultimately escalate with split on repeated failures", async () => {
     const reader = createMockFileReader({ "plan.md": samplePlan });
@@ -34,7 +32,9 @@ describe("Advanced Error Flow Integration", () => {
     handler.setActivePlan("s-1", "plan.md", "task-1");
 
     // Helper to simulate a tool failure
-    const simulateFailure = async (result: string): Promise<import("../../src/core/types").HookResponse> => {
+    const simulateFailure = async (
+      result: string,
+    ): Promise<import("../../src/core/types").HookResponse> => {
       const event: PostToolUseEvent = {
         type: "PostToolUse",
         payload: { toolName: "task", toolResult: result, error: true },
@@ -68,7 +68,7 @@ describe("Advanced Error Flow Integration", () => {
       expect(resp4.injectedContext).toContain("Task Escalation");
       expect(resp4.injectedContext).toContain("task-1.1"); // Split suggestion
     }
-    
+
     // Check that plan.md was updated with the error note
     expect(writer.writtenFiles["plan.md"]).toContain("⚠️ **Error**");
   });

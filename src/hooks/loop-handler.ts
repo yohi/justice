@@ -75,7 +75,9 @@ export class LoopDetectionHandler {
         };
       }
     } catch (err) {
-      console.warn(`[JUSTICE] LoopDetectionHandler failed to handle event: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(
+        `[JUSTICE] LoopDetectionHandler failed to handle event: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     return PROCEED;

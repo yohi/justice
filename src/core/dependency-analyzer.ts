@@ -133,10 +133,7 @@ export class DependencyAnalyzer {
     return result;
   }
 
-  private detectCircular(
-    deps: Map<string, string[]>,
-    taskMap: Map<string, PlanTask>,
-  ): Set<string> {
+  private detectCircular(deps: Map<string, string[]>, taskMap: Map<string, PlanTask>): Set<string> {
     const circularIds = new Set<string>();
     const visiting = new Set<string>();
     const visited = new Set<string>();

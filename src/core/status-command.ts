@@ -38,7 +38,7 @@ export class StatusCommand {
 
     const progress = this.reporter.generateReport(tasks);
     const parallelizable = this.analyzer.getParallelizable(tasks);
-    
+
     let executionOrder: PlanTask[] = [];
     let executionOrderError: string | undefined;
     try {
@@ -57,7 +57,15 @@ export class StatusCommand {
       categoryMap.set(task.id, this.classifier.classify(task));
     }
 
-    return { planPath, tasks, progress, parallelizable, executionOrder, executionOrderError, categoryMap };
+    return {
+      planPath,
+      tasks,
+      progress,
+      parallelizable,
+      executionOrder,
+      executionOrderError,
+      categoryMap,
+    };
   }
 
   /**

@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
-import type { FileReader, FileWriter, HookEvent, MessageEvent, PreToolUseEvent, PostToolUseEvent, EventEvent } from "../../src/core/types";
+import type {
+  FileReader,
+  FileWriter,
+  MessageEvent,
+  PreToolUseEvent,
+  PostToolUseEvent,
+  EventEvent,
+} from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
 describe("JusticePlugin", () => {
@@ -72,14 +79,14 @@ describe("JusticePlugin", () => {
 
       const spySnapshot = vi.spyOn(plugin.getCompactionProtector(), "createSnapshot");
       const spyFormat = vi.spyOn(plugin.getCompactionProtector(), "formatForInjection");
-      
+
       const event: EventEvent = {
         type: "Event",
         payload: { eventType: "compaction", sessionId: "s-1", reason: "Context too long" },
         sessionId: "s-1",
       };
       const response = await plugin.handleEvent(event);
-      
+
       expect(spySnapshot).toHaveBeenCalled();
       expect(spyFormat).toHaveBeenCalled();
       expect(response.action).toBe("inject");
@@ -91,14 +98,18 @@ describe("JusticePlugin", () => {
       // which we know passes it to handlers. We can verify sharing by testing the global WisdomStore.
       // The instructions say: "fetch the WisdomStore from the PlanBridge and from TaskFeedback ... and assert strict equality"
       // Wait, PlanBridge and TaskFeedback don't have getWisdomStore() accessors.
-      // We will access them by casting to any to satisfy the prompt's spirit, or just rely on the fact 
+      // We will access them by casting to any to satisfy the prompt's spirit, or just rely on the fact
       // they share the instance created in the constructor. Let's cast to any to prove equality.
-      const planBridgeStore = (plugin.getPlanBridge() as any).wisdomStore;
-      const taskFeedbackStore = (plugin.getTaskFeedback() as any).wisdomStore;
-      const protectorStore = (plugin.getCompactionProtector() as any).wisdomStore;
-      
+      const planBridgeStore = (plugin.getPlanBridge() as unknown as { wisdomStore: unknown })
+        .wisdomStore;
+      const taskFeedbackStore = (plugin.getTaskFeedback() as unknown as { wisdomStore: unknown })
+        .wisdomStore;
+      const protectorStore = (
+        plugin.getCompactionProtector() as unknown as { wisdomStore: unknown }
+      ).wisdomStore;
+
       const mainStore = plugin.getWisdomStore();
-      
+
       expect(planBridgeStore).toBe(mainStore);
       expect(taskFeedbackStore).toBe(mainStore);
       expect(protectorStore).toBe(mainStore);

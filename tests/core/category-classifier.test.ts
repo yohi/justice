@@ -18,12 +18,18 @@ describe("CategoryClassifier", () => {
   const classifier = new CategoryClassifier();
 
   it("should classify UI/CSS/design tasks as visual-engineering", () => {
-    const task = makeTask("Implement responsive navbar", ["Create CSS grid layout", "Add hover animations"]);
+    const task = makeTask("Implement responsive navbar", [
+      "Create CSS grid layout",
+      "Add hover animations",
+    ]);
     expect(classifier.classify(task)).toBe("visual-engineering");
   });
 
   it("should classify architecture/design tasks as ultrabrain", () => {
-    const task = makeTask("Design plugin architecture", ["Define interfaces", "Create dependency graph"]);
+    const task = makeTask("Design plugin architecture", [
+      "Define interfaces",
+      "Create dependency graph",
+    ]);
     expect(classifier.classify(task)).toBe("ultrabrain");
   });
 
@@ -44,7 +50,11 @@ describe("CategoryClassifier", () => {
   });
 
   it("should default to deep for implementation tasks", () => {
-    const task = makeTask("Implement parser module", ["Write failing test", "Implement logic", "Run tests"]);
+    const task = makeTask("Implement parser module", [
+      "Write failing test",
+      "Implement logic",
+      "Run tests",
+    ]);
     expect(classifier.classify(task)).toBe("deep");
   });
 

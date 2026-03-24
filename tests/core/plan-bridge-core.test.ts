@@ -23,8 +23,7 @@ describe("PlanBridgeCore", () => {
     });
 
     it("should return null when all tasks are completed", () => {
-      const completedPlan =
-        "## Task 1: Done\n- [x] Step 1\n- [x] Step 2\n";
+      const completedPlan = "## Task 1: Done\n- [x] Step 1\n- [x] Step 2\n";
       const result = core.buildDelegationFromPlan(completedPlan, {
         planFilePath: "plan.md",
         referenceFiles: [],

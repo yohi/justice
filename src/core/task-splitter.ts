@@ -18,7 +18,7 @@ export class TaskSplitter {
    */
   suggestSplit(task: PlanTask, errorClass: ErrorClass): SplitSuggestion {
     const uncompletedSteps = task.steps.filter((s) => !s.checked).map((s) => s.description);
-    
+
     // If there's only 1 step left, we can't split it by steps easily,
     // so we return it as a single sub-task to focus deeply on it.
     if (uncompletedSteps.length <= 1) {
@@ -50,13 +50,14 @@ export class TaskSplitter {
 
     if (errorClass === "timeout") {
       // Split into Implementation and Testing
-      const testSteps = uncompletedSteps.filter(s => /test|spec/i.test(s));
-      const implSteps = uncompletedSteps.filter(s => !/test|spec/i.test(s));
-      
+      const testSteps = uncompletedSteps.filter((s) => /test|spec/i.test(s));
+      const implSteps = uncompletedSteps.filter((s) => !/test|spec/i.test(s));
+
       if (testSteps.length > 0 && implSteps.length > 0) {
         return {
           originalTaskId: task.id,
-          rationale: "Task timed out. Splitting implementation and testing steps to reduce complexity.",
+          rationale:
+            "Task timed out. Splitting implementation and testing steps to reduce complexity.",
           suggestedSubTasks: [
             {
               title: `${task.title} (実装 / Implementation)`,
@@ -114,7 +115,9 @@ export class TaskSplitter {
   formatAsPlanMarkdown(suggestion: SplitSuggestion): string {
     const lines: string[] = [];
     lines.push(`> **JUSTICE AI 提案**: ${suggestion.rationale}`);
-    lines.push(`> 以下のように \`plan.md\` のタスク \`${suggestion.originalTaskId}\` を分割することを推奨します。`);
+    lines.push(
+      `> 以下のように \`plan.md\` のタスク \`${suggestion.originalTaskId}\` を分割することを推奨します。`,
+    );
     lines.push("");
 
     let index = 1;

@@ -47,7 +47,7 @@ describe("SmartRetryPolicy", () => {
       expect(delay2).toBeGreaterThanOrEqual(4000);
       expect(delay2).toBeLessThanOrEqual(4500);
     });
-    
+
     it("should cap at maxDelayMs", () => {
       const longPolicy = new SmartRetryPolicy(10000, 30000);
       const delay = longPolicy.calculateDelay(3); // 10000 * 8 = 80000 -> max 30000

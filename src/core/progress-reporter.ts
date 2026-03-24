@@ -60,14 +60,15 @@ export class ProgressReporter {
 
     lines.push("## 📊 Progress Report");
     lines.push("");
-    lines.push(`**Overall:** ${report.overallProgress}% (${report.completedTasks}/${report.totalTasks} tasks)`);
+    lines.push(
+      `**Overall:** ${report.overallProgress}% (${report.completedTasks}/${report.totalTasks} tasks)`,
+    );
     lines.push("");
 
     for (const task of report.taskStatuses) {
       const icon = this.statusIcon(task.status);
-      const progress = task.totalSteps > 0
-        ? ` (${task.completedSteps}/${task.totalSteps} steps)`
-        : "";
+      const progress =
+        task.totalSteps > 0 ? ` (${task.completedSteps}/${task.totalSteps} steps)` : "";
       lines.push(`- ${icon} ${task.title}${progress}`);
     }
 

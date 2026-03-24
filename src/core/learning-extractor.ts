@@ -136,9 +136,12 @@ export class LearningExtractor {
   private sanitizeRawOutput(raw: string, maxLength = 500): string {
     // 1. Mask potential secrets (e.g., API keys, auth tokens, passwords)
     let sanitized = raw
-      .replace(/(?:api[_-]?key|secret|password|token|auth|access[_-]?token)["']?\s*[:=]\s*["']?([A-Za-z0-9+/=._-]{8,})["']?/gi, (match, group) => {
-        return match.replace(group, "****[MASKED]****");
-      })
+      .replace(
+        /(?:api[_-]?key|secret|password|token|auth|access[_-]?token)["']?\s*[:=]\s*["']?([A-Za-z0-9+/=._-]{8,})["']?/gi,
+        (match, group) => {
+          return match.replace(group, "****[MASKED]****");
+        },
+      )
       .replace(/((?:https?:\/\/|git@)[^@:]+)(?::[^@]+)?@/gi, "$1:****[MASKED]****@");
 
     // 2. Truncate if exceeding maxLength

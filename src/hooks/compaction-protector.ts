@@ -54,11 +54,9 @@ export class CompactionProtector {
   createSnapshot(input: SnapshotInput): ProtectedContext {
     // Merge WisdomStore learnings with any explicit input learnings
     const wisdomLearnings = this.wisdomStore
-      ? this.wisdomStore.formatForInjection(
-          this.wisdomStore.getRelevant({ maxEntries: 10 }),
-        )
+      ? this.wisdomStore.formatForInjection(this.wisdomStore.getRelevant({ maxEntries: 10 }))
       : "";
-    
+
     // Combine and deduplicate learnings blocks
     const learningBlocks = [input.learnings, wisdomLearnings]
       .filter((l) => l.trim() !== "")
