@@ -56,6 +56,13 @@ export class ErrorClassifier {
    * Determine if a task should be retried based on error class and current retry count.
    */
   shouldRetry(errorClass: ErrorClass, currentRetryCount: number): boolean {
+    if (
+      !Number.isFinite(currentRetryCount) ||
+      !Number.isInteger(currentRetryCount) ||
+      currentRetryCount < 0
+    ) {
+      return false;
+    }
     if (!this.retryableErrors.has(errorClass)) return false;
     return currentRetryCount < this.maxRetries;
   }

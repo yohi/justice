@@ -128,9 +128,29 @@ describe("PlanParser", () => {
     });
 
     it("should return undefined when all tasks are complete", () => {
-      const tasks = parser.parse("### Task 1: Done\n\n- [x] Step 1\n");
+      const tasks = parser.parse("## Task 1: Done\n\n- [x] Step 1\n");
       const next = parser.getNextIncompleteTask(tasks);
       expect(next).toBeUndefined();
+    });
+  });
+
+  describe("metadata and comments handling", () => {
+    it("should ignore blockquote metadata lines and only parse tasks and checkboxes", () => {
+      const content = `
+# Plan
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans
+> This is another metadata line
+
+## Task 1: Setup
+- [ ] Step 1
+`;
+      const tasks = parser.parse(content);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe("task-1");
+      expect(tasks[0].steps).toHaveLength(1);
+      // Verify no metadata leaked into task title or step description
+      expect(tasks[0].title).toBe("Setup");
+      expect(tasks[0].steps[0].description).toBe("Step 1");
     });
   });
 });

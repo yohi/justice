@@ -88,11 +88,11 @@ export interface ProtectedContext {
 /** リトライポリシー */
 export interface RetryPolicy {
   readonly maxRetries: number;
-  readonly retryableErrors: ErrorClass[];
+  readonly retryableErrors: readonly ErrorClass[];
 }
 
 /** デフォルトのリトライポリシー */
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxRetries: 3,
-  retryableErrors: ["syntax_error", "type_error"],
+  retryableErrors: Object.freeze(["syntax_error", "type_error"]),
 };

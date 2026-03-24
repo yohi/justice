@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Setup project structure
+## Task 1: Setup project structure
 
 **Files:**
 - Create: `src/feature-x.ts`
@@ -28,7 +28,7 @@
 
 - [x] Verify tests pass
 
-### Task 2: Implement core logic
+## Task 2: Implement core logic
 
 **Step 1: Write failing test for parser**
 
@@ -42,7 +42,7 @@
 
 - [ ] Verify all tests pass
 
-### Task 3: Add error handling
+## Task 3: Add error handling
 
 **Step 1: Write failing test for error cases**
 

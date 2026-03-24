@@ -1,6 +1,6 @@
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
-const TASK_HEADING_REGEX = /^###\s+Task\s+(\d+):\s*(.+)$/;
+const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
 const CHECKBOX_ANY_REGEX = /^-\s+\[([ x])\]\s+(.+)$/;
 
 export class PlanParser {

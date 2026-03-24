@@ -85,9 +85,20 @@ export class CompactionProtector {
 
     sections.push("");
     sections.push("**Plan Snapshot**:");
-    sections.push("```markdown");
+
+    // Find the longest sequence of backticks in the plan to determine a safe fence
+    const backtickMatches = snapshot.planSnapshot.match(/`+/g) || [];
+    let maxBackticks = 2; // minimum 3 backticks for fence, so we start with max 2 found
+    for (const match of backtickMatches) {
+      if (match.length > maxBackticks) {
+        maxBackticks = match.length;
+      }
+    }
+    const fence = "`".repeat(maxBackticks + 1);
+
+    sections.push(`${fence}markdown`);
     sections.push(snapshot.planSnapshot);
-    sections.push("```");
+    sections.push(fence);
     sections.push("---");
 
     return sections.join("\n");

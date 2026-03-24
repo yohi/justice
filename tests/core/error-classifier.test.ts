@@ -75,6 +75,13 @@ describe("ErrorClassifier", () => {
     it("should never retry loop detected", () => {
       expect(classifier.shouldRetry("loop_detected", 0)).toBe(false);
     });
+
+    it("should return false for invalid retry counts", () => {
+      expect(classifier.shouldRetry("syntax_error", -1)).toBe(false);
+      expect(classifier.shouldRetry("syntax_error", 1.5)).toBe(false);
+      expect(classifier.shouldRetry("syntax_error", NaN)).toBe(false);
+      expect(classifier.shouldRetry("syntax_error", Infinity)).toBe(false);
+    });
   });
 
   describe("getEscalationMessage", () => {
