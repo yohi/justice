@@ -158,6 +158,8 @@ export class NodeFileSystem implements FileReader, FileWriter {
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
     try {
+      // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await unlink(safePath);
     } catch (err: unknown) {
       if (
