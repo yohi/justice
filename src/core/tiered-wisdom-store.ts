@@ -1,4 +1,4 @@
-import type { WisdomEntry } from "./types";
+import type { ErrorClass, WisdomEntry } from "./types";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -93,6 +93,42 @@ export class TieredWisdomStore {
       }
       return this.globalStore.add(entry);
     }
-    return this.localStore.add(entry);
+return this.localStore.add(entry);
+  }
+
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[] {
+    const limit = options?.maxEntries ?? 10;
+    const local = this.localStore.getRelevant({ errorClass: options?.errorClass, maxEntries: limit });
+
+    if (local.length >= limit) {
+      return local.slice(-limit);
+    }
+
+    const remaining = limit - local.length;
+    const global = this.globalStore.getRelevant({ errorClass: options?.errorClass, maxEntries: remaining });
+
+    return [...local, ...global].slice(-limit);
+  }
+
+  getByTaskId(taskId: string): WisdomEntry[] {
+    const local = this.localStore.getByTaskId(taskId);
+    const global = this.globalStore.getByTaskId(taskId);
+    return [...local, ...global];
+  }
+
+  formatForInjection(entries: WisdomEntry[]): string {
+    return this.localStore.formatForInjection(entries);
+  }
+
+  async loadAll(): Promise<void> {
+    const local = await this.localPersistence.load();
+    const global = await this.globalPersistence.load();
+    this.localStore = local;
+    this.globalStore = global;
+  }
+
+  async persistAll(): Promise<void> {
+    await this.localPersistence.save(this.localStore);
+    await this.globalPersistence.save(this.globalStore);
   }
 }
