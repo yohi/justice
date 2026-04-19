@@ -23,14 +23,14 @@ export function createMockFileWriter(): FileWriter & { writtenFiles: Record<stri
       if (!(from in writtenFiles)) {
         throw new Error(`rename: source not found: ${from}`);
       }
+      if (from === to) return;
       writtenFiles[to] = writtenFiles[from];
       delete writtenFiles[from];
     }),
     deleteFile: vi.fn(async (path: string) => {
-      if (!(path in writtenFiles)) {
-        throw new Error(`deleteFile: file not found: ${path}`);
+      if (path in writtenFiles) {
+        delete writtenFiles[path];
       }
-      delete writtenFiles[path];
     }),
   };
 }

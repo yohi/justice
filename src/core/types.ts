@@ -211,9 +211,10 @@ export interface FileWriter {
   rename(from: string, to: string): Promise<void>;
 
   /**
-   * 指定されたパスのファイルを削除します。best-effort クリーンアップ（例:
-   * `saveAtomic` が rename に失敗した際の一時ファイル除去）に用いられます。
-   * 実装は path traversal を拒否します。
+   * 指定されたパスのファイルを削除します。
+   * ベストエフォートでのクリーンアップを意図しており、対象ファイルが存在しない場合（ENOENT）はエラーを投げずに
+   * 正常終了（resolved success）として扱う必要があります。
+   * 実装は path traversal を拒否し、権限エラー等の致命的なエラーは再送出しなければなりません。
    */
   deleteFile(path: string): Promise<void>;
 }
