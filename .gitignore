@@ -9,3 +9,6 @@ coverage/
 .vscode/
 Thumbs.db
 .worktrees/
+
+/superpowers/
+/oh-my-openagent/
