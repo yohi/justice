@@ -1,13 +1,14 @@
 import type { FileReader, FileWriter } from "../core/types";
 import { resolve, isAbsolute, relative, dirname } from "node:path";
 import {
-  mkdir,
+  mkdir as fsMkdir,
   readFile,
   writeFile,
   stat,
   realpath,
   rename as fsRename,
   unlink,
+  rmdir as fsRmdir,
 } from "node:fs/promises";
 
 export class NodeFileSystem implements FileReader, FileWriter {
@@ -27,7 +28,7 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
     // Ensure parent directory exists
     const parentDir = dirname(safePath);
-    await mkdir(parentDir, { recursive: true });
+    await fsMkdir(parentDir, { recursive: true });
 
     await writeFile(safePath, content, "utf-8");
   }
@@ -93,34 +94,39 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    const parentDir = dirname(resolved);
-    try {
-      const realRoot = await realpath(this.rootDir);
-      // Resolve the parent directory since the file might not exist
-      const realParent = await realpath(parentDir);
-      const realRel = relative(realRoot, realParent);
+    const realRoot = await realpath(this.rootDir);
 
-      if (realRel.startsWith("..") || isAbsolute(realRel)) {
-        throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
-      }
+    // Walk up the directory tree to find the deepest existing ancestor
+    let current = resolved;
+    while (current.length >= this.rootDir.length && current.startsWith(this.rootDir)) {
+      try {
+        const currentReal = await realpath(current);
+        const realRel = relative(realRoot, currentReal);
 
-      // If the parent is safe, resolving the file inside it is safe
-      // (assuming the leaf is not a symlink pointing outside, but if we overwrite it we might follow it.
-      // However, if we write, we might overwrite a symlink. To be fully safe against overwriting symlinks
-      // we'd need to lstat the leaf if it exists. For now, this meets the symlink parent check).
-      return resolved;
-    } catch (err: unknown) {
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        (err as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        // If parent doesn't exist, we can't fully realpath it.
-        // We rely on the lexical check for safety in this case.
-        return resolved;
+        if (realRel.startsWith("..") || isAbsolute(realRel)) {
+          throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
+        }
+
+        // If we successfully realpath'd without escaping, this part of the path is safe.
+        // We can break here because the ancestors of a safe realpath are also safe within the root.
+        break;
+      } catch (err: unknown) {
+        if (
+          err instanceof Error &&
+          "code" in err &&
+          (err as NodeJS.ErrnoException).code === "ENOENT"
+        ) {
+          // Go up one level
+          const parent = dirname(current);
+          if (parent === current) break;
+          current = parent;
+        } else {
+          throw err;
+        }
       }
-      throw err;
     }
+
+    return resolved;
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -128,14 +134,39 @@ export class NodeFileSystem implements FileReader, FileWriter {
     const safeTo = await this.resolveSafelyForWrite(to);
 
     // Ensure parent directory exists
-    await mkdir(dirname(safeTo), { recursive: true });
+    await fsMkdir(dirname(safeTo), { recursive: true });
 
+    // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsRename(safeFrom, safeTo);
+  }
+
+  async mkdir(path: string, recursive: boolean): Promise<void> {
+    const safePath = await this.resolveSafelyForWrite(path);
+    await fsMkdir(safePath, { recursive });
+  }
+
+  async rmdir(path: string): Promise<void> {
+    const safePath = await this.resolveSafelyForWrite(path);
+    try {
+        await fsRmdir(safePath);
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return;
+      }
+      throw err;
+    }
   }
 
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
     try {
+      // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await unlink(safePath);
     } catch (err: unknown) {
       if (

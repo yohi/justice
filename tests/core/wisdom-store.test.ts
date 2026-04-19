@@ -182,8 +182,8 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     expect(all[0]?.taskId).toBe("t1");
 
     // Verify it's a snapshot (mutating the returned array shouldn't affect the store)
-    // Cast to any to bypass readonly for testing mutation resistance
-    (all as any).push({ id: "hacked" });
+    // Cast to unknown[] to bypass readonly for testing mutation resistance
+    (all as unknown[]).push({ id: "hacked" });
     expect(store.getAllEntries()).toHaveLength(2);
     expect(all).toHaveLength(3);
 
@@ -245,7 +245,7 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
   it("fromEntries should filter out invalid entries", () => {
     const entries = [
       { id: "w-1", taskId: "t1", category: "success_pattern" as const, content: "A", timestamp: "X" },
-      { invalid: "entry" } as any,
+      { invalid: "entry" } as unknown as WisdomEntry,
     ];
     const store = WisdomStore.fromEntries(entries, 10);
     expect(store.getAllEntries()).toHaveLength(1);

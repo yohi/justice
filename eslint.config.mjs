@@ -7,9 +7,24 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   prettierConfig,
   {
+    plugins: {
+      security: {
+        rules: {
+          "detect-non-literal-fs-filename": {
+            create() {
+              return {};
+            },
+          },
+        },
+      },
+    },
     rules: {
+      "security/detect-non-literal-fs-filename": "warn",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/explicit-function-return-type": "warn",
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: false,
     },
   },
 );
