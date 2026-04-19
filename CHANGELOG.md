@@ -6,6 +6,25 @@
 
 * **error-classifier:** recognize provider-side transient and config errors (rate limit, quota, 5xx, missing API key, model not found). Patterns ported from oh-my-openagent@3.17.4 runtime-fallback. Justice itself does not retry these; actual retry handling is delegated to OmO's `runtime-fallback`.
 
+## [1.1.0](https://github.com/yohi/justice/compare/v1.0.0...v1.1.0) (2026-04-19)
+
+
+### Features
+
+* **core:** ErrorClassifier にプロバイダエラー分類機能を追加 ([5ec033b](https://github.com/yohi/justice/commit/5ec033b001ab75fc7aa817f35307a0c797db74e0))
+* **core:** ErrorClassを拡張しprovider_transient/provider_configを追加、パターンファイル新規作成 ([def43bc](https://github.com/yohi/justice/commit/def43bce76881709d1a637dea5d4818427751632))
+* **core:** OmOランタイムエラーのプロバイダエラー分類を実装 ([ebb0880](https://github.com/yohi/justice/commit/ebb0880c160401a006efafba5640e53afaf92391))
+* **core:** エラー分類器にプロバイダーコンテキストの処理を追加 ([06912a2](https://github.com/yohi/justice/commit/06912a21f8f81a28b98852fea2e3f87f4c51faf9))
+* **core:** プロバイダーエラーの分類と処理を追加 ([f940898](https://github.com/yohi/justice/commit/f94089835a637e0fbbd223c513f3a9f6e1953811))
+* **core:** プロバイダーコンテキスト対応エラー分類 ([13f1160](https://github.com/yohi/justice/commit/13f1160827bc236b5433922e52c1f7692772c547))
+* **core:** プロバイダーのエラー分類機能強化とパターン更新 ([926bea0](https://github.com/yohi/justice/commit/926bea0d0b36a8c924fe9a8d40c786a8e0f11731))
+* **error-classifier:** プロバイダエラーの分類ルールとエスカレーションメッセージを追加 ([8bd93b6](https://github.com/yohi/justice/commit/8bd93b67a34271f83de8f2962460c1f9f4372da6))
+
+
+### Bug Fixes
+
+* **core:** provider_transient エラーメッセージに自動リトライ無効化を追記 ([ab10069](https://github.com/yohi/justice/commit/ab1006907df42dc42601ee1dff239f79f540a4c6))
+
 ## 1.0.0 (2026-03-24)
 
 
