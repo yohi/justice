@@ -55,7 +55,7 @@ export interface ClassificationOptions {
    * Whether the error is suspected to originate from the AI provider.
    * If true, provider-specific patterns (rate limits, API key issues) are evaluated.
    */
-  isProviderContext?: boolean;
+  readonly isProviderContext?: boolean;
 }
 
 export class ErrorClassifier {
