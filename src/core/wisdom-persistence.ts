@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import type { FileReader, FileWriter, WisdomEntry } from "./types";
 import { WisdomStore } from "./wisdom-store";
@@ -60,13 +61,14 @@ export class WisdomPersistence {
       return new WisdomStore();
     }
 
+    let data: unknown;
     try {
-      JSON.parse(json);
+      data = JSON.parse(json);
     } catch (err) {
       throw new Error(`Failed to parse wisdom file: ${this.wisdomFilePath}`, { cause: err });
     }
 
-    return WisdomStore.deserialize(json);
+    return WisdomStore.deserialize(data);
   }
 
   /**
@@ -82,16 +84,23 @@ export class WisdomPersistence {
     const lockMetaPath = `${lockPath}/owner.json`;
     const lockTtlMs = 10000; // 10 seconds TTL
     const maxRetries = 5;
+    const currentHost = hostname();
     let attempt = 0;
 
     while (attempt < maxRetries) {
       try {
         await this.fileWriter.mkdir(lockPath, false);
-        // Lock acquired, write metadata
-        await this.fileWriter.writeFile(
-          lockMetaPath,
-          JSON.stringify({ pid: process.pid, hostname: process.env.HOSTNAME || "localhost", timestamp: Date.now() })
-        );
+        try {
+          // Lock acquired, write metadata
+          await this.fileWriter.writeFile(
+            lockMetaPath,
+            JSON.stringify({ pid: process.pid, hostname: currentHost, timestamp: Date.now() })
+          );
+        } catch (err) {
+          // Metadata writing failed — release the lock and propagate
+          await this.fileWriter.rmdir(lockPath).catch(() => {});
+          throw err;
+        }
         break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -99,13 +108,15 @@ export class WisdomPersistence {
           continue; // Retry immediately
         } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           // Check for stale lock
+          let shouldClear = false;
           try {
             const metaJson = await this.fileReader.readFile(lockMetaPath);
             const meta = JSON.parse(metaJson);
             const isStale = Date.now() - meta.timestamp > lockTtlMs;
             let processDead = false;
             
-            if (!isStale && meta.pid) {
+            // Only use process.kill if on the same host
+            if (!isStale && meta.pid && meta.hostname === currentHost) {
               try {
                 process.kill(meta.pid, 0);
               } catch {
@@ -114,12 +125,21 @@ export class WisdomPersistence {
             }
             
             if (isStale || processDead) {
-              await this.fileWriter.deleteFile(lockMetaPath).catch(() => {});
-              await this.fileWriter.rmdir(lockPath).catch(() => {});
-              continue; // Retry immediately
+              shouldClear = true;
             }
           } catch {
-            // Meta file might not exist yet (race condition) or invalid, just wait and backoff
+            // Meta file might not exist yet (race condition) or invalid.
+            // If we've retried enough and still can't read it, treat as stale.
+            if (attempt >= maxRetries / 2) {
+              shouldClear = true;
+            }
+          }
+
+          if (shouldClear) {
+            await this.fileWriter.deleteFile(lockMetaPath).catch(() => {});
+            await this.fileWriter.rmdir(lockPath).catch(() => {});
+            attempt++; // Count attempt when clearing stale lock to prevent infinite loops
+            continue; // Retry immediately
           }
 
           attempt++;

@@ -130,14 +130,13 @@ export class NodeFileSystem implements FileReader, FileWriter {
   }
 
   async rename(from: string, to: string): Promise<void> {
-    const safeFrom = await this.resolveSafelyForWrite(from);
+    const safeFrom = await this.resolveSafely(from);
     const safeTo = await this.resolveSafelyForWrite(to);
 
     // Ensure parent directory exists
     await fsMkdir(dirname(safeTo), { recursive: true });
 
-    // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    // Paths are validated — path traversal is mitigated.
     await fsRename(safeFrom, safeTo);
   }
 
@@ -148,26 +147,20 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
   async rmdir(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    try {
-        await fsRmdir(safePath);
-    } catch (err: unknown) {
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        (err as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        return;
-      }
-      throw err;
-    }
+    await this.bestEffortDelete(async () => await fsRmdir(safePath));
   }
 
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
+    await this.bestEffortDelete(async () => await unlink(safePath));
+  }
+
+  /**
+   * Execute a deletion operation and ignore ENOENT errors.
+   */
+  private async bestEffortDelete(op: () => Promise<void>): Promise<void> {
     try {
-      // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
-      await unlink(safePath);
+      await op();
     } catch (err: unknown) {
       if (
         err instanceof Error &&

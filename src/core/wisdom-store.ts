@@ -105,17 +105,22 @@ export class WisdomStore {
   }
 
   /**
-   * Deserializes a JSON string back into a WisdomStore instance.
+   * Deserializes a JSON string or already parsed data back into a WisdomStore instance.
    * Handles empty or invalid inputs gracefully.
    */
-  static deserialize(json: string): WisdomStore {
+  static deserialize(input: string | unknown): WisdomStore {
     let data: Partial<WisdomStoreData> = {};
-    try {
-      if (json && json.trim() !== "") {
-        data = JSON.parse(json) as Partial<WisdomStoreData>;
+
+    if (typeof input === "string") {
+      try {
+        if (input.trim() !== "") {
+          data = JSON.parse(input) as Partial<WisdomStoreData>;
+        }
+      } catch {
+        // Return empty store on parse failure
       }
-    } catch {
-      // Return empty store on parse failure
+    } else if (typeof input === "object" && input !== null) {
+      data = input as Partial<WisdomStoreData>;
     }
 
     const maxEntries = data.maxEntries ?? 100;
