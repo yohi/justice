@@ -63,6 +63,8 @@ export type ErrorClass =
   | "design_error"
   | "timeout"
   | "loop_detected"
+  | "provider_transient"
+  | "provider_config"
   | "unknown";
 
 /** task()に渡すカテゴリ（OmO準拠） */
