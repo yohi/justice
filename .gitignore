@@ -10,5 +10,5 @@ coverage/
 Thumbs.db
 .worktrees/
 
-superpowers/
-oh-my-openagent/
+/superpowers/
+/oh-my-openagent/

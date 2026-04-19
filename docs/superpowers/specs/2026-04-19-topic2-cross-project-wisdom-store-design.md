@@ -37,7 +37,7 @@
 
 ## 3. Architecture
 
-```
+```text
 JusticePlugin
    └─ TieredWisdomStore                          ← 新規クラス
         ├─ localStore: WisdomStore               ← 既存・無変更
@@ -166,7 +166,9 @@ getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomE
 }
 ```
 
-`getByTaskId()` / `formatForInjection()` は両 store を集約（taskId は重複しない前提で単純結合）。
+**ローカル優先の挙動上の注意**: ローカルが `limit` 件を満たす場合、グローバルの新エントリ（より新しい timestamp を持つもの）は返却されません。これは Q11 で承認されたローカル優先設計の結果で、現プロジェクト最近のコンテキストを最優先するためです。「全体 timestamp 順マージで上位 N 件」を期待する読者がいる可能性があるため、実装時はテストで本挙動を担保すること。
+
+`getByTaskId()` / `formatForInjection()` は両 store のヒットを単純結合します。同一 taskId が両 store に存在するケースは正常で、例えば 1 つの task が `failure_gotcha` (local) と `environment_quirk` (global) の両カテゴリの wisdom を生成した場合に発生します。`WisdomStore.getByTaskId()` は既に `WisdomEntry[]` 返却、`formatForInjection()` は配列を受け取る既存 API のため、API 変更は不要。
 
 ### 6.4 Persistence Coordination
 
@@ -260,6 +262,20 @@ private mergeById(
 - `rename` は POSIX 上 atomic（同一ファイルシステム内の場合）
 - temp ファイル名に `process.pid + random` を含めることで、複数プロセスが同時実行しても tmp が衝突しない
 - Race window: `load → merge → write` 間に他プロセスが `saveAtomic` した場合、後勝ちで一部ロストの可能性は残る。wisdom 書き込みは低頻度のため許容範囲
+
+### 設計意図: 意図的な lock-free 設計
+
+本設計は **クロスプロセスファイルロック (proper-lockfile / flock 等) を意図的に採用しない** という選択をしています。Q10（ブレストフェーズ）で以下のトレードオフを評価し決定:
+
+- **採用しない理由**:
+  - wisdom 書き込みは「失敗パターン抽出時」など低頻度イベント（毎秒書き込みではない）
+  - 一部ロストしても致命的ではない（再学習可能）
+  - `proper-lockfile` 等の依存追加は Devcontainer / ネットワーク FS / WSL マウント等で挙動が不安定
+  - クラッシュ時のロックファイル残存復旧ロジックが必要になり実装複雑化
+- **代替案 C（ファイルロック）の評価**: オーバーキルと判断
+- **採用案 B（atomic write + RMW）の妥協点**: 上記の race window を許容、その代わり「ロック不要・依存最小・FS 種別非依存」を得る
+
+将来 wisdom 書き込み頻度が大幅に増える場合（例: リアルタイム学習機能の追加）はこの判断を再評価する。
 
 ## 9. `NodeFileSystem.rename()` Implementation
 
@@ -443,6 +459,10 @@ export class JusticePlugin {
 
 ## 16. Open Questions / Future Work
 
+- (Future) **`SECRET_PATTERNS` の偽陽性チューニング**: 実装フェーズ後の運用ログを基に、誤検知率の高いパターンを refine する。具体的検討項目:
+  - **`home_path_linux` / `home_path_macos`**: wisdom content に「`/home/runner/work/` で権限エラー」のような正当な記述が含まれるとマッチして noise になる。本物のホームパス漏洩（例: `/home/yohi/.aws/credentials`）は他の `api_key` 系パターンで捕捉できることが多いため、**パターン削除** または **`info` ログへ降格** を検討。
+  - **`/\btoken\b/i`**: "JWT token の使い方" のような正当な技術文脈で誤検知。**より具体的なパターン**（例: `/\btoken\s*[:=]\s*["'`]?[\w-]{8,}/i` で値らしきもの込みでマッチ）への差し替えを検討。
+  - **判断基準**: 実運用で「警告ノイズで本物の API キー警告が埋もれる」事象が発生したらチューニング。事前最適化はせず、`SECRET_PATTERNS` のメトリクス（warn 発火回数、ユーザーフィードバック）を 1〜2 リリース観察してから判断。
 - (Future) **明示移行コマンド** `justice migrate-local-to-global`: 既存 local エントリを規則に従って昇格
 - (Future) **グローバルストアの Git 同期サポート**: `~/.justice/` を git リポジトリ化し、複数マシン間で wisdom を sync
 - (Future) **MCP リソース化**: グローバルストアを MCP server として公開し、他 MCP 対応ツールから wisdom を参照可能にする
