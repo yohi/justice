@@ -121,19 +121,23 @@ export class WisdomPersistence {
             const metaJson = await this.fileReader.readFile(lockMetaPath);
             const meta = JSON.parse(metaJson);
             const isStale = Date.now() - meta.timestamp > lockTtlMs;
-            let processDead = false;
             
-            // Only use process.kill if on the same host
-            if (!isStale && meta.pid && meta.hostname === currentHost) {
+            if (meta.hostname === currentHost && meta.pid) {
+              // On the same host: only treat as stale if the process is actually dead.
+              // This protects long-running writers from being preempted by TTL.
               try {
                 process.kill(meta.pid, 0);
+                // Process is still alive, lock is NOT stale regardless of TTL.
+                shouldClear = false;
               } catch {
-                processDead = true;
+                // Process is dead, lock is stale.
+                shouldClear = true;
               }
-            }
-            
-            if (isStale || processDead) {
-              shouldClear = true;
+            } else {
+              // On a different host: rely solely on TTL.
+              if (isStale) {
+                shouldClear = true;
+              }
             }
           } catch {
             // Meta file might not exist yet (race condition) or invalid.
