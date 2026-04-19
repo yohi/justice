@@ -3,8 +3,11 @@ import {
   PROVIDER_TRANSIENT_PATTERNS,
   PROVIDER_CONFIG_PATTERNS,
 } from "../../src/core/provider-error-patterns";
+import { ErrorClassifier } from "../../src/core/error-classifier";
 
 describe("provider-error-patterns", () => {
+  const classifier = new ErrorClassifier();
+
   describe("PROVIDER_TRANSIENT_PATTERNS", () => {
     it("should be a frozen array of RegExp", () => {
       expect(Array.isArray(PROVIDER_TRANSIENT_PATTERNS)).toBe(true);
@@ -14,8 +17,33 @@ describe("provider-error-patterns", () => {
       }
     });
 
-    it("should contain 17 patterns", () => {
-      expect(PROVIDER_TRANSIENT_PATTERNS).toHaveLength(17);
+    it("should match transient error messages", () => {
+      const positiveExamples = [
+        "Rate limit reached for model-x",
+        "Too many requests. Please try again later.",
+        "Error 429: Too Many Requests",
+        "Service Unavailable (503)",
+        "The server is overloaded.",
+        "Quota exceeded for your account",
+        "Out of credits",
+        "quota will reset after 24h",
+      ];
+
+      for (const msg of positiveExamples) {
+        expect(classifier.classify(msg)).toBe("provider_transient");
+      }
+    });
+
+    it("should not match unrelated messages", () => {
+      const negativeExamples = [
+        "SyntaxError: unexpected token",
+        "Success: operation completed",
+        "File not found",
+      ];
+
+      for (const msg of negativeExamples) {
+        expect(classifier.classify(msg)).not.toBe("provider_transient");
+      }
     });
   });
 
@@ -28,8 +56,19 @@ describe("provider-error-patterns", () => {
       }
     });
 
-    it("should contain 7 patterns", () => {
-      expect(PROVIDER_CONFIG_PATTERNS).toHaveLength(7);
+    it("should match configuration error messages", () => {
+      const positiveExamples = [
+        "API key is missing or invalid",
+        "The API key must be a string.",
+        "model not found",
+        "providerModelNotFoundError: the requested model does not exist",
+        "AI_LoadAPIKeyError: failed to load credentials",
+        "Model not supported",
+      ];
+
+      for (const msg of positiveExamples) {
+        expect(classifier.classify(msg)).toBe("provider_config");
+      }
     });
   });
 });

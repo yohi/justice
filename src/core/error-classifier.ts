@@ -1,5 +1,9 @@
 import type { ErrorClass } from "./types";
 import { DEFAULT_RETRY_POLICY } from "./types";
+import {
+  PROVIDER_TRANSIENT_PATTERNS,
+  PROVIDER_CONFIG_PATTERNS,
+} from "./provider-error-patterns";
 
 interface ClassificationRule {
   pattern: RegExp;
@@ -7,6 +11,14 @@ interface ClassificationRule {
 }
 
 const CLASSIFICATION_RULES: ClassificationRule[] = [
+  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_transient" as const,
+  })),
+  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_config" as const,
+  })),
   { pattern: /SyntaxError/i, errorClass: "syntax_error" },
   { pattern: /parse error/i, errorClass: "syntax_error" },
   { pattern: /unexpected token/i, errorClass: "syntax_error" },
@@ -72,6 +84,16 @@ export class ErrorClassifier {
    */
   getEscalationMessage(errorClass: ErrorClass): string {
     switch (errorClass) {
+      case "provider_transient":
+        return (
+          "The provider is temporarily unavailable or rate-limited. " +
+          "Please wait a few moments or consider adjusting the retry delay."
+        );
+      case "provider_config":
+        return (
+          "A configuration issue with the provider was detected (e.g., invalid API key, model not found). " +
+          "Please verify your API credentials and model configuration."
+        );
       case "test_failure":
         return (
           "Tests are failing. Please use the systematic-debugging skill to " +
