@@ -122,7 +122,6 @@ export class WisdomStore {
     const store = new WisdomStore(maxEntries);
 
     if (data.entries && Array.isArray(data.entries)) {
-      // Push entries avoiding the add() method to keep original IDs and timestamps
       for (const entry of data.entries) {
         if (WisdomStore.isValidEntry(entry)) {
           store.entries.push(entry);
@@ -130,6 +129,35 @@ export class WisdomStore {
       }
     }
 
+    return store;
+  }
+
+  /**
+   * Returns a readonly snapshot of all entries in insertion order.
+   */
+  getAllEntries(): readonly WisdomEntry[] {
+    return this.entries;
+  }
+
+  /**
+   * Returns the configured maximum entry capacity.
+   */
+  getMaxEntries(): number {
+    return this.maxEntries;
+  }
+
+  /**
+   * Constructs a store from a list of entries, keeping the latest `maxEntries`.
+   * Order is preserved; overflow is trimmed from the front (oldest) in a single
+   * pass via `slice(-maxEntries)` (O(N)).
+   */
+  static fromEntries(entries: readonly WisdomEntry[], maxEntries = 100): WisdomStore {
+    const store = new WisdomStore(maxEntries);
+    const trimmed =
+      entries.length > maxEntries ? entries.slice(-maxEntries) : entries;
+    for (const entry of trimmed) {
+      store.entries.push(entry);
+    }
     return store;
   }
 
