@@ -1,12 +1,16 @@
 import type { ErrorClass } from "./types";
 import { DEFAULT_RETRY_POLICY } from "./types";
+import {
+  PROVIDER_TRANSIENT_PATTERNS,
+  PROVIDER_CONFIG_PATTERNS,
+} from "./provider-error-patterns";
 
 interface ClassificationRule {
   pattern: RegExp;
   errorClass: ErrorClass;
 }
 
-const CLASSIFICATION_RULES: ClassificationRule[] = [
+const SPECIFIC_GENERAL_RULES: ClassificationRule[] = [
   { pattern: /SyntaxError/i, errorClass: "syntax_error" },
   { pattern: /parse error/i, errorClass: "syntax_error" },
   { pattern: /unexpected token/i, errorClass: "syntax_error" },
@@ -18,6 +22,9 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /test failed/i, errorClass: "test_failure" },
   { pattern: /assertion error/i, errorClass: "test_failure" },
   { pattern: /Expected:.*?Received:/s, errorClass: "test_failure" },
+];
+
+const GENERIC_GENERAL_RULES: ClassificationRule[] = [
   { pattern: /timed?\s*out/i, errorClass: "timeout" },
   { pattern: /timeout/i, errorClass: "timeout" },
   { pattern: /loop detected/i, errorClass: "loop_detected" },
@@ -27,6 +34,29 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
 ];
+
+const PROVIDER_RULES: ClassificationRule[] = [
+  ...PROVIDER_CONFIG_PATTERNS.map(
+    (pattern): ClassificationRule => ({
+      pattern,
+      errorClass: "provider_config",
+    }),
+  ),
+  ...PROVIDER_TRANSIENT_PATTERNS.map(
+    (pattern): ClassificationRule => ({
+      pattern,
+      errorClass: "provider_transient",
+    }),
+  ),
+];
+
+export interface ClassificationOptions {
+  /**
+   * Whether the error is suspected to originate from the AI provider.
+   * If true, provider-specific patterns (rate limits, API key issues) are evaluated.
+   */
+  readonly isProviderContext?: boolean;
+}
 
 export class ErrorClassifier {
   private readonly maxRetries: number;
@@ -43,12 +73,31 @@ export class ErrorClassifier {
   /**
    * Classify an error message into an ErrorClass.
    */
-  classify(errorOutput: string): ErrorClass {
-    for (const rule of CLASSIFICATION_RULES) {
+  classify(errorOutput: string, options: ClassificationOptions = {}): ErrorClass {
+    // 1. Always evaluate specific general rules first (SyntaxError, TypeError, FAIL etc.)
+    for (const rule of SPECIFIC_GENERAL_RULES) {
       if (rule.pattern.test(errorOutput)) {
         return rule.errorClass;
       }
     }
+
+    // 2. Evaluate provider-specific rules only if in provider context
+    // This MUST come before GENERIC_GENERAL_RULES so "Gateway Timeout" is matched here instead of general "timeout"
+    if (options.isProviderContext) {
+      for (const rule of PROVIDER_RULES) {
+        if (rule.pattern.test(errorOutput)) {
+          return rule.errorClass;
+        }
+      }
+    }
+
+    // 3. Evaluate generic general rules (timeout, loop detected etc.)
+    for (const rule of GENERIC_GENERAL_RULES) {
+      if (rule.pattern.test(errorOutput)) {
+        return rule.errorClass;
+      }
+    }
+
     return "unknown";
   }
 
@@ -91,6 +140,19 @@ export class ErrorClassifier {
         return (
           "A loop was detected — the agent is repeating the same actions. " +
           "Please split the task into smaller steps or clarify the requirements in plan.md."
+        );
+      case "provider_transient":
+        return (
+          "The task failed due to a transient provider issue (rate limit or service " +
+          "unavailability). Wait a few minutes before re-delegating, or try a different " +
+          "`category` to switch to an alternative model. Auto-retry is disabled for this class."
+        );
+      case "provider_config":
+        return (
+          "The task failed due to a provider configuration or account error (missing API key, " +
+          "invalid model, or exhausted billing credits/quota). This requires user intervention " +
+          "— check your environment variables and model configuration in `oh-my-openagent.jsonc`. " +
+          "Auto-retry is disabled for this class."
         );
       case "syntax_error":
       case "type_error":

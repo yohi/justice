@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **error-classifier:** recognize provider-side transient and config errors (rate limit, quota, 5xx, missing API key, model not found). Patterns ported from oh-my-openagent@3.17.4 runtime-fallback. Justice itself does not retry these; actual retry handling is delegated to OmO's `runtime-fallback`.
+
 ## 1.0.0 (2026-03-24)
 
 
