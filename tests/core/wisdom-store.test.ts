@@ -180,7 +180,17 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     const all = store.getAllEntries();
     expect(all).toHaveLength(2);
     expect(all[0]?.taskId).toBe("t1");
-    expect(all[1]?.taskId).toBe("t2");
+
+    // Verify it's a snapshot (mutating the returned array shouldn't affect the store)
+    // Cast to any to bypass readonly for testing mutation resistance
+    (all as any).push({ id: "hacked" });
+    expect(store.getAllEntries()).toHaveLength(2);
+    expect(all).toHaveLength(3);
+
+    // Verify subsequent additions don't affect previously returned snapshots
+    store.add({ taskId: "t3", category: "design_decision", content: "C" });
+    expect(all).toHaveLength(3);
+    expect(store.getAllEntries()).toHaveLength(3);
   });
 
   it("getMaxEntries should expose the configured capacity", () => {
@@ -223,5 +233,22 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     const all = store.getAllEntries();
     expect(all).toHaveLength(3);
     expect(all.map((e) => e.id)).toEqual(["w-2", "w-3", "w-4"]);
+  });
+
+  it("fromEntries should handle maxEntries = 0 correctly", () => {
+    const entries = [{ id: "w-1", taskId: "t1", category: "success_pattern" as const, content: "A", timestamp: "X" }];
+    const store = WisdomStore.fromEntries(entries, 0);
+    expect(store.getAllEntries()).toHaveLength(0);
+    expect(store.getMaxEntries()).toBe(0);
+  });
+
+  it("fromEntries should filter out invalid entries", () => {
+    const entries = [
+      { id: "w-1", taskId: "t1", category: "success_pattern" as const, content: "A", timestamp: "X" },
+      { invalid: "entry" } as any,
+    ];
+    const store = WisdomStore.fromEntries(entries, 10);
+    expect(store.getAllEntries()).toHaveLength(1);
+    expect(store.getAllEntries()[0]?.id).toBe("w-1");
   });
 });

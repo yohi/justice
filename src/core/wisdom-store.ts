@@ -136,7 +136,7 @@ export class WisdomStore {
    * Returns a readonly snapshot of all entries in insertion order.
    */
   getAllEntries(): readonly WisdomEntry[] {
-    return this.entries;
+    return [...this.entries];
   }
 
   /**
@@ -152,11 +152,18 @@ export class WisdomStore {
    * pass via `slice(-maxEntries)` (O(N)).
    */
   static fromEntries(entries: readonly WisdomEntry[], maxEntries = 100): WisdomStore {
-    const store = new WisdomStore(maxEntries);
-    const trimmed =
-      entries.length > maxEntries ? entries.slice(-maxEntries) : entries;
+    const limit = Math.max(0, Math.floor(maxEntries));
+    const store = new WisdomStore(limit);
+
+    if (limit === 0) {
+      return store;
+    }
+
+    const trimmed = entries.length > limit ? entries.slice(-limit) : entries;
     for (const entry of trimmed) {
-      store.entries.push(entry);
+      if (WisdomStore.isValidEntry(entry)) {
+        store.entries.push(entry);
+      }
     }
     return store;
   }
