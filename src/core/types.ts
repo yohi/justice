@@ -63,6 +63,8 @@ export type ErrorClass =
   | "design_error"
   | "timeout"
   | "loop_detected"
+  | "provider_transient"
+  | "provider_config"
   | "unknown";
 
 /** task()に渡すカテゴリ（OmO準拠） */
@@ -94,7 +96,7 @@ export interface RetryPolicy {
 /** デフォルトのリトライポリシー */
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxRetries: 3,
-  retryableErrors: Object.freeze(["syntax_error", "type_error"]),
+  retryableErrors: Object.freeze(["syntax_error", "type_error", "provider_transient"]),
 };
 
 /** OmO Hook イベントの Discriminated Union */
