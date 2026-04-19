@@ -54,7 +54,7 @@ export class WisdomPersistence {
       if (err instanceof Error && "code" in err && (err as NodeJS.AbortedError).code === "ENOENT") {
         return new WisdomStore();
       }
-      throw err;
+      throw err instanceof Error ? err : new Error(String(err));
     }
 
     if (!json || json.trim() === "") {
@@ -113,7 +113,7 @@ export class WisdomPersistence {
           // Note: deleteFile/rmdir already handle ENOENT.
           await this.fileWriter.deleteFile(lockMetaPath);
           await this.fileWriter.rmdir(lockPath);
-          throw err;
+          throw err instanceof Error ? err : new Error(String(err));
         }
         break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
@@ -180,13 +180,13 @@ export class WisdomPersistence {
           if (attempt >= maxRetries) {
             throw new Error(
               `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
-              { cause: err },
+              { cause: err instanceof Error ? err : undefined },
             );
           }
           // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
           await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
         } else {
-          throw err; // EACCES, etc.
+          throw err instanceof Error ? err : new Error(String(err));
         }
       }
     }
@@ -213,25 +213,26 @@ export class WisdomPersistence {
         } catch {
           // Swallow cleanup errors — the original error is the real cause.
         }
-        throw err;
+        throw err instanceof Error ? err : new Error(String(err));
       }
     } catch (err) {
       primaryError = err;
-      throw err;
     } finally {
       // Cleanup. Note: NodeFileSystem methods already ignore ENOENT.
       try {
         await this.fileWriter.deleteFile(lockMetaPath);
       } catch (err) {
-        // Only rethrow if there was no original error occurring before finally
-        if (!primaryError) throw err;
+        if (primaryError === null) primaryError = err;
       }
       try {
         await this.fileWriter.rmdir(lockPath);
       } catch (err) {
-        // Only rethrow if there was no original error occurring before finally
-        if (!primaryError) throw err;
+        if (primaryError === null) primaryError = err;
       }
+    }
+
+    if (primaryError) {
+      throw primaryError instanceof Error ? primaryError : new Error(String(primaryError));
     }
   }
 
