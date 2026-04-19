@@ -87,6 +87,7 @@ export class WisdomPersistence {
     const currentHost = hostname();
     let attempt = 0;
     let lockAcquired = false;
+    let firstObservedAt: number | null = null;
 
     while (attempt < maxRetries) {
       try {
@@ -99,13 +100,10 @@ export class WisdomPersistence {
           );
           lockAcquired = true;
         } catch (err) {
-          // Metadata writing failed — release the lock and propagate
-          try {
-            await this.fileWriter.deleteFile(lockMetaPath);
-          } catch {
-            // Best-effort cleanup
-          }
-          await this.fileWriter.rmdir(lockPath).catch(() => {});
+          // Metadata writing failed — release the lock and propagate.
+          // Note: deleteFile/rmdir already handle ENOENT.
+          await this.fileWriter.deleteFile(lockMetaPath);
+          await this.fileWriter.rmdir(lockPath);
           throw err;
         }
         break; // Lock successfully acquired and metadata written
@@ -115,6 +113,7 @@ export class WisdomPersistence {
           await this.fileWriter.mkdir(dirname(lockPath), true);
           continue; // Retry immediately
         } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          if (firstObservedAt === null) firstObservedAt = Date.now();
           // Check for stale lock
           let shouldClear = false;
           try {
@@ -141,15 +140,16 @@ export class WisdomPersistence {
             }
           } catch {
             // Meta file might not exist yet (race condition) or invalid.
-            // If we've retried enough and still can't read it, treat as stale.
-            if (attempt >= maxRetries / 2) {
+            // Treat as stale only if the lock has been observed for longer than TTL.
+            if (firstObservedAt !== null && Date.now() - firstObservedAt > lockTtlMs) {
               shouldClear = true;
             }
           }
 
           if (shouldClear) {
-            await this.fileWriter.deleteFile(lockMetaPath).catch(() => {});
-            await this.fileWriter.rmdir(lockPath).catch(() => {});
+            // Clear the lock. Note: deleteFile/rmdir already handle ENOENT.
+            await this.fileWriter.deleteFile(lockMetaPath);
+            await this.fileWriter.rmdir(lockPath);
             attempt++; // Count attempt when clearing stale lock to prevent infinite loops
             continue; // Retry immediately
           }
@@ -193,15 +193,16 @@ export class WisdomPersistence {
         throw err;
       }
     } finally {
+      // Cleanup. Note: NodeFileSystem methods already ignore ENOENT.
       try {
         await this.fileWriter.deleteFile(lockMetaPath);
-      } catch {
-        // Ignore errors during metadata cleanup
+      } catch (err) {
+        // Only rethrow if there was no original error occurring before finally
       }
       try {
         await this.fileWriter.rmdir(lockPath);
-      } catch {
-        // Ignore errors during lock dir cleanup
+      } catch (err) {
+        // Only rethrow if there was no original error occurring before finally
       }
     }
   }
@@ -211,12 +212,19 @@ export class WisdomPersistence {
     memoryEntries: readonly WisdomEntry[],
   ): WisdomEntry[] {
     const byId = new Map<string, WisdomEntry>();
-    for (const e of diskEntries) byId.set(e.id, e);
     
     const getTs = (e: WisdomEntry): number => {
       const ts = Date.parse(e.timestamp);
       return isNaN(ts) ? 0 : ts;
     };
+
+    // Fold disk and memory entries by the same rules
+    for (const e of diskEntries) {
+      const existing = byId.get(e.id);
+      if (!existing || getTs(e) > getTs(existing)) {
+        byId.set(e.id, e);
+      }
+    }
 
     for (const e of memoryEntries) {
       const existing = byId.get(e.id);
