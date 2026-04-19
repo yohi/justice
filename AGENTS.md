@@ -162,3 +162,11 @@ This project does not use databases, but if needed:
 - `bun:sqlite` for SQLite (not `better-sqlite3`)
 - `Bun.sql` for Postgres (not `pg`)
 - `Bun.redis` for Redis (not `ioredis`)
+
+### Upstream Drift Tracking
+
+When `oh-my-openagent` releases a new version, review
+`src/hooks/runtime-fallback/{constants,error-classifier}.ts` for changes to
+`RETRYABLE_ERROR_PATTERNS` and `classifyErrorType`. If new patterns are added
+or semantics shift, update `src/core/provider-error-patterns.ts` accordingly
+and bump the source version comment.
