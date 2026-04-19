@@ -34,7 +34,7 @@ describe("WisdomPersistence.saveAtomic", () => {
     const keys = Object.keys(writer.writtenFiles);
     expect(keys.filter((k) => k.includes(".tmp."))).toHaveLength(0);
 
-    expect(writer.writeFile).toHaveBeenCalledTimes(1);
+    expect(writer.writeFile).toHaveBeenCalledTimes(2); // lock meta and temp file
     expect(writer.rename).toHaveBeenCalledTimes(1);
   });
 
@@ -109,7 +109,7 @@ describe("WisdomPersistence.saveAtomic", () => {
     expect(
       Object.keys(writer.writtenFiles).filter((k) => k.includes(".tmp.")),
     ).toHaveLength(0);
-    expect(writer.deleteFile).toHaveBeenCalledTimes(1);
+    expect(writer.deleteFile).toHaveBeenCalledTimes(2); // temp file and lock meta
   });
 
   it("should still propagate the rename error when tmp cleanup also fails", async () => {
@@ -127,7 +127,7 @@ describe("WisdomPersistence.saveAtomic", () => {
     store.add({ taskId: "t1", category: "success_pattern", content: "x" });
 
     await expect(persistence.saveAtomic(store)).rejects.toThrow("rename failed");
-    expect(writer.deleteFile).toHaveBeenCalledTimes(1);
+    expect(writer.deleteFile).toHaveBeenCalledTimes(2); // temp file and lock meta
   });
 
   it("should use unique temp file names across concurrent calls and merge all entries", async () => {

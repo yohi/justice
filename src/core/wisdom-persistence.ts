@@ -79,18 +79,49 @@ export class WisdomPersistence {
    */
   async saveAtomic(store: WisdomStore): Promise<void> {
     const lockPath = `${this.wisdomFilePath}.lock`;
+    const lockMetaPath = `${lockPath}/owner.json`;
+    const lockTtlMs = 10000; // 10 seconds TTL
     const maxRetries = 5;
     let attempt = 0;
 
     while (attempt < maxRetries) {
       try {
         await this.fileWriter.mkdir(lockPath, false);
-        break; // Lock acquired
+        // Lock acquired, write metadata
+        await this.fileWriter.writeFile(
+          lockMetaPath,
+          JSON.stringify({ pid: process.pid, hostname: process.env.HOSTNAME || "localhost", timestamp: Date.now() })
+        );
+        break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
           await this.fileWriter.mkdir(dirname(lockPath), true);
           continue; // Retry immediately
         } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          // Check for stale lock
+          try {
+            const metaJson = await this.fileReader.readFile(lockMetaPath);
+            const meta = JSON.parse(metaJson);
+            const isStale = Date.now() - meta.timestamp > lockTtlMs;
+            let processDead = false;
+            
+            if (!isStale && meta.pid) {
+              try {
+                process.kill(meta.pid, 0);
+              } catch {
+                processDead = true;
+              }
+            }
+            
+            if (isStale || processDead) {
+              await this.fileWriter.deleteFile(lockMetaPath).catch(() => {});
+              await this.fileWriter.rmdir(lockPath).catch(() => {});
+              continue; // Retry immediately
+            }
+          } catch {
+            // Meta file might not exist yet (race condition) or invalid, just wait and backoff
+          }
+
           attempt++;
           if (attempt >= maxRetries) {
             throw new Error(
@@ -126,7 +157,16 @@ export class WisdomPersistence {
         throw err;
       }
     } finally {
-      await this.fileWriter.rmdir(lockPath);
+      try {
+        await this.fileWriter.deleteFile(lockMetaPath);
+      } catch {
+        // Ignore errors during metadata cleanup
+      }
+      try {
+        await this.fileWriter.rmdir(lockPath);
+      } catch {
+        // Ignore errors during lock dir cleanup
+      }
     }
   }
 
