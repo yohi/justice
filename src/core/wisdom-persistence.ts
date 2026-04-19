@@ -51,7 +51,7 @@ export class WisdomPersistence {
     try {
       json = await this.fileReader.readFile(this.wisdomFilePath);
     } catch (err: unknown) {
-      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (err instanceof Error && "code" in err && (err as NodeJS.AbortedError).code === "ENOENT") {
         return new WisdomStore();
       }
       throw err;
@@ -68,7 +68,16 @@ export class WisdomPersistence {
       throw new Error(`Failed to parse wisdom file: ${this.wisdomFilePath}`, { cause: err });
     }
 
-    return WisdomStore.deserialize(data);
+    const store = WisdomStore.deserialize(data);
+    // Strict validation: if the file exists and is parsed but contains no valid entries
+    // where we expected a store structure, it might be corrupted.
+    // deserialize() returns an empty store on invalid entries, so we check if the
+    // input data was at least an object with an entries array if it wasn't empty.
+    if (data && typeof data === "object" && !("entries" in data)) {
+      throw new Error(`Invalid wisdom file format (missing entries): ${this.wisdomFilePath}`);
+    }
+
+    return store;
   }
 
   /**
@@ -87,6 +96,7 @@ export class WisdomPersistence {
     const currentHost = hostname();
     let attempt = 0;
     let firstObservedAt: number | null = null;
+    let lockAcquired = false;
 
     while (attempt < maxRetries) {
       try {
@@ -97,6 +107,7 @@ export class WisdomPersistence {
             lockMetaPath,
             JSON.stringify({ pid: process.pid, hostname: currentHost, timestamp: Date.now() })
           );
+          lockAcquired = true;
         } catch (err) {
           // Metadata writing failed — release the lock and propagate.
           // Note: deleteFile/rmdir already handle ENOENT.
@@ -154,7 +165,14 @@ export class WisdomPersistence {
             // Clear the lock. Note: deleteFile/rmdir already handle ENOENT.
             await this.fileWriter.deleteFile(lockMetaPath);
             await this.fileWriter.rmdir(lockPath);
-            attempt++; // Count attempt when clearing stale lock to prevent infinite loops
+            firstObservedAt = null; // Reset observation for the next lock
+            attempt++;
+            if (attempt >= maxRetries) {
+              throw new Error(
+                `Failed to acquire lock for ${this.wisdomFilePath} after clearing stale locks ${maxRetries} times`,
+                { cause: err }
+              );
+            }
             continue; // Retry immediately
           }
 
@@ -173,6 +191,11 @@ export class WisdomPersistence {
       }
     }
 
+    if (!lockAcquired) {
+      throw new Error(`Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`);
+    }
+
+    let primaryError: unknown = null;
     try {
       const currentOnDisk = await this.loadStrict();
       const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
@@ -192,17 +215,22 @@ export class WisdomPersistence {
         }
         throw err;
       }
+    } catch (err) {
+      primaryError = err;
+      throw err;
     } finally {
       // Cleanup. Note: NodeFileSystem methods already ignore ENOENT.
       try {
         await this.fileWriter.deleteFile(lockMetaPath);
-      } catch {
+      } catch (err) {
         // Only rethrow if there was no original error occurring before finally
+        if (!primaryError) throw err;
       }
       try {
         await this.fileWriter.rmdir(lockPath);
-      } catch {
+      } catch (err) {
         // Only rethrow if there was no original error occurring before finally
+        if (!primaryError) throw err;
       }
     }
   }
