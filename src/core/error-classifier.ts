@@ -11,14 +11,6 @@ interface ClassificationRule {
 }
 
 const CLASSIFICATION_RULES: ClassificationRule[] = [
-  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_transient" as const,
-  })),
-  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_config" as const,
-  })),
   { pattern: /SyntaxError/i, errorClass: "syntax_error" },
   { pattern: /parse error/i, errorClass: "syntax_error" },
   { pattern: /unexpected token/i, errorClass: "syntax_error" },
@@ -38,6 +30,18 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /fundamentally incompatible/i, errorClass: "design_error" },
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
+
+  // Provider config (more specific) — evaluated after general code errors
+  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_config" as ErrorClass,
+  })),
+
+  // Provider transient — evaluated as fallback
+  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_transient" as ErrorClass,
+  })),
 ];
 
 export class ErrorClassifier {
@@ -84,16 +88,6 @@ export class ErrorClassifier {
    */
   getEscalationMessage(errorClass: ErrorClass): string {
     switch (errorClass) {
-      case "provider_transient":
-        return (
-          "The provider is temporarily unavailable or rate-limited. " +
-          "Please wait a few moments or consider adjusting the retry delay."
-        );
-      case "provider_config":
-        return (
-          "A configuration issue with the provider was detected (e.g., invalid API key, model not found). " +
-          "Please verify your API credentials and model configuration."
-        );
       case "test_failure":
         return (
           "Tests are failing. Please use the systematic-debugging skill to " +
@@ -113,6 +107,19 @@ export class ErrorClassifier {
         return (
           "A loop was detected — the agent is repeating the same actions. " +
           "Please split the task into smaller steps or clarify the requirements in plan.md."
+        );
+      case "provider_transient":
+        return (
+          "The task failed due to a transient provider issue (rate limit, quota, or service " +
+          "unavailability). Wait a few minutes before re-delegating, or try a different " +
+          "`category` to switch to an alternative model. Auto-retry is disabled for this class."
+        );
+      case "provider_config":
+        return (
+          "The task failed due to a provider configuration error (missing/invalid API key or " +
+          "unavailable model). This requires user intervention — check your environment " +
+          "variables and model configuration in `oh-my-opencode.jsonc`. Auto-retry is disabled " +
+          "for this class."
         );
       case "syntax_error":
       case "type_error":

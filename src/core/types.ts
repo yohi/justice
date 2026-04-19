@@ -96,7 +96,7 @@ export interface RetryPolicy {
 /** デフォルトのリトライポリシー */
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxRetries: 3,
-  retryableErrors: Object.freeze(["syntax_error", "type_error", "provider_transient"]),
+  retryableErrors: Object.freeze(["syntax_error", "type_error"]),
 };
 
 /** OmO Hook イベントの Discriminated Union */
