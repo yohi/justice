@@ -86,6 +86,7 @@ export class WisdomPersistence {
     const maxRetries = 5;
     const currentHost = hostname();
     let attempt = 0;
+    let lockAcquired = false;
 
     while (attempt < maxRetries) {
       try {
@@ -96,8 +97,14 @@ export class WisdomPersistence {
             lockMetaPath,
             JSON.stringify({ pid: process.pid, hostname: currentHost, timestamp: Date.now() })
           );
+          lockAcquired = true;
         } catch (err) {
           // Metadata writing failed — release the lock and propagate
+          try {
+            await this.fileWriter.deleteFile(lockMetaPath);
+          } catch {
+            // Best-effort cleanup
+          }
           await this.fileWriter.rmdir(lockPath).catch(() => {});
           throw err;
         }
@@ -158,6 +165,10 @@ export class WisdomPersistence {
       }
     }
 
+    if (!lockAcquired) {
+      throw new Error(`Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`);
+    }
+
     try {
       const currentOnDisk = await this.loadStrict();
       const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
@@ -197,14 +208,22 @@ export class WisdomPersistence {
   ): WisdomEntry[] {
     const byId = new Map<string, WisdomEntry>();
     for (const e of diskEntries) byId.set(e.id, e);
+    
+    const getTs = (e: WisdomEntry): number => {
+      const ts = Date.parse(e.timestamp);
+      return isNaN(ts) ? 0 : ts;
+    };
+
     for (const e of memoryEntries) {
       const existing = byId.get(e.id);
-      if (!existing || e.timestamp > existing.timestamp) {
+      if (!existing || getTs(e) > getTs(existing)) {
         byId.set(e.id, e);
       }
     }
-    return [...byId.values()].sort((a, b) =>
-      a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0,
-    );
+    return [...byId.values()].sort((a, b) => {
+      const tsA = getTs(a);
+      const tsB = getTs(b);
+      return tsA < tsB ? -1 : tsA > tsB ? 1 : 0;
+    });
   }
 }

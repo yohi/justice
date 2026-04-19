@@ -1,5 +1,5 @@
 import type { FileReader, FileWriter } from "../core/types";
-import { resolve, isAbsolute, relative, dirname } from "node:path";
+import { resolve, isAbsolute, relative, dirname, basename, join } from "node:path";
 import {
   mkdir as fsMkdir,
   readFile,
@@ -100,8 +100,11 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Failed to resolve root directory: ${this.rootDir}`, { cause: err });
     });
 
-    // Walk up the directory tree to find the deepest existing ancestor
+    // Walk up the directory tree to find the deepest existing ancestor.
+    // We collect the path segments that don't exist yet to reconstruct the safe path.
     let current = resolved;
+    const remaining: string[] = [];
+
     while (current.length >= this.rootDir.length && current.startsWith(this.rootDir)) {
       try {
         const currentReal = await realpath(current);
@@ -111,16 +114,18 @@ export class NodeFileSystem implements FileReader, FileWriter {
           throw new Error(`Unsafe path traversal via symlink rejected: ${path}`);
         }
 
-        // If we successfully realpath'd without escaping, this part of the path is safe.
-        // We can break here because the ancestors of a safe realpath are also safe within the root.
-        break;
+        // Return the canonical realpath of the existing part joined with non-existent segments.
+        // This prevents TOCTOU where an ancestor is swapped for a symlink after validation.
+        return remaining.length > 0
+          ? join(currentReal, ...[...remaining].reverse())
+          : currentReal;
       } catch (err: unknown) {
         if (
           err instanceof Error &&
           "code" in err &&
           (err as NodeJS.ErrnoException).code === "ENOENT"
         ) {
-          // Go up one level
+          remaining.push(basename(current));
           const parent = dirname(current);
           if (parent === current) break;
           current = parent;
@@ -130,9 +135,7 @@ export class NodeFileSystem implements FileReader, FileWriter {
       }
     }
 
-    // Return the lexical path 'resolved' instead of the realpath.
-    // This preserves the caller's path semantics (e.g. for files that don't exist yet)
-    // while we've already validated that no symlinks in the existing ancestry lead outside rootDir.
+    // Fallback to resolved if somehow we exited the loop without a result (should not happen given rootDir exists)
     return resolved;
   }
 
