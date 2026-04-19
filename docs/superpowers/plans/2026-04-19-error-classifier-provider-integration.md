@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Justice の ErrorClassifier が OmO `runtime-fallback` 由来のプロバイダエラー (rate limit / quota / 5xx / API key 不備 / model not found) を分類し、エージェントに適切なエスカレーションメッセージを返せるようにする。
+> **用語:** 本ドキュメント中の `OmO` は上流ライブラリ `oh-my-openagent` を指す（コードベース全体で共通の略称）。`oh-my-opencode.jsonc` は利用者のローカル設定ファイル名であり、`oh-my-openagent` とは別物。
 
-**Architecture:** 既存の `ErrorClass` 型に 2 値 (`provider_transient` / `provider_config`) を追加し、OmO@3.17.4 のパターンをポートした独立ファイルから分類ルールを注入する。Justice 側リトライは発火させない (OmO fallback と二重リトライ回避)。
+**Goal:** Justice の ErrorClassifier が OmO (`oh-my-openagent`) の `runtime-fallback` 由来のプロバイダエラー (rate limit / quota / 5xx / API key 不備 / model not found) を分類し、エージェントに適切なエスカレーションメッセージを返せるようにする。
+
+**Architecture:** 既存の `ErrorClass` 型に 2 値 (`provider_transient` / `provider_config`) を追加し、`oh-my-openagent@3.17.4` のパターンをポートした独立ファイルから分類ルールを注入する。Justice 側リトライは発火させない (OmO fallback と二重リトライ回避)。
 
 **Tech Stack:** TypeScript, Vitest, Bun
 
-**Design Spec:** [2026-04-19-topic1-error-classifier-integration-design.md](file:///home/y_ohi/program/justice/docs/superpowers/specs/2026-04-19-topic1-error-classifier-integration-design.md)
+**Design Spec:** [2026-04-19-topic1-error-classifier-integration-design.md](../specs/2026-04-19-topic1-error-classifier-integration-design.md)
 
 ---
 
@@ -35,13 +37,13 @@ master
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `src/core/types.ts` | Modify (L59-66) | `ErrorClass` に 2 値追加 |
+| `src/core/types.ts` | Modify | `ErrorClass` 型定義に 2 値追加 |
 | `src/core/provider-error-patterns.ts` | **Create** | プロバイダエラーパターンの正規表現定義 |
 | `src/core/error-classifier.ts` | Modify | パターン import、CLASSIFICATION_RULES 拡張、getEscalationMessage 拡張 |
 | `tests/core/provider-error-patterns.test.ts` | **Create** | パターン配列のエクスポート・長さ検証 |
 | `tests/core/error-classifier.test.ts` | Modify | 分類テスト §A-F、リトライテスト §C、エスカレーションテスト §D、優先度テスト §E |
-| `CHANGELOG.md` | Modify (L1-3) | Unreleased エントリ追加 |
-| `AGENTS.md` | Modify (末尾セクション追加) | Upstream Drift Tracking セクション追加 |
+| `CHANGELOG.md` | Modify | Unreleased エントリ追加 |
+| `AGENTS.md` | Modify | Upstream Drift Tracking セクション追加 |
 
 ---
 
@@ -53,7 +55,7 @@ master
 
 **Files:**
 
-- Modify: `src/core/types.ts:59-66`
+- Modify: `src/core/types.ts`（`ErrorClass` 型定義）
 - Create: `src/core/provider-error-patterns.ts`
 - Create: `tests/core/provider-error-patterns.test.ts`
 
@@ -67,7 +69,7 @@ master
 - [ ] **Step 1: Phase ブランチと Task ブランチを作成**
 
 ```bash
-cd /home/y_ohi/program/justice
+cd "$(git rev-parse --show-toplevel)"
 git checkout master
 git pull origin master
 git checkout -b feature/phase-1__error-classifier-provider__base
@@ -78,7 +80,7 @@ git checkout -b feature/phase1-task1__type-and-patterns
 - [ ] **Step 2: 既存テストが PASS することを確認（ベースライン）**
 
 Run: `bun run test`
-Expected: 全テスト PASS (201 tests)
+Expected: 全テスト PASS（失敗 0 件。テスト総数を記録してベースラインとする）
 
 - [ ] **Step 3: パターンファイルの検証テストを作成 (RED)**
 
@@ -101,8 +103,8 @@ describe("provider-error-patterns", () => {
       }
     });
 
-    it("should contain 16 patterns", () => {
-      expect(PROVIDER_TRANSIENT_PATTERNS).toHaveLength(16);
+    it("should contain 17 patterns", () => {
+      expect(PROVIDER_TRANSIENT_PATTERNS).toHaveLength(17);
     });
   });
 
@@ -129,7 +131,7 @@ Expected: FAIL (モジュールが存在しない)
 
 - [ ] **Step 5: ErrorClass 型を拡張**
 
-`src/core/types.ts` の L59-66 を以下に変更:
+`src/core/types.ts` の `ErrorClass` 型定義を以下に変更:
 
 ```typescript
 /** エラー分類 */
@@ -153,7 +155,6 @@ export type ErrorClass =
 // Source: oh-my-openagent@3.17.4
 //   src/hooks/runtime-fallback/constants.ts (RETRYABLE_ERROR_PATTERNS)
 //   src/hooks/runtime-fallback/error-classifier.ts (classifyErrorType)
-// Tracked commit: <SHA at port time, recorded in CHANGELOG>
 
 export const PROVIDER_TRANSIENT_PATTERNS: readonly RegExp[] = Object.freeze([
   /rate.?limit/i,
@@ -186,7 +187,7 @@ export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = Object.freeze([
 ]);
 ```
 
-> **Note:** 設計書では PROVIDER_TRANSIENT_PATTERNS は 16 個、PROVIDER_CONFIG_PATTERNS は 7 個。`Object.freeze()` で `readonly` 制約をランタイムでも担保する。
+> **Note:** 設計書では PROVIDER_TRANSIENT_PATTERNS は 17 個、PROVIDER_CONFIG_PATTERNS は 7 個。`Object.freeze()` で `readonly` 制約をランタイムでも担保する。
 
 - [ ] **Step 7: パターンファイルのテストが PASS することを確認**
 
@@ -196,7 +197,7 @@ Expected: PASS (4 tests)
 - [ ] **Step 8: 既存テストが全て PASS することを確認**
 
 Run: `bun run test`
-Expected: 全テスト PASS (201 + 4 = 205 tests)
+Expected: 全テスト PASS（失敗 0 件。ベースラインから +4 件増加）
 
 Run: `bun run typecheck`
 Expected: エラーなし
@@ -222,8 +223,8 @@ Draft PR: `feature/phase1-task1__type-and-patterns` → `feature/phase-1__error-
 
 **Files:**
 
-- Modify: `src/core/error-classifier.ts:1-110`
-- Modify: `tests/core/error-classifier.test.ts:1-109`
+- Modify: `src/core/error-classifier.ts`
+- Modify: `tests/core/error-classifier.test.ts`
 
 **Branch:**
 
@@ -402,7 +403,7 @@ Expected: 新規追加テスト全て FAIL、既存テスト全て PASS
 
 `src/core/error-classifier.ts` を以下のように変更:
 
-1\. import 追加 (L1 の後):
+1\. ファイル先頭の既存 import 直後に以下を追加:
 
 ```typescript
 import {
@@ -411,7 +412,7 @@ import {
 } from "./provider-error-patterns";
 ```
 
-2\. `CLASSIFICATION_RULES` 配列末尾 (L29 の `];` の前) に追加:
+2\. `CLASSIFICATION_RULES` 配列の末尾（閉じ `];` の直前）に追加:
 
 ```typescript
   // Provider config (more specific) — evaluated first within provider rules
@@ -448,7 +449,7 @@ import {
 - [ ] **Step 11: 全テストが PASS することを確認**
 
 Run: `bun run test`
-Expected: 全テスト PASS (205 + 新規テスト)
+Expected: 全テスト PASS（失敗 0 件。Task 1 末尾から新規追加分だけ増加）
 
 Run: `bun run typecheck`
 Expected: エラーなし
@@ -477,8 +478,8 @@ Draft PR: `feature/phase1-task2__classifier-logic-and-tests` → `feature/phase-
 
 **Files:**
 
-- Modify: `CHANGELOG.md:1-3`
-- Modify: `AGENTS.md:130` (末尾セクション追加)
+- Modify: `CHANGELOG.md`（先頭 `# Changelog` 見出しの直後に Unreleased セクション挿入）
+- Modify: `AGENTS.md`（末尾 `---` 区切り直前に Upstream Drift Tracking セクション追加）
 
 **Branch:**
 
@@ -496,7 +497,7 @@ git checkout -b feature/phase1-task3__docs-and-changelog
 
 - [ ] **Step 2: CHANGELOG.md に Unreleased セクションを追加**
 
-`CHANGELOG.md` の L1 (`# Changelog`) の直後に追加:
+`CHANGELOG.md` の `# Changelog` 見出しの直後に追加:
 
 ```markdown
 
@@ -509,7 +510,7 @@ git checkout -b feature/phase1-task3__docs-and-changelog
 
 - [ ] **Step 3: AGENTS.md に Upstream Drift Tracking セクションを追加**
 
-`AGENTS.md` の `---` 区切り (L130) の直前に新セクションを追加:
+`AGENTS.md` の末尾付近にある最終 `---` 区切りの直前に新セクションを追加:
 
 ```markdown
 
