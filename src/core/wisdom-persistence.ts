@@ -145,7 +145,7 @@ export class WisdomPersistence {
           } catch {
             // Meta file might not exist yet (race condition) or invalid.
             // Treat as stale only if the lock has been observed for longer than TTL.
-            if (firstObservedAt !== null && Date.now() - firstObservedAt > lockTtlMs) {
+            if (Date.now() - firstObservedAt > lockTtlMs) {
               shouldClear = true;
             }
           }
