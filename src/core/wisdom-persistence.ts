@@ -196,12 +196,12 @@ export class WisdomPersistence {
       // Cleanup. Note: NodeFileSystem methods already ignore ENOENT.
       try {
         await this.fileWriter.deleteFile(lockMetaPath);
-      } catch (err) {
+      } catch {
         // Only rethrow if there was no original error occurring before finally
       }
       try {
         await this.fileWriter.rmdir(lockPath);
-      } catch (err) {
+      } catch {
         // Only rethrow if there was no original error occurring before finally
       }
     }
