@@ -31,13 +31,13 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
 
-  // Provider config (more specific) — evaluated first within provider rules
+  // Provider config (more specific) — evaluated after general code errors
   ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
     pattern,
     errorClass: "provider_config" as ErrorClass,
   })),
 
-  // Provider transient
+  // Provider transient — evaluated as fallback
   ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
     pattern,
     errorClass: "provider_transient" as ErrorClass,
@@ -111,8 +111,8 @@ export class ErrorClassifier {
       case "provider_transient":
         return (
           "The task failed due to a transient provider issue (rate limit, quota, or service " +
-          "unavailability) that exhausted the harness's automatic retries. Wait a few minutes " +
-          "before re-delegating, or try a different `category` to switch to an alternative model."
+          "unavailability). Wait a few minutes before re-delegating, or try a different " +
+          "`category` to switch to an alternative model. Auto-retry is disabled for this class."
         );
       case "provider_config":
         return (

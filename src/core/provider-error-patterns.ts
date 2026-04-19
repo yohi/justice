@@ -13,22 +13,21 @@ export const PROVIDER_TRANSIENT_PATTERNS: readonly RegExp[] = Object.freeze([
   /service.?unavailable/i,
   /overloaded/i,
   /temporarily.?unavailable/i,
-  /(?:^|\s)429(?:\s|$)/,
-  /(?:^|\s)503(?:\s|$)/,
-  /(?:^|\s)529(?:\s|$)/,
+  /\b429\b/,
+  /\b503\b/,
+  /\b529\b/,
   /retrying\s+in/i,
-  /payment.?required/i,
-  /usage\s+limit/i,
-  /out\s+of\s+credits?/i,
 ]);
 
 export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = Object.freeze([
   /api.?key.?is.?missing/i,
   /api.?key.*?must be a string/i,
   /model.{0,20}?not.{0,10}?supported/i,
-  /model_not_supported/i,
   /model\s+not\s+found/i,
   /providerModelNotFoundError/i,
   /AI_LoadAPIKeyError/i,
   /missing.{0,10}?api.{0,10}?key/i,
+  /payment.?required/i,
+  /usage\s+limit/i,
+  /out\s+of\s+credits?/i,
 ]);
