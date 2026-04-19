@@ -54,7 +54,7 @@ export class WisdomPersistence {
       if (err instanceof Error && "code" in err && (err as NodeJS.AbortedError).code === "ENOENT") {
         return new WisdomStore();
       }
-      throw err instanceof Error ? err : new Error(String(err));
+      throw err instanceof Error ? err : new Error(String(err), { cause: err });
     }
 
     if (!json || json.trim() === "") {
@@ -113,7 +113,7 @@ export class WisdomPersistence {
           // Note: deleteFile/rmdir already handle ENOENT.
           await this.fileWriter.deleteFile(lockMetaPath);
           await this.fileWriter.rmdir(lockPath);
-          throw err instanceof Error ? err : new Error(String(err));
+          throw err instanceof Error ? err : new Error(String(err), { cause: err });
         }
         break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
@@ -180,13 +180,13 @@ export class WisdomPersistence {
           if (attempt >= maxRetries) {
             throw new Error(
               `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
-              { cause: err instanceof Error ? err : undefined },
+              { cause: err },
             );
           }
           // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
           await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
         } else {
-          throw err instanceof Error ? err : new Error(String(err));
+          throw err instanceof Error ? err : new Error(String(err), { cause: err });
         }
       }
     }
@@ -213,7 +213,7 @@ export class WisdomPersistence {
         } catch {
           // Swallow cleanup errors — the original error is the real cause.
         }
-        throw err instanceof Error ? err : new Error(String(err));
+        throw err instanceof Error ? err : new Error(String(err), { cause: err });
       }
     } catch (err) {
       primaryError = err;
@@ -232,7 +232,7 @@ export class WisdomPersistence {
     }
 
     if (primaryError) {
-      throw primaryError instanceof Error ? primaryError : new Error(String(primaryError));
+      throw primaryError instanceof Error ? primaryError : new Error(String(primaryError), { cause: primaryError });
     }
   }
 
