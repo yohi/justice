@@ -165,8 +165,10 @@ This project does not use databases, but if needed:
 
 ### Upstream Drift Tracking
 
-When `oh-my-openagent` releases a new version, review
-`src/hooks/runtime-fallback/{constants,error-classifier}.ts` for changes to
-`RETRYABLE_ERROR_PATTERNS` and `classifyErrorType`. If new patterns are added
-or semantics shift, update `src/core/provider-error-patterns.ts` accordingly
-and bump the source version comment.
+When `oh-my-openagent` releases a new version, review its upstream code:
+- `src/hooks/runtime-fallback/constants.ts` (for `RETRYABLE_ERROR_PATTERNS`)
+- `src/hooks/runtime-fallback/error-classifier.ts` (for `classifyErrorType`)
+
+If new patterns are added or semantics shift, update the corresponding local files:
+- `src/core/provider-error-patterns.ts` (and bump the source version comment at the top)
+- `src/core/error-classifier.ts` (if classification logic changes)
