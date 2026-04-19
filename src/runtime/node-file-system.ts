@@ -68,7 +68,9 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    const realRoot = await realpath(this.rootDir);
+    const realRoot = await realpath(this.rootDir).catch((err) => {
+      throw new Error(`Failed to resolve root directory: ${this.rootDir}`, { cause: err });
+    });
     const realPath = await realpath(resolved);
     const realRel = relative(realRoot, realPath);
 
@@ -94,7 +96,9 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    const realRoot = await realpath(this.rootDir);
+    const realRoot = await realpath(this.rootDir).catch((err) => {
+      throw new Error(`Failed to resolve root directory: ${this.rootDir}`, { cause: err });
+    });
 
     // Walk up the directory tree to find the deepest existing ancestor
     let current = resolved;
@@ -126,6 +130,9 @@ export class NodeFileSystem implements FileReader, FileWriter {
       }
     }
 
+    // Return the lexical path 'resolved' instead of the realpath.
+    // This preserves the caller's path semantics (e.g. for files that don't exist yet)
+    // while we've already validated that no symlinks in the existing ancestry lead outside rootDir.
     return resolved;
   }
 
@@ -147,12 +154,12 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
   async rmdir(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    await this.bestEffortDelete(async () => await fsRmdir(safePath));
+    await this.bestEffortDelete(() => fsRmdir(safePath));
   }
 
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    await this.bestEffortDelete(async () => await unlink(safePath));
+    await this.bestEffortDelete(() => unlink(safePath));
   }
 
   /**

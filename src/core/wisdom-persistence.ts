@@ -104,6 +104,7 @@ export class WisdomPersistence {
         break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+          attempt++; // Increment attempt to respect retry limit
           await this.fileWriter.mkdir(dirname(lockPath), true);
           continue; // Retry immediately
         } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
