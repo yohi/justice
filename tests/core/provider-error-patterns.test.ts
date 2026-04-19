@@ -28,8 +28,8 @@ describe("provider-error-patterns", () => {
       }
     });
 
-    it("should contain 7 patterns", () => {
-      expect(PROVIDER_CONFIG_PATTERNS).toHaveLength(7);
+    it("should contain 8 patterns", () => {
+      expect(PROVIDER_CONFIG_PATTERNS).toHaveLength(8);
     });
   });
 });

@@ -1,5 +1,9 @@
 import type { ErrorClass } from "./types";
 import { DEFAULT_RETRY_POLICY } from "./types";
+import {
+  PROVIDER_TRANSIENT_PATTERNS,
+  PROVIDER_CONFIG_PATTERNS,
+} from "./provider-error-patterns";
 
 interface ClassificationRule {
   pattern: RegExp;
@@ -26,6 +30,18 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /fundamentally incompatible/i, errorClass: "design_error" },
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
+
+  // Provider config (more specific) — evaluated first within provider rules
+  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_config" as ErrorClass,
+  })),
+
+  // Provider transient
+  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_transient" as ErrorClass,
+  })),
 ];
 
 export class ErrorClassifier {
@@ -91,6 +107,19 @@ export class ErrorClassifier {
         return (
           "A loop was detected — the agent is repeating the same actions. " +
           "Please split the task into smaller steps or clarify the requirements in plan.md."
+        );
+      case "provider_transient":
+        return (
+          "The task failed due to a transient provider issue (rate limit, quota, or service " +
+          "unavailability) that exhausted the harness's automatic retries. Wait a few minutes " +
+          "before re-delegating, or try a different `category` to switch to an alternative model."
+        );
+      case "provider_config":
+        return (
+          "The task failed due to a provider configuration error (missing/invalid API key or " +
+          "unavailable model). This requires user intervention — check your environment " +
+          "variables and model configuration in `oh-my-opencode.jsonc`. Auto-retry is disabled " +
+          "for this class."
         );
       case "syntax_error":
       case "type_error":
