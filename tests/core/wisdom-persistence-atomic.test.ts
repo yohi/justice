@@ -130,10 +130,17 @@ describe("WisdomPersistence.saveAtomic", () => {
     expect(writer.deleteFile).toHaveBeenCalledTimes(1);
   });
 
-  it("should use unique temp file names across concurrent calls", async () => {
+  it("should use unique temp file names across concurrent calls and merge all entries", async () => {
     const writer = createMockFileWriter();
     const reader = createMockFileReader({});
     const persistence = new WisdomPersistence(reader, writer, defaultPath);
+
+    // Patch reader to use the shared writtenFiles from writer for consistent testing
+    reader.readFile = vi.fn(async (path: string) => {
+      if (path in writer.writtenFiles) return writer.writtenFiles[path]!;
+      throw new Error(`File not found: ${path}`);
+    });
+    reader.fileExists = vi.fn(async (path: string) => path in writer.writtenFiles);
 
     const writtenPaths: string[] = [];
     const originalWriteFile = writer.writeFile.bind(writer);
@@ -147,8 +154,32 @@ describe("WisdomPersistence.saveAtomic", () => {
     const s2 = new WisdomStore(100);
     s2.add({ taskId: "t2", category: "success_pattern", content: "b" });
 
+    // Concurrent calls should now be serialized by the lock
     await Promise.all([persistence.saveAtomic(s1), persistence.saveAtomic(s2)]);
+
     const tmpPaths = writtenPaths.filter((p) => p.includes(".tmp."));
     expect(new Set(tmpPaths).size).toBe(tmpPaths.length);
+
+    // Final file should contain BOTH entries because of lock-protected RMW
+    const finalData = JSON.parse(writer.writtenFiles[defaultPath]!);
+    expect(finalData.entries).toHaveLength(2);
+    const taskIds = (finalData.entries as WisdomEntry[]).map((e) => e.taskId);
+    expect(taskIds).toContain("t1");
+    expect(taskIds).toContain("t2");
+  });
+
+  it("should return an empty store if maxEntries is 0 (slice(-0) fix)", async () => {
+    const reader = createMockFileReader({});
+    const writer = createMockFileWriter();
+    const persistence = new WisdomPersistence(reader, writer, defaultPath);
+
+    const store = new WisdomStore(0);
+    store.add({ taskId: "t1", category: "success_pattern", content: "x" });
+
+    await persistence.saveAtomic(store);
+
+    const finalData = JSON.parse(writer.writtenFiles[defaultPath]!);
+    expect(finalData.entries).toHaveLength(0);
+    expect(finalData.maxEntries).toBe(0);
   });
 });

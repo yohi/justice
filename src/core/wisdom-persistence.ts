@@ -42,35 +42,55 @@ export class WisdomPersistence {
 
   /**
    * Atomically persists the WisdomStore: loads current on-disk state, merges
-   * in-memory entries (newer timestamp wins for duplicate IDs), trims to
-   * maxEntries, writes to a temp file, then renames over the target file.
+   * in-memory entries (newer timestamp wins for duplicate IDs),
+   * writes to a temp file, then renames over the target file.
    *
-   * Race window `load → merge → write` is intentionally unlocked; see design
-   * spec §8 (lock-free design notes).
-   *
-   * If `rename` fails, the temp file is best-effort removed before the original
-   * error is rethrown, so orphan `.tmp.*` files do not accumulate on repeated
-   * failures.
+   * Uses an advisory file-based lock (.lock directory) to ensure serial RMW
+   * across concurrent processes/calls. Retries if the lock is held.
    */
   async saveAtomic(store: WisdomStore): Promise<void> {
-    const currentOnDisk = await this.load();
-    const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
-    const capped = merged.slice(-store.getMaxEntries());
+    const lockPath = `${this.wisdomFilePath}.lock`;
+    const maxRetries = 5;
+    let attempt = 0;
 
-    const finalStore = WisdomStore.fromEntries(capped, store.getMaxEntries());
-    const json = finalStore.serialize();
-
-    const tmpPath = `${this.wisdomFilePath}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
-    await this.fileWriter.writeFile(tmpPath, json);
-    try {
-      await this.fileWriter.rename(tmpPath, this.wisdomFilePath);
-    } catch (renameErr) {
+    while (attempt < maxRetries) {
       try {
-        await this.fileWriter.deleteFile(tmpPath);
-      } catch {
-        // Swallow cleanup errors — the rename failure below is the real cause.
+        await this.fileWriter.mkdir(lockPath, false);
+        break; // Lock acquired
+      } catch (err: unknown) {
+        attempt++;
+        if (attempt >= maxRetries) {
+          throw new Error(
+            `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
+            { cause: err },
+          );
+        }
+        // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
+        await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
       }
-      throw renameErr;
+    }
+
+    try {
+      const currentOnDisk = await this.load();
+      const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
+
+      const finalStore = WisdomStore.fromEntries(merged, store.getMaxEntries());
+      const json = finalStore.serialize();
+
+      const tmpPath = `${this.wisdomFilePath}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
+      try {
+        await this.fileWriter.writeFile(tmpPath, json);
+        await this.fileWriter.rename(tmpPath, this.wisdomFilePath);
+      } catch (err) {
+        try {
+          await this.fileWriter.deleteFile(tmpPath);
+        } catch {
+          // Swallow cleanup errors — the original error is the real cause.
+        }
+        throw err;
+      }
+    } finally {
+      await this.fileWriter.rmdir(lockPath);
     }
   }
 

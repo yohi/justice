@@ -12,10 +12,15 @@ export function createMockFileReader(files: Record<string, string>): FileReader 
   };
 }
 
-export function createMockFileWriter(): FileWriter & { writtenFiles: Record<string, string> } {
+export function createMockFileWriter(): FileWriter & {
+  writtenFiles: Record<string, string>;
+  directories: Set<string>;
+} {
   const writtenFiles: Record<string, string> = {};
+  const directories = new Set<string>();
   return {
     writtenFiles,
+    directories,
     writeFile: vi.fn(async (path: string, content: string) => {
       writtenFiles[path] = content;
     }),
@@ -26,6 +31,17 @@ export function createMockFileWriter(): FileWriter & { writtenFiles: Record<stri
       if (from === to) return;
       writtenFiles[to] = writtenFiles[from];
       delete writtenFiles[from];
+    }),
+    mkdir: vi.fn(async (path: string, recursive: boolean) => {
+      if (!recursive && directories.has(path)) {
+        const err = new Error(`EEXIST: file already exists, mkdir '${path}'`) as NodeJS.ErrnoException;
+        err.code = "EEXIST";
+        throw err;
+      }
+      directories.add(path);
+    }),
+    rmdir: vi.fn(async (path: string) => {
+      directories.delete(path);
     }),
     deleteFile: vi.fn(async (path: string) => {
       if (path in writtenFiles) {

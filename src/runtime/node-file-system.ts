@@ -1,13 +1,14 @@
 import type { FileReader, FileWriter } from "../core/types";
 import { resolve, isAbsolute, relative, dirname } from "node:path";
 import {
-  mkdir,
+  mkdir as fsMkdir,
   readFile,
   writeFile,
   stat,
   realpath,
   rename as fsRename,
   unlink,
+  rmdir as fsRmdir,
 } from "node:fs/promises";
 
 export class NodeFileSystem implements FileReader, FileWriter {
@@ -27,7 +28,7 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
     // Ensure parent directory exists
     const parentDir = dirname(safePath);
-    await mkdir(parentDir, { recursive: true });
+    await fsMkdir(parentDir, { recursive: true });
 
     await writeFile(safePath, content, "utf-8");
   }
@@ -128,9 +129,30 @@ export class NodeFileSystem implements FileReader, FileWriter {
     const safeTo = await this.resolveSafelyForWrite(to);
 
     // Ensure parent directory exists
-    await mkdir(dirname(safeTo), { recursive: true });
+    await fsMkdir(dirname(safeTo), { recursive: true });
 
     await fsRename(safeFrom, safeTo);
+  }
+
+  async mkdir(path: string, recursive: boolean): Promise<void> {
+    const safePath = await this.resolveSafelyForWrite(path);
+    await fsMkdir(safePath, { recursive });
+  }
+
+  async rmdir(path: string): Promise<void> {
+    const safePath = await this.resolveSafelyForWrite(path);
+    try {
+        await fsRmdir(safePath);
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return;
+      }
+      throw err;
+    }
   }
 
   async deleteFile(path: string): Promise<void> {

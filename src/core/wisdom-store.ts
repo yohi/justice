@@ -54,7 +54,7 @@ export class WisdomStore {
 
     // Return the most recent entries up to maxEntries
     const limit = options?.maxEntries ?? 10;
-    return results.slice(-limit); // slice from the end to get the most recent
+    return results.slice(Math.max(0, results.length - limit)); // slice from the end to get the most recent
   }
 
   /**
@@ -159,7 +159,7 @@ export class WisdomStore {
       return store;
     }
 
-    const trimmed = entries.length > limit ? entries.slice(-limit) : entries;
+    const trimmed = entries.slice(Math.max(0, entries.length - limit));
     for (const entry of trimmed) {
       if (WisdomStore.isValidEntry(entry)) {
         store.entries.push(entry);
