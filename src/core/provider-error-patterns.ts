@@ -17,9 +17,6 @@ export const PROVIDER_TRANSIENT_PATTERNS: readonly RegExp[] = Object.freeze([
   /\b503\b/,
   /\b529\b/,
   /retrying\s+in/i,
-  /payment.?required/i,
-  /usage\s+limit/i,
-  /out\s+of\s+credits?/i,
 ]);
 
 export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = Object.freeze([
@@ -30,4 +27,7 @@ export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = Object.freeze([
   /providerModelNotFoundError/i,
   /AI_LoadAPIKeyError/i,
   /missing.{0,10}?api.{0,10}?key/i,
+  /payment.?required/i,
+  /usage\s+limit/i,
+  /out\s+of\s+credits?/i,
 ]);
