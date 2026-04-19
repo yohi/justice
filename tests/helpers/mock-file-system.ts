@@ -19,5 +19,18 @@ export function createMockFileWriter(): FileWriter & { writtenFiles: Record<stri
     writeFile: vi.fn(async (path: string, content: string) => {
       writtenFiles[path] = content;
     }),
+    rename: vi.fn(async (from: string, to: string) => {
+      if (!(from in writtenFiles)) {
+        throw new Error(`rename: source not found: ${from}`);
+      }
+      writtenFiles[to] = writtenFiles[from];
+      delete writtenFiles[from];
+    }),
+    deleteFile: vi.fn(async (path: string) => {
+      if (!(path in writtenFiles)) {
+        throw new Error(`deleteFile: file not found: ${path}`);
+      }
+      delete writtenFiles[path];
+    }),
   };
 }

@@ -200,9 +200,22 @@ export interface PostToolUsePayload {
 export interface FileWriter {
   /**
    * 指定されたパスにデータを書き込みます。
-   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）しなければなりません。
+   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）なければなりません。
    */
   writeFile(path: string, content: string): Promise<void>;
+
+  /**
+   * ファイルを `from` から `to` へ atomic にリネームします。
+   * 両 path とも rootDir 配下に閉じる必要があり、実装は path traversal を拒否します。
+   */
+  rename(from: string, to: string): Promise<void>;
+
+  /**
+   * 指定されたパスのファイルを削除します。best-effort クリーンアップ（例:
+   * `saveAtomic` が rename に失敗した際の一時ファイル除去）に用いられます。
+   * 実装は path traversal を拒否します。
+   */
+  deleteFile(path: string): Promise<void>;
 }
 
 /** コンテキスト削減戦略 */
