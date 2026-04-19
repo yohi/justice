@@ -114,7 +114,7 @@ describe("ErrorClassifier", () => {
     it("should return user intervention message for provider_config", () => {
       const msg = classifier.getEscalationMessage("provider_config");
       expect(msg).toContain("user intervention");
-      expect(msg).toContain("oh-my-opencode.jsonc");
+      expect(msg).toContain("oh-my-openagent.jsonc");
     });
   });
 
@@ -128,6 +128,7 @@ describe("ErrorClassifier", () => {
       ["503 Service Unavailable"],
       ["You have exhausted your capacity for this model"],
       ["Cooling down before next request"],
+      ["Gateway Timeout"], // Should be caught by PROVIDER_TRANSIENT_PATTERNS
     ])("should classify %j as provider_transient", (input) => {
       expect(classifier.classify(input)).toBe("provider_transient");
     });
@@ -139,6 +140,7 @@ describe("ErrorClassifier", () => {
       ["Error: model not found: claude-opus-99"],
       ["model_not_supported by current provider"],
       ["providerModelNotFoundError: gpt-99 unavailable"],
+      ["Missing API key in environment"], // New pattern test
     ])("should classify %j as provider_config", (input) => {
       expect(classifier.classify(input)).toBe("provider_config");
     });
@@ -162,6 +164,11 @@ describe("ErrorClassifier", () => {
 
     it("should prioritize test_failure over provider patterns", () => {
       expect(classifier.classify("FAIL tests/quota.test.ts")).toBe("test_failure");
+    });
+
+    it("should prioritize provider_transient over generic timeout", () => {
+      // "Gateway Timeout" contains "timeout", but should be "provider_transient"
+      expect(classifier.classify("Gateway Timeout")).toBe("provider_transient");
     });
 
     it("should classify config-only text as provider_config", () => {

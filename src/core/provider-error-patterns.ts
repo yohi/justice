@@ -13,8 +13,10 @@ export const PROVIDER_TRANSIENT_PATTERNS: readonly RegExp[] = Object.freeze([
   /service.?unavailable/i,
   /overloaded/i,
   /temporarily.?unavailable/i,
+  /gateway.?timeout/i,
   /\b429\b/,
   /\b503\b/,
+  /\b504\b/,
   /\b529\b/,
   /retrying\s+in/i,
 ]);
