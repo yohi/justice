@@ -36,14 +36,18 @@ const GENERIC_GENERAL_RULES: ClassificationRule[] = [
 ];
 
 const PROVIDER_RULES: ClassificationRule[] = [
-  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_config" as ErrorClass,
-  })),
-  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_transient" as ErrorClass,
-  })),
+  ...PROVIDER_CONFIG_PATTERNS.map(
+    (pattern): ClassificationRule => ({
+      pattern,
+      errorClass: "provider_config",
+    }),
+  ),
+  ...PROVIDER_TRANSIENT_PATTERNS.map(
+    (pattern): ClassificationRule => ({
+      pattern,
+      errorClass: "provider_transient",
+    }),
+  ),
 ];
 
 export interface ClassificationOptions {

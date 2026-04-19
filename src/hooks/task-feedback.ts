@@ -137,7 +137,8 @@ export class TaskFeedbackHandler {
     }
 
     // Classify the error using the raw task logic or test failure details
-    const errorClass = feedback.errorClassification ?? this.classifier.classify(rawResult);
+    const errorClass =
+      feedback.errorClassification ?? this.classifier.classify(rawResult, { isProviderContext: true });
 
     // Check retry eligibility with SmartRetryPolicy
     const currentCount = session.retryCounts.get(errorClass) ?? 0;
