@@ -1,6 +1,14 @@
 import type { FileReader, FileWriter } from "../core/types";
 import { resolve, isAbsolute, relative, dirname } from "node:path";
-import { mkdir, readFile, writeFile, stat, realpath } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  stat,
+  realpath,
+  rename as fsRename,
+  unlink,
+} from "node:fs/promises";
 
 export class NodeFileSystem implements FileReader, FileWriter {
   private readonly rootDir: string;
@@ -110,6 +118,32 @@ export class NodeFileSystem implements FileReader, FileWriter {
         // If parent doesn't exist, we can't fully realpath it.
         // We rely on the lexical check for safety in this case.
         return resolved;
+      }
+      throw err;
+    }
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const safeFrom = await this.resolveSafelyForWrite(from);
+    const safeTo = await this.resolveSafelyForWrite(to);
+
+    // Ensure parent directory exists
+    await mkdir(dirname(safeTo), { recursive: true });
+
+    await fsRename(safeFrom, safeTo);
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    const safePath = await this.resolveSafelyForWrite(path);
+    try {
+      await unlink(safePath);
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return;
       }
       throw err;
     }
