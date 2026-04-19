@@ -131,6 +131,8 @@ export class NodeFileSystem implements FileReader, FileWriter {
     // Ensure parent directory exists
     await fsMkdir(dirname(safeTo), { recursive: true });
 
+    // Paths are validated by resolveSafelyForWrite — path traversal is mitigated.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsRename(safeFrom, safeTo);
   }
 

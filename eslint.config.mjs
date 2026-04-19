@@ -19,8 +19,12 @@ export default tseslint.config(
       },
     },
     rules: {
+      "security/detect-non-literal-fs-filename": "warn",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/explicit-function-return-type": "warn",
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: false,
     },
   },
 );

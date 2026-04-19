@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { dirname } from "node:path";
 import type { FileReader, FileWriter, WisdomEntry } from "./types";
 import { WisdomStore } from "./wisdom-store";
 
@@ -41,6 +42,34 @@ export class WisdomPersistence {
   }
 
   /**
+   * Strictly loads WisdomStore. Throws if the file exists but cannot be read or parsed.
+   * Returns empty store only if file is not found (ENOENT).
+   */
+  private async loadStrict(): Promise<WisdomStore> {
+    let json: string;
+    try {
+      json = await this.fileReader.readFile(this.wisdomFilePath);
+    } catch (err: unknown) {
+      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return new WisdomStore();
+      }
+      throw err;
+    }
+
+    if (!json || json.trim() === "") {
+      return new WisdomStore();
+    }
+
+    try {
+      JSON.parse(json);
+    } catch (err) {
+      throw new Error(`Failed to parse wisdom file: ${this.wisdomFilePath}`, { cause: err });
+    }
+
+    return WisdomStore.deserialize(json);
+  }
+
+  /**
    * Atomically persists the WisdomStore: loads current on-disk state, merges
    * in-memory entries (newer timestamp wins for duplicate IDs),
    * writes to a temp file, then renames over the target file.
@@ -58,20 +87,27 @@ export class WisdomPersistence {
         await this.fileWriter.mkdir(lockPath, false);
         break; // Lock acquired
       } catch (err: unknown) {
-        attempt++;
-        if (attempt >= maxRetries) {
-          throw new Error(
-            `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
-            { cause: err },
-          );
+        if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+          await this.fileWriter.mkdir(dirname(lockPath), true);
+          continue; // Retry immediately
+        } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          attempt++;
+          if (attempt >= maxRetries) {
+            throw new Error(
+              `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
+              { cause: err },
+            );
+          }
+          // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
+          await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
+        } else {
+          throw err; // EACCES, etc.
         }
-        // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
-        await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
       }
     }
 
     try {
-      const currentOnDisk = await this.load();
+      const currentOnDisk = await this.loadStrict();
       const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
 
       const finalStore = WisdomStore.fromEntries(merged, store.getMaxEntries());

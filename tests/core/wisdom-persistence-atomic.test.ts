@@ -138,7 +138,9 @@ describe("WisdomPersistence.saveAtomic", () => {
     // Patch reader to use the shared writtenFiles from writer for consistent testing
     reader.readFile = vi.fn(async (path: string) => {
       if (path in writer.writtenFiles) return writer.writtenFiles[path]!;
-      throw new Error(`File not found: ${path}`);
+      const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
     });
     reader.fileExists = vi.fn(async (path: string) => path in writer.writtenFiles);
 
