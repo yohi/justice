@@ -10,7 +10,7 @@ interface ClassificationRule {
   errorClass: ErrorClass;
 }
 
-const CLASSIFICATION_RULES: ClassificationRule[] = [
+const SPECIFIC_GENERAL_RULES: ClassificationRule[] = [
   { pattern: /SyntaxError/i, errorClass: "syntax_error" },
   { pattern: /parse error/i, errorClass: "syntax_error" },
   { pattern: /unexpected token/i, errorClass: "syntax_error" },
@@ -22,19 +22,9 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /test failed/i, errorClass: "test_failure" },
   { pattern: /assertion error/i, errorClass: "test_failure" },
   { pattern: /Expected:.*?Received:/s, errorClass: "test_failure" },
+];
 
-  // Provider config (more specific) — evaluated before general timeouts
-  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_config" as ErrorClass,
-  })),
-
-  // Provider transient — evaluated before general timeouts
-  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
-    pattern,
-    errorClass: "provider_transient" as ErrorClass,
-  })),
-
+const GENERIC_GENERAL_RULES: ClassificationRule[] = [
   { pattern: /timed?\s*out/i, errorClass: "timeout" },
   { pattern: /timeout/i, errorClass: "timeout" },
   { pattern: /loop detected/i, errorClass: "loop_detected" },
@@ -44,6 +34,25 @@ const CLASSIFICATION_RULES: ClassificationRule[] = [
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
 ];
+
+const PROVIDER_RULES: ClassificationRule[] = [
+  ...PROVIDER_CONFIG_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_config" as ErrorClass,
+  })),
+  ...PROVIDER_TRANSIENT_PATTERNS.map((pattern) => ({
+    pattern,
+    errorClass: "provider_transient" as ErrorClass,
+  })),
+];
+
+export interface ClassificationOptions {
+  /**
+   * Whether the error is suspected to originate from the AI provider.
+   * If true, provider-specific patterns (rate limits, API key issues) are evaluated.
+   */
+  isProviderContext?: boolean;
+}
 
 export class ErrorClassifier {
   private readonly maxRetries: number;
@@ -60,12 +69,31 @@ export class ErrorClassifier {
   /**
    * Classify an error message into an ErrorClass.
    */
-  classify(errorOutput: string): ErrorClass {
-    for (const rule of CLASSIFICATION_RULES) {
+  classify(errorOutput: string, options: ClassificationOptions = {}): ErrorClass {
+    // 1. Always evaluate specific general rules first (SyntaxError, TypeError, FAIL etc.)
+    for (const rule of SPECIFIC_GENERAL_RULES) {
       if (rule.pattern.test(errorOutput)) {
         return rule.errorClass;
       }
     }
+
+    // 2. Evaluate provider-specific rules only if in provider context
+    // This MUST come before GENERIC_GENERAL_RULES so "Gateway Timeout" is matched here instead of general "timeout"
+    if (options.isProviderContext) {
+      for (const rule of PROVIDER_RULES) {
+        if (rule.pattern.test(errorOutput)) {
+          return rule.errorClass;
+        }
+      }
+    }
+
+    // 3. Evaluate generic general rules (timeout, loop detected etc.)
+    for (const rule of GENERIC_GENERAL_RULES) {
+      if (rule.pattern.test(errorOutput)) {
+        return rule.errorClass;
+      }
+    }
+
     return "unknown";
   }
 

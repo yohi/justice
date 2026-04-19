@@ -128,9 +128,14 @@ describe("ErrorClassifier", () => {
       ["503 Service Unavailable"],
       ["You have exhausted your capacity for this model"],
       ["Cooling down before next request"],
-      ["Gateway Timeout"], // Should be caught by PROVIDER_TRANSIENT_PATTERNS
-    ])("should classify %j as provider_transient", (input) => {
-      expect(classifier.classify(input)).toBe("provider_transient");
+      ["Gateway Timeout"],
+    ])("should classify %j as provider_transient when in provider context", (input) => {
+      expect(classifier.classify(input, { isProviderContext: true })).toBe("provider_transient");
+    });
+
+    it("should NOT classify transient patterns as provider_transient by default", () => {
+      expect(classifier.classify("rate limit")).toBe("unknown");
+      expect(classifier.classify("503 Service Unavailable")).toBe("unknown");
     });
   });
 
@@ -140,9 +145,13 @@ describe("ErrorClassifier", () => {
       ["Error: model not found: claude-opus-99"],
       ["model_not_supported by current provider"],
       ["providerModelNotFoundError: gpt-99 unavailable"],
-      ["Missing API key in environment"], // New pattern test
-    ])("should classify %j as provider_config", (input) => {
-      expect(classifier.classify(input)).toBe("provider_config");
+      ["Missing API key in environment"],
+    ])("should classify %j as provider_config when in provider context", (input) => {
+      expect(classifier.classify(input, { isProviderContext: true })).toBe("provider_config");
+    });
+
+    it("should NOT classify config patterns as provider_config by default", () => {
+      expect(classifier.classify("missing api key")).toBe("unknown");
     });
   });
 
@@ -159,24 +168,24 @@ describe("ErrorClassifier", () => {
 
   describe("priority / boundary cases", () => {
     it("should prioritize type_error over provider_transient", () => {
-      expect(classifier.classify("TypeError: caused by rate limit")).toBe("type_error");
+      expect(classifier.classify("TypeError: caused by rate limit", { isProviderContext: true })).toBe("type_error");
     });
 
     it("should prioritize test_failure over provider patterns", () => {
-      expect(classifier.classify("FAIL tests/quota.test.ts")).toBe("test_failure");
+      expect(classifier.classify("FAIL tests/quota.test.ts", { isProviderContext: true })).toBe("test_failure");
     });
 
     it("should prioritize provider_transient over generic timeout", () => {
       // "Gateway Timeout" contains "timeout", but should be "provider_transient"
-      expect(classifier.classify("Gateway Timeout")).toBe("provider_transient");
+      expect(classifier.classify("Gateway Timeout", { isProviderContext: true })).toBe("provider_transient");
     });
 
-    it("should classify config-only text as provider_config", () => {
-      expect(classifier.classify("missing api key")).toBe("provider_config");
+    it("should classify config-only text as provider_config in provider context", () => {
+      expect(classifier.classify("missing api key", { isProviderContext: true })).toBe("provider_config");
     });
 
-    it("should classify transient-only text as provider_transient", () => {
-      expect(classifier.classify("rate limit")).toBe("provider_transient");
+    it("should classify transient-only text as provider_transient in provider context", () => {
+      expect(classifier.classify("rate limit", { isProviderContext: true })).toBe("provider_transient");
     });
   });
 
@@ -194,14 +203,15 @@ describe("ErrorClassifier", () => {
       [/temporarily.?unavailable/i, "temporarily unavailable"],
       [/\b429\b/, "429 Too Many Requests"],
       [/\b503\b/, "503 Service Unavailable"],
+      [/\b504\b/, "504 Gateway Timeout"],
       [/\b529\b/, "529 Site is overloaded"],
       [/retrying\s+in/i, "retrying in 30s"],
     ];
 
     it.each(transientSamples)(
-      "pattern %s should match %j as provider_transient",
+      "pattern %s should match %j as provider_transient when in provider context",
       (_pattern, sample) => {
-        expect(classifier.classify(sample)).toBe("provider_transient");
+        expect(classifier.classify(sample, { isProviderContext: true })).toBe("provider_transient");
       },
     );
   });
@@ -211,7 +221,7 @@ describe("ErrorClassifier", () => {
       [/api.?key.?is.?missing/i, "api key is missing"],
       [/api.?key.*?must be a string/i, "api key must be a string"],
       [/model.{0,20}?not.{0,10}?supported/i, "model xyz not supported"],
-      [/model_not_supported/i, "model_not_supported"],
+      [/model.{0,20}?not.{0,10}?supported/i, "model_not_supported"],
       [/model\s+not\s+found/i, "model not found"],
       [/providerModelNotFoundError/i, "providerModelNotFoundError: gpt-5"],
       [/AI_LoadAPIKeyError/i, "AI_LoadAPIKeyError thrown"],
@@ -222,9 +232,9 @@ describe("ErrorClassifier", () => {
     ];
 
     it.each(configSamples)(
-      "pattern %s should match %j as provider_config",
+      "pattern %s should match %j as provider_config when in provider context",
       (_pattern, sample) => {
-        expect(classifier.classify(sample)).toBe("provider_config");
+        expect(classifier.classify(sample, { isProviderContext: true })).toBe("provider_config");
       },
     );
   });
