@@ -86,7 +86,6 @@ export class WisdomPersistence {
     const maxRetries = 5;
     const currentHost = hostname();
     let attempt = 0;
-    let lockAcquired = false;
     let firstObservedAt: number | null = null;
 
     while (attempt < maxRetries) {
@@ -98,7 +97,6 @@ export class WisdomPersistence {
             lockMetaPath,
             JSON.stringify({ pid: process.pid, hostname: currentHost, timestamp: Date.now() })
           );
-          lockAcquired = true;
         } catch (err) {
           // Metadata writing failed — release the lock and propagate.
           // Note: deleteFile/rmdir already handle ENOENT.
@@ -109,7 +107,13 @@ export class WisdomPersistence {
         break; // Lock successfully acquired and metadata written
       } catch (err: unknown) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-          attempt++; // Increment attempt to respect retry limit
+          attempt++;
+          if (attempt >= maxRetries) {
+            throw new Error(
+              `Failed to create parent directory for lock ${lockPath} after ${maxRetries} attempts`,
+              { cause: err }
+            );
+          }
           await this.fileWriter.mkdir(dirname(lockPath), true);
           continue; // Retry immediately
         } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
@@ -167,10 +171,6 @@ export class WisdomPersistence {
           throw err; // EACCES, etc.
         }
       }
-    }
-
-    if (!lockAcquired) {
-      throw new Error(`Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`);
     }
 
     try {
