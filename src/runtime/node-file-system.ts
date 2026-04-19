@@ -126,11 +126,26 @@ export class NodeFileSystem implements FileReader, FileWriter {
   async rename(from: string, to: string): Promise<void> {
     const safeFrom = await this.resolveSafelyForWrite(from);
     const safeTo = await this.resolveSafelyForWrite(to);
+
+    // Ensure parent directory exists
+    await mkdir(dirname(safeTo), { recursive: true });
+
     await fsRename(safeFrom, safeTo);
   }
 
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    await unlink(safePath);
+    try {
+      await unlink(safePath);
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return;
+      }
+      throw err;
+    }
   }
 }
