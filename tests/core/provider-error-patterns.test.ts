@@ -29,7 +29,7 @@ describe("provider-error-patterns", () => {
       ];
 
       for (const msg of positiveExamples) {
-        expect(classifier.classify(msg)).toBe("provider_transient");
+        expect(classifier.classify(msg, { isProviderContext: true })).toBe("provider_transient");
       }
     });
 
@@ -68,7 +68,7 @@ describe("provider-error-patterns", () => {
       ];
 
       for (const msg of positiveExamples) {
-        expect(classifier.classify(msg)).toBe("provider_config");
+        expect(classifier.classify(msg, { isProviderContext: true })).toBe("provider_config");
       }
     });
   });
