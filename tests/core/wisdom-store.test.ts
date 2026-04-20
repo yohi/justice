@@ -170,3 +170,85 @@ describe("WisdomStore", () => {
     });
   });
 });
+
+describe("WisdomStore — additions for TieredWisdomStore", () => {
+  it("getAllEntries should return all entries as a readonly snapshot", () => {
+    const store = new WisdomStore(100);
+    store.add({ taskId: "t1", category: "success_pattern", content: "A" });
+    store.add({ taskId: "t2", category: "failure_gotcha", content: "B" });
+
+    const all = store.getAllEntries();
+    expect(all).toHaveLength(2);
+    expect(all[0]?.taskId).toBe("t1");
+
+    // Verify it's a snapshot (mutating the returned array shouldn't affect the store)
+    // Cast to unknown[] to bypass readonly for testing mutation resistance
+    (all as unknown[]).push({ id: "hacked" });
+    expect(store.getAllEntries()).toHaveLength(2);
+    expect(all).toHaveLength(3);
+
+    // Verify subsequent additions don't affect previously returned snapshots
+    store.add({ taskId: "t3", category: "design_decision", content: "C" });
+    expect(all).toHaveLength(3);
+    expect(store.getAllEntries()).toHaveLength(3);
+  });
+
+  it("getMaxEntries should expose the configured capacity", () => {
+    expect(new WisdomStore(50).getMaxEntries()).toBe(50);
+    expect(new WisdomStore().getMaxEntries()).toBe(100);
+  });
+
+  it("fromEntries should reconstruct a store preserving entry order", () => {
+    const entries = [
+      {
+        id: "w-a",
+        taskId: "t1",
+        category: "success_pattern" as const,
+        content: "A",
+        timestamp: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "w-b",
+        taskId: "t2",
+        category: "failure_gotcha" as const,
+        content: "B",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+    ];
+    const store = WisdomStore.fromEntries(entries, 100);
+    expect(store.getAllEntries()).toHaveLength(2);
+    expect(store.getAllEntries()[0]?.id).toBe("w-a");
+    expect(store.getMaxEntries()).toBe(100);
+  });
+
+  it("fromEntries should trim to maxEntries keeping the latest entries (LRU-like)", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => ({
+      id: `w-${i}`,
+      taskId: `t${i}`,
+      category: "success_pattern" as const,
+      content: `C${i}`,
+      timestamp: `2026-01-0${i + 1}T00:00:00Z`,
+    }));
+    const store = WisdomStore.fromEntries(entries, 3);
+    const all = store.getAllEntries();
+    expect(all).toHaveLength(3);
+    expect(all.map((e) => e.id)).toEqual(["w-2", "w-3", "w-4"]);
+  });
+
+  it("fromEntries should handle maxEntries = 0 correctly", () => {
+    const entries = [{ id: "w-1", taskId: "t1", category: "success_pattern" as const, content: "A", timestamp: "X" }];
+    const store = WisdomStore.fromEntries(entries, 0);
+    expect(store.getAllEntries()).toHaveLength(0);
+    expect(store.getMaxEntries()).toBe(0);
+  });
+
+  it("fromEntries should filter out invalid entries", () => {
+    const entries = [
+      { id: "w-1", taskId: "t1", category: "success_pattern" as const, content: "A", timestamp: "X" },
+      { invalid: "entry" } as unknown as WisdomEntry,
+    ];
+    const store = WisdomStore.fromEntries(entries, 10);
+    expect(store.getAllEntries()).toHaveLength(1);
+    expect(store.getAllEntries()[0]?.id).toBe("w-1");
+  });
+});
