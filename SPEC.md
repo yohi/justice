@@ -534,6 +534,46 @@ const response = await plugin.handleEvent(event);
 
 ---
 
+### 5.16 `TieredWisdomStore` — Cross-Project Wisdom Composition
+
+`TieredWisdomStore` は 2 つの独立した `WisdomStore` インスタンス
+（project-local / user-global）を合成し、書き込みの振り分け・読み込みのマージ・秘密検出を提供する。
+
+**Constructor:**
+
+```typescript
+new TieredWisdomStore({
+  localStore: WisdomStore,
+  globalStore: WisdomStore,
+  localPersistence: WisdomPersistence,
+  globalPersistence: WisdomPersistence,
+  secretDetector?: SecretPatternDetector,
+  globalDisplayPath?: string,
+  logger?: { warn(msg: string, ...args: unknown[]): void },
+})
+```
+
+**主な API:**
+
+- `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` で警告ログ（ブロックはしない）。
+- `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
+- `getByTaskId(taskId)` — 両 store の該当エントリを連結。
+- `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。
+- `loadAll()` / `persistAll()` — 両 store を `WisdomPersistence.saveAtomic` で並列に atomic 永続化。
+
+**振り分けマトリクス:**
+
+| Category | Default scope |
+|---|---|
+| `environment_quirk` | global |
+| `success_pattern` | global |
+| `failure_gotcha` | local |
+| `design_decision` | local |
+
+**ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぐ。
+
+---
+
 ## 6. ファイル I/O インターフェース (File I/O Interfaces)
 
 すべてのファイル入出力（I/O）は、完全なユニットテストの可用性を持たせるために2つのインターフェースによって抽象化されています：
