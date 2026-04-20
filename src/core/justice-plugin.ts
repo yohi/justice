@@ -23,7 +23,7 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 const PROCEED: HookResponse = { action: "proceed" };
 
 export interface CreateGlobalFsResult {
-  readonly fs: NodeFileSystem;
+  readonly fs: FileReader & FileWriter;
   readonly relativePath: string;
 }
 
@@ -35,8 +35,8 @@ export async function createGlobalFs(
     let globalRoot: string;
     let relativePath: string;
 
-    if (envPath) {
-      if (!isAbsolute(envPath)) {
+    if (envPath !== undefined) {
+      if (!envPath || !isAbsolute(envPath)) {
         logger?.warn(
           `JUSTICE_GLOBAL_WISDOM_PATH must be an absolute path; got '${envPath}'. ` +
             "Global wisdom store disabled.",
@@ -58,6 +58,7 @@ export async function createGlobalFs(
       relativePath = "wisdom.json";
     }
 
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await mkdir(globalRoot, { recursive: true });
     return { fs: new NodeFileSystem(globalRoot), relativePath };
   } catch (error) {
@@ -73,7 +74,7 @@ export class NoOpPersistence extends WisdomPersistence {
     super(
       {
         async readFile(): Promise<string> {
-          return "";
+          return "{}";
         },
         async fileExists(): Promise<boolean> {
           return false;
