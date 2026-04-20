@@ -292,12 +292,16 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
 
     it("should handle non-finite numbers by falling back to 0", () => {
       const store = new WisdomStore(10);
+      store.add({ taskId: "t1", category: "success_pattern", content: "A" });
       store.setMaxEntries(NaN);
       expect(store.getMaxEntries()).toBe(0);
+      expect(store.getAllEntries()).toHaveLength(0);
 
       const store2 = new WisdomStore(10);
+      store2.add({ taskId: "t2", category: "success_pattern", content: "B" });
       store2.setMaxEntries(Infinity);
       expect(store2.getMaxEntries()).toBe(0);
+      expect(store2.getAllEntries()).toHaveLength(0);
     });
 
     it("should floor floating point numbers", () => {
@@ -310,6 +314,10 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
   describe("replaceEntries", () => {
     it("should replace all entries and respect limit", () => {
       const store = new WisdomStore(2);
+      // Pre-fill the store to verify "replace" behavior
+      store.add({ taskId: "old-1", category: "success_pattern", content: "Old entry" });
+      expect(store.getAllEntries()).toHaveLength(1);
+
       const entries: WisdomEntry[] = [
         { id: "1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "T1" },
         { id: "2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "T2" },
@@ -319,6 +327,8 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
       store.replaceEntries(entries);
       const all = store.getAllEntries();
       expect(all).toHaveLength(2);
+      // Verify old entry is gone and only the latest of the new ones remain
+      expect(all.some((e) => e.taskId === "old-1")).toBe(false);
       expect(all[0]?.id).toBe("2");
       expect(all[1]?.id).toBe("3");
     });
