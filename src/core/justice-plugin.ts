@@ -120,7 +120,7 @@ export interface JusticePluginOptions {
   };
   readonly onError?: (error: unknown) => void;
   readonly globalFileSystem?: {
-    readonly fs: NodeFileSystem;
+    readonly fs: FileReader & FileWriter;
     readonly relativePath: string;
   };
 }

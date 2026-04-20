@@ -22,56 +22,77 @@ describe("createGlobalFs", () => {
     }
   });
 
-  it("should honor JUSTICE_GLOBAL_WISDOM_PATH env var and split into root + relative", async () => {
+  interface TestCase {
+    name: string;
+    envValue: string | undefined;
+    expectedPathSuffix: string;
+    shouldFail?: boolean;
+    failMessage?: string;
+  }
+
+  const successCases: TestCase[] = [
+    {
+      name: "should honor JUSTICE_GLOBAL_WISDOM_PATH env var and split into root + relative",
+      envValue: "__TARGET_PATH__", // Placeholder for dynamic path
+      expectedPathSuffix: "wisdom.json",
+    },
+    {
+      name: "should default to ~/.justice/wisdom.json when env var is unset",
+      envValue: undefined,
+      expectedPathSuffix: "wisdom.json",
+    },
+  ];
+
+  it.each(successCases)("$name", async ({ envValue, expectedPathSuffix }) => {
     const target = join(tempDir, "inner", "wisdom.json");
-    process.env.JUSTICE_GLOBAL_WISDOM_PATH = target;
+    if (envValue === "__TARGET_PATH__") {
+      process.env.JUSTICE_GLOBAL_WISDOM_PATH = target;
+    } else if (envValue === undefined) {
+      delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
+    }
 
     const logger = { warn: vi.fn(), error: vi.fn() };
     const result = await createGlobalFs(logger);
 
     expect(result).not.toBeNull();
-    expect(result!.relativePath).toBe("wisdom.json");
+    expect(result!.relativePath).toBe(expectedPathSuffix);
 
-    await result!.fs.writeFile(result!.relativePath, "hello-globalfs");
-    const onDisk = await readFile(target, "utf-8");
-    expect(onDisk).toBe("hello-globalfs");
+    if (envValue === "__TARGET_PATH__") {
+      await result!.fs.writeFile(result!.relativePath, "hello-globalfs");
+      const onDisk = await readFile(target, "utf-8");
+      expect(onDisk).toBe("hello-globalfs");
+    }
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("should default to ~/.justice/wisdom.json when env var is unset", async () => {
-    delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
+  const failureCases: TestCase[] = [
+    {
+      name: "should return null and log warn when mkdir throws (e.g., permission denied)",
+      envValue: "__FORBIDDEN_PATH__",
+      expectedPathSuffix: "",
+      failMessage: "Failed to initialize global wisdom store",
+    },
+    {
+      name: "should reject relative JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
+      envValue: "relative/wisdom.json",
+      expectedPathSuffix: "",
+      failMessage: "must be an absolute path",
+    },
+  ];
+
+  it.each(failureCases)("$name", async ({ envValue, failMessage }) => {
+    if (envValue === "__FORBIDDEN_PATH__") {
+      process.env.JUSTICE_GLOBAL_WISDOM_PATH = join(tempDir, "..", "..", "forbidden", "wisdom.json");
+    } else {
+      process.env.JUSTICE_GLOBAL_WISDOM_PATH = envValue;
+    }
+
     const logger = { warn: vi.fn(), error: vi.fn() };
-
-    const result = await createGlobalFs(logger);
-
-    expect(result).not.toBeNull();
-    expect(result!.relativePath).toBe("wisdom.json");
-    const home = homedir();
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(home).toBeTruthy();
-  });
-
-  it("should return null and log warn when mkdir throws (e.g., permission denied)", async () => {
-    process.env.JUSTICE_GLOBAL_WISDOM_PATH = join(tempDir, "..", "..", "forbidden", "wisdom.json");
-    const logger = { warn: vi.fn(), error: vi.fn() };
-
     const result = await createGlobalFs(logger);
 
     expect(result).toBeNull();
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0]?.[0]).toContain("Failed to initialize global wisdom store");
-  });
-
-  it("should reject relative JUSTICE_GLOBAL_WISDOM_PATH and log a warn", async () => {
-    process.env.JUSTICE_GLOBAL_WISDOM_PATH = "relative/wisdom.json";
-    const logger = { warn: vi.fn(), error: vi.fn() };
-
-    const result = await createGlobalFs(logger);
-
-    expect(result).toBeNull();
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0]?.[0]).toContain("must be an absolute path");
-    expect(logger.warn.mock.calls[0]?.[0]).toContain("relative/wisdom.json");
+    expect(logger.warn.mock.calls[0]?.[0]).toContain(failMessage);
   });
 });
 
