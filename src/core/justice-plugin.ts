@@ -16,6 +16,8 @@ import { LoopDetectionHandler } from "../hooks/loop-handler";
 import { TaskSplitter } from "./task-splitter";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
+import { TieredWisdomStore } from "./tiered-wisdom-store";
+import { SecretPatternDetector } from "./secret-pattern-detector";
 import { NodeFileSystem } from "../runtime/node-file-system";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -117,6 +119,10 @@ export interface JusticePluginOptions {
     warn(message: string, ...args: unknown[]): void;
   };
   readonly onError?: (error: unknown) => void;
+  readonly globalFileSystem?: {
+    readonly fs: NodeFileSystem;
+    readonly relativePath: string;
+  };
 }
 
 export class JusticePlugin {
@@ -126,12 +132,39 @@ export class JusticePlugin {
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
   private readonly wisdomStore: WisdomStore;
+  private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
     this.options = options;
-    this.wisdomStore = new WisdomStore();
+
+    this.wisdomStore = new WisdomStore(100);
+    const localPersistence = new WisdomPersistence(fileReader, fileWriter, ".justice/wisdom.json");
+
+    const globalStore = new WisdomStore(500);
+    const globalPersistence = options.globalFileSystem
+      ? new WisdomPersistence(
+          options.globalFileSystem.fs,
+          options.globalFileSystem.fs,
+          options.globalFileSystem.relativePath,
+        )
+      : new NoOpPersistence();
+
+    const globalDisplayPath = options.globalFileSystem
+      ? options.globalFileSystem.relativePath
+      : "~/.justice/wisdom.json";
+
+    this.tieredWisdomStore = new TieredWisdomStore({
+      localStore: this.wisdomStore,
+      globalStore,
+      localPersistence,
+      globalPersistence,
+      secretDetector: new SecretPatternDetector(),
+      globalDisplayPath,
+      logger: options.logger,
+    });
+
     this.planBridge = new PlanBridge(fileReader, this.wisdomStore);
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.wisdomStore);
     this.compactionProtector = new CompactionProtector(this.wisdomStore);
@@ -161,9 +194,17 @@ export class JusticePlugin {
 
   /**
    * Get the shared WisdomStore for persistence or inspection.
+   * Preserved for backwards compatibility with existing external callers.
    */
   getWisdomStore(): WisdomStore {
     return this.wisdomStore;
+  }
+
+  /**
+   * Get the TieredWisdomStore composing local + global wisdom.
+   */
+  getTieredWisdomStore(): TieredWisdomStore {
+    return this.tieredWisdomStore;
   }
 
   /**

@@ -115,4 +115,30 @@ describe("JusticePlugin", () => {
       expect(protectorStore).toBe(mainStore);
     });
   });
+
+  describe("wisdom store integration", () => {
+    it("getWisdomStore() should return the local store (backwards compatible)", () => {
+      const tiered = plugin.getTieredWisdomStore();
+      expect(plugin.getWisdomStore()).toBe(tiered.getLocalStore());
+    });
+
+    it("getTieredWisdomStore() should return a TieredWisdomStore whose localStore is the same as getWisdomStore()", () => {
+      const tiered = plugin.getTieredWisdomStore();
+      expect(tiered.getLocalStore()).toBe(plugin.getWisdomStore());
+      // Default construction uses NoOpPersistence for global, so the global store starts empty.
+      expect(tiered.getGlobalStore().getAllEntries()).toHaveLength(0);
+    });
+
+    it("when no globalFileSystem is provided, global writes stay in-memory (fail-open)", () => {
+      const tiered = plugin.getTieredWisdomStore();
+      tiered.add({
+        taskId: "t",
+        category: "environment_quirk",
+        content: "Bun X.Y.Z quirk",
+      });
+      expect(tiered.getGlobalStore().getAllEntries()).toHaveLength(1);
+      // Still fine — persistAll should not throw because NoOpPersistence is used.
+      return expect(tiered.persistAll()).resolves.toBeUndefined();
+    });
+  });
 });
