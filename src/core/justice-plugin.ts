@@ -21,7 +21,7 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 const PROCEED: HookResponse = { action: "proceed" };
 
 export interface CreateGlobalFsResult {
-  readonly fs: NodeFileSystem;
+  readonly fs: FileReader & FileWriter;
   readonly relativePath: string;
 }
 
@@ -71,7 +71,7 @@ export class NoOpPersistence extends WisdomPersistence {
     super(
       {
         async readFile(): Promise<string> {
-          return "";
+          return "{}";
         },
         async fileExists(): Promise<boolean> {
           return false;
