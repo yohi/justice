@@ -51,7 +51,7 @@ export class WisdomPersistence {
     try {
       json = await this.fileReader.readFile(this.wisdomFilePath);
     } catch (err: unknown) {
-      if (err instanceof Error && "code" in err && (err as NodeJS.AbortedError).code === "ENOENT") {
+      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return new WisdomStore();
       }
       throw err instanceof Error ? err : new Error(String(err), { cause: err });
