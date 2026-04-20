@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-### Added
+### ⚠ BREAKING CHANGES
+
+* **core:** The `createGlobalFs()` API in `src/index.ts` has been changed from synchronous to asynchronous. Its return type is now `Promise<CreateGlobalFsResult | null>` instead of `{ justiceDir: string; wisdomPath: string } | null`.
+
+### Features
 
 - **Cross-Project Wisdom Store**: introduce `TieredWisdomStore` and `SecretPatternDetector`. Wisdom entries categorized as `environment_quirk` or `success_pattern` are now auto-promoted to a user-global store at `~/.justice/wisdom.json` (configurable via `JUSTICE_GLOBAL_WISDOM_PATH`). `failure_gotcha` and `design_decision` remain project-local. Callers can override routing via `{scope: "local" | "global"}`. Reads prefer the local store and fill the remainder from the global store.
 - `FileWriter.rename(from, to)` and `FileWriter.deleteFile(path)` interfaces plus `NodeFileSystem.rename()` / `NodeFileSystem.deleteFile()` implementations (path-traversal safe).
