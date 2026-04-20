@@ -7,10 +7,18 @@ interface WisdomStoreData {
 
 export class WisdomStore {
   private entries: WisdomEntry[] = [];
-  private readonly maxEntries: number;
+  private _maxEntries = 0;
 
   constructor(maxEntries = 100) {
-    this.maxEntries = maxEntries;
+    this.setMaxEntries(maxEntries);
+  }
+
+
+  /**
+   * Returns the configured maximum entry capacity.
+   */
+  public get maxEntries(): number {
+    return this._maxEntries;
   }
 
   /**
@@ -27,7 +35,7 @@ export class WisdomStore {
     this.entries.push(newEntry);
 
     // Evict oldest if exceeding capacity
-    if (this.entries.length > this.maxEntries) {
+    if (this.entries.length > this._maxEntries) {
       this.entries.shift(); // Remove the first (oldest) entry
     }
 
@@ -99,7 +107,7 @@ export class WisdomStore {
   serialize(): string {
     const data: WisdomStoreData = {
       entries: this.entries,
-      maxEntries: this.maxEntries,
+      maxEntries: this._maxEntries,
     };
     return JSON.stringify(data, null, 2);
   }
@@ -127,11 +135,8 @@ export class WisdomStore {
     const store = new WisdomStore(maxEntries);
 
     if (data.entries && Array.isArray(data.entries)) {
-      for (const entry of data.entries) {
-        if (WisdomStore.isValidEntry(entry)) {
-          store.entries.push(entry);
-        }
-      }
+      const filtered = data.entries.filter((e) => WisdomStore.isValidEntry(e));
+      store.replaceEntries(filtered);
     }
 
     return store;
@@ -148,7 +153,33 @@ export class WisdomStore {
    * Returns the configured maximum entry capacity.
    */
   getMaxEntries(): number {
-    return this.maxEntries;
+    return this._maxEntries;
+  }
+
+  /**
+   * Updates the maximum entry capacity. If the current number of entries
+   * exceeds the new limit, the oldest entries are evicted.
+   */
+  setMaxEntries(maxEntries: number): void {
+    if (typeof maxEntries !== "number" || !Number.isFinite(maxEntries) || maxEntries < 0) {
+      this._maxEntries = 0;
+    } else {
+      this._maxEntries = Math.floor(maxEntries);
+    }
+    this.entries = this.entries.slice(Math.max(0, this.entries.length - this._maxEntries));
+  }
+
+  /**
+   * Replaces all entries in the store with the provided list.
+   * This allows updating the store's state without replacing the instance itself,
+   * ensuring that other components holding references to this store see the updates.
+   */
+  replaceEntries(entries: readonly WisdomEntry[]): void {
+    if (this._maxEntries <= 0) {
+      this.entries = [];
+      return;
+    }
+    this.entries = entries.slice(-this._maxEntries);
   }
 
   /**
@@ -157,19 +188,15 @@ export class WisdomStore {
    * pass via `slice(-maxEntries)` (O(N)).
    */
   static fromEntries(entries: readonly WisdomEntry[], maxEntries = 100): WisdomStore {
-    const limit = Math.max(0, Math.floor(maxEntries));
-    const store = new WisdomStore(limit);
+    const store = new WisdomStore(maxEntries);
+    const limit = store.maxEntries;
 
     if (limit === 0) {
       return store;
     }
 
-    const trimmed = entries.slice(Math.max(0, entries.length - limit));
-    for (const entry of trimmed) {
-      if (WisdomStore.isValidEntry(entry)) {
-        store.entries.push(entry);
-      }
-    }
+    const validEntries = entries.filter((e) => WisdomStore.isValidEntry(e));
+    store.replaceEntries(validEntries);
     return store;
   }
 

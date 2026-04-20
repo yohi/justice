@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type {
   FileReader,
   FileWriter,
@@ -14,6 +16,18 @@ import { TaskSplitter } from "./task-splitter";
 import { WisdomStore } from "./wisdom-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
+
+export function createGlobalFs(): { justiceDir: string; wisdomPath: string } | null {
+  const homeDir = homedir() || process.env.HOME || process.env.USERPROFILE || null;
+  if (!homeDir) {
+    return null;
+  }
+  const justiceDir = join(homeDir, ".justice");
+  return {
+    justiceDir: justiceDir,
+    wisdomPath: join(justiceDir, "wisdom.json"),
+  };
+}
 
 export interface JusticePluginOptions {
   readonly logger?: {

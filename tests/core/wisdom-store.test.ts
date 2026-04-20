@@ -168,6 +168,26 @@ describe("WisdomStore", () => {
       const store2 = WisdomStore.deserialize("{}");
       expect(store2.getRelevant()).toHaveLength(0);
     });
+
+    it("should respect maxEntries during deserialize by trimming older entries", () => {
+      const data = {
+        maxEntries: 2,
+        entries: [
+          { id: "w-1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "2026-01-01T00:00:00Z" },
+          { id: "w-2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "2026-01-02T00:00:00Z" },
+          { id: "w-3", taskId: "t3", category: "success_pattern", content: "C", timestamp: "2026-01-03T00:00:00Z" },
+        ],
+      };
+      const json = JSON.stringify(data);
+      const store = WisdomStore.deserialize(json);
+
+      expect(store.getMaxEntries()).toBe(2);
+      const all = store.getAllEntries();
+      expect(all).toHaveLength(2);
+      // Should keep the latest 2 entries (w-2, w-3)
+      expect(all[0]?.id).toBe("w-2");
+      expect(all[1]?.id).toBe("w-3");
+    });
   });
 });
 
@@ -250,5 +270,74 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     const store = WisdomStore.fromEntries(entries, 10);
     expect(store.getAllEntries()).toHaveLength(1);
     expect(store.getAllEntries()[0]?.id).toBe("w-1");
+  });
+
+  describe("setMaxEntries boundary cases", () => {
+    it("should handle non-number inputs by falling back to 0", () => {
+      const store = new WisdomStore(10);
+      store.add({ taskId: "t1", category: "success_pattern", content: "A" });
+
+      // @ts-expect-error testing runtime safety
+      store.setMaxEntries("invalid");
+      expect(store.getMaxEntries()).toBe(0);
+      expect(store.getAllEntries()).toHaveLength(0);
+
+      const store2 = new WisdomStore(10);
+      store2.add({ taskId: "t1", category: "success_pattern", content: "A" });
+      // @ts-expect-error testing runtime safety
+      store2.setMaxEntries(Symbol("test"));
+      expect(store2.getMaxEntries()).toBe(0);
+      expect(store2.getAllEntries()).toHaveLength(0);
+    });
+
+    it("should handle non-finite numbers by falling back to 0", () => {
+      const store = new WisdomStore(10);
+      store.add({ taskId: "t1", category: "success_pattern", content: "A" });
+      store.setMaxEntries(NaN);
+      expect(store.getMaxEntries()).toBe(0);
+      expect(store.getAllEntries()).toHaveLength(0);
+
+      const store2 = new WisdomStore(10);
+      store2.add({ taskId: "t2", category: "success_pattern", content: "B" });
+      store2.setMaxEntries(Infinity);
+      expect(store2.getMaxEntries()).toBe(0);
+      expect(store2.getAllEntries()).toHaveLength(0);
+    });
+
+    it("should floor floating point numbers", () => {
+      const store = new WisdomStore(10);
+      store.setMaxEntries(5.7);
+      expect(store.getMaxEntries()).toBe(5);
+    });
+  });
+
+  describe("replaceEntries", () => {
+    it("should replace all entries and respect limit", () => {
+      const store = new WisdomStore(2);
+      // Pre-fill the store to verify "replace" behavior
+      store.add({ taskId: "old-1", category: "success_pattern", content: "Old entry" });
+      expect(store.getAllEntries()).toHaveLength(1);
+
+      const entries: WisdomEntry[] = [
+        { id: "1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "T1" },
+        { id: "2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "T2" },
+        { id: "3", taskId: "t3", category: "success_pattern", content: "C", timestamp: "T3" },
+      ];
+
+      store.replaceEntries(entries);
+      const all = store.getAllEntries();
+      expect(all).toHaveLength(2);
+      // Verify old entry is gone and only the latest of the new ones remain
+      expect(all.some((e) => e.taskId === "old-1")).toBe(false);
+      expect(all[0]?.id).toBe("2");
+      expect(all[1]?.id).toBe("3");
+    });
+
+    it("should clear entries if maxEntries is 0", () => {
+      const store = new WisdomStore(0);
+      const entries: WisdomEntry[] = [{ id: "1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "T1" }];
+      store.replaceEntries(entries);
+      expect(store.getAllEntries()).toHaveLength(0);
+    });
   });
 });
