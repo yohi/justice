@@ -135,7 +135,7 @@ export class WisdomStore {
     const store = new WisdomStore(maxEntries);
 
     if (data.entries && Array.isArray(data.entries)) {
-      const filtered = data.entries.filter(WisdomStore.isValidEntry);
+      const filtered = data.entries.filter((e) => WisdomStore.isValidEntry(e));
       store.replaceEntries(filtered);
     }
 
@@ -196,12 +196,9 @@ export class WisdomStore {
       return store;
     }
 
-    const trimmed = entries.slice(Math.max(0, entries.length - limit));
-    for (const entry of trimmed) {
-      if (WisdomStore.isValidEntry(entry)) {
-        store.entries.push(entry);
-      }
-    }
+    const validEntries = entries.filter((e) => WisdomStore.isValidEntry(e));
+    const trimmed = validEntries.slice(-limit);
+    store.replaceEntries(trimmed);
     return store;
   }
 
