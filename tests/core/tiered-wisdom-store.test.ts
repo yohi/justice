@@ -61,53 +61,40 @@ describe("TieredWisdomStore — routing (add)", () => {
     vi.spyOn(globalStore, "add");
   });
 
-  it("should route environment_quirk to globalStore by default", () => {
-    tiered.add({ taskId: "t", category: "environment_quirk", content: "Bun X quirk" });
+  it.each([
+    { category: "environment_quirk", expected: "global" },
+    { category: "success_pattern", expected: "global" },
+    { category: "failure_gotcha", expected: "local" },
+    { category: "design_decision", expected: "local" },
+  ] as const)("should route $category to $expected store by default", ({ category, expected }) => {
+    tiered.add({ taskId: "t", category, content: "content" });
 
-    expect(globalStore.add).toHaveBeenCalledTimes(1);
-    expect(localStore.add).not.toHaveBeenCalled();
+    if (expected === "global") {
+      expect(globalStore.add).toHaveBeenCalledTimes(1);
+      expect(localStore.add).not.toHaveBeenCalled();
+    } else {
+      expect(localStore.add).toHaveBeenCalledTimes(1);
+      expect(globalStore.add).not.toHaveBeenCalled();
+    }
   });
 
-  it("should route success_pattern to globalStore by default", () => {
-    tiered.add({ taskId: "t", category: "success_pattern", content: "Pattern Y" });
+  it.each([
+    { category: "environment_quirk", scope: "local", expected: "local" },
+    { category: "failure_gotcha", scope: "global", expected: "global" },
+  ] as const)(
+    "should honor explicit scope=$scope for $category",
+    ({ category, scope, expected }) => {
+      tiered.add({ taskId: "t", category, content: "content" }, { scope });
 
-    expect(globalStore.add).toHaveBeenCalledTimes(1);
-    expect(localStore.add).not.toHaveBeenCalled();
-  });
-
-  it("should route failure_gotcha to localStore by default", () => {
-    tiered.add({ taskId: "t", category: "failure_gotcha", content: "Gotcha Z" });
-
-    expect(localStore.add).toHaveBeenCalledTimes(1);
-    expect(globalStore.add).not.toHaveBeenCalled();
-  });
-
-  it("should route design_decision to localStore by default", () => {
-    tiered.add({ taskId: "t", category: "design_decision", content: "Decision" });
-
-    expect(localStore.add).toHaveBeenCalledTimes(1);
-    expect(globalStore.add).not.toHaveBeenCalled();
-  });
-
-  it("should honor explicit scope=local for environment_quirk", () => {
-    tiered.add(
-      { taskId: "t", category: "environment_quirk", content: "Override-local" },
-      { scope: "local" },
-    );
-
-    expect(localStore.add).toHaveBeenCalledTimes(1);
-    expect(globalStore.add).not.toHaveBeenCalled();
-  });
-
-  it("should honor explicit scope=global for failure_gotcha", () => {
-    tiered.add(
-      { taskId: "t", category: "failure_gotcha", content: "Override-global" },
-      { scope: "global" },
-    );
-
-    expect(globalStore.add).toHaveBeenCalledTimes(1);
-    expect(localStore.add).not.toHaveBeenCalled();
-  });
+      if (expected === "global") {
+        expect(globalStore.add).toHaveBeenCalledTimes(1);
+        expect(localStore.add).not.toHaveBeenCalled();
+      } else {
+        expect(localStore.add).toHaveBeenCalledTimes(1);
+        expect(globalStore.add).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("should log warn when an entry with secrets is promoted to global", () => {
     tiered.add({

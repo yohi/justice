@@ -152,6 +152,15 @@ export class WisdomStore {
   }
 
   /**
+   * Replaces all entries in the store with the provided list.
+   * This allows updating the store's state without replacing the instance itself,
+   * ensuring that other components holding references to this store see the updates.
+   */
+  replaceEntries(entries: WisdomEntry[]): void {
+    this.entries = [...entries].slice(-this.maxEntries);
+  }
+
+  /**
    * Constructs a store from a list of entries, keeping the latest `maxEntries`.
    * Order is preserved; overflow is trimmed from the front (oldest) in a single
    * pass via `slice(-maxEntries)` (O(N)).

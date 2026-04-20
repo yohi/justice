@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type {
   FileReader,
   FileWriter,
@@ -15,20 +16,16 @@ import { WisdomStore } from "./wisdom-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function createGlobalFs(): { homeDir: string; wisdomPath: string } | null {
+export function createGlobalFs(): { justiceDir: string; wisdomPath: string } | null {
   const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? null;
   if (!homeDir) {
     return null;
   }
   const justiceDir = join(homeDir, ".justice");
   return {
-    homeDir: justiceDir,
+    justiceDir: justiceDir,
     wisdomPath: join(justiceDir, "wisdom.json"),
   };
-}
-
-function join(...parts: string[]): string {
-  return parts.join("/").replace(/\/+/g, "/");
 }
 
 export interface JusticePluginOptions {

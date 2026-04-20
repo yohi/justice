@@ -95,7 +95,8 @@ export class TieredWisdomStore {
       }
       return this.globalStore.add(entry);
     }
-return this.localStore.add(entry);
+
+    return this.localStore.add(entry);
   }
 
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[] {
@@ -103,13 +104,13 @@ return this.localStore.add(entry);
     const local = this.localStore.getRelevant({ errorClass: options?.errorClass, maxEntries: limit });
 
     if (local.length >= limit) {
-      return local.slice(-limit);
+      return local;
     }
 
     const remaining = limit - local.length;
     const global = this.globalStore.getRelevant({ errorClass: options?.errorClass, maxEntries: remaining });
 
-    return [...local, ...global].slice(-limit);
+    return [...local, ...global];
   }
 
   getByTaskId(taskId: string): WisdomEntry[] {
@@ -123,14 +124,18 @@ return this.localStore.add(entry);
   }
 
   async loadAll(): Promise<void> {
-    const local = await this.localPersistence.load();
-    const global = await this.globalPersistence.load();
-    this.localStore = local;
-    this.globalStore = global;
+    const [local, global] = await Promise.all([
+      this.localPersistence.load(),
+      this.globalPersistence.load(),
+    ]);
+    this.localStore.replaceEntries(local.getAllEntries());
+    this.globalStore.replaceEntries(global.getAllEntries());
   }
 
   async persistAll(): Promise<void> {
-    await this.localPersistence.save(this.localStore);
-    await this.globalPersistence.save(this.globalStore);
+    await Promise.all([
+      this.localPersistence.save(this.localStore),
+      this.globalPersistence.save(this.globalStore),
+    ]);
   }
 }
