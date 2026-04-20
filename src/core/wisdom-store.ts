@@ -54,7 +54,7 @@ export class WisdomStore {
 
     // Return the most recent entries up to maxEntries
     const limit = options?.maxEntries ?? 10;
-    return results.slice(-limit); // slice from the end to get the most recent
+    return results.slice(Math.max(0, results.length - limit)); // slice from the end to get the most recent
   }
 
   /**
@@ -105,24 +105,28 @@ export class WisdomStore {
   }
 
   /**
-   * Deserializes a JSON string back into a WisdomStore instance.
+   * Deserializes a JSON string or already parsed data back into a WisdomStore instance.
    * Handles empty or invalid inputs gracefully.
    */
-  static deserialize(json: string): WisdomStore {
+  static deserialize(input: string | unknown): WisdomStore {
     let data: Partial<WisdomStoreData> = {};
-    try {
-      if (json && json.trim() !== "") {
-        data = JSON.parse(json) as Partial<WisdomStoreData>;
+
+    if (typeof input === "string") {
+      try {
+        if (input.trim() !== "") {
+          data = JSON.parse(input) as Partial<WisdomStoreData>;
+        }
+      } catch {
+        // Return empty store on parse failure
       }
-    } catch {
-      // Return empty store on parse failure
+    } else if (typeof input === "object" && input !== null) {
+      data = input as Partial<WisdomStoreData>;
     }
 
     const maxEntries = data.maxEntries ?? 100;
     const store = new WisdomStore(maxEntries);
 
     if (data.entries && Array.isArray(data.entries)) {
-      // Push entries avoiding the add() method to keep original IDs and timestamps
       for (const entry of data.entries) {
         if (WisdomStore.isValidEntry(entry)) {
           store.entries.push(entry);
@@ -130,6 +134,42 @@ export class WisdomStore {
       }
     }
 
+    return store;
+  }
+
+  /**
+   * Returns a readonly snapshot of all entries in insertion order.
+   */
+  getAllEntries(): readonly WisdomEntry[] {
+    return [...this.entries];
+  }
+
+  /**
+   * Returns the configured maximum entry capacity.
+   */
+  getMaxEntries(): number {
+    return this.maxEntries;
+  }
+
+  /**
+   * Constructs a store from a list of entries, keeping the latest `maxEntries`.
+   * Order is preserved; overflow is trimmed from the front (oldest) in a single
+   * pass via `slice(-maxEntries)` (O(N)).
+   */
+  static fromEntries(entries: readonly WisdomEntry[], maxEntries = 100): WisdomStore {
+    const limit = Math.max(0, Math.floor(maxEntries));
+    const store = new WisdomStore(limit);
+
+    if (limit === 0) {
+      return store;
+    }
+
+    const trimmed = entries.slice(Math.max(0, entries.length - limit));
+    for (const entry of trimmed) {
+      if (WisdomStore.isValidEntry(entry)) {
+        store.entries.push(entry);
+      }
+    }
     return store;
   }
 
