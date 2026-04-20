@@ -10,8 +10,10 @@ export class WisdomStore {
   private _maxEntries: number;
 
   constructor(maxEntries = 100) {
-    this._maxEntries = maxEntries;
+    this._maxEntries = 100; // temporary fallback before setMaxEntries
+    this.setMaxEntries(maxEntries);
   }
+
 
   /**
    * Returns the configured maximum entry capacity.
@@ -186,8 +188,8 @@ export class WisdomStore {
    * pass via `slice(-maxEntries)` (O(N)).
    */
   static fromEntries(entries: readonly WisdomEntry[], maxEntries = 100): WisdomStore {
-    const limit = Math.max(0, Math.floor(maxEntries));
-    const store = new WisdomStore(limit);
+    const store = new WisdomStore(maxEntries);
+    const limit = store.maxEntries;
 
     if (limit === 0) {
       return store;
