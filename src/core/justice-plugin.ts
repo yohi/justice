@@ -33,8 +33,8 @@ export async function createGlobalFs(
     let globalRoot: string;
     let relativePath: string;
 
-    if (envPath) {
-      if (!isAbsolute(envPath)) {
+    if (envPath !== undefined) {
+      if (!envPath || !isAbsolute(envPath)) {
         logger?.warn(
           `JUSTICE_GLOBAL_WISDOM_PATH must be an absolute path; got '${envPath}'. ` +
             "Global wisdom store disabled.",

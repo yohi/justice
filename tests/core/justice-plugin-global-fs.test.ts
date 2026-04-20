@@ -80,6 +80,12 @@ describe("createGlobalFs", () => {
       },
     },
     {
+      name: "reject empty JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
+      getEnv: () => "",
+      expectSuccess: false,
+      warnMatch: "must be an absolute path",
+    },
+    {
       name: "reject relative JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
       getEnv: () => "relative/wisdom.json",
       expectSuccess: false,
