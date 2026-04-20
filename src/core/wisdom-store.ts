@@ -7,10 +7,9 @@ interface WisdomStoreData {
 
 export class WisdomStore {
   private entries: WisdomEntry[] = [];
-  private _maxEntries: number;
+  private _maxEntries = 0;
 
   constructor(maxEntries = 100) {
-    this._maxEntries = 100; // temporary fallback before setMaxEntries
     this.setMaxEntries(maxEntries);
   }
 
@@ -165,7 +164,12 @@ export class WisdomStore {
    * exceeds the new limit, the oldest entries are evicted.
    */
   setMaxEntries(maxEntries: number): void {
-    this._maxEntries = Math.max(0, Math.floor(maxEntries));
+    const n = Math.floor(maxEntries);
+    if (!Number.isFinite(n) || n < 0) {
+      this._maxEntries = 0;
+    } else {
+      this._maxEntries = n;
+    }
     this.entries = this.entries.slice(Math.max(0, this.entries.length - this._maxEntries));
   }
 

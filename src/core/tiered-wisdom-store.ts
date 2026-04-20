@@ -86,12 +86,22 @@ export class TieredWisdomStore {
 
     if (targetScope === "global") {
       const detected = this.secretDetector.scan(entry.content);
-      if (detected.length > 0 && this.logger) {
-        this.logger.warn(
-          `Wisdom entry promoted to global may contain secrets ` +
-            `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
-            `Review ${this.globalDisplayPath} and edit/redact if needed.`,
-        );
+      if (detected.length > 0) {
+        if (this.logger) {
+          try {
+            this.logger.warn(
+              `Wisdom entry promotion to global BLOCKED: may contain secrets ` +
+                `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
+                `The entry has been saved to the local store instead. ` +
+                `Review entry content or redact secrets before trying to promote to ${this.globalDisplayPath}.`,
+            );
+          } catch (e) {
+            // Fail-safe: Ensure entry is still saved locally even if logging fails
+            console.warn("Logging failed during secret detection warning:", e);
+          }
+        }
+        // Block global promotion and save to local store instead for safety
+        return this.localStore.add(entry);
       }
       return this.globalStore.add(entry);
     }
@@ -107,10 +117,21 @@ export class TieredWisdomStore {
       return local;
     }
 
+    const localIds = new Set(local.map((e) => e.id));
     const remaining = limit - local.length;
-    const global = this.globalStore.getRelevant({ errorClass: options?.errorClass, maxEntries: remaining });
 
-    return this.deduplicate([...local, ...global]).slice(-limit);
+    // Fetch from global, excluding entries already found in local
+    const globalRaw = this.globalStore.getRelevant({
+      errorClass: options?.errorClass,
+      maxEntries: limit, // Request enough to cover potential overlaps
+    });
+
+    const globalFiltered = globalRaw
+      .filter((e) => !localIds.has(e.id))
+      .slice(-remaining);
+
+    // Order: [global, local] so that local (specific) items appear later in the prompt (recency bias)
+    return [...globalFiltered, ...local];
   }
 
   getByTaskId(taskId: string): WisdomEntry[] {

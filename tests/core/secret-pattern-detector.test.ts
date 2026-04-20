@@ -21,9 +21,15 @@ describe("SecretPatternDetector", () => {
     expect(detector.scan("passwordless login")).not.toContainEqual({ name: "password" });
   });
 
-  it("should detect standalone 'secret' and 'token' words", () => {
-    expect(detector.scan("the secret is safe")).toContainEqual({ name: "secret" });
-    expect(detector.scan("JWT token expired")).toContainEqual({ name: "token" });
+  it("should detect standalone 'secret' and 'token' keywords in specific context", () => {
+    expect(detector.scan("client_secret = 'abc'")).toContainEqual({ name: "secret" });
+    expect(detector.scan("the secret_key is safe")).toContainEqual({ name: "secret" });
+    expect(detector.scan("use bearer_token for auth")).toContainEqual({ name: "token" });
+    expect(detector.scan("JWT access_token expired")).toContainEqual({ name: "token" });
+    
+    // Should NOT detect generic words
+    expect(detector.scan("the secret is safe")).toEqual([]);
+    expect(detector.scan("JWT token expired")).toEqual([]);
   });
 
   it("should detect linux home paths (with or without trailing slash)", () => {
@@ -36,8 +42,15 @@ describe("SecretPatternDetector", () => {
     expect(detector.scan("error at /Users/bob")).toContainEqual({ name: "home_path_macos" });
   });
 
+  it("should detect windows home paths", () => {
+    expect(detector.scan("error at C:\\Users\\Alice\\Documents")).toContainEqual({ name: "home_path_windows" });
+    expect(detector.scan("path is D:\\Users\\Bob\\")).toContainEqual({ name: "home_path_windows" });
+  });
+
   it("should detect anthropic API key literal shape", () => {
     expect(detector.scan("sk-ant-abcdefghijklmnopqrstuvwx")).toContainEqual({ name: "anthropic_key" });
+    // Should NOT be detected as openai_key
+    expect(detector.scan("sk-ant-abcdefghijklmnopqrstuvwx")).not.toContainEqual({ name: "openai_key" });
   });
 
   it("should detect openai API key literal shape (including modern proj- and symbols)", () => {
