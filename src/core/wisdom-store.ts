@@ -161,11 +161,10 @@ export class WisdomStore {
    * exceeds the new limit, the oldest entries are evicted.
    */
   setMaxEntries(maxEntries: number): void {
-    const n = Math.floor(maxEntries);
-    if (!Number.isFinite(n) || n < 0) {
+    if (typeof maxEntries !== "number" || !Number.isFinite(maxEntries) || maxEntries < 0) {
       this._maxEntries = 0;
     } else {
-      this._maxEntries = n;
+      this._maxEntries = Math.floor(maxEntries);
     }
     this.entries = this.entries.slice(Math.max(0, this.entries.length - this._maxEntries));
   }
@@ -180,7 +179,7 @@ export class WisdomStore {
       this.entries = [];
       return;
     }
-    this.entries = [...entries].slice(-this._maxEntries);
+    this.entries = entries.slice(-this._maxEntries);
   }
 
   /**

@@ -271,4 +271,63 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     expect(store.getAllEntries()).toHaveLength(1);
     expect(store.getAllEntries()[0]?.id).toBe("w-1");
   });
+
+  describe("setMaxEntries boundary cases", () => {
+    it("should handle non-number inputs by falling back to 0", () => {
+      const store = new WisdomStore(10);
+      store.add({ taskId: "t1", category: "success_pattern", content: "A" });
+
+      // @ts-expect-error testing runtime safety
+      store.setMaxEntries("invalid");
+      expect(store.getMaxEntries()).toBe(0);
+      expect(store.getAllEntries()).toHaveLength(0);
+
+      const store2 = new WisdomStore(10);
+      store2.add({ taskId: "t1", category: "success_pattern", content: "A" });
+      // @ts-expect-error testing runtime safety
+      store2.setMaxEntries(Symbol("test"));
+      expect(store2.getMaxEntries()).toBe(0);
+      expect(store2.getAllEntries()).toHaveLength(0);
+    });
+
+    it("should handle non-finite numbers by falling back to 0", () => {
+      const store = new WisdomStore(10);
+      store.setMaxEntries(NaN);
+      expect(store.getMaxEntries()).toBe(0);
+
+      const store2 = new WisdomStore(10);
+      store2.setMaxEntries(Infinity);
+      expect(store2.getMaxEntries()).toBe(0);
+    });
+
+    it("should floor floating point numbers", () => {
+      const store = new WisdomStore(10);
+      store.setMaxEntries(5.7);
+      expect(store.getMaxEntries()).toBe(5);
+    });
+  });
+
+  describe("replaceEntries", () => {
+    it("should replace all entries and respect limit", () => {
+      const store = new WisdomStore(2);
+      const entries: WisdomEntry[] = [
+        { id: "1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "T1" },
+        { id: "2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "T2" },
+        { id: "3", taskId: "t3", category: "success_pattern", content: "C", timestamp: "T3" },
+      ];
+
+      store.replaceEntries(entries);
+      const all = store.getAllEntries();
+      expect(all).toHaveLength(2);
+      expect(all[0]?.id).toBe("2");
+      expect(all[1]?.id).toBe("3");
+    });
+
+    it("should clear entries if maxEntries is 0", () => {
+      const store = new WisdomStore(0);
+      const entries: WisdomEntry[] = [{ id: "1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "T1" }];
+      store.replaceEntries(entries);
+      expect(store.getAllEntries()).toHaveLength(0);
+    });
+  });
 });
