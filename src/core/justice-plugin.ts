@@ -1,5 +1,6 @@
-import { join } from "node:path";
+import { join, basename, dirname, isAbsolute } from "node:path";
 import { homedir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import type {
   FileReader,
   FileWriter,
@@ -14,19 +15,100 @@ import { CompactionProtector } from "../hooks/compaction-protector";
 import { LoopDetectionHandler } from "../hooks/loop-handler";
 import { TaskSplitter } from "./task-splitter";
 import { WisdomStore } from "./wisdom-store";
+import { WisdomPersistence } from "./wisdom-persistence";
+import { NodeFileSystem } from "../runtime/node-file-system";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function createGlobalFs(): { justiceDir: string; wisdomPath: string } | null {
-  const homeDir = homedir() || process.env.HOME || process.env.USERPROFILE || null;
-  if (!homeDir) {
+export interface CreateGlobalFsResult {
+  readonly fs: NodeFileSystem;
+  readonly relativePath: string;
+}
+
+export async function createGlobalFs(
+  logger?: JusticePluginOptions["logger"],
+): Promise<CreateGlobalFsResult | null> {
+  try {
+    const envPath = process.env.JUSTICE_GLOBAL_WISDOM_PATH;
+    let globalRoot: string;
+    let relativePath: string;
+
+    if (envPath) {
+      if (!isAbsolute(envPath)) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH must be an absolute path; got '${envPath}'. ` +
+            "Global wisdom store disabled.",
+        );
+        return null;
+      }
+      globalRoot = dirname(envPath);
+      relativePath = basename(envPath);
+    } else {
+      const home = homedir();
+      if (!home) {
+        logger?.warn(
+          "Cannot determine home directory; global wisdom store disabled. " +
+            "Set JUSTICE_GLOBAL_WISDOM_PATH to enable.",
+        );
+        return null;
+      }
+      globalRoot = join(home, ".justice");
+      relativePath = "wisdom.json";
+    }
+
+    await mkdir(globalRoot, { recursive: true });
+    return { fs: new NodeFileSystem(globalRoot), relativePath };
+  } catch (error) {
+    logger?.warn(
+      `Failed to initialize global wisdom store: ${String(error)}; falling back to local-only.`,
+    );
     return null;
   }
-  const justiceDir = join(homeDir, ".justice");
-  return {
-    justiceDir: justiceDir,
-    wisdomPath: join(justiceDir, "wisdom.json"),
-  };
+}
+
+export class NoOpPersistence extends WisdomPersistence {
+  constructor() {
+    super(
+      {
+        async readFile(): Promise<string> {
+          return "";
+        },
+        async fileExists(): Promise<boolean> {
+          return false;
+        },
+      },
+      {
+        async writeFile(): Promise<void> {
+          /* no-op */
+        },
+        async rename(): Promise<void> {
+          /* no-op */
+        },
+        async deleteFile(): Promise<void> {
+          /* no-op */
+        },
+        async mkdir(): Promise<void> {
+          /* no-op */
+        },
+        async rmdir(): Promise<void> {
+          /* no-op */
+        },
+      },
+      "wisdom.json",
+    );
+  }
+
+  override async load(): Promise<WisdomStore> {
+    return new WisdomStore();
+  }
+
+  override async save(_store: WisdomStore): Promise<void> {
+    /* no-op */
+  }
+
+  override async saveAtomic(_store: WisdomStore): Promise<void> {
+    /* no-op */
+  }
 }
 
 export interface JusticePluginOptions {
