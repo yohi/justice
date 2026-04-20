@@ -152,11 +152,24 @@ export class WisdomStore {
   }
 
   /**
+   * Updates the maximum entry capacity. If the current number of entries
+   * exceeds the new limit, the oldest entries are evicted.
+   */
+  setMaxEntries(maxEntries: number): void {
+    (this as any).maxEntries = Math.max(0, Math.floor(maxEntries));
+    this.entries = this.entries.slice(Math.max(0, this.entries.length - this.maxEntries));
+  }
+
+  /**
    * Replaces all entries in the store with the provided list.
    * This allows updating the store's state without replacing the instance itself,
    * ensuring that other components holding references to this store see the updates.
    */
-  replaceEntries(entries: WisdomEntry[]): void {
+  replaceEntries(entries: readonly WisdomEntry[]): void {
+    if (this.maxEntries <= 0) {
+      this.entries = [];
+      return;
+    }
     this.entries = [...entries].slice(-this.maxEntries);
   }
 

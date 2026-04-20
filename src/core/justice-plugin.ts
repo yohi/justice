@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { homedir } from "node:os";
 import type {
   FileReader,
   FileWriter,
@@ -17,7 +18,7 @@ import { WisdomStore } from "./wisdom-store";
 const PROCEED: HookResponse = { action: "proceed" };
 
 export function createGlobalFs(): { justiceDir: string; wisdomPath: string } | null {
-  const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? null;
+  const homeDir = homedir() || process.env.HOME || process.env.USERPROFILE || null;
   if (!homeDir) {
     return null;
   }

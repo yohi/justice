@@ -110,13 +110,13 @@ export class TieredWisdomStore {
     const remaining = limit - local.length;
     const global = this.globalStore.getRelevant({ errorClass: options?.errorClass, maxEntries: remaining });
 
-    return [...local, ...global];
+    return this.deduplicate([...local, ...global]).slice(-limit);
   }
 
   getByTaskId(taskId: string): WisdomEntry[] {
     const local = this.localStore.getByTaskId(taskId);
     const global = this.globalStore.getByTaskId(taskId);
-    return [...local, ...global];
+    return this.deduplicate([...local, ...global]);
   }
 
   formatForInjection(entries: WisdomEntry[]): string {
@@ -128,14 +128,27 @@ export class TieredWisdomStore {
       this.localPersistence.load(),
       this.globalPersistence.load(),
     ]);
+
+    this.localStore.setMaxEntries(local.getMaxEntries());
     this.localStore.replaceEntries(local.getAllEntries());
+
+    this.globalStore.setMaxEntries(global.getMaxEntries());
     this.globalStore.replaceEntries(global.getAllEntries());
   }
 
   async persistAll(): Promise<void> {
     await Promise.all([
-      this.localPersistence.save(this.localStore),
-      this.globalPersistence.save(this.globalStore),
+      this.localPersistence.saveAtomic(this.localStore),
+      this.globalPersistence.saveAtomic(this.globalStore),
     ]);
+  }
+
+  private deduplicate(entries: WisdomEntry[]): WisdomEntry[] {
+    const seen = new Set<string>();
+    return entries.filter((e) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
   }
 }
