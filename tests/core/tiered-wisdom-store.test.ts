@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TieredWisdomStore } from "../../src/core/tiered-wisdom-store";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
@@ -45,81 +45,71 @@ function makeTiered(opts?: {
 }
 
 describe("TieredWisdomStore — routing (add)", () => {
-  it("should route environment_quirk to globalStore by default", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
+  let tiered: TieredWisdomStore;
+  let localStore: WisdomStore;
+  let globalStore: WisdomStore;
+  let logger: ReturnType<typeof makeLogger>;
 
+  beforeEach(() => {
+    const setup = makeTiered();
+    tiered = setup.tiered;
+    localStore = setup.localStore;
+    globalStore = setup.globalStore;
+    logger = setup.logger;
+
+    vi.spyOn(localStore, "add");
+    vi.spyOn(globalStore, "add");
+  });
+
+  it("should route environment_quirk to globalStore by default", () => {
     tiered.add({ taskId: "t", category: "environment_quirk", content: "Bun X quirk" });
 
-    expect(globalSpy).toHaveBeenCalledTimes(1);
-    expect(localSpy).not.toHaveBeenCalled();
+    expect(globalStore.add).toHaveBeenCalledTimes(1);
+    expect(localStore.add).not.toHaveBeenCalled();
   });
 
   it("should route success_pattern to globalStore by default", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
-
     tiered.add({ taskId: "t", category: "success_pattern", content: "Pattern Y" });
 
-    expect(globalSpy).toHaveBeenCalledTimes(1);
-    expect(localSpy).not.toHaveBeenCalled();
+    expect(globalStore.add).toHaveBeenCalledTimes(1);
+    expect(localStore.add).not.toHaveBeenCalled();
   });
 
   it("should route failure_gotcha to localStore by default", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
-
     tiered.add({ taskId: "t", category: "failure_gotcha", content: "Gotcha Z" });
 
-    expect(localSpy).toHaveBeenCalledTimes(1);
-    expect(globalSpy).not.toHaveBeenCalled();
+    expect(localStore.add).toHaveBeenCalledTimes(1);
+    expect(globalStore.add).not.toHaveBeenCalled();
   });
 
   it("should route design_decision to localStore by default", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
-
     tiered.add({ taskId: "t", category: "design_decision", content: "Decision" });
 
-    expect(localSpy).toHaveBeenCalledTimes(1);
-    expect(globalSpy).not.toHaveBeenCalled();
+    expect(localStore.add).toHaveBeenCalledTimes(1);
+    expect(globalStore.add).not.toHaveBeenCalled();
   });
 
   it("should honor explicit scope=local for environment_quirk", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
-
     tiered.add(
       { taskId: "t", category: "environment_quirk", content: "Override-local" },
       { scope: "local" },
     );
 
-    expect(localSpy).toHaveBeenCalledTimes(1);
-    expect(globalSpy).not.toHaveBeenCalled();
+    expect(localStore.add).toHaveBeenCalledTimes(1);
+    expect(globalStore.add).not.toHaveBeenCalled();
   });
 
   it("should honor explicit scope=global for failure_gotcha", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
-    const localSpy = vi.spyOn(localStore, "add");
-    const globalSpy = vi.spyOn(globalStore, "add");
-
     tiered.add(
       { taskId: "t", category: "failure_gotcha", content: "Override-global" },
       { scope: "global" },
     );
 
-    expect(globalSpy).toHaveBeenCalledTimes(1);
-    expect(localSpy).not.toHaveBeenCalled();
+    expect(globalStore.add).toHaveBeenCalledTimes(1);
+    expect(localStore.add).not.toHaveBeenCalled();
   });
 
   it("should log warn when an entry with secrets is promoted to global", () => {
-    const { tiered, logger } = makeTiered();
-
     tiered.add({
       taskId: "t",
       category: "success_pattern",
@@ -134,8 +124,6 @@ describe("TieredWisdomStore — routing (add)", () => {
   });
 
   it("should NOT log warn when entry stays local even if it looks like a secret", () => {
-    const { tiered, logger } = makeTiered();
-
     tiered.add({
       taskId: "t",
       category: "failure_gotcha",
@@ -146,7 +134,6 @@ describe("TieredWisdomStore — routing (add)", () => {
   });
 
   it("should expose getLocalStore() and getGlobalStore() for direct access", () => {
-    const { tiered, localStore, globalStore } = makeTiered();
     expect(tiered.getLocalStore()).toBe(localStore);
     expect(tiered.getGlobalStore()).toBe(globalStore);
   });

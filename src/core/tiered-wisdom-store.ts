@@ -1,4 +1,4 @@
-import type { ErrorClass, WisdomEntry } from "./types";
+import type { ErrorClass, WisdomEntry, WisdomCategory } from "./types";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -23,6 +23,13 @@ export interface AddOptions {
   scope?: WisdomScope;
 }
 
+const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
+  environment_quirk: "global",
+  success_pattern: "global",
+  failure_gotcha: "local",
+  design_decision: "local",
+};
+
 /**
  * Composes two independent WisdomStore instances — a project-local store and a
  * user-global store — into a single API. Writes are routed by category
@@ -30,8 +37,8 @@ export interface AddOptions {
  * the remainder from global.
  */
 export class TieredWisdomStore {
-  private localStore: WisdomStore;
-  private globalStore: WisdomStore;
+  private readonly localStore: WisdomStore;
+  private readonly globalStore: WisdomStore;
   private readonly localPersistence: WisdomPersistence;
   private readonly globalPersistence: WisdomPersistence;
   private readonly secretDetector: SecretPatternDetector;
@@ -74,12 +81,7 @@ export class TieredWisdomStore {
     options?: AddOptions,
   ): WisdomEntry {
     const explicitScope = options?.scope;
-    const heuristicScope: WisdomScope =
-      entry.category === "environment_quirk"
-        ? "global"
-        : entry.category === "success_pattern"
-          ? "global"
-          : "local";
+    const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
 
     if (targetScope === "global") {
@@ -87,7 +89,7 @@ export class TieredWisdomStore {
       if (detected.length > 0 && this.logger) {
         this.logger.warn(
           `Wisdom entry promoted to global may contain secrets ` +
-            `(patterns matched: ${detected.join(", ")}). ` +
+            `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
             `Review ${this.globalDisplayPath} and edit/redact if needed.`,
         );
       }
