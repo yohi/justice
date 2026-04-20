@@ -1,9 +1,32 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
+import * as os from "node:os";
 import { join } from "node:path";
 import { createGlobalFs, NoOpPersistence } from "../../src/core/justice-plugin";
 import { WisdomStore } from "../../src/core/wisdom-store";
+
+let mockHomedir: string;
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => mockHomedir || actual.homedir(),
+  };
+});
+
+let mockMkdirError: Error | undefined;
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    mkdir: async (...args: any[]) => {
+      if (mockMkdirError) throw mockMkdirError;
+      return actual.mkdir(...args);
+    }
+  };
+});
 
 describe("createGlobalFs", () => {
   let tempDir: string;
@@ -11,9 +34,11 @@ describe("createGlobalFs", () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "justice-globalfs-"));
+    vi.spyOn(os, "homedir").mockReturnValue(tempDir);
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
     if (originalEnv === undefined) {
       delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
@@ -39,15 +64,20 @@ describe("createGlobalFs", () => {
       getEnv: () => undefined,
       expectedRelative: "wisdom.json",
       expectSuccess: true,
-      verify: async () => {
-        expect(homedir()).toBeTruthy();
+      async verify(result: any) {
+        await result.fs.writeFile(result.relativePath, "hello-default");
+        const onDisk = await readFile(join(homedir(), ".justice", "wisdom.json"), "utf-8");
+        expect(onDisk).toBe("hello-default");
       },
     },
     {
       name: "return null and log warn when mkdir throws",
-      getEnv: (dir: string) => join(dir, "..", "..", "forbidden", "wisdom.json"),
+      getEnv: (dir: string) => join(dir, "forbidden", "wisdom.json"),
       expectSuccess: false,
       warnMatch: "Failed to initialize global wisdom store",
+      setupMock: () => {
+        mockMkdirError = new Error("EACCES");
+      },
     },
     {
       name: "reject relative JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
@@ -55,7 +85,7 @@ describe("createGlobalFs", () => {
       expectSuccess: false,
       warnMatch: "must be an absolute path",
     },
-  ])("should $name", async ({ getEnv, expectedRelative, expectSuccess, warnMatch, verify }) => {
+  ])("should $name", async ({ getEnv, expectedRelative, expectSuccess, warnMatch, verify, setupMock }: any) => {
     const envValue = getEnv(tempDir);
     if (envValue === undefined) {
       delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
@@ -64,13 +94,14 @@ describe("createGlobalFs", () => {
     }
 
     const logger = { warn: vi.fn(), error: vi.fn() };
+    if (setupMock) setupMock();
     const result = await createGlobalFs(logger);
 
     if (expectSuccess) {
       expect(result).not.toBeNull();
       expect(result!.relativePath).toBe(expectedRelative);
       expect(logger.warn).not.toHaveBeenCalled();
-      if (verify && envValue) {
+      if (verify) {
         await verify(result, envValue);
       }
     } else {
@@ -88,16 +119,6 @@ describe("NoOpPersistence", () => {
     expect(store.getAllEntries()).toHaveLength(0);
   });
 
-  it("should return an empty WisdomStore when parsing fails or is empty", async () => {
-    // This indirectly tests the dummy readFile returning "{}"
-    // but NoOpPersistence.load() is hardcoded to return new WisdomStore()
-    // so it doesn't even use its own reader. 
-    // However, the Codacy nitpick was about robustness if it WERE used.
-    const p = new NoOpPersistence();
-    const store = await p.load();
-    expect(store.getAllEntries()).toHaveLength(0);
-  });
-
   it("should silently accept save() and saveAtomic() without any I/O", async () => {
     const p = new NoOpPersistence();
     const store = new WisdomStore(100);
@@ -107,3 +128,4 @@ describe("NoOpPersistence", () => {
     await expect(p.saveAtomic(store)).resolves.toBeUndefined();
   });
 });
+
