@@ -1,4 +1,4 @@
-import type { WisdomEntry, WisdomCategory } from "./types";
+import type { ErrorClass, WisdomEntry, WisdomCategory } from "./types";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -95,6 +95,60 @@ export class TieredWisdomStore {
       }
       return this.globalStore.add(entry);
     }
+
     return this.localStore.add(entry);
+  }
+
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[] {
+    const limit = options?.maxEntries ?? 10;
+    const local = this.localStore.getRelevant({ errorClass: options?.errorClass, maxEntries: limit });
+
+    if (local.length >= limit) {
+      return local;
+    }
+
+    const remaining = limit - local.length;
+    const global = this.globalStore.getRelevant({ errorClass: options?.errorClass, maxEntries: remaining });
+
+    return this.deduplicate([...local, ...global]).slice(-limit);
+  }
+
+  getByTaskId(taskId: string): WisdomEntry[] {
+    const local = this.localStore.getByTaskId(taskId);
+    const global = this.globalStore.getByTaskId(taskId);
+    return this.deduplicate([...local, ...global]);
+  }
+
+  formatForInjection(entries: WisdomEntry[]): string {
+    return this.localStore.formatForInjection(entries);
+  }
+
+  async loadAll(): Promise<void> {
+    const [local, global] = await Promise.all([
+      this.localPersistence.load(),
+      this.globalPersistence.load(),
+    ]);
+
+    this.localStore.setMaxEntries(local.getMaxEntries());
+    this.localStore.replaceEntries(local.getAllEntries());
+
+    this.globalStore.setMaxEntries(global.getMaxEntries());
+    this.globalStore.replaceEntries(global.getAllEntries());
+  }
+
+  async persistAll(): Promise<void> {
+    await Promise.all([
+      this.localPersistence.saveAtomic(this.localStore),
+      this.globalPersistence.saveAtomic(this.globalStore),
+    ]);
+  }
+
+  private deduplicate(entries: WisdomEntry[]): WisdomEntry[] {
+    const seen = new Set<string>();
+    return entries.filter((e) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
   }
 }
