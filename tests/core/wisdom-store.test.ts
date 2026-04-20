@@ -168,6 +168,26 @@ describe("WisdomStore", () => {
       const store2 = WisdomStore.deserialize("{}");
       expect(store2.getRelevant()).toHaveLength(0);
     });
+
+    it("should respect maxEntries during deserialize by trimming older entries", () => {
+      const data = {
+        maxEntries: 2,
+        entries: [
+          { id: "w-1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "2026-01-01T00:00:00Z" },
+          { id: "w-2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "2026-01-02T00:00:00Z" },
+          { id: "w-3", taskId: "t3", category: "success_pattern", content: "C", timestamp: "2026-01-03T00:00:00Z" },
+        ],
+      };
+      const json = JSON.stringify(data);
+      const store = WisdomStore.deserialize(json);
+
+      expect(store.getMaxEntries()).toBe(2);
+      const all = store.getAllEntries();
+      expect(all).toHaveLength(2);
+      // Should keep the latest 2 entries (w-2, w-3)
+      expect(all[0]?.id).toBe("w-2");
+      expect(all[1]?.id).toBe("w-3");
+    });
   });
 });
 

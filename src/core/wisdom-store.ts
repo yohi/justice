@@ -135,11 +135,8 @@ export class WisdomStore {
     const store = new WisdomStore(maxEntries);
 
     if (data.entries && Array.isArray(data.entries)) {
-      for (const entry of data.entries) {
-        if (WisdomStore.isValidEntry(entry)) {
-          store.entries.push(entry);
-        }
-      }
+      const filtered = data.entries.filter(WisdomStore.isValidEntry);
+      store.replaceEntries(filtered);
     }
 
     return store;
