@@ -196,8 +196,7 @@ export class WisdomStore {
     }
 
     const validEntries = entries.filter((e) => WisdomStore.isValidEntry(e));
-    const trimmed = validEntries.slice(-limit);
-    store.replaceEntries(trimmed);
+    store.replaceEntries(validEntries);
     return store;
   }
 
