@@ -200,9 +200,38 @@ export interface PostToolUsePayload {
 export interface FileWriter {
   /**
    * 指定されたパスにデータを書き込みます。
-   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）しなければなりません。
+   * 実装側は、書き込み前に親ディレクトリが存在することを保証（必要に応じて作成）なければなりません。
    */
   writeFile(path: string, content: string): Promise<void>;
+
+  /**
+   * ファイルを `from` から `to` へ atomic にリネームします。
+   * 両 path とも rootDir 配下に閉じる必要があり、実装は path traversal を拒否します。
+   */
+  rename(from: string, to: string): Promise<void>;
+
+  /**
+   * ディレクトリを作成します。
+   * @param path 作成するディレクトリのパス
+   * @param recursive true の場合、親ディレクトリも作成します（原子性は保証されません）。
+   *                  false の場合、単一のディレクトリを作成し、既に存在する場合はエラーを投げます。
+   *                  排他制御（ロック）の実装には recursive: false を使用します。
+   */
+  mkdir(path: string, recursive: boolean): Promise<void>;
+
+  /**
+   * ディレクトリを削除します。
+   * 対象が存在しない場合はエラーを投げずに正常終了します。
+   */
+  rmdir(path: string): Promise<void>;
+
+  /**
+   * 指定されたパスのファイルを削除します。
+   * ベストエフォートでのクリーンアップを意図しており、対象ファイルが存在しない場合（ENOENT）はエラーを投げずに
+   * 正常終了（resolved success）として扱う必要があります。
+   * 実装は path traversal を拒否し、権限エラー等の致命的なエラーは再送出しなければなりません。
+   */
+  deleteFile(path: string): Promise<void>;
 }
 
 /** コンテキスト削減戦略 */

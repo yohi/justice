@@ -72,4 +72,67 @@ describe("NodeFileSystem", () => {
       await expect(fs.readFile("..\\..\\etc\\passwd")).rejects.toThrow("path traversal");
     });
   });
+
+  describe("rename", () => {
+    it("should rename a file within the root directory", async () => {
+      await fs.writeFile("src.txt", "hello");
+      await fs.rename("src.txt", "dst.txt");
+
+      expect(await fs.fileExists("src.txt")).toBe(false);
+      expect(await fs.fileExists("dst.txt")).toBe(true);
+      expect(await fs.readFile("dst.txt")).toBe("hello");
+    });
+
+    it("should rename into a nested directory that does not exist yet and succeed", async () => {
+      await fs.writeFile("src.txt", "hello");
+      await fs.rename("src.txt", "nested/sub/dst.txt");
+      expect(await fs.fileExists("nested/sub/dst.txt")).toBe(true);
+      expect(await fs.readFile("nested/sub/dst.txt")).toBe("hello");
+    });
+
+    it("should reject absolute source paths", async () => {
+      await expect(fs.rename("/etc/passwd", "out.txt")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject absolute target paths", async () => {
+      await fs.writeFile("src.txt", "hello");
+      await expect(fs.rename("src.txt", "/tmp/out.txt")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject path traversal in source or target", async () => {
+      await fs.writeFile("src.txt", "hello");
+      await expect(fs.rename("../escape.txt", "dst.txt")).rejects.toThrow("path traversal");
+      await expect(fs.rename("src.txt", "../escape.txt")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject windows style separators for traversal (rename)", async () => {
+      await fs.writeFile("src.txt", "hello");
+      await expect(fs.rename("..\\..\\etc\\passwd", "dst.txt")).rejects.toThrow("path traversal");
+      await expect(fs.rename("src.txt", "..\\..\\etc\\passwd")).rejects.toThrow("path traversal");
+    });
+  });
+
+  describe("deleteFile", () => {
+    it("should delete an existing file within the root directory", async () => {
+      await fs.writeFile("tmp.txt", "x");
+      await fs.deleteFile("tmp.txt");
+      expect(await fs.fileExists("tmp.txt")).toBe(false);
+    });
+
+    it("should NOT throw when deleting a non-existent file (best-effort)", async () => {
+      await expect(fs.deleteFile("missing.txt")).resolves.not.toThrow();
+    });
+
+    it("should reject absolute paths", async () => {
+      await expect(fs.deleteFile("/etc/passwd")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject path traversal attempts", async () => {
+      await expect(fs.deleteFile("../escape.txt")).rejects.toThrow("path traversal");
+    });
+
+    it("should reject windows style separators for traversal (deleteFile)", async () => {
+      await expect(fs.deleteFile("..\\..\\etc\\passwd")).rejects.toThrow("path traversal");
+    });
+  });
 });
