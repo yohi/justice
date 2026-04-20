@@ -81,7 +81,7 @@ export class TieredWisdomStore {
     options?: AddOptions,
   ): WisdomEntry {
     const explicitScope = options?.scope;
-    const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category] ?? "local";
+    const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
 
     if (targetScope === "global") {
