@@ -34,10 +34,13 @@ describe("createGlobalFs", () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "justice-globalfs-"));
-    vi.spyOn(os, "homedir").mockReturnValue(tempDir);
+    mockHomedir = tempDir;
+    mockMkdirError = undefined;
   });
 
   afterEach(async () => {
+    mockHomedir = "";
+    mockMkdirError = undefined;
     vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
     if (originalEnv === undefined) {
