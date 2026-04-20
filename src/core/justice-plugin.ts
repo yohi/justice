@@ -56,6 +56,7 @@ export async function createGlobalFs(
       relativePath = "wisdom.json";
     }
 
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await mkdir(globalRoot, { recursive: true });
     return { fs: new NodeFileSystem(globalRoot), relativePath };
   } catch (error) {
