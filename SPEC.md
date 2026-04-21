@@ -555,7 +555,7 @@ new TieredWisdomStore({
 
 **主な API:**
 
-- `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` でマッチした場合は、Global への昇格をブロックし、警告ログを出力した上で Local ストアに保存する。
+- `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` でマッチした場合は、警告ログを出力してユーザーに通知しますが、書き込み自体は Global ストアに対して継続されます。環境変数や秘密情報の混入には注意が必要です。
 - `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
 - `getByTaskId(taskId)` — 両 store の該当エントリを連結。
 - `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。

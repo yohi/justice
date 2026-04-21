@@ -151,9 +151,9 @@ is filled from the global store (newest-first within each store).
 
 Entries promoted to the global store are scanned for common secret-like
 patterns (API keys, home-directory paths, `sk-…` / `sk-ant-…` shapes, etc.).
-Matches **block** global promotion and cause the entry to be saved to the
-project-local store instead for safety. Review the content, redact any secrets,
-and manually move to global if appropriate.
+Matches **trigger a warning log** to alert the user, but the entry is still 
+saved to the global store. Review the content, redact any secrets if necessary, 
+and ensure your global wisdom file remains secure.
 
 ### Environment variable
 

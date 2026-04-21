@@ -223,7 +223,7 @@ describe("ErrorClassifier", () => {
       [/api.?key.?is.?missing/i, "api key is missing"],
       [/api.?key.*?must be a string/i, "api key must be a string"],
       [/model.{0,20}?not.{0,10}?supported/i, "model xyz not supported"],
-      [/model.{0,20}?not.{0,10}?supported/i, "model_not_supported"],
+      [/model_not_supported/i, "model_not_supported"],
       [/model\s+not\s+found/i, "model not found"],
       [/providerModelNotFoundError/i, "providerModelNotFoundError: gpt-5"],
       [/AI_LoadAPIKeyError/i, "AI_LoadAPIKeyError thrown"],
