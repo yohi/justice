@@ -137,4 +137,3 @@ describe("NoOpPersistence", () => {
     await expect(p.saveAtomic(store)).resolves.toBeUndefined();
   });
 });
-

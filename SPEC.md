@@ -2,7 +2,7 @@
 
 > **バージョン**: 0.1.0
 > **ステータス**: プロダクションレディ (Phase 7 完了)
-> **最終更新日**: 2026-03-24
+> **最終更新日**: 2026-04-21
 
 ## 1. 概要
 
@@ -534,6 +534,46 @@ const response = await plugin.handleEvent(event);
 
 ---
 
+### 5.16 `TieredWisdomStore` — Cross-Project Wisdom Composition
+
+`TieredWisdomStore` は 2 つの独立した `WisdomStore` インスタンス
+（project-local / user-global）を合成し、書き込みの振り分け・読み込みのマージ・秘密検出を提供する。
+
+**Constructor:**
+
+```typescript
+new TieredWisdomStore({
+  localStore: WisdomStore,
+  globalStore: WisdomStore,
+  localPersistence: WisdomPersistence,
+  globalPersistence: WisdomPersistence,
+  secretDetector?: SecretPatternDetector,
+  globalDisplayPath?: string,
+  logger?: { warn(msg: string, ...args: unknown[]): void },
+})
+```
+
+**主な API:**
+
+- `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` でマッチした場合は、Global への昇格をブロックし、警告ログを出力した上で Local ストアに保存する。
+- `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
+- `getByTaskId(taskId)` — 両 store の該当エントリを連結。
+- `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。
+- `loadAll()` / `persistAll()` — 両 store を `WisdomPersistence.saveAtomic` で並列に atomic 永続化。
+
+**振り分けマトリクス:**
+
+| Category | Default scope |
+|---|---|
+| `environment_quirk` | global |
+| `success_pattern` | global |
+| `failure_gotcha` | local |
+| `design_decision` | local |
+
+**ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぐ。
+
+---
+
 ## 6. ファイル I/O インターフェース (File I/O Interfaces)
 
 すべてのファイル入出力（I/O）は、完全なユニットテストの可用性を持たせるために2つのインターフェースによって抽象化されています：
@@ -711,11 +751,11 @@ justice/
 
 | 解析レイヤー | 対象となるファイル数 | サンプルテスト件数 |
 |-------|-------|-------|
-| コアロジック部 | 17 ファイル | 約 150 件 |
-| フック・ハンドラ群 | 4 ファイル | 約 30 件 |
+| コアロジック部 | 22 ファイル | 約 250 件 |
+| フック・ハンドラ群 | 4 ファイル | 約 40 件 |
 | ランタイム処理 | 1 ファイル | 9 件 |
-| 実環境・結合検証 | 6 ファイル | 約 12 件 |
-| **合計総数** | **28 テストファイル** | **201 件** |
+| 実環境・結合検証 | 7 ファイル | 約 28 件 |
+| **合計総数** | **34 テストファイル** | **327 件** |
 
 ### 11.2 テスト戦略と方針
 
@@ -730,7 +770,7 @@ justice/
 
 ```typescript
 // メインとなるオーケストレーターとハブ
-export { JusticePlugin } from "./core/justice-plugin";
+export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";
@@ -752,6 +792,8 @@ export { TaskSplitter } from "./core/task-splitter";
 export { WisdomStore } from "./core/wisdom-store";
 export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
+export { TieredWisdomStore } from "./core/tiered-wisdom-store";
+export { SecretPatternDetector } from "./core/secret-pattern-detector";
 
 // 直接各機能ごとのフックを利用したい場合
 export { PlanBridge } from "./hooks/plan-bridge";

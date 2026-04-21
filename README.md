@@ -45,7 +45,7 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
 # 依存関係のインストール
 bun install
 
-# 全テストの実行 (201 テスト)
+# 全テストの実行 (327 テスト)
 bun run test
 
 # 型チェック
@@ -122,6 +122,46 @@ bun add justice-plugin
 | `CompactionProtector` | Hook | コンパクション発生時にプランの状態をスナップショット化 |
 | `LoopDetectionHandler` | Hook | ループ検出時に強制中断し、分割を提案 |
 | `NodeFileSystem` | Runtime | `Bun.file` を基盤とした `FileReader`/`FileWriter` 実装 |
+| `TieredWisdomStore` | Core | プロジェクトローカルとユーザーグローバルの2層 Wisdom ストア |
+| `SecretPatternDetector` | Core | 秘密情報の自動検出（API キー、パスワード等） |
+
+## Cross-Project Wisdom Store
+
+Justice stores learnings in two places:
+
+| Scope | Default path | Default categories (auto-routed) |
+|-------|-------------|----------------------------------|
+| Project-local | `.justice/wisdom.json` | `failure_gotcha`, `design_decision` |
+| User-global | `~/.justice/wisdom.json` (or `$JUSTICE_GLOBAL_WISDOM_PATH`) | `environment_quirk`, `success_pattern` |
+
+Routing is overridable per call:
+
+```ts
+plugin.getTieredWisdomStore().add(
+  { taskId, category: "environment_quirk", content: "…" },
+  { scope: "local" }, // override — stay project-local
+);
+```
+
+Reads combine both stores with **local-priority**: if the local store already
+has `maxEntries` relevant matches, those are returned; otherwise the remainder
+is filled from the global store (newest-first within each store).
+
+### Secret detection
+
+Entries promoted to the global store are scanned for common secret-like
+patterns (API keys, home-directory paths, `sk-…` / `sk-ant-…` shapes, etc.).
+Matches **block** global promotion and cause the entry to be saved to the
+project-local store instead for safety. Review the content, redact any secrets,
+and manually move to global if appropriate.
+
+### Environment variable
+
+- `JUSTICE_GLOBAL_WISDOM_PATH` — **absolute path** to the global wisdom file.
+  Relative paths are rejected with a warning and disable the global store.
+  When unset, defaults to `~/.justice/wisdom.json`. When `HOME` cannot be
+  determined and this variable is unset, the global store is disabled
+  (local-only) and a warning is logged.
 
 ## エラーハンドリング
 
