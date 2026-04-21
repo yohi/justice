@@ -206,6 +206,9 @@ describe("ErrorClassifier", () => {
       [/\b504\b/, "504 Gateway Timeout"],
       [/\b529\b/, "529 Site is overloaded"],
       [/retrying\s+in/i, "retrying in 30s"],
+      [/payment.?required/i, "payment required"],
+      [/usage\s+limit/i, "usage limit reached"],
+      [/out\s+of\s+credits?/i, "out of credits"],
     ];
 
     it.each(transientSamples)(
@@ -226,9 +229,6 @@ describe("ErrorClassifier", () => {
       [/providerModelNotFoundError/i, "providerModelNotFoundError: gpt-5"],
       [/AI_LoadAPIKeyError/i, "AI_LoadAPIKeyError thrown"],
       [/missing.{0,10}?api.{0,10}?key/i, "missing api key"],
-      [/payment.?required/i, "payment required"],
-      [/usage\s+limit/i, "usage limit reached"],
-      [/out\s+of\s+credits?/i, "out of credits"],
     ];
 
     it.each(configSamples)(
