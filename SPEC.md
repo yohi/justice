@@ -353,10 +353,10 @@ interface ProtectedContext {
 
 | エラー種別 | 最大リトライ回数 | 所属レイヤー |
 |-------|------------|-------|
-| `syntax_error` | 3 | 第1レイヤー (自動修正) |
-| `type_error` | 3 | 第1レイヤー (自動修正) |
-| `test_failure` | 0 | 第2レイヤー (即時エスカレーション) |
-| `design_error` | 0 | 第2レイヤー (即時エスカレーション) |
+| `syntax_error` | 3 | 第1層 (自動修正) |
+| `type_error` | 3 | 第1層 (自動修正) |
+| `test_failure` | 0 | 第2層 (即時エスカレーション) |
+| `design_error` | 0 | 第2層 (即時エスカレーション) |
 | `timeout` | 0 | 中断 (Abort) |
 | `loop_detected` | 0 | 中断 (Abort) |
 | `provider_transient` | 0 | プロバイダ層 (OmOに委ねる) |
@@ -603,7 +603,7 @@ interface FileWriter {
 
 ## 7. エラー時の処理 (Error Handling)
 
-### 7.1 定められた2層エラー戦略
+### 7.1 定められた3層エラー戦略
 
 ```text
 タスク `task()` 実行内でエラーが発生
@@ -611,17 +611,20 @@ interface FileWriter {
         ▼
 ErrorClassifier.classify() による分類チェック
         │
-   ┌────┴────┐
-   │         │
-第1レイヤー 第2レイヤー
-(リトライ可) (強制エスカレーション)
-   │         │
-   ▼         ▼
-OmOに完全に  エラーを抽出し
-委ね（黙認） `plan.md` 等へ
-自動修復を   修復のための指示と
-見守る     ガイダンスを追加する
+   ┌────┼───────────────┐
+   │    │               │
+第1層  第2層         プロバイダ層
+(自動) (エスカレート) (基盤/設定)
+   │    │               │
+   ▼    ▼               ▼
+OmOに  エラーを抽出し   provider_transient:
+完全に  `plan.md` 等へ   OmOに委ねる
+委ね   修復のための     provider_config:
+自動修復 指示とガイダンス  要手動介入として
+を見守る を追加する       報告する
 ```
+
+第1層（`syntax_error`, `type_error`）、第2層（`test_failure`, `design_error`）、およびプロバイダ層（`provider_transient`, `provider_config`）の3層構造でエラーを管理します。表の定義とこのフローを一致させることで、各エラー発生時のハンドリングパスを明確化しています。
 
 ### 7.2 タイムアウト・およびループ検出時
 
