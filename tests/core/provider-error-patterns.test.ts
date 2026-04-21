@@ -12,6 +12,7 @@ describe("provider-error-patterns", () => {
     it("should be a frozen array of RegExp", () => {
       expect(Array.isArray(PROVIDER_TRANSIENT_PATTERNS)).toBe(true);
       expect(Object.isFrozen(PROVIDER_TRANSIENT_PATTERNS)).toBe(true);
+      expect(PROVIDER_TRANSIENT_PATTERNS).toHaveLength(19);
       for (const pattern of PROVIDER_TRANSIENT_PATTERNS) {
         expect(pattern).toBeInstanceOf(RegExp);
       }
@@ -53,6 +54,7 @@ describe("provider-error-patterns", () => {
     it("should be a frozen array of RegExp", () => {
       expect(Array.isArray(PROVIDER_CONFIG_PATTERNS)).toBe(true);
       expect(Object.isFrozen(PROVIDER_CONFIG_PATTERNS)).toBe(true);
+      expect(PROVIDER_CONFIG_PATTERNS).toHaveLength(8);
       for (const pattern of PROVIDER_CONFIG_PATTERNS) {
         expect(pattern).toBeInstanceOf(RegExp);
       }
@@ -66,6 +68,7 @@ describe("provider-error-patterns", () => {
         "providerModelNotFoundError: the requested model does not exist",
         "AI_LoadAPIKeyError: failed to load credentials",
         "Model not supported",
+        "model_not_supported",
       ];
 
       for (const msg of positiveExamples) {
