@@ -94,6 +94,24 @@ describe("createGlobalFs", () => {
       expectSuccess: false,
       warnMatch: "must be an absolute path",
     },
+    {
+      name: "reject root JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
+      getEnv: () => "/",
+      expectSuccess: false,
+      warnMatch: "points to a sensitive system directory",
+    },
+    {
+      name: "reject sensitive JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
+      getEnv: () => "/etc/wisdom.json",
+      expectSuccess: false,
+      warnMatch: "points to a sensitive system directory",
+    },
+    {
+      name: "reject /usr JUSTICE_GLOBAL_WISDOM_PATH and log a warn",
+      getEnv: () => "/usr/wisdom.json",
+      expectSuccess: false,
+      warnMatch: "points to a sensitive system directory",
+    },
   ])("should $name", async ({ getEnv, expectedRelative, expectSuccess, warnMatch, verify, setupMock }: any) => {
     const envValue = getEnv(tempDir);
     if (envValue === undefined) {

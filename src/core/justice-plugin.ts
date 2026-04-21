@@ -34,6 +34,9 @@ export interface CreateGlobalFsResult {
  */
 function isSensitivePath(path: string): boolean {
   const normalized = resolve(path);
+  // Root path is always sensitive
+  if (normalized === "/" || normalized === resolve("/")) return true;
+
   const sensitivePrefixes = ["/etc", "/usr", "/bin", "/sbin", "/var", "/boot", "/dev", "/root"];
   return sensitivePrefixes.some(
     (prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`),
@@ -66,7 +69,7 @@ export async function createGlobalFs(
         );
       }
 
-      if (isSensitivePath(absolutePath)) {
+      if (absolutePath === "/" || isSensitivePath(absolutePath)) {
         logger?.warn(
           `JUSTICE_GLOBAL_WISDOM_PATH points to a sensitive system directory ('${absolutePath}'). ` +
             "Global wisdom store disabled for security.",
