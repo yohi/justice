@@ -94,7 +94,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
         if (this.logger) {
           try {
             this.logger.warn(warnMessage);
-          } catch (e) {
+          } catch {
             console.warn(warnMessage);
           }
         } else {
