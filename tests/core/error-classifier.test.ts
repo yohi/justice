@@ -201,6 +201,7 @@ describe("ErrorClassifier", () => {
       [/service.?unavailable/i, "service unavailable"],
       [/overloaded/i, "server overloaded"],
       [/temporarily.?unavailable/i, "temporarily unavailable"],
+      [/gateway.?timeout/i, "Gateway Timeout"],
       [/\b429\b/, "429 Too Many Requests"],
       [/\b503\b/, "503 Service Unavailable"],
       [/\b504\b/, "504 Gateway Timeout"],
