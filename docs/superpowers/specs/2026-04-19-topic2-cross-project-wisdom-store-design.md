@@ -27,10 +27,10 @@
 | ストア構成 | ローカル + グローバルの **2 つの独立 `WisdomStore` インスタンス**を新規 `TieredWisdomStore` で合成 |
 | グローバルパス | 既定 `~/.justice/wisdom.json`、`JUSTICE_GLOBAL_WISDOM_PATH` 環境変数で上書き可 |
 | 書き込み振り分け | カテゴリヒューリスティック (`environment_quirk` / `success_pattern` → global、他は local) + 明示オプションで上書き可 |
-| 秘密検出 | パターン照合で警告ログのみ（ハードブロックしない） |
+| 秘密検出 | パターン照合で検出時は **グローバルへの書き込みをハードブロックしローカルへ保存** （警告ログ出力） |
 | 読み込みマージ | ローカル優先・不足分を新しい順でグローバルから補填 |
 | 容量 | local 100 件 / global 500 件、超過時は LRU |
-| 並行書き込み | atomic write (temp + rename) + read-modify-write |
+| 並行書き込み | atomic write (temp + rename) + read-modify-write と **`.lock` ディレクトリとTTL付きメタデータを用いたプロセス間ファイルロック** |
 | 既存 API 互換 | `getWisdomStore()` シグネチャ維持、新規 `getTieredWisdomStore()` 追加 |
 | 既存エントリ移行 | しない（新規書き込みのみヒューリスティック適用） |
 | SemVer | minor bump（追加のみ・既存挙動不変） |
@@ -81,31 +81,32 @@ export interface SecretMatch {
 }
 
 const SECRET_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: "api_key", pattern: /api[-_]?key/i },
-  { name: "password", pattern: /password/i },
-  { name: "secret", pattern: /\bsecret\b/i },
-  { name: "token", pattern: /\btoken\b/i },
-  { name: "home_path_linux", pattern: /\/home\/[^/\s]+\// },
-  { name: "home_path_macos", pattern: /\/Users\/[^/\s]+\// },
-  { name: "openai_key", pattern: /sk-[a-zA-Z0-9]{20,}/ },
-  { name: "anthropic_key", pattern: /sk-ant-[a-zA-Z0-9_-]{20,}/ },
+  { name: "api_key", pattern: /(?:\b|_)api[-_]?key(?=\b|_|$)/i },
+  { name: "password", pattern: /\b(?:db|db_|admin_|root_)?password\b/i },
+  { name: "secret", pattern: /\b(?:client_secret|secret[_-]?key)\b/i },
+  { name: "token", pattern: /\b(?:bearer_token|access_token|refresh_token|github_token)\b/i },
+  { name: "home_path_linux", pattern: /\/home\/[^/\s]+\/?/ },
+  { name: "home_path_macos", pattern: /\/Users\/[^/\s]+\/?/ },
+  { name: "home_path_windows", pattern: /[a-zA-Z]:\\Users\\[^\\\s]+\\?/ },
+  { name: "openai_key", pattern: /\bsk-(?!ant-)(?:proj-)?[a-zA-Z0-9_-]{20,}\b/ },
+  { name: "anthropic_key", pattern: /\bsk-ant-[a-zA-Z0-9_-]{20,}\b/ },
 ];
 
 export class SecretPatternDetector {
-  scan(content: string): string[] {
+  scan(content: string): SecretMatch[] {
     return SECRET_PATTERNS
       .filter(({ pattern }) => pattern.test(content))
-      .map(({ name }) => name);
+      .map(({ name }) => ({ name }));
   }
 }
 ```
 
 ### Pattern Selection Notes
 
-- `\bsecret\b` / `\btoken\b` は単語境界つきで「コメント内の "secret" 単語」「JWT token」等を捕捉
-- ホームパスは Linux / macOS の両形式
-- API キーは Anthropic (`sk-ant-`) と OpenAI (`sk-`) の頭辞をリテラル長と組み合わせて検出
-- ハードブロックではなく **警告ログのみ** で扱うため、偽陽性 (例: "API key を使う上での注意") は問題にならない
+- `\bsecret\b` / `\btoken\b` のような広い単語境界でのマッチは誤検知（False positive）が多すぎるため、`client_secret` や `bearer_token` などのより限定的・厳密な正規表現へと改善されています。
+- ホームパスは Linux / macOS に加えて Windows パターンも検出されます。
+- API キーは Anthropic (`sk-ant-`) と OpenAI (`sk-`) の頭辞をリテラル長と組み合わせて検出されます。
+- 検知された場合は **ハードブロック** となり、該当エントリはグローバルストアへの書き込みが拒否され、代わりにローカルストアへ書き込まれます。
 
 ## 6. New File: `src/core/tiered-wisdom-store.ts` (~120 行)
 
@@ -127,11 +128,15 @@ add(
   if (targetScope === "global") {
     const detected = this.secretDetector.scan(entry.content);
     if (detected.length > 0) {
-      this.logger?.warn(
-        `Wisdom entry promoted to global may contain secrets ` +
-        `(patterns matched: ${detected.join(", ")}). ` +
-        `Review ${this.globalDisplayPath} and edit/redact if needed.`
-      );
+      if (this.logger) {
+        this.logger.warn(
+          `Wisdom entry promotion to global BLOCKED: may contain secrets ` +
+          `(patterns matched: ${detected.map(m => m.name).join(", ")}). ` +
+          `The entry has been saved to the local store instead. ` +
+          `Review entry content or redact secrets before trying to promote to ${this.globalDisplayPath}.`
+        );
+      }
+      return this.localStore.add(entry);
     }
     return this.globalStore.add(entry);
   }
@@ -263,19 +268,9 @@ private mergeById(
 - temp ファイル名に `process.pid + random` を含めることで、複数プロセスが同時実行しても tmp が衝突しない
 - Race window: `load → merge → write` 間に他プロセスが `saveAtomic` した場合、後勝ちで一部ロストの可能性は残る。wisdom 書き込みは低頻度のため許容範囲
 
-### 設計意図: 意図的な lock-free 設計
+### 設計意図: 意図的な file-lock 設計
 
-本設計は **クロスプロセスファイルロック (proper-lockfile / flock 等) を意図的に採用しない** という選択をしています。Q10（ブレストフェーズ）で以下のトレードオフを評価し決定:
-
-- **採用しない理由**:
-  - wisdom 書き込みは「失敗パターン抽出時」など低頻度イベント（毎秒書き込みではない）
-  - 一部ロストしても致命的ではない（再学習可能）
-  - `proper-lockfile` 等の依存追加は Devcontainer / ネットワーク FS / WSL マウント等で挙動が不安定
-  - クラッシュ時のロックファイル残存復旧ロジックが必要になり実装複雑化
-- **代替案 C（ファイルロック）の評価**: オーバーキルと判断
-- **採用案 B（atomic write + RMW）の妥協点**: 上記の race window を許容、その代わり「ロック不要・依存最小・FS 種別非依存」を得る
-
-将来 wisdom 書き込み頻度が大幅に増える場合（例: リアルタイム学習機能の追加）はこの判断を再評価する。
+初期設計ではクロスプロセスファイルロックを意図的に採用しない（オーバーキルなため）としていましたが、複数プロセスの並行動作時におけるデータの確実な保護（race window の排除）を重視し、**`.lock` ディレクトリの作成・メタデータ（PIDやhostname）記録・TTLおよび指数バックオフリトライによるプロセス間ファイルロック機構を採用** しました。これにより `load → merge → write` の間の競合が防がれています。
 
 ## 9. `NodeFileSystem.rename()` Implementation
 

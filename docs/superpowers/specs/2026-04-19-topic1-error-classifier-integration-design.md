@@ -98,6 +98,8 @@ export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = [
 - `payment.?required` / `usage\s+limit` / `out\s+of\s+credits?` は OmO の `classifyErrorType("quota_exceeded")` 由来。`PROVIDER_TRANSIENT_PATTERNS` 側に置く（quota は時間経過/プラン更新で解消し得る扱い）。
 - `model.{0,20}?not.{0,10}?supported` と `model_not_supported` の両方を持つのは、表記ゆれ吸収のため OmO に倣ったもの。
 
+*(Note: Implementation later added an `isProviderContext` option to `ErrorClassifier.classify` to avoid misclassifying generic errors like "timeout" as provider-specific errors when not evaluating tool output. Also, cross-process file locking was adopted instead of pure lock-free, and secrets are now hard-blocked from global promotion.)*
+
 ## 5. `ErrorClassifier` Changes
 
 ### `src/core/error-classifier.ts`
