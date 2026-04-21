@@ -145,7 +145,7 @@ type ErrorClass =
   | "design_error"      // 第2レイヤー: 即時エスカレーション
   | "timeout"           // 即時中断 + 分割指示
   | "loop_detected"     // 即時中断 + 分割指示
-  | "provider_transient"// プロバイダの一時的エラー (Rate Limit等): 非リトライ（OmO側に委ねる）
+  | "provider_transient" // プロバイダの一時的エラー (Rate Limit等): 非リトライ（OmO側に委ねる）
   | "provider_config"   // プロバイダの設定エラー (API Key欠如等): 非リトライ（要ユーザー介入）
   | "unknown";
 ```

@@ -28,7 +28,7 @@ tests/
 - All core classes are **stateless** where possible.
 - Hooks delegate to core logic immediately; no business logic in hooks.
 - All types are `readonly` to enforce immutability.
-- Error classification uses pattern matching rules.
+- Error classification uses pattern-matching rules.
 - I/O is abstracted via `FileReader` / `FileWriter` interfaces for testability.
 - `JusticePlugin` is the single orchestrator — wires all hooks with a shared `TieredWisdomStore` (project-local + user-global).
 - Wisdom writes use **atomic (temp + rename)** persistence to ensure integrity without locking.
@@ -57,14 +57,14 @@ bun run build         # Build to dist/
 | `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest` with structured prompt |
 | `src/core/trigger-detector.ts` | `TriggerDetector` | Detect plan reference + delegation intent in messages |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classify errors; determine retry eligibility |
-| `src/core/provider-error-patterns.ts`| — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
+| `src/core/provider-error-patterns.ts` | — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
 | `src/core/feedback-formatter.ts` | `FeedbackFormatter` | Parse raw `task()` output → `TaskFeedback` |
 | `src/core/plan-bridge-core.ts` | `PlanBridgeCore` | Pure logic: plan→delegation pipeline |
 | `src/core/smart-retry-policy.ts` | `SmartRetryPolicy` | Exponential backoff + context reduction |
 | `src/core/task-splitter.ts` | `TaskSplitter` | Split suggestions for failed/timed-out tasks |
-| `src/core/wisdom-store.ts` | `WisdomStore` | In-memory learning store (LRU, max entries) |
-| `src/core/tiered-wisdom-store.ts`| `TieredWisdomStore` | Compose local + global wisdom stores; handle routing/merging |
-| `src/core/secret-pattern-detector.ts`| `SecretPatternDetector` | Scan for secrets (API keys, home paths) in wisdom entries |
+| `src/core/wisdom-store.ts` | `WisdomStore` | In-memory learning store (LRU, max 100 entries) |
+| `src/core/tiered-wisdom-store.ts` | `TieredWisdomStore` | Compose local + global wisdom stores; handle routing/merging |
+| `src/core/secret-pattern-detector.ts` | `SecretPatternDetector` | Scan for secrets (API keys, home paths) in wisdom entries |
 | `src/core/learning-extractor.ts` | `LearningExtractor` | Extract `WisdomEntry` drafts from `TaskFeedback` |
 | `src/core/wisdom-persistence.ts` | `WisdomPersistence` | Atomic persistence (`saveAtomic`) via temp + rename |
 | `src/core/dependency-analyzer.ts` | `DependencyAnalyzer` | Parse `(depends: task-N)` markers; topological sort |
