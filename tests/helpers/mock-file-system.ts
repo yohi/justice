@@ -72,3 +72,30 @@ export function createMockFileWriter(): FileWriter & {
     }),
   };
 }
+
+/**
+ * Creates a mock that implements both FileReader and FileWriter.
+ * This is useful for TieredWisdomStore tests where the same FS object is used for both.
+ */
+export function createMockFileSystem(initialFiles: Record<string, string> = {}): FileReader &
+  FileWriter & {
+    writtenFiles: Record<string, string>;
+    directories: Set<string>;
+  } {
+  const fs = createMockFileWriter();
+  Object.assign(fs.writtenFiles, initialFiles);
+
+  (fs as any).readFile = vi.fn(async (path: string) => {
+    const content = fs.writtenFiles[path];
+    if (content === undefined) {
+      const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    }
+    return content;
+  });
+
+  (fs as any).fileExists = vi.fn(async (path: string) => path in fs.writtenFiles);
+
+  return fs as any;
+}
