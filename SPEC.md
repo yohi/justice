@@ -139,12 +139,14 @@ interface TestSummary {
 
 ```typescript
 type ErrorClass =
-  | "syntax_error"   // 第1レイヤー: リトライ可能 (最大 3回)
-  | "type_error"     // 第1レイヤー: リトライ可能 (最大 3回)
-  | "test_failure"   // 第2レイヤー: 即時エスカレーション
-  | "design_error"   // 第2レイヤー: 即時エスカレーション
-  | "timeout"        // 即時中断 + 分割指示
-  | "loop_detected"  // 即時中断 + 分割指示
+  | "syntax_error"      // 第1レイヤー: リトライ可能 (最大 3回)
+  | "type_error"        // 第1レイヤー: リトライ可能 (最大 3回)
+  | "test_failure"      // 第2レイヤー: 即時エスカレーション
+  | "design_error"      // 第2レイヤー: 即時エスカレーション
+  | "timeout"           // 即時中断 + 分割指示
+  | "loop_detected"     // 即時中断 + 分割指示
+  | "provider_transient"// プロバイダの一時的エラー (Rate Limit等): 非リトライ（OmO側に委ねる）
+  | "provider_config"   // プロバイダの設定エラー (API Key欠如等): 非リトライ（要ユーザー介入）
   | "unknown";
 ```
 
@@ -357,6 +359,8 @@ interface ProtectedContext {
 | `design_error` | 0 | 第2レイヤー (即時エスカレーション) |
 | `timeout` | 0 | 中断 (Abort) |
 | `loop_detected` | 0 | 中断 (Abort) |
+| `provider_transient` | 0 | プロバイダ層 (OmOに委ねる) |
+| `provider_config` | 0 | プロバイダ層 (要介入) |
 
 ---
 
