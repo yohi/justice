@@ -171,7 +171,8 @@ Justice は 3層構造のエラー戦略を実装しています：
 | :--- | :--- | :--- |
 | **第1層** (自動修正) | `syntax_error`, `type_error` (最大 3 リトライ) | エージェントに通知せず進行（OmO が自動修正を実施） |
 | **第2層** (エスカレーション) | `test_failure`, `design_error` | `plan.md` にエラーの注記を追記; systematic-debugging のガイダンスを注入 |
-| **プロバイダ層** (基盤/設定) | `provider_transient`, `provider_config` | 状況に応じ OmO への委ね、またはユーザー介入の要求 |
+| **プロバイダ層 (一時的)** | `provider_transient` (Rate Limit等) | 一時的な失敗として OmO の基盤再試行に委ねる |
+| **プロバイダ層 (設定)** | `provider_config` (API Key等) | 設定/認証エラーとしてユーザーに介入と修正を要求する |
 | **中断 (Abort)** | `timeout`, `loop_detected` | タスク分割の指示をコンテキストに注入 |
 
 ## 開発用コマンド
