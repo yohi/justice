@@ -89,7 +89,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
           `Wisdom entry promotion to global cancelled: potential secrets detected ` +
           `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
           `The entry will be saved to PROJECT-LOCAL store instead. ` +
-          `Review the content and redact secrets if you intended to share this.`;
+          `Review the content and redact secrets if you intended to share this via ${this.globalDisplayPath}.`;
 
         if (this.logger) {
           try {
