@@ -1,6 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { hostname } from "node:os";
-import { dirname } from "node:path";
 import type { FileReader, FileWriter, WisdomEntry } from "./types";
 import { WisdomStore } from "./wisdom-store";
 
@@ -85,154 +83,31 @@ export class WisdomPersistence {
    * in-memory entries (newer timestamp wins for duplicate IDs),
    * writes to a temp file, then renames over the target file.
    *
-   * Uses an advisory file-based lock (.lock directory) to ensure serial RMW
-   * across concurrent processes/calls. Retries if the lock is held.
+   * Race window `load → merge → write` is intentionally unlocked; see design
+   * spec §8 (lock-free design notes).
+   *
+   * If `rename` fails, the temp file is best-effort removed before the original
+   * error is rethrown, so orphan `.tmp.*` files do not accumulate on repeated
+   * failures.
    */
   async saveAtomic(store: WisdomStore): Promise<void> {
-    const lockPath = `${this.wisdomFilePath}.lock`;
-    const lockMetaPath = `${lockPath}/owner.json`;
-    const lockTtlMs = 10000; // 10 seconds TTL
-    const maxRetries = 5;
-    const currentHost = hostname();
-    let attempt = 0;
-    let firstObservedAt: number | null = null;
-    let lockAcquired = false;
+    const currentOnDisk = await this.loadStrict();
+    const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
 
-    while (attempt < maxRetries) {
-      try {
-        await this.fileWriter.mkdir(lockPath, false);
-        try {
-          // Lock acquired, write metadata
-          await this.fileWriter.writeFile(
-            lockMetaPath,
-            JSON.stringify({ pid: process.pid, hostname: currentHost, timestamp: Date.now() })
-          );
-          lockAcquired = true;
-        } catch (err) {
-          // Metadata writing failed — release the lock and propagate.
-          // Note: deleteFile/rmdir already handle ENOENT.
-          await this.fileWriter.deleteFile(lockMetaPath);
-          await this.fileWriter.rmdir(lockPath);
-          throw err instanceof Error ? err : new Error(String(err), { cause: err });
-        }
-        break; // Lock successfully acquired and metadata written
-      } catch (err: unknown) {
-        if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-          attempt++;
-          if (attempt >= maxRetries) {
-            throw new Error(
-              `Failed to create parent directory for lock ${lockPath} after ${maxRetries} attempts`,
-              { cause: err }
-            );
-          }
-          await this.fileWriter.mkdir(dirname(lockPath), true);
-          continue; // Retry immediately
-        } else if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
-          if (firstObservedAt === null) firstObservedAt = Date.now();
-          // Check for stale lock
-          let shouldClear = false;
-          try {
-            const metaJson = await this.fileReader.readFile(lockMetaPath);
-            const meta = JSON.parse(metaJson);
-            const isStale = Date.now() - meta.timestamp > lockTtlMs;
-            
-            if (meta.hostname === currentHost && meta.pid) {
-              // On the same host: only treat as stale if the process is actually dead.
-              // This protects long-running writers from being preempted by TTL.
-              try {
-                process.kill(meta.pid, 0);
-                // Process is still alive, lock is NOT stale regardless of TTL.
-                shouldClear = false;
-              } catch {
-                // Process is dead, lock is stale.
-                shouldClear = true;
-              }
-            } else {
-              // On a different host: rely solely on TTL.
-              if (isStale) {
-                shouldClear = true;
-              }
-            }
-          } catch {
-            // Meta file might not exist yet (race condition) or invalid.
-            // Treat as stale only if the lock has been observed for longer than TTL.
-            if (Date.now() - firstObservedAt > lockTtlMs) {
-              shouldClear = true;
-            }
-          }
+    const finalStore = WisdomStore.fromEntries(merged, store.getMaxEntries());
+    const json = finalStore.serialize();
 
-          if (shouldClear) {
-            // Clear the lock. Note: deleteFile/rmdir already handle ENOENT.
-            await this.fileWriter.deleteFile(lockMetaPath);
-            await this.fileWriter.rmdir(lockPath);
-            firstObservedAt = null; // Reset observation for the next lock
-            attempt++;
-            if (attempt >= maxRetries) {
-              throw new Error(
-                `Failed to acquire lock for ${this.wisdomFilePath} after clearing stale locks ${maxRetries} times`,
-                { cause: err }
-              );
-            }
-            continue; // Retry immediately
-          }
-
-          attempt++;
-          if (attempt >= maxRetries) {
-            throw new Error(
-              `Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`,
-              { cause: err },
-            );
-          }
-          // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
-          await new Promise((resolve) => setTimeout(resolve, 25 * Math.pow(2, attempt)));
-        } else {
-          throw err instanceof Error ? err : new Error(String(err), { cause: err });
-        }
-      }
-    }
-
-    if (!lockAcquired) {
-      throw new Error(`Failed to acquire lock for ${this.wisdomFilePath} after ${maxRetries} attempts`);
-    }
-
-    let primaryError: unknown = null;
+    const tmpPath = `${this.wisdomFilePath}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
     try {
-      const currentOnDisk = await this.loadStrict();
-      const merged = this.mergeById(currentOnDisk.getAllEntries(), store.getAllEntries());
-
-      const finalStore = WisdomStore.fromEntries(merged, store.getMaxEntries());
-      const json = finalStore.serialize();
-
-      const tmpPath = `${this.wisdomFilePath}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
-      try {
-        await this.fileWriter.writeFile(tmpPath, json);
-        await this.fileWriter.rename(tmpPath, this.wisdomFilePath);
-      } catch (err) {
-        try {
-          await this.fileWriter.deleteFile(tmpPath);
-        } catch {
-          // Swallow cleanup errors — the original error is the real cause.
-        }
-        throw err instanceof Error ? err : new Error(String(err), { cause: err });
-      }
+      await this.fileWriter.writeFile(tmpPath, json);
+      await this.fileWriter.rename(tmpPath, this.wisdomFilePath);
     } catch (err) {
-      primaryError = err;
-    } finally {
-      // Cleanup. Note: NodeFileSystem methods already ignore ENOENT.
       try {
-        await this.fileWriter.deleteFile(lockMetaPath);
-      } catch (err) {
-        if (primaryError === null) primaryError = err;
+        await this.fileWriter.deleteFile(tmpPath);
+      } catch {
+        // Swallow cleanup errors — the original error is the real cause.
       }
-      try {
-        await this.fileWriter.rmdir(lockPath);
-      } catch (err) {
-        if (primaryError === null) primaryError = err;
-      }
-    }
-
-    if (primaryError) {
-      throw primaryError instanceof Error ? primaryError : new Error(String(primaryError), { cause: primaryError });
+      throw err instanceof Error ? err : new Error(String(err), { cause: err });
     }
   }
 

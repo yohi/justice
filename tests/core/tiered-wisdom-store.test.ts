@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { TieredWisdomStore } from "../../src/core/tiered-wisdom-store";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
@@ -117,6 +117,10 @@ describe("TieredWisdomStore — routing (add)", () => {
     expect(msg).toContain("may contain secrets");
     expect(msg).toContain("api_key");
     expect(msg).toContain("~/.justice/wisdom.json");
+
+    // Ensure it was still written to the global store despite the warning
+    expect(globalStore.add).toHaveBeenCalledTimes(1);
+    expect(localStore.add).not.toHaveBeenCalled();
   });
 
   it("should NOT log warn when entry stays local even if it looks like a secret", () => {
