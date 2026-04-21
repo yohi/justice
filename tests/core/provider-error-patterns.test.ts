@@ -26,8 +26,6 @@ describe("provider-error-patterns", () => {
         "The server is overloaded.",
         "Quota exceeded for your account",
         "quota will reset after 24h",
-        "Out of credits",
-        "Payment Required",
       ];
 
       for (const msg of positiveExamples) {
@@ -65,6 +63,9 @@ describe("provider-error-patterns", () => {
         "providerModelNotFoundError: the requested model does not exist",
         "AI_LoadAPIKeyError: failed to load credentials",
         "Model not supported",
+        "Payment Required",
+        "Usage limit reached",
+        "Out of credits",
       ];
 
       for (const msg of positiveExamples) {
