@@ -207,7 +207,6 @@ describe("ErrorClassifier", () => {
       [/\b529\b/, "529 Site is overloaded"],
       [/retrying\s+in/i, "retrying in 30s"],
     ];
-
     it.each(transientSamples)(
       "pattern %s should match %j as provider_transient when in provider context",
       (_pattern, sample) => {
@@ -230,7 +229,6 @@ describe("ErrorClassifier", () => {
       [/usage\s+limit/i, "usage limit reached"],
       [/out\s+of\s+credits?/i, "out of credits"],
     ];
-
     it.each(configSamples)(
       "pattern %s should match %j as provider_config when in provider context",
       (_pattern, sample) => {

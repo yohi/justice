@@ -63,8 +63,9 @@ describe("provider-error-patterns", () => {
         "providerModelNotFoundError: the requested model does not exist",
         "AI_LoadAPIKeyError: failed to load credentials",
         "Model not supported",
-        "Out of credits",
         "Payment Required",
+        "Usage limit reached",
+        "Out of credits",
       ];
 
       for (const msg of positiveExamples) {
