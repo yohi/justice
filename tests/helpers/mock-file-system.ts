@@ -17,10 +17,12 @@ export function createMockFileReader(files: Record<string, string>): FileReader 
   };
 }
 
-export function createMockFileWriter(): FileWriter & {
+export interface MockFileWriter extends FileWriter {
   writtenFiles: Record<string, string>;
   directories: Set<string>;
-} {
+}
+
+export function createMockFileWriter(): MockFileWriter {
   const writtenFiles: Record<string, string> = {};
   const directories = new Set<string>();
   return {
@@ -73,29 +75,32 @@ export function createMockFileWriter(): FileWriter & {
   };
 }
 
+export interface MockFileSystem extends FileReader, FileWriter {
+  writtenFiles: Record<string, string>;
+  directories: Set<string>;
+}
+
 /**
  * Creates a mock that implements both FileReader and FileWriter.
  * This is useful for TieredWisdomStore tests where the same FS object is used for both.
  */
-export function createMockFileSystem(initialFiles: Record<string, string> = {}): FileReader &
-  FileWriter & {
-    writtenFiles: Record<string, string>;
-    directories: Set<string>;
-  } {
-  const fs = createMockFileWriter();
-  Object.assign(fs.writtenFiles, initialFiles);
+export function createMockFileSystem(initialFiles: Record<string, string> = {}): MockFileSystem {
+  const writer = createMockFileWriter();
+  Object.assign(writer.writtenFiles, initialFiles);
 
-  (fs as any).readFile = vi.fn(async (path: string) => {
-    const content = fs.writtenFiles[path];
-    if (content === undefined) {
-      const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
-      err.code = "ENOENT";
-      throw err;
-    }
-    return content;
-  });
+  const mockFs: MockFileSystem = {
+    ...writer,
+    readFile: vi.fn(async (path: string) => {
+      const content = writer.writtenFiles[path];
+      if (content === undefined) {
+        const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return content;
+    }),
+    fileExists: vi.fn(async (path: string) => path in writer.writtenFiles),
+  };
 
-  (fs as any).fileExists = vi.fn(async (path: string) => path in fs.writtenFiles);
-
-  return fs as any;
+  return mockFs;
 }
