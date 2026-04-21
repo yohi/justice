@@ -28,6 +28,7 @@ export const PROVIDER_CONFIG_PATTERNS: readonly RegExp[] = Object.freeze([
   /api.?key.?is.?missing/i,
   /api.?key.*?must be a string/i,
   /model.{0,20}?not.{0,10}?supported/i,
+  /model_not_supported/i,
   /model\s+not\s+found/i,
   /providerModelNotFoundError/i,
   /AI_LoadAPIKeyError/i,
