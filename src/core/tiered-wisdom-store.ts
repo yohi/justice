@@ -86,9 +86,9 @@ export class TieredWisdomStore implements WisdomStoreInterface {
       const detected = this.secretDetector.scan(entry.content);
       if (detected.length > 0) {
         const warnMessage = 
-          `Wisdom entry promotion to global cancelled: potential secrets detected ` +
+          `Wisdom entry promotion to global: potential secrets detected ` +
           `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
-          `The entry will be saved to PROJECT-LOCAL store instead. ` +
+          `Promotion canceled to prevent potential secret exposure. The entry has been saved to the project-local store instead. ` +
           `Review the content and redact secrets if you intended to share this via ${this.globalDisplayPath}.`;
 
         if (this.logger) {
@@ -100,7 +100,6 @@ export class TieredWisdomStore implements WisdomStoreInterface {
         } else {
           console.warn(warnMessage);
         }
-        // Fallback to local store to prevent secret leakage to global store
         return this.localStore.add(entry);
       }
       return this.globalStore.add(entry);

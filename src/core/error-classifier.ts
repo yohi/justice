@@ -143,9 +143,9 @@ export class ErrorClassifier {
         );
       case "provider_transient":
         return (
-          "The task failed due to a transient provider issue (rate limit or service " +
-          "unavailability). Wait a few minutes before re-delegating, or try a different " +
-          "`category` to switch to an alternative model. Auto-retry is disabled for this class."
+          "The task failed due to a transient provider issue (rate limit, quota, or service " +
+          "unavailability) that exhausted the harness's automatic retries. Wait a few minutes " +
+          "before re-delegating, or try a different `category` to switch to an alternative model."
         );
       case "provider_config":
         return (

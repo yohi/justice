@@ -114,13 +114,13 @@ describe("TieredWisdomStore — routing (add)", () => {
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
     const msg = logger.warn.mock.calls[0]?.[0] as string;
-    expect(msg).toContain("promotion to global cancelled");
+    expect(msg).toContain("potential secrets detected");
     expect(msg).toContain("api_key");
-    expect(msg).toContain("PROJECT-LOCAL");
+    expect(msg).toContain("Promotion canceled");
 
-    // Ensure it was redirected to the local store to prevent leakage
-    expect(localStore.add).toHaveBeenCalledTimes(1);
+    // Ensure it was redirected to the local store
     expect(globalStore.add).not.toHaveBeenCalled();
+    expect(localStore.add).toHaveBeenCalledTimes(1);
   });
 
   it("should NOT log warn when entry stays local even if it looks like a secret", () => {
