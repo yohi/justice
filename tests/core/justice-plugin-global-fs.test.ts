@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { createGlobalFs, NoOpPersistence, type CreateGlobalFsResult } from "../../src/core/justice-plugin";
 import { WisdomStore } from "../../src/core/wisdom-store";
 
-let mockHomedir: string;
+let mockHomedir: string | undefined;
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
     ...actual,
-    homedir: (): string => mockHomedir || actual.homedir(),
+    homedir: (): string => (mockHomedir !== undefined ? mockHomedir : actual.homedir()),
   };
 });
 
@@ -48,7 +48,7 @@ describe("createGlobalFs", () => {
   });
 
   afterEach(async () => {
-    mockHomedir = "";
+    mockHomedir = undefined;
     mockMkdirError = undefined;
     vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
@@ -120,6 +120,15 @@ describe("createGlobalFs", () => {
       getEnv: () => "/usr/wisdom.json",
       expectSuccess: false,
       warnMatch: "points to a sensitive system directory",
+    },
+    {
+      name: "disable global store when HOME cannot be determined",
+      getEnv: () => undefined,
+      expectSuccess: false,
+      warnMatch: "Cannot determine home directory",
+      setupMock: (): void => {
+        mockHomedir = "";
+      },
     },
   ];
 

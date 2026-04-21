@@ -19,7 +19,14 @@ function makeTiered(opts?: {
   globalStore?: WisdomStore;
   globalDisplayPath?: string;
   logger?: ReturnType<typeof makeLogger>;
-}): TieredWisdomStore {
+}): {
+  tiered: TieredWisdomStore;
+  localStore: WisdomStore;
+  globalStore: WisdomStore;
+  localPersistence: WisdomPersistence;
+  globalPersistence: WisdomPersistence;
+  logger: ReturnType<typeof makeLogger>;
+} {
   const localStore = opts?.localStore ?? new WisdomStore(100);
   const globalStore = opts?.globalStore ?? new WisdomStore(500);
   const localPersistence = new WisdomPersistence(

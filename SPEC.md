@@ -513,7 +513,7 @@ jitter = random(0, baseDelay × 0.5)
 
 ### 5.15 `JusticePlugin` — オーケストレーター (Orchestrator)
 
-共有されるひとつの `WisdomStore` インスタンスを用いて、4つのフックハンドラ（`plan-bridge`, `task-feedback`, `compaction-protector`, `loop-handler`）を統括し繋ぎ合わせる中核となるクラスです。
+階層化された知見ストア（`TieredWisdomStore`）を用いて、4つのフックハンドラ（`plan-bridge`, `task-feedback`, `compaction-protector`, `loop-handler`）を統括し繋ぎ合わせる中核となるクラスです。プロジェクト固有のローカル知見とユーザー全体のグローバル知見をシームレスに扱い、Persistence（永続化）や秘密情報の検出・保護を管理します。
 
 ```typescript
 const plugin = new JusticePlugin(fileReader, fileWriter);
@@ -522,15 +522,15 @@ const response = await plugin.handleEvent(event);
 
 **イベントの流れ（ルーティング一覧）:**
 
-| 発生するイベントタイプ | 発火するハンドラ |
-|-----------|---------|
-| `Message` | `PlanBridge.handleMessage` |
-| `PreToolUse` | `PlanBridge.handlePreToolUse` |
-| `PostToolUse` | `TaskFeedbackHandler.handlePostToolUse` |
-| `Event` (compaction) | `CompactionProtector` |
-| `Event` (loop-detector) | `LoopDetectionHandler` |
+| 発生するイベントタイプ | 発火するハンドラ | 内容 |
+|-----------|---------|---|
+| `Message` | `PlanBridge.handleMessage` | プランの解析と委譲（Delegation）の検出 |
+| `PreToolUse` | `PlanBridge.handlePreToolUse` | プランの解析と委譲（Delegation）の検出 |
+| `PostToolUse` | `TaskFeedbackHandler.handlePostToolUse` | 学習内容の抽出（Learning Extraction）と保存、エラー分類・リトライ判定 |
+| `Event` (compaction) | `CompactionProtector` | コンテキスト圧縮時のプラン・学習内容の保護と再注入 |
+| `Event` (loop-detector) | `LoopDetectionHandler` | 無限ループ検出時の中断とタスク再分割の提案 |
 
-**状態の共有管理:** 単一の `WisdomStore` だけが共有状態として使われ、`PlanBridge`、`TaskFeedbackHandler`、`CompactionProtector` において参照や書き込みが行われます。
+**知見の管理:** `JusticePlugin` は内部で `TieredWisdomStore` を保持し、各ハンドラに共有します。知見の書き込み時にはヒューリスティックまたは明示的なスコープ指定に基づいて適切なストア（Local/Global）へ振り分け、読み込み時にはローカル優先のマージ挙動を提供します。
 
 ---
 

@@ -1,4 +1,4 @@
-import type { WisdomEntry, ErrorClass, WisdomStoreInterface } from "./types";
+import type { WisdomEntry, ErrorClass, WisdomStoreInterface, WisdomScope } from "./types";
 
 interface WisdomStoreData {
   entries: WisdomEntry[];
@@ -27,7 +27,7 @@ export class WisdomStore implements WisdomStoreInterface {
    */
   add(
     entry: Omit<WisdomEntry, "id" | "timestamp">,
-    _options?: { scope?: "local" | "global" },
+    _options?: { scope?: WisdomScope },
   ): WisdomEntry {
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),

@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-206%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-327%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 

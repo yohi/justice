@@ -1,4 +1,4 @@
-import { join, basename, dirname, isAbsolute, resolve } from "node:path";
+import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:path";
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
@@ -8,7 +8,6 @@ import type {
   HookResponse,
   EventEvent,
   CompactionPayload,
-  WisdomStoreInterface,
 } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
@@ -34,8 +33,22 @@ export interface CreateGlobalFsResult {
  */
 function isSensitivePath(path: string): boolean {
   const normalized = resolve(path);
+  const { root } = parse(normalized);
+
   // Root path is always sensitive
-  if (normalized === "/" || normalized === resolve("/")) return true;
+  if (normalized === root) return true;
+
+  if (process.platform === "win32") {
+    const lower = normalized.toLowerCase();
+    const sensitivePrefixes = [
+      "c:\\windows",
+      "c:\\program files",
+      "c:\\program files (x86)",
+      "c:\\users\\administrator",
+      "c:\\programdata",
+    ];
+    return sensitivePrefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix}${sep}`));
+  }
 
   const sensitivePrefixes = ["/etc", "/usr", "/bin", "/sbin", "/var", "/boot", "/dev", "/root"];
   return sensitivePrefixes.some(
@@ -69,7 +82,7 @@ export async function createGlobalFs(
         );
       }
 
-      if (absolutePath === "/" || isSensitivePath(absolutePath)) {
+      if (isSensitivePath(absolutePath)) {
         logger?.warn(
           `JUSTICE_GLOBAL_WISDOM_PATH points to a sensitive system directory ('${absolutePath}'). ` +
             "Global wisdom store disabled for security.",
@@ -104,7 +117,9 @@ export async function createGlobalFs(
 }
 
 export class NoOpPersistence extends WisdomPersistence {
-  constructor() {
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 100) {
     super(
       {
         async readFile(): Promise<string> {
@@ -113,8 +128,6 @@ export class NoOpPersistence extends WisdomPersistence {
         async fileExists(): Promise<boolean> {
           return false;
         },
-      },
-      {
         async writeFile(): Promise<void> {
           /* no-op */
         },
@@ -133,10 +146,11 @@ export class NoOpPersistence extends WisdomPersistence {
       },
       "wisdom.json",
     );
+    this.maxEntries = maxEntries;
   }
 
   override async load(): Promise<WisdomStore> {
-    return new WisdomStore();
+    return new WisdomStore(this.maxEntries);
   }
 
   override async save(_store: WisdomStore): Promise<void> {
@@ -185,7 +199,7 @@ export class JusticePlugin {
           options.globalFileSystem.fs,
           options.globalFileSystem.relativePath,
         )
-      : new NoOpPersistence();
+      : new NoOpPersistence(500);
 
     const globalDisplayPath =
       options.globalFileSystem && options.globalFileSystem.absolutePath
@@ -246,8 +260,8 @@ export class JusticePlugin {
    * Get the shared WisdomStore for persistence or inspection.
    * Preserved for backwards compatibility with existing external callers.
    */
-  getWisdomStore(): WisdomStoreInterface {
-    return this.wisdomStore;
+  getWisdomStore(): WisdomStore {
+    return this.wisdomStore as WisdomStore;
   }
 
   /**

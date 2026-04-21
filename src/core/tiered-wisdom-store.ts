@@ -145,16 +145,33 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   }
 
   async loadAll(): Promise<void> {
-    const [local, global] = await Promise.all([
+    const results = await Promise.allSettled([
       this.localPersistence.load(),
       this.globalPersistence.load(),
     ]);
 
-    this.localStore.setMaxEntries(local.getMaxEntries());
-    this.localStore.replaceEntries(local.getAllEntries());
+    const localResult = results[0];
+    const globalResult = results[1];
 
-    this.globalStore.setMaxEntries(global.getMaxEntries());
-    this.globalStore.replaceEntries(global.getAllEntries());
+    if (localResult.status === "fulfilled") {
+      const local = localResult.value;
+      this.localStore.setMaxEntries(local.getMaxEntries());
+      this.localStore.replaceEntries(local.getAllEntries());
+    } else {
+      if (this.logger) {
+        this.logger.warn(`Failed to load project-local wisdom: ${String(localResult.reason)}`);
+      }
+    }
+
+    if (globalResult.status === "fulfilled") {
+      const global = globalResult.value;
+      this.globalStore.setMaxEntries(global.getMaxEntries());
+      this.globalStore.replaceEntries(global.getAllEntries());
+    } else {
+      if (this.logger) {
+        this.logger.warn(`Failed to load user-global wisdom: ${String(globalResult.reason)}`);
+      }
+    }
   }
 
   async persistAll(): Promise<void> {
