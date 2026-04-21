@@ -1,10 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
-import * as fsPromises from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
-import * as os from "node:os";
 import { join } from "node:path";
-import { createGlobalFs, NoOpPersistence } from "../../src/core/justice-plugin";
+import { createGlobalFs, NoOpPersistence, type CreateGlobalFsResult } from "../../src/core/justice-plugin";
 import { WisdomStore } from "../../src/core/wisdom-store";
 
 let mockHomedir: string;
@@ -12,7 +10,7 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
     ...actual,
-    homedir: () => mockHomedir || actual.homedir(),
+    homedir: (): string => mockHomedir || actual.homedir(),
   };
 });
 
@@ -21,12 +19,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
-    mkdir: async (...args: any[]) => {
+    mkdir: async (...args: unknown[]): Promise<string | undefined> => {
       if (mockMkdirError) throw mockMkdirError;
-      return actual.mkdir(...args);
-    }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (actual.mkdir as any)(...args);
+    },
   };
 });
+
+interface TestCase {
+  name: string;
+  getEnv: (dir: string) => string | undefined;
+  expectedRelative?: string;
+  expectSuccess: boolean;
+  warnMatch?: string;
+  verify?: (result: CreateGlobalFsResult, envPath: string) => Promise<void>;
+  setupMock?: () => void;
+}
 
 describe("createGlobalFs", () => {
   let tempDir: string;
@@ -50,13 +59,13 @@ describe("createGlobalFs", () => {
     }
   });
 
-  it.each([
+  const testCases: TestCase[] = [
     {
       name: "honor JUSTICE_GLOBAL_WISDOM_PATH env var",
       getEnv: (dir: string) => join(dir, "inner", "wisdom.json"),
       expectedRelative: "wisdom.json",
       expectSuccess: true,
-      async verify(result: any, envPath: string) {
+      async verify(result: CreateGlobalFsResult, envPath: string): Promise<void> {
         await result.fs.writeFile(result.relativePath, "hello-globalfs");
         const onDisk = await readFile(envPath, "utf-8");
         expect(onDisk).toBe("hello-globalfs");
@@ -67,7 +76,7 @@ describe("createGlobalFs", () => {
       getEnv: () => undefined,
       expectedRelative: "wisdom.json",
       expectSuccess: true,
-      async verify(result: any) {
+      async verify(result: CreateGlobalFsResult): Promise<void> {
         await result.fs.writeFile(result.relativePath, "hello-default");
         const onDisk = await readFile(join(homedir(), ".justice", "wisdom.json"), "utf-8");
         expect(onDisk).toBe("hello-default");
@@ -78,7 +87,7 @@ describe("createGlobalFs", () => {
       getEnv: (dir: string) => join(dir, "forbidden", "wisdom.json"),
       expectSuccess: false,
       warnMatch: "Failed to initialize global wisdom store",
-      setupMock: () => {
+      setupMock: (): void => {
         mockMkdirError = new Error("EACCES");
       },
     },
@@ -112,31 +121,36 @@ describe("createGlobalFs", () => {
       expectSuccess: false,
       warnMatch: "points to a sensitive system directory",
     },
-  ])("should $name", async ({ getEnv, expectedRelative, expectSuccess, warnMatch, verify, setupMock }: any) => {
-    const envValue = getEnv(tempDir);
-    if (envValue === undefined) {
-      delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
-    } else {
-      process.env.JUSTICE_GLOBAL_WISDOM_PATH = envValue;
-    }
+  ];
 
-    const logger = { warn: vi.fn(), error: vi.fn() };
-    if (setupMock) setupMock();
-    const result = await createGlobalFs(logger);
-
-    if (expectSuccess) {
-      expect(result).not.toBeNull();
-      expect(result!.relativePath).toBe(expectedRelative);
-      expect(logger.warn).not.toHaveBeenCalled();
-      if (verify) {
-        await verify(result, envValue);
+  it.each(testCases)(
+    "should $name",
+    async ({ getEnv, expectedRelative, expectSuccess, warnMatch, verify, setupMock }) => {
+      const envValue = getEnv(tempDir);
+      if (envValue === undefined) {
+        delete process.env.JUSTICE_GLOBAL_WISDOM_PATH;
+      } else {
+        process.env.JUSTICE_GLOBAL_WISDOM_PATH = envValue;
       }
-    } else {
-      expect(result).toBeNull();
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn.mock.calls[0]?.[0]).toContain(warnMatch);
-    }
-  });
+
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      if (setupMock) setupMock();
+      const result = await createGlobalFs(logger);
+
+      if (expectSuccess) {
+        expect(result).not.toBeNull();
+        expect(result!.relativePath).toBe(expectedRelative);
+        expect(logger.warn).not.toHaveBeenCalled();
+        if (verify) {
+          await verify(result!, envValue || "");
+        }
+      } else {
+        expect(result).toBeNull();
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn.mock.calls[0]?.[0]).toContain(warnMatch);
+      }
+    },
+  );
 });
 
 describe("NoOpPersistence", () => {

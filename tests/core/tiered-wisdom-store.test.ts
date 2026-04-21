@@ -5,10 +5,12 @@ import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { SecretPatternDetector } from "../../src/core/secret-pattern-detector";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
-function makeLogger() {
+function makeLogger(): { warn: Mock; error: Mock } {
   return {
-    warn: vi.fn(),
-    error: vi.fn(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    warn: vi.fn() as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    error: vi.fn() as any,
   };
 }
 
@@ -17,7 +19,7 @@ function makeTiered(opts?: {
   globalStore?: WisdomStore;
   globalDisplayPath?: string;
   logger?: ReturnType<typeof makeLogger>;
-}) {
+}): TieredWisdomStore {
   const localStore = opts?.localStore ?? new WisdomStore(100);
   const globalStore = opts?.globalStore ?? new WisdomStore(500);
   const localPersistence = new WisdomPersistence(
