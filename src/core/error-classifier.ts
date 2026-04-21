@@ -150,8 +150,8 @@ export class ErrorClassifier {
       case "provider_config":
         return (
           "The task failed due to a provider configuration or account error (missing API key, " +
-          "invalid model, or exhausted billing credits/quota). This requires user intervention " +
-          "— check your environment variables and model configuration in `oh-my-openagent.jsonc`. " +
+          "or invalid model). This requires user intervention " +
+          "— check your environment variables and model configuration in `oh-my-opencode.jsonc`. " +
           "Auto-retry is disabled for this class."
         );
       case "syntax_error":
