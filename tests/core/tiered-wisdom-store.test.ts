@@ -105,7 +105,7 @@ describe("TieredWisdomStore — routing (add)", () => {
     },
   );
 
-  it("should log warn when an entry with secrets is targeted for global, but NOT cancel promotion", () => {
+  it("should log warn and cancel promotion when an entry with secrets is targeted for global", () => {
     tiered.add({
       taskId: "t",
       category: "success_pattern",
@@ -116,11 +116,11 @@ describe("TieredWisdomStore — routing (add)", () => {
     const msg = logger.warn.mock.calls[0]?.[0] as string;
     expect(msg).toContain("potential secrets detected");
     expect(msg).toContain("api_key");
-    expect(msg).not.toContain("cancelled");
+    expect(msg).toContain("Promotion canceled");
 
-    // Ensure it was NOT redirected to the local store
-    expect(globalStore.add).toHaveBeenCalledTimes(1);
-    expect(localStore.add).not.toHaveBeenCalled();
+    // Ensure it was redirected to the local store
+    expect(globalStore.add).not.toHaveBeenCalled();
+    expect(localStore.add).toHaveBeenCalledTimes(1);
   });
 
   it("should NOT log warn when entry stays local even if it looks like a secret", () => {

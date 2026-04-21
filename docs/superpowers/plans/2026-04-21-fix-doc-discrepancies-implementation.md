@@ -35,21 +35,21 @@
 - Modify: `src/core/tiered-wisdom-store.ts`
 - Modify: `tests/core/tiered-wisdom-store.test.ts`
 
-- [ ] **Step 1: Fix Secret Detection Logic & Logging**
+- [ ] **Step 1: Restore Secret Detection Fallback & Fix Logging**
 `src/core/tiered-wisdom-store.ts` を編集。
-  - `add` メソッドで秘密検知時に `this.localStore.add` へフォールバックしている箇所を削除し、常に `this.globalStore.add`（または指定スコープ）が実行されるようにする。
-  - 警告ログ内の `detected.map((m) => m.name)` を `detected` に修正。
+  - `add` メソッドで秘密検知時に `this.localStore.add` へフォールバックするロジックを確実に実装（または維持）し、グローバルへの漏洩を防ぐ。
+  - 警告ログ内で `detected.map((m) => m.name).join(", ")` が使用されていることを確認し、オブジェクト配列から正しくパターン名が表示されるようにする。
 
 - [ ] **Step 2: Update Tests**
 `tests/core/tiered-wisdom-store.test.ts` を編集。
-  - `should log warn and cancel promotion when an entry with secrets is targeted for global` テストケースを、書き込みがキャンセルされない（`globalStore.add` が呼ばれる）ことを期待するように修正。
+  - `should log warn and cancel promotion when an entry with secrets is targeted for global` テストケースが、正しく `globalStore.add` の呼び出しをキャンセルし、`localStore.add` が呼ばれることを確認するように修正。
 
 - [ ] **Step 3: Run Tests**
 `bun run test tests/core/tiered-wisdom-store.test.ts` を実行し、PASSすることを確認する。
 
 ---
 
-## Task 4: Final Verification
+## Task 3: Final Verification
 
 - [ ] **Step 1: Run All Checks**
 `bun run test && bun run typecheck && bun run lint` を実行し、全件PASSすることを確認する。

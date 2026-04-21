@@ -17,28 +17,21 @@
 
 | 項目 | 修正内容 |
 |---|---|
-| TieredWisdomStore 秘密検知 | `add` メソッドにおいて秘密が検知されても、`globalStore.add` を実行する（フォールバックを削除）。 |
-| 警告ログバグ | `detected` 配列の要素（string）をそのまま表示するように修正。 |
+| TieredWisdomStore 秘密検知 | `add` メソッドにおいて秘密が検知された場合、`globalStore.add` をキャンセルし、`localStore.add` へフォールバックすることで機密情報の漏洩を防ぐ。 |
+| 警告ログ表示 | `SecretPatternDetector.scan()` がオブジェクト配列を返すため、`detected.map((m) => m.name).join(", ")` を使用してパターン名を正しく表示する。 |
 | エスカレーションメッセージ | `ErrorClassifier.getEscalationMessage` の `provider_transient` ケースを設計書（2026-04-19-error-classifier...）の文言に合わせる。 |
 
 ## 3. Implementation Details
 
 ### TieredWisdomStore.ts
 ```typescript
-// 修正前
+// 修正後
 if (detected.length > 0) {
   const warnMessage = `... ${detected.map((m) => m.name).join(", ")} ...`;
   // ... logging ...
-  return this.localStore.add(entry);
+  return this.localStore.add(entry); // 秘密検知時はローカルへフォールバック
 }
 return this.globalStore.add(entry);
-
-// 修正後
-if (detected.length > 0) {
-  const warnMessage = `... ${detected.join(", ")} ...`; // 修正
-  // ... logging ...
-}
-return this.globalStore.add(entry); // 常にグローバル（または指定されたスコープ）へ保存
 ```
 
 ### ErrorClassifier.ts
