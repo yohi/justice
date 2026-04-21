@@ -120,7 +120,7 @@ export class NoOpPersistence extends WisdomPersistence {
   private readonly maxEntries: number;
 
   constructor(maxEntries = 100) {
-    const noopReader = {
+    const noopReader: FileReader = {
       async readFile(): Promise<string> {
         return "{}";
       },
@@ -128,7 +128,7 @@ export class NoOpPersistence extends WisdomPersistence {
         return false;
       },
     };
-    const noopWriter = {
+    const noopWriter: FileWriter = {
       async writeFile(): Promise<void> {
         /* no-op */
       },

@@ -1,4 +1,5 @@
-import type { WisdomEntry, ErrorClass, WisdomStoreInterface, WisdomScope } from "./types";
+import type { WisdomEntry, ErrorClass, WisdomStoreInterface } from "./types";
+import type { WisdomScope } from "./tiered-wisdom-store";
 
 interface WisdomStoreData {
   entries: WisdomEntry[];
