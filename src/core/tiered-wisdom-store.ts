@@ -1,4 +1,4 @@
-import type { ErrorClass, WisdomEntry, WisdomCategory } from "./types";
+import type { ErrorClass, WisdomEntry, WisdomCategory, WisdomStoreInterface } from "./types";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -36,7 +36,7 @@ const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
  * heuristics (overridable via {scope}). Reads prefer the local store, filling
  * the remainder from global.
  */
-export class TieredWisdomStore {
+export class TieredWisdomStore implements WisdomStoreInterface {
   private readonly localStore: WisdomStore;
   private readonly globalStore: WisdomStore;
   private readonly localPersistence: WisdomPersistence;

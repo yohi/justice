@@ -279,3 +279,14 @@ export type WisdomCategory =
   | "failure_gotcha" // 失敗時の落とし穴
   | "design_decision" // 重要な設計判断
   | "environment_quirk"; // 環境固有の注意事項
+
+/**
+ * WisdomStore のインターフェース。
+ * ローカルストアと階層化ストアの両方で共通の操作を定義します。
+ */
+export interface WisdomStoreInterface {
+  add(entry: Omit<WisdomEntry, "id" | "timestamp">): WisdomEntry;
+  getByTaskId(taskId: string): WisdomEntry[];
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[];
+  formatForInjection(entries: WisdomEntry[]): string;
+}

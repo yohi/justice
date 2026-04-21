@@ -1,11 +1,11 @@
-import type { WisdomEntry, ErrorClass } from "./types";
+import type { WisdomEntry, ErrorClass, WisdomStoreInterface } from "./types";
 
 interface WisdomStoreData {
   entries: WisdomEntry[];
   maxEntries: number;
 }
 
-export class WisdomStore {
+export class WisdomStore implements WisdomStoreInterface {
   private entries: WisdomEntry[] = [];
   private _maxEntries = 0;
 
