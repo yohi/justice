@@ -41,10 +41,19 @@ export function createMockFileWriter(): MockFileWriter {
     }),
     mkdir: vi.fn(async (path: string, recursive: boolean) => {
       if (recursive) {
-        const parts = path.split("/");
-        let current = "";
+        const isAbsolute = path.startsWith("/");
+        const parts = path.split("/").filter((p) => p !== "");
+        let current = isAbsolute ? "/" : "";
+        if (isAbsolute) directories.add("/");
+
         for (const part of parts) {
-          current = current ? `${current}/${part}` : part;
+          if (current === "/") {
+            current = `/${part}`;
+          } else if (current === "") {
+            current = part;
+          } else {
+            current = `${current}/${part}`;
+          }
           directories.add(current);
         }
         return;
@@ -86,6 +95,19 @@ export interface MockFileSystem extends FileReader, FileWriter {
  */
 export function createMockFileSystem(initialFiles: Record<string, string> = {}): MockFileSystem {
   const writer = createMockFileWriter();
+
+  // Restore directory structure from initialFiles
+  for (const filePath of Object.keys(initialFiles)) {
+    let dir = dirname(filePath);
+    while (dir !== "." && dir !== "/") {
+      writer.directories.add(dir);
+      dir = dirname(dir);
+    }
+    if (dir === "/") {
+      writer.directories.add("/");
+    }
+  }
+
   Object.assign(writer.writtenFiles, initialFiles);
 
   const mockFs: MockFileSystem = {
