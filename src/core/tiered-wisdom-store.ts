@@ -159,7 +159,11 @@ export class TieredWisdomStore implements WisdomStoreInterface {
       this.localStore.replaceEntries(local.getAllEntries());
     } else {
       if (this.logger) {
-        this.logger.warn(`Failed to load project-local wisdom: ${String(localResult.reason)}`);
+        try {
+          this.logger.warn(`Failed to load project-local wisdom: ${String(localResult.reason)}`);
+        } catch {
+          /* ignore logging errors */
+        }
       }
     }
 
@@ -169,7 +173,11 @@ export class TieredWisdomStore implements WisdomStoreInterface {
       this.globalStore.replaceEntries(global.getAllEntries());
     } else {
       if (this.logger) {
-        this.logger.warn(`Failed to load user-global wisdom: ${String(globalResult.reason)}`);
+        try {
+          this.logger.warn(`Failed to load user-global wisdom: ${String(globalResult.reason)}`);
+        } catch {
+          /* ignore logging errors */
+        }
       }
     }
   }

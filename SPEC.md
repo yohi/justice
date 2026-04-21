@@ -559,7 +559,8 @@ new TieredWisdomStore({
 - `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
 - `getByTaskId(taskId)` — 両 store の該当エントリを連結。
 - `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。
-- `loadAll()` / `persistAll()` — 両 store を `WisdomPersistence.saveAtomic` で並列に atomic 永続化。
+- `loadAll()` — 永続ストレージから両 store を復元する処理。
+- `persistAll()` — `WisdomPersistence.saveAtomic` を用いて、両 store を並列かつ atomic に永続化する。
 
 **振り分けマトリクス:**
 

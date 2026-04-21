@@ -120,32 +120,32 @@ export class NoOpPersistence extends WisdomPersistence {
   private readonly maxEntries: number;
 
   constructor(maxEntries = 100) {
-    super(
-      {
-        async readFile(): Promise<string> {
-          return "{}";
-        },
-        async fileExists(): Promise<boolean> {
-          return false;
-        },
-        async writeFile(): Promise<void> {
-          /* no-op */
-        },
-        async rename(): Promise<void> {
-          /* no-op */
-        },
-        async deleteFile(): Promise<void> {
-          /* no-op */
-        },
-        async mkdir(): Promise<void> {
-          /* no-op */
-        },
-        async rmdir(): Promise<void> {
-          /* no-op */
-        },
+    const noopReader = {
+      async readFile(): Promise<string> {
+        return "{}";
       },
-      "wisdom.json",
-    );
+      async fileExists(): Promise<boolean> {
+        return false;
+      },
+    };
+    const noopWriter = {
+      async writeFile(): Promise<void> {
+        /* no-op */
+      },
+      async rename(): Promise<void> {
+        /* no-op */
+      },
+      async deleteFile(): Promise<void> {
+        /* no-op */
+      },
+      async mkdir(): Promise<void> {
+        /* no-op */
+      },
+      async rmdir(): Promise<void> {
+        /* no-op */
+      },
+    };
+    super(noopReader, noopWriter, "wisdom.json");
     this.maxEntries = maxEntries;
   }
 
@@ -231,7 +231,11 @@ export class JusticePlugin {
     try {
       await this.tieredWisdomStore.loadAll();
     } catch (error) {
-      this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);
+      try {
+        this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);
+      } catch {
+        /* Ignore logging errors to preserve fail-open behavior */
+      }
     }
   }
 
@@ -261,7 +265,7 @@ export class JusticePlugin {
    * Preserved for backwards compatibility with existing external callers.
    */
   getWisdomStore(): WisdomStore {
-    return this.wisdomStore as WisdomStore;
+    return this.wisdomStore;
   }
 
   /**
