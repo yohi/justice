@@ -101,7 +101,9 @@ export function createMockFileSystem(initialFiles: Record<string, string> = {}):
     let dir = dirname(filePath);
     while (dir !== "." && dir !== "/") {
       writer.directories.add(dir);
-      dir = dirname(dir);
+      const parent = dirname(dir);
+      if (parent === dir) break; // Avoid infinite loop on Windows (e.g., 'C:\')
+      dir = parent;
     }
     if (dir === "/") {
       writer.directories.add("/");

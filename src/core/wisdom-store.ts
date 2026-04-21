@@ -25,7 +25,10 @@ export class WisdomStore implements WisdomStoreInterface {
    * Adds a new learning entry to the store.
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
-  add(entry: Omit<WisdomEntry, "id" | "timestamp">): WisdomEntry {
+  add(
+    entry: Omit<WisdomEntry, "id" | "timestamp">,
+    _options?: { scope?: "local" | "global" },
+  ): WisdomEntry {
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),

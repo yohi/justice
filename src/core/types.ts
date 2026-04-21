@@ -285,7 +285,10 @@ export type WisdomCategory =
  * ローカルストアと階層化ストアの両方で共通の操作を定義します。
  */
 export interface WisdomStoreInterface {
-  add(entry: Omit<WisdomEntry, "id" | "timestamp">): WisdomEntry;
+  add(
+    entry: Omit<WisdomEntry, "id" | "timestamp">,
+    options?: { scope?: "local" | "global" },
+  ): WisdomEntry;
   getByTaskId(taskId: string): WisdomEntry[];
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[];
   formatForInjection(entries: WisdomEntry[]): string;
