@@ -1,4 +1,4 @@
-import { join, basename, dirname, isAbsolute } from "node:path";
+import { join, basename, dirname, isAbsolute, resolve } from "node:path";
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
@@ -8,12 +8,13 @@ import type {
   HookResponse,
   EventEvent,
   CompactionPayload,
+  WisdomStoreInterface,
 } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
 import { LoopDetectionHandler } from "../hooks/loop-handler";
-import { TaskSplitter } from "./task-splitter";
+import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { TieredWisdomStore } from "./tiered-wisdom-store";
@@ -43,8 +44,17 @@ export async function createGlobalFs(
         );
         return null;
       }
-      globalRoot = dirname(envPath);
-      relativePath = basename(envPath);
+      
+      // Sanitize: resolve to remove any '..' and check
+      const normalizedPath = resolve(envPath);
+      if (normalizedPath !== envPath) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH contained relative components and was normalized to '${normalizedPath}'.`,
+        );
+      }
+      
+      globalRoot = dirname(normalizedPath);
+      relativePath = basename(normalizedPath);
     } else {
       const home = homedir();
       if (!home) {
@@ -166,10 +176,23 @@ export class JusticePlugin {
       logger: options.logger,
     });
 
-    this.planBridge = new PlanBridge(fileReader, this.wisdomStore);
-    this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.wisdomStore);
-    this.compactionProtector = new CompactionProtector(this.wisdomStore);
+    // Use tieredWisdomStore for handlers that need cross-project context
+    this.planBridge = new PlanBridge(fileReader, this.tieredWisdomStore);
+    this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
+    this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
+  }
+
+  /**
+   * Initializes the plugin by loading wisdom from persistence.
+   * This should be called before handling events.
+   */
+  async initialize(): Promise<void> {
+    try {
+      await this.tieredWisdomStore.loadAll();
+    } catch (error) {
+      this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);
+    }
   }
 
   /**
@@ -197,7 +220,7 @@ export class JusticePlugin {
    * Get the shared WisdomStore for persistence or inspection.
    * Preserved for backwards compatibility with existing external callers.
    */
-  getWisdomStore(): WisdomStore {
+  getWisdomStore(): WisdomStoreInterface {
     return this.wisdomStore;
   }
 
@@ -227,6 +250,14 @@ export class JusticePlugin {
    */
   getCompactionProtector(): CompactionProtector {
     return this.compactionProtector;
+  }
+
+  /**
+   * Get the TaskFeedbackHandler instance (preserved for backwards compatibility).
+   * Note: This is an alias for getTaskFeedback() but using TaskFeedbackHandler return type.
+   */
+  getTaskFeedbackHandler(): TaskFeedbackHandler {
+    return this.taskFeedback;
   }
 
   /**

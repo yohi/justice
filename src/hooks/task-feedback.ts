@@ -5,6 +5,7 @@ import type {
   HookResponse,
   FeedbackAction,
   TaskFeedback,
+  WisdomStoreInterface,
 } from "../core/types";
 import { FeedbackFormatter } from "../core/feedback-formatter";
 import { ErrorClassifier } from "../core/error-classifier";
@@ -36,11 +37,11 @@ export class TaskFeedbackHandler {
   private readonly parser: PlanParser;
   private readonly retryPolicy: SmartRetryPolicy;
   private readonly splitter: TaskSplitter;
-  private readonly wisdomStore: WisdomStore;
+  private readonly wisdomStore: WisdomStoreInterface;
   private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
 
-  constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStore) {
+  constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
     this.fileWriter = fileWriter;
     this.formatter = new FeedbackFormatter();
@@ -55,7 +56,7 @@ export class TaskFeedbackHandler {
   /**
    * Returns the internal WisdomStore for external persistence or inspection.
    */
-  getWisdomStore(): WisdomStore {
+  getWisdomStore(): WisdomStoreInterface {
     return this.wisdomStore;
   }
 
