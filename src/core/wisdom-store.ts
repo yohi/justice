@@ -1,11 +1,11 @@
-import type { WisdomEntry, ErrorClass } from "./types";
+import type { WisdomEntry, ErrorClass, WisdomStoreInterface, WisdomScope } from "./types";
 
 interface WisdomStoreData {
   entries: WisdomEntry[];
   maxEntries: number;
 }
 
-export class WisdomStore {
+export class WisdomStore implements WisdomStoreInterface {
   private entries: WisdomEntry[] = [];
   private _maxEntries = 0;
 
@@ -25,7 +25,10 @@ export class WisdomStore {
    * Adds a new learning entry to the store.
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
-  add(entry: Omit<WisdomEntry, "id" | "timestamp">): WisdomEntry {
+  add(
+    entry: Omit<WisdomEntry, "id" | "timestamp">,
+    _options?: { scope?: WisdomScope },
+  ): WisdomEntry {
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),

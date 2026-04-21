@@ -17,10 +17,12 @@ export function createMockFileReader(files: Record<string, string>): FileReader 
   };
 }
 
-export function createMockFileWriter(): FileWriter & {
+export interface MockFileWriter extends FileWriter {
   writtenFiles: Record<string, string>;
   directories: Set<string>;
-} {
+}
+
+export function createMockFileWriter(): MockFileWriter {
   const writtenFiles: Record<string, string> = {};
   const directories = new Set<string>();
   return {
@@ -39,10 +41,19 @@ export function createMockFileWriter(): FileWriter & {
     }),
     mkdir: vi.fn(async (path: string, recursive: boolean) => {
       if (recursive) {
-        const parts = path.split("/");
-        let current = "";
+        const isAbsolute = path.startsWith("/");
+        const parts = path.split("/").filter((p) => p !== "");
+        let current = isAbsolute ? "/" : "";
+        if (isAbsolute) directories.add("/");
+
         for (const part of parts) {
-          current = current ? `${current}/${part}` : part;
+          if (current === "/") {
+            current = `/${part}`;
+          } else if (current === "") {
+            current = part;
+          } else {
+            current = `${current}/${part}`;
+          }
           directories.add(current);
         }
         return;
@@ -71,4 +82,49 @@ export function createMockFileWriter(): FileWriter & {
       }
     }),
   };
+}
+
+export interface MockFileSystem extends FileReader, FileWriter {
+  writtenFiles: Record<string, string>;
+  directories: Set<string>;
+}
+
+/**
+ * Creates a mock that implements both FileReader and FileWriter.
+ * This is useful for TieredWisdomStore tests where the same FS object is used for both.
+ */
+export function createMockFileSystem(initialFiles: Record<string, string> = {}): MockFileSystem {
+  const writer = createMockFileWriter();
+
+  // Restore directory structure from initialFiles
+  for (const filePath of Object.keys(initialFiles)) {
+    let dir = dirname(filePath);
+    while (dir !== "." && dir !== "/") {
+      writer.directories.add(dir);
+      const parent = dirname(dir);
+      if (parent === dir) break; // Avoid infinite loop on Windows (e.g., 'C:\')
+      dir = parent;
+    }
+    if (dir === "/") {
+      writer.directories.add("/");
+    }
+  }
+
+  Object.assign(writer.writtenFiles, initialFiles);
+
+  const mockFs: MockFileSystem = {
+    ...writer,
+    readFile: vi.fn(async (path: string) => {
+      const content = writer.writtenFiles[path];
+      if (content === undefined) {
+        const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return content;
+    }),
+    fileExists: vi.fn(async (path: string) => path in writer.writtenFiles),
+  };
+
+  return mockFs;
 }

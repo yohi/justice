@@ -1,5 +1,6 @@
-import { join } from "node:path";
+import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:path";
 import { homedir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import type {
   FileReader,
   FileWriter,
@@ -12,21 +13,154 @@ import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
 import { LoopDetectionHandler } from "../hooks/loop-handler";
-import { TaskSplitter } from "./task-splitter";
+import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
+import { WisdomPersistence } from "./wisdom-persistence";
+import { TieredWisdomStore } from "./tiered-wisdom-store";
+import { SecretPatternDetector } from "./secret-pattern-detector";
+import { NodeFileSystem } from "../runtime/node-file-system";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function createGlobalFs(): { justiceDir: string; wisdomPath: string } | null {
-  const homeDir = homedir() || process.env.HOME || process.env.USERPROFILE || null;
-  if (!homeDir) {
+export interface CreateGlobalFsResult {
+  readonly fs: FileReader & FileWriter;
+  readonly relativePath: string;
+  readonly absolutePath: string;
+}
+
+/**
+ * Validates if a path points to a sensitive system directory.
+ */
+function isSensitivePath(path: string): boolean {
+  const normalized = resolve(path);
+  const { root } = parse(normalized);
+
+  // Root path is always sensitive
+  if (normalized === root) return true;
+
+  if (process.platform === "win32") {
+    const lower = normalized.toLowerCase();
+    const sensitivePrefixes = [
+      "c:\\windows",
+      "c:\\program files",
+      "c:\\program files (x86)",
+      "c:\\users\\administrator",
+      "c:\\programdata",
+    ];
+    return sensitivePrefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix}${sep}`));
+  }
+
+  const sensitivePrefixes = ["/etc", "/usr", "/bin", "/sbin", "/var", "/boot", "/dev", "/root"];
+  return sensitivePrefixes.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`),
+  );
+}
+
+export async function createGlobalFs(
+  logger?: JusticePluginOptions["logger"],
+): Promise<CreateGlobalFsResult | null> {
+  try {
+    const envPath = process.env.JUSTICE_GLOBAL_WISDOM_PATH;
+    let globalRoot: string;
+    let relativePath: string;
+    let absolutePath: string;
+
+    if (envPath !== undefined) {
+      if (!envPath || !isAbsolute(envPath)) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH must be an absolute path; got '${envPath}'. ` +
+            "Global wisdom store disabled.",
+        );
+        return null;
+      }
+
+      // Sanitize: resolve to remove any '..' and check
+      absolutePath = resolve(envPath);
+      if (absolutePath !== envPath) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH contained relative components and was normalized to '${absolutePath}'.`,
+        );
+      }
+
+      if (isSensitivePath(absolutePath)) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH points to a sensitive system directory ('${absolutePath}'). ` +
+            "Global wisdom store disabled for security.",
+        );
+        return null;
+      }
+
+      globalRoot = dirname(absolutePath);
+      relativePath = basename(absolutePath);
+    } else {
+      const home = homedir();
+      if (!home) {
+        logger?.warn(
+          "Cannot determine home directory; global wisdom store disabled. " +
+            "Set JUSTICE_GLOBAL_WISDOM_PATH to enable.",
+        );
+        return null;
+      }
+      globalRoot = join(home, ".justice");
+      relativePath = "wisdom.json";
+      absolutePath = join(globalRoot, relativePath);
+    }
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    await mkdir(globalRoot, { recursive: true });
+    return { fs: new NodeFileSystem(globalRoot), relativePath, absolutePath };
+  } catch (error) {
+    logger?.warn(
+      `Failed to initialize global wisdom store: ${String(error)}; falling back to local-only.`,
+    );
     return null;
   }
-  const justiceDir = join(homeDir, ".justice");
-  return {
-    justiceDir: justiceDir,
-    wisdomPath: join(justiceDir, "wisdom.json"),
-  };
+}
+
+export class NoOpPersistence extends WisdomPersistence {
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 100) {
+    const noopReader: FileReader = {
+      async readFile(): Promise<string> {
+        return "{}";
+      },
+      async fileExists(): Promise<boolean> {
+        return false;
+      },
+    };
+    const noopWriter: FileWriter = {
+      async writeFile(): Promise<void> {
+        /* no-op */
+      },
+      async rename(): Promise<void> {
+        /* no-op */
+      },
+      async deleteFile(): Promise<void> {
+        /* no-op */
+      },
+      async mkdir(): Promise<void> {
+        /* no-op */
+      },
+      async rmdir(): Promise<void> {
+        /* no-op */
+      },
+    };
+    super(noopReader, noopWriter, "wisdom.json");
+    this.maxEntries = maxEntries;
+  }
+
+  override async load(): Promise<WisdomStore> {
+    return new WisdomStore(this.maxEntries);
+  }
+
+  override async save(_store: WisdomStore): Promise<void> {
+    /* no-op */
+  }
+
+  override async saveAtomic(_store: WisdomStore): Promise<void> {
+    /* no-op */
+  }
 }
 
 export interface JusticePluginOptions {
@@ -35,6 +169,11 @@ export interface JusticePluginOptions {
     warn(message: string, ...args: unknown[]): void;
   };
   readonly onError?: (error: unknown) => void;
+  readonly globalFileSystem?: {
+    readonly fs: FileReader & FileWriter;
+    readonly relativePath: string;
+    readonly absolutePath?: string;
+  };
 }
 
 export class JusticePlugin {
@@ -44,16 +183,61 @@ export class JusticePlugin {
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
   private readonly wisdomStore: WisdomStore;
+  private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
     this.options = options;
-    this.wisdomStore = new WisdomStore();
-    this.planBridge = new PlanBridge(fileReader, this.wisdomStore);
-    this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.wisdomStore);
-    this.compactionProtector = new CompactionProtector(this.wisdomStore);
+
+    this.wisdomStore = new WisdomStore(100);
+    const localPersistence = new WisdomPersistence(fileReader, fileWriter, ".justice/wisdom.json");
+
+    const globalStore = new WisdomStore(500);
+    const globalPersistence = options.globalFileSystem
+      ? new WisdomPersistence(
+          options.globalFileSystem.fs,
+          options.globalFileSystem.fs,
+          options.globalFileSystem.relativePath,
+        )
+      : new NoOpPersistence(500);
+
+    const globalDisplayPath =
+      options.globalFileSystem && options.globalFileSystem.absolutePath
+        ? options.globalFileSystem.absolutePath
+        : "~/.justice/wisdom.json";
+
+    this.tieredWisdomStore = new TieredWisdomStore({
+      localStore: this.wisdomStore,
+      globalStore,
+      localPersistence,
+      globalPersistence,
+      secretDetector: new SecretPatternDetector(),
+      globalDisplayPath,
+      logger: options.logger,
+    });
+
+    // Use tieredWisdomStore for handlers that need cross-project context
+    this.planBridge = new PlanBridge(fileReader, this.tieredWisdomStore);
+    this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
+    this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
+  }
+
+  /**
+   * Initializes the plugin by loading wisdom from persistence.
+   * This should be called before handling events.
+   */
+  async initialize(): Promise<void> {
+    try {
+      await this.tieredWisdomStore.loadAll();
+    } catch (error) {
+      try {
+        this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);
+      } catch {
+        /* Ignore logging errors to preserve fail-open behavior */
+      }
+    }
   }
 
   /**
@@ -79,9 +263,17 @@ export class JusticePlugin {
 
   /**
    * Get the shared WisdomStore for persistence or inspection.
+   * Preserved for backwards compatibility with existing external callers.
    */
   getWisdomStore(): WisdomStore {
     return this.wisdomStore;
+  }
+
+  /**
+   * Get the TieredWisdomStore composing local + global wisdom.
+   */
+  getTieredWisdomStore(): TieredWisdomStore {
+    return this.tieredWisdomStore;
   }
 
   /**
@@ -103,6 +295,14 @@ export class JusticePlugin {
    */
   getCompactionProtector(): CompactionProtector {
     return this.compactionProtector;
+  }
+
+  /**
+   * Get the TaskFeedbackHandler instance (preserved for backwards compatibility).
+   * Note: This is an alias for getTaskFeedback() but using TaskFeedbackHandler return type.
+   */
+  getTaskFeedbackHandler(): TaskFeedbackHandler {
+    return this.taskFeedback;
   }
 
   /**

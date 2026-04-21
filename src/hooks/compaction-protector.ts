@@ -1,6 +1,5 @@
-import type { ProtectedContext } from "../core/types";
+import type { ProtectedContext, WisdomStoreInterface } from "../core/types";
 import { PlanParser } from "../core/plan-parser";
-import { WisdomStore } from "../core/wisdom-store";
 
 interface SnapshotInput {
   planContent: string;
@@ -12,9 +11,9 @@ interface SnapshotInput {
 export class CompactionProtector {
   private activePlanPath: string | null = null;
   private readonly parser: PlanParser;
-  private readonly wisdomStore: WisdomStore | null;
+  private readonly wisdomStore: WisdomStoreInterface | null;
 
-  constructor(wisdomStore?: WisdomStore) {
+  constructor(wisdomStore?: WisdomStoreInterface) {
     this.parser = new PlanParser();
     this.wisdomStore = wisdomStore ?? null;
   }

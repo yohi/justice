@@ -2,9 +2,22 @@
 
 ## Unreleased
 
+### ⚠ BREAKING CHANGES
+
+* **core:** The `createGlobalFs()` API in `src/index.ts` has been changed from synchronous to asynchronous. Its return type is now `Promise<CreateGlobalFsResult | null>` instead of `{ justiceDir: string; wisdomPath: string } | null`.
+
 ### Features
 
-* **error-classifier:** recognize provider-side transient and config errors (rate limit, quota, 5xx, missing API key, model not found). Patterns ported from oh-my-openagent@3.17.4 runtime-fallback. Justice itself does not retry these; actual retry handling is delegated to OmO's `runtime-fallback`.
+- **Cross-Project Wisdom Store**: introduce `TieredWisdomStore` and `SecretPatternDetector`. Wisdom entries categorized as `environment_quirk` or `success_pattern` are auto-promoted to a user-global store at `~/.justice/wisdom.json` (configurable via `JUSTICE_GLOBAL_WISDOM_PATH`), while `failure_gotcha` and `design_decision` remain project-local. However, any entry flagged by `SecretPatternDetector` as containing secrets is **blocked** from global promotion and saved only to the local store for safety. Callers can override routing via `{scope: "local" | "global"}`. Reads prefer the local store and fill the remainder from the global store.
+- `FileWriter.rename(from, to)` and `FileWriter.deleteFile(path)` interfaces plus `NodeFileSystem.rename()` / `NodeFileSystem.deleteFile()` implementations (path-traversal safe).
+- `WisdomStore.getAllEntries()`, `WisdomStore.getMaxEntries()`, and `WisdomStore.fromEntries()` (pure additions).
+- `WisdomPersistence.saveAtomic()`: load-merge-write using a temp file and atomic rename (existing `save()` preserved for backwards compatibility).
+- `JusticePlugin.getTieredWisdomStore()`: exposes the tiered store. `getWisdomStore()` remains unchanged and returns the local store.
+
+### Notes
+
+- Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
+- Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
 ## [1.1.0](https://github.com/yohi/justice/compare/v1.0.0...v1.1.0) (2026-04-19)
 

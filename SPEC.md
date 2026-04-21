@@ -2,7 +2,7 @@
 
 > **バージョン**: 0.1.0
 > **ステータス**: プロダクションレディ (Phase 7 完了)
-> **最終更新日**: 2026-03-24
+> **最終更新日**: 2026-04-21
 
 ## 1. 概要
 
@@ -513,7 +513,7 @@ jitter = random(0, baseDelay × 0.5)
 
 ### 5.15 `JusticePlugin` — オーケストレーター (Orchestrator)
 
-共有されるひとつの `WisdomStore` インスタンスを用いて、4つのフックハンドラ（`plan-bridge`, `task-feedback`, `compaction-protector`, `loop-handler`）を統括し繋ぎ合わせる中核となるクラスです。
+階層化された知見ストア（`TieredWisdomStore`）を用いて、4つのフックハンドラ（`plan-bridge`, `task-feedback`, `compaction-protector`, `loop-handler`）を統括し繋ぎ合わせる中核となるクラスです。プロジェクト固有のローカル知見とユーザー全体のグローバル知見をシームレスに扱い、Persistence（永続化）や秘密情報の検出・保護を管理します。
 
 ```typescript
 const plugin = new JusticePlugin(fileReader, fileWriter);
@@ -522,15 +522,56 @@ const response = await plugin.handleEvent(event);
 
 **イベントの流れ（ルーティング一覧）:**
 
-| 発生するイベントタイプ | 発火するハンドラ |
-|-----------|---------|
-| `Message` | `PlanBridge.handleMessage` |
-| `PreToolUse` | `PlanBridge.handlePreToolUse` |
-| `PostToolUse` | `TaskFeedbackHandler.handlePostToolUse` |
-| `Event` (compaction) | `CompactionProtector` |
-| `Event` (loop-detector) | `LoopDetectionHandler` |
+| 発生するイベントタイプ | 発火するハンドラ | 内容 |
+|-----------|---------|---|
+| `Message` | `PlanBridge.handleMessage` | プランの解析と委譲（Delegation）の検出 |
+| `PreToolUse` | `PlanBridge.handlePreToolUse` | プランの解析と委譲（Delegation）の検出 |
+| `PostToolUse` | `TaskFeedbackHandler.handlePostToolUse` | 学習内容の抽出（Learning Extraction）と保存、エラー分類・リトライ判定 |
+| `Event` (compaction) | `CompactionProtector` | コンテキスト圧縮時のプラン・学習内容の保護と再注入 |
+| `Event` (loop-detector) | `LoopDetectionHandler` | 無限ループ検出時の中断とタスク再分割の提案 |
 
-**状態の共有管理:** 単一の `WisdomStore` だけが共有状態として使われ、`PlanBridge`、`TaskFeedbackHandler`、`CompactionProtector` において参照や書き込みが行われます。
+**知見の管理:** `JusticePlugin` は内部で `TieredWisdomStore` を保持し、各ハンドラに共有します。知見の書き込み時にはヒューリスティックまたは明示的なスコープ指定に基づいて適切なストア（Local/Global）へ振り分け、読み込み時にはローカル優先のマージ挙動を提供します。
+
+---
+
+### 5.16 `TieredWisdomStore` — Cross-Project Wisdom Composition
+
+`TieredWisdomStore` は 2 つの独立した `WisdomStore` インスタンス
+（project-local / user-global）を合成し、書き込みの振り分け・読み込みのマージ・秘密検出を提供する。
+
+**Constructor:**
+
+```typescript
+new TieredWisdomStore({
+  localStore: WisdomStore,
+  globalStore: WisdomStore,
+  localPersistence: WisdomPersistence,
+  globalPersistence: WisdomPersistence,
+  secretDetector?: SecretPatternDetector,
+  globalDisplayPath?: string,
+  logger?: { warn(msg: string, ...args: unknown[]): void },
+})
+```
+
+**主な API:**
+
+- `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` でマッチした場合は、Global への昇格をブロックし、警告ログを出力した上で Local ストアに保存する。
+- `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
+- `getByTaskId(taskId)` — 両 store の該当エントリを連結。
+- `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。
+- `loadAll()` — 永続ストレージから両 store を復元する処理。
+- `persistAll()` — `WisdomPersistence.saveAtomic` を用いて、両 store を並列かつ atomic に永続化する。
+
+**振り分けマトリクス:**
+
+| Category | Default scope |
+|---|---|
+| `environment_quirk` | global |
+| `success_pattern` | global |
+| `failure_gotcha` | local |
+| `design_decision` | local |
+
+**ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぐ。
 
 ---
 
@@ -711,11 +752,11 @@ justice/
 
 | 解析レイヤー | 対象となるファイル数 | サンプルテスト件数 |
 |-------|-------|-------|
-| コアロジック部 | 17 ファイル | 約 150 件 |
-| フック・ハンドラ群 | 4 ファイル | 約 30 件 |
+| コアロジック部 | 22 ファイル | 約 250 件 |
+| フック・ハンドラ群 | 4 ファイル | 約 40 件 |
 | ランタイム処理 | 1 ファイル | 9 件 |
-| 実環境・結合検証 | 6 ファイル | 約 12 件 |
-| **合計総数** | **28 テストファイル** | **201 件** |
+| 実環境・結合検証 | 7 ファイル | 約 28 件 |
+| **合計総数** | **34 テストファイル** | **327 件** |
 
 ### 11.2 テスト戦略と方針
 
@@ -730,7 +771,7 @@ justice/
 
 ```typescript
 // メインとなるオーケストレーターとハブ
-export { JusticePlugin } from "./core/justice-plugin";
+export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";
@@ -752,6 +793,8 @@ export { TaskSplitter } from "./core/task-splitter";
 export { WisdomStore } from "./core/wisdom-store";
 export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
+export { TieredWisdomStore } from "./core/tiered-wisdom-store";
+export { SecretPatternDetector } from "./core/secret-pattern-detector";
 
 // 直接各機能ごとのフックを利用したい場合
 export { PlanBridge } from "./hooks/plan-bridge";

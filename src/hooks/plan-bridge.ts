@@ -1,7 +1,6 @@
-import type { FileReader, HookEvent, HookResponse, DelegationRequest } from "../core/types";
+import type { FileReader, HookEvent, HookResponse, DelegationRequest, WisdomStoreInterface } from "../core/types";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
-import { WisdomStore } from "../core/wisdom-store";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
@@ -16,9 +15,9 @@ export class PlanBridge {
   private readonly progressReporter: ProgressReporter;
   private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly activePlanPaths: Map<string, string> = new Map();
-  private readonly wisdomStore: WisdomStore | null;
+  private readonly wisdomStore: WisdomStoreInterface | null;
 
-  constructor(fileReader: FileReader, wisdomStore?: WisdomStore) {
+  constructor(fileReader: FileReader, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
     this.core = new PlanBridgeCore();
