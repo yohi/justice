@@ -100,7 +100,7 @@ bun add justice-plugin
 
 ## コアコンポーネント
 
-| コンポーネント | レイヤー | 目的 |
+| コンポーネント | 層 | 目的 |
 |-----------|-------|---------|
 | `PlanParser` | Core | `plan.md` を解析して `PlanTask[]` を生成、チェックボックスの更新 |
 | `TaskPackager` | Core | `PlanTask` から構造化された `DelegationRequest` に変換 |
@@ -163,14 +163,15 @@ Review the content and redact any secrets if you intended to share it globally.
   determined and this variable is unset, the global store is disabled
   (local-only) and a warning is logged.
 
-## エラーハンドリング
+### 多層エラーハンドリング
 
-Justice は 2 層レイヤーのエラー戦略を実装しています：
+Justice は 3層構造のエラー戦略を実装しています：
 
-| レイヤー | 対象エラー | アクション |
-|-------|--------|--------|
-| **第1レイヤー** (自動修正) | `syntax_error`, `type_error` (最大 3 リトライ) | エージェントに通知せず進行（OmO が自動修正を実施） |
-| **第2レイヤー** (エスカレーション) | `test_failure`, `design_error` | `plan.md` にエラーの注記を追記; systematic-debugging のガイダンスをコンテキストに注入 |
+| 層 | 対象エラー | アクション |
+| :--- | :--- | :--- |
+| **第1層** (自動修正) | `syntax_error`, `type_error` (最大 3 リトライ) | エージェントに通知せず進行（OmO が自動修正を実施） |
+| **第2層** (エスカレーション) | `test_failure`, `design_error` | `plan.md` にエラーの注記を追記; systematic-debugging のガイダンスを注入 |
+| **プロバイダ層** (基盤/設定) | `provider_transient`, `provider_config` | 状況に応じ OmO への委ね、またはユーザー介入の要求 |
 | **中断 (Abort)** | `timeout`, `loop_detected` | タスク分割の指示をコンテキストに注入 |
 
 ## 開発用コマンド
