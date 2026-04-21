@@ -45,7 +45,7 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
 # 依存関係のインストール
 bun install
 
-# 全テストの実行 (201 テスト)
+# 全テストの実行 (327 テスト)
 bun run test
 
 # 型チェック
@@ -151,8 +151,9 @@ is filled from the global store (newest-first within each store).
 
 Entries promoted to the global store are scanned for common secret-like
 patterns (API keys, home-directory paths, `sk-…` / `sk-ant-…` shapes, etc.).
-Matches only emit a warning log — they do **not** block writes. Review the
-global JSON file and redact if needed.
+Matches **block** global promotion and cause the entry to be saved to the
+project-local store instead for safety. Review the content, redact any secrets,
+and manually move to global if appropriate.
 
 ### Environment variable
 

@@ -26,6 +26,18 @@ const PROCEED: HookResponse = { action: "proceed" };
 export interface CreateGlobalFsResult {
   readonly fs: FileReader & FileWriter;
   readonly relativePath: string;
+  readonly absolutePath: string;
+}
+
+/**
+ * Validates if a path points to a sensitive system directory.
+ */
+function isSensitivePath(path: string): boolean {
+  const normalized = resolve(path);
+  const sensitivePrefixes = ["/etc", "/usr", "/bin", "/sbin", "/var", "/boot", "/dev", "/root"];
+  return sensitivePrefixes.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`),
+  );
 }
 
 export async function createGlobalFs(
@@ -35,6 +47,7 @@ export async function createGlobalFs(
     const envPath = process.env.JUSTICE_GLOBAL_WISDOM_PATH;
     let globalRoot: string;
     let relativePath: string;
+    let absolutePath: string;
 
     if (envPath !== undefined) {
       if (!envPath || !isAbsolute(envPath)) {
@@ -44,17 +57,25 @@ export async function createGlobalFs(
         );
         return null;
       }
-      
+
       // Sanitize: resolve to remove any '..' and check
-      const normalizedPath = resolve(envPath);
-      if (normalizedPath !== envPath) {
+      absolutePath = resolve(envPath);
+      if (absolutePath !== envPath) {
         logger?.warn(
-          `JUSTICE_GLOBAL_WISDOM_PATH contained relative components and was normalized to '${normalizedPath}'.`,
+          `JUSTICE_GLOBAL_WISDOM_PATH contained relative components and was normalized to '${absolutePath}'.`,
         );
       }
-      
-      globalRoot = dirname(normalizedPath);
-      relativePath = basename(normalizedPath);
+
+      if (isSensitivePath(absolutePath)) {
+        logger?.warn(
+          `JUSTICE_GLOBAL_WISDOM_PATH points to a sensitive system directory ('${absolutePath}'). ` +
+            "Global wisdom store disabled for security.",
+        );
+        return null;
+      }
+
+      globalRoot = dirname(absolutePath);
+      relativePath = basename(absolutePath);
     } else {
       const home = homedir();
       if (!home) {
@@ -66,11 +87,12 @@ export async function createGlobalFs(
       }
       globalRoot = join(home, ".justice");
       relativePath = "wisdom.json";
+      absolutePath = join(globalRoot, relativePath);
     }
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     await mkdir(globalRoot, { recursive: true });
-    return { fs: new NodeFileSystem(globalRoot), relativePath };
+    return { fs: new NodeFileSystem(globalRoot), relativePath, absolutePath };
   } catch (error) {
     logger?.warn(
       `Failed to initialize global wisdom store: ${String(error)}; falling back to local-only.`,
@@ -133,6 +155,7 @@ export interface JusticePluginOptions {
   readonly globalFileSystem?: {
     readonly fs: FileReader & FileWriter;
     readonly relativePath: string;
+    readonly absolutePath?: string;
   };
 }
 
@@ -162,9 +185,10 @@ export class JusticePlugin {
         )
       : new NoOpPersistence();
 
-    const globalDisplayPath = options.globalFileSystem
-      ? options.globalFileSystem.relativePath
-      : "~/.justice/wisdom.json";
+    const globalDisplayPath =
+      options.globalFileSystem && options.globalFileSystem.absolutePath
+        ? options.globalFileSystem.absolutePath
+        : "~/.justice/wisdom.json";
 
     this.tieredWisdomStore = new TieredWisdomStore({
       localStore: this.wisdomStore,
