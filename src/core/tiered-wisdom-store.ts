@@ -1,9 +1,7 @@
-import type { ErrorClass, WisdomEntry, WisdomCategory, WisdomStoreInterface } from "./types";
+import type { ErrorClass, WisdomEntry, WisdomCategory, WisdomStoreInterface, WisdomScope } from "./types";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
-
-export type WisdomScope = "local" | "global";
 
 export interface TieredWisdomStoreLogger {
   warn(message: string, ...args: unknown[]): void;

@@ -18,6 +18,12 @@ export { TaskSplitter } from "./core/task-splitter";
 export { LoopDetectionHandler } from "./hooks/loop-handler";
 
 // Phase 5 Exports
+export {
+  type WisdomEntry,
+  type WisdomCategory,
+  type WisdomScope,
+  type WisdomStoreInterface,
+} from "./core/types";
 export { WisdomStore } from "./core/wisdom-store";
 export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
@@ -26,7 +32,6 @@ export {
   TieredWisdomStore,
   type TieredWisdomStoreOptions,
   type AddOptions,
-  type WisdomScope,
   type TieredWisdomStoreLogger,
 } from "./core/tiered-wisdom-store";
 

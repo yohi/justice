@@ -280,6 +280,9 @@ export type WisdomCategory =
   | "design_decision" // 重要な設計判断
   | "environment_quirk"; // 環境固有の注意事項
 
+/** Wisdom の適用範囲 */
+export type WisdomScope = "local" | "global";
+
 /**
  * WisdomStore のインターフェース。
  * ローカルストアと階層化ストアの両方で共通の操作を定義します。
@@ -287,7 +290,7 @@ export type WisdomCategory =
 export interface WisdomStoreInterface {
   add(
     entry: Omit<WisdomEntry, "id" | "timestamp">,
-    options?: { scope?: "local" | "global" },
+    options?: { scope?: WisdomScope },
   ): WisdomEntry;
   getByTaskId(taskId: string): WisdomEntry[];
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[];
