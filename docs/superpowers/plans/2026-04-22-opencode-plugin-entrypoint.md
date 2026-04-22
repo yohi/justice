@@ -26,6 +26,17 @@
 - Phase 内の Task ブランチは直前 Task ブランチから派生（PR 完了待ちは不要）
 - 各 Task 完了時に **所属 Phase ブランチをベースとする Draft PR** を必ず作成する
 
+<details>
+<summary>📝 運用ルール: 並列 Task ブランチ戦略のリスクと注意事項</summary>
+
+本プロジェクトでは開発速度を優先し、前 Task の PR マージを待たずに後続 Task ブランチを派生させる戦略をとっています。これには以下のリスクと対応策が伴います。
+
+- **レビュー指摘への対応**: 前 Task のレビューでコード変更が要求された場合、そのブランチから派生している**すべての後続ブランチに対して `git rebase` が必要**になります。
+- **依存関係の確認**: Draft PR を作成する前に、依存する前 Task の実装内容（特にインターフェースや共通定数）がレビューによって変更されていないか必ず確認してください。
+- **レビュー負荷の低減**: 後続 Task のレビュアーが混乱しないよう、PR 説明欄には必ず「どの Task に依存しているか」を明記してください。
+
+</details>
+
 ---
 
 ## Phase 1: Foundation (loop-error-patterns + lint guard)
@@ -76,16 +87,16 @@ bun add -D @opencode-ai/plugin
 
 - [ ] **Step 4: peerDependency として追記**
 
-`package.json` の `peerDependencies` セクションを以下に更新:
+`package.json` の `peerDependencies` セクションを、Step 2 で得たバージョン（例: `0.1.0`）を用いて更新します:
 
 ```json
 "peerDependencies": {
   "typescript": "^6.0.2",
-  "@opencode-ai/plugin": "*"
+  "@opencode-ai/plugin": "^<VERIFIED_VERSION>"
 }
 ```
 
-※ Step 2 で得たバージョンから caret range (`^X.Y.Z`) を後続タスクで置換。Phase 1 では最小侵襲で `*` を設定する。
+※ `<VERIFIED_VERSION>` は Step 2 で得た実測値に手動で書き換えてください。最初から具体的な caret range を設定することで、意図しないバージョンとの非互換リスクを最小化します。
 
 - [ ] **Step 5: typecheck が通ることを確認**
 
@@ -508,7 +519,6 @@ export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodeP
   const base: OpenCodePluginInit = {
     project: { name: "test", root: "/tmp/test-workspace" } as never,
     client: { app: { log: vi.fn().mockResolvedValue(undefined) } } as never,
-    $: vi.fn() as never,
     directory: "/tmp/test-workspace",
     worktree: "/tmp/test-workspace",
   };
@@ -536,7 +546,6 @@ import { NodeFileSystem } from "./node-file-system";
 export interface OpenCodePluginInit {
   readonly project: { readonly name?: string; readonly root?: string };
   readonly client: { readonly app: { log: (entry: OpenCodeLogEntry) => Promise<void> | void } };
-  readonly $: (...args: unknown[]) => unknown;
   readonly directory?: string;
   readonly worktree?: string;
 }
@@ -703,8 +712,8 @@ describe("OpenCodeAdapter.onMessageUpdated", () => {
       {
         message: { role: "user", content: "plan.md の次のタスクを委譲して" },
         sessionID: "sess-1",
-      } as never,
-      output as never,
+      } as Parameters<typeof adapter.onMessageUpdated>[0],
+      output as Parameters<typeof adapter.onMessageUpdated>[1],
     );
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -854,16 +863,61 @@ git add src/runtime/opencode-adapter.ts tests/runtime/opencode-adapter.test.ts
 git commit -m "feat(runtime): implement OpenCodeAdapter.onMessageUpdated"
 ```
 
-- [ ] **Step 8: push + Draft PR**
+- [ ] **Step 8: 軽量な統合スモークテストを追加**
+
+早期に `OpenCodeAdapter` と `JusticePlugin` の結合を確認するため、スモークテストを作成します。
+
+Create `tests/integration/smoke-test.test.ts`:
+
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { fakeInit } from "../helpers/fake-opencode-init";
+
+describe("OpenCodeAdapter Smoke Test", () => {
+  it("executes the end-to-end path from adapter to JusticePlugin", async () => {
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const adapter = new OpenCodeAdapter(init);
+
+    // Initial state: not initialized
+    expect(adapter.getJustice()).toBeNull();
+
+    const output = { context: [] as string[] };
+    await adapter.onMessageUpdated(
+      {
+        message: { role: "user", content: "hello" },
+        sessionID: "sess-smoke",
+      } as Parameters<typeof adapter.onMessageUpdated>[0],
+      output as Parameters<typeof adapter.onMessageUpdated>[1]
+    );
+
+    // After first hook call: should be initialized
+    const justice = adapter.getJustice();
+    expect(justice).not.toBeNull();
+    expect(justice?.initialize).toBeDefined();
+  });
+});
+```
+
+- [ ] **Step 9: スモークテストが通ることを確認**
+
+Run: `bun run test tests/integration/smoke-test.test.ts`
+Expected: PASS
+
+- [ ] **Step 10: typecheck + lint + full test**
+
+Run: `bun run typecheck && bun run lint && bun run test`
+Expected: 全て PASS
+
+- [ ] **Step 11: コミット**
 
 ```bash
-git push -u origin feature/phase2-task2__on-message-updated
-gh pr create --draft \
-  --base feature/phase2__opencode-plugin__base \
-  --head feature/phase2-task2__on-message-updated \
-  --title "Phase2 Task2: OpenCodeAdapter.onMessageUpdated" \
-  --body "Handles OpenCode message.updated payloads. Filters on role=user + non-empty content; inject responses push into output.context. Fail-open guarantee preserved."
+git add src/runtime/opencode-adapter.ts tests/runtime/opencode-adapter.test.ts tests/integration/smoke-test.test.ts
+git commit -m "feat(runtime): implement OpenCodeAdapter.onMessageUpdated and add smoke test"
 ```
+
+- [ ] **Step 12: push + Draft PR**
+
 
 ---
 
@@ -906,8 +960,8 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
         tool: "task",
         args: { prompt: "do a thing" },
         sessionID: "s",
-      } as never,
-      { args: { prompt: "do a thing" } } as never,
+      } as Parameters<typeof adapter.onToolExecuteBefore>[0],
+      { args: { prompt: "do a thing" } } as Parameters<typeof adapter.onToolExecuteBefore>[1],
     );
     expect(spy).toHaveBeenCalledTimes(1);
     const [event] = spy.mock.calls[0];
@@ -1714,19 +1768,19 @@ export const OpenCodePlugin: Plugin = async (init) => {
   const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
   return {
     "message.updated": async (input, output) => {
-      await adapter.onMessageUpdated(input as never, output as never);
+      await adapter.onMessageUpdated(input as Parameters<typeof adapter.onMessageUpdated>[0], output as Parameters<typeof adapter.onMessageUpdated>[1]);
     },
     "tool.execute.before": async (input, output) => {
-      await adapter.onToolExecuteBefore(input as never, output as never);
+      await adapter.onToolExecuteBefore(input as Parameters<typeof adapter.onToolExecuteBefore>[0], output as Parameters<typeof adapter.onToolExecuteBefore>[1]);
     },
     "tool.execute.after": async (input, output) => {
-      await adapter.onToolExecuteAfter(input as never, output as never);
+      await adapter.onToolExecuteAfter(input as Parameters<typeof adapter.onToolExecuteAfter>[0], output as Parameters<typeof adapter.onToolExecuteAfter>[1]);
     },
     "experimental.session.compacting": async (input, output) => {
-      await adapter.onSessionCompacting(input as never, output as never);
+      await adapter.onSessionCompacting(input as Parameters<typeof adapter.onSessionCompacting>[0], output as Parameters<typeof adapter.onSessionCompacting>[1]);
     },
     "session.error": async (input, output) => {
-      await adapter.onSessionError(input as never, output as never);
+      await adapter.onSessionError(input as Parameters<typeof adapter.onSessionError>[0], output as Parameters<typeof adapter.onSessionError>[1]);
     },
   };
 };
@@ -1821,7 +1875,7 @@ bun pm ls @opencode-ai/plugin 2>&1 | tail -5
 }
 ```
 
-(Task 1.1 で一時的に `*` にしていた `@opencode-ai/plugin` peer range を、実測バージョンからの caret range に置換。)
+(Task 1.1 で既に設定済みですが、`exports` 追加および `version` bump と合わせて改めて整合性を確認し、必要に応じて最新の実測バージョンに基づき更新します。)
 
 - [ ] **Step 4: ビルドして `dist/opencode-plugin.{js,d.ts}` が生成されることを確認**
 
@@ -1894,7 +1948,7 @@ git checkout -b feature/phase2-task9__docs
 `@yohi/justice/opencode` サブパスから `OpenCodePlugin` を import し、
 OpenCode の `plugins` 配列に追加するだけで有効化できます。
 
-```ts
+```typescript
 import { OpenCodePlugin } from "@yohi/justice/opencode";
 export default { plugins: [OpenCodePlugin] };
 ```
@@ -1968,6 +2022,7 @@ try {
 
 ### ワークスペース解決
 
+```text
 - `worktree ?? directory` を採用
 - 両方 undefined の場合は Adapter が no-op モードへ縮退し、全フックが即 PROCEED を返す
 - `createGlobalFs()` 失敗時は `NoOpPersistence` にフォールバック (既存動作)
@@ -2059,7 +2114,7 @@ gh pr create --draft \
 
 ### 2. プレースホルダスキャン
 
-- 全 `<PKG_VER>` 参照は Task 1.1/2.8 の実行手順で実測値に置換される仕組みを含む (プレースホルダではなく手順の一部)
+- 全 `<PKG_VER>` 参照は、実装者が実測値を確認した上で手動で置換する必要があります。
 - 「TBD」「implement later」等の禁止ワードは含まない
 
 ### 3. 型整合
