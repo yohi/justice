@@ -65,16 +65,16 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 3.  **[ ] 動作確認:**
     *   `bun run test` を実行して、既存の全テストがパスすることを確認してください。
 4.  **[ ] 学習の初期化:**
-    *   `.justice/wisdom.json` (プロジェクトローカル) および `~/.justice/wisdom.json` (ユーザーグローバル) の存在を確認し、必要に応じて初期化してください。
+    *   `.justice/wisdom.json` (プロジェクトローカル) および `~/.justice/wisdom.json` (ユーザーグローバル) の存在を確認し、必要に応じて空のデータ（例: `{"entries": []}`）で初期化してください。
 5.  **[ ] OmO への統合:**
-    *   このプロジェクトを別の OmO プロジェクトに統合する場合は、まず**ソースコードからビルドするか、GitHub Packages のパッケージを利用するかをユーザーに尋ねてください。**
+    *   このプロジェクトを別の OmO プロジェクトに統合する場合は、まず**ソースコードからビルドするか、GitHub Packages のパッケー ジを利用するかをユーザーに尋ねてください。**
     *   **パターン A: ソースコードからビルド**
         *   `bun run build` を実行して `dist/` を生成し、そのパスをフックに設定します。
     *   **パターン B: GitHub Packages からインストール**
-        *   `bun add @yohi/justice` を実行します（GitHub Packages の認証が必要です）。
+        *   `bun add @yohi/justice` を実行します（GitHub Packages の認証が必要です。`.npmrc` に `@yohi:registry=https://npm.pkg.github.com` の設定があることを確認してください）。
     *   詳細は後述の「インストール (OmO への統合)」を参照してください。
 6.  **[ ] 統合のテスト:**
-    *   `tests/integration/` のテストを実行し、OmO のライフサイクルとの統合が正しく機能することを確認してください。
+    *   `bun test tests/integration/` を実行し、OmO のライフサイクルとの統合が正しく機能することを確認してください。
 
 </details>
 
