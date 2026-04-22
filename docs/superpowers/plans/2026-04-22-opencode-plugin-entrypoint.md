@@ -1889,7 +1889,7 @@ git checkout -b feature/phase2-task9__docs
 
 `README.md` のインストール見出しの直後に、以下のセクションを追加する:
 
-```markdown
+````markdown
 ### パターン 1: OpenCode Plugin 経由 (推奨, v1.2.0〜)
 
 `@yohi/justice/opencode` サブパスから `OpenCodePlugin` を import し、
@@ -1910,7 +1910,7 @@ export default { plugins: [OpenCodePlugin] };
 そのまま維持できます。1.2.0 以降もシム経路は壊れません。両方式を同時に
 設定しないでください — `client.app.log` に `Justice initialized via
 {adapter|legacy-shim}` が 1 セッションで両方出た場合は設定を見直してください。
-```
+````
 
 - [ ] **Step 3: `README.md` の「コアコンポーネント」表に OpenCodeAdapter を追加**
 
@@ -1932,7 +1932,7 @@ export default { plugins: [OpenCodePlugin] };
 
 `SPEC.md` 末尾 (または該当する場所) に以下を追加:
 
-```markdown
+````markdown
 ## OpenCode Plugin 統合 (v1.2.0)
 
 `@yohi/justice/opencode` サブパスから named export される `OpenCodePlugin`
@@ -1953,7 +1953,7 @@ export default { plugins: [OpenCodePlugin] };
 
 ### Fail-Open テンプレート
 
-すべてのハンドラ境界で以下の構造を守ります:
+すべてのハンドラ境界で以下の構造を守ります (早期 return で処理をスキップできる場合は `ensureInitialized()` を条件チェック後に移動してよい — `onSessionError` が該当):
 
 ```text
 try {
@@ -1972,7 +1972,7 @@ try {
 - `worktree ?? directory` を採用
 - 両方 undefined の場合は Adapter が no-op モードへ縮退し、全フックが即 PROCEED を返す
 - `createGlobalFs()` 失敗時は `NoOpPersistence` にフォールバック (既存動作)
-```
+````
 
 - [ ] **Step 6: `CHANGELOG.md` に `Unreleased` → `1.2.0` セクションを追加**
 
