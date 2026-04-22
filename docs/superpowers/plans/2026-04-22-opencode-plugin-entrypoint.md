@@ -24,6 +24,7 @@
 - 各 Phase ブランチは必ず `master` から派生する
 - Phase 2 は Phase 1 の master マージ完了後にのみ開始する
 - Phase 内の Task ブランチは直前 Task ブランチから派生（PR 完了待ちは不要）
+  - ⚠️ **リベースリスク:** 先行 Task でインターフェース変更が入った場合、後続 Task に連鎖リベースが発生する。変更規模が大きい場合は Phase ブランチへの早期マージを優先すること。
 - 各 Task 完了時に **所属 Phase ブランチをベースとする Draft PR** を必ず作成する
 
 ---
@@ -1837,7 +1838,7 @@ Expected: 両ファイルが存在する。
 
 ```bash
 bun run typecheck
-node -e "import('./dist/opencode-plugin.js').then(m => console.log(Object.keys(m)))"
+bun -e "import('./dist/opencode-plugin.js').then(m => console.log(Object.keys(m)))"
 ```
 
 Expected: `[ 'OpenCodePlugin' ]` が表示される。
