@@ -41,6 +41,45 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
 
 ## クイックスタート
 
+### For Humans (推奨)
+
+> [!TIP]
+> **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。
+
+以下のプロンプトをコピーしてエージェントに渡してください：
+
+```text
+Install and configure Justice Plugin by following the instructions here:
+https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
+```
+
+<details>
+<summary><b>For Agents (AIエージェント向け手順)</b></summary>
+
+あなたがターミナル操作可能なAIエージェントであるなら、以下の手順でこのプロジェクトの理解とセットアップを自律的に遂行してください：
+
+1.  **[ ] プロジェクトの理解:**
+    *   `SPEC.md` と `AGENTS.md` を読み、このプラグインの役割と実装の詳細を把握してください。
+2.  **[ ] 依存関係の解決:**
+    *   `bun install` を実行して依存関係をインストールしてください。
+3.  **[ ] 動作確認:**
+    *   `bun run test` を実行して、既存の全テストがパスすることを確認してください。
+4.  **[ ] 学習の初期化:**
+    *   `.justice/wisdom.json` (プロジェクトローカル) および `~/.justice/wisdom.json` (ユーザーグローバル) の存在を確認し、必要に応じて空のデータ（例: `{"entries": []}`）で初期化してください。
+5.  **[ ] OmO への統合:**
+    *   このプロジェクトを別の OmO プロジェクトに統合する場合は、まず**ソースコードからビルドするか、GitHub Packages のパッケー ジを利用するかをユーザーに尋ねてください。**
+    *   **パターン A: ソースコードからビルド**
+        *   `bun run build` を実行して `dist/` を生成し、そのパスをフックに設定します。
+    *   **パターン B: GitHub Packages からインストール**
+        *   `bun add @yohi/justice` を実行します（GitHub Packages の認証が必要です。`.npmrc` に `@yohi:registry=https://npm.pkg.github.com` の設定があることを確認してください）。
+    *   詳細は後述の「インストール (OmO への統合)」を参照してください。
+6.  **[ ] 統合のテスト:**
+    *   `bun test tests/integration/` を実行し、OmO のライフサイクルとの統合が正しく機能することを確認してください。
+
+</details>
+
+### 手動セットアップ (非推奨)
+
 ```bash
 # 依存関係のインストール
 bun install
@@ -57,11 +96,31 @@ bun run lint
 
 ## インストール (OmO への統合)
 
-```bash
-bun add justice-plugin
-```
+このプラグインを `oh-my-openagent` に統合するには、以下のいずれかの方法を選択してください（AIエージェントに依頼することを推奨します）。
 
-`oh-my-opencode.jsonc` に以下を追加してください：
+### 方法 A: ソースコードからビルド（開発・最新版用）
+
+このリポジトリをクローンし、ビルドしたファイルを直接参照します。
+
+1.  **ビルドの実行**
+    ```bash
+    bun run build
+    ```
+2.  **フックの設定**
+    `oh-my-opencode.jsonc` の `source` に、ビルドされた JS ファイルの絶対パスを指定します。
+
+### 方法 B: GitHub Packages からインストール（安定版用）
+
+[GitHub Packages](https://github.com/users/yohi/packages/npm/package/justice) に公開されているパッケージを利用します。
+
+1.  **インストール**
+    ```bash
+    bun add @yohi/justice
+    ```
+2.  **フックの設定**
+    `oh-my-opencode.jsonc` の `source` に、`node_modules/@yohi/justice/dist/hooks/...` のパスを指定します。
+
+### フックの設定例 (oh-my-opencode.jsonc)
 
 ```jsonc
 {
@@ -70,22 +129,22 @@ bun add justice-plugin
       {
         "name": "justice-plan-bridge",
         "event": ["Message", "PreToolUse"],
-        "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
+        "source": "[PATH_TO_JUSTICE]/dist/hooks/plan-bridge.js"
       },
       {
         "name": "justice-task-feedback",
         "event": ["PostToolUse"],
-        "source": "./node_modules/justice-plugin/dist/hooks/task-feedback.js"
+        "source": "[PATH_TO_JUSTICE]/dist/hooks/task-feedback.js"
       },
       {
         "name": "justice-compaction-protector",
         "event": ["Event"],
-        "source": "./node_modules/justice-plugin/dist/hooks/compaction-protector.js"
+        "source": "[PATH_TO_JUSTICE]/dist/hooks/compaction-protector.js"
       },
       {
         "name": "justice-loop-handler",
         "event": ["Event"],
-        "source": "./node_modules/justice-plugin/dist/hooks/loop-handler.js"
+        "source": "[PATH_TO_JUSTICE]/dist/hooks/loop-handler.js"
       }
     ]
   }
