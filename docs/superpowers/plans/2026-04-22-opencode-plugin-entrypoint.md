@@ -76,16 +76,16 @@ bun add -D @opencode-ai/plugin
 
 - [ ] **Step 4: peerDependency として追記**
 
-`package.json` の `peerDependencies` セクションを以下に更新:
+`package.json` の `peerDependencies` セクションを以下に更新 (バージョンは Step 2 で取得した値を使用):
 
 ```json
 "peerDependencies": {
   "typescript": "^6.0.2",
-  "@opencode-ai/plugin": "*"
+  "@opencode-ai/plugin": "^<PKG_VER>"
 }
 ```
 
-※ Step 2 で得たバージョンから caret range (`^X.Y.Z`) を後続タスクで置換。Phase 1 では最小侵襲で `*` を設定する。
+※ `<PKG_VER>` は Step 2 で取得した実バージョン (例: `0.1.0` → `"^0.1.0"`)。`*` は破壊的変更を含む全バージョンを許容するため使用禁止。
 
 - [ ] **Step 5: typecheck が通ることを確認**
 
@@ -536,6 +536,7 @@ import { NodeFileSystem } from "./node-file-system";
 export interface OpenCodePluginInit {
   readonly project: { readonly name?: string; readonly root?: string };
   readonly client: { readonly app: { log: (entry: OpenCodeLogEntry) => Promise<void> | void } };
+  /** Subagent utility provided by OpenCode SDK — not used by Justice, retained for structural compatibility. */
   readonly $: (...args: unknown[]) => unknown;
   readonly directory?: string;
   readonly worktree?: string;
@@ -1821,7 +1822,7 @@ bun pm ls @opencode-ai/plugin 2>&1 | tail -5
 }
 ```
 
-(Task 1.1 で一時的に `*` にしていた `@opencode-ai/plugin` peer range を、実測バージョンからの caret range に置換。)
+(Task 1.1 で設定した `@opencode-ai/plugin` peer range を、Step 2 で確認した最新バージョンで再確認・更新。)
 
 - [ ] **Step 4: ビルドして `dist/opencode-plugin.{js,d.ts}` が生成されることを確認**
 
@@ -2059,7 +2060,7 @@ gh pr create --draft \
 
 ### 2. プレースホルダスキャン
 
-- 全 `<PKG_VER>` 参照は Task 1.1/2.8 の実行手順で実測値に置換される仕組みを含む (プレースホルダではなく手順の一部)
+- 全 `<PKG_VER>` 参照は実装時プレースホルダとして残る。Task 1.1 Step 2 および Task 2.8 Step 2 で取得した実測値に手動置換すること
 - 「TBD」「implement later」等の禁止ワードは含まない
 
 ### 3. 型整合
