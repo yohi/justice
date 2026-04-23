@@ -53,8 +53,7 @@ export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from 
  * Legacy/Alternative hook handler for backward compatibility or simple event routing.
  * (Used by some early integrations)
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default async function handleHook(_event: any): Promise<any> {
+export default async function handleHook(_event: GenericEventInput): Promise<{ action: string }> {
   // Note: This is a simplified wrapper. The primary integration should use OpenCodePlugin.
   // We'll keep this as a fail-safe that uses a one-off adapter if needed,
   // but recommended path is through the Plugin-type OpenCodePlugin.
