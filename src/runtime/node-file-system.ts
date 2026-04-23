@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- All filesystem paths are validated by resolveSafely/resolveSafelyForWrite before use. */
 import type { FileReader, FileWriter } from "../core/types";
 import { resolve, isAbsolute, relative, dirname, basename, join } from "node:path";
 import {
@@ -183,3 +184,4 @@ export class NodeFileSystem implements FileReader, FileWriter {
     }
   }
 }
+/* eslint-enable security/detect-non-literal-fs-filename */

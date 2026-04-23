@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture-backed maps by dynamic path. */
 import { vi } from "vitest";
 import { dirname } from "node:path";
 import type { FileReader, FileWriter } from "../../src/core/types";
@@ -128,3 +129,4 @@ export function createMockFileSystem(initialFiles: Record<string, string> = {}):
 
   return mockFs;
 }
+/* eslint-enable security/detect-object-injection */

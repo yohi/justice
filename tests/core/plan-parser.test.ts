@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Fixture reads are confined to the local fixtures directory. */
 import { describe, it, expect } from "vitest";
 import { PlanParser } from "../../src/core/plan-parser";
 import { readFileSync } from "node:fs";
@@ -166,3 +167,4 @@ describe("PlanParser", () => {
     });
   });
 });
+/* eslint-enable security/detect-non-literal-fs-filename */
