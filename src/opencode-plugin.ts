@@ -1,7 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   OpenCodeAdapter,
-  type OpenCodePluginInit,
   type OpenCodeEvent,
 } from "./runtime/opencode-adapter";
 
@@ -12,7 +11,7 @@ import {
  * It uses OpenCodeAdapter to bridge OpenCode hooks to JusticePlugin logic.
  */
 export const OpenCodePlugin: Plugin = async (init) => {
-  const adapter = new OpenCodeAdapter(init as OpenCodePluginInit);
+  const adapter = new OpenCodeAdapter(init);
 
   return {
     event: async (input: OpenCodeEvent): Promise<void> => {

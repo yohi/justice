@@ -33,14 +33,17 @@ function deepMerge<T extends object>(base: T, overrides: Partial<T>): T {
 }
 
 export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodePluginInit {
-  const base: OpenCodePluginInit = {
+  const base = {
     project: { name: "test", root: "/tmp/test-workspace" },
     client: { app: { log: vi.fn().mockResolvedValue(undefined) } },
-    $: vi.fn() as unknown as OpenCodePluginInit["$"],
+    $: vi.fn(),
     directory: "/tmp/test-workspace",
-  };
+    worktree: "/tmp/test-workspace",
+    serverUrl: new URL("http://localhost"),
+    experimental_workspace: { register: vi.fn() },
+  } as unknown as OpenCodePluginInit;
 
-  return deepMerge(base, overrides);
+  return deepMerge(base as unknown as Record<string, unknown>, overrides as Record<string, unknown>) as OpenCodePluginInit;
 }
 
 /**

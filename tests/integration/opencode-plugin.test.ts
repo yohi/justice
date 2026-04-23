@@ -54,10 +54,10 @@ describe("OpenCodePlugin (integration)", () => {
 
     const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
     const initLogs = logFn.mock.calls.filter((call) => {
-      const [entry] = call as [{ message?: string }];
+      const [args] = call as [{ body?: { message?: string } }];
       return (
-        typeof entry?.message === "string" &&
-        entry.message.includes("Justice initialized via opencode-adapter")
+        typeof args?.body?.message === "string" &&
+        args.body.message.includes("Justice initialized via opencode-adapter")
       );
     });
     expect(initLogs.length).toBe(1);

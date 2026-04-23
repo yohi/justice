@@ -12,25 +12,23 @@ export interface OpenCodeLogEntry {
 
 /**
  * Structural bridge for OpenCode plugin initialization.
- * We use a subset of PluginInput that Justice actually needs.
+ * We use a subset of PluginInput that Justice actually needs,
+ * extended with internal expectations if necessary.
  */
-export interface OpenCodePluginInit {
-  readonly project: { readonly name?: string; readonly root?: string };
+export type OpenCodePluginInit = PluginInput & {
+  readonly project: { readonly root?: string };
   readonly client: {
     readonly app: {
-      log: (entry: OpenCodeLogEntry) => unknown;
+      readonly log: (
+        ...args: Parameters<PluginInput["client"]["app"]["log"]>
+      ) => ReturnType<PluginInput["client"]["app"]["log"]>;
     };
   };
-  readonly $: unknown;
-  readonly directory?: string;
-  readonly worktree?: string;
-}
+};
 
 // Ensure OpenCodePluginInit is compatible with a subset of PluginInput
 type _CompatibilityCheck = PluginInput extends OpenCodePluginInit ? true : never;
 const _compatibilityCheck: _CompatibilityCheck extends true ? true : never = true;
-// Mark as used to satisfy linters if necessary
-void _compatibilityCheck;
 
 export interface ToolInput {
   readonly tool: string;
@@ -100,10 +98,12 @@ export class OpenCodeAdapter {
   async log(level: "info" | "warn" | "error", message: string, ...args: unknown[]): Promise<void> {
     try {
       await this.#init.client.app.log({
-        level,
-        service: "justice",
-        message,
-        extra: args.length > 0 ? { args } : undefined,
+        body: {
+          level,
+          service: "justice",
+          message,
+          extra: args.length > 0 ? { args } : undefined,
+        },
       });
     } catch {
       /* final defense line: never throw from the logging wrapper */
