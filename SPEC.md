@@ -683,8 +683,11 @@ bun add justice-plugin
         "name": "justice-plan-bridge",
         "event": ["Message", "PreToolUse"],
         "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
-      },
-// ... (中略)
+      }
+    ]
+  }
+}
+```
 ```
 
 ---

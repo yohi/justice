@@ -10,24 +10,32 @@ import type { HookEvent, HookResponse } from "./core/types";
  */
 
 let pluginInstance: JusticePlugin | null = null;
+let pluginInitPromise: Promise<JusticePlugin> | null = null;
 
 async function getPlugin(): Promise<JusticePlugin> {
   if (pluginInstance) {
     return pluginInstance;
   }
 
-  const root = process.cwd();
-  const fileSystem = new NodeFileSystem(root);
-  const globalFs = await createGlobalFs();
+  if (pluginInitPromise) {
+    return pluginInitPromise;
+  }
 
-  pluginInstance = new JusticePlugin(fileSystem, fileSystem, {
-    globalFileSystem: globalFs || undefined,
-    // Note: In an OpenCode environment, logs are typically handled by the host.
-    // We could pass a custom logger here if needed.
-  });
+  pluginInitPromise = (async () => {
+    const root = process.cwd();
+    const fileSystem = new NodeFileSystem(root);
+    const globalFs = await createGlobalFs();
 
-  await pluginInstance.initialize();
-  return pluginInstance;
+    const instance = new JusticePlugin(fileSystem, fileSystem, {
+      globalFileSystem: globalFs || undefined,
+    });
+
+    await instance.initialize();
+    pluginInstance = instance;
+    return instance;
+  })();
+
+  return pluginInitPromise;
 }
 
 /**

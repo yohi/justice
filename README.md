@@ -144,6 +144,22 @@ bun run lint
 
 必要に応じて特定のイベントのみを選択的に適用できます。
 
+```jsonc
+{
+  "hooks": {
+    "custom": [
+      {
+        "name": "justice-plan-bridge",
+        "event": ["Message", "PreToolUse"],
+        "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
+      }
+    ]
+  }
+}
+```
+
+詳細は [SPEC.md](./SPEC.md) の「個別のフックを使用する場合」を参照してください。
+
 ## 使い方
 
 インストール後、AI エージェントがメッセージ内でプランファイルを参照し、かつ委譲を表すキーワード（例: "plan.md から次のタスクを委譲して"）を含めた場合に、Justice は自動的にアクティブになります。
