@@ -44,6 +44,8 @@ async function getPlugin(): Promise<JusticePlugin> {
   return pluginInitPromise;
 }
 
+export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from "./runtime/opencode-adapter";
+
 /**
  * Unified hook handler for all OpenCode events.
  */
