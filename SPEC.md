@@ -657,6 +657,24 @@ bun add justice-plugin
 
 ### 8.2 設定ファイルへの記述構成 (`oh-my-opencode.jsonc`)
 
+#### 推奨: 統合エントリーポイントを使用する場合
+
+```jsonc
+{
+  "hooks": {
+    "custom": [
+      {
+        "name": "justice-plugin",
+        "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
+        "source": "./node_modules/justice-plugin/dist/opencode-plugin.js"
+      }
+    ]
+  }
+}
+```
+
+#### 個別のフックを使用する場合
+
 ```jsonc
 {
   "hooks": {
@@ -665,21 +683,6 @@ bun add justice-plugin
         "name": "justice-plan-bridge",
         "event": ["Message", "PreToolUse"],
         "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
-      },
-      {
-        "name": "justice-task-feedback",
-        "event": ["PostToolUse"],
-        "source": "./node_modules/justice-plugin/dist/hooks/task-feedback.js"
-      },
-      {
-        "name": "justice-compaction-protector",
-        "event": ["Event"],
-        "source": "./node_modules/justice-plugin/dist/hooks/compaction-protector.js"
-      },
-      {
-        "name": "justice-loop-handler",
-        "event": ["Event"],
-        "source": "./node_modules/justice-plugin/dist/hooks/loop-handler.js"
       }
     ]
   }
@@ -820,6 +823,7 @@ justice/
 ```typescript
 // メインとなるオーケストレーターとハブ
 export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
+export { default as handleHook } from "./opencode-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";
