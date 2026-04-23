@@ -42,10 +42,11 @@ export class FeedbackFormatter {
     // Try generic format first
     const genericMatch = rawOutput.match(TEST_RESULT_REGEX);
     if (genericMatch) {
+      const [, passedStr = "0", failedStr = "0", skippedStr = "0"] = genericMatch;
       return {
-        passed: parseInt(genericMatch[1] ?? "0", 10),
-        failed: genericMatch[2] ? parseInt(genericMatch[2], 10) : 0,
-        skipped: genericMatch[3] ? parseInt(genericMatch[3], 10) : 0,
+        passed: parseInt(passedStr, 10),
+        failed: parseInt(failedStr, 10),
+        skipped: parseInt(skippedStr, 10),
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }
@@ -53,8 +54,9 @@ export class FeedbackFormatter {
     // Try vitest format
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
     if (vitestMatch) {
+      const [, passedStr = "0"] = vitestMatch;
       return {
-        passed: parseInt(vitestMatch[1] ?? "0", 10),
+        passed: parseInt(passedStr, 10),
         failed: 0,
         skipped: 0,
         failureDetails: this.extractFailureDetails(rawOutput),
