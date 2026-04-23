@@ -21,7 +21,7 @@ export interface OpenCodePluginInit {
   readonly worktree?: string;
 }
 
-interface GenericEventInput {
+export interface GenericEventInput {
   readonly event: {
     readonly type: string;
     readonly properties?: Record<string, unknown>;
