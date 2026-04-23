@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-object-injection -- Parser uses validated line-index access over split arrays. */
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
@@ -16,6 +15,7 @@ export class PlanParser {
     let currentTask: { title: string; taskNum: number; steps: PlanStep[] } | null = null;
 
     for (let i = 0; i < lines.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection
       const line = lines[i];
       if (line === undefined) continue;
 
@@ -66,6 +66,7 @@ export class PlanParser {
       throw new Error(`Line number ${lineNumber} is out of range (1-${lines.length})`);
     }
 
+    // eslint-disable-next-line security/detect-object-injection
     const line = lines[index];
     if (line === undefined) {
       throw new Error(`Line number ${lineNumber} is undefined`);
@@ -77,6 +78,7 @@ export class PlanParser {
     }
 
     const newChar = checked ? "x" : " ";
+    // eslint-disable-next-line security/detect-object-injection
     lines[index] = `${match[1]}${newChar}${match[3]}`;
 
     return lines.join("\n");
@@ -100,6 +102,7 @@ export class PlanParser {
     let inserted = false;
 
     for (let i = 0; i < lines.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection
       const line = lines[i];
       if (line !== undefined) {
         result.push(line);
@@ -112,6 +115,7 @@ export class PlanParser {
           result.push(`> ⚠️ **Error**: ${errorMessage}`);
 
           // Only add trailing blank if the next line isn't already blank
+          // eslint-disable-next-line security/detect-object-injection
           const nextLine = lines[i + 1];
           if (nextLine !== undefined && nextLine.trim() !== "") {
             result.push("");
@@ -151,4 +155,3 @@ export class PlanParser {
     return "pending";
   }
 }
-/* eslint-enable security/detect-object-injection */
