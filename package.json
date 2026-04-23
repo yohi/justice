@@ -1,6 +1,6 @@
 {
   "name": "@yohi/justice",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "OpenCode plugin bridging Superpowers and oh-my-openagent",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -21,6 +21,10 @@
     "./runtime": {
       "import": "./dist/runtime/node-file-system.js",
       "types": "./dist/runtime/node-file-system.d.ts"
+    },
+    "./opencode": {
+      "import": "./dist/opencode-plugin.js",
+      "types": "./dist/opencode-plugin.d.ts"
     }
   },
   "files": [
@@ -40,6 +44,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@opencode-ai/plugin": "^1.14.21",
     "@types/bun": "latest",
     "@types/node": "^25.5.0",
     "@vitest/coverage-v8": "4.1.1",
