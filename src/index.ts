@@ -50,4 +50,4 @@ export { NodeFileSystem } from "./runtime/node-file-system";
 export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from "./runtime/opencode-adapter";
 // Phase 8 Exports
 export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
-export { default as handleHook } from "./opencode-plugin";
+export { default, OpenCodePlugin, handleHook } from "./opencode-plugin";
