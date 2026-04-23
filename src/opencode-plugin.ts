@@ -46,6 +46,20 @@ export {
 } from "./runtime/opencode-adapter";
 
 /**
+ * Type guard to check if the provided init object satisfies OpenCodePluginInit requirements.
+ */
+function isOpenCodePluginInit(init?: Partial<OpenCodePluginInit>): init is OpenCodePluginInit {
+  return (
+    !!init?.client &&
+    !!init?.serverUrl &&
+    !!init?.$ &&
+    !!init?.project &&
+    typeof init.project === "object" &&
+    !!(init.directory || init.worktree || init.project.root)
+  );
+}
+
+/**
  * Legacy/Alternative hook handler for backward compatibility or simple event routing.
  * (Used by some early integrations)
  */
@@ -53,20 +67,13 @@ export async function handleHook(
   event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
   init?: Partial<OpenCodePluginInit>,
 ): Promise<void> {
-  if (
-    !init?.client ||
-    !init?.serverUrl ||
-    !init?.$ ||
-    !init?.project ||
-    typeof init.project !== "object" ||
-    (!init.directory && !init.worktree && !init.project.root)
-  ) {
+  if (!isOpenCodePluginInit(init)) {
     throw new Error(
       "[JUSTICE] handleHook initialization failed: Missing required fields in init parameter (client, directory/worktree, serverUrl, $, and a proper project shape). Please use OpenCodePlugin instead or provide a valid init.",
     );
   }
 
-  const pluginInstance = await OpenCodePlugin(init as OpenCodePluginInit);
+  const pluginInstance = await OpenCodePlugin(init);
 
   if (pluginInstance && typeof pluginInstance.event === "function") {
     await pluginInstance.event(event);
