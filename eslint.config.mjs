@@ -4,6 +4,9 @@ import prettierConfig from "eslint-config-prettier";
 import securityPlugin from "eslint-plugin-security";
 
 export default tseslint.config(
+  {
+    ignores: ["dist/**", "tests/**"],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   prettierConfig,
