@@ -214,6 +214,18 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") return;
 
+      try {
+        await this.#init.client.tui.showToast({
+          body: {
+            title: "Justice Plugin",
+            message: "Delegate action detected. Plan context injected.",
+            variant: "info",
+          },
+        });
+      } catch {
+        /* fail open, not critical */
+      }
+
       const args = output.args;
 
       const originalPrompt = typeof args.prompt === "string" ? args.prompt : "";
