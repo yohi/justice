@@ -45,7 +45,7 @@ export class OpenCodeAdapter {
         : { name: undefined, root: undefined };
 
     const log =
-      typeof init.client?.app?.log === "function"
+      typeof init.client.app.log === "function"
         ? init.client.app.log
         : () => {
             /* no-op */
@@ -57,7 +57,7 @@ export class OpenCodeAdapter {
       client: {
         ...init.client,
         app: {
-          ...init.client?.app,
+          ...init.client.app,
           log,
         },
       },
