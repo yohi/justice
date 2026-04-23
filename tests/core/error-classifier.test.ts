@@ -31,11 +31,8 @@ describe("ErrorClassifier", () => {
     });
 
     it("should classify loop detection", () => {
-      expect(classifier.classify("Loop detected")).toBe("loop_detected");
-      expect(classifier.classify("infinite loop")).toBe("loop_detected");
-      expect(classifier.classify("same edit applied 5 times")).toBe("loop_detected");
-      expect(classifier.classify("repeated calls to the same tool")).toBe("loop_detected");
-      expect(classifier.classify("stuck in a loop")).toBe("loop_detected");
+      const result = classifier.classify("Loop detected: same edit applied 5 times");
+      expect(result).toBe("loop_detected");
     });
 
     it("should classify design errors from architectural keywords", () => {

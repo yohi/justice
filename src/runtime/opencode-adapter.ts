@@ -1,4 +1,3 @@
-import type { PluginInput } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { NodeFileSystem } from "./node-file-system";
@@ -10,46 +9,24 @@ export interface OpenCodeLogEntry {
   readonly extra?: Record<string, unknown>;
 }
 
-/**
- * Structural bridge for OpenCode plugin initialization.
- * We extend PluginInput to explicitly capture properties we depend on.
- */
-export type OpenCodePluginInit = PluginInput & {
-  // Add specific requirements if they are missing or slightly different in PluginInput
-  readonly project: PluginInput["project"] & { readonly root?: string };
-};
-
-export interface ToolInput {
-  readonly tool: string;
-  readonly sessionID: string;
-  readonly callID: string;
-  readonly args?: Record<string, unknown>;
+export interface OpenCodePluginInit {
+  readonly project: { readonly name?: string; readonly root?: string };
+  readonly client: {
+    readonly app: {
+      log: (entry: OpenCodeLogEntry) => Promise<void> | void;
+    };
+  };
+  readonly $: (...args: unknown[]) => unknown;
+  readonly directory?: string;
+  readonly worktree?: string;
 }
 
-/**
- * Interface representing the output of 'tool.execute.before' hook.
- */
-export interface ToolBeforeOutput {
-  args: Record<string, unknown>;
-}
-
-/**
- * Interface representing the output of 'tool.execute.after' hook.
- */
-export interface ToolAfterOutput {
-  title: string;
-  readonly output: string;
-  metadata: Record<string, unknown>;
-}
-
-export interface GenericEventInput {
+interface GenericEventInput {
   readonly event: {
     readonly type: string;
     readonly properties?: Record<string, unknown>;
   };
 }
-
-export type OpenCodeEvent = GenericEventInput;
 
 export class OpenCodeAdapter {
   readonly #init: OpenCodePluginInit;
@@ -58,17 +35,9 @@ export class OpenCodeAdapter {
   #justice: JusticePlugin | null = null;
   #initPromise: Promise<void> | null = null;
 
-  /**
-   * For testing purposes, allows injecting a pre-initialized JusticePlugin.
-   */
-  public __injectJusticeForTest(justice: JusticePlugin): void {
-    this.#justice = justice;
-    this.#initPromise = Promise.resolve();
-  }
-
   constructor(init: OpenCodePluginInit) {
     this.#init = init;
-    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project.root ?? null;
+    this.#workspaceRoot = init.worktree ?? init.directory ?? null;
     this.#noOp = this.#workspaceRoot === null;
   }
 
@@ -87,12 +56,10 @@ export class OpenCodeAdapter {
   async log(level: "info" | "warn" | "error", message: string, ...args: unknown[]): Promise<void> {
     try {
       await this.#init.client.app.log({
-        body: {
-          level,
-          service: "justice",
-          message,
-          extra: args.length > 0 ? { args } : undefined,
-        },
+        level,
+        service: "justice",
+        message,
+        extra: args.length > 0 ? { args } : undefined,
       });
     } catch {
       /* final defense line: never throw from the logging wrapper */
@@ -102,14 +69,15 @@ export class OpenCodeAdapter {
   async ensureInitialized(): Promise<void> {
     if (this.#noOp) return;
     if (this.#initPromise) {
-      return this.#initPromise;
+      await this.#initPromise;
+      return;
     }
 
-    this.#initPromise = this.#runInit();
-    return this.#initPromise;
+    this.#initPromise = this.__runInit();
+    await this.#initPromise;
   }
 
-  async #runInit(): Promise<void> {
+  async __runInit(): Promise<void> {
     try {
       const root = this.#workspaceRoot;
       if (root === null) return;
@@ -125,7 +93,7 @@ export class OpenCodeAdapter {
       };
 
       const globalFs = await createGlobalFs(loggerAdapter);
-      const justice = new JusticePlugin(localFs, localFs, {
+      this.#justice = new JusticePlugin(localFs, localFs, {
         logger: loggerAdapter,
         onError: (err): void => {
           void this.log("error", "[Justice] internal error", err);
@@ -133,16 +101,14 @@ export class OpenCodeAdapter {
         globalFileSystem: globalFs ?? undefined,
       });
 
-      await justice.initialize();
-      this.#justice = justice;
+      await this.#justice.initialize();
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
-      this.#justice = null;
       await this.log("error", "[Justice] lazy init failed", err);
     }
   }
 
-  async onEvent(input: OpenCodeEvent): Promise<void> {
+  async onEvent(input: GenericEventInput): Promise<void> {
     if (this.#noOp) return;
 
     try {
@@ -151,14 +117,14 @@ export class OpenCodeAdapter {
       if (!sessionId) return;
 
       if (input.event.type === "message.updated") {
+        await this.ensureInitialized();
+        const justice = this.#justice;
+        if (!justice) return;
+
         const info = this.#readRecord(properties, "info");
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
         if (role !== "user" || content.length === 0) return;
-
-        await this.ensureInitialized();
-        const justice = this.#justice;
-        if (!justice) return;
 
         await justice.handleEvent({
           type: "Message",
@@ -192,16 +158,17 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteBefore(
-    { callID: _callID, ...input }: { tool: string; sessionID: string; callID: string },
+    input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
+    void input.callID;
     if (this.#noOp) return;
 
     try {
-      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
+      if (input.tool !== "task") return;
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
@@ -214,33 +181,16 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") return;
 
-      const args = output.args;
-      const originalPrompt = typeof args.prompt === "string" ? args.prompt : "";
-      args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
+      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
+      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
 
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
-      if (modified?.args) {
-        for (const [key, value] of Object.entries(modified.args)) {
-          if (key === "prompt") continue;
-          // eslint-disable-next-line security/detect-object-injection
-          args[key] = value;
-        }
-      }
+      if (!modified?.args) return;
 
-      // Show toast after successful injection
-      const tui = this.#init.client?.tui;
-      if (typeof tui?.showToast === "function") {
-        try {
-          await tui.showToast({
-            body: {
-              title: "Justice Plugin",
-              message: "Delegate action detected. Plan context injected.",
-              variant: "info",
-            },
-          });
-        } catch {
-          /* fail open, not critical */
-        }
+      for (const [key, value] of Object.entries(modified.args)) {
+        if (key === "prompt") continue;
+        // eslint-disable-next-line security/detect-object-injection
+        output.args[key] = value;
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
@@ -248,16 +198,23 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteAfter(
-    { callID: _callID, args: _args, ...input }: { tool: string; sessionID: string; callID: string; args?: Record<string, unknown> },
-    output: { title: string; readonly output: string; metadata: Record<string, unknown> },
+    input: {
+      readonly tool: string;
+      readonly sessionID: string;
+      readonly callID: string;
+      readonly args: Record<string, unknown>;
+    },
+    output: { readonly output: string; readonly metadata?: Record<string, unknown> },
   ): Promise<void> {
+    void input.callID;
+    void input.args;
     if (this.#noOp) return;
 
     try {
-      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
+      if (input.tool !== "task") return;
 
       await justice.handleEvent({
         type: "PostToolUse",
@@ -265,13 +222,9 @@ export class OpenCodeAdapter {
         payload: {
           toolName: input.tool,
           toolResult: output.output,
-          error: output.metadata.error === true,
+          error: output.metadata?.error === true,
         },
       });
-      if (!output.title) {
-        output.title =
-          typeof output.metadata.title === "string" ? output.metadata.title : "task completed";
-      }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);
     }
@@ -279,7 +232,7 @@ export class OpenCodeAdapter {
 
   async onSessionCompacting(
     input: { readonly sessionID: string },
-    output: { context: string[]; prompt?: string },
+    output: { context?: string[]; prompt?: string },
   ): Promise<void> {
     if (this.#noOp) return;
 
@@ -299,6 +252,7 @@ export class OpenCodeAdapter {
       });
 
       if (response.action !== "inject") return;
+      if (!output.context) output.context = [];
       output.context.push(response.injectedContext);
     } catch (err) {
       await this.log("error", "[Justice] onSessionCompacting failure", err);

@@ -1,10 +1,9 @@
 /* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
-// Simpler non-nested regex to avoid ReDoS warnings
-const TEST_RESULT_REGEX = /Tests?:?\s+(\d+)\s+passed/i;
-const FAILED_COUNT_REGEX = /(\d+)\s+failed/i;
-const SKIPPED_COUNT_REGEX = /(\d+)\s+skipped/i;
+// Tests: N passed, M failed, K skipped
+const TEST_RESULT_REGEX =
+  /Tests?:?\s+(\d+)\s+passed(?:,?\s+(\d+)\s+failed)?(?:,?\s+(\d+)\s+skipped)?/i;
 
 // Vitest-style: Tests  12 passed (12)
 const VITEST_RESULT_REGEX = /Tests\s+(\d+)\s+passed\s+\(\d+\)/i;
@@ -40,26 +39,22 @@ export class FeedbackFormatter {
    * Supports multiple formats (generic, vitest-style).
    */
   parseTestResults(rawOutput: string): TestSummary | null {
-    const passedMatch = rawOutput.match(TEST_RESULT_REGEX);
-    const failedMatch = rawOutput.match(FAILED_COUNT_REGEX);
-    const skippedMatch = rawOutput.match(SKIPPED_COUNT_REGEX);
-
-    const hasCounts = passedMatch || failedMatch || skippedMatch;
-
-    if (hasCounts) {
+    // Try generic format first
+    const genericMatch = rawOutput.match(TEST_RESULT_REGEX);
+    if (genericMatch && genericMatch[1] !== undefined) {
       return {
-        passed: passedMatch ? parseInt(passedMatch[1] || "0", 10) : 0,
-        failed: failedMatch ? parseInt(failedMatch[1] || "0", 10) : 0,
-        skipped: skippedMatch ? parseInt(skippedMatch[1] || "0", 10) : 0,
+        passed: parseInt(genericMatch[1], 10),
+        failed: genericMatch[2] !== undefined ? parseInt(genericMatch[2], 10) : 0,
+        skipped: genericMatch[3] !== undefined ? parseInt(genericMatch[3], 10) : 0,
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }
 
     // Try vitest format
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
-    if (vitestMatch) {
+    if (vitestMatch && vitestMatch[1] !== undefined) {
       return {
-        passed: parseInt(vitestMatch[1] || "0", 10),
+        passed: parseInt(vitestMatch[1], 10),
         failed: 0,
         skipped: 0,
         failureDetails: this.extractFailureDetails(rawOutput),

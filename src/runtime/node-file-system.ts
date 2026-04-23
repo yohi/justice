@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- All filesystem paths are validated by resolveSafely/resolveSafelyForWrite before use. */
 import type { FileReader, FileWriter } from "../core/types";
 import { resolve, isAbsolute, relative, dirname, basename, join } from "node:path";
 import {
@@ -20,7 +21,6 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
   async readFile(path: string): Promise<string> {
     const safePath = await this.resolveSafely(path);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     return await readFile(safePath, "utf-8");
   }
 
@@ -29,17 +29,14 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
     // Ensure parent directory exists
     const parentDir = dirname(safePath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsMkdir(parentDir, { recursive: true });
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await writeFile(safePath, content, "utf-8");
   }
 
   async fileExists(path: string): Promise<boolean> {
     try {
       const safePath = await this.resolveSafely(path);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await stat(safePath);
       return true;
     } catch (err: unknown) {
@@ -72,11 +69,9 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     const realRoot = await realpath(this.rootDir).catch((err) => {
       throw new Error(`Failed to resolve root directory: ${this.rootDir}`, { cause: err });
     });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     const realPath = await realpath(resolved);
     const realRel = relative(realRoot, realPath);
 
@@ -102,7 +97,6 @@ export class NodeFileSystem implements FileReader, FileWriter {
       throw new Error(`Unsafe path traversal rejected: ${path}`);
     }
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     const realRoot = await realpath(this.rootDir).catch((err) => {
       throw new Error(`Failed to resolve root directory: ${this.rootDir}`, { cause: err });
     });
@@ -114,7 +108,6 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
     while (current.length >= this.rootDir.length && current.startsWith(this.rootDir)) {
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename
         const currentReal = await realpath(current);
         const realRel = relative(realRoot, currentReal);
 
@@ -152,29 +145,24 @@ export class NodeFileSystem implements FileReader, FileWriter {
     const safeTo = await this.resolveSafelyForWrite(to);
 
     // Ensure parent directory exists
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsMkdir(dirname(safeTo), { recursive: true });
 
     // Paths are validated — path traversal is mitigated.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsRename(safeFrom, safeTo);
   }
 
   async mkdir(path: string, recursive: boolean): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fsMkdir(safePath, { recursive });
   }
 
   async rmdir(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await this.bestEffortDelete(() => fsRmdir(safePath));
   }
 
   async deleteFile(path: string): Promise<void> {
     const safePath = await this.resolveSafelyForWrite(path);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await this.bestEffortDelete(() => unlink(safePath));
   }
 
@@ -196,3 +184,4 @@ export class NodeFileSystem implements FileReader, FileWriter {
     }
   }
 }
+/* eslint-enable security/detect-non-literal-fs-filename */

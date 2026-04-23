@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Integration test reads validated temporary filesystem paths. */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
@@ -161,6 +162,7 @@ describe("createGlobalFs", () => {
     },
   );
 });
+/* eslint-enable security/detect-non-literal-fs-filename */
 
 describe("NoOpPersistence", () => {
   it("should return an empty WisdomStore from load()", async () => {

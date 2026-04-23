@@ -657,24 +657,6 @@ bun add justice-plugin
 
 ### 8.2 設定ファイルへの記述構成 (`oh-my-opencode.jsonc`)
 
-#### 推奨: 統合エントリーポイントを使用する場合
-
-```jsonc
-{
-  "hooks": {
-    "custom": [
-      {
-        "name": "justice-plugin",
-        "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
-        "source": "./node_modules/justice-plugin/dist/opencode-plugin.js"
-      }
-    ]
-  }
-}
-```
-
-#### 個別のフックを使用する場合
-
 ```jsonc
 {
   "hooks": {
@@ -683,6 +665,21 @@ bun add justice-plugin
         "name": "justice-plan-bridge",
         "event": ["Message", "PreToolUse"],
         "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
+      },
+      {
+        "name": "justice-task-feedback",
+        "event": ["PostToolUse"],
+        "source": "./node_modules/justice-plugin/dist/hooks/task-feedback.js"
+      },
+      {
+        "name": "justice-compaction-protector",
+        "event": ["Event"],
+        "source": "./node_modules/justice-plugin/dist/hooks/compaction-protector.js"
+      },
+      {
+        "name": "justice-loop-handler",
+        "event": ["Event"],
+        "source": "./node_modules/justice-plugin/dist/hooks/loop-handler.js"
       }
     ]
   }
@@ -702,40 +699,14 @@ import { OpenCodePlugin } from "@yohi/justice/opencode";
 export default { plugins: [OpenCodePlugin] };
 ```
 
-### フックマッピング
+### フック対応
 
-| OpenCode フック | Adapter メソッド | Justice イベント | output 射影 |
-|---|---|---|---|
-| `event` (`message.updated`) | `onEvent` | `MessageEvent` | 汎用イベント経由のため副作用のみ (`activePlan` の設定) |
-| `tool.execute.before` | `onToolExecuteBefore` | `PreToolUseEvent` (task のみ) | `inject` 時 `prompt` 前置 + 他 `args` 上書き |
-| `tool.execute.after` | `onToolExecuteAfter` | `PostToolUseEvent` (task のみ) | 結果を `output.output` と `output.metadata.error` から取得 |
-| `experimental.session.compacting` | `onSessionCompacting` | `EventEvent<CompactionPayload>` | `inject` 時 `output.context[]` に push (`prompt` を `reason` とみなす) |
-| `event` (`session.error`) | `onEvent` | `EventEvent<LoopDetectorPayload>` (loop パターン一致時のみ) | 副作用のみ |
-
-### Fail-Open テンプレート
-
-すべてのハンドラ境界で以下の構造を守ります (早期 return で処理をスキップできる場合は `ensureInitialized()` を条件チェック後に移動してよい):
-
-```text
-try {
-  // 入力イベントからの検証や、イベント種類の判定を実施
-  await this.ensureInitialized();
-  const justice = this.getJustice();
-  if (!justice) return;
-
-  const response = await justice.handleEvent(event);
-  // output への反映等
-} catch (err) {
-  await this.log("error", "[Justice] ... failure", err);
-  // 例外をスローせず、output を変更しない — OpenCode セッションは継続する
-}
-```
-
-### ワークスペース解決
-
-- `worktree ?? directory ?? project.root` を採用
-- 全て undefined の場合は Adapter が no-op モードへ縮退し、全フックが即 return する
-- `createGlobalFs()` 失敗時は `NoOpPersistence` にフォールバック (既存動作)
+- direct hook: `tool.execute.before`
+- direct hook: `tool.execute.after`
+- direct hook: `experimental.session.compacting`
+- generic hook: `event`
+  - `message.updated` → `MessageEvent`
+  - `session.error` → ループ系のみ `EventEvent<LoopDetectorPayload>`
 
 ### 追加ファイル
 
@@ -849,7 +820,6 @@ justice/
 ```typescript
 // メインとなるオーケストレーターとハブ
 export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
-export { default as handleHook } from "./opencode-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";

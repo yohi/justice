@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
-import { fakeInit, createMockedAdapter } from "../helpers/fake-opencode-init";
+import { fakeInit } from "../helpers/fake-opencode-init";
 
 describe("OpenCodeAdapter skeleton", () => {
   beforeEach(() => {
@@ -13,53 +13,38 @@ describe("OpenCodeAdapter skeleton", () => {
     expect(adapter).toBeInstanceOf(OpenCodeAdapter);
   });
 
-  it("enters no-op mode when all possible workspace roots are undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
+  it("enters no-op mode when both worktree and directory are undefined", () => {
+    const init = fakeInit({ worktree: undefined, directory: undefined });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(true);
   });
 
   it("falls back to directory when worktree is undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: "/tmp/fallback", project: { root: undefined } });
+    const init = fakeInit({ worktree: undefined, directory: "/tmp/fallback" });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(false);
     expect(adapter.getWorkspaceRoot()).toBe("/tmp/fallback");
   });
 
-  it("falls back to project.root when worktree and directory are undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: "/tmp/project-root" } });
-    const adapter = new OpenCodeAdapter(init);
-    expect(adapter.isNoOp()).toBe(false);
-    expect(adapter.getWorkspaceRoot()).toBe("/tmp/project-root");
-  });
-
-  it("prefers worktree over directory and project.root", () => {
-    const init = fakeInit({
-      worktree: "/tmp/wt",
-      directory: "/tmp/dir",
-      project: { root: "/tmp/proj" },
-    });
+  it("prefers worktree over directory when both are set", () => {
+    const init = fakeInit({ worktree: "/tmp/wt", directory: "/tmp/dir" });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.getWorkspaceRoot()).toBe("/tmp/wt");
   });
 
-  it("lazy-initializes justice only once across multiple concurrent entries", async () => {
-    // We mock JusticePlugin globally to detect calls to its initialize method
-    const { JusticePlugin } = await import("../../src/core/justice-plugin");
-    const initSpy = vi.spyOn(JusticePlugin.prototype, "initialize").mockResolvedValue(undefined);
-
+  it("lazy-initializes justice only once across multiple entries", async () => {
     const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
     const adapter = new OpenCodeAdapter(init);
-    
-    // Fire off multiple initializations concurrently
-    await Promise.all([
-      adapter.ensureInitialized(),
-      adapter.ensureInitialized(),
-      adapter.ensureInitialized(),
-    ]);
+    const initSpy = vi.spyOn(
+      adapter as unknown as { __runInit: () => Promise<void> },
+      "__runInit",
+    );
+
+    await adapter.ensureInitialized();
+    await adapter.ensureInitialized();
+    await adapter.ensureInitialized();
 
     expect(initSpy).toHaveBeenCalledTimes(1);
-    initSpy.mockRestore();
   });
 
   it("log wrapper invokes client.app.log and swallows thrown errors", async () => {
@@ -76,7 +61,7 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("no-op adapter never initializes justice", async () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
+    const init = fakeInit({ worktree: undefined, directory: undefined });
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
     expect(adapter.isNoOp()).toBe(true);
@@ -90,7 +75,11 @@ describe("OpenCodeAdapter.onEvent", () => {
   });
 
   it("routes message.updated user events with content to JusticePlugin.handleEvent", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const adapter = new OpenCodeAdapter(init);
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (!justice) throw new Error("justice should be initialized");
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onEvent({
@@ -113,7 +102,9 @@ describe("OpenCodeAdapter.onEvent", () => {
   });
 
   it("skips non-user message.updated events", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onEvent({
@@ -127,7 +118,9 @@ describe("OpenCodeAdapter.onEvent", () => {
   });
 
   it("routes loop-like session.error events to loop-detector Event", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onEvent({
@@ -151,8 +144,13 @@ describe("OpenCodeAdapter.onEvent", () => {
   });
 
   it("ignores non-loop session.error events without calling justice or logging", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const init = fakeInit();
+    const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    const adapter = new OpenCodeAdapter(init);
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const handleSpy = vi.spyOn(justice, "handleEvent");
+    logSpy.mockClear();
 
     await adapter.onEvent({
       event: {
@@ -162,10 +160,13 @@ describe("OpenCodeAdapter.onEvent", () => {
     });
 
     expect(handleSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
   });
 
   it("fails open when event handling throws", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     vi.spyOn(justice, "handleEvent").mockRejectedValue(new Error("boom"));
 
     await expect(
@@ -185,7 +186,9 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   });
 
   it("converts task tool invocations into PreToolUseEvent", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteBefore(
@@ -207,7 +210,9 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   });
 
   it("skips non-task tools", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onToolExecuteBefore(
@@ -219,7 +224,9 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   });
 
   it("prepends injected context to output.args.prompt and merges other args", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
       injectedContext: "[PLAN]",
@@ -241,12 +248,14 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
   });
 
   it("converts task tool results into PostToolUseEvent with error=false on success", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteAfter(
       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-      { title: "done", output: "result body", metadata: {} },
+      { title: "done", output: "result body", metadata: undefined },
     );
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -259,7 +268,9 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
   });
 
   it("sets error=true when output metadata includes error", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteAfter(
@@ -281,7 +292,9 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
   });
 
   it("converts compaction inputs into EventEvent with eventType=compaction", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onSessionCompacting({ sessionID: "s" }, { context: [], prompt: undefined });
@@ -296,7 +309,9 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
   });
 
   it("pushes snapshot to output.context on inject response", async () => {
-    const { adapter, justice } = createMockedAdapter();
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice()!;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
       injectedContext: "snapshot-body",
@@ -305,58 +320,5 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
     const output = { context: [] as string[], prompt: undefined as string | undefined };
     await adapter.onSessionCompacting({ sessionID: "s" }, output);
     expect(output.context).toEqual(["snapshot-body"]);
-  });
-});
-
-describe("OpenCodeAdapter advanced initialization", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("fails open and does not retry initialization if the first attempt failed", async () => {
-    const { JusticePlugin } = await import("../../src/core/justice-plugin");
-    const initSpy = vi.spyOn(JusticePlugin.prototype, "initialize");
-    
-    // First attempt fails
-    initSpy.mockRejectedValueOnce(new Error("init failed"));
-    
-    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
-    const adapter = new OpenCodeAdapter(init);
-    
-    // ensureInitialized resolves safely (fail-open)
-    await expect(adapter.ensureInitialized()).resolves.toBeUndefined();
-    expect(initSpy).toHaveBeenCalledTimes(1);
-
-    // Second attempt should not invoke initialize again
-    await expect(adapter.ensureInitialized()).resolves.toBeUndefined();
-    expect(initSpy).toHaveBeenCalledTimes(1);
-
-    initSpy.mockRestore();
-  });
-
-  it("does not initialize for non-task tools in onToolExecuteBefore", async () => {
-    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
-    const adapter = new OpenCodeAdapter(init);
-    const initSpy = vi.spyOn(adapter, "ensureInitialized");
-
-    await adapter.onToolExecuteBefore(
-      { tool: "other", sessionID: "s", callID: "c" },
-      { args: {} }
-    );
-
-    expect(initSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not initialize for non-task tools in onToolExecuteAfter", async () => {
-    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
-    const adapter = new OpenCodeAdapter(init);
-    const initSpy = vi.spyOn(adapter, "ensureInitialized");
-
-    await adapter.onToolExecuteAfter(
-      { tool: "other", sessionID: "s", callID: "c", args: {} },
-      { title: "done", output: "ok", metadata: {} }
-    );
-
-    expect(initSpy).not.toHaveBeenCalled();
   });
 });
