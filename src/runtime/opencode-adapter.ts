@@ -137,10 +137,8 @@ export class OpenCodeAdapter {
       this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
-      this.#initPromise = null;
       this.#justice = null;
       await this.log("error", "[Justice] lazy init failed", err);
-      throw err;
     }
   }
 
