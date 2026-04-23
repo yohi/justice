@@ -47,3 +47,4 @@ export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core/justice-plugin";
 export { StatusCommand, type PlanStatus } from "./core/status-command";
 export { NodeFileSystem } from "./runtime/node-file-system";
+export { default as handleHook } from "./opencode-plugin";

@@ -122,34 +122,27 @@ bun run lint
 
 ### フックの設定例 (oh-my-opencode.jsonc)
 
+#### 推奨: 統合エントリーポイントを使用する場合
+
+すべてのイベントを一つのハンドラーで処理します。管理が容易になります。
+
 ```jsonc
 {
   "hooks": {
     "custom": [
       {
-        "name": "justice-plan-bridge",
-        "event": ["Message", "PreToolUse"],
-        "source": "[PATH_TO_JUSTICE]/dist/hooks/plan-bridge.js"
-      },
-      {
-        "name": "justice-task-feedback",
-        "event": ["PostToolUse"],
-        "source": "[PATH_TO_JUSTICE]/dist/hooks/task-feedback.js"
-      },
-      {
-        "name": "justice-compaction-protector",
-        "event": ["Event"],
-        "source": "[PATH_TO_JUSTICE]/dist/hooks/compaction-protector.js"
-      },
-      {
-        "name": "justice-loop-handler",
-        "event": ["Event"],
-        "source": "[PATH_TO_JUSTICE]/dist/hooks/loop-handler.js"
+        "name": "justice-plugin",
+        "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
+        "source": "[PATH_TO_JUSTICE]/dist/opencode-plugin.js"
       }
     ]
   }
 }
 ```
+
+#### 個別のフックを使用する場合
+
+必要に応じて特定のイベントのみを選択的に適用できます。
 
 ## 使い方
 
