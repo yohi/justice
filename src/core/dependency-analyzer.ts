@@ -2,6 +2,7 @@
 import type { PlanTask } from "./types";
 
 const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
+const DEPENDS_GLOBAL_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/gi;
 
 /**
  * 依存関係の解決中に発生したエラー。
@@ -20,13 +21,10 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
-    // eslint-disable-next-line security/detect-non-literal-regexp
-    const dependsRegex = new RegExp(DEPENDS_REGEX.source, "gi");
-
     for (const task of tasks) {
       const taskDeps = new Set<string>();
       for (const step of task.steps) {
-        const matches = step.description.matchAll(dependsRegex);
+        const matches = step.description.matchAll(DEPENDS_GLOBAL_REGEX);
         for (const match of matches) {
           if (match[1]) {
             const ids = match[1].split(",").map((s) => s.trim());

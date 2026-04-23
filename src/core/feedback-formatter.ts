@@ -41,18 +41,18 @@ export class FeedbackFormatter {
   parseTestResults(rawOutput: string): TestSummary | null {
     // Try generic format first
     const genericMatch = rawOutput.match(TEST_RESULT_REGEX);
-    if (genericMatch && genericMatch[1] !== undefined) {
+    if (genericMatch) {
       return {
         passed: parseInt(genericMatch[1], 10),
-        failed: genericMatch[2] !== undefined ? parseInt(genericMatch[2], 10) : 0,
-        skipped: genericMatch[3] !== undefined ? parseInt(genericMatch[3], 10) : 0,
+        failed: genericMatch[2] ? parseInt(genericMatch[2], 10) : 0,
+        skipped: genericMatch[3] ? parseInt(genericMatch[3], 10) : 0,
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }
 
     // Try vitest format
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
-    if (vitestMatch && vitestMatch[1] !== undefined) {
+    if (vitestMatch) {
       return {
         passed: parseInt(vitestMatch[1], 10),
         failed: 0,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { JusticePlugin } from "../../src/core/justice-plugin";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 describe("OpenCodeAdapter skeleton", () => {
@@ -104,7 +105,7 @@ describe("OpenCodeAdapter.onEvent", () => {
   it("skips non-user message.updated events", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onEvent({
@@ -120,7 +121,7 @@ describe("OpenCodeAdapter.onEvent", () => {
   it("routes loop-like session.error events to loop-detector Event", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onEvent({
@@ -148,7 +149,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const handleSpy = vi.spyOn(justice, "handleEvent");
     logSpy.mockClear();
 
@@ -166,7 +167,7 @@ describe("OpenCodeAdapter.onEvent", () => {
   it("fails open when event handling throws", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     vi.spyOn(justice, "handleEvent").mockRejectedValue(new Error("boom"));
 
     await expect(
@@ -188,7 +189,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   it("converts task tool invocations into PreToolUseEvent", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteBefore(
@@ -212,7 +213,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   it("skips non-task tools", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onToolExecuteBefore(
@@ -226,7 +227,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
   it("prepends injected context to output.args.prompt and merges other args", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
       injectedContext: "[PLAN]",
@@ -250,7 +251,7 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
   it("converts task tool results into PostToolUseEvent with error=false on success", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteAfter(
@@ -270,7 +271,7 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
   it("sets error=true when output metadata includes error", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onToolExecuteAfter(
@@ -294,7 +295,7 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
   it("converts compaction inputs into EventEvent with eventType=compaction", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onSessionCompacting({ sessionID: "s" }, { context: [], prompt: undefined });
@@ -311,7 +312,7 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
   it("pushes snapshot to output.context on inject response", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const justice = adapter.getJustice()!;
+    const justice = adapter.getJustice() as JusticePlugin;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
       injectedContext: "snapshot-body",
