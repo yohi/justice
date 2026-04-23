@@ -8,6 +8,12 @@ describe("OpenCodePlugin (integration)", () => {
     vi.clearAllMocks();
   });
 
+  type HandlerFunc = (i: any, o?: any) => Promise<void>;
+  const getHandler = (handlers: any, key: string): HandlerFunc => {
+    // eslint-disable-next-line security/detect-object-injection
+    return handlers[key] as HandlerFunc;
+  };
+
   it("is assignable to the OpenCode Plugin type", () => {
     const checked: Plugin = OpenCodePlugin;
     expect(typeof checked).toBe("function");
@@ -30,21 +36,20 @@ describe("OpenCodePlugin (integration)", () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as Parameters<typeof OpenCodePlugin>[0]);
     await Promise.all([
-      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>).event?.({
+      getHandler(handlers, "event")({
         event: {
           type: "message.updated",
           properties: { sessionID: "s", info: { role: "user", content: "hi" } },
         },
       }),
-      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)["tool.execute.before"]?.(
+      getHandler(handlers, "tool.execute.before")(
         { tool: "task", sessionID: "s", callID: "c1" },
         { args: { prompt: "p" } },
       ),
-      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)["tool.execute.after"]?.(
-       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-       { title: "done", output: "r", metadata: {} },
+      getHandler(handlers, "tool.execute.after")(
+        { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
+        { title: "done", output: "r", metadata: {} },
       ),
-
     ]);
 
     const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
@@ -67,15 +72,13 @@ describe("OpenCodePlugin (integration)", () => {
     const handlers = await OpenCodePlugin(init as Parameters<typeof OpenCodePlugin>[0]);
     const output = { context: [] as string[] };
 
-    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>).event?.({
+    await getHandler(handlers, "event")({
       event: {
         type: "message.updated",
         properties: { sessionID: "s", info: { role: "user", content: "hi" } },
       },
     });
-    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
-      "experimental.session.compacting"
-    ]?.({ sessionID: "s" }, output);
+    await getHandler(handlers, "experimental.session.compacting")({ sessionID: "s" }, output);
 
     expect(output.context).toEqual([]);
   });

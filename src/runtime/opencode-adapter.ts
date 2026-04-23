@@ -1,3 +1,4 @@
+import type { PluginInput } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { NodeFileSystem } from "./node-file-system";
@@ -9,6 +10,10 @@ export interface OpenCodeLogEntry {
   readonly extra?: Record<string, unknown>;
 }
 
+/**
+ * Structural bridge for OpenCode plugin initialization.
+ * We use a subset of PluginInput that Justice actually needs.
+ */
 export interface OpenCodePluginInit {
   readonly project: { readonly name?: string; readonly root?: string };
   readonly client: {
@@ -16,10 +21,13 @@ export interface OpenCodePluginInit {
       log: (entry: OpenCodeLogEntry) => Promise<void> | void;
     };
   };
-  readonly $: (...args: unknown[]) => unknown;
+  readonly $: any;
   readonly directory?: string;
   readonly worktree?: string;
 }
+
+// Ensure OpenCodePluginInit is compatible with a subset of PluginInput
+type _CompatibilityCheck = PluginInput extends OpenCodePluginInit ? true : false;
 
 export interface ToolInput {
   readonly tool: string;
