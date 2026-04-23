@@ -1,8 +1,9 @@
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
-// Tests: N passed, M failed, K skipped
-const TEST_RESULT_REGEX =
-  /Tests?:?\s+(\d+)\s+passed(?:,?\s+(\d+)\s+failed)?(?:,?\s+(\d+)\s+skipped)?/i;
+// Simpler non-nested regex to avoid ReDoS warnings
+const TEST_RESULT_REGEX = /Tests?:?\s+(\d+)\s+passed/i;
+const FAILED_COUNT_REGEX = /(\d+)\s+failed/i;
+const SKIPPED_COUNT_REGEX = /(\d+)\s+skipped/i;
 
 // Vitest-style: Tests  12 passed (12)
 const VITEST_RESULT_REGEX = /Tests\s+(\d+)\s+passed\s+\(\d+\)/i;
@@ -37,14 +38,17 @@ export class FeedbackFormatter {
    * Parse test results from raw output.
    * Supports multiple formats (generic, vitest-style).
    */
-  parseTestResults(rawOutput: string): TestSummary | null {
+  parseTestResults(rawOutput): TestSummary | null {
     // Try generic format first
-    const genericMatch = rawOutput.match(TEST_RESULT_REGEX);
-    if (genericMatch && genericMatch[1] !== undefined) {
+    const passedMatch = rawOutput.match(TEST_RESULT_REGEX);
+    if (passedMatch && passedMatch[1] !== undefined) {
+      const failedMatch = rawOutput.match(FAILED_COUNT_REGEX);
+      const skippedMatch = rawOutput.match(SKIPPED_COUNT_REGEX);
+
       return {
-        passed: parseInt(genericMatch[1], 10),
-        failed: genericMatch[2] !== undefined ? parseInt(genericMatch[2], 10) : 0,
-        skipped: genericMatch[3] !== undefined ? parseInt(genericMatch[3], 10) : 0,
+        passed: parseInt(passedMatch[1], 10),
+        failed: failedMatch && failedMatch[1] !== undefined ? parseInt(failedMatch[1], 10) : 0,
+        skipped: skippedMatch && skippedMatch[1] !== undefined ? parseInt(skippedMatch[1], 10) : 0,
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }

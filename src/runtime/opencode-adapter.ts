@@ -25,14 +25,14 @@ export interface ToolInput {
   readonly tool: string;
   readonly sessionID: string;
   readonly callID: string;
-  readonly args?: any;
+  readonly args?: Record<string, unknown>;
 }
 
 /**
  * Interface representing the output of 'tool.execute.before' hook.
  */
 export interface ToolBeforeOutput {
-  args: any;
+  args: Record<string, unknown>;
 }
 
 /**
@@ -41,7 +41,7 @@ export interface ToolBeforeOutput {
 export interface ToolAfterOutput {
   title: string;
   readonly output: string;
-  metadata: any;
+  metadata: Record<string, unknown>;
 }
 
 export interface GenericEventInput {
@@ -194,8 +194,8 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteBefore(
-    input: { tool: string; sessionID: string; callID: string },
-    output: { args: any },
+    { callID: _callID, ...input }: { tool: string; sessionID: string; callID: string },
+    output: { args: Record<string, unknown> },
   ): Promise<void> {
     if (this.#noOp) return;
 
@@ -238,8 +238,8 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteAfter(
-    input: { tool: string; sessionID: string; callID: string; args?: any },
-    output: { title: string; readonly output: string; metadata: any },
+    { callID: _callID, args: _args, ...input }: { tool: string; sessionID: string; callID: string; args?: Record<string, unknown> },
+    output: { title: string; readonly output: string; metadata: Record<string, unknown> },
   ): Promise<void> {
     if (this.#noOp) return;
 
@@ -259,6 +259,7 @@ export class OpenCodeAdapter {
         },
       });
       if (!output.title) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (output as any).title = (output.metadata?.title as string) ?? "task completed";
       }
     } catch (err) {
