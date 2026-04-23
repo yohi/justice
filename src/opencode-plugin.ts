@@ -21,7 +21,7 @@ async function getPlugin(): Promise<JusticePlugin> {
     return pluginInitPromise;
   }
 
-  pluginInitPromise = (async () => {
+  pluginInitPromise = (async (): Promise<JusticePlugin> => {
     try {
       const root = process.cwd();
       const fileSystem = new NodeFileSystem(root);
@@ -34,9 +34,6 @@ async function getPlugin(): Promise<JusticePlugin> {
       await instance.initialize();
       pluginInstance = instance;
       return instance;
-    } catch (error) {
-      // Re-throw so callers can handle the initial failure
-      throw error;
     } finally {
       // Clear the init promise so that future calls can retry if it failed,
       // or simply rely on pluginInstance if it succeeded.
