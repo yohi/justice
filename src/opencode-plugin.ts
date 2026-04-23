@@ -51,13 +51,23 @@ export {
  */
 export async function handleHook(
   event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
+  init?: Partial<OpenCodePluginInit>,
 ): Promise<void> {
-  let pluginInstance: Awaited<ReturnType<typeof OpenCodePlugin>> | undefined;
-  try {
-    pluginInstance = await OpenCodePlugin({ project: {} } as unknown as OpenCodePluginInit);
-  } catch {
-    // Ignore error to fall through to the clear throw below
+  if (
+    !init ||
+    !init.client ||
+    !init.serverUrl ||
+    !init.$ ||
+    !init.project ||
+    typeof init.project !== "object" ||
+    (!init.directory && !init.worktree && !init.project.root)
+  ) {
+    throw new Error(
+      "[JUSTICE] handleHook initialization failed: Missing required fields in init parameter (client, directory/worktree, serverUrl, $, and a proper project shape). Please use OpenCodePlugin instead or provide a valid init.",
+    );
   }
+
+  const pluginInstance = await OpenCodePlugin(init as OpenCodePluginInit);
 
   if (pluginInstance && typeof pluginInstance.event === "function") {
     await pluginInstance.event(event);
