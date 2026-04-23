@@ -12,17 +12,11 @@ export interface OpenCodeLogEntry {
 
 /**
  * Structural bridge for OpenCode plugin initialization.
- * We use a subset of PluginInput that Justice actually needs,
- * extended with internal expectations if necessary.
+ * We extend PluginInput to explicitly capture properties we depend on.
  */
 export type OpenCodePluginInit = PluginInput & {
-  readonly $: PluginInput["$"];
-  readonly project: { readonly root?: string };
-  readonly client: {
-    readonly app: {
-      readonly log: PluginInput["client"]["app"]["log"];
-    };
-  };
+  // Add specific requirements if they are missing or slightly different in PluginInput
+  readonly project: PluginInput["project"] & { readonly root?: string };
 };
 
 export interface ToolInput {
