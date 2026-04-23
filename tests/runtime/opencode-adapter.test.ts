@@ -15,7 +15,7 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("enters no-op mode when both worktree and directory are undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined });
+    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(true);
   });
@@ -36,16 +36,14 @@ describe("OpenCodeAdapter skeleton", () => {
   it("lazy-initializes justice only once across multiple entries", async () => {
     const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
     const adapter = new OpenCodeAdapter(init);
-    const initSpy = vi.spyOn(
-      adapter as unknown as { __runInit: () => Promise<void> },
-      "__runInit",
-    );
+    const initSpy = vi.spyOn(JusticePlugin.prototype, "initialize");
 
     await adapter.ensureInitialized();
     await adapter.ensureInitialized();
     await adapter.ensureInitialized();
 
     expect(initSpy).toHaveBeenCalledTimes(1);
+    initSpy.mockRestore();
   });
 
   it("log wrapper invokes client.app.log and swallows thrown errors", async () => {
@@ -62,7 +60,7 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("no-op adapter never initializes justice", async () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined });
+    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
     expect(adapter.isNoOp()).toBe(true);

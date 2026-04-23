@@ -1,5 +1,6 @@
 /* eslint-disable security/detect-unsafe-regex */
 export const LOOP_ERROR_PATTERNS: readonly RegExp[] = Object.freeze([
+  /same\s+edit\s+applied/i,
   /loop\s*detect/i,
   /infinite\s+loop/i,
   /repetition\s*limit/i,

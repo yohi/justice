@@ -37,7 +37,7 @@ export class OpenCodeAdapter {
 
   constructor(init: OpenCodePluginInit) {
     this.#init = init;
-    this.#workspaceRoot = init.worktree ?? init.directory ?? null;
+    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project.root ?? null;
     this.#noOp = this.#workspaceRoot === null;
   }
 
@@ -73,11 +73,11 @@ export class OpenCodeAdapter {
       return;
     }
 
-    this.#initPromise = this.__runInit();
+    this.#initPromise = this.#runInit();
     await this.#initPromise;
   }
 
-  async __runInit(): Promise<void> {
+  async #runInit(): Promise<void> {
     try {
       const root = this.#workspaceRoot;
       if (root === null) return;
@@ -161,7 +161,6 @@ export class OpenCodeAdapter {
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
     if (this.#noOp) return;
 
     try {
@@ -206,8 +205,6 @@ export class OpenCodeAdapter {
     },
     output: { readonly output: string; readonly metadata?: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
-    void input.args;
     if (this.#noOp) return;
 
     try {

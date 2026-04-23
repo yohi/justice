@@ -10,5 +10,14 @@ export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodeP
     worktree: "/tmp/test-workspace",
   };
 
-  return { ...base, ...overrides };
+  return {
+    ...base,
+    ...overrides,
+    project: { ...base.project, ...overrides.project },
+    client: {
+      ...base.client,
+      ...overrides.client,
+      app: { ...base.client.app, ...overrides.client?.app },
+    },
+  };
 }
