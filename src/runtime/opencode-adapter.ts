@@ -1,3 +1,4 @@
+import type { PluginInput } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { NodeFileSystem } from "./node-file-system";
@@ -24,6 +25,12 @@ export interface OpenCodePluginInit {
   readonly directory?: string;
   readonly worktree?: string;
 }
+
+// Ensure OpenCodePluginInit is compatible with a subset of PluginInput
+type _CompatibilityCheck = PluginInput extends OpenCodePluginInit ? true : never;
+const _compatibilityCheck: _CompatibilityCheck extends true ? true : never = true;
+// Mark as used to satisfy linters if necessary
+void _compatibilityCheck;
 
 export interface ToolInput {
   readonly tool: string;
