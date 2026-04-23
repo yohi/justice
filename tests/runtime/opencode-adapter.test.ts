@@ -313,7 +313,7 @@ describe("OpenCodeAdapter advanced initialization", () => {
     vi.clearAllMocks();
   });
 
-  it("retries initialization if a previous attempt failed", async () => {
+  it("fails open and does not retry initialization if the first attempt failed", async () => {
     const { JusticePlugin } = await import("../../src/core/justice-plugin");
     const initSpy = vi.spyOn(JusticePlugin.prototype, "initialize");
     
@@ -323,13 +323,13 @@ describe("OpenCodeAdapter advanced initialization", () => {
     const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
     const adapter = new OpenCodeAdapter(init);
     
-    await expect(adapter.ensureInitialized()).rejects.toThrow("init failed");
+    // ensureInitialized resolves safely (fail-open)
+    await expect(adapter.ensureInitialized()).resolves.toBeUndefined();
     expect(initSpy).toHaveBeenCalledTimes(1);
 
-    // Second attempt succeeds
-    initSpy.mockResolvedValueOnce(undefined);
+    // Second attempt should not invoke initialize again
     await expect(adapter.ensureInitialized()).resolves.toBeUndefined();
-    expect(initSpy).toHaveBeenCalledTimes(2);
+    expect(initSpy).toHaveBeenCalledTimes(1);
 
     initSpy.mockRestore();
   });

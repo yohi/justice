@@ -702,14 +702,40 @@ import { OpenCodePlugin } from "@yohi/justice/opencode";
 export default { plugins: [OpenCodePlugin] };
 ```
 
-### フック対応
+### フックマッピング
 
-- direct hook: `tool.execute.before`
-- direct hook: `tool.execute.after`
-- direct hook: `experimental.session.compacting`
-- generic hook: `event`
-  - `message.updated` → `MessageEvent`
-  - `session.error` → ループ系のみ `EventEvent<LoopDetectorPayload>`
+| OpenCode フック | Adapter メソッド | Justice イベント | output 射影 |
+|---|---|---|---|
+| `event` (`message.updated`) | `onEvent` | `MessageEvent` | 汎用イベント経由のため副作用のみ (`activePlan` の設定) |
+| `tool.execute.before` | `onToolExecuteBefore` | `PreToolUseEvent` (task のみ) | `inject` 時 `prompt` 前置 + 他 `args` 上書き |
+| `tool.execute.after` | `onToolExecuteAfter` | `PostToolUseEvent` (task のみ) | 結果を `output.output` と `output.metadata.error` から取得 |
+| `experimental.session.compacting` | `onSessionCompacting` | `EventEvent<CompactionPayload>` | `inject` 時 `output.context[]` に push (`prompt` を `reason` とみなす) |
+| `event` (`session.error`) | `onEvent` | `EventEvent<LoopDetectorPayload>` (loop パターン一致時のみ) | 副作用のみ |
+
+### Fail-Open テンプレート
+
+すべてのハンドラ境界で以下の構造を守ります (早期 return で処理をスキップできる場合は `ensureInitialized()` を条件チェック後に移動してよい):
+
+```text
+try {
+  // 入力イベントからの検証や、イベント種類の判定を実施
+  await this.ensureInitialized();
+  const justice = this.getJustice();
+  if (!justice) return;
+
+  const response = await justice.handleEvent(event);
+  // output への反映等
+} catch (err) {
+  await this.log("error", "[Justice] ... failure", err);
+  // 例外をスローせず、output を変更しない — OpenCode セッションは継続する
+}
+```
+
+### ワークスペース解決
+
+- `worktree ?? directory ?? project.root` を採用
+- 全て undefined の場合は Adapter が no-op モードへ縮退し、全フックが即 return する
+- `createGlobalFs()` 失敗時は `NoOpPersistence` にフォールバック (既存動作)
 
 ### 追加ファイル
 
