@@ -37,7 +37,7 @@ export class OpenCodeAdapter {
 
   constructor(init: OpenCodePluginInit) {
     const project =
-      init.project && typeof init.project === "object"
+      typeof init.project === "object"
         ? {
             name: init.project.name,
             root: init.project.root,
