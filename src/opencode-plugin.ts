@@ -50,12 +50,22 @@ export {
  * (Used by some early integrations)
  */
 export async function handleHook(
-  _event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
+  event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
 ): Promise<void> {
-  // Note: This is a simplified wrapper. The primary integration should use OpenCodePlugin.
-  // We'll keep this as a fail-safe that uses a one-off adapter if needed,
-  // but recommended path is through the Plugin-type OpenCodePlugin.
-  console.warn("[JUSTICE] handleHook called directly. Use OpenCodePlugin for full adapter features.");
+  let pluginInstance;
+  try {
+    pluginInstance = await OpenCodePlugin({ project: {} } as any);
+  } catch (error) {
+    // Ignore error to fall through to the clear throw below
+  }
+
+  if (pluginInstance && typeof pluginInstance.event === "function") {
+    await pluginInstance.event(event);
+  } else {
+    throw new Error(
+      "[JUSTICE] handleHook is unsupported: plugin instance cannot be created or does not expose an event handler. Please use OpenCodePlugin instead.",
+    );
+  }
 }
 
 export default OpenCodePlugin;
