@@ -47,9 +47,9 @@ export class FeedbackFormatter {
 
     if (hasCounts) {
       return {
-        passed: passedMatch ? parseInt(passedMatch[1], 10) : 0,
-        failed: failedMatch ? parseInt(failedMatch[1], 10) : 0,
-        skipped: skippedMatch ? parseInt(skippedMatch[1], 10) : 0,
+        passed: passedMatch ? parseInt(passedMatch[1] || "0", 10) : 0,
+        failed: failedMatch ? parseInt(failedMatch[1] || "0", 10) : 0,
+        skipped: skippedMatch ? parseInt(skippedMatch[1] || "0", 10) : 0,
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }
@@ -58,7 +58,7 @@ export class FeedbackFormatter {
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
     if (vitestMatch) {
       return {
-        passed: parseInt(vitestMatch[1], 10),
+        passed: parseInt(vitestMatch[1] || "0", 10),
         failed: 0,
         skipped: 0,
         failureDetails: this.extractFailureDetails(rawOutput),
