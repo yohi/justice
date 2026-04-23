@@ -8,6 +8,9 @@
 
 ### Features
 
+- **opencode-plugin:** add `@yohi/justice/opencode` subpath export with `OpenCodePlugin` entrypoint and `OpenCodeAdapter` runtime bridge for the current OpenCode plugin API.
+- **runtime:** add `OpenCodeAdapter` lazy initialization, fail-open hook boundaries, compaction injection, and loop-error mapping via generic `event` handling.
+- **core:** add `LOOP_ERROR_PATTERNS` and `matchesLoopError` for session loop detection.
 - **Cross-Project Wisdom Store**: introduce `TieredWisdomStore` and `SecretPatternDetector`. Wisdom entries categorized as `environment_quirk` or `success_pattern` are auto-promoted to a user-global store at `~/.justice/wisdom.json` (configurable via `JUSTICE_GLOBAL_WISDOM_PATH`), while `failure_gotcha` and `design_decision` remain project-local. Any entry flagged by `SecretPatternDetector` as potentially containing secrets will **trigger a warning and have its global promotion cancelled** (falling back to project-local store) to prevent cross-project leakage. Callers can override routing via `{scope: "local" | "global"}`. Reads prefer the local store and fill the remainder from the global store.
 - `FileWriter.rename(from, to)` and `FileWriter.deleteFile(path)` interfaces plus `NodeFileSystem.rename()` / `NodeFileSystem.deleteFile()` implementations (path-traversal safe).
 - `WisdomStore.getAllEntries()`, `WisdomStore.getMaxEntries()`, and `WisdomStore.fromEntries()` (pure additions).
