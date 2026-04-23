@@ -8,8 +8,8 @@ describe("OpenCodePlugin (integration)", () => {
     vi.clearAllMocks();
   });
 
-  type HandlerFunc = (i: any, o?: any) => Promise<void>;
-  const getHandler = (handlers: any, key: string): HandlerFunc => {
+  type HandlerFunc = (i: unknown, o?: unknown) => Promise<void>;
+  const getHandler = (handlers: Record<string, unknown>, key: string): HandlerFunc => {
     // eslint-disable-next-line security/detect-object-injection
     return handlers[key] as HandlerFunc;
   };
