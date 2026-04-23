@@ -257,7 +257,7 @@ export class OpenCodeAdapter {
       });
       if (!output.title) {
         output.title =
-          typeof output.metadata?.title === "string" ? output.metadata.title : "task completed";
+          typeof output.metadata.title === "string" ? output.metadata.title : "task completed";
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);
