@@ -22,17 +22,26 @@ async function getPlugin(): Promise<JusticePlugin> {
   }
 
   pluginInitPromise = (async () => {
-    const root = process.cwd();
-    const fileSystem = new NodeFileSystem(root);
-    const globalFs = await createGlobalFs();
+    try {
+      const root = process.cwd();
+      const fileSystem = new NodeFileSystem(root);
+      const globalFs = await createGlobalFs();
 
-    const instance = new JusticePlugin(fileSystem, fileSystem, {
-      globalFileSystem: globalFs || undefined,
-    });
+      const instance = new JusticePlugin(fileSystem, fileSystem, {
+        globalFileSystem: globalFs || undefined,
+      });
 
-    await instance.initialize();
-    pluginInstance = instance;
-    return instance;
+      await instance.initialize();
+      pluginInstance = instance;
+      return instance;
+    } catch (error) {
+      // Re-throw so callers can handle the initial failure
+      throw error;
+    } finally {
+      // Clear the init promise so that future calls can retry if it failed,
+      // or simply rely on pluginInstance if it succeeded.
+      pluginInitPromise = null;
+    }
   })();
 
   return pluginInitPromise;

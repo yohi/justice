@@ -688,7 +688,6 @@ bun add justice-plugin
   }
 }
 ```
-```
 
 ---
 
