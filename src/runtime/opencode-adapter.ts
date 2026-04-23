@@ -45,7 +45,7 @@ export class OpenCodeAdapter {
 
   constructor(init: OpenCodePluginInit) {
     this.#init = init;
-    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project?.root ?? null;
+    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project.root ?? null;
     this.#noOp = this.#workspaceRoot === null;
   }
 
