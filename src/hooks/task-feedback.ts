@@ -335,6 +335,7 @@ export class TaskFeedbackHandler {
 
       const toRemove = this.sessions.size - MAX_SESSIONS + 1;
       for (let i = 0; i < toRemove; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const entry = sortedSessions[i];
         if (entry) {
           this.sessions.delete(entry[0]);

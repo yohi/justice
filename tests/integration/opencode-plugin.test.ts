@@ -11,7 +11,11 @@ describe("OpenCodePlugin (integration)", () => {
   type HandlerFunc = (i: unknown, o?: unknown) => Promise<void>;
   const getHandler = (handlers: Record<string, unknown>, key: string): HandlerFunc => {
     // eslint-disable-next-line security/detect-object-injection
-    return handlers[key] as HandlerFunc;
+    const handler = handlers[key];
+    if (typeof handler !== "function") {
+      throw new Error(`Missing or non-callable handler for key: ${key}`);
+    }
+    return handler as HandlerFunc;
   };
 
   it("is assignable to the OpenCode Plugin type", () => {
