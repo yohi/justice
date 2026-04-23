@@ -52,7 +52,7 @@ export {
 export async function handleHook(
   event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
 ): Promise<void> {
-  let pluginInstance;
+  let pluginInstance: Awaited<ReturnType<typeof OpenCodePlugin>> | undefined;
   try {
     pluginInstance = await OpenCodePlugin({ project: {} } as unknown as OpenCodePluginInit);
   } catch {
