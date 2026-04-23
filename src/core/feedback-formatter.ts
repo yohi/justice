@@ -1,10 +1,6 @@
 /* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
-// Tests: N passed, M failed, K skipped (all groups optional)
-const TEST_RESULT_REGEX =
-  /Tests?:?\s+(?:(\d+)\s+passed)?\s*,?\s*(?:(\d+)\s+failed)?\s*,?\s*(?:(\d+)\s+skipped)?/i;
-
 // Vitest-style: Tests  12 passed (12)
 const VITEST_RESULT_REGEX = /Tests\s+(\d+)\s+passed\s+\(\d+\)/i;
 
@@ -46,10 +42,14 @@ export class FeedbackFormatter {
       const skipped = rawOutput.match(/(\d+)\s+skipped/i);
 
       if (passed || failed || skipped) {
+        const [, passedCount = "0"] = passed ?? [];
+        const [, failedCount = "0"] = failed ?? [];
+        const [, skippedCount = "0"] = skipped ?? [];
+
         return {
-          passed: passed ? parseInt(passed[1] ?? "0", 10) : 0,
-          failed: failed ? parseInt(failed[1] ?? "0", 10) : 0,
-          skipped: skipped ? parseInt(skipped[1] ?? "0", 10) : 0,
+          passed: parseInt(passedCount, 10),
+          failed: parseInt(failedCount, 10),
+          skipped: parseInt(skippedCount, 10),
           failureDetails: this.extractFailureDetails(rawOutput),
         };
       }
