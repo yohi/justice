@@ -214,30 +214,33 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") return;
 
-      try {
-        await this.#init.client.tui.showToast({
-          body: {
-            title: "Justice Plugin",
-            message: "Delegate action detected. Plan context injected.",
-            variant: "info",
-          },
-        });
-      } catch {
-        /* fail open, not critical */
-      }
-
       const args = output.args;
-
       const originalPrompt = typeof args.prompt === "string" ? args.prompt : "";
       args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
 
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
-      if (!modified?.args) return;
+      if (modified?.args) {
+        for (const [key, value] of Object.entries(modified.args)) {
+          if (key === "prompt") continue;
+          // eslint-disable-next-line security/detect-object-injection
+          args[key] = value;
+        }
+      }
 
-      for (const [key, value] of Object.entries(modified.args)) {
-        if (key === "prompt") continue;
-        // eslint-disable-next-line security/detect-object-injection
-        args[key] = value;
+      // Show toast after successful injection
+      const tui = this.#init.client?.tui;
+      if (typeof tui?.showToast === "function") {
+        try {
+          await tui.showToast({
+            body: {
+              title: "Justice Plugin",
+              message: "Delegate action detected. Plan context injected.",
+              variant: "info",
+            },
+          });
+        } catch {
+          /* fail open, not critical */
+        }
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
