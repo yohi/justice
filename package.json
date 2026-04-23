@@ -44,7 +44,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@opencode-ai/plugin": "^1.14.21",
     "@types/bun": "latest",
     "@types/node": "^25.5.0",
     "@vitest/coverage-v8": "4.1.1",
@@ -56,6 +55,12 @@
     "vitest": "^4.1.1"
   },
   "peerDependencies": {
+    "@opencode-ai/plugin": "^1.14.21",
     "typescript": "^6.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
   }
 }

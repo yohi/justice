@@ -14,7 +14,7 @@ describe("OpenCodePlugin (integration)", () => {
   });
 
   it("returns the expected direct hook keys plus generic event", async () => {
-    const handlers = await OpenCodePlugin(fakeInit() as never);
+    const handlers = await OpenCodePlugin(fakeInit() as Parameters<typeof OpenCodePlugin>[0]);
     const keys = Object.keys(handlers);
     expect(keys).toEqual(
       expect.arrayContaining([
@@ -28,7 +28,7 @@ describe("OpenCodePlugin (integration)", () => {
 
   it("invokes lazy init only once across multiple hook entries", async () => {
     const init = fakeInit();
-    const handlers = await OpenCodePlugin(init as never);
+    const handlers = await OpenCodePlugin(init as Parameters<typeof OpenCodePlugin>[0]);
     await Promise.all([
       (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>).event?.({
         event: {
@@ -59,7 +59,7 @@ describe("OpenCodePlugin (integration)", () => {
 
   it("fails open during lazy init when workspace is unavailable", async () => {
     const init = fakeInit({ worktree: undefined, directory: undefined });
-    const handlers = await OpenCodePlugin(init as never);
+    const handlers = await OpenCodePlugin(init as Parameters<typeof OpenCodePlugin>[0]);
     const output = { context: [] as string[] };
 
     await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>).event?.({

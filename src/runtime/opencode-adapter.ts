@@ -80,10 +80,7 @@ export class OpenCodeAdapter {
       return this.#initPromise;
     }
 
-    this.#initPromise = this.#runInit().catch((err) => {
-      this.#initPromise = null;
-      throw err;
-    });
+    this.#initPromise = this.#runInit();
     return this.#initPromise;
   }
 
@@ -103,7 +100,7 @@ export class OpenCodeAdapter {
       };
 
       const globalFs = await createGlobalFs(loggerAdapter);
-      this.#justice = new JusticePlugin(localFs, localFs, {
+      const justice = new JusticePlugin(localFs, localFs, {
         logger: loggerAdapter,
         onError: (err): void => {
           void this.log("error", "[Justice] internal error", err);
@@ -111,9 +108,12 @@ export class OpenCodeAdapter {
         globalFileSystem: globalFs ?? undefined,
       });
 
-      await this.#justice.initialize();
+      await justice.initialize();
+      this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
+      this.#initPromise = null;
+      this.#justice = null;
       await this.log("error", "[Justice] lazy init failed", err);
       throw err;
     }
@@ -128,14 +128,14 @@ export class OpenCodeAdapter {
       if (!sessionId) return;
 
       if (input.event.type === "message.updated") {
-        await this.ensureInitialized();
-        const justice = this.#justice;
-        if (!justice) return;
-
         const info = this.#readRecord(properties, "info");
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
         if (role !== "user" || content.length === 0) return;
+
+        await this.ensureInitialized();
+        const justice = this.#justice;
+        if (!justice) return;
 
         await justice.handleEvent({
           type: "Message",
@@ -172,7 +172,6 @@ export class OpenCodeAdapter {
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
     if (this.#noOp) return;
 
     try {
@@ -209,7 +208,7 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteAfter(
-    input: {
+    _input: {
       readonly tool: string;
       readonly sessionID: string;
       readonly callID: string;
@@ -217,21 +216,19 @@ export class OpenCodeAdapter {
     },
     output: { readonly output: string; readonly metadata?: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
-    void input.args;
     if (this.#noOp) return;
 
     try {
-      if (input.tool !== "task") return;
+      if (_input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
 
       await justice.handleEvent({
         type: "PostToolUse",
-        sessionId: input.sessionID,
+        sessionId: _input.sessionID,
         payload: {
-          toolName: input.tool,
+          toolName: _input.tool,
           toolResult: output.output,
           error: output.metadata?.error === true,
         },
