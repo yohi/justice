@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-unsafe-regex -- Dependency markers are deliberately constrained and regex-parsed. */
 import type { PlanTask } from "./types";
 
 const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
@@ -19,6 +20,7 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
+    // eslint-disable-next-line security/detect-non-literal-regexp
     const dependsRegex = new RegExp(DEPENDS_REGEX.source, "gi");
 
     for (const task of tasks) {
@@ -171,3 +173,4 @@ export class DependencyAnalyzer {
     return circularIds;
   }
 }
+/* eslint-enable security/detect-unsafe-regex */

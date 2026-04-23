@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
 // Tests: N passed, M failed, K skipped
@@ -106,3 +107,4 @@ export class FeedbackFormatter {
     return details;
   }
 }
+/* eslint-enable security/detect-unsafe-regex */
