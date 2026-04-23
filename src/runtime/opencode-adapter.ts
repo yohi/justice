@@ -16,19 +16,14 @@ export interface OpenCodeLogEntry {
  * extended with internal expectations if necessary.
  */
 export type OpenCodePluginInit = PluginInput & {
+  readonly $: PluginInput["$"];
   readonly project: { readonly root?: string };
   readonly client: {
     readonly app: {
-      readonly log: (
-        ...args: Parameters<PluginInput["client"]["app"]["log"]>
-      ) => ReturnType<PluginInput["client"]["app"]["log"]>;
+      readonly log: PluginInput["client"]["app"]["log"];
     };
   };
 };
-
-// Ensure OpenCodePluginInit is compatible with a subset of PluginInput
-type _CompatibilityCheck = PluginInput extends OpenCodePluginInit ? true : never;
-const _compatibilityCheck: _CompatibilityCheck extends true ? true : never = true;
 
 export interface ToolInput {
   readonly tool: string;

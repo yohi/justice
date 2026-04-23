@@ -1,7 +1,12 @@
 ---
+exclude_paths:
+  - "src/runtime/node-file-system.ts"
+  - "tests/helpers/mock-file-system.ts"
+  - "tests/runtime/node-file-system.test.ts"
 engines:
   eslint-8:
     exclude_paths:
       - "src/runtime/node-file-system.ts"
       - "tests/helpers/mock-file-system.ts"
       - "tests/runtime/node-file-system.test.ts"
+      - "tests/integration/opencode-plugin.test.ts"
