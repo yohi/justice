@@ -35,6 +35,14 @@ export class OpenCodeAdapter {
   #justice: JusticePlugin | null = null;
   #initPromise: Promise<void> | null = null;
 
+  /**
+   * For testing purposes, allows injecting a pre-initialized JusticePlugin.
+   */
+  public __injectJusticeForTest(justice: JusticePlugin): void {
+    this.#justice = justice;
+    this.#initPromise = Promise.resolve();
+  }
+
   constructor(init: OpenCodePluginInit) {
     this.#init = init;
     this.#workspaceRoot = init.worktree ?? init.directory ?? null;
@@ -73,11 +81,11 @@ export class OpenCodeAdapter {
       return;
     }
 
-    this.#initPromise = this.__runInit();
+    this.#initPromise = this.#runInit();
     await this.#initPromise;
   }
 
-  async __runInit(): Promise<void> {
+  async #runInit(): Promise<void> {
     try {
       const root = this.#workspaceRoot;
       if (root === null) return;
