@@ -60,10 +60,7 @@ export class PlanBridge {
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
     // React to both assistant and user messages (different integrations use different roles)
-    if (
-      event.type !== "Message" ||
-      (event.payload.role !== "assistant" && event.payload.role !== "user")
-    ) {
+    if (event.type !== "Message") {
       return PROCEED;
     }
 
