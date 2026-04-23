@@ -59,7 +59,11 @@ describe("OpenCodePlugin (integration)", () => {
   });
 
   it("fails open during lazy init when workspace is unavailable", async () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined });
+    const init = fakeInit({
+      project: { name: "test", root: undefined as unknown as string },
+      worktree: undefined,
+      directory: undefined,
+    });
     const handlers = await OpenCodePlugin(init as Parameters<typeof OpenCodePlugin>[0]);
     const output = { context: [] as string[] };
 

@@ -39,32 +39,26 @@ export class FeedbackFormatter {
    * Supports multiple formats (generic, vitest-style).
    */
   parseTestResults(rawOutput: string): TestSummary | null {
-    // Try generic format first
     const passedMatch = rawOutput.match(TEST_RESULT_REGEX);
-    const passedStr = passedMatch?.[1];
+    const failedMatch = rawOutput.match(FAILED_COUNT_REGEX);
+    const skippedMatch = rawOutput.match(SKIPPED_COUNT_REGEX);
 
-    if (passedStr) {
-      const failedMatch = rawOutput.match(FAILED_COUNT_REGEX);
-      const skippedMatch = rawOutput.match(SKIPPED_COUNT_REGEX);
+    const hasCounts = passedMatch || failedMatch || skippedMatch;
 
-      const failedStr = failedMatch?.[1];
-      const skippedStr = skippedMatch?.[1];
-
+    if (hasCounts) {
       return {
-        passed: parseInt(passedStr, 10),
-        failed: failedStr ? parseInt(failedStr, 10) : 0,
-        skipped: skippedStr ? parseInt(skippedStr, 10) : 0,
+        passed: passedMatch ? parseInt(passedMatch[1], 10) : 0,
+        failed: failedMatch ? parseInt(failedMatch[1], 10) : 0,
+        skipped: skippedMatch ? parseInt(skippedMatch[1], 10) : 0,
         failureDetails: this.extractFailureDetails(rawOutput),
       };
     }
 
     // Try vitest format
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
-    const vitestPassedStr = vitestMatch?.[1];
-
-    if (vitestPassedStr) {
+    if (vitestMatch) {
       return {
-        passed: parseInt(vitestPassedStr, 10),
+        passed: parseInt(vitestMatch[1], 10),
         failed: 0,
         skipped: 0,
         failureDetails: this.extractFailureDetails(rawOutput),

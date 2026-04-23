@@ -28,7 +28,8 @@ export class DependencyAnalyzer {
           if (match[1]) {
             const rawIds = match[1].split(",");
             for (const rawId of rawIds) {
-              const idMatch = rawId.trim().match(/task-[\d]+/i);
+              const trimmed = rawId.trim();
+              const idMatch = trimmed.match(/^task-[\d]+$/i);
               if (idMatch) {
                 taskDeps.add(idMatch[0].toLowerCase());
               }

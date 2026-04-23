@@ -354,7 +354,7 @@ describe("OpenCodeAdapter advanced initialization", () => {
 
     await adapter.onToolExecuteAfter(
       { tool: "other", sessionID: "s", callID: "c", args: {} },
-      { output: "ok" }
+      { title: "done", output: "ok", metadata: {} }
     );
 
     expect(initSpy).not.toHaveBeenCalled();
