@@ -4,6 +4,7 @@ import {
   PROVIDER_TRANSIENT_PATTERNS,
   PROVIDER_CONFIG_PATTERNS,
 } from "./provider-error-patterns";
+import { matchesLoopError } from "./loop-error-patterns";
 
 interface ClassificationRule {
   pattern: RegExp;
@@ -27,9 +28,6 @@ const SPECIFIC_GENERAL_RULES: ClassificationRule[] = [
 const GENERIC_GENERAL_RULES: ClassificationRule[] = [
   { pattern: /timed?\s*out/i, errorClass: "timeout" },
   { pattern: /timeout/i, errorClass: "timeout" },
-  { pattern: /loop detected/i, errorClass: "loop_detected" },
-  { pattern: /infinite loop/i, errorClass: "loop_detected" },
-  { pattern: /same edit applied/i, errorClass: "loop_detected" },
   { pattern: /fundamentally incompatible/i, errorClass: "design_error" },
   { pattern: /cannot implement.*?interface/i, errorClass: "design_error" },
   { pattern: /architectural.*?mismatch/i, errorClass: "design_error" },
@@ -91,7 +89,12 @@ export class ErrorClassifier {
       }
     }
 
-    // 3. Evaluate generic general rules (timeout, loop detected etc.)
+    // 3. Evaluate loop detection
+    if (matchesLoopError(errorOutput)) {
+      return "loop_detected";
+    }
+
+    // 4. Evaluate generic general rules (timeout etc.)
     for (const rule of GENERIC_GENERAL_RULES) {
       if (rule.pattern.test(errorOutput)) {
         return rule.errorClass;
