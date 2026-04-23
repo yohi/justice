@@ -20,4 +20,29 @@ export default tseslint.config(
       reportUnusedDisableDirectives: false,
     },
   },
+  {
+    files: ["src/**/*.ts"],
+    ignores: ["src/opencode-plugin.ts", "src/runtime/opencode-adapter.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@opencode-ai/plugin",
+              message:
+                "Core/Hook layer must stay pure. Import @opencode-ai/plugin only from src/opencode-plugin.ts or src/runtime/opencode-adapter.ts.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["@opencode-ai/plugin/*"],
+              message:
+                "Core/Hook layer must stay pure. Import @opencode-ai/plugin/* only from src/opencode-plugin.ts or src/runtime/opencode-adapter.ts.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );
