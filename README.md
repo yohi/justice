@@ -117,6 +117,21 @@ export default { plugins: [OpenCodePlugin] };
 既存の `oh-my-opencode.jsonc` の `hooks.custom` 配列に直接フックを追加する方法です。
 プラグインのエントリーポイントを使わない古い統合環境や、特定のイベントのみを選択的に適用したい場合に使用します。
 
+**設定例 (`oh-my-opencode.jsonc`):**
+```jsonc
+{
+  "hooks": {
+    "custom": [
+      {
+        "name": "justice-loop-detector",
+        "events": ["onEvent"],
+        "source": "/path/to/your/dist/index.js" // ビルド済みファイルを指定
+      }
+    ]
+  }
+}
+```
+
 ### 方法 A: ソースコードからビルド（開発・最新版用）
 
 このリポジトリをクローンし、ビルドしたファイルを直接参照します。

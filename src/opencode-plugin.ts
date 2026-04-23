@@ -8,23 +8,22 @@ import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-ada
  * It uses OpenCodeAdapter to bridge OpenCode hooks to JusticePlugin logic.
  */
 export const OpenCodePlugin: Plugin = async (init) => {
-  const adapter = new OpenCodeAdapter(init as OpenCodePluginInit);
+  const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
 
   return {
-    event: async (input): Promise<void> => {
+    event: async (input: any): Promise<void> => {
       await adapter.onEvent(input);
     },
-    "tool.execute.before": async (input, output): Promise<void> => {
+    "tool.execute.before": async (input: any, output: any): Promise<void> => {
       await adapter.onToolExecuteBefore(input, output);
     },
-    "tool.execute.after": async (input, output): Promise<{ title: string }> => {
+    "tool.execute.after": async (input: any, output: any): Promise<void> => {
       await adapter.onToolExecuteAfter(input, output);
-      return { title: (output.metadata?.title as string) ?? "task completed" };
     },
-    "experimental.session.compacting": async (input, output): Promise<void> => {
+    "experimental.session.compacting": async (input: any, output: any): Promise<void> => {
       await adapter.onSessionCompacting(input, output as { context: string[]; prompt?: string });
     },
-  };
+  } as any;
 };
 
 export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from "./runtime/opencode-adapter";

@@ -169,22 +169,22 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteBefore(
-    input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
+    _input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
     if (this.#noOp) return;
 
     try {
-      if (input.tool !== "task") return;
+      if (_input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
-        sessionId: input.sessionID,
+        sessionId: _input.sessionID,
         payload: {
-          toolName: input.tool,
+          toolName: _input.tool,
           toolInput: output.args,
         },
       });
@@ -212,7 +212,7 @@ export class OpenCodeAdapter {
       readonly tool: string;
       readonly sessionID: string;
       readonly callID: string;
-      readonly args: Record<string, unknown>;
+      readonly args?: Record<string, unknown>;
     },
     output: { readonly output: string; readonly metadata?: Record<string, unknown> },
   ): Promise<void> {
@@ -239,7 +239,7 @@ export class OpenCodeAdapter {
   }
 
   async onSessionCompacting(
-    input: { readonly sessionID: string },
+    _input: { readonly sessionID: string },
     output: { context?: string[]; prompt?: string },
   ): Promise<void> {
     if (this.#noOp) return;
@@ -251,10 +251,10 @@ export class OpenCodeAdapter {
 
       const response = await justice.handleEvent({
         type: "Event",
-        sessionId: input.sessionID,
+        sessionId: _input.sessionID,
         payload: {
           eventType: "compaction",
-          sessionId: input.sessionID,
+          sessionId: _input.sessionID,
           reason: output.prompt ?? "",
         },
       });
