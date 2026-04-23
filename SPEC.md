@@ -657,24 +657,6 @@ bun add justice-plugin
 
 ### 8.2 設定ファイルへの記述構成 (`oh-my-opencode.jsonc`)
 
-#### 推奨: 統合エントリーポイントを使用する場合
-
-```jsonc
-{
-  "hooks": {
-    "custom": [
-      {
-        "name": "justice-plugin",
-        "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
-        "source": "./node_modules/justice-plugin/dist/opencode-plugin.js"
-      }
-    ]
-  }
-}
-```
-
-#### 個別のフックを使用する場合
-
 ```jsonc
 {
   "hooks": {
@@ -683,6 +665,21 @@ bun add justice-plugin
         "name": "justice-plan-bridge",
         "event": ["Message", "PreToolUse"],
         "source": "./node_modules/justice-plugin/dist/hooks/plan-bridge.js"
+      },
+      {
+        "name": "justice-task-feedback",
+        "event": ["PostToolUse"],
+        "source": "./node_modules/justice-plugin/dist/hooks/task-feedback.js"
+      },
+      {
+        "name": "justice-compaction-protector",
+        "event": ["Event"], // 内部で eventType === "compaction" をフィルタリング
+        "source": "./node_modules/justice-plugin/dist/hooks/compaction-protector.js"
+      },
+      {
+        "name": "justice-loop-handler",
+        "event": ["Event"], // 内部で eventType === "loop-detector" をフィルタリング
+        "source": "./node_modules/justice-plugin/dist/hooks/loop-handler.js"
       }
     ]
   }
@@ -693,58 +690,26 @@ bun add justice-plugin
 
 ## OpenCode Plugin 統合 (v1.2.0)
 
-`@yohi/justice/opencode` から named export される `OpenCodePlugin` を追加し、
-現行 OpenCode Plugin API に合わせて Justice を公式 plugin として読み込めるようにします。
+`@yohi/justice/opencode` から named export される `OpenCodePlugin` を介して、OpenCode の公式プラグインとして動作します。内部では `OpenCodeAdapter` が OpenCode のフックと Justice の `HookEvent` 間の変換を担います。
 
-```ts
-import { OpenCodePlugin } from "@yohi/justice/opencode";
+### 初期化フロー
+- **Lazy Initialization**: 最初のフック呼び出し時に `JusticePlugin.initialize()` が一度だけ実行されます。
+- **Fail-Open**: `worktree` や `directory` が取得できない環境では自動的に No-Op モードとなり、エラーをログ出力しつつセッションの進行を妨げません。
 
-export default { plugins: [OpenCodePlugin] };
-```
+### フックとイベントのマッピング
 
-### フックマッピング
-
-| OpenCode フック | Adapter メソッド | Justice イベント | output 射影 |
-|---|---|---|---|
-| `event` (`message.updated`) | `onEvent` | `MessageEvent` | 汎用イベント経由のため副作用のみ (`activePlan` の設定) |
-| `tool.execute.before` | `onToolExecuteBefore` | `PreToolUseEvent` (task のみ) | `inject` 時 `prompt` 前置 + 他 `args` 上書き |
-| `tool.execute.after` | `onToolExecuteAfter` | `PostToolUseEvent` (task のみ) | 結果を `output.output` と `output.metadata.error` から取得 |
-| `experimental.session.compacting` | `onSessionCompacting` | `EventEvent<CompactionPayload>` | `inject` 時 `output.context[]` に push (`prompt` を `reason` とみなす) |
-| `event` (`session.error`) | `onEvent` | `EventEvent<LoopDetectorPayload>` (loop パターン一致時のみ) | 副作用のみ |
-
-### Fail-Open テンプレート
-
-すべてのハンドラ境界で以下の構造を守ります (早期 return で処理をスキップできる場合は `ensureInitialized()` を条件チェック後に移動してよい):
-
-```text
-try {
-  // 入力イベントからの検証や、イベント種類の判定を実施
-  await this.ensureInitialized();
-  const justice = this.getJustice();
-  if (!justice) return;
-
-  const response = await justice.handleEvent(event);
-  // output への反映等
-} catch (err) {
-  await this.log("error", "[Justice] ... failure", err);
-  // 例外をスローせず、output を変更しない — OpenCode セッションは継続する
-}
-```
-
-### ワークスペース解決
-
-- `worktree ?? directory ?? project.root` を採用
-- 全て undefined の場合は Adapter が no-op モードへ縮退し、全フックが即 return する
-- `createGlobalFs()` 失敗時は `NoOpPersistence` にフォールバック (既存動作)
+| OpenCode フック | 変換後の Justice イベント | 補足 |
+|:---|:---|:---|
+| `tool.execute.before` | `PreToolUseEvent` | `tool === "task"` の場合のみ。プラン内容を prompt に注入。 |
+| `tool.execute.after` | `PostToolUseEvent` | `tool === "task"` の場合のみ。実行結果とエラー状態を通知。 |
+| `experimental.session.compacting` | `EventEvent` (compaction) | コンパクション時にプランのスナップショットを保護。 |
+| `event` (message.updated) | `MessageEvent` | ユーザーメッセージから委譲の意図を検出。 |
+| `event` (session.error) | `EventEvent` (loop-detector) | `LOOP_ERROR_PATTERNS` に一致するエラーのみ転送。 |
 
 ### 追加ファイル
-
-- `src/runtime/opencode-adapter.ts`
-- `src/opencode-plugin.ts`
-- `src/core/loop-error-patterns.ts`
-- `tests/runtime/opencode-adapter.test.ts`
-- `tests/integration/opencode-plugin.test.ts`
-- `tests/helpers/fake-opencode-init.ts`
+- `src/runtime/opencode-adapter.ts` — 変換ブリッジ本体
+- `src/opencode-plugin.ts` — エントリポイント
+- `src/core/loop-error-patterns.ts` — ループ検知用パターン定義
 
 既存の OmO カスタムフック経路 (`dist/hooks/*.js`) は後方互換のため維持されます。
 
@@ -849,7 +814,6 @@ justice/
 ```typescript
 // メインとなるオーケストレーターとハブ
 export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
-export { default as handleHook } from "./opencode-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";

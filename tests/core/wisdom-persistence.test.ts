@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-object-injection -- Assertions intentionally inspect dynamic serialized keys in test maps. */
 import { describe, it, expect } from "vitest";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
@@ -57,3 +58,4 @@ describe("WisdomPersistence", () => {
     expect(store.getRelevant()).toHaveLength(0);
   });
 });
+/* eslint-enable security/detect-object-injection */

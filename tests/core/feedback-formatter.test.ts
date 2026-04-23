@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { FeedbackFormatter } from "../../src/core/feedback-formatter";
+import type { TestSummary } from "../../src/core/types";
 
 describe("FeedbackFormatter", () => {
   const formatter = new FeedbackFormatter();
@@ -62,18 +63,34 @@ describe("FeedbackFormatter", () => {
 
   describe("parseTestResults", () => {
     it("should parse 'Tests: N passed, M failed' format", () => {
-      const result = formatter.parseTestResults("Tests: 10 passed, 2 failed, 3 skipped");
+      const result = formatter.parseTestResults("Tests: 10 passed, 2 failed, 3 skipped") as TestSummary;
       expect(result).not.toBeNull();
-      expect(result!.passed).toBe(10);
-      expect(result!.failed).toBe(2);
-      expect(result!.skipped).toBe(3);
+      expect(result.passed).toBe(10);
+      expect(result.failed).toBe(2);
+      expect(result.skipped).toBe(3);
+    });
+
+    it("should parse format with missing parts (e.g. only failures)", () => {
+      const result = formatter.parseTestResults("Tests: 2 failed") as TestSummary;
+      expect(result).not.toBeNull();
+      expect(result.passed).toBe(0);
+      expect(result.failed).toBe(2);
+      expect(result.skipped).toBe(0);
+    });
+
+    it("should parse format with multiple missing parts", () => {
+      const result = formatter.parseTestResults("Test: 5 passed, 1 skipped") as TestSummary;
+      expect(result).not.toBeNull();
+      expect(result.passed).toBe(5);
+      expect(result.failed).toBe(0);
+      expect(result.skipped).toBe(1);
     });
 
     it("should parse Vitest-style output", () => {
-      const result = formatter.parseTestResults("Tests  12 passed (12)");
+      const result = formatter.parseTestResults("Tests  12 passed (12)") as TestSummary;
       expect(result).not.toBeNull();
-      expect(result!.passed).toBe(12);
-      expect(result!.failed).toBe(0);
+      expect(result.passed).toBe(12);
+      expect(result.failed).toBe(0);
     });
 
     it("should return null when no test results found", () => {
@@ -89,10 +106,10 @@ describe("FeedbackFormatter", () => {
         "FAIL tests/b.test.ts > should also work",
         "TypeError: cannot read property of undefined",
       ].join("\n");
-      const result = formatter.parseTestResults(output);
+      const result = formatter.parseTestResults(output) as TestSummary;
       expect(result).not.toBeNull();
-      expect(result!.failureDetails).toBeDefined();
-      expect(result!.failureDetails!.length).toBeGreaterThanOrEqual(1);
+      expect(result.failureDetails).toBeDefined();
+      expect(result.failureDetails.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

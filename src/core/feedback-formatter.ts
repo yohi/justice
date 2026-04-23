@@ -1,11 +1,6 @@
 /* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
-// Simpler non-nested regex to avoid ReDoS warnings
-const TEST_RESULT_REGEX = /Tests?:?\s+(\d+)\s+passed/i;
-const FAILED_COUNT_REGEX = /(\d+)\s+failed/i;
-const SKIPPED_COUNT_REGEX = /(\d+)\s+skipped/i;
-
 // Vitest-style: Tests  12 passed (12)
 const VITEST_RESULT_REGEX = /Tests\s+(\d+)\s+passed\s+\(\d+\)/i;
 
@@ -40,26 +35,32 @@ export class FeedbackFormatter {
    * Supports multiple formats (generic, vitest-style).
    */
   parseTestResults(rawOutput: string): TestSummary | null {
-    const passedMatch = rawOutput.match(TEST_RESULT_REGEX);
-    const failedMatch = rawOutput.match(FAILED_COUNT_REGEX);
-    const skippedMatch = rawOutput.match(SKIPPED_COUNT_REGEX);
+    // Try generic format: "Tests: 5 passed, 2 failed" or "Tests: 2 failed"
+    if (/Tests?:/i.test(rawOutput)) {
+      const passed = rawOutput.match(/(\d+)\s+passed/i);
+      const failed = rawOutput.match(/(\d+)\s+failed/i);
+      const skipped = rawOutput.match(/(\d+)\s+skipped/i);
 
-    const hasCounts = passedMatch || failedMatch || skippedMatch;
+      if (passed || failed || skipped) {
+        const [, passedCount = "0"] = passed ?? [];
+        const [, failedCount = "0"] = failed ?? [];
+        const [, skippedCount = "0"] = skipped ?? [];
 
-    if (hasCounts) {
-      return {
-        passed: passedMatch ? parseInt(passedMatch[1] || "0", 10) : 0,
-        failed: failedMatch ? parseInt(failedMatch[1] || "0", 10) : 0,
-        skipped: skippedMatch ? parseInt(skippedMatch[1] || "0", 10) : 0,
-        failureDetails: this.extractFailureDetails(rawOutput),
-      };
+        return {
+          passed: parseInt(passedCount, 10),
+          failed: parseInt(failedCount, 10),
+          skipped: parseInt(skippedCount, 10),
+          failureDetails: this.extractFailureDetails(rawOutput),
+        };
+      }
     }
 
-    // Try vitest format
+    // Try vitest format: "Tests  12 passed (12)"
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
     if (vitestMatch) {
+      const [, passedStr = "0"] = vitestMatch;
       return {
-        passed: parseInt(vitestMatch[1] || "0", 10),
+        passed: parseInt(passedStr, 10),
         failed: 0,
         skipped: 0,
         failureDetails: this.extractFailureDetails(rawOutput),

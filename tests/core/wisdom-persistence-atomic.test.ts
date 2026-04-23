@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-object-injection -- Assertions intentionally inspect dynamic serialized keys in test maps. */
 import { describe, it, expect, vi } from "vitest";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { WisdomStore } from "../../src/core/wisdom-store";
@@ -168,3 +169,4 @@ describe("WisdomPersistence.saveAtomic", () => {
     expect(finalData.maxEntries).toBe(0);
   });
 });
+/* eslint-enable security/detect-object-injection */

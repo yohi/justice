@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, HookEvent, PreToolUseEvent } from "../../src/core/types";
@@ -38,6 +39,9 @@ describe("PlanBridge", () => {
 
       const response = await bridge.handleMessage(event);
       expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
       expect(response.injectedContext).toContain("Setup project structure");
       expect(bridge.getActivePlan("s-1")).toBe("docs/plans/sample-plan.md");
     });
@@ -82,6 +86,9 @@ describe("PlanBridge", () => {
 
       const response = await bridge.handleMessage(event);
       expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
       expect(response.injectedContext).toContain("already completed");
       expect(bridge.getActivePlan("s-4")).toBeNull();
     });
@@ -108,6 +115,9 @@ describe("PlanBridge", () => {
 
       const response = await bridge.handlePreToolUse(event);
       expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
       expect(response.injectedContext).toContain("Task ID");
     });
 
@@ -206,3 +216,4 @@ describe("PlanBridge", () => {
     });
   });
 });
+/* eslint-enable security/detect-object-injection */

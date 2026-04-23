@@ -32,10 +32,13 @@ describe("ErrorClassifier", () => {
 
     it("should classify loop detection", () => {
       expect(classifier.classify("Loop detected")).toBe("loop_detected");
-      expect(classifier.classify("infinite loop")).toBe("loop_detected");
+      expect(classifier.classify("infinite loop encountered")).toBe("loop_detected");
       expect(classifier.classify("same edit applied 5 times")).toBe("loop_detected");
-      expect(classifier.classify("repeated calls to the same tool")).toBe("loop_detected");
-      expect(classifier.classify("stuck in a loop")).toBe("loop_detected");
+      expect(classifier.classify("repetition limit exceeded")).toBe("loop_detected");
+      expect(classifier.classify("assistant made repeated tool calls")).toBe("loop_detected");
+      expect(classifier.classify("agent is stuck in a loop")).toBe("loop_detected");
+      expect(classifier.classify("too many iterations in planning")).toBe("loop_detected");
+      expect(classifier.classify("Loop detected: same edit applied 5 times")).toBe("loop_detected");
     });
 
     it("should classify design errors from architectural keywords", () => {
