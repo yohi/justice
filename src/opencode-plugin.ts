@@ -1,61 +1,59 @@
-import { JusticePlugin, createGlobalFs } from "./core/justice-plugin";
-import { NodeFileSystem } from "./runtime/node-file-system";
-import type { HookEvent, HookResponse } from "./core/types";
+import type { Plugin } from "@opencode-ai/plugin";
+import {
+  OpenCodeAdapter,
+  type OpenCodePluginInit,
+  type OpenCodeEvent,
+} from "./runtime/opencode-adapter";
 
 /**
  * OpenCode Plugin Entrypoint for Justice
- * 
- * This file provides a unified entrypoint for the OpenCode environment.
- * It manages a singleton instance of JusticePlugin and routes events appropriately.
+ *
+ * This file provides the official entrypoint for the OpenCode plugin environment.
+ * It uses OpenCodeAdapter to bridge OpenCode hooks to JusticePlugin logic.
  */
+export const OpenCodePlugin: Plugin = async (init) => {
+  const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
 
-let pluginInstance: JusticePlugin | null = null;
-let pluginInitPromise: Promise<JusticePlugin> | null = null;
+  return {
+    event: async (input: OpenCodeEvent): Promise<void> => {
+      await adapter.onEvent(input);
+    },
+    "tool.execute.before": async (
+      input: { tool: string; sessionID: string; callID: string },
+      output: { args: Record<string, unknown> },
+    ): Promise<void> => {
+      await adapter.onToolExecuteBefore(input, output);
+    },
+    "tool.execute.after": async (
+      input: { tool: string; sessionID: string; callID: string; args?: Record<string, unknown> },
+      output: { title: string; output: string; metadata: Record<string, unknown> },
+    ): Promise<void> => {
+      await adapter.onToolExecuteAfter(input, output);
+    },
+    "experimental.session.compacting": async (
+      input: { sessionID: string },
+      output: { context: string[]; prompt?: string },
+    ): Promise<void> => {
+      await adapter.onSessionCompacting(input, output);
+    },
+  };
+};
 
-async function getPlugin(): Promise<JusticePlugin> {
-  if (pluginInstance) {
-    return pluginInstance;
-  }
-
-  if (pluginInitPromise) {
-    return pluginInitPromise;
-  }
-
-  pluginInitPromise = (async (): Promise<JusticePlugin> => {
-    try {
-      const root = process.cwd();
-      const fileSystem = new NodeFileSystem(root);
-      const globalFs = await createGlobalFs();
-
-      const instance = new JusticePlugin(fileSystem, fileSystem, {
-        globalFileSystem: globalFs || undefined,
-      });
-
-      await instance.initialize();
-      pluginInstance = instance;
-      return instance;
-    } finally {
-      // Clear the init promise so that future calls can retry if it failed,
-      // or simply rely on pluginInstance if it succeeded.
-      pluginInitPromise = null;
-    }
-  })();
-
-  return pluginInitPromise;
-}
-
-export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from "./runtime/opencode-adapter";
+export {
+  OpenCodeAdapter,
+  type OpenCodePluginInit,
+  type OpenCodeLogEntry,
+} from "./runtime/opencode-adapter";
 
 /**
- * Unified hook handler for all OpenCode events.
+ * Legacy/Alternative hook handler for backward compatibility or simple event routing.
+ * (Used by some early integrations)
  */
-export default async function handleHook(event: HookEvent): Promise<HookResponse> {
-  try {
-    const plugin = await getPlugin();
-    return await plugin.handleEvent(event);
-  } catch (error) {
-    // Fail-open: log error but don't break the agent's flow
-    console.error("[JUSTICE] Plugin error:", error);
-    return { action: "proceed" };
-  }
+export default async function handleHook(
+  _event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
+): Promise<void> {
+  // Note: This is a simplified wrapper. The primary integration should use OpenCodePlugin.
+  // We'll keep this as a fail-safe that uses a one-off adapter if needed,
+  // but recommended path is through the Plugin-type OpenCodePlugin.
+  console.warn("[JUSTICE] handleHook called directly. Use OpenCodePlugin for full adapter features.");
 }

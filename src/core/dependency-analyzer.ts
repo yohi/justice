@@ -1,7 +1,5 @@
 import type { PlanTask } from "./types";
 
-const DEPENDS_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/i;
-
 /**
  * 依存関係の解決中に発生したエラー。
  */
@@ -19,17 +17,22 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
-    const dependsRegex = new RegExp(DEPENDS_REGEX.source, "gi");
+    // Global regex for matching all dependency markers
+    const markerRegex = /\(depends:\s*([^)]+)\)/gi;
 
     for (const task of tasks) {
       const taskDeps = new Set<string>();
       for (const step of task.steps) {
-        const matches = step.description.matchAll(dependsRegex);
+        const matches = step.description.matchAll(markerRegex);
         for (const match of matches) {
           if (match[1]) {
-            const ids = match[1].split(",").map((s) => s.trim());
-            for (const id of ids) {
-              taskDeps.add(id);
+            const rawIds = match[1].split(",");
+            for (const rawId of rawIds) {
+              const trimmed = rawId.trim();
+              const idMatch = trimmed.match(/^task-[\d]+$/i);
+              if (idMatch) {
+                taskDeps.add(idMatch[0].toLowerCase());
+              }
             }
           }
         }
