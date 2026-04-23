@@ -21,12 +21,37 @@ export interface OpenCodePluginInit {
   readonly worktree?: string;
 }
 
-interface GenericEventInput {
+export interface ToolInput {
+  readonly tool: string;
+  readonly sessionID: string;
+  readonly callID: string;
+  readonly args?: Record<string, unknown>;
+}
+
+/**
+ * Interface representing the output of 'tool.execute.before' hook.
+ */
+export interface ToolBeforeOutput {
+  args: Record<string, unknown>;
+}
+
+/**
+ * Interface representing the output of 'tool.execute.after' hook.
+ */
+export interface ToolAfterOutput {
+  title: string;
+  readonly output: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface GenericEventInput {
   readonly event: {
     readonly type: string;
     readonly properties?: Record<string, unknown>;
   };
 }
+
+export type OpenCodeEvent = GenericEventInput;
 
 export class OpenCodeAdapter {
   readonly #init: OpenCodePluginInit;
@@ -80,10 +105,7 @@ export class OpenCodeAdapter {
       return this.#initPromise;
     }
 
-    this.#initPromise = this.#runInit().catch((err) => {
-      this.#initPromise = null;
-      throw err;
-    });
+    this.#initPromise = this.#runInit();
     return this.#initPromise;
   }
 
@@ -103,7 +125,7 @@ export class OpenCodeAdapter {
       };
 
       const globalFs = await createGlobalFs(loggerAdapter);
-      this.#justice = new JusticePlugin(localFs, localFs, {
+      const justice = new JusticePlugin(localFs, localFs, {
         logger: loggerAdapter,
         onError: (err): void => {
           void this.log("error", "[Justice] internal error", err);
@@ -111,15 +133,18 @@ export class OpenCodeAdapter {
         globalFileSystem: globalFs ?? undefined,
       });
 
-      await this.#justice.initialize();
+      await justice.initialize();
+      this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
+      this.#initPromise = null;
+      this.#justice = null;
       await this.log("error", "[Justice] lazy init failed", err);
       throw err;
     }
   }
 
-  async onEvent(input: GenericEventInput): Promise<void> {
+  async onEvent(input: OpenCodeEvent): Promise<void> {
     if (this.#noOp) return;
 
     try {
@@ -128,14 +153,14 @@ export class OpenCodeAdapter {
       if (!sessionId) return;
 
       if (input.event.type === "message.updated") {
-        await this.ensureInitialized();
-        const justice = this.#justice;
-        if (!justice) return;
-
         const info = this.#readRecord(properties, "info");
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
         if (role !== "user" || content.length === 0) return;
+
+        await this.ensureInitialized();
+        const justice = this.#justice;
+        if (!justice) return;
 
         await justice.handleEvent({
           type: "Message",
@@ -169,10 +194,9 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteBefore(
-    input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
+    { callID: _callID, ...input }: { tool: string; sessionID: string; callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
     if (this.#noOp) return;
 
     try {
@@ -192,8 +216,10 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") return;
 
-      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
-      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
+      const args = output.args;
+
+      const originalPrompt = typeof args.prompt === "string" ? args.prompt : "";
+      args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
 
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
       if (!modified?.args) return;
@@ -201,7 +227,7 @@ export class OpenCodeAdapter {
       for (const [key, value] of Object.entries(modified.args)) {
         if (key === "prompt") continue;
         // eslint-disable-next-line security/detect-object-injection
-        output.args[key] = value;
+        args[key] = value;
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
@@ -209,16 +235,9 @@ export class OpenCodeAdapter {
   }
 
   async onToolExecuteAfter(
-    input: {
-      readonly tool: string;
-      readonly sessionID: string;
-      readonly callID: string;
-      readonly args: Record<string, unknown>;
-    },
-    output: { readonly output: string; readonly metadata?: Record<string, unknown> },
+    { callID: _callID, args: _args, ...input }: { tool: string; sessionID: string; callID: string; args?: Record<string, unknown> },
+    output: { title: string; readonly output: string; metadata: Record<string, unknown> },
   ): Promise<void> {
-    void input.callID;
-    void input.args;
     if (this.#noOp) return;
 
     try {
@@ -233,9 +252,13 @@ export class OpenCodeAdapter {
         payload: {
           toolName: input.tool,
           toolResult: output.output,
-          error: output.metadata?.error === true,
+          error: output.metadata.error === true,
         },
       });
+      if (!output.title) {
+        output.title =
+          typeof output.metadata.title === "string" ? output.metadata.title : "task completed";
+      }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);
     }
@@ -243,7 +266,7 @@ export class OpenCodeAdapter {
 
   async onSessionCompacting(
     input: { readonly sessionID: string },
-    output: { context?: string[]; prompt?: string },
+    output: { context: string[]; prompt?: string },
   ): Promise<void> {
     if (this.#noOp) return;
 
@@ -263,7 +286,6 @@ export class OpenCodeAdapter {
       });
 
       if (response.action !== "inject") return;
-      if (!output.context) output.context = [];
       output.context.push(response.injectedContext);
     } catch (err) {
       await this.log("error", "[Justice] onSessionCompacting failure", err);

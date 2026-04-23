@@ -17,8 +17,12 @@
         "vitest": "^4.1.1",
       },
       "peerDependencies": {
+        "@opencode-ai/plugin": "^1.14.21",
         "typescript": "^6.0.2",
       },
+      "optionalPeers": [
+        "@opencode-ai/plugin",
+      ],
     },
   },
   "packages": {
