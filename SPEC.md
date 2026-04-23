@@ -690,32 +690,26 @@ bun add justice-plugin
 
 ## OpenCode Plugin 統合 (v1.2.0)
 
-`@yohi/justice/opencode` から named export される `OpenCodePlugin` を追加し、
-現行 OpenCode Plugin API に合わせて Justice を公式 plugin として読み込めるようにします。
+`@yohi/justice/opencode` から named export される `OpenCodePlugin` を介して、OpenCode の公式プラグインとして動作します。内部では `OpenCodeAdapter` が OpenCode のフックと Justice の `HookEvent` 間の変換を担います。
 
-```ts
-import { OpenCodePlugin } from "@yohi/justice/opencode";
+### 初期化フロー
+- **Lazy Initialization**: 最初のフック呼び出し時に `JusticePlugin.initialize()` が一度だけ実行されます。
+- **Fail-Open**: `worktree` や `directory` が取得できない環境では自動的に No-Op モードとなり、エラーをログ出力しつつセッションの進行を妨げません。
 
-export default { plugins: [OpenCodePlugin] };
-```
+### フックとイベントのマッピング
 
-### フック対応
-
-- direct hook: `tool.execute.before`
-- direct hook: `tool.execute.after`
-- direct hook: `experimental.session.compacting`
-- generic hook: `event`
-  - `message.updated` → `MessageEvent`
-  - `session.error` → ループ系のみ `EventEvent<LoopDetectorPayload>`
+| OpenCode フック | 変換後の Justice イベント | 補足 |
+|:---|:---|:---|
+| `tool.execute.before` | `PreToolUseEvent` | `tool === "task"` の場合のみ。プラン内容を prompt に注入。 |
+| `tool.execute.after` | `PostToolUseEvent` | `tool === "task"` の場合のみ。実行結果とエラー状態を通知。 |
+| `experimental.session.compacting` | `EventEvent` (compaction) | コンパクション時にプランのスナップショットを保護。 |
+| `event` (message.updated) | `MessageEvent` | ユーザーメッセージから委譲の意図を検出。 |
+| `event` (session.error) | `EventEvent` (loop-detector) | `LOOP_ERROR_PATTERNS` に一致するエラーのみ転送。 |
 
 ### 追加ファイル
-
-- `src/runtime/opencode-adapter.ts`
-- `src/opencode-plugin.ts`
-- `src/core/loop-error-patterns.ts`
-- `tests/runtime/opencode-adapter.test.ts`
-- `tests/integration/opencode-plugin.test.ts`
-- `tests/helpers/fake-opencode-init.ts`
+- `src/runtime/opencode-adapter.ts` — 変換ブリッジ本体
+- `src/opencode-plugin.ts` — エントリポイント
+- `src/core/loop-error-patterns.ts` — ループ検知用パターン定義
 
 既存の OmO カスタムフック経路 (`dist/hooks/*.js`) は後方互換のため維持されます。
 
