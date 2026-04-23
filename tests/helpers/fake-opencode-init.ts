@@ -9,7 +9,7 @@ import type { JusticePlugin } from "../../src/core/justice-plugin";
 function deepMerge<T extends object>(base: T, overrides: Partial<T>): T {
   const result = { ...base } as Record<string, unknown>;
   for (const key in overrides) {
-    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+    if (Object.hasOwn(overrides, key)) {
       const val = overrides[key];
       // eslint-disable-next-line security/detect-object-injection
       const existing = result[key];

@@ -210,15 +210,12 @@ export class OpenCodeAdapter {
         sessionId: input.sessionID,
         payload: {
           toolName: input.tool,
-          toolInput: output.args ?? {},
+          toolInput: output.args,
         },
       });
 
       if (response.action !== "inject") return;
 
-      if (!output.args) {
-        output.args = {};
-      }
       const args = output.args;
 
       const originalPrompt = typeof args.prompt === "string" ? args.prompt : "";
@@ -255,12 +252,11 @@ export class OpenCodeAdapter {
         payload: {
           toolName: input.tool,
           toolResult: output.output,
-          error: output.metadata?.error === true,
+          error: output.metadata.error === true,
         },
       });
       if (!output.title) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (output as any).title = (output.metadata?.title as string) ?? "task completed";
+        output.title = (output.metadata.title as string) ?? "task completed";
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);

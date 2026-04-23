@@ -41,9 +41,10 @@ describe("OpenCodePlugin (integration)", () => {
         { args: { prompt: "p" } },
       ),
       (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)["tool.execute.after"]?.(
-        { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-        { title: "done", output: "r", metadata: undefined },
+       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
+       { title: "done", output: "r", metadata: {} },
       ),
+
     ]);
 
     const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;

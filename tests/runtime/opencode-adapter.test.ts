@@ -246,7 +246,7 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
 
     await adapter.onToolExecuteAfter(
       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-      { title: "done", output: "result body", metadata: undefined },
+      { title: "done", output: "result body", metadata: {} },
     );
 
     expect(spy).toHaveBeenCalledTimes(1);

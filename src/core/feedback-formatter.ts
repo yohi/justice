@@ -38,7 +38,7 @@ export class FeedbackFormatter {
    * Parse test results from raw output.
    * Supports multiple formats (generic, vitest-style).
    */
-  parseTestResults(rawOutput): TestSummary | null {
+  parseTestResults(rawOutput: string): TestSummary | null {
     // Try generic format first
     const passedMatch = rawOutput.match(TEST_RESULT_REGEX);
     if (passedMatch && passedMatch[1] !== undefined) {

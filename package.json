@@ -52,7 +52,8 @@
     "eslint-plugin-security": "^4.0.0",
     "prettier": "^3.8.1",
     "typescript-eslint": "^8.57.2",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.1",
+    "@opencode-ai/plugin": "^1.14.21"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.14.21",

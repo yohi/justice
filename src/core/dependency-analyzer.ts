@@ -1,8 +1,5 @@
 import type { PlanTask } from "./types";
 
-// Simple non-nested regex to avoid ReDoS warnings
-const DEPENDS_MARKER_REGEX = /\(depends:\s*([^)]+)\)/i;
-
 /**
  * 依存関係の解決中に発生したエラー。
  */
@@ -20,8 +17,8 @@ export class DependencyAnalyzer {
    */
   extractDependencies(tasks: PlanTask[]): Map<string, string[]> {
     const deps = new Map<string, string[]>();
-    // eslint-disable-next-line security/detect-non-literal-regexp
-    const markerRegex = new RegExp(DEPENDS_MARKER_REGEX.source, "gi");
+    // Global regex for matching all dependency markers
+    const markerRegex = /\(depends:\s*([^)]+)\)/gi;
 
     for (const task of tasks) {
       const taskDeps = new Set<string>();
