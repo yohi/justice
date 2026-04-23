@@ -673,12 +673,12 @@ bun add justice-plugin
       },
       {
         "name": "justice-compaction-protector",
-        "event": ["Event"],
+        "event": ["Event"], // 内部で eventType === "compaction" をフィルタリング
         "source": "./node_modules/justice-plugin/dist/hooks/compaction-protector.js"
       },
       {
         "name": "justice-loop-handler",
-        "event": ["Event"],
+        "event": ["Event"], // 内部で eventType === "loop-detector" をフィルタリング
         "source": "./node_modules/justice-plugin/dist/hooks/loop-handler.js"
       }
     ]

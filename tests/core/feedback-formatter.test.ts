@@ -69,6 +69,22 @@ describe("FeedbackFormatter", () => {
       expect(result!.skipped).toBe(3);
     });
 
+    it("should parse format with missing parts (e.g. only failures)", () => {
+      const result = formatter.parseTestResults("Tests: 2 failed");
+      expect(result).not.toBeNull();
+      expect(result!.passed).toBe(0);
+      expect(result!.failed).toBe(2);
+      expect(result!.skipped).toBe(0);
+    });
+
+    it("should parse format with multiple missing parts", () => {
+      const result = formatter.parseTestResults("Test: 5 passed, 1 skipped");
+      expect(result).not.toBeNull();
+      expect(result!.passed).toBe(5);
+      expect(result!.failed).toBe(0);
+      expect(result!.skipped).toBe(1);
+    });
+
     it("should parse Vitest-style output", () => {
       const result = formatter.parseTestResults("Tests  12 passed (12)");
       expect(result).not.toBeNull();

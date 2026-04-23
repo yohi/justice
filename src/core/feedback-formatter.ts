@@ -1,9 +1,9 @@
 /* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
-// Tests: N passed, M failed, K skipped
+// Tests: N passed, M failed, K skipped (all groups optional)
 const TEST_RESULT_REGEX =
-  /Tests?:?\s+(\d+)\s+passed(?:,?\s+(\d+)\s+failed)?(?:,?\s+(\d+)\s+skipped)?/i;
+  /Tests?:?\s+(?:(\d+)\s+passed)?\s*,?\s*(?:(\d+)\s+failed)?\s*,?\s*(?:(\d+)\s+skipped)?/i;
 
 // Vitest-style: Tests  12 passed (12)
 const VITEST_RESULT_REGEX = /Tests\s+(\d+)\s+passed\s+\(\d+\)/i;
@@ -39,19 +39,23 @@ export class FeedbackFormatter {
    * Supports multiple formats (generic, vitest-style).
    */
   parseTestResults(rawOutput: string): TestSummary | null {
-    // Try generic format first
-    const genericMatch = rawOutput.match(TEST_RESULT_REGEX);
-    if (genericMatch) {
-      const [, passedStr = "0", failedStr = "0", skippedStr = "0"] = genericMatch;
-      return {
-        passed: parseInt(passedStr, 10),
-        failed: parseInt(failedStr, 10),
-        skipped: parseInt(skippedStr, 10),
-        failureDetails: this.extractFailureDetails(rawOutput),
-      };
+    // Try generic format: "Tests: 5 passed, 2 failed" or "Tests: 2 failed"
+    if (/Tests?:/i.test(rawOutput)) {
+      const passed = rawOutput.match(/(\d+)\s+passed/i);
+      const failed = rawOutput.match(/(\d+)\s+failed/i);
+      const skipped = rawOutput.match(/(\d+)\s+skipped/i);
+
+      if (passed || failed || skipped) {
+        return {
+          passed: passed ? parseInt(passed[1] ?? "0", 10) : 0,
+          failed: failed ? parseInt(failed[1] ?? "0", 10) : 0,
+          skipped: skipped ? parseInt(skipped[1] ?? "0", 10) : 0,
+          failureDetails: this.extractFailureDetails(rawOutput),
+        };
+      }
     }
 
-    // Try vitest format
+    // Try vitest format: "Tests  12 passed (12)"
     const vitestMatch = rawOutput.match(VITEST_RESULT_REGEX);
     if (vitestMatch) {
       const [, passedStr = "0"] = vitestMatch;

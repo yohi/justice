@@ -93,7 +93,7 @@ export class OpenCodeAdapter {
       };
 
       const globalFs = await createGlobalFs(loggerAdapter);
-      this.#justice = new JusticePlugin(localFs, localFs, {
+      const justice = new JusticePlugin(localFs, localFs, {
         logger: loggerAdapter,
         onError: (err): void => {
           void this.log("error", "[Justice] internal error", err);
@@ -101,9 +101,12 @@ export class OpenCodeAdapter {
         globalFileSystem: globalFs ?? undefined,
       });
 
-      await this.#justice.initialize();
+      await justice.initialize();
+      this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
+      this.#justice = null;
+      this.#initPromise = null; // Allow retry on next attempt
       await this.log("error", "[Justice] lazy init failed", err);
     }
   }
