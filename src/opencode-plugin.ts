@@ -42,6 +42,8 @@ export const OpenCodePlugin: Plugin = async (init) => {
   };
 };
 
+export { OpenCodeAdapter, type OpenCodePluginInit, type OpenCodeLogEntry } from "./runtime/opencode-adapter";
+
 /**
  * Legacy/Alternative hook handler for backward compatibility or simple event routing.
  * (Used by some early integrations)
