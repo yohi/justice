@@ -3,16 +3,34 @@ import type { OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import type { JusticePlugin } from "../../src/core/justice-plugin";
 
+/**
+ * Simple deep merge to preserve nested default fields in OpenCodePluginInit
+ */
+function deepMerge<T extends object>(base: T, overrides: Partial<T>): T {
+  const result = { ...base } as any;
+  for (const key in overrides) {
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      const val = overrides[key];
+      if (val && typeof val === "object" && !Array.isArray(val) && result[key] && typeof result[key] === "object") {
+        result[key] = deepMerge(result[key], val);
+      } else {
+        result[key] = val;
+      }
+    }
+  }
+  return result;
+}
+
 export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodePluginInit {
   const base: OpenCodePluginInit = {
     project: { name: "test", root: "/tmp/test-workspace" },
     client: { app: { log: vi.fn().mockResolvedValue(undefined) } },
-    $: vi.fn(),
+    $: vi.fn() as any,
     directory: "/tmp/test-workspace",
     worktree: "/tmp/test-workspace",
   };
 
-  return { ...base, ...overrides };
+  return deepMerge(base, overrides);
 }
 
 /**
