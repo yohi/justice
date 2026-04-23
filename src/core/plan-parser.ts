@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-object-injection -- Parser uses validated line-index access over split arrays. */
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
@@ -150,3 +151,4 @@ export class PlanParser {
     return "pending";
   }
 }
+/* eslint-enable security/detect-object-injection */

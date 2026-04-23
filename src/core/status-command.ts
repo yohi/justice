@@ -104,6 +104,7 @@ export class StatusCommand {
       lines.push("No tasks found.");
     } else {
       for (let i = 0; i < status.executionOrder.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const task = status.executionOrder[i]!;
         const icon = task.status === "completed" ? "✅" : "⬜";
         lines.push(`${i + 1}. ${icon} ${task.title}`);
