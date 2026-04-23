@@ -54,8 +54,8 @@ export async function handleHook(
 ): Promise<void> {
   let pluginInstance;
   try {
-    pluginInstance = await OpenCodePlugin({ project: {} } as any);
-  } catch (error) {
+    pluginInstance = await OpenCodePlugin({ project: {} } as unknown as OpenCodePluginInit);
+  } catch {
     // Ignore error to fall through to the clear throw below
   }
 
