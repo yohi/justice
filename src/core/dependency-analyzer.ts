@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-unsafe-regex -- Dependency markers are deliberately constrained and regex-parsed. */
 import type { PlanTask } from "./types";
 
 /**
@@ -174,3 +175,4 @@ export class DependencyAnalyzer {
     return circularIds;
   }
 }
+/* eslint-enable security/detect-unsafe-regex */

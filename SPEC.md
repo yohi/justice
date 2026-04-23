@@ -691,6 +691,39 @@ bun add justice-plugin
 
 ---
 
+## OpenCode Plugin 統合 (v1.2.0)
+
+`@yohi/justice/opencode` から named export される `OpenCodePlugin` を追加し、
+現行 OpenCode Plugin API に合わせて Justice を公式 plugin として読み込めるようにします。
+
+```ts
+import { OpenCodePlugin } from "@yohi/justice/opencode";
+
+export default { plugins: [OpenCodePlugin] };
+```
+
+### フック対応
+
+- direct hook: `tool.execute.before`
+- direct hook: `tool.execute.after`
+- direct hook: `experimental.session.compacting`
+- generic hook: `event`
+  - `message.updated` → `MessageEvent`
+  - `session.error` → ループ系のみ `EventEvent<LoopDetectorPayload>`
+
+### 追加ファイル
+
+- `src/runtime/opencode-adapter.ts`
+- `src/opencode-plugin.ts`
+- `src/core/loop-error-patterns.ts`
+- `tests/runtime/opencode-adapter.test.ts`
+- `tests/integration/opencode-plugin.test.ts`
+- `tests/helpers/fake-opencode-init.ts`
+
+既存の OmO カスタムフック経路 (`dist/hooks/*.js`) は後方互換のため維持されます。
+
+---
+
 ## 9. ディレクトリ構造 (Directory Structure)
 
 ```text
@@ -720,15 +753,18 @@ justice/
 │   │   ├── compaction-protector.ts   — コンパクションから身を守って保持するフック
 │   │   └── loop-handler.ts           — ループを検知するためのフック
 │   ├── runtime/
-│   │   └── node-file-system.ts       — 実際の Bun.file ベースによるファイルの読み書き
+│   │   ├── node-file-system.ts       — 実際の Bun.file ベースによるファイルの読み書き
+│   │   └── opencode-adapter.ts       — OpenCode hook ↔ Justice HookEvent adapter
+│   ├── opencode-plugin.ts            — OpenCode Plugin entrypoint
 │   └── index.ts                      — 上記の外部・公開APIの全エクスポート
 ├── tests/
 │   ├── core/          — コア層に対する 22 のテスト用ファイル群
 │   ├── hooks/         — フック層に対する 4 つのテスト・ファイル群
-│   ├── integration/   — 全体を統合・通貫した機能テストを対象の 6 つのテスト
-│   ├── runtime/       — ランタイムファイル書き出しの検証（1 テストファイル）
+│   ├── integration/   — 全体を統合・通貫した機能テスト
+│   ├── runtime/       — ランタイム処理と adapter の検証
 │   ├── helpers/
-│   │   └── mock-file-system.ts       — インメモリベースのファイル操作モック
+│   │   ├── mock-file-system.ts       — インメモリベースのファイル操作モック
+│   │   └── fake-opencode-init.ts     — OpenCode Plugin init スタブ
 │   └── fixtures/
 │       ├── sample-plan.md
 │       ├── sample-plan-partial.md
@@ -795,6 +831,9 @@ export { StatusCommand, type PlanStatus } from "./core/status-command";
 // 実際における利用環境からのランタイム
 export { NodeFileSystem } from "./runtime/node-file-system";
 
+// OpenCode plugin entrypoint
+export { OpenCodePlugin } from "./opencode-plugin";
+
 // （高度な手法での利用に向けた）全公開コアクラス
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
@@ -817,6 +856,9 @@ export { PlanBridge } from "./hooks/plan-bridge";
 export { TaskFeedbackHandler } from "./hooks/task-feedback";
 export { CompactionProtector } from "./hooks/compaction-protector";
 export { LoopDetectionHandler } from "./hooks/loop-handler";
+
+// OpenCode shared primitives
+export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
 
 // 実装に関する全ての型
 export type {

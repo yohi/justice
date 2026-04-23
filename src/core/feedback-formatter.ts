@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-unsafe-regex -- Formatter uses bounded output-summary regexes. */
 import type { TaskFeedback, TaskFeedbackStatus, TestSummary } from "./types";
 
 // Simpler non-nested regex to avoid ReDoS warnings
@@ -111,3 +112,4 @@ export class FeedbackFormatter {
     return details;
   }
 }
+/* eslint-enable security/detect-unsafe-regex */

@@ -4,6 +4,9 @@ import prettierConfig from "eslint-config-prettier";
 import securityPlugin from "eslint-plugin-security";
 
 export default tseslint.config(
+  {
+    ignores: ["dist/**"],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   prettierConfig,
@@ -18,6 +21,13 @@ export default tseslint.config(
       // particularly those guarding against 'security/detect-non-literal-fs-filename' false positives.
       // These directives should be cleaned up as codebase matures.
       reportUnusedDisableDirectives: false,
+    },
+  },
+  {
+    files: ["tests/**/*.ts"],
+    rules: {
+      "security/detect-object-injection": "off",
+      "security/detect-non-literal-fs-filename": "off",
     },
   },
   {

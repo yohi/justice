@@ -142,6 +142,7 @@ export class LearningExtractor {
           return match.replace(group, "****[MASKED]****");
         },
       )
+      // eslint-disable-next-line security/detect-unsafe-regex
       .replace(/((?:https?:\/\/|git@)[^@:]+)(?::[^@]+)?@/gi, "$1:****[MASKED]****@");
 
     // 2. Truncate if exceeding maxLength

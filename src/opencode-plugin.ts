@@ -12,7 +12,7 @@ import {
  * It uses OpenCodeAdapter to bridge OpenCode hooks to JusticePlugin logic.
  */
 export const OpenCodePlugin: Plugin = async (init) => {
-  const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
+  const adapter = new OpenCodeAdapter(init as OpenCodePluginInit);
 
   return {
     event: async (input: OpenCodeEvent): Promise<void> => {

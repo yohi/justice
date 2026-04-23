@@ -95,6 +95,7 @@ export class LoopDetectionHandler {
       const sorted = [...this.sessions.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess);
       const toRemove = this.sessions.size - MAX_SESSIONS + 1;
       for (let i = 0; i < toRemove; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const entry = sorted[i];
         if (entry) this.sessions.delete(entry[0]);
       }

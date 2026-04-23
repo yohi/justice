@@ -1,3 +1,4 @@
+import type { PluginInput } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { NodeFileSystem } from "./node-file-system";
@@ -9,17 +10,14 @@ export interface OpenCodeLogEntry {
   readonly extra?: Record<string, unknown>;
 }
 
-export interface OpenCodePluginInit {
-  readonly project: { readonly name?: string; readonly root?: string };
-  readonly client: {
-    readonly app: {
-      log: (entry: OpenCodeLogEntry) => Promise<void> | void;
-    };
-  };
-  readonly $: (...args: unknown[]) => unknown;
-  readonly directory?: string;
-  readonly worktree?: string;
-}
+/**
+ * Structural bridge for OpenCode plugin initialization.
+ * We extend PluginInput to explicitly capture properties we depend on.
+ */
+export type OpenCodePluginInit = PluginInput & {
+  // Add specific requirements if they are missing or slightly different in PluginInput
+  readonly project: PluginInput["project"] & { readonly root?: string };
+};
 
 export interface ToolInput {
   readonly tool: string;
@@ -89,10 +87,12 @@ export class OpenCodeAdapter {
   async log(level: "info" | "warn" | "error", message: string, ...args: unknown[]): Promise<void> {
     try {
       await this.#init.client.app.log({
-        level,
-        service: "justice",
-        message,
-        extra: args.length > 0 ? { args } : undefined,
+        body: {
+          level,
+          service: "justice",
+          message,
+          extra: args.length > 0 ? { args } : undefined,
+        },
       });
     } catch {
       /* final defense line: never throw from the logging wrapper */

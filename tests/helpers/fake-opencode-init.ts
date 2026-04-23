@@ -6,25 +6,20 @@ import type { JusticePlugin } from "../../src/core/justice-plugin";
 /**
  * Simple deep merge to preserve nested default fields in OpenCodePluginInit
  */
+function isPlainObject(item: unknown): item is Record<string, unknown> {
+  return !!item && typeof item === "object" && !Array.isArray(item) && item.constructor === Object;
+}
+
 function deepMerge<T extends object>(base: T, overrides: Partial<T>): T {
   const result = { ...base } as Record<string, unknown>;
   for (const key in overrides) {
     if (Object.hasOwn(overrides, key)) {
       const val = overrides[key];
-      // eslint-disable-next-line security/detect-object-injection
       const existing = result[key];
-      if (
-        val &&
-        typeof val === "object" &&
-        !Array.isArray(val) &&
-        existing &&
-        typeof existing === "object" &&
-        !Array.isArray(existing)
-      ) {
-        // eslint-disable-next-line security/detect-object-injection
-        result[key] = deepMerge(existing as object, val as object);
+
+      if (isPlainObject(val) && isPlainObject(existing)) {
+        result[key] = deepMerge(existing, val);
       } else {
-        // eslint-disable-next-line security/detect-object-injection
         result[key] = val;
       }
     }
@@ -33,14 +28,17 @@ function deepMerge<T extends object>(base: T, overrides: Partial<T>): T {
 }
 
 export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodePluginInit {
-  const base: OpenCodePluginInit = {
+  const base = {
     project: { name: "test", root: "/tmp/test-workspace" },
     client: { app: { log: vi.fn().mockResolvedValue(undefined) } },
-    $: vi.fn() as unknown as OpenCodePluginInit["$"],
+    $: vi.fn(),
     directory: "/tmp/test-workspace",
-  };
+    worktree: "/tmp/test-workspace",
+    serverUrl: new URL("http://localhost"),
+    experimental_workspace: { register: vi.fn() },
+  } as unknown as OpenCodePluginInit;
 
-  return deepMerge(base, overrides);
+  return deepMerge(base as unknown as Record<string, unknown>, overrides as Record<string, unknown>) as OpenCodePluginInit;
 }
 
 /**
