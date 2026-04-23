@@ -36,8 +36,33 @@ export class OpenCodeAdapter {
   #initPromise: Promise<void> | null = null;
 
   constructor(init: OpenCodePluginInit) {
-    this.#init = init;
-    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project.root ?? null;
+    const project =
+      init.project && typeof init.project === "object"
+        ? {
+            name: init.project.name,
+            root: init.project.root,
+          }
+        : { name: undefined, root: undefined };
+
+    const log =
+      typeof init.client?.app?.log === "function"
+        ? init.client.app.log
+        : () => {
+            /* no-op */
+          };
+
+    this.#init = {
+      ...init,
+      project,
+      client: {
+        ...init.client,
+        app: {
+          ...init.client?.app,
+          log,
+        },
+      },
+    };
+    this.#workspaceRoot = init.worktree ?? init.directory ?? this.#init.project.root ?? null;
     this.#noOp = this.#workspaceRoot === null;
   }
 
@@ -120,14 +145,14 @@ export class OpenCodeAdapter {
       if (!sessionId) return;
 
       if (input.event.type === "message.updated") {
-        await this.ensureInitialized();
-        const justice = this.#justice;
-        if (!justice) return;
-
         const info = this.#readRecord(properties, "info");
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
         if (role !== "user" || content.length === 0) return;
+
+        await this.ensureInitialized();
+        const justice = this.#justice;
+        if (!justice) return;
 
         await justice.handleEvent({
           type: "Message",
@@ -167,10 +192,10 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
-      if (input.tool !== "task") return;
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
@@ -211,10 +236,10 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
-      if (input.tool !== "task") return;
 
       await justice.handleEvent({
         type: "PostToolUse",

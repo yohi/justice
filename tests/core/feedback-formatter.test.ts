@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { FeedbackFormatter } from "../../src/core/feedback-formatter";
+import type { TestSummary } from "../../src/core/types";
 
 describe("FeedbackFormatter", () => {
   const formatter = new FeedbackFormatter();
