@@ -100,13 +100,24 @@ bun run lint
 
 ### パターン 1: OpenCode Plugin 経由 (推奨, v1.2.0〜)
 
-`@yohi/justice/opencode` サブパスから `OpenCodePlugin` を import し、
-OpenCode の `plugins` 配列に追加するだけで有効化できます。
+`opencode.json`（または `~/.config/opencode/opencode.json`）の `plugin` 配列に `@yohi/justice` を追加するだけで、OpenCode が自動的にインストールと有効化を行います。
+
+```json
+{
+  "plugin": [
+    "@yohi/justice"
+  ]
+}
+```
+
+*(※GitHub Packagesからのインストールとなるため、環境に合わせた `.npmrc` 等の設定が必要です)*
+
+プログラマティックにインポートする場合（`@yohi/justice/opencode` もしくはルートから）は以下のように記述します：
 
 ```ts
-import { OpenCodePlugin } from "@yohi/justice/opencode";
+import JusticePlugin from "@yohi/justice";
 
-export default { plugins: [OpenCodePlugin] };
+export default { plugins: [JusticePlugin] };
 ```
 
 初期化 (`wisdom` のロード) は最初の hook 呼び出し時に一度だけ遅延実行されます。
@@ -141,7 +152,15 @@ export default { plugins: [OpenCodePlugin] };
     bun run build
     ```
 2.  **フックの設定**
-    `oh-my-opencode.jsonc` の `source` に、ビルドされた JS ファイルの絶対パスを指定します。
+    `opencode.json`（または `~/.config/opencode/opencode.json`）の `plugin` 配列に、クローンしたディレクトリの絶対パスを指定します。
+
+    ```json
+    {
+      "plugin": [
+        "/path/to/your/cloned/justice"
+      ]
+    }
+    ```
 
 ### 方法 B: GitHub Packages からインストール（安定版用）
 

@@ -49,7 +49,7 @@ export {
  * Legacy/Alternative hook handler for backward compatibility or simple event routing.
  * (Used by some early integrations)
  */
-export default async function handleHook(
+export async function handleHook(
   _event: Parameters<NonNullable<Awaited<ReturnType<typeof OpenCodePlugin>>["event"]>>[0],
 ): Promise<void> {
   // Note: This is a simplified wrapper. The primary integration should use OpenCodePlugin.
@@ -57,3 +57,5 @@ export default async function handleHook(
   // but recommended path is through the Plugin-type OpenCodePlugin.
   console.warn("[JUSTICE] handleHook called directly. Use OpenCodePlugin for full adapter features.");
 }
+
+export default OpenCodePlugin;
