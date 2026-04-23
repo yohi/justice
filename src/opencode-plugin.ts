@@ -54,11 +54,10 @@ export async function handleHook(
   init?: Partial<OpenCodePluginInit>,
 ): Promise<void> {
   if (
-    !init ||
-    !init.client ||
-    !init.serverUrl ||
-    !init.$ ||
-    !init.project ||
+    !init?.client ||
+    !init?.serverUrl ||
+    !init?.$ ||
+    !init?.project ||
     typeof init.project !== "object" ||
     (!init.directory && !init.worktree && !init.project.root)
   ) {
