@@ -45,7 +45,7 @@ export class OpenCodeAdapter {
 
   constructor(init: OpenCodePluginInit) {
     this.#init = init;
-    this.#workspaceRoot = init.worktree ?? init.directory ?? null;
+    this.#workspaceRoot = init.worktree ?? init.directory ?? init.project?.root ?? null;
     this.#noOp = this.#workspaceRoot === null;
   }
 
@@ -77,12 +77,14 @@ export class OpenCodeAdapter {
   async ensureInitialized(): Promise<void> {
     if (this.#noOp) return;
     if (this.#initPromise) {
-      await this.#initPromise;
-      return;
+      return this.#initPromise;
     }
 
-    this.#initPromise = this.#runInit();
-    await this.#initPromise;
+    this.#initPromise = this.#runInit().catch((err) => {
+      this.#initPromise = null;
+      throw err;
+    });
+    return this.#initPromise;
   }
 
   async #runInit(): Promise<void> {
@@ -113,6 +115,7 @@ export class OpenCodeAdapter {
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
       await this.log("error", "[Justice] lazy init failed", err);
+      throw err;
     }
   }
 
@@ -173,10 +176,10 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
-      if (input.tool !== "task") return;
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
@@ -219,10 +222,10 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      if (input.tool !== "task") return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
-      if (input.tool !== "task") return;
 
       await justice.handleEvent({
         type: "PostToolUse",

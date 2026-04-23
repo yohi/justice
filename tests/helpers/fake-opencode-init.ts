@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
-import { JusticePlugin } from "../../src/core/justice-plugin";
+import type { JusticePlugin } from "../../src/core/justice-plugin";
 
 export function fakeInit(overrides: Partial<OpenCodePluginInit> = {}): OpenCodePluginInit {
   const base: OpenCodePluginInit = {

@@ -13,21 +13,32 @@ describe("OpenCodeAdapter skeleton", () => {
     expect(adapter).toBeInstanceOf(OpenCodeAdapter);
   });
 
-  it("enters no-op mode when both worktree and directory are undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined });
+  it("enters no-op mode when all possible workspace roots are undefined", () => {
+    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(true);
   });
 
   it("falls back to directory when worktree is undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: "/tmp/fallback" });
+    const init = fakeInit({ worktree: undefined, directory: "/tmp/fallback", project: { root: undefined } });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(false);
     expect(adapter.getWorkspaceRoot()).toBe("/tmp/fallback");
   });
 
-  it("prefers worktree over directory when both are set", () => {
-    const init = fakeInit({ worktree: "/tmp/wt", directory: "/tmp/dir" });
+  it("falls back to project.root when worktree and directory are undefined", () => {
+    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: "/tmp/project-root" } });
+    const adapter = new OpenCodeAdapter(init);
+    expect(adapter.isNoOp()).toBe(false);
+    expect(adapter.getWorkspaceRoot()).toBe("/tmp/project-root");
+  });
+
+  it("prefers worktree over directory and project.root", () => {
+    const init = fakeInit({
+      worktree: "/tmp/wt",
+      directory: "/tmp/dir",
+      project: { root: "/tmp/proj" },
+    });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.getWorkspaceRoot()).toBe("/tmp/wt");
   });
@@ -65,7 +76,7 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("no-op adapter never initializes justice", async () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined });
+    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
     expect(adapter.isNoOp()).toBe(true);
@@ -141,8 +152,6 @@ describe("OpenCodeAdapter.onEvent", () => {
 
   it("ignores non-loop session.error events without calling justice or logging", async () => {
     const { adapter, justice } = createMockedAdapter();
-    const init = adapter["#init"] as any; // Not ideal, but we need to check the mock logger
-    // Actually, createMockedAdapter already has the mocked logger from fakeInit
     const handleSpy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onEvent({
@@ -296,5 +305,58 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
     const output = { context: [] as string[], prompt: undefined as string | undefined };
     await adapter.onSessionCompacting({ sessionID: "s" }, output);
     expect(output.context).toEqual(["snapshot-body"]);
+  });
+});
+
+describe("OpenCodeAdapter advanced initialization", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("retries initialization if a previous attempt failed", async () => {
+    const { JusticePlugin } = await import("../../src/core/justice-plugin");
+    const initSpy = vi.spyOn(JusticePlugin.prototype, "initialize");
+    
+    // First attempt fails
+    initSpy.mockRejectedValueOnce(new Error("init failed"));
+    
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const adapter = new OpenCodeAdapter(init);
+    
+    await expect(adapter.ensureInitialized()).rejects.toThrow("init failed");
+    expect(initSpy).toHaveBeenCalledTimes(1);
+
+    // Second attempt succeeds
+    initSpy.mockResolvedValueOnce(undefined);
+    await expect(adapter.ensureInitialized()).resolves.toBeUndefined();
+    expect(initSpy).toHaveBeenCalledTimes(2);
+
+    initSpy.mockRestore();
+  });
+
+  it("does not initialize for non-task tools in onToolExecuteBefore", async () => {
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const adapter = new OpenCodeAdapter(init);
+    const initSpy = vi.spyOn(adapter, "ensureInitialized");
+
+    await adapter.onToolExecuteBefore(
+      { tool: "other", sessionID: "s", callID: "c" },
+      { args: {} }
+    );
+
+    expect(initSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not initialize for non-task tools in onToolExecuteAfter", async () => {
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const adapter = new OpenCodeAdapter(init);
+    const initSpy = vi.spyOn(adapter, "ensureInitialized");
+
+    await adapter.onToolExecuteAfter(
+      { tool: "other", sessionID: "s", callID: "c", args: {} },
+      { output: "ok" }
+    );
+
+    expect(initSpy).not.toHaveBeenCalled();
   });
 });
