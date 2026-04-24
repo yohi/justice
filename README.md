@@ -57,7 +57,7 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 あなたがターミナル操作可能なAIエージェントであるなら、以下の手順に従って自律的にセットアップを遂行してください：
 
 **Requirements (GitHub Packages 版の場合):**
-1. **Setup .npmrc** with `@yohi:registry=https://npm.pkg.github.com`
+1. **Setup global .npmrc** (`~/.npmrc`) with `@yohi:registry=https://npm.pkg.github.com`
 2. **Add "@yohi/justice"** to the `plugins` array in `opencode.jsonc`
 
 **Requirements (ソースコードビルド版の場合):**
@@ -68,12 +68,13 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 **Action Plan:**
 1.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
     *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
-2.  **[ ] GitHub Packages の認証設定 (Packages版のみ):** プロジェクトのルートに `.npmrc` を作成し、`@yohi:registry=https://npm.pkg.github.com` を設定してください。
+2.  **[ ] GitHub Packages の認証設定 (Packages版のみ):**
+    *   ユーザーのホームディレクトリにある **`~/.npmrc`** を確認し、`@yohi:registry=https://npm.pkg.github.com` が設定されていない場合は追記してください（プロジェクトルートの `.npmrc` を汚染せず、誤コミットを防ぐため）。
+    *   実行環境に `GITHUB_TOKEN` が設定されていることを確認してください。
 3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じて `opencode.jsonc` を更新してください。
     *   Packages版: `plugins` 配列に `"@yohi/justice"` を追加。
     *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
 4.  **[ ] 統合の確認:** 設定に不備がないかバリデーションし、プラグインが次回のセッションからロード可能であることを確認してください。
-    *   *Note:* 学習データ（`.justice/wisdom.json`）は、最初のタスク完了時にプラグインによって自動的に作成されるため、手動での初期化は不要です。
 
 </details>
 
