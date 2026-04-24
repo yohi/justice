@@ -68,15 +68,19 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 3. **Register hooks** in `opencode.jsonc` pointing to the local `dist/` files.
 
 **Action Plan:**
-1.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
+1.  **[ ] GitHub Packages の認証設定 (Packages版のみ):**
+    *   ユーザーのホームディレクトリにある **`~/.npmrc`** を確認し、以下の2行が設定されていない場合は追記してください（401エラー防止のため）。
+        ```ini
+        @yohi:registry=https://npm.pkg.github.com
+        //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+        ```
+    *   環境変数 `GITHUB_TOKEN` が利用可能であることを確認してください。
+2.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
     *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
-2.  **[ ] GitHub Packages の認証設定 (Packages版のみ):**
-    *   ユーザーのホームディレクトリにある **`~/.npmrc`** を確認し、`@yohi:registry=https://npm.pkg.github.com` が設定されていない場合は追記してください（プロジェクトルートの `.npmrc` を汚染せず、誤コミットを防ぐため）。
-    *   実行環境に `GITHUB_TOKEN` が設定されていることを確認してください。
 3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じて `opencode.jsonc` を更新してください。
     *   Packages版: `plugins` 配列に `"@yohi/justice"` を追加。
     *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
-4.  **[ ] 統合の確認:** 設定に不備がないかバリデーションし、プラグインが次回のセッションからロード可能であることを確認してください。
+4.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
 
 </details>
 
@@ -98,9 +102,11 @@ bun run test
 
 最もクリーンで推奨される方法です。
 
-1.  **認証設定 (`.npmrc`)**
+1.  **認証設定 (`~/.npmrc`)**
+    プロジェクトルートの `.npmrc` を汚染せず、誤コミットを防ぐため、ユーザーのホームディレクトリへの設定を推奨します。以下の2行を追記してください。
     ```ini
     @yohi:registry=https://npm.pkg.github.com
+    //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
     ```
 2.  **プラグインの有効化 (`opencode.jsonc`)**
     `plugins` リストにパッケージ名を追加するだけで、すべてのフックが自動的に登録されます。**`hooks.custom` への記述は不要です。**
