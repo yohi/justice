@@ -43,10 +43,8 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
 
 ### For Humans (推奨)
 
-> [!TIP]
-> **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。
-
-以下のプロンプトをコピーしてエージェントに渡してください：
+Justice Plugin の導入は、AIエージェント（Gemini CLI / Cursor / GitHub Copilot 等）に丸投げしてください。
+以下のプロンプトをコピーして渡すだけで、**GitHub Packages の認証からプラグインの有効化まで**、すべてが完了します。
 
 ```text
 Install and configure @yohi/justice by following the instructions at:
@@ -74,10 +72,8 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じて `opencode.jsonc` を更新してください。
     *   Packages版: `plugins` 配列に `"@yohi/justice"` を追加。
     *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
-4.  **[ ] 学習データの初期化:**
-    *   `.justice/wisdom.json` (プロジェクトローカル) を `{"entries": []}` で作成。
-    *   可能であれば `~/.justice/wisdom.json` (ユーザーグローバル) の存在を確認し、必要に応じて初期化してください。
-5.  **[ ] 統合の確認:** 設定に不備がないかバリデーションしてください。
+4.  **[ ] 統合の確認:** 設定に不備がないかバリデーションし、プラグインが次回のセッションからロード可能であることを確認してください。
+    *   *Note:* 学習データ（`.justice/wisdom.json`）は、最初のタスク完了時にプラグインによって自動的に作成されるため、手動での初期化は不要です。
 
 </details>
 
