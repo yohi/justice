@@ -68,13 +68,15 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 3. **Register hooks** in `opencode.jsonc` pointing to the local `dist/` files.
 
 **Action Plan:**
-1.  **[ ] 導入パターンの決定:** `ask_user` ツールを使用し、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かをユーザーに確認してください。
-    *   選択肢提示の際、Packages 版は `.npmrc` 設定のみで済む最もクリーンな方法であることを伝えてください。
+1.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
+    *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
 2.  **[ ] GitHub Packages の認証設定 (Packages版のみ):** プロジェクトのルートに `.npmrc` を作成し、`@yohi:registry=https://npm.pkg.github.com` を設定してください。
 3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じて `opencode.jsonc` を更新してください。
     *   Packages版: `plugins` 配列に `"@yohi/justice"` を追加。
-    *   ソース版: `hooks.custom` にビルド済み JS へのパスを登録。
-4.  **[ ] 学習データの初期化:** `.justice/wisdom.json` を空のデータ（`{"entries": []}`）で作成してください。
+    *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
+4.  **[ ] 学習データの初期化:**
+    *   `.justice/wisdom.json` (プロジェクトローカル) を `{"entries": []}` で作成。
+    *   可能であれば `~/.justice/wisdom.json` (ユーザーグローバル) の存在を確認し、必要に応じて初期化してください。
 5.  **[ ] 統合の確認:** 設定に不備がないかバリデーションしてください。
 
 </details>
@@ -122,6 +124,7 @@ export default { plugins: [OpenCodePlugin] };
 ### パターン 3: ソースコードからビルド (最新版・開発用)
 
 リポジトリをクローンし、ビルドしたファイルをフックとして直接参照します。
+**注意:** 各フックファイルは依存関係注入を必要とするため、直接指定するのではなく、すべてのコンポーネントを初期化する `dist/opencode-plugin.js` をエントリポイントとして使用してください。
 
 1.  **ビルド**
     ```bash
@@ -129,26 +132,21 @@ export default { plugins: [OpenCodePlugin] };
     cd justice && bun install && bun run build
     ```
 2.  **フックの設定** (`opencode.jsonc`)
-    ビルドされた JS ファイルのパスを `hooks.custom` に指定します。
     ```jsonc
     {
       "hooks": {
         "custom": [
           {
-            "name": "justice-plan-bridge",
-            "event": ["Message", "PreToolUse"],
-            "source": "[LOCAL_PATH]/justice/dist/hooks/plan-bridge.js"
-          },
-          {
-            "name": "justice-task-feedback",
-            "event": ["PostToolUse"],
-            "source": "[LOCAL_PATH]/justice/dist/hooks/task-feedback.js"
+            "name": "justice-plugin",
+            "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
+            "source": "[LOCAL_PATH]/justice/dist/opencode-plugin.js"
           }
-          // 必要に応じて compaction-protector, loop-handler も追加
         ]
       }
     }
     ```
+
+## 使い方
 
 インストール後、AI エージェントがメッセージ内でプランファイルを参照し、かつ委譲を表すキーワード（例: "plan.md から次のタスクを委譲して"）を含めた場合に、Justice は自動的にアクティブになります。
 
