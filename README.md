@@ -43,8 +43,10 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
 
 ### For Humans (推奨)
 
-Justice Plugin の導入は、AIエージェント（Gemini CLI / Cursor / GitHub Copilot 等）に丸投げしてください。
-以下のプロンプトをコピーして渡すだけで、**GitHub Packages の認証からプラグインの有効化まで**、すべてが完了します。
+> [!TIP]
+> **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。
+
+以下のプロンプトをコピーしてエージェントに渡してください：
 
 ```text
 Install and configure @yohi/justice by following the instructions at:
