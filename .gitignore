@@ -5,6 +5,7 @@ coverage/
 *.tsbuildinfo
 .env
 .env.*
+.npmrc
 *.log
 .vscode/
 Thumbs.db
