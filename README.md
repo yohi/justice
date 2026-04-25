@@ -59,7 +59,7 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 あなたがターミナル操作可能なAIエージェントであるなら、以下の手順に従って自律的にセットアップを遂行してください：
 
 **Requirements (GitHub Packages 版の場合):**
-1. **Setup global .npmrc** (`~/.npmrc`) with `@yohi:registry=https://npm.pkg.github.com`
+1. **Setup global .npmrc** (`~/.npmrc`) with `@yohi:registry=https://npm.pkg.github.com` and `_authToken`
 2. **Add "@yohi/justice"** to the `plugins` array in `opencode.jsonc`
 
 **Requirements (ソースコードビルド版の場合):**
