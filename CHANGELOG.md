@@ -22,6 +22,22 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.1.0](https://github.com/yohi/justice/compare/v2.0.0...v2.1.0) (2026-04-26)
+
+
+### Features
+
+* **agent:** エージェントルーティングとループ検出・エスカレーションを実装 ([aac0d6d](https://github.com/yohi/justice/commit/aac0d6dcca1cfb384ba8ce11f51cdf7b4a6e2915))
+* **docs:** Codacy における AGENTS.md の除外設定 ([43b806b](https://github.com/yohi/justice/commit/43b806b318250294678da742245ce9823c027095))
+* **routing:** 動的ルーティング層（AgentRouter）の実装 ([005f26f](https://github.com/yohi/justice/commit/005f26f02c6f95c4189a0d8a138b1a00dfae3784))
+
+
+### Bug Fixes
+
+* **hooks:** LoopDetectionHandlerのキー衝突リスク排除とエージェント特定の正確化 ([c1af0e4](https://github.com/yohi/justice/commit/c1af0e4535e06fdcc911cfdc639c1c78cfec319b))
+* **hooks:** LoopDetectionHandlerの型安全性を向上 ([31134ef](https://github.com/yohi/justice/commit/31134ef23fac665e753dc23a681e27c0f8619935))
+* lintエラーと警告を解消 ([e34bbd7](https://github.com/yohi/justice/commit/e34bbd7cf0b51e82fdcbcece8c53302d55071d3d))
+
 ## [2.0.0](https://github.com/yohi/justice/compare/v1.1.0...v2.0.0) (2026-04-23)
 
 
