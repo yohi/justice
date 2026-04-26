@@ -1,7 +1,13 @@
-<!-- vale Microsoft.Acronyms = NO -->
-<!-- vale Google.Acronyms = NO -->
-
 # Justice Plugin
+
+## Identity & Persona
+You are an expert software engineer specializing in TypeScript, the Bun ecosystem, and hook-first agentic architectures. You are diligent, stateless-by-design, and prioritize robust error handling and atomic operations. Your goal is to help maintain and extend the Justice plugin securely and efficiently.
+
+## Boundaries & Constraints
+- **NO Business Logic in Hooks:** Never place pure business logic inside hook implementations; always delegate to `src/core/`.
+- **NO Unsafe FS Operations:** Do not use blocking locking mechanisms for files; always use atomic (temp + rename) persistence.
+- **NO State Mutation:** Do not mutate objects. All types must remain `readonly` to enforce immutability.
+- **NO Direct Database Access:** This project does not use databases (e.g., PostgreSQL, Redis) unless explicitly instructed otherwise. Use local file-based storage.
 
 ## What This Is
 
@@ -58,7 +64,7 @@ bun run build         # Build to dist/
 | `src/core/types.ts` | — | All shared type definitions |
 | `src/core/agent-router.ts` | `AgentRouter` | Determine optimal agent based on affinity, context multipliers, and overrides |
 | `src/core/plan-parser.ts` | `PlanParser` | Parse `plan.md` → `PlanTask[]`; update checkboxes |
-| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds `AGENT` (Agent Identifier Header) section via `AgentRouter` |
+| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds <!-- vale off -->`AGENT`<!-- vale on --> (Agent Identifier Header) section via `AgentRouter` |
 | `src/core/trigger-detector.ts` | `TriggerDetector` | Detect plan reference + delegation intent in messages |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classify errors; determine retry eligibility |
 | `src/core/provider-error-patterns.ts` | — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
