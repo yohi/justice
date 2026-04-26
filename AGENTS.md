@@ -55,7 +55,7 @@ bun run build         # Build to dist/
 | `src/core/types.ts` | — | All shared type definitions |
 | `src/core/agent-router.ts` | `AgentRouter` | Determine optimal agent based on affinity, context multipliers, and overrides |
 | `src/core/plan-parser.ts` | `PlanParser` | Parse `plan.md` → `PlanTask[]`; update checkboxes |
-| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds `AGENT` (委譲先エージェント識別ヘッダ) section via `AgentRouter` |
+| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds `AGENT` (Agent Identifier Header) section via `AgentRouter` |
 | `src/core/trigger-detector.ts` | `TriggerDetector` | Detect plan reference + delegation intent in messages |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classify errors; determine retry eligibility |
 | `src/core/provider-error-patterns.ts` | — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
