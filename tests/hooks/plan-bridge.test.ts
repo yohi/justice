@@ -2,6 +2,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, HookEvent, PreToolUseEvent } from "../../src/core/types";
+import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
+import { createMockFileReader as createJusticeMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { TaskSplitter } from "../../src/core/task-splitter";
 
 const samplePlanContent = [
   "## Task 1: Setup",
@@ -20,13 +23,17 @@ function createMockFileReader(files: Record<string, string>): FileReader {
   };
 }
 
+function createLoopHandler(reader: FileReader): LoopDetectionHandler {
+  return new LoopDetectionHandler(reader, createMockFileWriter(), new TaskSplitter());
+}
+
 describe("PlanBridge", () => {
   describe("handleMessage", () => {
     it("should detect plan reference and return delegation request", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const event: HookEvent = {
         type: "Message",
@@ -53,7 +60,7 @@ describe("PlanBridge", () => {
           throw new Error("Read failed");
         }),
       };
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const event: HookEvent = {
         type: "Message",
@@ -73,7 +80,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({
         "plan.md": "## Task 1: Done\n- [x] Step 1\n- [x] Step 2\n",
       });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const event: HookEvent = {
         type: "Message",
@@ -99,7 +106,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       // Set the active plan for this session
       bridge.setActivePlan("s-6", "docs/plans/sample-plan.md");
@@ -125,7 +132,7 @@ describe("PlanBridge", () => {
       const reader = createMockFileReader({
         "plan.md": samplePlanContent,
       });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       // Session A has an active plan
       bridge.setActivePlan("session-a", "plan.md");
@@ -151,7 +158,7 @@ describe("PlanBridge", () => {
         "\n",
       );
       const reader = createMockFileReader({ "plan.md": planContent });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setActivePlan("s-1", "plan.md");
 
       const event: PreToolUseEvent = {
@@ -174,7 +181,7 @@ describe("PlanBridge", () => {
         "- [ ] Write code",
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setActivePlan("s-1", "plan.md");
 
       const event: PreToolUseEvent = {
@@ -200,7 +207,7 @@ describe("PlanBridge", () => {
         "- [ ] Write README",
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
-      const bridge = new PlanBridge(reader);
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setActivePlan("s-1", "plan.md");
 
       const event: PreToolUseEvent = {

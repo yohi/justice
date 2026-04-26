@@ -4,6 +4,7 @@ import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
+import { LoopDetectionHandler } from "./loop-handler";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -16,14 +17,16 @@ export class PlanBridge {
   private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly activePlanPaths: Map<string, string> = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
+  private readonly loopHandler: LoopDetectionHandler | null;
 
-  constructor(fileReader: FileReader, wisdomStore?: WisdomStoreInterface) {
+  constructor(fileReader: FileReader, loopHandler?: LoopDetectionHandler, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
     this.core = new PlanBridgeCore();
     this.parser = new PlanParser();
     this.progressReporter = new ProgressReporter();
     this.dependencyAnalyzer = new DependencyAnalyzer();
+    this.loopHandler = loopHandler ?? null;
     this.wisdomStore = wisdomStore ?? null;
   }
 
@@ -101,6 +104,16 @@ export class PlanBridge {
     // Set as active plan for PreToolUse context injection
     this.setActivePlan(event.sessionId, planRef.planPath);
 
+    // Sync current task and agent to LoopDetectionHandler
+    if (this.loopHandler) {
+      this.loopHandler.setActivePlan(
+        event.sessionId,
+        planRef.planPath,
+        delegation.context.taskId,
+        delegation.context.agentId ?? "hephaestus",
+      );
+    }
+
     return {
       action: "inject",
       injectedContext: this.buildInjectedContext(planContent, delegation),
@@ -145,6 +158,16 @@ export class PlanBridge {
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
       return PROCEED;
+    }
+
+    // Sync current task and agent to LoopDetectionHandler
+    if (this.loopHandler) {
+      this.loopHandler.setActivePlan(
+        event.sessionId,
+        activePlanPath,
+        delegation.context.taskId,
+        delegation.context.agentId ?? "hephaestus",
+      );
     }
 
     return {

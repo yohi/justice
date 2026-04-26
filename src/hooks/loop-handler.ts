@@ -23,6 +23,7 @@ function resolveMaxRetries(): number {
 interface SessionState {
   planPath: string;
   activeTaskId: string;
+  currentAgent: AgentId;
   lastAccess: number;
 }
 
@@ -49,7 +50,7 @@ export interface EscalationDecision {
 export class LoopDetectionHandler {
   private readonly parser: PlanParser;
   private readonly sessions: Map<string, SessionState> = new Map();
-  private readonly trials: Map<string, TrialRecord[]> = new Map();
+  private readonly trials: Map<string, Map<string, TrialRecord[]>> = new Map();
   private readonly maxRetries: number;
 
   constructor(
@@ -61,15 +62,12 @@ export class LoopDetectionHandler {
     this.maxRetries = resolveMaxRetries();
   }
 
-  private buildTrialKey(sessionId: string, taskId: string): string {
-    return `${sessionId}:${taskId}`;
-  }
-
-  setActivePlan(sessionId: string, planPath: string, taskId: string): void {
+  setActivePlan(sessionId: string, planPath: string, taskId: string, agentId: AgentId): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
       activeTaskId: taskId,
+      currentAgent: agentId,
       lastAccess: Date.now(),
     });
   }
@@ -78,18 +76,22 @@ export class LoopDetectionHandler {
    * 試行結果を記録する。
    */
   recordTrial(sessionId: string, taskId: string, record: Omit<TrialRecord, "timestamp">): void {
-    const key = this.buildTrialKey(sessionId, taskId);
-    const list = this.trials.get(key) ?? [];
+    let sessionTrials = this.trials.get(sessionId);
+    if (!sessionTrials) {
+      sessionTrials = new Map();
+      this.trials.set(sessionId, sessionTrials);
+    }
+
+    const list = sessionTrials.get(taskId) ?? [];
     list.push({ ...record, timestamp: Date.now() });
-    this.trials.set(key, list);
+    sessionTrials.set(taskId, list);
   }
 
   /**
    * 現時点でのエスカレーション判定を返す。
    */
   evaluateEscalation(sessionId: string, taskId: string, primaryAgent: AgentId): EscalationDecision {
-    const key = this.buildTrialKey(sessionId, taskId);
-    const records = this.trials.get(key) ?? [];
+    const records = this.trials.get(sessionId)?.get(taskId) ?? [];
     const failures = records.filter((r) => r.result === "failure").length;
     const historySummary = this.formatTrialHistory(records);
 
@@ -117,16 +119,20 @@ export class LoopDetectionHandler {
    * テスト・診断用に内部で保持している試行履歴のスナップショットを返す。
    */
   getTrialHistory(sessionId: string, taskId: string): readonly TrialRecord[] {
-    return this.trials.get(this.buildTrialKey(sessionId, taskId)) ?? [];
+    return this.trials.get(sessionId)?.get(taskId) ?? [];
   }
 
   /**
    * 直近で記録された試行から実行中のエージェントを推測する。
    */
   private inferLastAgent(sessionId: string, taskId: string): AgentId {
-    const records = this.trials.get(this.buildTrialKey(sessionId, taskId));
+    const records = this.trials.get(sessionId)?.get(taskId);
     const last = records?.at(-1);
-    return last?.agent ?? "hephaestus";
+    if (last) return last.agent;
+
+    // 履歴がない場合は SessionState に保存された現在のエージェントを返す
+    const session = this.sessions.get(sessionId);
+    return session?.currentAgent ?? "hephaestus";
   }
 
   private formatTrialHistory(records: readonly TrialRecord[]): string {
@@ -233,11 +239,7 @@ export class LoopDetectionHandler {
 
   private removeSession(sessionId: string): void {
     this.sessions.delete(sessionId);
-    // 試行記録も削除（メモリリーク防止）
-    for (const key of this.trials.keys()) {
-      if (key.startsWith(`${sessionId}:`)) {
-        this.trials.delete(key);
-      }
-    }
+    // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
+    this.trials.delete(sessionId);
   }
 }

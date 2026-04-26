@@ -218,10 +218,10 @@ export class JusticePlugin {
     });
 
     // Use tieredWisdomStore for handlers that need cross-project context
-    this.planBridge = new PlanBridge(fileReader, this.tieredWisdomStore);
+    this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
+    this.planBridge = new PlanBridge(fileReader, this.loopHandler, this.tieredWisdomStore);
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
   }
 
   /**
