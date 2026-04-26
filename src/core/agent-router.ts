@@ -15,15 +15,15 @@ export const AGENT_IDS = ["hephaestus", "sisyphus", "prometheus", "atlas"] as co
  *   skill (Superpowers / Wisdom 由来) → 各エージェントのベーススコア
  * 値が大きいほど、その skill を遂行するうえで適性が高い。
  */
-const AFFINITY_MATRIX: Readonly<Record<string, Readonly<Record<AgentId, number>>>> = {
-  "implementer-prompt": { hephaestus: 10, sisyphus: 3, prometheus: 0, atlas: 2 },
-  "systematic-debugging": { hephaestus: 2, sisyphus: 10, prometheus: 0, atlas: 1 },
-  "code-quality-reviewer": { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 0 },
-  "spec-reviewer": { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 1 },
-  "test-driven-development": { hephaestus: 6, sisyphus: 8, prometheus: 2, atlas: 1 },
-  "writing-plans": { hephaestus: 1, sisyphus: 1, prometheus: 1, atlas: 10 },
-  brainstorming: { hephaestus: 2, sisyphus: 2, prometheus: 2, atlas: 9 },
-};
+const AFFINITY_MATRIX: ReadonlyMap<string, Readonly<Record<AgentId, number>>> = new Map([
+  ["implementer-prompt", { hephaestus: 10, sisyphus: 3, prometheus: 0, atlas: 2 }],
+  ["systematic-debugging", { hephaestus: 2, sisyphus: 10, prometheus: 0, atlas: 1 }],
+  ["code-quality-reviewer", { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 0 }],
+  ["spec-reviewer", { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 1 }],
+  ["test-driven-development", { hephaestus: 6, sisyphus: 8, prometheus: 2, atlas: 1 }],
+  ["writing-plans", { hephaestus: 1, sisyphus: 1, prometheus: 1, atlas: 10 }],
+  ["brainstorming", { hephaestus: 2, sisyphus: 2, prometheus: 2, atlas: 9 }],
+]);
 
 /**
  * Dominant Override:
@@ -52,6 +52,11 @@ const CONTEXT_MULTIPLIERS: readonly ContextMultiplierRule[] = [
   { category: "bugfix", skill: "systematic-debugging", multiplier: 1.5 },
   { category: "feature", skill: "implementer-prompt", multiplier: 1.5 },
 ];
+
+/** 検索用 Map の構築 (O(1) ルックアップ用) */
+const CONTEXT_MULTIPLIER_MAP: ReadonlyMap<string, number> = new Map(
+  CONTEXT_MULTIPLIERS.map((m) => [`${m.category}:${m.skill}`, m.multiplier]),
+);
 
 const DEFAULT_FALLBACK: AgentId = "hephaestus";
 
@@ -92,7 +97,7 @@ export class AgentRouter {
     for (const agent of AGENT_IDS) scores.set(agent, 0);
 
     for (const skill of skills) {
-      const row = AFFINITY_MATRIX[skill];
+      const row = AFFINITY_MATRIX.get(skill);
       if (!row) continue;
       const multiplier = this.lookupMultiplier(category, skill);
       for (const agent of AGENT_IDS) {
@@ -146,8 +151,7 @@ export class AgentRouter {
   }
 
   private lookupMultiplier(category: RoutingCategory, skill: string): number {
-    const entry = CONTEXT_MULTIPLIERS.find((m) => m.category === category && m.skill === skill);
-    return entry?.multiplier ?? 1.0;
+    return CONTEXT_MULTIPLIER_MAP.get(`${category}:${skill}`) ?? 1.0;
   }
 
   private emptyScoreboard(): Record<AgentId, number> {
