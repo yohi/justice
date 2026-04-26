@@ -34,7 +34,7 @@ export interface TrialRecord {
   readonly timestamp: number;
 }
 
-export type EscalationReason = "max_retries_exceeded" | "loop_detected_and_retries_exceeded";
+export type EscalationReason = "max_retries_exceeded";
 
 /** エスカレーション判定結果 */
 export interface EscalationDecision {
@@ -61,6 +61,10 @@ export class LoopDetectionHandler {
     this.maxRetries = resolveMaxRetries();
   }
 
+  private buildTrialKey(sessionId: string, taskId: string): string {
+    return `${sessionId}:${taskId}`;
+  }
+
   setActivePlan(sessionId: string, planPath: string, taskId: string): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
@@ -71,21 +75,21 @@ export class LoopDetectionHandler {
   }
 
   /**
-   * 試行結果を記録する。失敗回数が `MAX_RETRIES_BEFORE_ESCALATION` を超えると
-   * `evaluateEscalation` がエスカレーション指示を返すようになる。
+   * 試行結果を記録する。
    */
-  recordTrial(taskId: string, record: Omit<TrialRecord, "timestamp">): void {
-    const list = this.trials.get(taskId) ?? [];
+  recordTrial(sessionId: string, taskId: string, record: Omit<TrialRecord, "timestamp">): void {
+    const key = this.buildTrialKey(sessionId, taskId);
+    const list = this.trials.get(key) ?? [];
     list.push({ ...record, timestamp: Date.now() });
-    this.trials.set(taskId, list);
+    this.trials.set(key, list);
   }
 
   /**
    * 現時点でのエスカレーション判定を返す。
-   * 失敗回数が閾値以上に達していれば、`sisyphus` へ強制ルーティングするよう示す。
    */
-  evaluateEscalation(taskId: string, primaryAgent: AgentId): EscalationDecision {
-    const records = this.trials.get(taskId) ?? [];
+  evaluateEscalation(sessionId: string, taskId: string, primaryAgent: AgentId): EscalationDecision {
+    const key = this.buildTrialKey(sessionId, taskId);
+    const records = this.trials.get(key) ?? [];
     const failures = records.filter((r) => r.result === "failure").length;
     const historySummary = this.formatTrialHistory(records);
 
@@ -112,16 +116,15 @@ export class LoopDetectionHandler {
   /**
    * テスト・診断用に内部で保持している試行履歴のスナップショットを返す。
    */
-  getTrialHistory(taskId: string): readonly TrialRecord[] {
-    return this.trials.get(taskId) ?? [];
+  getTrialHistory(sessionId: string, taskId: string): readonly TrialRecord[] {
+    return this.trials.get(this.buildTrialKey(sessionId, taskId)) ?? [];
   }
 
   /**
    * 直近で記録された試行から実行中のエージェントを推測する。
-   * 履歴がない場合は、デフォルト実装担当である `hephaestus` を仮定する。
    */
-  private inferLastAgent(taskId: string): AgentId {
-    const records = this.trials.get(taskId);
+  private inferLastAgent(sessionId: string, taskId: string): AgentId {
+    const records = this.trials.get(this.buildTrialKey(sessionId, taskId));
     if (!records || records.length === 0) return "hephaestus";
     const last = records[records.length - 1];
     return last?.agent ?? "hephaestus";
@@ -152,10 +155,8 @@ export class LoopDetectionHandler {
       const activeTask = tasks.find((t) => t.id === session.activeTaskId);
 
       if (activeTask) {
-        // ループ検知自体を 1 回の失敗試行として記録する。
-        // どのエージェントが失敗中かは、最後に記録された試行から推測する。
-        const lastAgent = this.inferLastAgent(session.activeTaskId);
-        this.recordTrial(session.activeTaskId, {
+        const lastAgent = this.inferLastAgent(event.sessionId, session.activeTaskId);
+        this.recordTrial(event.sessionId, session.activeTaskId, {
           agent: lastAgent,
           result: "failure",
           wisdom: `loop_detected: ${event.payload.message}`,
@@ -174,7 +175,7 @@ export class LoopDetectionHandler {
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
 
         // エスカレーション判定
-        const escalation = this.evaluateEscalation(session.activeTaskId, lastAgent);
+        const escalation = this.evaluateEscalation(event.sessionId, session.activeTaskId, lastAgent);
         const escalationBlock: string[] = escalation.escalated
           ? [
               "",
@@ -215,7 +216,7 @@ export class LoopDetectionHandler {
     const now = Date.now();
     for (const [id, session] of this.sessions.entries()) {
       if (now - session.lastAccess > SESSION_TTL_MS) {
-        this.sessions.delete(id);
+        this.removeSession(id);
       }
     }
 
@@ -223,9 +224,18 @@ export class LoopDetectionHandler {
       const sorted = [...this.sessions.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess);
       const toRemove = this.sessions.size - MAX_SESSIONS + 1;
       for (let i = 0; i < toRemove; i++) {
-        // eslint-disable-next-line security/detect-object-injection
         const entry = sorted[i];
-        if (entry) this.sessions.delete(entry[0]);
+        if (entry) this.removeSession(entry[0]);
+      }
+    }
+  }
+
+  private removeSession(sessionId: string): void {
+    this.sessions.delete(sessionId);
+    // 試行記録も削除（メモリリーク防止）
+    for (const key of this.trials.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        this.trials.delete(key);
       }
     }
   }

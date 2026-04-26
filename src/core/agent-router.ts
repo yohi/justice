@@ -87,22 +87,7 @@ export class AgentRouter {
    * デバッグ・ログ・テスト用途で利用。
    */
   route(category: RoutingCategory, skills: readonly string[]): RoutingResult {
-    // 1. Dominant Override
-    for (const skill of skills) {
-      const forced = DOMINANT_OVERRIDES.get(skill);
-      if (forced) {
-        const scoreboard = this.emptyScoreboard();
-        return {
-          agentId: forced,
-          score: Number.POSITIVE_INFINITY,
-          reason: "dominant_override",
-          overrideSkill: skill,
-          scoreboard,
-        };
-      }
-    }
-
-    // 2. Affinity Matrix × Context Multiplier
+    // 1. スコア計算を先に行い、スコアボードを確定させる
     const scores = new Map<AgentId, number>();
     for (const agent of AGENT_IDS) scores.set(agent, 0);
 
@@ -116,8 +101,23 @@ export class AgentRouter {
         scores.set(agent, current + base * multiplier);
       }
     }
+    const scoreboard = this.snapshotScoreboard(scores);
 
-    // 3. 最高得点の選定（同点時は AGENT_IDS の宣言順を優先）
+    // 2. Dominant Override チェック（計算済みの scoreboard を含めて返す）
+    for (const skill of skills) {
+      const forced = DOMINANT_OVERRIDES.get(skill);
+      if (forced) {
+        return {
+          agentId: forced,
+          score: Number.POSITIVE_INFINITY,
+          reason: "dominant_override",
+          overrideSkill: skill,
+          scoreboard,
+        };
+      }
+    }
+
+    // 3. 最高得点の選定
     let best: AgentId = DEFAULT_FALLBACK;
     let bestScore = -1;
     for (const agent of AGENT_IDS) {
@@ -127,8 +127,6 @@ export class AgentRouter {
         best = agent;
       }
     }
-
-    const scoreboard = this.snapshotScoreboard(scores);
 
     if (bestScore <= 0) {
       return {

@@ -47,14 +47,25 @@ export class TaskPackager {
    * SOP (Superpowers) / Wisdom / Plan セグメントを統合する。
    */
   package(task: PlanTask, options: PackageOptions): DelegationRequest {
-    const skills = options.loadSkills ?? this.defaultSkills;
+    const skills = [...(options.loadSkills ?? this.defaultSkills)];
 
     const classifiedCategory = this.classifier.classify(task);
     const category: TaskCategory = options.category ?? classifiedCategory;
 
     const routingCategory: RoutingCategory = options.routingCategory ?? category;
-    const agentId: AgentId =
-      options.agentId ?? this.router.determineOptimalAgent(routingCategory, skills);
+    const routingResult = this.router.route(routingCategory, skills);
+    let agentId: AgentId = routingResult.agentId;
+
+    if (options.agentId) {
+      if (routingResult.reason === "dominant_override" && options.agentId !== routingResult.agentId) {
+        console.warn(
+          `[JUSTICE] Dominant override (skill: ${routingResult.overrideSkill}) takes precedence over requested agentId: ${options.agentId} -> ${routingResult.agentId}`,
+        );
+        agentId = routingResult.agentId;
+      } else {
+        agentId = options.agentId;
+      }
+    }
 
     const context: DelegationContext = {
       planFilePath: options.planFilePath,
