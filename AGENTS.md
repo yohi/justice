@@ -9,7 +9,8 @@ Your goal is to help maintain and extend the Justice plugin securely and efficie
 - **NO Business Logic in Hooks:** Never place pure business logic inside hook implementations; always delegate to `src/core/`.
 - **NO Unsafe File System (FS) Operations:** Do not use blocking locking mechanisms for files; always use atomic (temp + rename) persistence.
 - **NO State Mutation:** Do not mutate objects. All types must remain `readonly` to enforce immutability.
-- **NO Direct Database Access:** This project does not use databases (e.g., PostgreSQL, Redis). Always use local file-based storage unless explicitly instructed otherwise.
+- **NO External/Server-based DBs:** Do not use external databases (e.g., PostgreSQL, Redis). 
+- **NO Direct DB/File Access in Hooks:** All data persistence (including `.nexus/` metadata or JSON files) must be performed through established abstractions in `src/core/` (e.g., `WisdomPersistence`). Direct DB connection or file manipulation outside these layers is prohibited.
 
 ## What This Is
 
