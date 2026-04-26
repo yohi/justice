@@ -115,6 +115,7 @@ describe("AgentRouter", () => {
       const result = router.route("deep", ["implementer-prompt"]);
       for (const agent of AGENT_IDS) {
         expect(result.scoreboard).toHaveProperty(agent);
+        // eslint-disable-next-line security/detect-object-injection
         expect(typeof result.scoreboard[agent]).toBe("number");
       }
     });

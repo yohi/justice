@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, HookEvent, PreToolUseEvent } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
-import { createMockFileReader as createJusticeMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileWriter } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
 const samplePlanContent = [
