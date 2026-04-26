@@ -40,6 +40,16 @@ export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
 
+// Agent Routing
+export {
+  AgentRouter,
+  AGENT_IDS,
+  type RoutingCategory,
+  type RoutingReason,
+  type RoutingResult,
+} from "./core/agent-router";
+export type { AgentId } from "./core/types";
+
 export type { BuildDelegationOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 

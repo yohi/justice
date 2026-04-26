@@ -1,0 +1,166 @@
+import type { AgentId, TaskCategory } from "./types";
+
+/**
+ * AgentRouter のルーティング判定で使用するカテゴリ。
+ * `TaskCategory` を内包しつつ、より細かいルーティング意図を表す
+ * `bugfix` / `feature` を追加で受け入れる。
+ */
+export type RoutingCategory = TaskCategory | "bugfix" | "feature";
+
+/** 既知のエージェント ID 一覧（スコア計算の走査順を確定させるため readonly tuple で保持） */
+export const AGENT_IDS = ["hephaestus", "sisyphus", "prometheus", "atlas"] as const;
+
+/**
+ * Affinity Matrix:
+ *   skill (Superpowers / Wisdom 由来) → 各エージェントのベーススコア
+ * 値が大きいほど、その skill を遂行するうえで適性が高い。
+ */
+const AFFINITY_MATRIX: Readonly<Record<string, Readonly<Record<AgentId, number>>>> = {
+  "implementer-prompt": { hephaestus: 10, sisyphus: 3, prometheus: 0, atlas: 2 },
+  "systematic-debugging": { hephaestus: 2, sisyphus: 10, prometheus: 0, atlas: 1 },
+  "code-quality-reviewer": { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 0 },
+  "spec-reviewer": { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 1 },
+  "test-driven-development": { hephaestus: 6, sisyphus: 8, prometheus: 2, atlas: 1 },
+  "writing-plans": { hephaestus: 1, sisyphus: 1, prometheus: 1, atlas: 10 },
+  brainstorming: { hephaestus: 2, sisyphus: 2, prometheus: 2, atlas: 9 },
+};
+
+/**
+ * Dominant Override:
+ *   特定 skill が含まれていた場合、スコア計算より前段で
+ *   物理的に対象エージェントへ強制ルーティングする。
+ *   実装者が自分のコードをレビューする「自己レビュー競合」を防止するため、
+ *   レビュー系スキルは必ず prometheus に固定する。
+ */
+const DOMINANT_OVERRIDES: ReadonlyMap<string, AgentId> = new Map<string, AgentId>([
+  ["code-quality-reviewer", "prometheus"],
+  ["spec-reviewer", "prometheus"],
+]);
+
+interface ContextMultiplierRule {
+  readonly category: RoutingCategory;
+  readonly skill: string;
+  readonly multiplier: number;
+}
+
+/**
+ * Context Multiplier:
+ *   (RoutingCategory, skill) の組合せに対するスコア倍率。
+ *   例: bugfix × systematic-debugging → x1.5（sisyphus に追い風）
+ */
+const CONTEXT_MULTIPLIERS: readonly ContextMultiplierRule[] = [
+  { category: "bugfix", skill: "systematic-debugging", multiplier: 1.5 },
+  { category: "feature", skill: "implementer-prompt", multiplier: 1.5 },
+];
+
+const DEFAULT_FALLBACK: AgentId = "hephaestus";
+
+export type RoutingReason = "dominant_override" | "score_winner" | "fallback";
+
+export interface RoutingResult {
+  readonly agentId: AgentId;
+  readonly score: number;
+  readonly reason: RoutingReason;
+  readonly overrideSkill?: string;
+  readonly scoreboard: Readonly<Record<AgentId, number>>;
+}
+
+/**
+ * AgentRouter:
+ *   skill とカテゴリから、最適な実行エージェントを決定する。
+ *
+ *   判定順序:
+ *     1) Dominant Override（自己レビュー回避などの強制ルール）
+ *     2) Affinity Matrix によるベーススコア × Context Multiplier の合計
+ *     3) すべて 0 だった場合は DEFAULT_FALLBACK（hephaestus）
+ */
+export class AgentRouter {
+  /**
+   * 最適エージェントの ID のみを返すショートハンド。
+   */
+  determineOptimalAgent(category: RoutingCategory, skills: readonly string[]): AgentId {
+    return this.route(category, skills).agentId;
+  }
+
+  /**
+   * 採点プロセスを含む完全なルーティング結果を返す。
+   * デバッグ・ログ・テスト用途で利用。
+   */
+  route(category: RoutingCategory, skills: readonly string[]): RoutingResult {
+    // 1. Dominant Override
+    for (const skill of skills) {
+      const forced = DOMINANT_OVERRIDES.get(skill);
+      if (forced) {
+        const scoreboard = this.emptyScoreboard();
+        return {
+          agentId: forced,
+          score: Number.POSITIVE_INFINITY,
+          reason: "dominant_override",
+          overrideSkill: skill,
+          scoreboard,
+        };
+      }
+    }
+
+    // 2. Affinity Matrix × Context Multiplier
+    const scores = new Map<AgentId, number>();
+    for (const agent of AGENT_IDS) scores.set(agent, 0);
+
+    for (const skill of skills) {
+      const row = AFFINITY_MATRIX[skill];
+      if (!row) continue;
+      const multiplier = this.lookupMultiplier(category, skill);
+      for (const agent of AGENT_IDS) {
+        const base = row[agent];
+        const current = scores.get(agent) ?? 0;
+        scores.set(agent, current + base * multiplier);
+      }
+    }
+
+    // 3. 最高得点の選定（同点時は AGENT_IDS の宣言順を優先）
+    let best: AgentId = DEFAULT_FALLBACK;
+    let bestScore = -1;
+    for (const agent of AGENT_IDS) {
+      const s = scores.get(agent) ?? 0;
+      if (s > bestScore) {
+        bestScore = s;
+        best = agent;
+      }
+    }
+
+    const scoreboard = this.snapshotScoreboard(scores);
+
+    if (bestScore <= 0) {
+      return {
+        agentId: DEFAULT_FALLBACK,
+        score: 0,
+        reason: "fallback",
+        scoreboard,
+      };
+    }
+
+    return {
+      agentId: best,
+      score: bestScore,
+      reason: "score_winner",
+      scoreboard,
+    };
+  }
+
+  private lookupMultiplier(category: RoutingCategory, skill: string): number {
+    const entry = CONTEXT_MULTIPLIERS.find((m) => m.category === category && m.skill === skill);
+    return entry?.multiplier ?? 1.0;
+  }
+
+  private emptyScoreboard(): Record<AgentId, number> {
+    return { hephaestus: 0, sisyphus: 0, prometheus: 0, atlas: 0 };
+  }
+
+  private snapshotScoreboard(scores: Map<AgentId, number>): Record<AgentId, number> {
+    const board = this.emptyScoreboard();
+    for (const agent of AGENT_IDS) {
+      board[agent] = scores.get(agent) ?? 0;
+    }
+    return board;
+  }
+}

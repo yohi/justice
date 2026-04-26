@@ -32,7 +32,11 @@ export interface DelegationContext {
   readonly referenceFiles: string[];
   readonly rolePrompt?: string;
   readonly previousLearnings?: string;
+  readonly agentId?: AgentId;
 }
+
+/** Oh My OpenAgent のエージェント識別子 */
+export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
 
 /** task()完了後のフィードバック */
 export interface TaskFeedback {
