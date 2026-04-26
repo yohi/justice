@@ -25,15 +25,38 @@ export class PlanBridge {
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
 
-  constructor(fileReader: FileReader, loopHandler?: LoopDetectionHandler, wisdomStore?: WisdomStoreInterface) {
+  constructor(
+    fileReader: FileReader,
+    loopHandlerOrWisdomStore?: LoopDetectionHandler | WisdomStoreInterface,
+    wisdomStore?: WisdomStoreInterface,
+  ) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
     this.core = new PlanBridgeCore();
     this.parser = new PlanParser();
     this.progressReporter = new ProgressReporter();
     this.dependencyAnalyzer = new DependencyAnalyzer();
-    this.loopHandler = loopHandler ?? null;
-    this.wisdomStore = wisdomStore ?? null;
+
+    // detect legacy argument order: new PlanBridge(reader, wisdomStore)
+    if (this.isWisdomStore(loopHandlerOrWisdomStore)) {
+      this.loopHandler = null;
+      this.wisdomStore = loopHandlerOrWisdomStore;
+    } else {
+      this.loopHandler = loopHandlerOrWisdomStore ?? null;
+      this.wisdomStore = wisdomStore ?? null;
+    }
+  }
+
+  /**
+   * Type guard to detect if an object implements WisdomStoreInterface.
+   */
+  private isWisdomStore(obj: unknown): obj is WisdomStoreInterface {
+    return (
+      typeof obj === "object" &&
+      obj !== null &&
+      "getRelevant" in obj &&
+      typeof (obj as Record<string, unknown>).getRelevant === "function"
+    );
   }
 
   /**

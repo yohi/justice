@@ -95,18 +95,18 @@ describe("AgentRouter", () => {
   describe("Score aggregation", () => {
     it("should sum scores across multiple skills", () => {
       // implementer-prompt: hephaestus=10, sisyphus=3
-      // test-driven-development: hephaestus=6, sisyphus=8
-      // → hephaestus=16, sisyphus=11 → hephaestus wins
+      // test-driven-development: hephaestus=3, sisyphus=8
+      // → hephaestus=13, sisyphus=11 → hephaestus wins
       const result = router.route("deep", ["implementer-prompt", "test-driven-development"]);
       expect(result.agentId).toBe("hephaestus");
-      expect(result.scoreboard.hephaestus).toBe(16);
+      expect(result.scoreboard.hephaestus).toBe(13);
       expect(result.scoreboard.sisyphus).toBe(11);
     });
 
     it("should pick the agent with the highest cumulative score", () => {
       // systematic-debugging: hephaestus=2, sisyphus=10
-      // test-driven-development: hephaestus=6, sisyphus=8
-      // → sisyphus=18, hephaestus=8 → sisyphus wins
+      // test-driven-development: hephaestus=3, sisyphus=8
+      // → sisyphus=18, hephaestus=5 → sisyphus wins
       const result = router.route("deep", ["systematic-debugging", "test-driven-development"]);
       expect(result.agentId).toBe("sisyphus");
     });
@@ -125,8 +125,14 @@ describe("AgentRouter", () => {
       expect(result.reason).toBe("score_winner");
     });
 
-    it("should return reason=fallback for empty/unknown skills", () => {
+    it("should return reason=fallback for empty skills", () => {
       const result = router.route("deep", []);
+      expect(result.reason).toBe("fallback");
+      expect(result.agentId).toBe("hephaestus");
+    });
+
+    it("should return reason=fallback for unknown skills", () => {
+      const result = router.route("deep", ["completely-unknown-skill"]);
       expect(result.reason).toBe("fallback");
       expect(result.agentId).toBe("hephaestus");
     });

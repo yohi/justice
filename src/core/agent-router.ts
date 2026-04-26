@@ -55,7 +55,7 @@ const AFFINITY_MATRIX: ReadonlyMap<string, ReadonlyMap<AgentId, number>> = new M
   [
     "test-driven-development",
     new Map<AgentId, number>([
-      ["hephaestus", 6],
+      ["hephaestus", 3],
       ["sisyphus", 8],
       ["prometheus", 2],
       ["atlas", 1],

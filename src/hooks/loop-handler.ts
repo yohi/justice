@@ -124,15 +124,18 @@ export class LoopDetectionHandler {
 
   /**
    * 直近で記録された試行から実行中のエージェントを推測する。
+   * セッションの currentAgent が存在する場合はそれを最優先し、
+   * 存在しない場合のみ履歴の最終エントリにフォールバックする。
    */
   private inferLastAgent(sessionId: string, taskId: string): AgentId {
+    const session = this.sessions.get(sessionId);
+    if (session?.currentAgent) return session.currentAgent;
+
     const records = this.trials.get(sessionId)?.get(taskId);
     const last = records?.at(-1);
     if (last) return last.agent;
 
-    // 履歴がない場合は SessionState に保存された現在のエージェントを返す
-    const session = this.sessions.get(sessionId);
-    return session?.currentAgent ?? "hephaestus";
+    return "hephaestus";
   }
 
   private formatTrialHistory(records: readonly TrialRecord[]): string {
