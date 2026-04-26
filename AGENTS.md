@@ -53,8 +53,9 @@ bun run build         # Build to dist/
 | File | Class | Responsibility |
 |------|-------|---------------|
 | `src/core/types.ts` | — | All shared type definitions |
+| `src/core/agent-router.ts` | `AgentRouter` | Determine optimal agent based on affinity, context multipliers, and overrides |
 | `src/core/plan-parser.ts` | `PlanParser` | Parse `plan.md` → `PlanTask[]`; update checkboxes |
-| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest` with structured prompt |
+| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds `AGENT` section via `AgentRouter` |
 | `src/core/trigger-detector.ts` | `TriggerDetector` | Detect plan reference + delegation intent in messages |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classify errors; determine retry eligibility |
 | `src/core/provider-error-patterns.ts` | — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
@@ -72,10 +73,10 @@ bun run build         # Build to dist/
 | `src/core/progress-reporter.ts` | `ProgressReporter` | Progress report generation (%, Markdown, compact) |
 | `src/core/status-command.ts` | `StatusCommand` | Programmatic plan status API |
 | `src/core/justice-plugin.ts` | `JusticePlugin` | Orchestrator — wires all hooks with `TieredWisdomStore` |
-| `src/hooks/plan-bridge.ts` | `PlanBridge` | `Message`/`PreToolUse` event handler |
+| `src/hooks/plan-bridge.ts` | `PlanBridge` | `Message`/`PreToolUse` event handler; syncs agent state |
 | `src/hooks/task-feedback.ts` | `TaskFeedbackHandler` | `PostToolUse` feedback loop |
 | `src/hooks/compaction-protector.ts` | `CompactionProtector` | Snapshot plan + wisdom on compaction event |
-| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort + split on `loop-detector` event |
+| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort, track trial history, escalate to `sisyphus` on repeated failures |
 | `src/runtime/node-file-system.ts` | `NodeFileSystem` | `Bun.file`-based FS implementation with path sanitization |
 
 ### Hook Event Routing

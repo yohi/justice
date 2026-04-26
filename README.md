@@ -162,7 +162,8 @@ export default { plugins: [OpenCodePlugin] };
 | コンポーネント | 層 | 目的 |
 |-----------|-------|---------|
 | `PlanParser` | Core | `plan.md` を解析して `PlanTask[]` を生成、チェックボックスの更新 |
-| `TaskPackager` | Core | `PlanTask` から構造化された `DelegationRequest` に変換 |
+| `AgentRouter` | Core | タスクのカテゴリやスキルに基づいて最適なエージェントへ委譲をルーティングする |
+| `TaskPackager` | Core | `PlanTask` から構造化された `DelegationRequest` に変換し、`AGENT` ヘッダを埋め込む |
 | `TriggerDetector` | Core | プランの参照と委譲の意図を検出 |
 | `ErrorClassifier` | Core | エラーを分類し、リトライの可否を判定 |
 | `FeedbackFormatter` | Core | `task()` の生の出力を解析して `TaskFeedback` に変換 |
@@ -176,10 +177,10 @@ export default { plugins: [OpenCodePlugin] };
 | `WisdomPersistence` | Core | `WisdomStore` と `.justice/wisdom.json` 間の永続化・復元 |
 | `StatusCommand` | Core | プログラムから利用可能なプランステータス API |
 | `JusticePlugin` | Core | オーケストレーター — イベントをルーティングし、`WisdomStore` を共有 |
-| `PlanBridge` | Hook | `Message`/`PreToolUse` 時の委譲ブリッジ |
+| `PlanBridge` | Hook | `Message`/`PreToolUse` 時の委譲ブリッジおよびエージェント状態の同期 |
 | `TaskFeedbackHandler` | Hook | `PostToolUse` 時のフィードバックループ |
 | `CompactionProtector` | Hook | コンパクション発生時にプランの状態をスナップショット化 |
-| `LoopDetectionHandler` | Hook | ループ検出時に強制中断し、分割を提案 |
+| `LoopDetectionHandler` | Hook | ループ検出時に強制中断、試行履歴の追跡、および `sisyphus` 等へのエスカレーションを行う |
 | `OpenCodeAdapter` | Runtime | OpenCode `Plugin` ↔ `HookEvent` の双方向変換と Fail-Open 境界 |
 | `NodeFileSystem` | Runtime | `Bun.file` を基盤とした `FileReader`/`FileWriter` 実装 |
 | `TieredWisdomStore` | Core | プロジェクトローカルとユーザーグローバルの2層 Wisdom ストア |

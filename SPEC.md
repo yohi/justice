@@ -107,6 +107,7 @@ interface DelegationContext {
   readonly referenceFiles: string[];
   readonly rolePrompt?: string;
   readonly previousLearnings?: string;  // WisdomStore から注入
+  readonly agentId?: AgentId;           // AgentRouter による割り当て
 }
 ```
 
@@ -282,10 +283,12 @@ interface ProtectedContext {
 
 **フロー:**
 
-1. セッションから現在アクティブなタスクを検出
-2. `TaskSplitter.suggestSplit(task, "loop_detected")` — 分割の提案を生成
-3. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
-4. `plan.md` と互換性のある Markdown 形式のタスク分割提案を含んだ `inject` （注入）レスポンスを返す
+1. セッションから現在アクティブなタスクおよび実行中のエージェントを検出
+2. エージェントの失敗試行として記録を残し、試行履歴（Trial History）を更新
+3. `TaskSplitter.suggestSplit(task, "loop_detected")` — 分割の提案を生成
+4. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
+5. エスカレーション判定: 失敗回数が `MAX_RETRIES_BEFORE_ESCALATION` (デフォルト 3) 以上の場合、`sisyphus` (デバッグ特化) への強制ルーティング（エスカレーション）を指示
+6. `plan.md` と互換性のある Markdown 形式のタスク分割提案とエスカレーション情報を含んだ `inject` （注入）レスポンスを返す
 
 ---
 
@@ -314,11 +317,12 @@ interface ProtectedContext {
 
 ### 5.2 `TaskPackager`
 
-`PlanTask` オブジェクトを、構造化されたプロンプトを含む `DelegationRequest` に変換します。
+`PlanTask` オブジェクトを、構造化されたプロンプトを含む `DelegationRequest` に変換します。内部的に `CategoryClassifier` と `AgentRouter` を呼び出し、タスクの性質に適したエージェントへのルーティングも担当します。
 
 **生成されるプロンプトの構成:**
 
 ```text
+**AGENT**: <agentId>
 [役割のプロンプト (任意指定)]
 ## 実行タスク: <title>
 ## ステップ一覧: <ステップのリスト>
@@ -575,6 +579,23 @@ new TieredWisdomStore({
 
 ---
 
+### 5.17 `AgentRouter`
+
+`CategoryClassifier` で判定されたカテゴリと、要求されるスキル (Skills) に基づき、タスクを最適なエージェント (`hephaestus`, `sisyphus`, `prometheus`, `atlas`) へルーティングします。
+
+**ルーティング判定ロジック:**
+
+1. **Affinity Matrix (ベーススコア計算):**
+   要求されるスキルが、各エージェントの得意分野とどれだけ一致するかをスコア化します。
+2. **Context Multiplier (文脈乗数):**
+   「バグ修正 (bugfix) かつ 体系的デバッグ (systematic-debugging)」のような特定カテゴリとスキルの組み合わせが発生した場合、ベーススコアをブースト（乗算）します。
+3. **Dominant Override (強制オーバーライド):**
+   `code-quality-reviewer` のようなレビュー特化スキルが要求された場合、スコア計算より優先して物理的に特定エージェント（`prometheus` 等）へ固定でルーティングします。これにより、実装者が自身のコードをレビューしてしまう競合を防ぎます。
+4. **Fallback:**
+   すべてのスコアが0または判定できない場合は、デフォルトエージェント (`hephaestus`) が選択されます。
+
+---
+
 ## 6. ファイル I/O インターフェース (File I/O Interfaces)
 
 すべてのファイル入出力（I/O）は、完全なユニットテストの可用性を持たせるために2つのインターフェースによって抽象化されています：
@@ -825,6 +846,7 @@ export { NodeFileSystem } from "./runtime/node-file-system";
 export { OpenCodePlugin } from "./opencode-plugin";
 
 // （高度な手法での利用に向けた）全公開コアクラス
+export { AgentRouter } from "./core/agent-router";
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
 export { ErrorClassifier } from "./core/error-classifier";
@@ -853,7 +875,7 @@ export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-pattern
 // 実装に関する全ての型
 export type {
   PlanTask, PlanStep, PlanTaskStatus,
-  DelegationRequest, DelegationContext,
+  DelegationRequest, DelegationContext, AgentId,
   TaskFeedback, TaskFeedbackStatus, TestSummary,
   ErrorClass, TaskCategory,
   ProtectedContext, RetryPolicy,
