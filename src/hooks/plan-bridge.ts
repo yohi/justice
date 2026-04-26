@@ -1,10 +1,16 @@
-import type { FileReader, HookEvent, HookResponse, DelegationRequest, WisdomStoreInterface } from "../core/types";
+import type {
+  FileReader,
+  HookEvent,
+  HookResponse,
+  DelegationRequest,
+  WisdomStoreInterface,
+} from "../core/types";
+import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
-import { LoopDetectionHandler } from "./loop-handler";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
