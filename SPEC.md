@@ -284,7 +284,7 @@ interface ProtectedContext {
 **フロー:**
 
 1. セッションから現在アクティブなタスクおよび実行中のエージェントを検出
-2. エージェントの失敗試行として記録を残し、試行履歴（Trial History）を更新
+2. エージェントの失敗試行として記録を残し、試行履歴（Trial History）を更新（※試行履歴はインメモリでのみ管理され、セッション終了・再起動のタイミングでリセットされる）
 3. `TaskSplitter.suggestSplit(task, "loop_detected")` — 分割の提案を生成
 4. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
 5. エスカレーション判定: 失敗回数が `MAX_RETRIES_BEFORE_ESCALATION` (デフォルト 3) 以上の場合、`sisyphus` (デバッグ特化) への強制ルーティング（エスカレーション）を指示
@@ -330,6 +330,8 @@ interface ProtectedContext {
 ## 参照すべきファイル: <関連ファイルリスト>
 ## 過去の学習内容: <関連するWisdomのリスト>
 ```
+
+※ `agentId` が未指定（`undefined`）の場合は、`**AGENT**: <agentId>` の行全体を省略する。
 
 ---
 
@@ -590,7 +592,7 @@ new TieredWisdomStore({
 2. **Context Multiplier (文脈乗数):**
    「バグ修正 (bugfix) かつ 体系的デバッグ (systematic-debugging)」のような特定カテゴリとスキルの組み合わせが発生した場合、ベーススコアをブースト（乗算）します。
 3. **Dominant Override (強制オーバーライド):**
-   `code-quality-reviewer` のようなレビュー特化スキルが要求された場合、スコア計算より優先して物理的に特定エージェント（`prometheus` 等）へ固定でルーティングします。これにより、実装者が自身のコードをレビューしてしまう競合を防ぎます。
+   対象スキル（`code-quality-reviewer`, `spec-reviewer`）が要求された場合、スコア計算より優先して常に `prometheus` へ固定でルーティングします。これにより、実装者が自身のコードをレビューしてしまう競合を防ぎます。
 4. **Fallback:**
    すべてのスコアが0または判定できない場合は、デフォルトエージェント (`hephaestus`) が選択されます。
 
