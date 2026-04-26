@@ -107,6 +107,7 @@ interface DelegationContext {
   readonly referenceFiles: string[];
   readonly rolePrompt?: string;
   readonly previousLearnings?: string;  // WisdomStore から注入
+  readonly agentId?: AgentId;           // AgentRouter による割り当て
 }
 ```
 
@@ -282,10 +283,12 @@ interface ProtectedContext {
 
 **フロー:**
 
-1. セッションから現在アクティブなタスクを検出
-2. `TaskSplitter.suggestSplit(task, "loop_detected")` — 分割の提案を生成
-3. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
-4. `plan.md` と互換性のある Markdown 形式のタスク分割提案を含んだ `inject` （注入）レスポンスを返す
+1. セッションから現在アクティブなタスクおよび実行中のエージェントを検出
+2. エージェントの失敗試行として記録を残し、試行履歴（Trial History）を更新（※試行履歴はインメモリでのみ管理され、セッション終了・再起動のタイミングでリセットされる）
+3. `TaskSplitter.suggestSplit(task, "loop_detected")` — 分割の提案を生成
+4. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
+5. エスカレーション判定: 失敗回数が `MAX_RETRIES_BEFORE_ESCALATION` (デフォルト 3) 以上の場合、`sisyphus` (デバッグ特化) への強制ルーティング（エスカレーション）を指示
+6. `plan.md` と互換性のある Markdown 形式のタスク分割提案とエスカレーション情報を含んだ `inject` （注入）レスポンスを返す
 
 ---
 
@@ -314,11 +317,12 @@ interface ProtectedContext {
 
 ### 5.2 `TaskPackager`
 
-`PlanTask` オブジェクトを、構造化されたプロンプトを含む `DelegationRequest` に変換します。
+`PlanTask` オブジェクトを、構造化されたプロンプトを含む `DelegationRequest` に変換します。内部的に `CategoryClassifier` と `AgentRouter` を呼び出し、タスクの性質に適したエージェントへのルーティングも担当します。
 
 **生成されるプロンプトの構成:**
 
 ```text
+**AGENT**: <agentId>
 [役割のプロンプト (任意指定)]
 ## 実行タスク: <title>
 ## ステップ一覧: <ステップのリスト>
@@ -326,6 +330,8 @@ interface ProtectedContext {
 ## 参照すべきファイル: <関連ファイルリスト>
 ## 過去の学習内容: <関連するWisdomのリスト>
 ```
+
+※ `agentId` が未指定（`undefined`）の場合は、`**AGENT**: <agentId>` の行全体を省略する。
 
 ---
 
@@ -572,6 +578,23 @@ new TieredWisdomStore({
 | `design_decision` | local |
 
 **ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぐ。
+
+---
+
+### 5.17 `AgentRouter`
+
+`CategoryClassifier` で判定されたカテゴリと、要求されるスキル (Skills) に基づき、タスクを最適なエージェント (`hephaestus`, `sisyphus`, `prometheus`, `atlas`) へルーティングします。
+
+**ルーティング判定ロジック (`AgentRouter` での実行順序):**
+
+1. **スコア計算 (Affinity × Context):**
+   各スキルのベーススコア (`Affinity Matrix`) に、カテゴリに応じた倍率 (`Context Multiplier`) を乗算し、すべてのエージェントの合計スコア（スコアボード）を確定させます。
+2. **Dominant Override (強制オーバーライド):**
+   スコア計算の実行後、特定の重要スキル（`code-quality-reviewer`, `spec-reviewer`）が要求されているかを確認します。これらが含まれる場合、計算されたスコアに関わらず `prometheus` へのルーティングを強制します。これは、実装担当エージェントが自身のコードをレビューする「自己レビュー競合」を物理的に防止するための設計です。
+3. **最高得点者の選定:**
+   オーバーライドが発生しなかった場合、スコアボードの中で最も高い得点を持つエージェントを選択します。
+4. **Fallback:**
+   すべてのスコアが 0 または判定不能な場合、最終的にデフォルトエージェント (`hephaestus`) が選択されます。
 
 ---
 
@@ -825,6 +848,7 @@ export { NodeFileSystem } from "./runtime/node-file-system";
 export { OpenCodePlugin } from "./opencode-plugin";
 
 // （高度な手法での利用に向けた）全公開コアクラス
+export { AgentRouter } from "./core/agent-router";
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
 export { ErrorClassifier } from "./core/error-classifier";
@@ -853,7 +877,7 @@ export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-pattern
 // 実装に関する全ての型
 export type {
   PlanTask, PlanStep, PlanTaskStatus,
-  DelegationRequest, DelegationContext,
+  DelegationRequest, DelegationContext, AgentId,
   TaskFeedback, TaskFeedbackStatus, TestSummary,
   ErrorClass, TaskCategory,
   ProtectedContext, RetryPolicy,

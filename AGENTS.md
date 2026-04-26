@@ -1,5 +1,17 @@
 # Justice Plugin
 
+## Identity & Persona
+You are an expert software engineer specializing in TypeScript, the Bun ecosystem, and hook-first agentic architectures.
+You are diligent, stateless-by-design, and prioritize robust error handling and atomic operations.
+Your goal is to help maintain and extend the Justice plugin securely and efficiently.
+
+## Boundaries & Constraints
+- **NO Business Logic in Hooks:** Never place pure business logic inside hook implementations; always delegate to `src/core/`.
+- **NO Unsafe File System (FS) Operations:** Do not use blocking locking mechanisms for files; always use atomic (temp + rename) persistence.
+- **NO State Mutation:** Do not mutate objects. All types must remain `readonly` to enforce immutability.
+- **NO External/Server-based DBs:** Do not use external databases (e.g., PostgreSQL, Redis). 
+- **NO Direct DB/File Access in Hooks:** All data persistence (including `.nexus/` metadata or JSON files) must be performed through established abstractions in `src/core/` (e.g., `WisdomPersistence`). Direct DB connection or file manipulation outside these layers is prohibited.
+
 ## What This Is
 
 Justice is an OpenCode plugin (hook-first architecture) that bridges
@@ -53,8 +65,9 @@ bun run build         # Build to dist/
 | File | Class | Responsibility |
 |------|-------|---------------|
 | `src/core/types.ts` | — | All shared type definitions |
+| `src/core/agent-router.ts` | `AgentRouter` | Determine optimal agent based on affinity, context multipliers, and overrides |
 | `src/core/plan-parser.ts` | `PlanParser` | Parse `plan.md` → `PlanTask[]`; update checkboxes |
-| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest` with structured prompt |
+| `src/core/task-packager.ts` | `TaskPackager` | `PlanTask` → `DelegationRequest`; embeds Agent Identifier Header section via `AgentRouter` |
 | `src/core/trigger-detector.ts` | `TriggerDetector` | Detect plan reference + delegation intent in messages |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classify errors; determine retry eligibility |
 | `src/core/provider-error-patterns.ts` | — | regex patterns for provider-side errors (Rate Limit, Quota, etc.) |
@@ -72,10 +85,10 @@ bun run build         # Build to dist/
 | `src/core/progress-reporter.ts` | `ProgressReporter` | Progress report generation (%, Markdown, compact) |
 | `src/core/status-command.ts` | `StatusCommand` | Programmatic plan status API |
 | `src/core/justice-plugin.ts` | `JusticePlugin` | Orchestrator — wires all hooks with `TieredWisdomStore` |
-| `src/hooks/plan-bridge.ts` | `PlanBridge` | `Message`/`PreToolUse` event handler |
+| `src/hooks/plan-bridge.ts` | `PlanBridge` | `Message`/`PreToolUse` event handler; syncs agent state |
 | `src/hooks/task-feedback.ts` | `TaskFeedbackHandler` | `PostToolUse` feedback loop |
 | `src/hooks/compaction-protector.ts` | `CompactionProtector` | Snapshot plan + wisdom on compaction event |
-| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort + split on `loop-detector` event |
+| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort on loop-detector events, track trial history, escalate to `sisyphus` on failures >= MAX_RETRIES_BEFORE_ESCALATION |
 | `src/runtime/node-file-system.ts` | `NodeFileSystem` | `Bun.file`-based FS implementation with path sanitization |
 
 ### Hook Event Routing
