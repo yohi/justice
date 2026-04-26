@@ -101,6 +101,7 @@ export class AgentRouter {
       if (!row) continue;
       const multiplier = this.lookupMultiplier(category, skill);
       for (const agent of AGENT_IDS) {
+        // AFFINITY_MATRIX の行は AgentId をキーに持つことが保証されている
         const base = row[agent];
         const current = scores.get(agent) ?? 0;
         scores.set(agent, current + base * multiplier);
@@ -161,7 +162,9 @@ export class AgentRouter {
   private snapshotScoreboard(scores: Map<AgentId, number>): Record<AgentId, number> {
     const board = this.emptyScoreboard();
     for (const agent of AGENT_IDS) {
-      board[agent] = scores.get(agent) ?? 0;
+      // scores は AGENT_IDS で初期化されているため、必ず値が存在する
+      const score = scores.get(agent) as number;
+      board[agent] = score;
     }
     return board;
   }

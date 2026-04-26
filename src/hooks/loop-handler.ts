@@ -127,7 +127,8 @@ export class LoopDetectionHandler {
     const records = this.trials.get(this.buildTrialKey(sessionId, taskId));
     if (!records || records.length === 0) return "hephaestus";
     const last = records[records.length - 1];
-    return last?.agent ?? "hephaestus";
+    // length チェック済みのため last は必ず存在する
+    return last.agent;
   }
 
   private formatTrialHistory(records: readonly TrialRecord[]): string {
@@ -156,17 +157,18 @@ export class LoopDetectionHandler {
 
       if (activeTask) {
         const lastAgent = this.inferLastAgent(event.sessionId, session.activeTaskId);
+        const reason = String(event.payload.message);
         this.recordTrial(event.sessionId, session.activeTaskId, {
           agent: lastAgent,
           result: "failure",
-          wisdom: `loop_detected: ${event.payload.message}`,
+          wisdom: `loop_detected: ${reason}`,
         });
 
         // Append error note to plan.md
         const updatedPlan = this.parser.appendErrorNote(
           planContent,
           session.activeTaskId,
-          `loop_detected: ${event.payload.message}`,
+          `loop_detected: ${reason}`,
         );
         await this.fileWriter.writeFile(session.planPath, updatedPlan);
 
@@ -194,7 +196,7 @@ export class LoopDetectionHandler {
             "---",
             "⚠️ **JUSTICE プロテクター**: 無限ループを検知しました（OmO loop-detector）",
             `**Task**: ${session.activeTaskId}`,
-            `**Reason**: ${event.payload.message}`,
+            `**Reason**: ${reason}`,
             "",
             formattedSuggestion,
             ...escalationBlock,
@@ -224,8 +226,9 @@ export class LoopDetectionHandler {
       const sorted = [...this.sessions.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess);
       const toRemove = this.sessions.size - MAX_SESSIONS + 1;
       for (let i = 0; i < toRemove; i++) {
-        const entry = sorted[i];
-        if (entry) this.removeSession(entry[0]);
+        // sorted[i] は toRemove の範囲内であれば必ず存在する
+        const entry = sorted[i] as [string, SessionState];
+        this.removeSession(entry[0]);
       }
     }
   }
