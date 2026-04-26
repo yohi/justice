@@ -15,14 +15,70 @@ export const AGENT_IDS = ["hephaestus", "sisyphus", "prometheus", "atlas"] as co
  *   skill (Superpowers / Wisdom 由来) → 各エージェントのベーススコア
  * 値が大きいほど、その skill を遂行するうえで適性が高い。
  */
-const AFFINITY_MATRIX: ReadonlyMap<string, Readonly<Record<AgentId, number>>> = new Map([
-  ["implementer-prompt", { hephaestus: 10, sisyphus: 3, prometheus: 0, atlas: 2 }],
-  ["systematic-debugging", { hephaestus: 2, sisyphus: 10, prometheus: 0, atlas: 1 }],
-  ["code-quality-reviewer", { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 0 }],
-  ["spec-reviewer", { hephaestus: 0, sisyphus: 0, prometheus: 10, atlas: 1 }],
-  ["test-driven-development", { hephaestus: 6, sisyphus: 8, prometheus: 2, atlas: 1 }],
-  ["writing-plans", { hephaestus: 1, sisyphus: 1, prometheus: 1, atlas: 10 }],
-  ["brainstorming", { hephaestus: 2, sisyphus: 2, prometheus: 2, atlas: 9 }],
+const AFFINITY_MATRIX: ReadonlyMap<string, ReadonlyMap<AgentId, number>> = new Map([
+  [
+    "implementer-prompt",
+    new Map<AgentId, number>([
+      ["hephaestus", 10],
+      ["sisyphus", 3],
+      ["prometheus", 0],
+      ["atlas", 2],
+    ]),
+  ],
+  [
+    "systematic-debugging",
+    new Map<AgentId, number>([
+      ["hephaestus", 2],
+      ["sisyphus", 10],
+      ["prometheus", 0],
+      ["atlas", 1],
+    ]),
+  ],
+  [
+    "code-quality-reviewer",
+    new Map<AgentId, number>([
+      ["hephaestus", 0],
+      ["sisyphus", 0],
+      ["prometheus", 10],
+      ["atlas", 0],
+    ]),
+  ],
+  [
+    "spec-reviewer",
+    new Map<AgentId, number>([
+      ["hephaestus", 0],
+      ["sisyphus", 0],
+      ["prometheus", 10],
+      ["atlas", 1],
+    ]),
+  ],
+  [
+    "test-driven-development",
+    new Map<AgentId, number>([
+      ["hephaestus", 6],
+      ["sisyphus", 8],
+      ["prometheus", 2],
+      ["atlas", 1],
+    ]),
+  ],
+  [
+    "writing-plans",
+    new Map<AgentId, number>([
+      ["hephaestus", 1],
+      ["sisyphus", 1],
+      ["prometheus", 1],
+      ["atlas", 10],
+    ]),
+  ],
+  [
+    "brainstorming",
+    new Map<AgentId, number>([
+      ["hephaestus", 2],
+      ["sisyphus", 2],
+      ["prometheus", 2],
+      ["atlas", 9],
+    ]),
+  ],
 ]);
 
 /**
@@ -101,8 +157,7 @@ export class AgentRouter {
       if (!row) continue;
       const multiplier = this.lookupMultiplier(category, skill);
       for (const agent of AGENT_IDS) {
-        // AFFINITY_MATRIX の行は AgentId をキーに持つことが保証されている
-        const base = row[agent];
+        const base = row.get(agent) ?? 0;
         const current = scores.get(agent) ?? 0;
         scores.set(agent, current + base * multiplier);
       }
@@ -155,17 +210,9 @@ export class AgentRouter {
     return CONTEXT_MULTIPLIER_MAP.get(`${category}:${skill}`) ?? 1.0;
   }
 
-  private emptyScoreboard(): Record<AgentId, number> {
-    return { hephaestus: 0, sisyphus: 0, prometheus: 0, atlas: 0 };
-  }
-
   private snapshotScoreboard(scores: Map<AgentId, number>): Record<AgentId, number> {
-    const board = this.emptyScoreboard();
-    for (const agent of AGENT_IDS) {
-      // scores は AGENT_IDS で初期化されているため、必ず値が存在する
-      const score = scores.get(agent) as number;
-      board[agent] = score;
-    }
-    return board;
+    return Object.fromEntries(
+      AGENT_IDS.map((agent) => [agent, scores.get(agent) ?? 0]),
+    ) as Record<AgentId, number>;
   }
 }

@@ -125,8 +125,7 @@ export class LoopDetectionHandler {
    */
   private inferLastAgent(sessionId: string, taskId: string): AgentId {
     const records = this.trials.get(this.buildTrialKey(sessionId, taskId));
-    if (!records || records.length === 0) return "hephaestus";
-    const last = records[records.length - 1];
+    const last = records?.at(-1);
     return last?.agent ?? "hephaestus";
   }
 
@@ -223,11 +222,11 @@ export class LoopDetectionHandler {
 
     if (this.sessions.size >= MAX_SESSIONS) {
       const sorted = [...this.sessions.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess);
-      const toRemove = this.sessions.size - MAX_SESSIONS + 1;
-      for (let i = 0; i < toRemove; i++) {
-        // sorted[i] は toRemove の範囲内であれば必ず存在する
-        const entry = sorted[i] as [string, SessionState];
-        this.removeSession(entry[0]);
+      const toRemoveCount = this.sessions.size - MAX_SESSIONS + 1;
+      const targets = sorted.slice(0, toRemoveCount);
+
+      for (const [id] of targets) {
+        this.removeSession(id);
       }
     }
   }
