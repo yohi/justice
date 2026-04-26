@@ -127,8 +127,7 @@ export class LoopDetectionHandler {
     const records = this.trials.get(this.buildTrialKey(sessionId, taskId));
     if (!records || records.length === 0) return "hephaestus";
     const last = records[records.length - 1];
-    // length チェック済みのため last は必ず存在する
-    return last.agent;
+    return last?.agent ?? "hephaestus";
   }
 
   private formatTrialHistory(records: readonly TrialRecord[]): string {
