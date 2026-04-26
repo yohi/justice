@@ -1,3 +1,6 @@
+<!-- vale Microsoft.Acronyms = NO -->
+<!-- vale Google.Acronyms = NO -->
+
 # Justice Plugin
 
 ## What This Is
@@ -76,7 +79,7 @@ bun run build         # Build to dist/
 | `src/hooks/plan-bridge.ts` | `PlanBridge` | `Message`/`PreToolUse` event handler; syncs agent state |
 | `src/hooks/task-feedback.ts` | `TaskFeedbackHandler` | `PostToolUse` feedback loop |
 | `src/hooks/compaction-protector.ts` | `CompactionProtector` | Snapshot plan + wisdom on compaction event |
-| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort, track trial history, escalate to `sisyphus` on repeated failures |
+| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Force-abort on loop-detector events, track trial history, escalate to `sisyphus` on failures >= MAX_RETRIES |
 | `src/runtime/node-file-system.ts` | `NodeFileSystem` | `Bun.file`-based FS implementation with path sanitization |
 
 ### Hook Event Routing
