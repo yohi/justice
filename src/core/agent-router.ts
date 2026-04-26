@@ -70,8 +70,8 @@ export interface RoutingResult {
  *   skill とカテゴリから、最適な実行エージェントを決定する。
  *
  *   判定順序:
- *     1) Dominant Override（自己レビュー回避などの強制ルール）
- *     2) Affinity Matrix によるベーススコア × Context Multiplier の合計
+ *     1) Affinity Matrix によるベーススコア × Context Multiplier の合計（スコアボード確定）
+ *     2) Dominant Override（自己レビュー回避などの強制ルール）の適用
  *     3) すべて 0 だった場合は DEFAULT_FALLBACK（hephaestus）
  */
 export class AgentRouter {
