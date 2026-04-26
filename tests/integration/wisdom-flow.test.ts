@@ -6,6 +6,8 @@ import { WisdomStore } from "../../src/core/wisdom-store";
 import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
 import type { PostToolUseEvent } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
+import { TaskSplitter } from "../../src/core/task-splitter";
 
 const samplePlan = [
   "## Task 1: Implement feature",
@@ -28,6 +30,7 @@ describe("Wisdom Flow Integration", () => {
     const sharedWisdomStore = new WisdomStore();
     const reader = createMockFileReader({ "plan.md": samplePlan });
     const writer = createMockFileWriter();
+    const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
 
     // 1. TaskFeedbackHandler: task() succeeds with tests
     const feedbackHandler = new TaskFeedbackHandler(reader, writer, sharedWisdomStore);
@@ -52,7 +55,7 @@ describe("Wisdom Flow Integration", () => {
     expect(wisdomEntries.some((e) => e.category === "success_pattern")).toBe(true);
 
     // 3. PlanBridge uses sharedWisdomStore → previousLearnings injected into delegation
-    const planBridge = new PlanBridge(reader, sharedWisdomStore);
+    const planBridge = new PlanBridge(reader, loopHandler, sharedWisdomStore);
     planBridge.setActivePlan("s-2", "plan.md");
 
     const preToolEvent = {

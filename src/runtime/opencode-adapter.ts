@@ -47,7 +47,7 @@ export class OpenCodeAdapter {
     const log =
       typeof init.client.app.log === "function"
         ? init.client.app.log
-        : () => {
+        : (): void => {
             /* no-op */
           };
 

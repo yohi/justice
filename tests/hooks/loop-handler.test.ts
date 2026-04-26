@@ -62,7 +62,7 @@ describe("LoopDetectionHandler", () => {
       const splitter = new TaskSplitter();
       const handler = new LoopDetectionHandler(reader, writer, splitter);
 
-      handler.setActivePlan("s-2", "plan.md", "task-1");
+      handler.setActivePlan("s-2", "plan.md", "task-1", "hephaestus");
 
       const payload: LoopDetectorPayload = {
         eventType: "loop-detector",
