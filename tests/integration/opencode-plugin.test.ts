@@ -74,4 +74,24 @@ describe("OpenCodePlugin (integration)", () => {
 
     expect(output.context).toEqual([]);
   });
+
+  it("initializes Justice before checking instance in tool.execute.before", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+
+    // 初回の tool.execute.before 呼び出し
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "tool.execute.before"
+    ]?.({ tool: "task", sessionID: "s", callID: "c1" }, { args: { prompt: "p" } });
+
+    const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    const logs = logFn.mock.calls.map((call) => (call[0] as { message: string }).message);
+
+    // Justice initialized... ログが含まれていることを確認
+    expect(logs).toContain("Justice initialized via opencode-adapter");
+
+    // "Prompt ignored..." ログが含まれていないことを確認
+    // (初期化が先に行われるため、justiceInstance が存在するはず)
+    expect(logs.some((l) => l.includes("Prompt ignored by TriggerDetector"))).toBe(false);
+  });
 });
