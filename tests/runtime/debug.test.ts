@@ -5,14 +5,12 @@ describe("debug utility", () => {
   const originalEnv = process.env.DEBUG;
 
   beforeEach(() => {
-    vi.stubGlobal("console", {
-      warn: vi.fn(),
-    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
     process.env.DEBUG = originalEnv;
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   describe("isDebugEnabled", () => {
@@ -53,6 +51,17 @@ describe("debug utility", () => {
 
     it("should return false when it is a partial match without boundary", () => {
       process.env.DEBUG = "injustice";
+      expect(isDebugEnabled()).toBe(false);
+    });
+
+    // Regression tests for strict boundary check
+    it("should return false when DEBUG=justice:", () => {
+      process.env.DEBUG = "justice:";
+      expect(isDebugEnabled()).toBe(false);
+    });
+
+    it("should return false when DEBUG=justice:!", () => {
+      process.env.DEBUG = "justice:!";
       expect(isDebugEnabled()).toBe(false);
     });
   });

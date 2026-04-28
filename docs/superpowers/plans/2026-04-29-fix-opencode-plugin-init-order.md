@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: OpenCodePlugin の修正
+## Task 1: OpenCodePlugin の修正
 
 **Files:**
 - Modify: `src/opencode-plugin.ts`
@@ -38,7 +38,7 @@
 Run: `npm test tests/integration/opencode-plugin.test.ts`
 Expected: PASS
 
-### Task 2: 修正の検証（新規テストの追加）
+## Task 2: 修正の検証（新規テストの追加）
 
 **Files:**
 - Modify: `tests/integration/opencode-plugin.test.ts`

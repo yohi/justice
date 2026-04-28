@@ -6,13 +6,8 @@
 export function isDebugEnabled(): boolean {
   try {
     const debug = process.env.DEBUG ?? "";
-    // \bjustice(?::\*|:[a-z0-9_-]+)?\b
-    // - justice (単独)
-    // - justice:* (ワイルドカード)
-    // - justice:something-123 (ハイフンや数字を含むサブカテゴリ)
-    // にマッチする。
     // eslint-disable-next-line security/detect-unsafe-regex
-    return /\bjustice(?::\*|:[a-z0-9_-]+)?\b/.test(debug);
+    return /(?:^|[\s,])justice(?::(?:\*|[a-z0-9_-]+))?(?:[\s,]|$)/.test(debug);
   } catch {
     return false;
   }
