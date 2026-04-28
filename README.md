@@ -77,10 +77,13 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
     *   環境変数 `GITHUB_TOKEN` が利用可能であることを確認してください。
 2.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
     *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
-3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じてインストールを実行してください。
+3.  **[ ] 設定ファイルの特定:** 設定ファイルの場所が不明な場合は `opencode --help` を実行してパスを確認するか、以下の標準的な場所を探索してください：
+    *   グローバル設定: `~/.config/opencode/opencode.jsonc`
+    *   プロジェクト設定: `.opencode/opencode.json` または `opencode.jsonc`
+4.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じてインストールを実行してください。
     *   Packages版: **`opencode plugin @yohi/justice`** コマンドを実行してインストールしてください。
-    *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
-4.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
+    *   ソース版: 上記で特定した設定ファイルの `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
+5.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
 
 </details>
 
