@@ -67,8 +67,7 @@ master
 ```typescript
 import type {
   VersionedEnvelope, LockMetadata, ConflictRecord, SaveResult,
-  ArchiveThresholds, ArchivedWisdom, TelemetrySnapshot, TelemetryEvent,
-  RetryThresholdContext, RetryThresholdResult, WisdomEntry,
+  RetryThresholdResult, WisdomEntry,
 } from "../../src/core/types";
 
 describe("Expansion type definitions", () => {
@@ -225,7 +224,7 @@ gh pr create --base master --head feature/phase1_type-foundation__base --title "
 
 ```typescript
 // tests/core/atomic-persistence.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { AtomicPersistence } from "../../src/core/atomic-persistence";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 
