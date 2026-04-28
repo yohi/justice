@@ -22,6 +22,23 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.2.0](https://github.com/yohi/justice/compare/v2.1.0...v2.2.0) (2026-04-28)
+
+
+### Features
+
+* **core:** 汎用アトミック永続化プリミティブの導入 ([7033914](https://github.com/yohi/justice/commit/7033914151c53fcd9ba197cdc35caf55628c89ff))
+* **justice:** Justice 拡張計画 (フェーズ1-5) を追加 ([76357c1](https://github.com/yohi/justice/commit/76357c1bef9614ed779b6b06f468387388755cbf))
+* **justice:** 知見信頼性向上とエージェント自己適応強化のための拡張設計 ([c87c44a](https://github.com/yohi/justice/commit/c87c44a338b5270e14b11403f8317e84c9cfd76d))
+* **wisdom:** メトリクス追跡と永続化ロジックを改善 ([7f11a74](https://github.com/yohi/justice/commit/7f11a74872cc715537185348322f4cd7c0ca1092))
+
+
+### Bug Fixes
+
+* **opencode-adapter:** assistant ロールからのメッセージを正しくルーティング ([5dd1b62](https://github.com/yohi/justice/commit/5dd1b62b4a2399946cb14ae9a72ef83487e6b51c))
+* **opencode:** コードレビューの指摘に基づき空コンテンツの扱いを改善 ([36ce9d6](https://github.com/yohi/justice/commit/36ce9d6e1d33effee37d402ee571487e9ff1a6fa))
+* **opencode:** プラグインのロード互換性と初期化トリガーの修正 ([8616a5a](https://github.com/yohi/justice/commit/8616a5a96250774786c4f34a67c7b30f8598a4e8))
+
 ## [2.1.0](https://github.com/yohi/justice/compare/v2.0.0...v2.1.0) (2026-04-26)
 
 
