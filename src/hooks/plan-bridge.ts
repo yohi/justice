@@ -100,9 +100,6 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // Only react to assistant messages
-    if (event.payload.role !== "assistant") return PROCEED;
-
     const content = event.payload.content;
     const lastUserMessage = this.lastUserMessages.get(event.sessionId);
 
