@@ -99,13 +99,15 @@ export class TriggerDetector {
 
   /**
    * Combined check: should this message trigger plan-bridge?
-   * Triggers if there is a plan reference AND delegation intent (primary),
-   * or if there is a plan reference alone AND it passes the context guard (fallback).
+   * 
+   * Triggers in two cases:
+   * 1. Primary path: A plan reference AND an explicit delegation intent keyword are found.
+   * 2. Fallback path: A plan reference is found even without an explicit keyword (implicit intent), provided that the lastUserMessage also contains the plan reference.
+   * 
    * @deprecated Use analyzeTrigger() instead to avoid duplicate calls.
    */
-  shouldTrigger(message: string): boolean {
-    return this.analyzeTrigger(message).shouldTrigger;
+  shouldTrigger(message: string, context?: TriggerContext): boolean {
+    return this.analyzeTrigger(message, context).shouldTrigger;
   }
 }
 /* eslint-enable security/detect-unsafe-regex */
-etect-unsafe-regex */

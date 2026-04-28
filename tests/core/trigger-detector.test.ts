@@ -95,7 +95,7 @@ describe("TriggerDetector", () => {
       });
 
       it("should detect 進めて", () => {
-        expect(detector.detectDelegationIntent("次を進めて")).toBe(true);
+        expect(detector.detectDelegationIntent("次のタスクを進めて")).toBe(true);
       });
 
       it("should detect 始めて", () => {
@@ -103,11 +103,11 @@ describe("TriggerDetector", () => {
       });
 
       it("should detect やって", () => {
-        expect(detector.detectDelegationIntent("これやって")).toBe(true);
+        expect(detector.detectDelegationIntent("このissueをやって")).toBe(true);
       });
 
       it("should detect お願い", () => {
-        expect(detector.detectDelegationIntent("次のステップお願い")).toBe(true);
+        expect(detector.detectDelegationIntent("次の実装お願い")).toBe(true);
       });
 
       it("should detect English keywords: implement", () => {
