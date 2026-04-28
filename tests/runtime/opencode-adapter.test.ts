@@ -113,7 +113,16 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
-    expect(spy).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "Message",
+        sessionId: "s",
+        payload: expect.objectContaining({
+          role: "user",
+          content: "hello",
+        }),
+      })
+    );
   });
 
   it("routes loop-like session.error events to loop-detector Event", async () => {

@@ -30,7 +30,7 @@ const DELEGATION_KEYWORDS: RegExp[] = [
   // Phase 1: 日本語の開発現場フレーズ
   /実装(?:して|を開始|をお願い|を進めて)/,
   /作(?:成して|って)/,
-  /(?:進めて|始めて|やって|お願い)/,
+  /(?:(?:作成|実装|タスク|issue|チケット).*?(?:進めて|始めて|やって|お願い))|(?:(?:進めて|始めて|やって|お願い).*?(?:作成|実装|タスク|issue|チケット))/i,
   /\b(?:implement|build|create)\s+(?:the\s+)?(?:task|issue|ticket|story|feature|component|module|service|test|code|fix)\b/i,
 ];
 
@@ -108,3 +108,4 @@ export class TriggerDetector {
   }
 }
 /* eslint-enable security/detect-unsafe-regex */
+etect-unsafe-regex */

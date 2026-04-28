@@ -13,7 +13,7 @@
 
 ---
 
-### Task 1: Refine English Delegation Keywords
+## Task 1: Refine English Delegation Keywords
 
 **Files:**
 - Modify: `src/core/trigger-detector.ts`
@@ -39,12 +39,12 @@ Update the JSDoc for `shouldTrigger` to mention Primary and Fallback paths.
    * 
    * Triggers in two cases:
    * 1. Primary path: A plan reference AND an explicit delegation intent keyword are found.
-   * 2. Fallback path: A plan reference is found even without an explicit keyword (implicit intent).
+   * 2. Fallback path: A plan reference is found even without an explicit keyword (implicit intent), provided that the lastUserMessage also contains the plan reference.
    * 
    * @deprecated Use analyzeTrigger() instead to avoid duplicate calls.
    */
-  shouldTrigger(message: string): boolean {
-    return this.analyzeTrigger(message).shouldTrigger;
+  shouldTrigger(message: string, context?: TriggerContext): boolean {
+    return this.analyzeTrigger(message, context).shouldTrigger;
   }
 ```
 
@@ -55,7 +55,7 @@ Expected: Some tests might fail because they use `implement`, `build`, or `creat
 
 ---
 
-### Task 2: Update Tests for Refined Keywords
+## Task 2: Update Tests for Refined Keywords
 
 **Files:**
 - Modify: `tests/core/trigger-detector.test.ts`
