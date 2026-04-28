@@ -26,7 +26,7 @@ bun run test && bun run typecheck && bun run lint
 
 ## Git Branch Strategy
 
-```
+```text
 master
 ├── feature/phase1_type-foundation__base
 │   ├── feature/phase1-task1_type-definitions    ← Base
@@ -230,7 +230,7 @@ import { AtomicPersistence } from "../../src/core/atomic-persistence";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 
 function createStringPersistence(fs: ReturnType<typeof createMockFileSystem>, path = "test.json") {
-  return new AtomicPersistence(fs, fs, {
+  return new AtomicPersistence(fs, fs, fs, {
     filePath: path,
     serialize: (d: string) => d,
     deserialize: (r: string) => r,
@@ -277,12 +277,25 @@ describe("AtomicPersistence", () => {
   });
 
   it("diverts to conflict file after max retries", async () => {
-    // Mock: version always advances externally
     const fs = createMockFileSystem();
     const ap = createStringPersistence(fs);
-    // Pre-write with version that keeps changing
-    // (detailed concurrent scenario test)
-    // This tests the conflict_diverted path
+    // Simulate external version advancing on every read (always stale)
+    let externalVersion = 1;
+    const origReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(async (path: string) => {
+      const raw = await origReadFile(path);
+      // Inject ever-increasing version so claim always fails
+      const envelope = JSON.parse(raw || '{"version":0,"data":""}');
+      envelope.version = ++externalVersion;
+      return JSON.stringify(envelope);
+    });
+
+    await ap.saveAtomicWithLock("initial");
+    const result = await ap.saveAtomicWithLock("will-conflict");
+    expect(result.status).toBe("conflict_diverted");
+    // Conflict file should exist
+    const conflictContent = await fs.readFile("test.json.conflict.json");
+    expect(conflictContent).toBeDefined();
   });
 });
 ```
@@ -299,12 +312,18 @@ Expected: FAIL — AtomicPersistence が未定義
 - `saveAtomicWithLock()`: retry loop (max 3) → tmp 書込 → `fs.link()` で claim → version recheck → `fs.rename()` で publish
 - Stale-claim 回復: claim の mtime が 10s 超なら unlink
 - Fail-open 退避: `divertToConflictFile()`
-- `node:fs/promises` の `link` / `stat` を直接使用（`FileWriter` interface 外）
+- `link` / `stat` / `unlink` は注入された `FsOps` インターフェース経由で使用（テスタビリティ確保）
 
 ```typescript
-import { link, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { FileReader, FileWriter, LockMetadata, SaveResult, VersionedEnvelope, ConflictFileSchema } from "./types";
+
+/** Low-level FS operations required by AtomicPersistence (link/stat/unlink). */
+export interface FsOps {
+  readonly link: (existingPath: string, newPath: string) => Promise<void>;
+  readonly stat: (path: string) => Promise<{ mtimeMs: number }>;
+  readonly unlink: (path: string) => Promise<void>;
+}
 
 export interface AtomicPersistenceConfig<T> {
   readonly filePath: string;
@@ -324,6 +343,7 @@ export class AtomicPersistence<T> {
   constructor(
     private readonly fileReader: FileReader,
     private readonly fileWriter: FileWriter,
+    private readonly fsOps: FsOps,
     private readonly config: AtomicPersistenceConfig<T>,
   ) {}
 
@@ -333,9 +353,12 @@ export class AtomicPersistence<T> {
 
   async saveAtomicWithLock(data: T, initialLockMeta?: LockMetadata): Promise<SaveResult> {
     // Implementation per design spec §5.2 Steps 1-3
+    // Use this.fsOps.link() / this.fsOps.stat() / this.fsOps.unlink()
   }
 }
 ```
+
+> **Note:** `NodeFileSystem` は `FsOps` を実装し、`node:fs/promises` の `link`/`stat`/`unlink` を委譲する。テスト時は `createMockFileSystem()` が `FsOps` を実装済み（Phase 1 Task 2）。
 
 完全な実装コードは設計書 §5.2 のフローに従う。
 
@@ -393,7 +416,31 @@ describe("WisdomPersistence concurrency", () => {
   });
 
   it("concurrent writes merge hitCount additively", async () => {
-    // Two writers read same version, both update hitCount, merge should add
+    const fs = createMockFileSystem();
+    const wp = new WisdomPersistence(fs, fs);
+    const store = new WisdomStore();
+    const entry = store.add({ taskId: "t1", category: "success_pattern", content: "shared" });
+    await wp.saveAtomicWithLock(store);
+
+    // Writer A: reads, increments hitCount by 1
+    const { store: storeA, lockMeta: metaA } = await wp.loadWithLock();
+    const entryA = storeA.getAllEntries().find((e) => e.taskId === "t1")!;
+    storeA.updateMetrics(entryA.id, (e) => ({ ...e, hitCount: (e.hitCount ?? 0) + 1, lastHitAt: "2026-01-01T00:00:00Z", firstSeenAt: "2026-01-01T00:00:00Z" }));
+
+    // Writer B: reads same version, increments hitCount by 2
+    const { store: storeB, lockMeta: metaB } = await wp.loadWithLock();
+    const entryB = storeB.getAllEntries().find((e) => e.taskId === "t1")!;
+    storeB.updateMetrics(entryB.id, (e) => ({ ...e, hitCount: (e.hitCount ?? 0) + 2, lastHitAt: "2026-02-01T00:00:00Z", firstSeenAt: "2026-01-01T00:00:00Z" }));
+
+    // Both save — one will trigger merge
+    await wp.saveAtomicWithLock(storeA, metaA);
+    await wp.saveAtomicWithLock(storeB, metaB);
+
+    const { store: final } = await wp.loadWithLock();
+    const merged = final.getAllEntries().find((e) => e.taskId === "t1")!;
+    expect(merged.hitCount).toBe(3); // 1 + 2 additively merged
+    expect(merged.firstSeenAt).toBe("2026-01-01T00:00:00Z"); // earliest
+    expect(merged.lastHitAt).toBe("2026-02-01T00:00:00Z"); // latest
   });
 
   it("existing saveAtomic still works (@deprecated)", async () => {
@@ -476,12 +523,34 @@ describe("Multi-process wisdom integration", () => {
     ]);
 
     const final = await wp1.load();
-    expect(final.getAllEntries().length).toBeGreaterThanOrEqual(3);
+    const entries = final.getAllEntries();
+    expect(entries.length).toBeGreaterThanOrEqual(3);
+
+    // Verify each writer's entry is present with correct content
+    const t1 = entries.find((e) => e.taskId === "t1" && e.content === "from writer 1");
+    const t2 = entries.find((e) => e.taskId === "t2" && e.content === "from writer 2");
+    const t3 = entries.find((e) => e.taskId === "t3" && e.content === "from writer 3");
+    expect(t1).toBeDefined();
+    expect(t2).toBeDefined();
+    expect(t3).toBeDefined();
+
+    // Verify no duplicate entries per unique (taskId, category, content)
+    const uniqueKeys = new Set(entries.map((e) => `${e.taskId}:${e.category}:${e.content}`));
+    expect(uniqueKeys.size).toBe(entries.length);
   });
 
   it("existing wisdom-flow test still passes (AC-7)", async () => {
-    // Verify backward compatibility — this test exists in tests/integration/wisdom-flow.test.ts
-    // and should pass without modifications
+    // Backward compatibility: legacy saveAtomic + load round-trip
+    const fs = createMockFileSystem();
+    const wp = new WisdomPersistence(fs, fs);
+    const store = new WisdomStore();
+    store.add({ taskId: "t1", category: "failure_gotcha", content: "gotcha" });
+    store.add({ taskId: "t2", category: "success_pattern", content: "pattern" });
+    await wp.saveAtomic(store);
+    const loaded = await wp.load();
+    expect(loaded.getAllEntries()).toHaveLength(2);
+    expect(loaded.getAllEntries().find((e) => e.taskId === "t1")?.content).toBe("gotcha");
+    expect(loaded.getAllEntries().find((e) => e.taskId === "t2")?.content).toBe("pattern");
   });
 });
 ```

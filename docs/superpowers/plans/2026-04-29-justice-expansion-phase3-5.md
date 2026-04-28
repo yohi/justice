@@ -1,6 +1,6 @@
 # Justice Expansion 実装計画 — Phase 3–5
 
-> 本ファイルは `2026-04-29-justice-expansion.md` の続きです。
+> 本ファイルは `2026-04-29-justice-expansion-phase1-2.md` の続きです。
 
 ---
 
@@ -82,8 +82,10 @@ onEvict(listener: (evicted: WisdomEntry) => void): void {
 updateMetrics(entryId: string, mutator: (entry: WisdomEntry) => WisdomEntry): WisdomEntry | undefined {
   const idx = this.entries.findIndex((e) => e.id === entryId);
   if (idx < 0) return undefined;
-  this.entries[idx] = mutator(this.entries[idx]);
-  return this.entries[idx];
+  const copy = { ...this.entries[idx] };
+  const updated = mutator(copy);
+  this.entries[idx] = updated;
+  return updated;
 }
 ```
 
@@ -105,6 +107,7 @@ Expected: ALL PASS
 
 ```bash
 git commit -m "feat(wisdom-store): add updateMetrics/attachMetrics/onEvict"
+git push -u origin feature/phase3-task1_store-extensions
 gh pr create --base feature/phase3_wisdom-metrics-archive__base --title "feat(wisdom-store): メトリクス拡張" --draft
 ```
 
@@ -173,6 +176,7 @@ describe("WisdomMetrics", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(core): implement WisdomMetrics stateless service"
+git push -u origin feature/phase3-task2_wisdom-metrics
 gh pr create --base feature/phase3_wisdom-metrics-archive__base --title "feat(core): WisdomMetrics" --draft
 ```
 
@@ -241,6 +245,7 @@ describe("WisdomArchive", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(core): implement WisdomArchive with AtomicPersistence"
+git push -u origin feature/phase3-task3_wisdom-archive
 gh pr create --base feature/phase3_wisdom-metrics-archive__base --title "feat(core): WisdomArchive" --draft
 ```
 
@@ -260,12 +265,46 @@ gh pr create --base feature/phase3_wisdom-metrics-archive__base --title "feat(co
 // tests/core/tiered-wisdom-store.test.ts に追加
 describe("eviction → archive integration", () => {
   it("evicted failure_gotcha is archived", async () => {
-    // Setup: WisdomStore(maxEntries=2), WisdomArchive (mock)
-    // Add 3 entries → first is evicted → shouldArchive → append called
+    const store = new WisdomStore(2);
+    const mockAppend = vi.fn().mockResolvedValue(undefined);
+    const archive = {
+      shouldArchive: (e: WisdomEntry) => ({ archive: e.category === "failure_gotcha", reason: "high_priority_category" }),
+      append: mockAppend,
+    } as unknown as WisdomArchive;
+
+    store.onEvict((evicted) => {
+      if (archive.shouldArchive(evicted).archive) {
+        void archive.append(evicted).catch(() => {});
+      }
+    });
+
+    store.add({ taskId: "t1", category: "failure_gotcha", content: "a" });
+    store.add({ taskId: "t2", category: "success_pattern", content: "b" });
+    store.add({ taskId: "t3", category: "success_pattern", content: "c" });
+
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    expect(mockAppend).toHaveBeenCalledWith(expect.objectContaining({ category: "failure_gotcha" }));
   });
 
   it("evicted success_pattern is not archived", async () => {
-    // success_pattern は shouldArchive=false → append not called
+    const store = new WisdomStore(2);
+    const mockAppend = vi.fn().mockResolvedValue(undefined);
+    const archive = {
+      shouldArchive: () => ({ archive: false, reason: "none" }),
+      append: mockAppend,
+    } as unknown as WisdomArchive;
+
+    store.onEvict((evicted) => {
+      if (archive.shouldArchive(evicted).archive) {
+        void archive.append(evicted).catch(() => {});
+      }
+    });
+
+    store.add({ taskId: "t1", category: "success_pattern", content: "a" });
+    store.add({ taskId: "t2", category: "success_pattern", content: "b" });
+    store.add({ taskId: "t3", category: "success_pattern", content: "c" });
+
+    expect(mockAppend).not.toHaveBeenCalled();
   });
 });
 ```
@@ -274,7 +313,7 @@ describe("eviction → archive integration", () => {
 
 設計書 §6.4 に基づき、コンストラクタで:
 - `local.attachMetrics(metrics)` / `global.attachMetrics(metrics)`
-- `local.onEvict(...)` / `global.onEvict(...)` → `handleEviction()` → `archive.shouldArchive()` → `archive.append()` (fire-and-forget)
+- `local.onEvict(...)` / `global.onEvict(...)` → `handleEviction()` → `archive.shouldArchive()` → `void archive.append(...).catch(err => console.warn("archive.append failed", err))`
 
 - [ ] **Step 3: JusticePlugin の wiring 更新**
 
@@ -285,6 +324,7 @@ describe("eviction → archive integration", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(tiered): integrate WisdomMetrics + WisdomArchive into TieredWisdomStore"
+git push -u origin feature/phase3-task4_tiered-integration
 gh pr create --base feature/phase3_wisdom-metrics-archive__base --title "feat(tiered): メトリクス・アーカイブ統合" --draft
 ```
 
@@ -378,6 +418,7 @@ describe("TelemetryStore", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(core): implement TelemetryStore with event recording and snapshot computation"
+git push -u origin feature/phase4-task1_telemetry-store
 gh pr create --base feature/phase4_telemetry__base --title "feat(core): TelemetryStore" --draft
 ```
 
@@ -440,6 +481,7 @@ describe("StatusCommand analytics", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(status): add getStatusWithAnalytics/formatAsJson with TelemetryStore wiring"
+git push -u origin feature/phase4-task2_status-command
 gh pr create --base feature/phase4_telemetry__base --title "feat(status): StatusCommand + テレメトリ統合" --draft
 ```
 
@@ -514,6 +556,7 @@ describe("RetryPolicyCalculator", () => {
 ```bash
 bun run test && bun run typecheck && bun run lint
 git commit -m "feat(core): implement RetryPolicyCalculator with category/volume modifiers"
+git push -u origin feature/phase5-task1_retry-calculator
 gh pr create --base feature/phase5_adaptive-retry__base --title "feat(core): RetryPolicyCalculator" --draft
 ```
 
@@ -594,6 +637,7 @@ Expected: ALL PASS (既存 loop-handler テストも無変更で通過 — activ
 
 ```bash
 git commit -m "feat(loop-handler): integrate RetryPolicyCalculator for dynamic maxRetries"
+git push -u origin feature/phase5-task2_loop-integration
 gh pr create --base feature/phase5_adaptive-retry__base --title "feat(loop-handler): 動的リトライ閾値" --draft
 ```
 
