@@ -10,13 +10,13 @@ describe("TriggerDetector", () => {
         "Please look at docs/plans/feature.md and delegate tasks",
       );
       expect(result).not.toBeNull();
-      expect(result!.planPath).toBe("docs/plans/feature.md");
+      expect(result?.planPath).toBe("docs/plans/feature.md");
     });
 
     it("should detect plan path with various extensions", () => {
       const result = detector.detectPlanReference("Refer to docs/plans/2026-03-24-phase2.md");
       expect(result).not.toBeNull();
-      expect(result!.planPath).toContain("phase2.md");
+      expect(result?.planPath).toContain("phase2.md");
     });
 
     it("should reject absolute paths", () => {
@@ -40,7 +40,7 @@ describe("TriggerDetector", () => {
     it("should detect plan.md as a generic reference", () => {
       const result = detector.detectPlanReference("Check the plan.md for the next task");
       expect(result).not.toBeNull();
-      expect(result!.planPath).toBe("plan.md");
+      expect(result?.planPath).toBe("plan.md");
     });
   });
 
@@ -124,7 +124,7 @@ describe("TriggerDetector", () => {
     });
 
     it("should return true when plan reference exists (implicit delegation via fallback)", () => {
-      expect(detector.shouldTrigger("Check plan.md and run the next incomplete task")).toBe(true);
+      expect(detector.shouldTrigger("Check plan.md")).toBe(true);
     });
 
     it("should return false when neither exists", () => {
@@ -143,7 +143,7 @@ describe("TriggerDetector", () => {
       const result = detector.analyzeTrigger("plan.mdに基づいて実装して");
       expect(result.shouldTrigger).toBe(true);
       expect(result.planRef).not.toBeNull();
-      expect(result.planRef!.planPath).toBe("plan.md");
+      expect(result.planRef?.planPath).toBe("plan.md");
       expect(result.fallbackTriggered).toBe(false);
     });
 
@@ -151,7 +151,7 @@ describe("TriggerDetector", () => {
       const result = detector.analyzeTrigger("plan.mdを確認した");
       expect(result.shouldTrigger).toBe(true);
       expect(result.planRef).not.toBeNull();
-      expect(result.planRef!.planPath).toBe("plan.md");
+      expect(result.planRef?.planPath).toBe("plan.md");
       expect(result.fallbackTriggered).toBe(true);
     });
 
