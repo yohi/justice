@@ -35,3 +35,5 @@ export const OpenCodePlugin: Plugin = async (init) => {
     },
   };
 };
+
+export default OpenCodePlugin;

@@ -77,10 +77,13 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
     *   環境変数 `GITHUB_TOKEN` が利用可能であることを確認してください。
 2.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
     *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
-3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じてインストールを実行してください。
+3.  **[ ] 設定ファイルの特定:** 設定ファイルの場所が不明な場合は `opencode --help` を実行してパスを確認するか、以下の標準的な場所を探索してください：
+    *   グローバル設定: `~/.config/opencode/opencode.jsonc`
+    *   プロジェクト設定: `.opencode/opencode.json` または `opencode.jsonc`
+4.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じてインストールを実行してください。
     *   Packages版: **`opencode plugin @yohi/justice`** コマンドを実行してインストールしてください。
-    *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
-4.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
+    *   ソース版: 上記で特定した設定ファイルの **`plugin` 配列** に、ビルドされた JS ファイル（`dist/opencode-plugin.js`）への絶対パスを登録してください。**※手動での `hooks` 登録は不要です。**
+5.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
 
 </details>
 
@@ -128,26 +131,21 @@ export default { plugins: [OpenCodePlugin] };
 
 ### パターン 3: ソースコードからビルド (最新版・開発用)
 
-リポジトリをクローンし、ビルドしたファイルをフックとして直接参照します。
-**注意:** 各フックファイルは依存関係注入を必要とするため、直接指定するのではなく、すべてのコンポーネントを初期化する `dist/opencode-plugin.js` をエントリポイントとして使用してください。
+リポジトリをクローンし、ビルドしたファイルをプラグインとして直接参照します。
+プラグインとして登録することで、必要なフック（Message, PreToolUse 等）は自動的に登録されます。**手動で `hooks` セクションに記述する必要はありません。**
 
 1.  **ビルド**
     ```bash
     git clone https://github.com/yohi/justice.git
     cd justice && bun install && bun run build
     ```
-2.  **フックの設定** (`opencode.jsonc`)
+2.  **プラグインの登録** (`opencode.jsonc`)
+    `plugin` 配列にビルドされた JS ファイルへの絶対パスを記述してください。
     ```jsonc
     {
-      "hooks": {
-        "custom": [
-          {
-            "name": "justice-plugin",
-            "event": ["Message", "PreToolUse", "PostToolUse", "Event"],
-            "source": "[LOCAL_PATH]/justice/dist/opencode-plugin.js"
-          }
-        ]
-      }
+      "plugin": [
+        "/path/to/justice/dist/opencode-plugin.js"
+      ]
     }
     ```
 

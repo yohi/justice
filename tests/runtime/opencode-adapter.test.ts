@@ -73,7 +73,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     vi.clearAllMocks();
   });
 
-  it("routes message.updated user events with content to JusticePlugin.handleEvent", async () => {
+  it("routes message.updated assistant events with content to JusticePlugin.handleEvent", async () => {
     const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
@@ -86,7 +86,7 @@ describe("OpenCodeAdapter.onEvent", () => {
         type: "message.updated",
         properties: {
           sessionID: "sess-1",
-          info: { role: "user", content: "plan.md の次のタスクを委譲して" },
+          info: { role: "assistant", content: "plan.md の次のタスクを委譲して" },
         },
       },
     });
@@ -96,11 +96,11 @@ describe("OpenCodeAdapter.onEvent", () => {
     expect(event).toMatchObject({
       type: "Message",
       sessionId: "sess-1",
-      payload: { role: "user", content: "plan.md の次のタスクを委譲して" },
+      payload: { role: "assistant", content: "plan.md の次のタスクを委譲して" },
     });
   });
 
-  it("skips non-user message.updated events", async () => {
+  it("skips non-assistant message.updated events", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -109,7 +109,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     await adapter.onEvent({
       event: {
         type: "message.updated",
-        properties: { sessionID: "s", info: { role: "assistant", content: "hello" } },
+        properties: { sessionID: "s", info: { role: "user", content: "hello" } },
       },
     });
 
