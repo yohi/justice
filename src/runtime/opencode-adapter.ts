@@ -151,14 +151,18 @@ export class OpenCodeAdapter {
 
         if (role !== "user") return;
 
+        // Use the message event as a trigger to ensure the plugin is initialized,
+        // even if the content is temporarily empty (handling OpenCode's event structure changes).
         await this.ensureInitialized();
         const justice = this.#justice;
-        if (!justice) return;
+
+        // Skip event transfer if justice is unavailable or content is empty.
+        if (!justice || content.length === 0) return;
 
         await justice.handleEvent({
           type: "Message",
           sessionId,
-          payload: { role: "user", content: content || "" },
+          payload: { role: "user", content },
         });
         return;
       }
