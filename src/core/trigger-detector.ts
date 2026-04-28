@@ -31,7 +31,7 @@ const DELEGATION_KEYWORDS: RegExp[] = [
   /実装(?:して|を開始|をお願い|を進めて)/,
   /作(?:成して|って)/,
   /(?:進めて|始めて|やって|お願い)/,
-  /\b(?:implement|build|create)\b/i,
+  /\b(?:implement|build|create)\s+(?:the\s+)?(?:task|issue|ticket|story|feature|component|module|service|test|code|fix)\b/i,
 ];
 
 export class TriggerDetector {
@@ -99,8 +99,8 @@ export class TriggerDetector {
 
   /**
    * Combined check: should this message trigger plan-bridge?
-   * Triggers if there is a Primary path (intent keyword + plan ref)
-   * or a Fallback path (guarded by user intent).
+   * Triggers if there is a plan reference AND delegation intent (primary),
+   * or if there is a plan reference alone AND it passes the context guard (fallback).
    * @deprecated Use analyzeTrigger() instead to avoid duplicate calls.
    */
   shouldTrigger(message: string): boolean {
