@@ -9,7 +9,7 @@ describe("TriggerDetector Fallback Guard", () => {
     const context = { lastUserMessage: "Please follow plan.md" };
     
     // This is the new behavior we want to implement
-    const result = (detector as any).analyzeTrigger(assistantMessage, context);
+    const result = detector.analyzeTrigger(assistantMessage, context);
     expect(result.shouldTrigger).toBe(true);
     expect(result.fallbackTriggered).toBe(true);
   });
@@ -18,7 +18,7 @@ describe("TriggerDetector Fallback Guard", () => {
     const assistantMessage = "I found a plan.md file in the directory.";
     const context = { lastUserMessage: "What files are here?" };
     
-    const result = (detector as any).analyzeTrigger(assistantMessage, context);
+    const result = detector.analyzeTrigger(assistantMessage, context);
     expect(result.shouldTrigger).toBe(false);
   });
 
@@ -26,7 +26,7 @@ describe("TriggerDetector Fallback Guard", () => {
     const assistantMessage = "I will execute the next task in plan.md.";
     const context = { lastUserMessage: "Go ahead." };
     
-    const result = (detector as any).analyzeTrigger(assistantMessage, context);
+    const result = detector.analyzeTrigger(assistantMessage, context);
     expect(result.shouldTrigger).toBe(true);
     expect(result.fallbackTriggered).toBe(false);
   });
@@ -34,7 +34,7 @@ describe("TriggerDetector Fallback Guard", () => {
   it("should NOT trigger fallback if context is missing (backward compatibility / default guard)", () => {
     const assistantMessage = "I will look into plan.md.";
     
-    const result = (detector as any).analyzeTrigger(assistantMessage);
+    const result = detector.analyzeTrigger(assistantMessage);
     expect(result.shouldTrigger).toBe(false);
   });
 });

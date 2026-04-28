@@ -11,6 +11,7 @@ export function isDebugEnabled(): boolean {
     // - justice:* (ワイルドカード)
     // - justice:something-123 (ハイフンや数字を含むサブカテゴリ)
     // にマッチする。
+    // eslint-disable-next-line security/detect-unsafe-regex
     return /\bjustice(?::\*|:[a-z0-9_-]+)?\b/.test(debug);
   } catch {
     return false;

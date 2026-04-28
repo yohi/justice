@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
-import type { FileReader, HookEvent } from "../../src/core/types";
+import type { FileReader } from "../../src/core/types";
 
 describe("PlanBridge Fallback Guard Integration", () => {
   const mockFileReader: FileReader = {
