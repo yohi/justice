@@ -87,7 +87,7 @@ export class TriggerDetector {
     // Fallback path (Guarded): planRef exists but no explicit keyword detected.
     // To prevent accidental triggers when the assistant just mentions a file,
     // we only allow fallback if the LAST user message also mentions a plan file.
-    if (planRef !== null && context?.lastUserMessage) {
+    if (planRef !== null && !hasIntent && context?.lastUserMessage) {
       const userPlanRef = this.detectPlanReference(context.lastUserMessage);
       if (userPlanRef !== null) {
         return { shouldTrigger: true, planRef, fallbackTriggered: true };
