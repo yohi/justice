@@ -60,7 +60,7 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
 
 **Requirements (GitHub Packages 版の場合):**
 1. **Setup global .npmrc** (`~/.npmrc`) with `@yohi:registry=https://npm.pkg.github.com` and `_authToken`
-2. **Add "@yohi/justice"** to the `plugins` array in `opencode.jsonc`
+2. **Run `opencode plugin @yohi/justice`** to install the package and register it in `opencode.jsonc`
 
 **Requirements (ソースコードビルド版の場合):**
 1. **Clone this repository** to a local directory.
