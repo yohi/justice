@@ -22,6 +22,7 @@ export class PlanBridge {
   private readonly progressReporter: ProgressReporter;
   private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly activePlanPaths: Map<string, string> = new Map();
+  private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
 
@@ -91,12 +92,22 @@ export class PlanBridge {
    * Handle Message event: detect plan references and delegation intent.
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
+    if (event.type !== "Message") return PROCEED;
+
+    // Track last user message for TriggerDetector guard
+    if (event.payload.role === "user") {
+      this.lastUserMessages.set(event.sessionId, event.payload.content);
+      return PROCEED;
+    }
+
     // Only react to assistant messages
-    if (event.type !== "Message" || event.payload.role !== "assistant") return PROCEED;
+    if (event.payload.role !== "assistant") return PROCEED;
 
     const content = event.payload.content;
+    const lastUserMessage = this.lastUserMessages.get(event.sessionId);
+
     const { shouldTrigger, planRef, fallbackTriggered } =
-      this.triggerDetector.analyzeTrigger(content);
+      this.triggerDetector.analyzeTrigger(content, { lastUserMessage });
     if (!shouldTrigger || !planRef) return PROCEED;
 
     // Fail-open ONLY on I/O error

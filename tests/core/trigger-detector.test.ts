@@ -10,13 +10,17 @@ describe("TriggerDetector", () => {
         "Please look at docs/plans/feature.md and delegate tasks",
       );
       expect(result).not.toBeNull();
-      expect(result?.planPath).toBe("docs/plans/feature.md");
+      if (result) {
+        expect(result.planPath).toBe("docs/plans/feature.md");
+      }
     });
 
     it("should detect plan path with various extensions", () => {
       const result = detector.detectPlanReference("Refer to docs/plans/2026-03-24-phase2.md");
       expect(result).not.toBeNull();
-      expect(result?.planPath).toContain("phase2.md");
+      if (result) {
+        expect(result.planPath).toContain("phase2.md");
+      }
     });
 
     it("should reject absolute paths", () => {
@@ -40,7 +44,9 @@ describe("TriggerDetector", () => {
     it("should detect plan.md as a generic reference", () => {
       const result = detector.detectPlanReference("Check the plan.md for the next task");
       expect(result).not.toBeNull();
-      expect(result?.planPath).toBe("plan.md");
+      if (result) {
+        expect(result.planPath).toBe("plan.md");
+      }
     });
   });
 
@@ -123,35 +129,41 @@ describe("TriggerDetector", () => {
       expect(detector.shouldTrigger("Delegate the next task from plan.md")).toBe(true);
     });
 
-    it("should return true when plan reference exists (implicit delegation via fallback)", () => {
-      expect(detector.shouldTrigger("Check plan.md")).toBe(true);
+    it("should return true when plan reference exists (guarded fallback)", () => {
+      // ユーザーがプランに言及している場合のみフォールバック
+      const context = { lastUserMessage: "Please check plan.md" };
+      const analysis = detector.analyzeTrigger("I will check plan.md", context);
+      expect(analysis.shouldTrigger).toBe(true);
     });
 
     it("should return false when neither exists", () => {
       expect(detector.shouldTrigger("Hello world")).toBe(false);
     });
 
-    // Phase 2: フォールバック層による発火
-    it("should return true for plan.md reference even without explicit keywords (fallback)", () => {
-      expect(detector.shouldTrigger("plan.mdを確認した")).toBe(true);
+    it("should return false for plan.md reference without user context (guarded)", () => {
+      expect(detector.shouldTrigger("I mentioned plan.md here")).toBe(false);
     });
   });
 
-  // Phase 2: analyzeTrigger のフォールバック層テスト
   describe("analyzeTrigger", () => {
     it("should trigger with fallbackTriggered=false when both planRef and intent exist", () => {
       const result = detector.analyzeTrigger("plan.mdに基づいて実装して");
       expect(result.shouldTrigger).toBe(true);
       expect(result.planRef).not.toBeNull();
-      expect(result.planRef?.planPath).toBe("plan.md");
+      if (result.planRef) {
+        expect(result.planRef.planPath).toBe("plan.md");
+      }
       expect(result.fallbackTriggered).toBe(false);
     });
 
-    it("should trigger with fallbackTriggered=true when planRef exists but no intent keyword", () => {
-      const result = detector.analyzeTrigger("plan.mdを確認した");
+    it("should trigger with fallbackTriggered=true when planRef exists and user also mentioned plan", () => {
+      const context = { lastUserMessage: "Here is the plan.md" };
+      const result = detector.analyzeTrigger("plan.mdを確認した", context);
       expect(result.shouldTrigger).toBe(true);
       expect(result.planRef).not.toBeNull();
-      expect(result.planRef?.planPath).toBe("plan.md");
+      if (result.planRef) {
+        expect(result.planRef.planPath).toBe("plan.md");
+      }
       expect(result.fallbackTriggered).toBe(true);
     });
 
@@ -169,11 +181,11 @@ describe("TriggerDetector", () => {
       expect(result.fallbackTriggered).toBe(false);
     });
 
-    it("should trigger via fallback for design.md-style references", () => {
-      const result = detector.analyzeTrigger("docs/plans/design-plan.mdを見て");
-      expect(result.shouldTrigger).toBe(true);
-      expect(result.planRef).not.toBeNull();
-      expect(result.fallbackTriggered).toBe(true);
+    it("should not trigger via fallback if user did NOT mention plan file", () => {
+      const context = { lastUserMessage: "Hello" };
+      const result = detector.analyzeTrigger("docs/plans/design-plan.mdを見て", context);
+      expect(result.shouldTrigger).toBe(false);
+      expect(result.fallbackTriggered).toBe(false);
     });
 
     it("should trigger via primary path for Japanese delegation with plan reference", () => {
@@ -182,6 +194,27 @@ describe("TriggerDetector", () => {
       expect(result.planRef).not.toBeNull();
       expect(result.fallbackTriggered).toBe(false);
     });
+
+    describe("Context Guarding", () => {
+      it("should trigger fallback if last user message contains a plan reference", () => {
+        const context = { lastUserMessage: "Look at docs/plans/main.md" };
+        const result = detector.analyzeTrigger("Checking docs/plans/main.md", context);
+        expect(result.shouldTrigger).toBe(true);
+        expect(result.fallbackTriggered).toBe(true);
+      });
+
+      it("should NOT trigger fallback if last user message does NOT contain a plan reference", () => {
+        const context = { lastUserMessage: "How are you?" };
+        const result = detector.analyzeTrigger("I am working on plan.md", context);
+        expect(result.shouldTrigger).toBe(false);
+      });
+
+      it("should still trigger PRIMARY path regardless of context", () => {
+        const context = { lastUserMessage: "No mention of plan here" };
+        const result = detector.analyzeTrigger("Delegate next task from plan.md", context);
+        expect(result.shouldTrigger).toBe(true);
+        expect(result.fallbackTriggered).toBe(false);
+      });
+    });
   });
 });
-

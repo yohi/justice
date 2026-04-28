@@ -15,6 +15,10 @@ export interface TriggerAnalysis {
   readonly fallbackTriggered: boolean;
 }
 
+export interface TriggerContext {
+  readonly lastUserMessage?: string;
+}
+
 const PLAN_PATH_REGEX = /(?:^|\s|["'`])([\w./-]*plan[\w./-]*\.md)\b/i;
 
 const DELEGATION_KEYWORDS: RegExp[] = [
@@ -71,7 +75,7 @@ export class TriggerDetector {
    * Analyzes if the message should trigger delegation.
    * Returns a combined result of shouldTrigger and planRef.
    */
-  analyzeTrigger(message: string): TriggerAnalysis {
+  analyzeTrigger(message: string, context?: TriggerContext): TriggerAnalysis {
     const planRef = this.detectPlanReference(message);
     const hasIntent = this.detectDelegationIntent(message);
 
@@ -80,11 +84,14 @@ export class TriggerDetector {
       return { shouldTrigger: true, planRef, fallbackTriggered: false };
     }
 
-    // Fallback path: planRef exists but no explicit keyword detected.
-    // If the user mentions a plan file, it is highly likely they intend delegation.
-    // Fire with fallbackTriggered flag so downstream consumers can act accordingly.
-    if (planRef !== null) {
-      return { shouldTrigger: true, planRef, fallbackTriggered: true };
+    // Fallback path (Guarded): planRef exists but no explicit keyword detected.
+    // To prevent accidental triggers when the assistant just mentions a file,
+    // we only allow fallback if the LAST user message also mentions a plan file.
+    if (planRef !== null && context?.lastUserMessage) {
+      const userPlanRef = this.detectPlanReference(context.lastUserMessage);
+      if (userPlanRef !== null) {
+        return { shouldTrigger: true, planRef, fallbackTriggered: true };
+      }
     }
 
     return { shouldTrigger: false, planRef: null, fallbackTriggered: false };
@@ -92,7 +99,8 @@ export class TriggerDetector {
 
   /**
    * Combined check: should this message trigger plan-bridge?
-   * Triggers if there is a plan reference AND delegation intent.
+   * Triggers if there is a Primary path (intent keyword + plan ref)
+   * or a Fallback path (guarded by user intent).
    * @deprecated Use analyzeTrigger() instead to avoid duplicate calls.
    */
   shouldTrigger(message: string): boolean {
