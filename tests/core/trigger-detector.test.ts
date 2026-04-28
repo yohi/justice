@@ -220,6 +220,7 @@ describe("TriggerDetector", () => {
         const context = { lastUserMessage: "How are you?" };
         const result = detector.analyzeTrigger("I am working on plan.md", context);
         expect(result.shouldTrigger).toBe(false);
+        expect(result.fallbackTriggered).toBe(false);
       });
 
       it("should still trigger PRIMARY path regardless of context", () => {

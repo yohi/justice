@@ -113,6 +113,7 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
+    expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "Message",
