@@ -149,7 +149,7 @@ export class OpenCodeAdapter {
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
 
-        if (role !== "assistant") return;
+        if (role !== "assistant" && role !== "user") return;
 
         // Use the message event as a trigger to ensure the plugin is initialized,
         // even if the content is temporarily empty (handling OpenCode's event structure changes).
@@ -162,7 +162,7 @@ export class OpenCodeAdapter {
         await justice.handleEvent({
           type: "Message",
           sessionId,
-          payload: { role: "assistant", content },
+          payload: { role: role as "assistant" | "user", content },
         });
         return;
       }

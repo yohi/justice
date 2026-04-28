@@ -8,6 +8,15 @@ export interface PlanReference {
 export interface TriggerAnalysis {
   readonly shouldTrigger: boolean;
   readonly planRef: PlanReference | null;
+  /**
+   * true の場合、正規表現キーワードでは検出されず、
+   * planRef の存在によるフォールバック層で発火したことを示す。
+   */
+  readonly fallbackTriggered: boolean;
+}
+
+export interface TriggerContext {
+  readonly lastUserMessage?: string;
 }
 
 const PLAN_PATH_REGEX = /(?:^|\s|["'`])([\w./-]*plan[\w./-]*\.md)\b/i;
@@ -18,6 +27,11 @@ const DELEGATION_KEYWORDS: RegExp[] = [
   /\b(?:execute|run|start)\s+(?:the\s+)?(?:next\s+)?(?:incomplete\s+)?task/i,
   /次のタスク/,
   /タスクを(?:実行|委譲|開始)/,
+  // Phase 1: 日本語の開発現場フレーズ
+  /実装(?:して|を開始|をお願い|を進めて)/,
+  /作(?:成して|って)/,
+  /(?:(?:作成|実装|タスク|issue|チケット).*?(?:進めて|始めて|やって|お願い))|(?:(?:進めて|始めて|やって|お願い).*?(?:作成|実装|タスク|issue|チケット))/i,
+  /\b(?:implement|build|create)\s+(?:the\s+)?(?:task|issue|ticket|story|feature|component|module|service|test|code|fix)\b/i,
 ];
 
 export class TriggerDetector {
@@ -61,24 +75,39 @@ export class TriggerDetector {
    * Analyzes if the message should trigger delegation.
    * Returns a combined result of shouldTrigger and planRef.
    */
-  analyzeTrigger(message: string): TriggerAnalysis {
+  analyzeTrigger(message: string, context?: TriggerContext): TriggerAnalysis {
     const planRef = this.detectPlanReference(message);
     const hasIntent = this.detectDelegationIntent(message);
-    const shouldTrigger = planRef !== null && hasIntent;
 
-    return {
-      shouldTrigger,
-      planRef: shouldTrigger ? planRef : null,
-    };
+    // Primary path: both planRef AND explicit intent keyword
+    if (planRef !== null && hasIntent) {
+      return { shouldTrigger: true, planRef, fallbackTriggered: false };
+    }
+
+    // Fallback path (Guarded): planRef exists but no explicit keyword detected.
+    // To prevent accidental triggers when the assistant just mentions a file,
+    // we only allow fallback if the LAST user message also mentions a plan file.
+    if (planRef !== null && !hasIntent && context?.lastUserMessage) {
+      const userPlanRef = this.detectPlanReference(context.lastUserMessage);
+      if (userPlanRef !== null && userPlanRef.planPath === planRef.planPath) {
+        return { shouldTrigger: true, planRef, fallbackTriggered: true };
+      }
+    }
+
+    return { shouldTrigger: false, planRef: null, fallbackTriggered: false };
   }
 
   /**
    * Combined check: should this message trigger plan-bridge?
-   * Triggers if there is a plan reference AND delegation intent.
+   * 
+   * Triggers in two cases:
+   * 1. Primary path: A plan reference AND an explicit delegation intent keyword are found.
+   * 2. Fallback path: A plan reference is found even without an explicit keyword (implicit intent), provided that the lastUserMessage also contains the plan reference.
+   * 
    * @deprecated Use analyzeTrigger() instead to avoid duplicate calls.
    */
-  shouldTrigger(message: string): boolean {
-    return this.analyzeTrigger(message).shouldTrigger;
+  shouldTrigger(message: string, context?: TriggerContext): boolean {
+    return this.analyzeTrigger(message, context).shouldTrigger;
   }
 }
 /* eslint-enable security/detect-unsafe-regex */

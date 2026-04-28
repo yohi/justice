@@ -100,7 +100,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     });
   });
 
-  it("skips non-assistant message.updated events", async () => {
+  it("routes user messages message.updated events", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -113,7 +113,17 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "Message",
+        sessionId: "s",
+        payload: expect.objectContaining({
+          role: "user",
+          content: "hello",
+        }),
+      })
+    );
   });
 
   it("routes loop-like session.error events to loop-detector Event", async () => {

@@ -22,6 +22,7 @@ export class PlanBridge {
   private readonly progressReporter: ProgressReporter;
   private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly activePlanPaths: Map<string, string> = new Map();
+  private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
 
@@ -91,11 +92,19 @@ export class PlanBridge {
    * Handle Message event: detect plan references and delegation intent.
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
-    // Only react to assistant messages
-    if (event.type !== "Message" || event.payload.role !== "assistant") return PROCEED;
+    if (event.type !== "Message") return PROCEED;
+
+    // Track last user message for TriggerDetector guard
+    if (event.payload.role === "user") {
+      this.lastUserMessages.set(event.sessionId, event.payload.content);
+      return PROCEED;
+    }
 
     const content = event.payload.content;
-    const { shouldTrigger, planRef } = this.triggerDetector.analyzeTrigger(content);
+    const lastUserMessage = this.lastUserMessages.get(event.sessionId);
+
+    const { shouldTrigger, planRef, fallbackTriggered } =
+      this.triggerDetector.analyzeTrigger(content, { lastUserMessage });
     if (!shouldTrigger || !planRef) return PROCEED;
 
     // Fail-open ONLY on I/O error
@@ -143,9 +152,17 @@ export class PlanBridge {
       );
     }
 
+    let injectedContext = this.buildInjectedContext(planContent, delegation);
+    if (fallbackTriggered) {
+      injectedContext =
+        `[JUSTICE:FALLBACK] Delegation triggered by plan reference only (no explicit keyword match).\n` +
+        `If this is not intended as task delegation, you may ignore this context.\n\n` +
+        injectedContext;
+    }
+
     return {
       action: "inject",
-      injectedContext: this.buildInjectedContext(planContent, delegation),
+      injectedContext,
     };
   }
 
