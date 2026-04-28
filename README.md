@@ -77,8 +77,8 @@ https://raw.githubusercontent.com/yohi/justice/refs/heads/master/README.md
     *   環境変数 `GITHUB_TOKEN` が利用可能であることを確認してください。
 2.  **[ ] 導入パターンの決定:** ユーザーに確認し（`ask_user` 等のインタラクション手段を使用）、GitHub Packages (安定版) か ソースコードビルド (最新版/開発者用) かを選択してもらってください。
     *   **Fallback:** インタラクションが不可能な場合は、最もクリーンな **GitHub Packages 版** をデフォルトとして選択してください。
-3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じて `opencode.jsonc` を更新してください。
-    *   Packages版: `plugins` 配列に `"@yohi/justice"` を追加。
+3.  **[ ] プラグイン/フックの登録:** ユーザーの選択に応じてインストールを実行してください。
+    *   Packages版: **`opencode plugin @yohi/justice`** コマンドを実行してインストールしてください。
     *   ソース版: `hooks.custom` に **プラグインのエントリポイント**（依存関係注入を伴うラッパー）へのパスを登録してください。
 4.  **[ ] 統合の確認:** 起動ログ（または `background_output`）を確認し、`Justice initialized via opencode-adapter` というメッセージが出力されていることをもってセットアップ完了と判定してください。
 
@@ -100,7 +100,7 @@ bun run test
 
 ### パターン 1: GitHub Packages 経由 (推奨)
 
-最もクリーンで推奨される方法です。
+最もクリーンで推奨される方法です。OpenCode の `plugin` コマンドを使用することで、インストールと設定が自動的に行われます。
 
 1.  **認証設定 (`~/.npmrc`)**
     プロジェクトルートの `.npmrc` を汚染せず、誤コミットを防ぐため、ユーザーのホームディレクトリへの設定を推奨します。以下の2行を追記してください。
@@ -108,13 +108,13 @@ bun run test
     @yohi:registry=https://npm.pkg.github.com
     //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
     ```
-2.  **プラグインの有効化 (`opencode.jsonc`)**
-    `plugins` リストにパッケージ名を追加するだけで、すべてのフックが自動的に登録されます。**`hooks.custom` への記述は不要です。**
-    ```jsonc
-    {
-      "plugins": ["@yohi/justice"]
-    }
+2.  **プラグインのインストール**
+    ターミナルで以下のコマンドを実行してください。これにより、パッケージがダウンロードされ、設定ファイル（`.opencode/opencode.json` または `opencode.jsonc`）に自動的に追記されます。
+    ```bash
+    opencode plugin @yohi/justice
     ```
+    > [!IMPORTANT]
+    > `opencode.jsonc` へ手動で追記するだけでは、パッケージの実体がインストールされない場合があります。必ず上記のコマンドを使用してインストールをトリガーしてください。
 
 ### パターン 2: TypeScript 設定経由
 
