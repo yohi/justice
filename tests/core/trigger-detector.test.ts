@@ -115,6 +115,12 @@ describe("TriggerDetector", () => {
       it("should detect English keywords: create", () => {
         expect(detector.detectDelegationIntent("create the service")).toBe(true);
       });
+
+      it("should not detect lone English verbs without context", () => {
+        expect(detector.detectDelegationIntent("I will implement it")).toBe(false);
+        expect(detector.detectDelegationIntent("Just build it")).toBe(false);
+        expect(detector.detectDelegationIntent("Can you create it?")).toBe(false);
+      });
     });
   });
 
