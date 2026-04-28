@@ -148,7 +148,8 @@ export class OpenCodeAdapter {
         const info = this.#readRecord(properties, "info");
         const role = this.#readString(info, "role");
         const content = this.#readString(info, "content");
-        if (role !== "user" || content.length === 0) return;
+
+        if (role !== "user") return;
 
         await this.ensureInitialized();
         const justice = this.#justice;
@@ -157,7 +158,7 @@ export class OpenCodeAdapter {
         await justice.handleEvent({
           type: "Message",
           sessionId,
-          payload: { role: "user", content },
+          payload: { role: "user", content: content || "" },
         });
         return;
       }
