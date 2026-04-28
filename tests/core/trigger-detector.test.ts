@@ -187,6 +187,13 @@ describe("TriggerDetector", () => {
       expect(result.fallbackTriggered).toBe(false);
     });
 
+    it("should not trigger via fallback if user mentioned a DIFFERENT plan file", () => {
+      const context = { lastUserMessage: "Please check plan-A.md" };
+      const result = detector.analyzeTrigger("plan-B.mdを確認した", context);
+      expect(result.shouldTrigger).toBe(false);
+      expect(result.fallbackTriggered).toBe(false);
+    });
+
     it("should not trigger via fallback if user did NOT mention plan file", () => {
       const context = { lastUserMessage: "Hello" };
       const result = detector.analyzeTrigger("docs/plans/design-plan.mdを見て", context);

@@ -89,7 +89,7 @@ export class TriggerDetector {
     // we only allow fallback if the LAST user message also mentions a plan file.
     if (planRef !== null && !hasIntent && context?.lastUserMessage) {
       const userPlanRef = this.detectPlanReference(context.lastUserMessage);
-      if (userPlanRef !== null) {
+      if (userPlanRef !== null && userPlanRef.planPath === planRef.planPath) {
         return { shouldTrigger: true, planRef, fallbackTriggered: true };
       }
     }
