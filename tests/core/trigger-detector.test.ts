@@ -61,6 +61,61 @@ describe("TriggerDetector", () => {
     it("should return false for unrelated messages", () => {
       expect(detector.detectDelegationIntent("What is the weather?")).toBe(false);
     });
+
+    // Phase 1: 日本語キーワード拡張テスト
+    describe("Phase 1: extended Japanese keywords", () => {
+      it("should detect 実装して", () => {
+        expect(detector.detectDelegationIntent("plan.mdに基づいて実装して")).toBe(true);
+      });
+
+      it("should detect 実装を開始", () => {
+        expect(detector.detectDelegationIntent("実装を開始してください")).toBe(true);
+      });
+
+      it("should detect 実装をお願い", () => {
+        expect(detector.detectDelegationIntent("実装をお願いします")).toBe(true);
+      });
+
+      it("should detect 実装を進めて", () => {
+        expect(detector.detectDelegationIntent("実装を進めてください")).toBe(true);
+      });
+
+      it("should detect 作成して", () => {
+        expect(detector.detectDelegationIntent("テストファイルを作成して")).toBe(true);
+      });
+
+      it("should detect 作って", () => {
+        expect(detector.detectDelegationIntent("コンポーネントを作って")).toBe(true);
+      });
+
+      it("should detect 進めて", () => {
+        expect(detector.detectDelegationIntent("次を進めて")).toBe(true);
+      });
+
+      it("should detect 始めて", () => {
+        expect(detector.detectDelegationIntent("タスクを始めて")).toBe(true);
+      });
+
+      it("should detect やって", () => {
+        expect(detector.detectDelegationIntent("これやって")).toBe(true);
+      });
+
+      it("should detect お願い", () => {
+        expect(detector.detectDelegationIntent("次のステップお願い")).toBe(true);
+      });
+
+      it("should detect English keywords: implement", () => {
+        expect(detector.detectDelegationIntent("Please implement the feature")).toBe(true);
+      });
+
+      it("should detect English keywords: build", () => {
+        expect(detector.detectDelegationIntent("build the component")).toBe(true);
+      });
+
+      it("should detect English keywords: create", () => {
+        expect(detector.detectDelegationIntent("create the service")).toBe(true);
+      });
+    });
   });
 
   describe("shouldTrigger", () => {
@@ -68,12 +123,65 @@ describe("TriggerDetector", () => {
       expect(detector.shouldTrigger("Delegate the next task from plan.md")).toBe(true);
     });
 
-    it("should return true when plan reference exists (implicit delegation)", () => {
+    it("should return true when plan reference exists (implicit delegation via fallback)", () => {
       expect(detector.shouldTrigger("Check plan.md and run the next incomplete task")).toBe(true);
     });
 
     it("should return false when neither exists", () => {
       expect(detector.shouldTrigger("Hello world")).toBe(false);
     });
+
+    // Phase 2: フォールバック層による発火
+    it("should return true for plan.md reference even without explicit keywords (fallback)", () => {
+      expect(detector.shouldTrigger("plan.mdを確認した")).toBe(true);
+    });
+  });
+
+  // Phase 2: analyzeTrigger のフォールバック層テスト
+  describe("analyzeTrigger", () => {
+    it("should trigger with fallbackTriggered=false when both planRef and intent exist", () => {
+      const result = detector.analyzeTrigger("plan.mdに基づいて実装して");
+      expect(result.shouldTrigger).toBe(true);
+      expect(result.planRef).not.toBeNull();
+      expect(result.planRef!.planPath).toBe("plan.md");
+      expect(result.fallbackTriggered).toBe(false);
+    });
+
+    it("should trigger with fallbackTriggered=true when planRef exists but no intent keyword", () => {
+      const result = detector.analyzeTrigger("plan.mdを確認した");
+      expect(result.shouldTrigger).toBe(true);
+      expect(result.planRef).not.toBeNull();
+      expect(result.planRef!.planPath).toBe("plan.md");
+      expect(result.fallbackTriggered).toBe(true);
+    });
+
+    it("should not trigger when neither planRef nor intent exists", () => {
+      const result = detector.analyzeTrigger("今日の天気は？");
+      expect(result.shouldTrigger).toBe(false);
+      expect(result.planRef).toBeNull();
+      expect(result.fallbackTriggered).toBe(false);
+    });
+
+    it("should not trigger when only intent exists without planRef", () => {
+      const result = detector.analyzeTrigger("実装してください");
+      expect(result.shouldTrigger).toBe(false);
+      expect(result.planRef).toBeNull();
+      expect(result.fallbackTriggered).toBe(false);
+    });
+
+    it("should trigger via fallback for design.md-style references", () => {
+      const result = detector.analyzeTrigger("docs/plans/design-plan.mdを見て");
+      expect(result.shouldTrigger).toBe(true);
+      expect(result.planRef).not.toBeNull();
+      expect(result.fallbackTriggered).toBe(true);
+    });
+
+    it("should trigger via primary path for Japanese delegation with plan reference", () => {
+      const result = detector.analyzeTrigger("plan.mdのタスクを委譲する");
+      expect(result.shouldTrigger).toBe(true);
+      expect(result.planRef).not.toBeNull();
+      expect(result.fallbackTriggered).toBe(false);
+    });
   });
 });
+

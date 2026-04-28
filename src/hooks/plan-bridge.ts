@@ -95,7 +95,8 @@ export class PlanBridge {
     if (event.type !== "Message" || event.payload.role !== "assistant") return PROCEED;
 
     const content = event.payload.content;
-    const { shouldTrigger, planRef } = this.triggerDetector.analyzeTrigger(content);
+    const { shouldTrigger, planRef, fallbackTriggered } =
+      this.triggerDetector.analyzeTrigger(content);
     if (!shouldTrigger || !planRef) return PROCEED;
 
     // Fail-open ONLY on I/O error
@@ -143,9 +144,17 @@ export class PlanBridge {
       );
     }
 
+    let injectedContext = this.buildInjectedContext(planContent, delegation);
+    if (fallbackTriggered) {
+      injectedContext =
+        `[JUSTICE:FALLBACK] Delegation triggered by plan reference only (no explicit keyword match).\n` +
+        `If this is not intended as task delegation, you may ignore this context.\n\n` +
+        injectedContext;
+    }
+
     return {
       action: "inject",
-      injectedContext: this.buildInjectedContext(planContent, delegation),
+      injectedContext,
     };
   }
 
