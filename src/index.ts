@@ -58,3 +58,6 @@ export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core
 export { StatusCommand, type PlanStatus } from "./core/status-command";
 export { NodeFileSystem } from "./runtime/node-file-system";
 export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
+
+// OpenCode Plugin Entry
+export { OpenCodePlugin as default, OpenCodePlugin } from "./opencode-plugin";
