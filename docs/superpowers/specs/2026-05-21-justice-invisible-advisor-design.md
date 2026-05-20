@@ -40,7 +40,8 @@ src/
 │
 ├── hooks/
 │   ├── plan-bridge.ts                 [変更] handlePostToolUse 追加 / Atlas Guidance + Sisyphus Wisdom 経路
-│   └── loop-handler.ts                [変更] recordReviewOutput / pivot 注入 / notifier 統合
+│   ├── loop-handler.ts                [変更] recordReviewOutput / pivot 注入 / notifier 統合
+│   └── task-feedback.ts               [変更] setActivePlan(plan, agentId?) 拡張 / LearningExtractor.extract に persona 伝播
 │
 ├── runtime/
 │   └── opencode-notifier.ts           [新規] client.app.log を利用した OpenCodeNotifier
@@ -60,7 +61,8 @@ tests/
 │   └── learning-extractor.test.ts            [更新]
 ├── hooks/
 │   ├── plan-bridge.test.ts                   [更新]
-│   └── loop-handler.test.ts                  [更新]
+│   ├── loop-handler.test.ts                  [更新]
+│   └── task-feedback.test.ts                 [更新]
 ├── runtime/
 │   └── opencode-notifier.test.ts             [新規]
 ├── helpers/
@@ -69,7 +71,8 @@ tests/
 └── integration/
     ├── atlas-orchestration-flow.test.ts      [新規]
     ├── role-based-wisdom-flow.test.ts        [新規]
-    └── review-rejection-pivot-flow.test.ts   [新規]
+    ├── review-rejection-pivot-flow.test.ts   [新規]
+    └── sisyphus-debugging-flow.test.ts       [新規]
 ```
 
 ### 2-2. イベントルーティング更新
@@ -291,11 +294,22 @@ async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
 }
 ```
 
+**`handlePostToolUse` の補助メソッド挙動補足**:
+
+> **アイコン重複防止規約**: アイコン文字（🎯 / 🚧 / 🔬 / 🚨 / 💡 / 🔁）はバナー層（`formatBanner`）に集約する。§4-3 / §6-4 等のプロンプト本文ヘッダではアイコンを再掲しない（バナーと本文を連結した際の視覚的重複を防ぐ）。プロンプト本文はアイコンを含まない `[ATLAS ORCHESTRATION DIRECTIVE]` / `**ARCHITECTURE PIVOT REQUIRED**` 形式で記述する。
+
+- `buildAtlasGuidanceResponse(event, planSignal)`: §4-3 のプロンプト本文の先頭に §7-2 の `variant: "atlas_orchestration"` バナーを連結した `inject` レスポンスを返す。`notifier.notify(...)` を並行呼び出し（fail-open）。
+- `persistSisyphusInsight(event, debugSignal)`: 以下を直列実行し `inject` レスポンスを返す。
+  1. `learningExtractor.extract(feedback, rawOutput, { persona: "sisyphus" })` で draft 群を抽出。
+  2. 各 draft を `wisdomStore.add(draft, { persona: "sisyphus" })` で保存（`wisdomStore` 未注入時は保存をスキップして `proceed` を返す。例外発生時も `try/catch` で吸収し `proceed`）。
+  3. `notifier.formatBanner({ variant: "sisyphus_insight", title: "Sisyphus Insight", message: "systematic-debugging 完了。<N> 件の Wisdom を Sisyphus 名前空間に保存しました", level: "info" })` を `injectedContext` 先頭に挿入し、続けて保存サマリ（保存件数・category 内訳）を本文として `inject` する。`<N>` は実際に保存された entry 件数。
+  4. `notifier.notify(...)` を並行呼び出し（fail-open）。
+
 ### 4-3. Atlas Guidance プロンプト本体
 
 ```text
 ---
-🎯 [JUSTICE: ATLAS ORCHESTRATION DIRECTIVE]
+[ATLAS ORCHESTRATION DIRECTIVE]
 
 **Plan completed**: <planPath>
 **Detection source**: <skill_marker | result_marker | result_path>
@@ -442,7 +456,22 @@ getRelevant(options?: {
 ### 5-4. ペルソナ別注入の連動ポイント
 
 - `PlanBridge.handleMessage` → `delegation.context.agentId ?? "hephaestus"` を `getRelevantLearnings` 引数に渡す。
-- `PlanBridge.handlePreToolUse` (task) → 同上。
+- `PlanBridge.handlePreToolUse` (task) → 解決の優先順位は次の通り:
+  1. `delegation.context.agentId` が **解決可能** ならそれを採用。
+  2. 未解決の場合は `PlanCompletionDetector.lastInvokedPersona(sessionId)`（§4-1 のスキル名/エージェント名対応表に基づく `toolInput` ベース推定）を採用。
+  3. いずれも未解決の場合のみ `"hephaestus"` にフォールバック。
+
+  解決されたペルソナを `getRelevantLearnings` の `persona` 引数に渡す。
+
+  **「解決可能」の判定 predicate**（実装は型値集合への所属チェックのみで完結し、外部レジストリ/API 参照を一切行わない）:
+  - 値が非空文字列であること、かつ
+  - 小文字正規化後、`AgentId` 型の literal union（`"atlas" | "hephaestus" | "sisyphus" | "prometheus"`）= `AGENT_LABELS` のキー集合に含まれること。
+
+  以下は **すべて未解決** として扱う:
+  - `undefined` / `null`
+  - 空文字列 / 空白のみ文字列
+  - `"unknown"` 等のプレースホルダ値
+  - `AgentId` literal union に含まれない任意の文字列（大文字小文字無視で照合）
 - `PlanBridge.handlePostToolUse` (Atlas Guidance) → `getRelevantLearnings("atlas")`。
 - `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更を検知 → 必要に応じてペルソナ切替時の Wisdom 再注入トリガに利用。
 
@@ -544,7 +573,7 @@ recordReviewOutput(
 
 ```text
 ---
-🚧 **JUSTICE: ARCHITECTURE PIVOT REQUIRED**
+**ARCHITECTURE PIVOT REQUIRED**
 
 Prometheus が直近 <N> 回のレビューで連続して却下を出しています（閾値: <maxRejections>）。
 このアプローチは手詰まりです。**通常の再試行ループを断ち、別の視座でアーキテクチャを再検討してください。**
@@ -935,6 +964,20 @@ const justice = new JusticePlugin(localFs, localFs, {
 2. 各回 PostToolUse: `toolResult: "REJECTED: <理由>"` を発火。
 3. 1 回目・2 回目は `proceed`、3 回目で `inject` レスポンスが返り、🚧 バナーと Hephaestus 向け pivot 文言を含む。
 4. `loopHandler.getTrialHistory(sessionId, taskId)` に 3 件の prometheus failure record が記録されている。
+
+#### `tests/integration/sisyphus-debugging-flow.test.ts`（新規）
+
+シナリオ: 「Sisyphus が `systematic-debugging` を完了 → 根本原因マーカーから `design_decision` draft が抽出され Sisyphus 名前空間に保存 → 🔬 バナーが注入される」
+
+検証ステップ:
+1. PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` を発火 → `PlanCompletionDetector` に保留登録。
+2. PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を発火。
+3. 期待:
+   - `inject` レスポンス先頭に 🔬 バナー（`variant: "sisyphus_insight"`）が挿入される。
+   - `wisdomStore.add` が `persona: "sisyphus"` 指定で 1 件以上呼び出され、`wisdomStore.getRelevant({ persona: "sisyphus" })` で当該 entry が取得できる。
+   - 抽出された draft の少なくとも 1 件は `category: "design_decision"`（根本原因マーカー検出経路）。
+   - `mockNotifier.calls` に `variant: "sisyphus_insight"` の `notify` 呼び出しが 1 件記録される。
+4. 別ケース: 日本語マーカー `"根本原因: ..."` でも同じ経路が動作することを確認。
 
 ### 9-13. テストヘルパー
 
