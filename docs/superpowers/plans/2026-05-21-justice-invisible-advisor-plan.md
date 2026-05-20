@@ -43,14 +43,20 @@ bun run build       # dist/opencode-plugin.js を生成
 - **Base から派生**: 単体で型/テストが完結し、他 Task に依存しない独立タスク。
 - **直前 Task から派生**: 直前 Task の型・API・ファイル変更に依存し、それなしではコンパイル・テストが通らないタスク。
 
+**依存カテゴリの用語定義** (並列開発判断のため):
+- **完全独立**: 他 Task の型・実装・テストに一切依存せず、`master` 直派生で単体ビルド・テストが通る。並列開発で何の調整も不要。
+- **型依存** (type-dependent): 別 Task で追加される型/インターフェースを参照するが、実装ロジックには非依存。並列開発する場合は (a) 先行 Task ブランチをローカル取り込み、(b) 型を一時的に再宣言、いずれかで隔離可能。最終マージ順だけ規定される。
+- **実装依存** (runtime-dependent): 別 Task で追加される実装/関数の呼び出しに依存。先行 Task のマージなしには動作テストが通らない。
+- **マージ前提** (merge-prerequisite): 別 Phase の全 Task が `master` 経由でマージ済みであることを前提とする。Phase をまたぐ大括りの依存。
+
 ```text
 master
 └── feature/justice-invisible-advisor__base   ← Phase Base (全 PR のターゲット)
     ├── Phase 1: Foundation & Notification Layer
-    │   ├── feature/jia-phase1-task1_justice-notifier            ← Base 派生 (独立)
-    │   ├── feature/jia-phase1-task2_opencode-notifier           ← Base 派生 (独立)
-    │   ├── feature/jia-phase1-task3_persona-classifier          ← Base 派生 (独立)
-    │   └── feature/jia-phase1-task4_review-rejection-detector   ← Base 派生 (独立)
+    │   ├── feature/jia-phase1-task1_justice-notifier            ← Base 派生 (完全独立)
+    │   ├── feature/jia-phase1-task2_opencode-notifier           ← Base 派生 (型依存: Task1 の JusticeNotifier)
+    │   ├── feature/jia-phase1-task3_persona-classifier          ← Base 派生 (完全独立)
+    │   └── feature/jia-phase1-task4_review-rejection-detector   ← Base 派生 (完全独立)
     │
     ├── Phase 2: Role-based Wisdom Store
     │   ├── feature/jia-phase2-task1_wisdom-types-extension      ← Base 派生
@@ -60,19 +66,19 @@ master
     │   └── feature/jia-phase2-task5_learning-extractor-persona  ← Task4 派生
     │
     ├── Phase 3: Plan-to-Execution Bridge
-    │   ├── feature/jia-phase3-task1_plan-completion-detector    ← Base 派生 (独立)
-    │   ├── feature/jia-phase3-task2_merge-posttooluse           ← Base 派生 (独立)
-    │   └── feature/jia-phase3-task3_plan-bridge-handle-post     ← Task2 派生 (Phase 2 + Phase 3-1/2 マージ後)
+    │   ├── feature/jia-phase3-task1_plan-completion-detector    ← Base 派生 (型依存: Phase 1 Task 3 の AgentId 推定ロジック参照)
+    │   ├── feature/jia-phase3-task2_merge-posttooluse           ← Base 派生 (型依存: HookResponse 既存型のみ)
+    │   └── feature/jia-phase3-task3_plan-bridge-handle-post     ← Task2 派生 (マージ前提: Phase 2 全 + Phase 3-1/2)
     │
     ├── Phase 4: SDD Native Error Handling
-    │   ├── feature/jia-phase4-task1_loop-handler-pivot          ← Base 派生 (Phase 1 Task 4 + Phase 2 マージ後)
-    │   ├── feature/jia-phase4-task2_plan-bridge-pivot-route     ← Task1 派生 (Phase 3 マージ後)
-    │   └── feature/jia-phase4-task3_sisyphus-wisdom-route       ← Task2 派生
+    │   ├── feature/jia-phase4-task1_loop-handler-pivot          ← Base 派生 (マージ前提: Phase 1 Task 4 + Phase 2 全)
+    │   ├── feature/jia-phase4-task2_plan-bridge-pivot-route     ← Task1 派生 (マージ前提: Phase 3 全)
+    │   └── feature/jia-phase4-task3_sisyphus-wisdom-route       ← Task2 派生 (実装依存)
     │
     └── Phase 5: Integration & Wrap-up
-        ├── feature/jia-phase5-task1_adapter-wiring               ← Base 派生 (Phase 1-4 マージ後)
-        ├── feature/jia-phase5-task2_integration-tests            ← Task1 派生
-        └── feature/jia-phase5-task3_final-verification           ← Task2 派生
+        ├── feature/jia-phase5-task1_adapter-wiring               ← Base 派生 (マージ前提: Phase 1-4 全)
+        ├── feature/jia-phase5-task2_integration-tests            ← Task1 派生 (実装依存)
+        └── feature/jia-phase5-task3_final-verification           ← Task2 派生 (実装依存)
 ```
 
 **PR 戦略:** 各 Task は実装完了後、必ず `feature/justice-invisible-advisor__base` をターゲットに **Draft PR** を作成。レビュー完了後にマージし、後続 Task の base を rebase で追従させる。
@@ -85,7 +91,7 @@ master
 
 ### Task 1: `JusticeNotifier` インターフェースと `NoOpNotifier`
 
-**Branch:** `feature/jia-phase1-task1_justice-notifier` ← Base 派生 (独立)
+**Branch:** `feature/jia-phase1-task1_justice-notifier` ← Base 派生 (完全独立)
 
 **Files:**
 - Add: `src/core/justice-notifier.ts`
@@ -106,7 +112,7 @@ master
 
 ### Task 2: `OpenCodeNotifier` (runtime 層)
 
-**Branch:** `feature/jia-phase1-task2_opencode-notifier` ← Base 派生 (独立)
+**Branch:** `feature/jia-phase1-task2_opencode-notifier` ← Base 派生 (型依存: Task 1 の `JusticeNotifier`)
 
 > **注意:** Task 1 の `JusticeNotifier` 型が未マージの段階で並行開発する場合は、ローカルで Task 1 ブランチを取り込む or 一時的に型を再宣言して隔離。最終マージ順は Task 1 → Task 2 を推奨。
 
@@ -126,7 +132,7 @@ master
 
 ### Task 3: `PersonaClassifier`
 
-**Branch:** `feature/jia-phase1-task3_persona-classifier` ← Base 派生 (独立)
+**Branch:** `feature/jia-phase1-task3_persona-classifier` ← Base 派生 (完全独立)
 
 **Files:**
 - Add: `src/core/persona-classifier.ts`
@@ -144,7 +150,7 @@ master
 
 ### Task 4: `review-rejection-patterns` + `ReviewRejectionDetector`
 
-**Branch:** `feature/jia-phase1-task4_review-rejection-detector` ← Base 派生 (独立)
+**Branch:** `feature/jia-phase1-task4_review-rejection-detector` ← Base 派生 (完全独立)
 
 **Files:**
 - Add: `src/core/review-rejection-patterns.ts`
@@ -266,7 +272,7 @@ master
 
 ### Task 1: `PlanCompletionDetector`
 
-**Branch:** `feature/jia-phase3-task1_plan-completion-detector` ← Base 派生 (独立、Phase 1 Task 3 マージ前提)
+**Branch:** `feature/jia-phase3-task1_plan-completion-detector` ← Base 派生 (型依存: Phase 1 Task 3 の `PersonaClassifier`/`AgentId`)
 
 **Files:**
 - Add: `src/core/plan-completion-detector.ts`
@@ -286,7 +292,7 @@ master
 
 ### Task 2: `mergePostToolUseResponses` 純粋関数
 
-**Branch:** `feature/jia-phase3-task2_merge-posttooluse` ← Base 派生 (独立)
+**Branch:** `feature/jia-phase3-task2_merge-posttooluse` ← Base 派生 (型依存: 既存 `HookResponse` のみ)
 
 **Files:**
 - Modify: `src/core/justice-plugin.ts`
@@ -414,15 +420,22 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 - Add: `tests/integration/atlas-orchestration-flow.test.ts`
 - Add: `tests/integration/role-based-wisdom-flow.test.ts`
 - Add: `tests/integration/review-rejection-pivot-flow.test.ts`
+- Add: `tests/integration/sisyphus-debugging-flow.test.ts`
 
 **Steps:**
 
-- [ ] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。
+- [ ] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。**加えて `mockNotifier.calls` に `variant: "atlas_orchestration"` の `notify` 呼び出しが 1 件記録され、`mockNotifier.banners` の最後の要素が `injectedContext` 先頭バナーと一致することを assert**。
 - [ ] **Step 2: `role-based-wisdom-flow.test.ts` を実装** — §9-12 シナリオ通り。hephaestus 3 件 + atlas 2 件追加 → `getRelevant({ persona: "atlas" })` で 2 件のみ取得、injectedContext に hephaestus wisdom が含まれないことを assert。
-- [ ] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。
-- [ ] **Step 4: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一**
-- [ ] **Step 5: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [ ] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。**加えて 3 回目で `mockNotifier.calls` に `variant: "architecture_pivot"` の呼び出しが追加されること、1〜2 回目では追加されないことを assert**。
+- [ ] **Step 4: `sisyphus-debugging-flow.test.ts` を実装 (新規)** — シナリオ: (1) PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` 発火 → 保留登録。(2) PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を渡す。期待:
+  - `inject` レスポンスの先頭に 🔬 バナー (`variant: "sisyphus_insight"`) が挿入される
+  - `wisdomStore.add` が `persona: "sisyphus"` 指定で 1 件以上呼び出され、保存後 `wisdomStore.getRelevant({ persona: "sisyphus" })` で当該 entry が取得できる
+  - 抽出された draft の少なくとも 1 件は `category: "design_decision"` を持つ (根本原因マーカー検出経路)
+  - `mockNotifier.calls` に `variant: "sisyphus_insight"` の `notify` が 1 件記録される
+  - 日本語マーカー `"根本原因: ..."` でも同じ経路が動作することを別ケースで確認
+- [ ] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
+- [ ] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
+- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: 最終検証 + Phase Base マージ準備
 
