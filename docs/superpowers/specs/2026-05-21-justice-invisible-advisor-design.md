@@ -296,6 +296,8 @@ async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
 
 **`handlePostToolUse` の補助メソッド挙動補足**:
 
+> **アイコン重複防止規約**: アイコン文字（🎯 / 🚧 / 🔬 / 🚨 / 💡 / 🔁）はバナー層（`formatBanner`）に集約する。§4-3 / §6-4 等のプロンプト本文ヘッダではアイコンを再掲しない（バナーと本文を連結した際の視覚的重複を防ぐ）。プロンプト本文はアイコンを含まない `[ATLAS ORCHESTRATION DIRECTIVE]` / `**ARCHITECTURE PIVOT REQUIRED**` 形式で記述する。
+
 - `buildAtlasGuidanceResponse(event, planSignal)`: §4-3 のプロンプト本文の先頭に §7-2 の `variant: "atlas_orchestration"` バナーを連結した `inject` レスポンスを返す。`notifier.notify(...)` を並行呼び出し（fail-open）。
 - `persistSisyphusInsight(event, debugSignal)`: 以下を直列実行し `inject` レスポンスを返す。
   1. `learningExtractor.extract(feedback, rawOutput, { persona: "sisyphus" })` で draft 群を抽出。
@@ -307,7 +309,7 @@ async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
 
 ```text
 ---
-🎯 [JUSTICE: ATLAS ORCHESTRATION DIRECTIVE]
+[ATLAS ORCHESTRATION DIRECTIVE]
 
 **Plan completed**: <planPath>
 **Detection source**: <skill_marker | result_marker | result_path>
@@ -455,11 +457,21 @@ getRelevant(options?: {
 
 - `PlanBridge.handleMessage` → `delegation.context.agentId ?? "hephaestus"` を `getRelevantLearnings` 引数に渡す。
 - `PlanBridge.handlePreToolUse` (task) → 解決の優先順位は次の通り:
-  1. `delegation.context.agentId` が解決可能ならそれを採用。
+  1. `delegation.context.agentId` が **解決可能** ならそれを採用。
   2. 未解決の場合は `PlanCompletionDetector.lastInvokedPersona(sessionId)`（§4-1 のスキル名/エージェント名対応表に基づく `toolInput` ベース推定）を採用。
   3. いずれも未解決の場合のみ `"hephaestus"` にフォールバック。
 
   解決されたペルソナを `getRelevantLearnings` の `persona` 引数に渡す。
+
+  **「解決可能」の判定 predicate**（実装は型値集合への所属チェックのみで完結し、外部レジストリ/API 参照を一切行わない）:
+  - 値が非空文字列であること、かつ
+  - 小文字正規化後、`AgentId` 型の literal union（`"atlas" | "hephaestus" | "sisyphus" | "prometheus"`）= `AGENT_LABELS` のキー集合に含まれること。
+
+  以下は **すべて未解決** として扱う:
+  - `undefined` / `null`
+  - 空文字列 / 空白のみ文字列
+  - `"unknown"` 等のプレースホルダ値
+  - `AgentId` literal union に含まれない任意の文字列（大文字小文字無視で照合）
 - `PlanBridge.handlePostToolUse` (Atlas Guidance) → `getRelevantLearnings("atlas")`。
 - `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更を検知 → 必要に応じてペルソナ切替時の Wisdom 再注入トリガに利用。
 
@@ -561,7 +573,7 @@ recordReviewOutput(
 
 ```text
 ---
-🚧 **JUSTICE: ARCHITECTURE PIVOT REQUIRED**
+**ARCHITECTURE PIVOT REQUIRED**
 
 Prometheus が直近 <N> 回のレビューで連続して却下を出しています（閾値: <maxRejections>）。
 このアプローチは手詰まりです。**通常の再試行ループを断ち、別の視座でアーキテクチャを再検討してください。**
