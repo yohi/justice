@@ -110,13 +110,23 @@ export interface WisdomEntry {
   readonly persona: AgentId;        // 新規必須フィールド
 }
 
-export type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp">;
+export type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp" | "persona"> & {
+  readonly persona?: AgentId;       // Draft 段階では未確定可。WisdomStore.add で確定する。
+};
 
 export interface AddOptions {
   readonly scope?: WisdomScope;
   readonly persona?: AgentId;       // 明示指定で上書き可能
 }
 ```
+
+`WisdomStore.add(draft, options)` での persona 確定優先順位（上位ほど優先）：
+
+1. `options.persona` が指定されていればそれを採用
+2. `draft.persona` が指定されていればそれを採用
+3. いずれもなければ `PersonaClassifier.classify({ category: draft.category, errorClass: draft.errorClass })` でフォールバック
+
+確定後の persona は最終的な `WisdomEntry.persona`（必須）に書き込まれる。Draft 段階でのみ `persona?` が `undefined` を許容する。
 
 ### 3-2. `wisdom.json` の永続化フォーマット v2
 
@@ -460,7 +470,7 @@ extract(
 
 ```ts
 export const REVIEW_REJECTION_PATTERNS: readonly RegExp[] = Object.freeze([
-  /\brejected?\b/i,
+  /\breject(?:ed)?\b/i,
   /\bcannot\s+approve\b/i,
   /\bapproval\s+denied\b/i,
   /\brequested\s+changes\b/i,
@@ -767,7 +777,7 @@ const justice = new JusticePlugin(localFs, localFs, {
 | 5 | 同上に4行目 `"❌ critical issue"` 追加 | `true` | `3`（4 件目は除外） | `≤300` | excerpt 上限 3 件で打ち切り |
 | 6 | 1 行が 500 文字の `"MUST FIX: " + "x".repeat(500)` | `true` | `1`、長さ `200` | `≤300` | excerpt 1 件は ≤200 文字に切り詰め |
 | 7 | `"不承認: アーキテクチャ要修正"` | `true` | `1` | `>0` | 日本語パターン |
-| 8 | `"please reject this approach"` | `true` | `1` | `>0` | `\brejected?\b` の bare verb 一致（"reject" 単独） |
+| 8 | `"please reject this approach"` | `true` | `1` | `>0` | `\breject(?:ed)?\b` の bare verb 一致（"reject" 単独） |
 | 9 | `"approval denied due to security"` | `true` | `1` | `>0` | 連語パターン |
 | 10 | `"DO NOT MERGE"`（全大文字） | `true` | `1` | `>0` | 大文字小文字を問わない |
 
