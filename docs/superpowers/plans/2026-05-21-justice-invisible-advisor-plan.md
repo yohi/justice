@@ -65,7 +65,7 @@ master
     │   └── feature/jia-phase3-task3_plan-bridge-handle-post     ← Task2 派生 (Phase 2 + Phase 3-1/2 マージ後)
     │
     ├── Phase 4: SDD Native Error Handling
-    │   ├── feature/jia-phase4-task1_loop-handler-pivot          ← Base 派生 (独立)
+    │   ├── feature/jia-phase4-task1_loop-handler-pivot          ← Base 派生 (Phase 1 Task 4 + Phase 2 マージ後)
     │   ├── feature/jia-phase4-task2_plan-bridge-pivot-route     ← Task1 派生 (Phase 3 マージ後)
     │   └── feature/jia-phase4-task3_sisyphus-wisdom-route       ← Task2 派生
     │
@@ -245,8 +245,8 @@ master
 **Files:**
 - Modify: `src/core/learning-extractor.ts`
 - Modify: `tests/core/learning-extractor.test.ts`
-- Modify: `src/hooks/task-feedback-handler.ts` (シグネチャ拡張)
-- Modify: `tests/hooks/task-feedback-handler.test.ts`
+- Modify: `src/hooks/task-feedback.ts` (シグネチャ拡張)
+- Modify: `tests/hooks/task-feedback.test.ts`
 
 **Steps:**
 
@@ -254,7 +254,7 @@ master
 - [ ] **Step 2: `LearningExtractor.extract(feedback, rawOutput?, context?: { persona?: AgentId })` シグネチャ拡張** — §5-5 通り。各 draft の persona は context > classifier の順で確定。
 - [ ] **Step 3: `extractFromSuccess` 内に根本原因マーカー分岐を追加** — `learning-extractor.ts` 内 private 定数として `ROOT_CAUSE_MARKERS = [/Root cause:/i, /根本原因[:：]/u]` を保持。マッチ時 `category: "design_decision"` draft を生成。
 - [ ] **Step 4: `TaskFeedbackHandler.setActivePlan(plan, agentId?: AgentId)` シグネチャ拡張** — `session.currentAgent` として保持、`extract` 呼び出しに伝播。
-- [ ] **Step 5: 既存 `task-feedback-handler.test.ts` の呼び出し箇所互換性確認** — `agentId` はオプショナル維持のため既存呼び出しは無変更で動作することを assert。
+- [ ] **Step 5: 既存 `task-feedback.test.ts` の呼び出し箇所互換性確認** — `agentId` はオプショナル維持のため既存呼び出しは無変更で動作することを assert。
 - [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
 - [ ] **Step 7: Phase Base に向けた Draft PR を作成**
 
@@ -436,7 +436,7 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 - [ ] **Step 1: Devcontainer 内で全コマンドを最終実行** — `bun install --frozen-lockfile && bun run typecheck && bun run lint && bun run test && bun run build`。検収基準すべて満たすこと。
 - [ ] **Step 2: `dist/opencode-plugin.js` の生成と最低限の smoke import** — `node -e "require('./dist/opencode-plugin.js')"` 相当が成功すること。
-- [ ] **Step 3: 既存テスト 201 件 + 新規/更新テストすべて pass を確認** — `bun run test` の出力サマリで件数確認。
+- [ ] **Step 3: 全テスト pass を確認** — `bun run test` がエラー 0 で完了し、出力サマリの `failures: 0` および skip された不正な suite が無いことを確認。件数は Phase 1〜4 で累積追加されるため固定値で照合せず、定性的に「すべて pass」をもって合格とする。
 - [ ] **Step 4: `CHANGELOG.md` に 4 機能の追加を Conventional Commits 準拠で追記** — `feat(core): role-based wisdom store with v1→v2 migration`、`feat(hooks): plan-to-execution bridge with Atlas guidance`、`feat(hooks): SDD review-rejection pivot to Hephaestus`、`feat(runtime): toast-equivalent notifier (log + banner)`。
 - [ ] **Step 5: 設計書 §14 受け入れ条件 1〜6 をチェックリスト化し、各項目の検証手順を実行**:
   - [ ] (1) writing-plans 完了直後 → Atlas Guidance Directive 注入
