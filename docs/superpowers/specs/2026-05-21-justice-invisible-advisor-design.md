@@ -566,15 +566,15 @@ for (const draft of drafts) {
 
 ## 7. ユーザー向けトースト通知
 
-### 7-1. 3 層ハイブリッド通知設計
+### 7-1. 2 層通知設計（MVP）
 
-OpenCode の `TuiToast` API はサーバーサイドフックから直接呼び出せないため、以下 3 層を組み合わせて「トースト相当」の UX を実現する。
+OpenCode の `TuiToast` API はサーバーサイドフックから直接呼び出せないため、本 MVP では以下の 2 層を組み合わせて「トースト相当」の UX を実現する。`JusticeNotifier` 抽象は **この 2 層を統合するための最小限のインターフェース** として定義する。将来拡張への配慮（追加メソッド、TUI 連携用の余剰契約等）は持ち込まない。
 
 #### Layer 1: `client.app.log` 経由のログ通知（即時可視化）
-`OpenCodeAdapter` から渡される `log` 関数を `OpenCodeNotifier` 内部で利用し、`service: "justice"` の構造化メッセージを送信。
+`OpenCodeAdapter` から渡される `log` 関数を `OpenCodeNotifier` 内部で利用し、`service: "justice"` の構造化メッセージを送信。`JusticeNotifier.notify()` がこのレイヤを担う。
 
 #### Layer 2: `injectedContext` 先頭バナー（チャット上で必ず目視）
-各 hook の `inject` レスポンスの先頭に Markdown バナーを必ず埋め込む。
+各 hook の `inject` レスポンスの先頭に Markdown バナーを必ず埋め込む。`JusticeNotifier.formatBanner()` がこのレイヤを担う。
 
 ```text
 > 🎯 **JUSTICE NOTIFICATION** [Atlas Orchestration]
@@ -583,9 +583,6 @@ OpenCode の `TuiToast` API はサーバーサイドフックから直接呼び�
 ---
 [詳細プロンプト本文...]
 ```
-
-#### Layer 3: 将来拡張用の TUI ブリッジ（インターフェースのみ）
-MVP では未実装。`JusticeNotifier` 抽象は TUI プラグイン側からの将来連携を見越して定義する。
 
 ### 7-2. `JusticeNotifier` インターフェース
 
@@ -610,11 +607,18 @@ export interface JusticeNotification {
   readonly taskId?: string;
 }
 
+/**
+ * MVP の 2 層通知（Layer 1: log, Layer 2: banner）を統合するための
+ * 最小限のインターフェース。これ以上のメソッドは追加しない。
+ */
 export interface JusticeNotifier {
   notify(notification: JusticeNotification): void | Promise<void>;
   formatBanner(notification: Omit<JusticeNotification, "sessionId" | "taskId">): string;
 }
 
+/**
+ * 通知不要な経路（既存テスト互換、CI 等）で使用するデフォルト実装。
+ */
 export class NoOpNotifier implements JusticeNotifier {
   notify(): void { /* no-op */ }
   formatBanner(): string { return ""; }
@@ -705,35 +709,204 @@ const justice = new JusticePlugin(localFs, localFs, {
 
 ## 9. テスト戦略
 
-### 9-1. 新規ユニットテスト
+本セクションでは、実装時の解釈ブレを排除するため、新規/更新テストごとに **入力値 / 期待出力 / カバーするエッジケース** を表で明示する。すべてのテストは Vitest + `tests/helpers/mock-file-system.ts` の既存パターンに沿い、I/O は注入されたモック経由でのみ行う。
 
-| ファイル | 主な検証内容 |
-|---|---|
-| `tests/core/persona-classifier.test.ts` | 各 category × errorClass の優先順位、デフォルトフォールバック |
-| `tests/core/review-rejection-detector.test.ts` | 英日パターン網羅、excerpt 上限、空入力 |
-| `tests/core/plan-completion-detector.test.ts` | PreToolUse 保留 + PostToolUse 判定、confidence 評価、TTL/最大件数 eviction |
-| `tests/core/wisdom-persistence-migration.test.ts` | v1 → v2 マイグレーション、`PersonaClassifier` フォールバック、`saveAtomic` で v2 出力 |
-| `tests/core/justice-notifier.test.ts` | `NoOpNotifier`/`formatBanner` の出力フォーマット、`notify` の例外吸収 |
-| `tests/runtime/opencode-notifier.test.ts` | `client.app.log` 呼び出し検証、レベル変換 |
+### 9-1. `tests/core/persona-classifier.test.ts`（新規）
 
-### 9-2. 更新ユニットテスト
+検証対象: `PersonaClassifier.classify(entry: { category, errorClass })`
 
-- `tests/core/wisdom-store.test.ts` — Map ベース挙動、`persona` フィルタ、LRU eviction の挙動。
-- `tests/core/tiered-wisdom-store.test.ts` — persona 伝播時の local + global マージ。
-- `tests/core/learning-extractor.test.ts` — `persona` 付与、systematic-debugging 用の根本原因マーカー分岐。
-- `tests/hooks/plan-bridge.test.ts` — `handlePostToolUse` の3経路（writing-plans / systematic-debugging / Prometheus review）。
-- `tests/hooks/loop-handler.test.ts` — `recordReviewOutput` の pivot 判定、既存 `evaluateEscalation` との連動。
+| # | 入力 `category` | 入力 `errorClass` | 期待 出力 | カバー観点 |
+|---|---|---|---|---|
+| 1 | `"design_decision"` | `undefined` | `"atlas"` | 設計判断 → Atlas |
+| 2 | `"design_decision"` | `"design_error"` | `"atlas"` | 優先順位 1 が優先（errorClass 一致でも崩れない） |
+| 3 | `"failure_gotcha"` | `"design_error"` | `"atlas"` | 優先順位 1（errorClass）が category より上 |
+| 4 | `"failure_gotcha"` | `"loop_detected"` | `"sisyphus"` | 優先順位 2: ループ検知 |
+| 5 | `"environment_quirk"` | `"timeout"` | `"sisyphus"` | 優先順位 2（errorClass）が category 4 より上 |
+| 6 | `"environment_quirk"` | `undefined` | `"sisyphus"` | 優先順位 4: 環境特異性 |
+| 7 | `"success_pattern"` | `undefined` | `"hephaestus"` | 優先順位 5 |
+| 8 | `"failure_gotcha"` | `undefined` | `"hephaestus"` | 優先順位 5 |
+| 9 | `"success_pattern"` | `"syntax_error"` | `"hephaestus"` | デフォルトフォールバック |
+| 10 | `"success_pattern"` | `"unknown"` | `"hephaestus"` | DEFAULT_PERSONA |
 
-### 9-3. 統合テスト
+エッジケース:
+- `category` が `undefined` キャストされた場合 → `"hephaestus"` を返す（型強制で渡されることはないが防御的に確認）。
 
-- `tests/integration/atlas-orchestration-flow.test.ts` — Atlas が `writing-plans` を完了 → PostToolUse → Atlas Guidance 注入 → Hephaestus 委譲リクエスト確定までの一連の流れ。
-- `tests/integration/role-based-wisdom-flow.test.ts` — Hephaestus 用の add → Atlas 委譲時には Atlas wisdom のみ注入されることを検証。
-- `tests/integration/review-rejection-pivot-flow.test.ts` — Prometheus からの NG を 3 回受領後に pivot 注入されることを検証。
+### 9-2. `tests/core/review-rejection-detector.test.ts`（新規）
 
-### 9-4. テストヘルパー
+検証対象: `ReviewRejectionDetector.detect(text: string): ReviewRejectionSignal`
 
-- `tests/helpers/mock-notifier.ts` — `createMockNotifier()` を提供。`notify` 呼び出し履歴を配列に保存。
-- `tests/helpers/wisdom-draft-factory.ts` — `makeWisdomDraft({...})` を提供。`persona: "hephaestus"` をデフォルト値に持ち、既存テストの書き換え量を最小化。
+| # | 入力 `text` | 期待 `matched` | 期待 `excerpts` 件数 | 期待 `summary` 長 | カバー観点 |
+|---|---|---|---|---|---|
+| 1 | `""`（空文字列） | `false` | `0` | `0` | 空入力で副作用なし |
+| 2 | `"approved with minor nits"` | `false` | `0` | `0` | 偽陽性除外（approve は否定的でない） |
+| 3 | `"REJECTED: missing error handling"` | `true` | `1` | `>0` 〜 `≤300` | 単一行マッチ |
+| 4 | `"BLOCKER: race condition\nMUST FIX: nullable\ndo not merge"` | `true` | `3` | `≤300` | 複数行マッチ、上限 3 件 |
+| 5 | 同上に4行目 `"❌ critical issue"` 追加 | `true` | `3`（4 件目は除外） | `≤300` | excerpt 上限 3 件で打ち切り |
+| 6 | 1 行が 500 文字の `"MUST FIX: " + "x".repeat(500)` | `true` | `1`、長さ `200` | `≤300` | excerpt 1 件は ≤200 文字に切り詰め |
+| 7 | `"不承認: アーキテクチャ要修正"` | `true` | `1` | `>0` | 日本語パターン |
+| 8 | `"please reject this approach"` | `true` | `1` | `>0` | `\brejected?\b` の bare verb 一致（"reject" 単独） |
+| 9 | `"approval denied due to security"` | `true` | `1` | `>0` | 連語パターン |
+| 10 | `"DO NOT MERGE"`（全大文字） | `true` | `1` | `>0` | 大文字小文字を問わない |
+
+エッジケース:
+- `null` / `undefined` は型上渡らないため検証対象外。空文字列 (#1) でガードする。
+- すべての RegExp パターン (`REVIEW_REJECTION_PATTERNS`) について、少なくとも 1 件の陽性テストが上表に対応している。
+
+### 9-3. `tests/core/plan-completion-detector.test.ts`（新規）
+
+検証対象: `PlanCompletionDetector` の `recordPreToolUseInvocation` / `evaluateSkillCompletion` / `lastInvokedPersona`
+
+| # | シナリオ | 入力 | 期待 出力 / 状態 |
+|---|---|---|---|
+| 1 | PreToolUse で `loadSkills: ["writing-plans"]` を記録 → PostToolUse で `target: "writing-plans"` を評価 | toolName=`"task"`, toolResult=`"plan written"` | `{ source: "skill_marker", confidence: "high" }` |
+| 2 | PreToolUse 未登録、PostToolUse で `toolResult` に `"docs/superpowers/specs/2026-05-21-foo-design.md"` を含む | target=`"writing-plans"` | `{ source: "result_path", confidence: "medium", planFilePath: "docs/superpowers/specs/2026-05-21-foo-design.md" }` |
+| 3 | PreToolUse 未登録、PostToolUse `toolResult` が `"## Architecture\n...\n## Implementation"` を含む | target=`"writing-plans"` | `{ source: "result_marker", confidence: "medium" }` |
+| 4 | PreToolUse 登録あり、PostToolUse は `isError: true` | target=`"writing-plans"` | `null`（エラー時は完了とみなさない） |
+| 5 | PreToolUse 未登録、PostToolUse `toolResult` が完全な無関係文字列（`"hello world"`） | target=`"writing-plans"` | `null` |
+| 6 | 同一 sessionId で 2 連続評価（保留消去確認） | 1 回目: high 検出 → 2 回目: 同 sessionId/同 toolResult | 1 回目 `high`、2 回目 `null`（保留消去済み、result マッチも無ければ） |
+| 7 | TTL 境界: 記録から 5 分 + 1ms 経過 | `recordPreToolUseInvocation` → 5min+1ms 進行 → `evaluateSkillCompletion` | `null`（TTL 切れで保留破棄）。`Date.now` モック必須 |
+| 8 | TTL 境界: 記録から 5 分ちょうど（境界内） | 同上 → 5min − 1ms 進行 | `{ confidence: "high" }`（境界内は維持） |
+| 9 | 最大件数境界: 51 個の異なる sessionId を登録 | 1 個目の sessionId で `lastInvokedPersona` を呼ぶ | `undefined`（LRU で最古が evict されている） |
+| 10 | `lastInvokedPersona`: `toolInput.skills: ["code-quality-reviewer"]` を記録 | 同一 sessionId | `"prometheus"` |
+| 11 | `lastInvokedPersona`: `toolInput.agent: "sisyphus"` を記録 | 同一 sessionId | `"sisyphus"` |
+| 12 | `lastInvokedPersona`: 何も記録されていない sessionId | — | `undefined` |
+| 13 | 不正な `toolInput`（プロパティ欠落、型不一致） | `recordPreToolUseInvocation(sessionId, "task", { unknownKey: 123 })` | 例外を throw しない、保留も登録されない |
+| 14 | `target: "systematic-debugging"` で `toolResult` が `"Root cause: ..."` を含む | target=`"systematic-debugging"` | `{ source: "result_marker", confidence: "medium" }` |
+| 15 | `target: "systematic-debugging"` で `toolResult` が `"根本原因: ..."` を含む（日本語） | 同上 | `{ source: "result_marker", confidence: "medium" }` |
+
+### 9-4. `tests/core/wisdom-persistence-migration.test.ts`（新規）
+
+検証対象: `WisdomPersistence.load()` / `loadStrict()` / `saveAtomic()` の v1/v2 ハンドリング
+
+| # | ディスク上の入力 | 期待挙動 |
+|---|---|---|
+| 1 | ファイル不在（ENOENT） | 空ストアを返す（既存挙動維持） |
+| 2 | 空文字列 `""` | 空ストアを返す |
+| 3 | `"{ not json"`（破損 JSON） | `load()` は空ストアを返す。`loadStrict()` は throw |
+| 4 | v1 形式 `{ entries: [<persona無 entry>], maxEntries: 100 }` | 各 entry に `PersonaClassifier.classify()` で persona 付与した状態でロードされる |
+| 5 | v1 形式の entry 全件（10 件）について、各 `category`/`errorClass` の組合せが §9-1 の出力どおりにバケットに振り分けられる | バケット件数の検証 |
+| 6 | v2 形式 `{ version: 2, maxEntries: 100, byAgent: { Atlas: [...], ... } }` | `byAgent` の各キーが内部 `AgentId` 小文字に変換されてロード（ラベル `"Atlas"` → `"atlas"`） |
+| 7 | v2 形式で `byAgent` に未知のキー `"Unknown"` が混入 | 未知キーは無視（fail-open）、既知キーのみロード |
+| 8 | v2 形式で `entries` も併存（移行途中の不整合） | `version === 2` が優先され、`entries` は無視 |
+| 9 | `saveAtomic(store)` を v1 ファイル上で実行 | temp + rename 後、ディスクは v2 形式（`version: 2`, `byAgent`）のみ |
+| 10 | `saveAtomic` の `mergeById`: disk と memory に同一 `id` がある場合、新しい timestamp 側の `persona` が採用される | persona が disk: `"atlas"`、memory: `"hephaestus"`（新しい）→ 結果 `"hephaestus"` |
+| 11 | 認識不能形式（配列でない、`entries`/`byAgent` どちらもない） | `loadStrict` は throw、`load` は空ストア |
+
+### 9-5. `tests/core/justice-notifier.test.ts`（新規）
+
+検証対象: `NoOpNotifier` および `formatBanner` の出力フォーマット
+
+| # | 入力 | 期待出力 |
+|---|---|---|
+| 1 | `NoOpNotifier.notify(任意の通知)` | `undefined` を返す（throw しない、ログも出さない） |
+| 2 | `NoOpNotifier.formatBanner(任意)` | `""`（空文字列） |
+| 3 | `formatBanner({ variant: "atlas_orchestration", title: "Atlas", message: "委譲してください", level: "info" })` | 行 1: `"> 🎯 **JUSTICE NOTIFICATION** [Atlas]"`、行 2: `"> 委譲してください"`、行 3: `""` |
+| 4 | `formatBanner({ variant: "architecture_pivot", title: "Pivot", message: "再検討", level: "warning" })` | 行 1 アイコン `🚧`、その他の行構造 #3 同等 |
+| 5 | `formatBanner({ variant: "wisdom_saved", title: "Saved", message: "", level: "info" })` | message 空でも 3 行構成を維持（行 2 は `"> "`） |
+| 6 | `JusticeNotifier.notify()` が同期 throw する実装に対し、上位コードから呼び出して例外が伝播しないこと | `notify()` の呼び出しは例外を再 throw しない設計のため、テストは「呼び出し側が try/catch 不要」を確認 |
+
+### 9-6. `tests/runtime/opencode-notifier.test.ts`（新規）
+
+検証対象: `OpenCodeNotifier.notify()` の `client.app.log` 呼び出し
+
+| # | 入力 `notification.level` | 期待 `log` 引数 `level` | 期待 `service` | 期待 `message` 形式 |
+|---|---|---|---|---|
+| 1 | `"info"` | `"info"` | `"justice"` | `"<icon> [<title>] <message>"` |
+| 2 | `"success"` | `"info"`（success → info マッピング） | `"justice"` | 同上 |
+| 3 | `"warning"` | `"warn"`（warning → warn マッピング） | `"justice"` | 同上 |
+| 4 | `"error"` | `"error"` | `"justice"` | 同上 |
+| 5 | `log` 関数が throw する場合 | `notify()` 自身は throw しない（catch して握りつぶす） | — | — |
+| 6 | `notification.sessionId` / `taskId` を渡した場合 | `extra: { variant, sessionId, taskId }` フィールドが含まれる | — | — |
+| 7 | `notification.sessionId` / `taskId` が未指定 | `extra` 内の各フィールドは `undefined` | — | — |
+
+### 9-7. `tests/core/wisdom-store.test.ts`（更新）
+
+| # | シナリオ | 入力 | 期待出力 |
+|---|---|---|---|
+| 1 | `add(draft)` を 4 ペルソナそれぞれに 1 件ずつ | 各 draft に明示 `persona` | `getAllEntries()` 長さ = 4、タイムスタンプ昇順 |
+| 2 | `add(draft, { persona: "atlas" })` で entry.persona と異なる persona を渡す | `entry.persona: "hephaestus"`, options: `"atlas"` | options が優先（`"atlas"` バケットに保存） |
+| 3 | `add(draft)` で persona 未指定 | `category: "design_decision"` の draft | `PersonaClassifier` フォールバックで `"atlas"` |
+| 4 | `getRelevant({ persona: "hephaestus" })` | hephaestus に 3 件、他に 2 件 | 3 件のみ返却、すべて `persona === "hephaestus"` |
+| 5 | `getRelevant({ persona: "atlas", maxEntries: 1 })` | atlas に 5 件 | 最新 1 件のみ |
+| 6 | `getRelevant({})`（persona 未指定） | 全 4 ペルソナに各 1 件 | 4 件返却、タイムスタンプ昇順 |
+| 7 | LRU eviction 境界: `maxEntries: 3` で 4 件 add | 1→2→3→4 を異なるペルソナに追加 | 最古 1 件が evict され、合計 3 件 |
+| 8 | LRU eviction が偏りなく動作: 全件 `"hephaestus"` に 4 件 add（`maxEntries: 3`） | — | `"hephaestus"` バケットが 3 件、ほか 0 件 |
+| 9 | `replaceEntries([])` | — | 全バケットが空 |
+| 10 | `replaceEntries([persona無 entry])` （マイグレーション経由相当）| persona 欠落 entry を受け取る | `PersonaClassifier` で振り分け |
+
+### 9-8. `tests/core/tiered-wisdom-store.test.ts`（更新）
+
+| # | シナリオ | 入力 | 期待出力 |
+|---|---|---|---|
+| 1 | local に hephaestus 3 件、global に hephaestus 2 件、`getRelevant({ persona: "hephaestus", maxEntries: 5 })` | — | local 3 + global 2 = 5 件、local 優先順 |
+| 2 | local に atlas 1 件、global に atlas 3 件、`getRelevant({ persona: "atlas", maxEntries: 2 })` | — | local 1 + global 1（残り 1 件分のみ） |
+| 3 | local 0 件、global hephaestus 5 件、`getRelevant({ persona: "atlas", maxEntries: 5 })` | — | 0 件（atlas に該当なし） |
+| 4 | local と global で同一 id の entry がある場合 | 同一 id | local 優先で重複排除（`localIds` set による） |
+
+### 9-9. `tests/core/learning-extractor.test.ts`（更新）
+
+| # | シナリオ | 入力 | 期待出力 |
+|---|---|---|---|
+| 1 | `extract(feedback, raw)` で `context` 未指定 | `category` から推定 | 各 draft の `persona` が `PersonaClassifier` 結果と一致 |
+| 2 | `extract(feedback, raw, { persona: "sisyphus" })` | context 明示 | 全 draft の `persona === "sisyphus"`（自動推定を上書き） |
+| 3 | systematic-debugging 経路: `rawOutput` に `"Root cause: race condition"` を含む `status: "success"` | feedback.testResults なし | 少なくとも 1 件の draft、`category === "design_decision"` |
+| 4 | systematic-debugging 経路: `rawOutput` に `"根本原因: ..."` を含む | 同上 | #3 と同等の出力 |
+| 5 | systematic-debugging マーカーが無い `status: "success"` で `testResults.passed > 0` | 既存挙動 | 既存と同じ `success_pattern` draft が生成される（後方互換性） |
+
+### 9-10. `tests/hooks/plan-bridge.test.ts`（更新）
+
+| # | シナリオ | 入力 | 期待出力 |
+|---|---|---|---|
+| 1 | PostToolUse で writing-plans 完了検知（PreToolUse 保留あり） | `task` 完了、`toolResult` に planPath を含む | `action: "inject"`、`injectedContext` 先頭が Atlas Guidance バナー（🎯）、本文に「自ら実装に着手せず」を含む |
+| 2 | PostToolUse で systematic-debugging 完了検知 | 同上で根本原因マーカーあり | `action: "inject"`、Sisyphus Wisdom 保存ログ込み、`wisdomStore` に追加されている |
+| 3 | PostToolUse で `lastInvokedPersona === "prometheus"` かつ 3 回目の NG | recordReviewOutput で pivot 確定 | `action: "inject"`、pivot バナー（🚧）と Hephaestus 向け文言を含む |
+| 4 | PostToolUse で上記いずれにも該当しない（通常の task 完了） | — | `action: "proceed"` |
+| 5 | `wisdomStore` が null の状態で Sisyphus 経路を踏む | — | `action: "proceed"`（保存スキップ、エラーにしない） |
+
+### 9-11. `tests/hooks/loop-handler.test.ts`（更新）
+
+| # | シナリオ | 入力 | 期待 `PivotDecision` |
+|---|---|---|---|
+| 1 | NG を 1 回だけ | rejectionDetector で matched=true | `pivoted: false`、`rejections: 1`、`recentExcerpts.length: 1` |
+| 2 | NG を 3 回連続（閾値ちょうど） | maxRejections=3 デフォルト | `pivoted: true`、`reason: "review_rejection_threshold"`、`targetAgent: "hephaestus"` |
+| 3 | NG を 2 回（閾値直前） | — | `pivoted: false` |
+| 4 | NG マッチしない出力 | matched=false | `pivoted: false`、`rejections: 据え置き`、`recentExcerpts: []` |
+| 5 | 環境変数 `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5` で 5 回目に pivot | — | `pivoted: true`（5 回目）、4 回目では `pivoted: false` |
+| 6 | 環境変数が `"abc"`（NaN） | — | デフォルト 3 にフォールバック |
+| 7 | 環境変数が `"0"` または `"-1"` | — | デフォルト 3 にフォールバック |
+| 8 | NG カウント中の `recordTrial` 連動 | `recordReviewOutput` 後 | `getTrialHistory(sessionId, taskId)` に `agent: "prometheus", result: "failure", wisdom` が含まれる |
+| 9 | `removeSession` 後の状態 | NG 3 回後にセッション削除 | `rejections` Map 該当エントリも削除されている |
+
+### 9-12. 統合テスト
+
+#### `tests/integration/atlas-orchestration-flow.test.ts`（新規）
+
+シナリオ: 「Atlas が `writing-plans` 完了 → Atlas Guidance 注入 → 次の `task()` 呼び出しで Hephaestus 委譲リクエストが構築される」
+
+検証ステップ:
+1. PreToolUse: `task`, `toolInput: { skills: ["writing-plans"], prompt: "..." }` を発火 → `PlanCompletionDetector` 保留登録。
+2. PostToolUse: `task`, `toolResult: "Plan written to docs/superpowers/specs/2026-05-21-foo-design.md\n## Architecture\n## Implementation"`, `error: false` → `inject` レスポンスに 🎯 バナーと推奨エージェント（mock plan に基づき `"hephaestus"`）を含む。
+3. PreToolUse: 次の `task` を発火 → `previousLearnings` が atlas wisdom 由来であることを確認。
+
+#### `tests/integration/role-based-wisdom-flow.test.ts`（新規）
+
+シナリオ:
+1. `wisdomStore.add({ persona: "hephaestus", ... })` で 3 件追加。
+2. `wisdomStore.add({ persona: "atlas", ... })` で 2 件追加。
+3. PlanBridge が `delegation.context.agentId: "atlas"` で task 委譲する局面を mock → `getRelevant({ persona: "atlas" })` で 2 件のみ取得され、injectedContext に hephaestus wisdom が含まれないことを assert。
+
+#### `tests/integration/review-rejection-pivot-flow.test.ts`（新規）
+
+シナリオ:
+1. PreToolUse: `task`, `toolInput: { skills: ["code-quality-reviewer"] }` を 3 回発火（同一 sessionId/taskId）。
+2. 各回 PostToolUse: `toolResult: "REJECTED: <理由>"` を発火。
+3. 1 回目・2 回目は `proceed`、3 回目で `inject` レスポンスが返り、🚧 バナーと Hephaestus 向け pivot 文言を含む。
+4. `loopHandler.getTrialHistory(sessionId, taskId)` に 3 件の prometheus failure record が記録されている。
+
+### 9-13. テストヘルパー
+
+- `tests/helpers/mock-notifier.ts` — `createMockNotifier(): { notifier: JusticeNotifier; calls: JusticeNotification[]; banners: string[]; }`。`notify` 呼び出しを `calls` 配列に push、`formatBanner` 呼び出しの返値を `banners` に追記。
+- `tests/helpers/wisdom-draft-factory.ts` — `makeWisdomDraft(partial?: Partial<WisdomEntryDraft>): WisdomEntryDraft`。デフォルト `{ taskId: "task-1", category: "success_pattern", content: "test", persona: "hephaestus" }`。既存テストの書き換え量を最小化。
 
 ---
 
@@ -786,7 +959,7 @@ bun run build         # dist/ ビルド
 ## 13. 想定外スコープ（YAGNI 適用）
 
 - `wisdom.json` の v2 → v1 ダウングレード機能は提供しない。
-- TUI プラグインからの直接トースト表示は本イテレーションでは実装しない（インターフェースのみ整備）。
+- `JusticeNotifier` は MVP 2 層（log + banner）のみを統合する最小契約。TUI 連携・カスタムチャネル等の追加メソッドは導入しない。
 - `LearningExtractor` の根本原因マーカー抽出は Sisyphus 経路にのみ適用し、他ペルソナの success 経路は既存挙動を維持する。
 - 新規 npm パッケージ追加なし。組み込みモジュール（`node:crypto`, `node:path`, `node:os`, `node:fs/promises`）と既存 `@opencode-ai/plugin` エコシステムのみ使用。
 
