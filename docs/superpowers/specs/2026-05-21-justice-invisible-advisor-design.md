@@ -216,13 +216,29 @@ export class PlanCompletionDetector {
 
 **検知ロジック（A + B ハイブリッド）**:
 
-- **B 段階 (PreToolUse 捕捉)**: `toolInput.skills` / `toolInput.loadSkills` 配列にスキル名を含むか、`toolInput.role` / `toolInput.prompt` にスキル名文字列が含まれる場合、sessionId に紐付けて保留登録（メモリ TTL 5 分、最大 50 セッション、`LoopDetectionHandler` と同水準）。
+- **B 段階 (PreToolUse 捕捉)**: `toolInput.skills` / `toolInput.loadSkills` 配列にスキル名を含むか、`toolInput.role` / `toolInput.prompt` にスキル名文字列が含まれる場合、`(sessionId, SkillTarget)` の複合キーで保留登録（メモリ TTL 5 分、最大 50 セッション、`LoopDetectionHandler` と同水準）。
+  - 例: 同一 task() で `loadSkills: ["writing-plans", "systematic-debugging"]` を同時指定した場合、`(sessionId, "writing-plans")` と `(sessionId, "systematic-debugging")` の **2 件を独立に登録**する。
 - **A 段階 (PostToolUse 検証)**:
-  - 保留フラグが立っていれば `confidence: high` 確定。
+  - 引数 `target` に対応する保留フラグが立っていれば `confidence: high` 確定。
   - 保留フラグがなくとも、`toolResult` に以下が含まれれば `confidence: medium` で検出：
     - writing-plans: `docs/superpowers/specs/\d{4}-\d{2}-\d{2}-.*-design\.md` パスもしくは `## Architecture` + `## Implementation` 同時出現
     - systematic-debugging: `Root cause:` / `根本原因:` マーカー
-- 検出後はセッション保留を消去（多重検出防止）。
+- 検出後は **`(sessionId, target)` の保留のみを消去**（target スコープでの多重検出防止）。同一 sessionId の別 target 保留には影響しない。
+
+#### `lastInvokedPersona` のスキル名・エージェント名 → ペルソナ対応
+
+`recordPreToolUseInvocation` は `toolInput` を以下の優先順位で評価し、`(sessionId → AgentId)` のマップに保存する。TTL/最大件数は保留 Map と同水準（5 分・50 セッション）。
+
+| 優先順位 | 入力フィールド | マッチ条件 | 対応 `AgentId` |
+|---|---|---|---|
+| 1 | `toolInput.agent` | 文字列値が `"atlas"` / `"hephaestus"` / `"sisyphus"` / `"prometheus"` のいずれか（大文字小文字無視） | その値そのまま |
+| 2 | `toolInput.skills` / `toolInput.loadSkills` | 配列要素に `"code-quality-reviewer"` を含む | `"prometheus"` |
+| 3 | `toolInput.skills` / `toolInput.loadSkills` | 配列要素に `"systematic-debugging"` を含む | `"sisyphus"` |
+| 4 | `toolInput.skills` / `toolInput.loadSkills` | 配列要素に `"writing-plans"` / `"brainstorming"` を含む | `"atlas"` |
+| 5 | `toolInput.role` / `toolInput.prompt` | 文字列内に上記スキル名のいずれかを含む（部分一致） | スキル名に応じて 2〜4 と同じ |
+| 6 | 上記いずれにも該当しない | — | 記録しない（`lastInvokedPersona` は `undefined` を返す） |
+
+複数該当時は優先順位の上位を採用。本対応表は **`PersonaClassifier` の category/errorClass ルールとは独立**であり、`lastInvokedPersona` 専用の推定経路として扱う。
 
 ### 4-2. `PlanBridge` の `handlePostToolUse`
 
@@ -702,8 +718,13 @@ const justice = new JusticePlugin(localFs, localFs, {
 
 - すべての hook ハンドラは fail-open。新規 hook 経路も I/O は `try/catch` で包み、必ず `HookResponse` を返す。
 - `JusticeNotifier.notify()` は内部で全例外を吸収し、再 throw しない（バナー文字列生成も同様）。
-- `recordReviewOutput` は副作用フリーの判定純粋関数として記述し、内部状態書き込みは保留検知後にのみ実行する。
-- `PlanCompletionDetector` のセッション保留 Map は LRU + TTL で確実に解放（メモリリーク防止）。
+- `recordReviewOutput` は **NG 判定ロジックを 1 箇所に集約するメソッド**として設計する。内部では以下の副作用を伴う点に留意する（実装時に省略不可）：
+  - `rejections` Map への excerpt 追記（§6-3 ステップ 3）
+  - `recordTrial` への連動記録（§6-3 ステップ 4、`agent: "prometheus", result: "failure"`）
+  - `removeSession` 時の `rejections` Map クリーンアップ（§6-3 末尾）
+
+  ただし入力 `reviewerOutput` を変異させず、`PivotDecision` を毎回新規生成して返す点で **入出力は不変**である。
+- `PlanCompletionDetector` のセッション保留 Map（`(sessionId, SkillTarget)` 複合キー、§4-1 参照）および `lastInvokedPersona` マップは LRU + TTL で確実に解放（メモリリーク防止）。
 
 ---
 
@@ -725,11 +746,13 @@ const justice = new JusticePlugin(localFs, localFs, {
 | 6 | `"environment_quirk"` | `undefined` | `"sisyphus"` | 優先順位 4: 環境特異性 |
 | 7 | `"success_pattern"` | `undefined` | `"hephaestus"` | 優先順位 5 |
 | 8 | `"failure_gotcha"` | `undefined` | `"hephaestus"` | 優先順位 5 |
-| 9 | `"success_pattern"` | `"syntax_error"` | `"hephaestus"` | デフォルトフォールバック |
-| 10 | `"success_pattern"` | `"unknown"` | `"hephaestus"` | DEFAULT_PERSONA |
+| 9 | `"success_pattern"` | `"syntax_error"` | `"hephaestus"` | 優先順位 5（category=success_pattern）が errorClass の非該当値より上位であることを確認 |
+| 10 | `"success_pattern"` | `"unknown"` | `"hephaestus"` | 同上（errorClass=`"unknown"` は優先順位 1/2 に該当しない） |
+| 11 | `"unknown_category" as WisdomCategory` | `undefined` | `"hephaestus"` | **真の DEFAULT_PERSONA（優先順位 6）**: 全カテゴリ・errorClass に該当しない場合のフォールバック |
+| 12 | `"unknown_category" as WisdomCategory` | `"unknown_class"` | `"hephaestus"` | 同上、errorClass も非該当値の場合 |
 
 エッジケース:
-- `category` が `undefined` キャストされた場合 → `"hephaestus"` を返す（型強制で渡されることはないが防御的に確認）。
+- `category` が `undefined` キャストされた場合 → `"hephaestus"` を返す（型強制で渡されることはないが防御的に確認、優先順位 6 経由）。
 
 ### 9-2. `tests/core/review-rejection-detector.test.ts`（新規）
 
