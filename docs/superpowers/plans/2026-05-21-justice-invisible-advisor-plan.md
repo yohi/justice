@@ -102,7 +102,7 @@ master
 **Steps:**
 
 - [ ] **Step 1: Vitest テストを TDD で先行作成** — 設計書 §9-5 の表 #1〜#6 を網羅。`NoOpNotifier.notify()` が `undefined` を返すこと、`formatBanner` が空文字列を返すこと、アイコンマッピング (§7-3) に従い `🎯`/`🚧`/`🔬`/`🚨`/`💡`/`🔁` が正しく挿入されることを assert。
-- [ ] **Step 2: `JusticeNotifier` インターフェース、`JusticeNotification` 型、`NotificationLevel`/`NotificationVariant` 型を実装** — 設計書 §7-2 のシグネチャに完全準拠。`readonly` 必須。
+- [ ] **Step 2: `JusticeNotifier` インターフェース、`JusticeNotification` 型、`NotificationLevel`/`NotificationVariant` 型を実装** — 設計書 §7-2 のシグネチャに完全準拠。`readonly` 必須。`notify()` の JSDoc に fail-open 契約（内部で全例外を吸収し再 throw しない）を明記すること。
 - [ ] **Step 3: `NoOpNotifier` 実装** — `notify()` は `void`、`formatBanner()` は `""` を返す。
 - [ ] **Step 4: アイコンマッピングを純粋関数 `iconFor(variant)` として実装し、`formatBanner` の参照型実装を提供** — 後続 Task で `OpenCodeNotifier` がこれを再利用する基盤として、`src/core/justice-notifier.ts` 内に export しておく (※他 Notifier 実装からも参照可能)。
 - [ ] **Step 5: `tests/helpers/mock-notifier.ts` の `createMockNotifier()` を実装** — `calls` 配列に `notify` 引数を push、`banners` 配列に `formatBanner` 戻り値を push。
@@ -201,7 +201,7 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-7 の表 #1〜#10 を網羅。`add` の persona 確定優先順位 (options > draft.persona > classifier フォールバック)、`getRelevant({ persona })` 絞り込み、`getRelevant({ persona, maxEntries })`、persona 未指定時の昇順全件返却、LRU eviction が最古エントリ保有 bucket から削る挙動、`replaceEntries([])` の全 bucket クリア、persona 欠落 entry を `replaceEntries` で受けた際の classifier 振り分けを検証。
+- [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-7 の表 #1〜#10 を網羅。`add` の persona 確定優先順位 (options > draft.persona > classifier フォールバック)、`getRelevant({ persona })` 絞り込み、`getRelevant({ persona, maxEntries })`、persona 未指定時の昇順全件返却、LRU eviction が最古エントリ保有 bucket から削る挙動、`replaceEntries([])` の全 bucket クリア、persona 欠落 entry を `replaceEntries` で受けた際の classifier 振り分けを検証。#10 の persona 欠落テストでは v1 マイグレーション時のランタイム入力を模擬するため `as unknown as WisdomEntry` キャストを使用する。
 - [ ] **Step 2: `WisdomStore` 内部を `Map<AgentId, WisdomEntry[]>` に再実装** — 設計書 §5-1 の構造を踏襲。`entriesByPersona` は 4 ペルソナで初期化。`add` で persona 確定後 `entriesByPersona.get(persona).push()`。
 - [ ] **Step 3: `evictOldestIfOverflow` を実装** — 全 bucket の合計が `maxEntries` を超える限り、最古 timestamp を保有する bucket から `shift`。
 - [ ] **Step 4: `getRelevant`/`getAllEntries`/`replaceEntries` を新 API シグネチャに合わせて実装**
@@ -320,9 +320,9 @@ master
 - [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-10 の表 #1, #4 (writing-plans 完了検知時のみ、Prometheus 経路と Sisyphus 経路は Phase 4 で網羅) を網羅。`action: "inject"`、`injectedContext` 先頭が 🎯 バナー (notifier.formatBanner 経由)、本文に「自ら実装に着手せず」を含むことを assert。`PreToolUse` 保留登録パスもテスト。
 - [ ] **Step 2: `JusticePlugin` コンストラクタで `notifier?: JusticeNotifier` を受け取り、デフォルト `NoOpNotifier` を設定** — `PlanBridge` コンストラクタにも propagate。
 - [ ] **Step 3: `PlanBridge.handlePreToolUse` を拡張** — `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` を呼び出し。既存ロジックは保持。
-- [ ] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。
+- [ ] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — 早期リターンせず、writing-plans と systematic-debugging の両スキルを独立評価し、各結果を `mergePostToolUseResponses` で合成する。writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。Prometheus pivot 経路も合成結果に対して `mergePostToolUseResponses` で統合する。
 - [ ] **Step 5: `AgentRouter.route()` で推奨エージェントを決定** — `CategoryClassifier` 推定 + 関連スキルで呼び出し。`confidence: medium` 時のみ末尾に「自動検知。意図と異なる場合は無視可」注記を追加。
-- [ ] **Step 6: Phase 3 完了時点では Prometheus pivot 経路と Sisyphus Wisdom 保存経路は `// TODO: Phase 4` コメントでスタブ化** — Task 3 では writing-plans 経路のみ完成させる。
+- [ ] **Step 6: Phase 3 完了時点では Prometheus pivot 経路と Sisyphus Wisdom 保存経路は `PROCEED` を返すスタブとし `// TODO: Phase 4` コメントを付与** — Task 3 では writing-plans 経路のみ完成させる。合成ロジックの骨格（両スキル評価 + merge）は Task 3 時点で組み込む。
 - [ ] **Step 7: Devcontainer 内で全検証コマンド実行**
 - [ ] **Step 8: Phase Base に向けた Draft PR を作成**
 

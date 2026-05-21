@@ -264,17 +264,20 @@ async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
   const planSignal = this.completionDetector.evaluateSkillCompletion(
     event.sessionId, toolName, toolResult, error, "writing-plans",
   );
-  if (planSignal) {
-    return this.buildAtlasGuidanceResponse(event, planSignal);
-  }
+  const planResponse = planSignal
+    ? await this.buildAtlasGuidanceResponse(event, planSignal)
+    : PROCEED;
 
   // 2) systematic-debugging 完了 → Sisyphus Wisdom 保存
   const debugSignal = this.completionDetector.evaluateSkillCompletion(
     event.sessionId, toolName, toolResult, error, "systematic-debugging",
   );
-  if (debugSignal) {
-    return this.persistSisyphusInsight(event, debugSignal);
-  }
+  const debugResponse = debugSignal
+    ? await this.persistSisyphusInsight(event, debugSignal)
+    : PROCEED;
+
+  // 1) + 2) を合成（両スキルが同一イベントで完了した場合に対応）
+  let result = mergePostToolUseResponses(planResponse, debugResponse);
 
   // 3) task() 結果が Prometheus 由来かを判定し、NG カウントへ
   if (toolName === "task" && this.loopHandler) {
@@ -284,13 +287,16 @@ async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
       if (taskId) {
         const decision = this.loopHandler.recordReviewOutput(event.sessionId, taskId, toolResult);
         if (decision.pivoted) {
-          return this.buildPivotInjectionResponse(event, decision);
+          result = mergePostToolUseResponses(
+            result,
+            this.buildPivotInjectionResponse(event, decision),
+          );
         }
       }
     }
   }
 
-  return PROCEED;
+  return result;
 }
 ```
 
@@ -667,6 +673,10 @@ export interface JusticeNotification {
  * 最小限のインターフェース。これ以上のメソッドは追加しない。
  */
 export interface JusticeNotifier {
+  /**
+   * 通知を送信する。実装は内部で全例外を吸収し、再 throw してはならない（fail-open 契約）。
+   * 呼び出し元は try/catch なしで安全に呼び出せることを前提とする。
+   */
   notify(notification: JusticeNotification): void | Promise<void>;
   formatBanner(notification: Omit<JusticeNotification, "sessionId" | "taskId">): string;
 }
@@ -894,7 +904,7 @@ const justice = new JusticePlugin(localFs, localFs, {
 | 7 | LRU eviction 境界: `maxEntries: 3` で 4 件 add | 1→2→3→4 を異なるペルソナに追加 | 最古 1 件が evict され、合計 3 件 |
 | 8 | LRU eviction が偏りなく動作: 全件 `"hephaestus"` に 4 件 add（`maxEntries: 3`） | — | `"hephaestus"` バケットが 3 件、ほか 0 件 |
 | 9 | `replaceEntries([])` | — | 全バケットが空 |
-| 10 | `replaceEntries([persona無 entry])` （マイグレーション経由相当）| persona 欠落 entry を受け取る | `PersonaClassifier` で振り分け |
+| 10 | `replaceEntries([persona無 entry])` （マイグレーション経由相当）| `WisdomEntry` から `persona` を除外したオブジェクトを `as unknown as WisdomEntry` でキャストして渡す（v1 → v2 マイグレーション時のランタイム入力を模擬） | `PersonaClassifier` で振り分け |
 
 ### 9-8. `tests/core/tiered-wisdom-store.test.ts`（更新）
 
@@ -1016,7 +1026,7 @@ const justice = new JusticePlugin(localFs, localFs, {
 # devcontainer up --workspace-folder .
 
 # Devcontainer シェル内で:
-bun install
+bun install --frozen-lockfile
 bun run typecheck     # tsc --noEmit
 bun run lint          # ESLint (eslint.config.mjs)
 bun run test          # Vitest (新規テスト含む全件)
