@@ -183,14 +183,16 @@ export class LearningExtractor {
 
   private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
     const match = rawOutput.match(/Root cause:\s*(.+)/i);
-    if (!match || match[1] === undefined) {
+    const content = match?.[1];
+
+    if (!content) {
       return null;
     }
 
     return {
       taskId,
       category: "design_decision",
-      content: `Root cause identified:\n${this.sanitizeRawOutput(match[1].trim())}`,
+      content: `Root cause identified:\n${this.sanitizeRawOutput(content.trim())}`,
     };
   }
 
