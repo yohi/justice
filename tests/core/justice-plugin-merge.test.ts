@@ -30,8 +30,8 @@ describe("mergePostToolUseResponses", () => {
       injectedContext: "TaskFeedback context",
     };
 
-    expect(mergePostToolUseResponses({ action: "proceed" }, injected)).toBe(injected);
-    expect(mergePostToolUseResponses(injected, { action: "proceed" })).toBe(injected);
+    expect(mergePostToolUseResponses({ action: "proceed" }, injected)).toEqual(injected);
+    expect(mergePostToolUseResponses(injected, { action: "proceed" })).toEqual(injected);
   });
 
   it("prioritizes skip over inject", () => {

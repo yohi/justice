@@ -110,18 +110,21 @@ export interface MessageEvent {
   readonly type: "Message";
   readonly payload: MessagePayload;
   readonly sessionId: string;
+  readonly callId?: string;
 }
 
 export interface PreToolUseEvent {
   readonly type: "PreToolUse";
   readonly payload: PreToolUsePayload;
   readonly sessionId: string;
+  readonly callId?: string;
 }
 
 export interface PostToolUseEvent {
   readonly type: "PostToolUse";
   readonly payload: PostToolUsePayload;
   readonly sessionId: string;
+  readonly callId?: string;
 }
 
 /** OmO Event のペイロード Discriminated Union */
@@ -152,6 +155,7 @@ export interface EventEvent {
   readonly type: "Event";
   readonly payload: EventPayload;
   readonly sessionId: string;
+  readonly callId?: string;
 }
 
 export type HookEventType = HookEvent["type"];

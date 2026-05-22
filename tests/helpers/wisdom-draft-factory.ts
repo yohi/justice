@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
 import type { WisdomEntry } from "../../src/core/types";
 
 export function createWisdomEntry(partial: Partial<WisdomEntry> = {}): WisdomEntry {
+  const uniqueSuffix = randomBytes(4).toString("hex");
   return {
-    id: "w-test",
+    id: `w-test-${uniqueSuffix}`,
     taskId: "task-test",
     persona: "hephaestus",
     category: "success_pattern",

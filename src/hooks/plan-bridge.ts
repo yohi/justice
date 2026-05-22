@@ -130,7 +130,9 @@ export class PlanBridge {
       if (content === null) {
         // File missing: clear state and fail-open
         this.setActivePlan(event.sessionId, null);
-        this.lastCompletionInputs.delete(event.sessionId);
+        for (const k of this.lastCompletionInputs.keys()) {
+          if (k.startsWith(`${event.sessionId}:`)) this.lastCompletionInputs.delete(k);
+        }
         return PROCEED;
       }
       planContent = content;
@@ -171,7 +173,7 @@ export class PlanBridge {
       );
     }
 
-    this.rememberCompletionInput(event.sessionId, delegation);
+    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
 
     let injectedContext = this.buildInjectedContext(planContent, delegation);
     if (fallbackTriggered) {
@@ -205,7 +207,9 @@ export class PlanBridge {
       if (content === null) {
         // File missing: clear state and fail-open
         this.setActivePlan(event.sessionId, null);
-        this.lastCompletionInputs.delete(event.sessionId);
+        for (const k of this.lastCompletionInputs.keys()) {
+          if (k.startsWith(`${event.sessionId}:`)) this.lastCompletionInputs.delete(k);
+        }
         return PROCEED;
       }
       planContent = content;
@@ -240,7 +244,7 @@ export class PlanBridge {
       );
     }
 
-    this.rememberCompletionInput(event.sessionId, delegation);
+    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
 
     return {
       action: "inject",
@@ -254,7 +258,9 @@ export class PlanBridge {
   async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "PostToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    const completionInput = this.lastCompletionInputs.get(event.sessionId);
+    const callId = event.callId ?? "";
+    const key = `${event.sessionId}:${callId}`;
+    const completionInput = this.lastCompletionInputs.get(key);
     if (!completionInput) return PROCEED;
 
     const completion = this.completionDetector.detectCompletion({
@@ -263,7 +269,7 @@ export class PlanBridge {
       rawOutput: event.payload.toolResult,
     });
 
-    this.lastCompletionInputs.delete(event.sessionId);
+    this.lastCompletionInputs.delete(key);
 
     if (!completion) return PROCEED;
 
@@ -332,9 +338,9 @@ export class PlanBridge {
     return this.wisdomStore.formatForInjection(entries);
   }
 
-  private rememberCompletionInput(sessionId: string, delegation: DelegationRequest): void {
+  private rememberCompletionInput(sessionId: string, callId: string | undefined, delegation: DelegationRequest): void {
     const skillName = this.pickCompletionSkill(delegation.loadSkills);
-    this.lastCompletionInputs.set(sessionId, {
+    this.lastCompletionInputs.set(`${sessionId}:${callId ?? ""}`, {
       prompt: delegation.prompt,
       category: delegation.category,
       skillName,

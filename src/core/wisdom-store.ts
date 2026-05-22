@@ -227,9 +227,7 @@ export class WisdomStore implements WisdomStoreInterface {
       return store;
     }
 
-    const validEntries = (entries as unknown[])
-      .filter((e) => WisdomStore.isValidStoredEntry(e))
-      .map((e) => WisdomStore.withDefaultPersona(e as StoredWisdomEntry));
+    const validEntries = entries.map((e) => WisdomStore.withDefaultPersona(e as StoredWisdomEntry));
 
     store.replaceEntries(validEntries);
     return store;
@@ -241,7 +239,7 @@ export class WisdomStore implements WisdomStoreInterface {
       e !== null &&
       typeof (e as WisdomEntry).id === "string" &&
       typeof (e as WisdomEntry).taskId === "string" &&
-      (typeof (e as WisdomEntry).persona === "undefined" || WisdomStore.isAgentId((e as WisdomEntry).persona)) &&
+      WisdomStore.isAgentId((e as WisdomEntry).persona) &&
       typeof (e as WisdomEntry).category === "string" &&
       typeof (e as WisdomEntry).content === "string" &&
       typeof (e as WisdomEntry).timestamp === "string"

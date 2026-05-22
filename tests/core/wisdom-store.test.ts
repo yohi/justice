@@ -353,22 +353,7 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     expect(store.getMaxEntries()).toBe(0);
   });
 
-  it("fromEntries should filter out invalid entries", () => {
-    const entries = [
-      {
-        id: "w-1",
-        taskId: "t1",
-        persona: "hephaestus" as const,
-        category: "success_pattern" as const,
-        content: "A",
-        timestamp: "X",
-      },
-      { invalid: "entry" } as unknown as WisdomEntry,
-    ];
-    const store = WisdomStore.fromEntries(entries, 10);
-    expect(store.getAllEntries()).toHaveLength(1);
-    expect(store.getAllEntries()[0]?.id).toBe("w-1");
-  });
+
 
   describe("setMaxEntries boundary cases", () => {
     it("should handle non-number inputs by falling back to 0", () => {

@@ -67,14 +67,21 @@ export class WisdomPersistence {
     }
 
     const store = WisdomStore.deserialize(data);
-    // Strict validation: accept either v1 ({ entries }) or v2 ({ version: 2, entriesByAgent }).
-    if (
-      data &&
-      typeof data === "object" &&
-      !("entries" in data) &&
-      !(("version" in data) && (data as { version?: unknown }).version === 2 && "entriesByAgent" in data)
-    ) {
-      throw new Error(`Invalid wisdom file format (missing entries or entriesByAgent): ${this.wisdomFilePath}`);
+    // Strict validation: accept either v1 ({ entries: [] }) or v2 ({ version: 2, entriesByAgent: {} }).
+    if (data && typeof data === "object") {
+      const hasValidV1 = "entries" in data && Array.isArray((data as { entries: unknown }).entries);
+      const hasValidV2 =
+        "version" in data &&
+        (data as { version?: unknown }).version === 2 &&
+        "entriesByAgent" in data &&
+        typeof (data as { entriesByAgent?: unknown }).entriesByAgent === "object" &&
+        (data as { entriesByAgent: unknown }).entriesByAgent !== null;
+
+      if (!hasValidV1 && !hasValidV2) {
+        throw new Error(`Invalid wisdom file format (missing valid entries or entriesByAgent): ${this.wisdomFilePath}`);
+      }
+    } else {
+      throw new Error(`Invalid wisdom file format (not an object): ${this.wisdomFilePath}`);
     }
 
     return store;

@@ -30,10 +30,16 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
 
   if (a.action === "inject" && b.action === "inject") {
     const injectedContext = [a.injectedContext, b.injectedContext].filter(Boolean).join("\n\n");
+    const mergedPayload =
+      a.modifiedPayload && typeof a.modifiedPayload === "object" &&
+      b.modifiedPayload && typeof b.modifiedPayload === "object"
+        ? { ...a.modifiedPayload, ...b.modifiedPayload }
+        : b.modifiedPayload ?? a.modifiedPayload;
+
     return {
       action: "inject",
       injectedContext,
-      modifiedPayload: b.modifiedPayload ?? a.modifiedPayload,
+      modifiedPayload: mergedPayload,
     };
   }
 

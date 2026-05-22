@@ -123,11 +123,11 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成** — 設計書 §9-6 の表 #1〜#7 を網羅。`level` マッピング (`success → info`, `warning → warn`)、`service: "justice"` 固定、`extra` フィールドに `variant`/`sessionId`/`taskId` が含まれること、`log` 関数 throw 時に `notify()` が再 throw しないこと。
-- [ ] **Step 2: `OpenCodeNotifier` クラスを実装** — `constructor(log: (entry) => Promise<void> | void)`、`notify()` で `try/catch` ですべての例外を吸収、`formatBanner()` は §7-4 の 3 行構成 (`> <icon> **JUSTICE NOTIFICATION** [<title>]` / `> <message>` / `""`) を返す。
-- [ ] **Step 3: `OpenCodeLogEntry` 型は既存 `src/runtime/` の型を参照** — 既存定義がない場合は最小フィールド (`level`/`service`/`message`/`extra`) で local 定義し export。
-- [ ] **Step 4: `src/index.ts` から `OpenCodeNotifier` を export** (runtime 層の慣例に従う)
-- [ ] **Step 5: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行**
+- [x] **Step 1: Vitest テストを先行作成** — 設計書 §9-6 の表 #1〜#7 を網羅。`level` マッピング (`success → info`, `warning → warn`)、`service: "justice"` 固定、`extra` フィールドに `variant`/`sessionId`/`taskId` が含まれること、`log` 関数 throw 時に `notify()` が再 throw しないこと。
+- [x] **Step 2: `OpenCodeNotifier` クラスを実装** — `constructor(log: (entry) => Promise<void> | void)`、`notify()` で `try/catch` ですべての例外を吸収、`formatBanner()` は §7-4 の 3 行構成 (`> <icon> **JUSTICE NOTIFICATION** [<title>]` / `> <message>` / `""`) を返す。
+- [x] **Step 3: `OpenCodeLogEntry` 型は既存 `src/runtime/` の型を参照** — 既存定義がない場合は最小フィールド (`level`/`service`/`message`/`extra`) で local 定義し export。
+- [x] **Step 4: `src/index.ts` から `OpenCodeNotifier` を export** (runtime 層の慣例に従う)
+- [x] **Step 5: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行**
 - [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: `PersonaClassifier`
@@ -165,7 +165,7 @@ master
 - [x] **Step 3: `ReviewRejectionDetector.detect(text)` を実装** — `ReviewRejectionSignal { matched, excerpts: readonly string[], summary: string }` を返す。excerpts は最大 3 件・各 ≤200 文字、summary ≤300 文字。
 - [x] **Step 4: `src/index.ts` から export**
 - [x] **Step 5: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ---
 
