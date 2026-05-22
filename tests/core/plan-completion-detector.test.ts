@@ -37,6 +37,23 @@ describe("PlanCompletionDetector", () => {
     expect(result?.guidance).toContain("Sisyphus insight");
   });
 
+  it("prioritizes systematic-debugging skill over writing category", () => {
+    const result = detector.detectCompletion({
+      prompt: "Debug and document findings",
+      category: "writing",
+      skillName: "systematic-debugging",
+      completed: true,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        persona: "sisyphus",
+        trigger: "systematic_debugging_skill",
+      }),
+    );
+    expect(result?.guidance).toContain("Sisyphus insight");
+  });
+
   it("returns Prometheus pivot when code review rejects the output", () => {
     const result = detector.detectCompletion({
       prompt: "Review the patch",

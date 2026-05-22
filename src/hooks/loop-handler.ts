@@ -66,6 +66,7 @@ export class LoopDetectionHandler {
   private readonly trials: Map<string, Map<string, TrialRecord[]>> = new Map();
   private readonly reviewRejections: Map<string, Map<string, number>> = new Map();
   private readonly maxRetries: number;
+  private onSessionRemoved?: (sessionId: string) => void;
 
   constructor(
     private readonly fileReader: FileReader,
@@ -74,6 +75,13 @@ export class LoopDetectionHandler {
   ) {
     this.parser = new PlanParser();
     this.maxRetries = resolveMaxRetries();
+  }
+
+  /**
+   * Set a callback to be invoked when a session is removed (e.g., due to expiration).
+   */
+  setSessionRemovedCallback(callback: (sessionId: string) => void): void {
+    this.onSessionRemoved = callback;
   }
 
   setActivePlan(sessionId: string, planPath: string, taskId: string, agentId: AgentId): void {
@@ -294,5 +302,6 @@ export class LoopDetectionHandler {
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);
     this.reviewRejections.delete(sessionId);
+    this.onSessionRemoved?.(sessionId);
   }
 }

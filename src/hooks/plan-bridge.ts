@@ -96,6 +96,15 @@ export class PlanBridge {
   }
 
   /**
+   * Clear all internal state for a specific session.
+   */
+  destroySession(sessionId: string): void {
+    this.activePlanPaths.delete(sessionId);
+    this.lastUserMessages.delete(sessionId);
+    this.lastCompletionInputs.delete(sessionId);
+  }
+
+  /**
    * Handle Message event: detect plan references and delegation intent.
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {

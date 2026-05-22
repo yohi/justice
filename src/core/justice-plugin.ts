@@ -24,6 +24,10 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 const PROCEED: HookResponse = { action: "proceed" };
 
 export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
+  if (a.action === "skip" || b.action === "skip") {
+    return { action: "skip" };
+  }
+
   if (a.action === "inject" && b.action === "inject") {
     const injectedContext = [a.injectedContext, b.injectedContext].filter(Boolean).join("\n\n");
     return {
@@ -39,10 +43,6 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
 
   if (b.action === "inject") {
     return b;
-  }
-
-  if (a.action === "skip" || b.action === "skip") {
-    return { action: "skip" };
   }
 
   return PROCEED;
@@ -247,6 +247,12 @@ export class JusticePlugin {
     // Use tieredWisdomStore for handlers that need cross-project context
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
     this.planBridge = new PlanBridge(fileReader, this.loopHandler, this.tieredWisdomStore);
+
+    // Ensure session cleanup propagates from loopHandler to planBridge
+    this.loopHandler.setSessionRemovedCallback((sessionId) => {
+      this.planBridge.destroySession(sessionId);
+    });
+
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
   }

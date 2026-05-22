@@ -33,6 +33,14 @@ describe("mergePostToolUseResponses", () => {
     expect(mergePostToolUseResponses({ action: "proceed" }, injected)).toBe(injected);
     expect(mergePostToolUseResponses(injected, { action: "proceed" })).toBe(injected);
   });
+
+  it("prioritizes skip over inject", () => {
+    const skip: HookResponse = { action: "skip" };
+    const inject: HookResponse = { action: "inject", injectedContext: "Some context" };
+
+    expect(mergePostToolUseResponses(skip, inject)).toEqual({ action: "skip" });
+    expect(mergePostToolUseResponses(inject, skip)).toEqual({ action: "skip" });
+  });
 });
 
 describe("JusticePlugin PostToolUse merge", () => {

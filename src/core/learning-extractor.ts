@@ -16,13 +16,13 @@ export class LearningExtractor {
 
     switch (feedback.status) {
       case "success":
-        results.push(...this.extractFromSuccess(feedback, context));
+        results.push(...this.extractFromSuccess(feedback));
         break;
       case "failure":
-        results.push(...this.extractFromFailure(feedback, rawOutput, context));
+        results.push(...this.extractFromFailure(feedback, rawOutput));
         break;
       case "timeout":
-        results.push(...this.extractFromTimeout(feedback, context));
+        results.push(...this.extractFromTimeout(feedback));
         break;
       case "compaction_risk":
         // No specific learning from compaction risk
@@ -40,7 +40,6 @@ export class LearningExtractor {
 
   private extractFromSuccess(
     feedback: TaskFeedback,
-    context?: LearningExtractionContext,
   ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
@@ -63,13 +62,12 @@ export class LearningExtractor {
       });
     }
 
-    return this.applyPersona(results, context?.persona);
+    return results;
   }
 
   private extractFromFailure(
     feedback: TaskFeedback,
     rawOutput?: string,
-    context?: LearningExtractionContext,
   ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const errorClass: ErrorClass = feedback.errorClassification ?? "unknown";
@@ -82,7 +80,7 @@ export class LearningExtractor {
     }
 
     if (errorClass === "unknown") {
-      return this.applyPersona(results, context?.persona);
+      return results;
     }
 
     if (errorClass === "timeout") {
@@ -143,7 +141,7 @@ export class LearningExtractor {
       });
     }
 
-    return this.applyPersona(results, context?.persona);
+    return results;
   }
 
   /**
@@ -171,20 +169,16 @@ export class LearningExtractor {
 
   private extractFromTimeout(
     feedback: TaskFeedback,
-    context?: LearningExtractionContext,
   ): WisdomEntryDraft[] {
-    return this.applyPersona(
-      [
-        {
-          taskId: feedback.taskId,
-          category: "environment_quirk",
-          errorClass: "timeout",
-          content:
-            `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
-        },
-      ],
-      context?.persona,
-    );
+    return [
+      {
+        taskId: feedback.taskId,
+        category: "environment_quirk",
+        errorClass: "timeout",
+        content:
+          `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
+      },
+    ];
   }
 
   private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {

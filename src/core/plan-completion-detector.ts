@@ -28,15 +28,6 @@ export class PlanCompletionDetector {
       return null;
     }
 
-    if (input.category === "writing") {
-      return {
-        persona: "atlas",
-        trigger: "writing_category",
-        guidance:
-          "Atlas guidance: capture the completed work as documentation, a changelog entry, or a concise handoff note.",
-      };
-    }
-
     if (input.skillName === "systematic-debugging") {
       return {
         persona: "sisyphus",
@@ -56,6 +47,15 @@ export class PlanCompletionDetector {
             `Prometheus pivot: the review rejected the current approach. Rework the plan around the rejection signals and address these blockers first:\n${rejection.summary}`,
         };
       }
+    }
+
+    if (input.category === "writing") {
+      return {
+        persona: "atlas",
+        trigger: "writing_category",
+        guidance:
+          "Atlas guidance: capture the completed work as documentation, a changelog entry, or a concise handoff note.",
+      };
     }
 
     return null;
