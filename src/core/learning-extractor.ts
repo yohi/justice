@@ -1,6 +1,6 @@
-import type { TaskFeedback, ErrorClass, WisdomEntry } from "./types";
+import type { TaskFeedback, ErrorClass, WisdomEntryInput } from "./types";
 
-type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp">;
+type WisdomEntryDraft = WisdomEntryInput;
 
 export class LearningExtractor {
   /**

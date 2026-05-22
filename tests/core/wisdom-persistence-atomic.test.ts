@@ -11,6 +11,7 @@ function makeEntry(overrides: Partial<WisdomEntry>): WisdomEntry {
   return {
     id: "w-base",
     taskId: "t",
+    persona: "hephaestus",
     category: "success_pattern",
     content: "x",
     timestamp: "2026-01-01T00:00:00Z",
@@ -30,7 +31,8 @@ describe("WisdomPersistence.saveAtomic", () => {
 
     expect(writer.writtenFiles[defaultPath]).toBeDefined();
     const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
-    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.version).toBe(2);
+    expect(parsed.entriesByAgent.hephaestus).toHaveLength(1);
 
     const keys = Object.keys(writer.writtenFiles);
     expect(keys.filter((k) => k.includes(".tmp."))).toHaveLength(0);
@@ -62,13 +64,13 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomic(store);
     const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
     const byId = Object.fromEntries(
-      (parsed.entries as WisdomEntry[]).map((e) => [e.id, e]),
+      Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat().map((e) => [e.id, e]),
     );
 
     expect(byId["w-1"]?.content).toBe("new");
     expect(byId["w-2"]?.content).toBe("keep-disk");
     expect(byId["w-3"]?.content).toBe("added");
-    expect(parsed.entries).toHaveLength(3);
+    expect(Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat()).toHaveLength(3);
   });
 
   it("should trim merged entries to maxEntries using the most-recent timestamps", async () => {
@@ -88,9 +90,10 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomic(store);
 
     const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
-    expect(parsed.entries).toHaveLength(10);
+    const flattened = Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat();
+    expect(flattened).toHaveLength(10);
     for (const e of memEntries) {
-      expect((parsed.entries as WisdomEntry[]).map((x) => x.id)).toContain(e.id);
+      expect(flattened.map((x) => x.id)).toContain(e.id);
     }
   });
 
@@ -165,7 +168,7 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomic(store);
 
     const finalData = JSON.parse(writer.writtenFiles[defaultPath]!);
-    expect(finalData.entries).toHaveLength(0);
+    expect(Object.values(finalData.entriesByAgent as Record<string, WisdomEntry[]>).flat()).toHaveLength(0);
     expect(finalData.maxEntries).toBe(0);
   });
 });

@@ -1,18 +1,29 @@
-import type { WisdomEntry, ErrorClass, WisdomStoreInterface, WisdomScope } from "./types";
+import type { AgentId, ErrorClass, WisdomEntry, WisdomEntryInput, WisdomStoreInterface, WisdomScope } from "./types";
 
-interface WisdomStoreData {
-  entries: WisdomEntry[];
-  maxEntries: number;
+type StoredWisdomEntry = Omit<WisdomEntry, "persona"> & { readonly persona?: AgentId };
+
+interface WisdomStoreDataV1 {
+  readonly entries: readonly StoredWisdomEntry[];
+  readonly maxEntries: number;
 }
 
+interface WisdomStoreDataV2 {
+  readonly version: 2;
+  readonly entriesByAgent: Partial<Record<AgentId, readonly WisdomEntry[]>>;
+  readonly maxEntries: number;
+}
+
+const DEFAULT_PERSONA: AgentId = "hephaestus";
+const AGENT_ORDER: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
+
 export class WisdomStore implements WisdomStoreInterface {
-  private entries: WisdomEntry[] = [];
+  private readonly entriesByAgent = new Map<AgentId, WisdomEntry[]>();
   private _maxEntries = 0;
 
   constructor(maxEntries = 100) {
+    this.resetBuckets();
     this.setMaxEntries(maxEntries);
   }
-
 
   /**
    * Returns the configured maximum entry capacity.
@@ -25,22 +36,17 @@ export class WisdomStore implements WisdomStoreInterface {
    * Adds a new learning entry to the store.
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
-  add(
-    entry: Omit<WisdomEntry, "id" | "timestamp">,
-    _options?: { scope?: WisdomScope },
-  ): WisdomEntry {
+  add(entry: WisdomEntryInput, _options?: { scope?: WisdomScope }): WisdomEntry {
+    const persona = entry.persona ?? DEFAULT_PERSONA;
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),
       ...entry,
+      persona,
     };
 
-    this.entries.push(newEntry);
-
-    // Evict oldest if exceeding capacity
-    if (this.entries.length > this._maxEntries) {
-      this.entries.shift(); // Remove the first (oldest) entry
-    }
+    this.appendEntry(newEntry);
+    this.trimToCapacity();
 
     return newEntry;
   }
@@ -49,23 +55,26 @@ export class WisdomStore implements WisdomStoreInterface {
    * Retrieves all entries associated with a specific task ID.
    */
   getByTaskId(taskId: string): WisdomEntry[] {
-    return this.entries.filter((entry) => entry.taskId === taskId);
+    return this.getAllEntries().filter((entry) => entry.taskId === taskId);
   }
 
   /**
    * Retrieves relevant entries based on optional filtering criteria.
    * Limits results to `maxEntries` (default: 10), returning the most recent first.
    */
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[] {
-    let results = this.entries;
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
+    const limit = options?.maxEntries ?? 10;
+    let results = options?.persona ? this.getEntriesForPersona(options.persona) : this.getAllEntries();
+
+    if (options?.persona && results.length === 0) {
+      results = this.getAllEntries();
+    }
 
     if (options?.errorClass) {
       results = results.filter((entry) => entry.errorClass === options.errorClass);
     }
 
-    // Return the most recent entries up to maxEntries
-    const limit = options?.maxEntries ?? 10;
-    return results.slice(Math.max(0, results.length - limit)); // slice from the end to get the most recent
+    return results.slice(Math.max(0, results.length - limit));
   }
 
   /**
@@ -94,7 +103,6 @@ export class WisdomStore implements WisdomStoreInterface {
 
       lines.push(`- **${typeLabel}** \`[${entry.taskId}]\`${errClassStr}:`);
 
-      // Indent the content
       const contentLines = entry.content.split("\n");
       for (const line of contentLines) {
         lines.push(`  ${line}`);
@@ -108,8 +116,11 @@ export class WisdomStore implements WisdomStoreInterface {
    * Serializes the current store state to a JSON string.
    */
   serialize(): string {
-    const data: WisdomStoreData = {
-      entries: this.entries,
+    const data: WisdomStoreDataV2 = {
+      version: 2,
+      entriesByAgent: Object.fromEntries(
+        AGENT_ORDER.map((persona) => [persona, [...this.getEntriesForPersona(persona)]]),
+      ) as Partial<Record<AgentId, readonly WisdomEntry[]>>,
       maxEntries: this._maxEntries,
     };
     return JSON.stringify(data, null, 2);
@@ -120,26 +131,41 @@ export class WisdomStore implements WisdomStoreInterface {
    * Handles empty or invalid inputs gracefully.
    */
   static deserialize(input: string | unknown): WisdomStore {
-    let data: Partial<WisdomStoreData> = {};
+    let data: Partial<WisdomStoreDataV1 & Partial<WisdomStoreDataV2>> = {};
 
     if (typeof input === "string") {
       try {
         if (input.trim() !== "") {
-          data = JSON.parse(input) as Partial<WisdomStoreData>;
+          data = JSON.parse(input) as Partial<WisdomStoreDataV1 & Partial<WisdomStoreDataV2>>;
         }
       } catch {
         // Return empty store on parse failure
       }
     } else if (typeof input === "object" && input !== null) {
-      data = input as Partial<WisdomStoreData>;
+      data = input as Partial<WisdomStoreDataV1 & Partial<WisdomStoreDataV2>>;
     }
 
     const maxEntries = data.maxEntries ?? 100;
     const store = new WisdomStore(maxEntries);
 
-    if (data.entries && Array.isArray(data.entries)) {
-      const filtered = data.entries.filter((e) => WisdomStore.isValidEntry(e));
-      store.replaceEntries(filtered);
+    if (Array.isArray(data.entries)) {
+      const filtered = data.entries.filter((e): e is StoredWisdomEntry => WisdomStore.isValidStoredEntry(e));
+      store.replaceEntries(filtered.map((entry) => WisdomStore.withDefaultPersona(entry)));
+    } else if (data.version === 2 && data.entriesByAgent && typeof data.entriesByAgent === "object") {
+      const flattened: WisdomEntry[] = [];
+      for (const persona of AGENT_ORDER) {
+        const entries = WisdomStore.readEntriesByPersona(data.entriesByAgent, persona);
+        if (!Array.isArray(entries)) {
+          continue;
+        }
+
+        for (const entry of entries) {
+          if (WisdomStore.isValidStoredEntry(entry)) {
+            flattened.push(WisdomStore.withDefaultPersona(entry));
+          }
+        }
+      }
+      store.replaceEntries(flattened);
     }
 
     return store;
@@ -149,7 +175,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Returns a readonly snapshot of all entries in insertion order.
    */
   getAllEntries(): readonly WisdomEntry[] {
-    return [...this.entries];
+    return AGENT_ORDER.flatMap((persona) => [...this.getEntriesForPersona(persona)]);
   }
 
   /**
@@ -169,7 +195,7 @@ export class WisdomStore implements WisdomStoreInterface {
     } else {
       this._maxEntries = Math.floor(maxEntries);
     }
-    this.entries = this.entries.slice(Math.max(0, this.entries.length - this._maxEntries));
+    this.trimToCapacity();
   }
 
   /**
@@ -178,11 +204,15 @@ export class WisdomStore implements WisdomStoreInterface {
    * ensuring that other components holding references to this store see the updates.
    */
   replaceEntries(entries: readonly WisdomEntry[]): void {
+    this.resetBuckets();
     if (this._maxEntries <= 0) {
-      this.entries = [];
       return;
     }
-    this.entries = entries.slice(-this._maxEntries);
+
+    for (const entry of entries) {
+      this.appendEntry(entry);
+    }
+    this.trimToCapacity();
   }
 
   /**
@@ -209,9 +239,84 @@ export class WisdomStore implements WisdomStoreInterface {
       e !== null &&
       typeof (e as WisdomEntry).id === "string" &&
       typeof (e as WisdomEntry).taskId === "string" &&
+      typeof (e as WisdomEntry).persona === "string" &&
       typeof (e as WisdomEntry).category === "string" &&
       typeof (e as WisdomEntry).content === "string" &&
       typeof (e as WisdomEntry).timestamp === "string"
     );
+  }
+
+  private static isValidStoredEntry(e: unknown): e is StoredWisdomEntry {
+    return (
+      typeof e === "object" &&
+      e !== null &&
+      typeof (e as StoredWisdomEntry).id === "string" &&
+      typeof (e as StoredWisdomEntry).taskId === "string" &&
+      typeof (e as StoredWisdomEntry).category === "string" &&
+      typeof (e as StoredWisdomEntry).content === "string" &&
+      (typeof (e as StoredWisdomEntry).persona === "undefined" || WisdomStore.isAgentId((e as StoredWisdomEntry).persona)) &&
+      typeof (e as StoredWisdomEntry).timestamp === "string"
+    );
+  }
+
+  private static isAgentId(value: unknown): value is AgentId {
+    return value === "hephaestus" || value === "sisyphus" || value === "prometheus" || value === "atlas";
+  }
+
+  private static withDefaultPersona(entry: StoredWisdomEntry): WisdomEntry {
+    return {
+      ...entry,
+      persona: entry.persona ?? DEFAULT_PERSONA,
+    };
+  }
+
+  private static readEntriesByPersona(
+    entriesByAgent: Partial<Record<AgentId, readonly WisdomEntry[]>>,
+    persona: AgentId,
+  ): readonly WisdomEntry[] | undefined {
+    switch (persona) {
+      case "hephaestus":
+        return entriesByAgent.hephaestus;
+      case "sisyphus":
+        return entriesByAgent.sisyphus;
+      case "prometheus":
+        return entriesByAgent.prometheus;
+      case "atlas":
+        return entriesByAgent.atlas;
+    }
+  }
+
+  private resetBuckets(): void {
+    this.entriesByAgent.clear();
+    for (const persona of AGENT_ORDER) {
+      this.entriesByAgent.set(persona, []);
+    }
+  }
+
+  private getEntriesForPersona(persona: AgentId): readonly WisdomEntry[] {
+    return this.entriesByAgent.get(persona) ?? [];
+  }
+
+  private appendEntry(entry: WisdomEntry): void {
+    const bucket = this.entriesByAgent.get(entry.persona) ?? [];
+    bucket.push(entry);
+    this.entriesByAgent.set(entry.persona, bucket);
+  }
+
+  private trimToCapacity(): void {
+    if (this._maxEntries <= 0) {
+      this.resetBuckets();
+      return;
+    }
+
+    const all = this.getAllEntries();
+    if (all.length <= this._maxEntries) {
+      return;
+    }
+
+    this.resetBuckets();
+    for (const entry of all.slice(-this._maxEntries)) {
+      this.appendEntry(entry);
+    }
   }
 }

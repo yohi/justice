@@ -272,11 +272,16 @@ export interface EscalateAction {
 export interface WisdomEntry {
   readonly id: string;
   readonly taskId: string;
+  readonly persona: AgentId;
   readonly category: WisdomCategory;
   readonly content: string;
   readonly errorClass?: ErrorClass;
   readonly timestamp: string;
 }
+
+export type WisdomEntryInput = Omit<WisdomEntry, "id" | "timestamp" | "persona"> & {
+  readonly persona?: AgentId;
+};
 
 export type WisdomCategory =
   | "success_pattern" // 成功した実装パターン
@@ -293,10 +298,10 @@ export type WisdomScope = "local" | "global";
  */
 export interface WisdomStoreInterface {
   add(
-    entry: Omit<WisdomEntry, "id" | "timestamp">,
+    entry: WisdomEntryInput,
     options?: { scope?: WisdomScope },
   ): WisdomEntry;
   getByTaskId(taskId: string): WisdomEntry[];
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number }): WisdomEntry[];
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[];
   formatForInjection(entries: WisdomEntry[]): string;
 }
