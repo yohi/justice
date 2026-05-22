@@ -14,6 +14,9 @@ describe("PersonaClassifier", () => {
     [{ category: "environment_quirk" }, "sisyphus", "environment quirks route to Sisyphus"],
     [{ category: "success_pattern" }, "hephaestus", "success patterns route to Hephaestus"],
     [{ category: "failure_gotcha" }, "hephaestus", "failure gotchas route to Hephaestus"],
+    [{ category: "success_pattern", errorClass: "syntax_error" }, "hephaestus", "syntax_error falls through to category routing"],
+    [{ category: "design_decision", errorClass: "provider_transient" }, "atlas", "unhandled errorClass falls through to design_decision routing"],
+    [{ category: "environment_quirk", errorClass: "type_error" }, "sisyphus", "unhandled errorClass falls through to environment_quirk routing"],
     [{}, "hephaestus", "empty input uses the default persona"],
     [{ errorClass: "unknown" }, "hephaestus", "unknown errors use the default persona"],
     [

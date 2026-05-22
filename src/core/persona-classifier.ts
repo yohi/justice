@@ -25,6 +25,7 @@ export function classifyPersona(input: PersonaClassificationInput): AgentId {
   }
 
   if (input.category === "success_pattern" || input.category === "failure_gotcha") {
+  // success_pattern / failure_gotcha は仕様書 §3-4 により明示的に hephaestus へルーティング
     return "hephaestus";
   }
 
