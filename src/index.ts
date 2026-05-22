@@ -69,7 +69,9 @@ export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core/justice-plugin";
 export { StatusCommand, type PlanStatus } from "./core/status-command";
 export { NodeFileSystem } from "./runtime/node-file-system";
+export { OpenCodeNotifier } from "./runtime/opencode-notifier";
 export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
 
 // OpenCode Plugin Entry
 export { OpenCodePlugin as default, OpenCodePlugin } from "./opencode-plugin";
+export type { OpenCodeLogEntry } from "./runtime/opencode-adapter";

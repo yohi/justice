@@ -18,6 +18,7 @@ import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
+import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -169,6 +170,7 @@ export interface JusticePluginOptions {
     warn(message: string, ...args: unknown[]): void;
   };
   readonly onError?: (error: unknown) => void;
+  readonly notifier?: JusticeNotifier;
   readonly globalFileSystem?: {
     readonly fs: FileReader & FileWriter;
     readonly relativePath: string;
@@ -231,6 +233,16 @@ export class JusticePlugin {
   async initialize(): Promise<void> {
     try {
       await this.tieredWisdomStore.loadAll();
+      try {
+        await this.options.notifier?.notify({
+          level: "info",
+          variant: "atlas_orchestration",
+          title: "Justice initialized",
+          message: "OpenCode adapter initialization complete.",
+        });
+      } catch {
+        /* Ignore notification errors to preserve fail-open behavior */
+      }
     } catch (error) {
       try {
         this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);

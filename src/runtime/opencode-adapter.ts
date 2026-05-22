@@ -1,6 +1,7 @@
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { NodeFileSystem } from "./node-file-system";
+import { OpenCodeNotifier } from "./opencode-notifier";
 
 export interface OpenCodeLogEntry {
   readonly level: "info" | "warn" | "error";
@@ -118,12 +119,14 @@ export class OpenCodeAdapter {
       };
 
       const globalFs = await createGlobalFs(loggerAdapter);
+      const notifier = new OpenCodeNotifier(this.#init.client.app.log);
       const justice = new JusticePlugin(localFs, localFs, {
         logger: loggerAdapter,
         onError: (err): void => {
           void this.log("error", "[Justice] internal error", err);
         },
         globalFileSystem: globalFs ?? undefined,
+        notifier,
       });
 
       await justice.initialize();
