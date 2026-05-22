@@ -17,11 +17,10 @@ const DEFAULT_PERSONA: AgentId = "hephaestus";
 const AGENT_ORDER: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
 
 export class WisdomStore implements WisdomStoreInterface {
-  private readonly entriesByAgent = new Map<AgentId, WisdomEntry[]>();
+  private entries: WisdomEntry[] = [];
   private _maxEntries = 0;
 
   constructor(maxEntries = 100) {
-    this.resetBuckets();
     this.setMaxEntries(maxEntries);
   }
 
@@ -55,7 +54,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Retrieves all entries associated with a specific task ID.
    */
   getByTaskId(taskId: string): WisdomEntry[] {
-    return this.getAllEntries().filter((entry) => entry.taskId === taskId);
+    return this.entries.filter((entry) => entry.taskId === taskId);
   }
 
   /**
@@ -64,10 +63,12 @@ export class WisdomStore implements WisdomStoreInterface {
    */
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
-    let results = options?.persona ? this.getEntriesForPersona(options.persona) : this.getAllEntries();
+    let results = options?.persona 
+      ? this.entries.filter((e) => e.persona === options.persona) 
+      : [...this.entries];
 
     if (options?.persona && results.length === 0) {
-      results = this.getAllEntries();
+      results = [...this.entries];
     }
 
     if (options?.errorClass) {
@@ -119,7 +120,10 @@ export class WisdomStore implements WisdomStoreInterface {
     const data: WisdomStoreDataV2 = {
       version: 2,
       entriesByAgent: Object.fromEntries(
-        AGENT_ORDER.map((persona) => [persona, [...this.getEntriesForPersona(persona)]]),
+        AGENT_ORDER.map((persona) => [
+          persona, 
+          this.entries.filter((e) => e.persona === persona)
+        ]),
       ) as Partial<Record<AgentId, readonly WisdomEntry[]>>,
       maxEntries: this._maxEntries,
     };
@@ -165,6 +169,8 @@ export class WisdomStore implements WisdomStoreInterface {
           }
         }
       }
+      // Sort by timestamp to restore global insertion order from buckets
+      flattened.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
       store.replaceEntries(flattened);
     }
 
@@ -175,7 +181,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Returns a readonly snapshot of all entries in insertion order.
    */
   getAllEntries(): readonly WisdomEntry[] {
-    return AGENT_ORDER.flatMap((persona) => [...this.getEntriesForPersona(persona)]);
+    return [...this.entries];
   }
 
   /**
@@ -204,14 +210,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * ensuring that other components holding references to this store see the updates.
    */
   replaceEntries(entries: readonly WisdomEntry[]): void {
-    this.resetBuckets();
-    if (this._maxEntries <= 0) {
-      return;
-    }
-
-    for (const entry of entries) {
-      this.appendEntry(entry);
-    }
+    this.entries = [...entries];
     this.trimToCapacity();
   }
 
@@ -228,18 +227,21 @@ export class WisdomStore implements WisdomStoreInterface {
       return store;
     }
 
-    const validEntries = entries.filter((e) => WisdomStore.isValidEntry(e));
+    const validEntries = entries
+      .filter((e): e is StoredWisdomEntry => WisdomStore.isValidStoredEntry(e))
+      .map((e) => WisdomStore.withDefaultPersona(e));
+
     store.replaceEntries(validEntries);
     return store;
   }
 
-  private static isValidEntry(e: unknown): e is WisdomEntry {
+  public static isValidEntry(e: unknown): e is WisdomEntry {
     return (
       typeof e === "object" &&
       e !== null &&
       typeof (e as WisdomEntry).id === "string" &&
       typeof (e as WisdomEntry).taskId === "string" &&
-      typeof (e as WisdomEntry).persona === "string" &&
+      (typeof (e as WisdomEntry).persona === "undefined" || WisdomStore.isAgentId((e as WisdomEntry).persona)) &&
       typeof (e as WisdomEntry).category === "string" &&
       typeof (e as WisdomEntry).content === "string" &&
       typeof (e as WisdomEntry).timestamp === "string"
@@ -286,37 +288,18 @@ export class WisdomStore implements WisdomStoreInterface {
     }
   }
 
-  private resetBuckets(): void {
-    this.entriesByAgent.clear();
-    for (const persona of AGENT_ORDER) {
-      this.entriesByAgent.set(persona, []);
-    }
-  }
-
-  private getEntriesForPersona(persona: AgentId): readonly WisdomEntry[] {
-    return this.entriesByAgent.get(persona) ?? [];
-  }
-
   private appendEntry(entry: WisdomEntry): void {
-    const bucket = this.entriesByAgent.get(entry.persona) ?? [];
-    bucket.push(entry);
-    this.entriesByAgent.set(entry.persona, bucket);
+    this.entries.push(entry);
   }
 
   private trimToCapacity(): void {
     if (this._maxEntries <= 0) {
-      this.resetBuckets();
+      this.entries = [];
       return;
     }
 
-    const all = this.getAllEntries();
-    if (all.length <= this._maxEntries) {
-      return;
-    }
-
-    this.resetBuckets();
-    for (const entry of all.slice(-this._maxEntries)) {
-      this.appendEntry(entry);
+    if (this.entries.length > this._maxEntries) {
+      this.entries = this.entries.slice(-this._maxEntries);
     }
   }
 }

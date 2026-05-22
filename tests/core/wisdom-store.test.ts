@@ -252,6 +252,21 @@ describe("WisdomStore", () => {
       expect(all[0]?.id).toBe("w-2");
       expect(all[1]?.id).toBe("w-3");
     });
+
+    it("should maintain FIFO order across different personas (Issue 1 & 2)", () => {
+      const store = new WisdomStore(2);
+      store.add({ taskId: "t1", persona: "atlas", category: "success_pattern", content: "a1" });
+      store.add({ taskId: "t2", persona: "hephaestus", category: "success_pattern", content: "h1" });
+      
+      // Adding third entry should evict the oldest (a1)
+      store.add({ taskId: "t3", persona: "hephaestus", category: "success_pattern", content: "h2" });
+      
+      const all = store.getAllEntries();
+      expect(all).toHaveLength(2);
+      expect(all[0].content).toBe("h1");
+      expect(all[1].content).toBe("h2");
+      expect(all.some(e => e.content === "a1")).toBe(false);
+    });
   });
 });
 
@@ -391,6 +406,27 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
       const store = new WisdomStore(10);
       store.setMaxEntries(5.7);
       expect(store.getMaxEntries()).toBe(5);
+    });
+  });
+
+  describe("V1 compatibility (Issue 4)", () => {
+    it("should accept entries without persona (V1) in fromEntries", () => {
+      const v1Entries = [
+        {
+          id: "w-1",
+          taskId: "t-1",
+          category: "success_pattern" as const,
+          content: "content 1",
+          timestamp: "2026-01-01T00:00:00Z",
+        }
+      ];
+
+      // @ts-expect-error simulating V1 data which lacks 'persona'
+      const store = WisdomStore.fromEntries(v1Entries);
+      const entries = store.getAllEntries();
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0].persona).toBe("hephaestus");
     });
   });
 

@@ -263,9 +263,9 @@ export class PlanBridge {
       rawOutput: event.payload.toolResult,
     });
 
-    if (!completion) return PROCEED;
-
     this.lastCompletionInputs.delete(event.sessionId);
+
+    if (!completion) return PROCEED;
 
     return {
       action: "inject",

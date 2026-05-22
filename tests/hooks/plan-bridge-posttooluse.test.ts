@@ -57,6 +57,45 @@ describe("PlanBridge.handlePostToolUse", () => {
     } as PostToolUseEvent);
     expect(secondResponse.action).toBe("proceed");
   });
+
+  it("clears lastCompletionInputs even if completion is not detected (Issue 3)", async () => {
+    const reader = createMockFileReader({
+      "plan.md": "## Task 1: Write docs\n- [ ] Document it\n",
+    });
+    const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+    await bridge.handleMessage({
+      type: "Message",
+      payload: { role: "assistant", content: "Delegate from plan.md" },
+      sessionId: "s-issue3",
+    });
+
+    // Error event: detectCompletion returns null
+    const response1 = await bridge.handlePostToolUse({
+      type: "PostToolUse",
+      payload: {
+        toolName: "task",
+        toolResult: "Failed",
+        error: true,
+      },
+      sessionId: "s-issue3",
+    } as PostToolUseEvent);
+
+    expect(response1.action).toBe("proceed");
+
+    // Success event later for the same session should NOT find the old input
+    const response2 = await bridge.handlePostToolUse({
+      type: "PostToolUse",
+      payload: {
+        toolName: "task",
+        toolResult: "Success",
+        error: false,
+      },
+      sessionId: "s-issue3",
+    } as PostToolUseEvent);
+
+    expect(response2.action).toBe("proceed");
+  });
 });
 
 /* eslint-enable security/detect-object-injection */
