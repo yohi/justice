@@ -143,13 +143,14 @@ describe("LearningExtractor", () => {
       );
 
       expect(entries).toHaveLength(2); // One for the root cause, one for the design_error itself
-      expect(entries[0]).toEqual(
+      const rootCauseEntry = entries.find(e => e.category === "design_decision" && e.content.includes("Root cause identified"));
+      expect(rootCauseEntry).toBeDefined();
+      expect(rootCauseEntry).toEqual(
         expect.objectContaining({
           category: "design_decision",
           persona: "prometheus",
         }),
       );
-      expect(entries[0]?.content).toContain("Root cause identified");
     });
 
     it("should not extract a root cause if the matched content is only whitespace", () => {
