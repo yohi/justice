@@ -108,7 +108,7 @@ master
 - [x] **Step 5: `tests/helpers/mock-notifier.ts` の `createMockNotifier()` を実装** — `calls` 配列に `notify` 引数を push、`banners` 配列に `formatBanner` 戻り値を push。
 - [x] **Step 6: `src/index.ts` から新規型/クラスを export**
 - [x] **Step 7: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行し全 pass を確認**
-- [ ] **Step 8: Phase Base (`feature/justice-invisible-advisor__base`) に向けた Draft PR を作成**
+- [x] **Step 8: Phase Base (`feature/justice-invisible-advisor__base`) に向けた Draft PR を作成**
 
 ### Task 2: `OpenCodeNotifier` (runtime 層)
 
