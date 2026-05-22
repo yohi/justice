@@ -146,7 +146,7 @@ master
 - [x] **Step 3: 純粋関数 export (クラスではなくモジュール関数でも可、設計書 §3-4 のシグネチャに準拠)**
 - [x] **Step 4: `src/index.ts` から export**
 - [x] **Step 5: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 4: `review-rejection-patterns` + `ReviewRejectionDetector`
 
