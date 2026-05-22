@@ -265,6 +265,8 @@ export class PlanBridge {
 
     if (!completion) return PROCEED;
 
+    this.lastCompletionInputs.delete(event.sessionId);
+
     return {
       action: "inject",
       injectedContext: completion.guidance,

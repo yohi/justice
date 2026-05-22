@@ -1,23 +1,9 @@
-/* eslint-disable security/detect-object-injection -- Fixture maps are intentionally indexed by plan path. */
 import { describe, expect, it } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
-import type { FileReader, HookEvent } from "../../src/core/types";
-import { createMockFileWriter } from "../helpers/mock-file-system";
+import type { FileReader, PostToolUseEvent } from "../../src/core/types";
+import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
-
-function createMockFileReader(files: Record<string, string>): FileReader {
-  return {
-    async readFile(path: string): Promise<string> {
-      const content = files[path];
-      if (content === undefined) throw new Error(`File not found: ${path}`);
-      return content;
-    },
-    async fileExists(path: string): Promise<boolean> {
-      return path in files;
-    },
-  };
-}
 
 function createLoopHandler(reader: FileReader): LoopDetectionHandler {
   return new LoopDetectionHandler(reader, createMockFileWriter(), new TaskSplitter());
@@ -50,7 +36,7 @@ describe("PlanBridge.handlePostToolUse", () => {
         error: false,
       },
       sessionId: "s-1",
-    } as HookEvent);
+    } as PostToolUseEvent);
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") {
@@ -58,6 +44,18 @@ describe("PlanBridge.handlePostToolUse", () => {
     }
 
     expect(response.injectedContext).toContain("Atlas guidance");
+
+    // Verify cache is cleared: second call should return PROCEED
+    const secondResponse = await bridge.handlePostToolUse({
+      type: "PostToolUse",
+      payload: {
+        toolName: "task",
+        toolResult: "Completed the docs update",
+        error: false,
+      },
+      sessionId: "s-1",
+    } as PostToolUseEvent);
+    expect(secondResponse.action).toBe("proceed");
   });
 });
 

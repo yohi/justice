@@ -302,6 +302,11 @@ export class LoopDetectionHandler {
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);
     this.reviewRejections.delete(sessionId);
-    this.onSessionRemoved?.(sessionId);
+
+    try {
+      this.onSessionRemoved?.(sessionId);
+    } catch (error) {
+      console.error(`[LoopDetectionHandler] Error in onSessionRemoved callback for session ${sessionId}:`, error);
+    }
   }
 }
