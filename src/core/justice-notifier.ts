@@ -63,6 +63,5 @@ export class NoOpNotifier implements JusticeNotifier {
 
   formatBanner(_notification: Omit<JusticeNotification, "sessionId" | "taskId">): string {
     return "";
-    return "";
   }
 }
