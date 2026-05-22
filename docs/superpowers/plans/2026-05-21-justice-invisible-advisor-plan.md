@@ -128,7 +128,7 @@ master
 - [ ] **Step 3: `OpenCodeLogEntry` 型は既存 `src/runtime/` の型を参照** — 既存定義がない場合は最小フィールド (`level`/`service`/`message`/`extra`) で local 定義し export。
 - [ ] **Step 4: `src/index.ts` から `OpenCodeNotifier` を export** (runtime 層の慣例に従う)
 - [ ] **Step 5: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: `PersonaClassifier`
 
@@ -160,11 +160,11 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成** — 設計書 §9-2 の表 #1〜#10 を完全網羅。空文字列、approve 偽陽性除外、単一/複数行マッチ、excerpts 上限 3 件、各 excerpt の 200 文字切り詰め、`summary` ≤300 文字、日本語パターン (`不承認`/`要修正`/`致命的`/`ブロッカー` 等)、大文字小文字無視を検証。
-- [ ] **Step 2: `REVIEW_REJECTION_PATTERNS` を `Object.freeze` で実装** — 設計書 §6-1 の RegExp 配列をそのまま採用。`matchesReviewRejection(text): boolean` も export。
-- [ ] **Step 3: `ReviewRejectionDetector.detect(text)` を実装** — `ReviewRejectionSignal { matched, excerpts: readonly string[], summary: string }` を返す。excerpts は最大 3 件・各 ≤200 文字、summary ≤300 文字。
-- [ ] **Step 4: `src/index.ts` から export**
-- [ ] **Step 5: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 1: Vitest テストを先行作成** — 設計書 §9-2 の表 #1〜#10 を完全網羅。空文字列、approve 偽陽性除外、単一/複数行マッチ、excerpts 上限 3 件、各 excerpt の 200 文字切り詰め、`summary` ≤300 文字、日本語パターン (`不承認`/`要修正`/`致命的`/`ブロッカー` 等)、大文字小文字無視を検証。
+- [x] **Step 2: `REVIEW_REJECTION_PATTERNS` を `Object.freeze` で実装** — 設計書 §6-1 の RegExp 配列をそのまま採用。`matchesReviewRejection(text): boolean` も export。
+- [x] **Step 3: `ReviewRejectionDetector.detect(text)` を実装** — `ReviewRejectionSignal { matched, excerpts: readonly string[], summary: string }` を返す。excerpts は最大 3 件・各 ≤200 文字、summary ≤300 文字。
+- [x] **Step 4: `src/index.ts` から export**
+- [x] **Step 5: Devcontainer 内で全検証コマンド実行**
 - [ ] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ---
