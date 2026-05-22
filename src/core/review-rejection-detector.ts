@@ -21,10 +21,16 @@ export class ReviewRejectionDetector {
       return { matched: false, excerpts: [], summary: "" };
     }
 
+    const joined = excerpts.join("\n");
+    const isTruncated = joined.length > MAX_SUMMARY_LENGTH;
+    const summary = isTruncated
+      ? `${joined.slice(0, MAX_SUMMARY_LENGTH - 3)}...`
+      : joined;
+
     return {
       matched: true,
       excerpts,
-      summary: excerpts.join("\n").slice(0, MAX_SUMMARY_LENGTH),
+      summary,
     };
   }
 

@@ -54,6 +54,24 @@ describe("ReviewRejectionDetector", () => {
     expect(signal.summary.length).toBeLessThanOrEqual(300);
   });
 
+  it("detects lowercase must fix and blocker wording", () => {
+    const signal = detector.detect("must fix: typo\nblocker: race condition");
+
+    expect(signal.matched).toBe(true);
+    expect(signal.excerpts).toEqual(["must fix: typo", "blocker: race condition"]);
+    expect(signal.summary.length).toBeLessThanOrEqual(300);
+  });
+
+  it("appends ellipsis when summary exceeds max length", () => {
+    const longExcerpt = "x".repeat(400);
+    const signal = detector.detect(`BLOCKER: ${longExcerpt}\nMUST FIX: ${longExcerpt}\nDO NOT MERGE: ${longExcerpt}`);
+
+    expect(signal.matched).toBe(true);
+    expect(signal.excerpts).toHaveLength(3);
+    expect(signal.summary.length).toBeLessThanOrEqual(300);
+    expect(signal.summary.endsWith("...")).toBe(true);
+  });
+
   it("detects Japanese rejection wording", () => {
     const signal = detector.detect("不承認: アーキテクチャ要修正");
 
