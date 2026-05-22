@@ -101,14 +101,14 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを TDD で先行作成** — 設計書 §9-5 の表 #1〜#6 を網羅。`NoOpNotifier.notify()` が `undefined` を返すこと、`formatBanner` が空文字列を返すこと、アイコンマッピング (§7-3) に従い `🎯`/`🚧`/`🔬`/`🚨`/`💡`/`🔁` が正しく挿入されることを assert。
-- [ ] **Step 2: `JusticeNotifier` インターフェース、`JusticeNotification` 型、`NotificationLevel`/`NotificationVariant` 型を実装** — 設計書 §7-2 のシグネチャに完全準拠。`readonly` 必須。`notify()` の JSDoc に fail-open 契約（内部で全例外を吸収し再 throw しない）を明記すること。
-- [ ] **Step 3: `NoOpNotifier` 実装** — `notify()` は `void`、`formatBanner()` は `""` を返す。
-- [ ] **Step 4: アイコンマッピングを純粋関数 `iconFor(variant)` として実装し、`formatBanner` の参照型実装を提供** — 後続 Task で `OpenCodeNotifier` がこれを再利用する基盤として、`src/core/justice-notifier.ts` 内に export しておく (※他 Notifier 実装からも参照可能)。
-- [ ] **Step 5: `tests/helpers/mock-notifier.ts` の `createMockNotifier()` を実装** — `calls` 配列に `notify` 引数を push、`banners` 配列に `formatBanner` 戻り値を push。
-- [ ] **Step 6: `src/index.ts` から新規型/クラスを export**
-- [ ] **Step 7: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行し全 pass を確認**
-- [ ] **Step 8: Phase Base (`feature/justice-invisible-advisor__base`) に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを TDD で先行作成** — 設計書 §9-5 の表 #1〜#6 を網羅。`NoOpNotifier.notify()` が `undefined` を返すこと、`formatBanner` が空文字列を返すこと、アイコンマッピング (§7-3) に従い `🎯`/`🚧`/`🔬`/`🚨`/`💡`/`🔁` が正しく挿入されることを assert。
+- [x] **Step 2: `JusticeNotifier` インターフェース、`JusticeNotification` 型、`NotificationLevel`/`NotificationVariant` 型を実装** — 設計書 §7-2 のシグネチャに完全準拠。`readonly` 必須。`notify()` の JSDoc に fail-open 契約（内部で全例外を吸収し再 throw しない）を明記すること。
+- [x] **Step 3: `NoOpNotifier` 実装** — `notify()` は `void`、`formatBanner()` は `""` を返す。
+- [x] **Step 4: アイコンマッピングを純粋関数 `iconFor(variant)` として実装し、`formatBanner` の参照型実装を提供** — 後続 Task で `OpenCodeNotifier` がこれを再利用する基盤として、`src/core/justice-notifier.ts` 内に export しておく (※他 Notifier 実装からも参照可能)。
+- [x] **Step 5: `tests/helpers/mock-notifier.ts` の `createMockNotifier()` を実装** — `calls` 配列に `notify` 引数を push、`banners` 配列に `formatBanner` 戻り値を push。
+- [x] **Step 6: `src/index.ts` から新規型/クラスを export**
+- [x] **Step 7: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行し全 pass を確認**
+- [x] **Step 8: Phase Base (`feature/justice-invisible-advisor__base`) に向けた Draft PR を作成**
 
 ### Task 2: `OpenCodeNotifier` (runtime 層)
 
@@ -141,12 +141,12 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成** — 設計書 §9-1 の表 #1〜#12 を完全網羅。優先順位 (errorClass=`design_error` → atlas、`loop_detected`/`timeout` → sisyphus、category=`design_decision` → atlas、`environment_quirk` → sisyphus、`success_pattern`/`failure_gotcha` → hephaestus、デフォルト → hephaestus) を境界含めて検証。
-- [ ] **Step 2: `PersonaClassifier.classify({ category, errorClass })` を実装** — 設計書 §3-4 の優先順位通り。`DEFAULT_PERSONA = "hephaestus"` を export。
-- [ ] **Step 3: 純粋関数 export (クラスではなくモジュール関数でも可、設計書 §3-4 のシグネチャに準拠)**
-- [ ] **Step 4: `src/index.ts` から export**
-- [ ] **Step 5: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成** — 設計書 §9-1 の表 #1〜#12 を完全網羅。優先順位 (errorClass=`design_error` → atlas、`loop_detected`/`timeout` → sisyphus、category=`design_decision` → atlas、`environment_quirk` → sisyphus、`success_pattern`/`failure_gotcha` → hephaestus、デフォルト → hephaestus) を境界含めて検証。
+- [x] **Step 2: `PersonaClassifier.classify({ category, errorClass })` を実装** — 設計書 §3-4 の優先順位通り。`DEFAULT_PERSONA = "hephaestus"` を export。
+- [x] **Step 3: 純粋関数 export (クラスではなくモジュール関数でも可、設計書 §3-4 のシグネチャに準拠)**
+- [x] **Step 4: `src/index.ts` から export**
+- [x] **Step 5: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 4: `review-rejection-patterns` + `ReviewRejectionDetector`
 
