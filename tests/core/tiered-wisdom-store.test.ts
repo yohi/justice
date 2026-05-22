@@ -139,6 +139,35 @@ describe("TieredWisdomStore — routing (add)", () => {
   });
 });
 
+describe("TieredWisdomStore — persona propagation on add", () => {
+  it("should auto-classify persona when add is called without persona", () => {
+    const { tiered, globalStore } = makeTiered();
+
+    const entry = tiered.add({
+      taskId: "t",
+      category: "environment_quirk",
+      content: "quirk",
+    });
+
+    expect(entry.persona).toBe("sisyphus");
+    expect(globalStore.getAllEntries()[0]?.persona).toBe("sisyphus");
+  });
+
+  it("should preserve an explicit persona instead of reclassifying it", () => {
+    const { tiered, globalStore } = makeTiered();
+
+    const entry = tiered.add({
+      taskId: "t",
+      category: "environment_quirk",
+      content: "quirk",
+      persona: "atlas",
+    });
+
+    expect(entry.persona).toBe("atlas");
+    expect(globalStore.getAllEntries()[0]?.persona).toBe("atlas");
+  });
+});
+
 describe("TieredWisdomStore — read merge (getRelevant)", () => {
   it("should return only local entries when local already satisfies maxEntries", () => {
     const localStore = new WisdomStore(100);
@@ -203,6 +232,43 @@ describe("TieredWisdomStore — read merge (getRelevant)", () => {
 
     expect(merged).toHaveLength(2);
     for (const e of merged) expect(e.errorClass).toBe("test_failure");
+  });
+
+  it("should filter by persona across local and global stores", () => {
+    const localStore = new WisdomStore(100);
+    localStore.add({
+      taskId: "lt1",
+      category: "failure_gotcha",
+      content: "local-hephaestus",
+      persona: "hephaestus",
+    });
+    localStore.add({
+      taskId: "lt2",
+      category: "failure_gotcha",
+      content: "local-atlas",
+      persona: "atlas",
+    });
+
+    const globalStore = new WisdomStore(500);
+    globalStore.add({
+      taskId: "gt1",
+      category: "success_pattern",
+      content: "global-hephaestus",
+      persona: "hephaestus",
+    });
+    globalStore.add({
+      taskId: "gt2",
+      category: "success_pattern",
+      content: "global-sisyphus",
+      persona: "sisyphus",
+    });
+
+    const { tiered } = makeTiered({ localStore, globalStore });
+    const merged = tiered.getRelevant({ maxEntries: 10, persona: "hephaestus" });
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((e) => e.persona)).toEqual(["hephaestus", "hephaestus"]);
+    expect(merged.map((e) => e.content)).toEqual(["local-hephaestus", "global-hephaestus"]);
   });
 
   it("should default maxEntries to 10 when omitted", () => {

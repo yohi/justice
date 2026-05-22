@@ -1,4 +1,5 @@
 import type {
+  AgentId,
   ErrorClass,
   WisdomEntry,
   WisdomCategory,
@@ -9,6 +10,7 @@ import type {
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
+import { PersonaClassifier } from "./persona-classifier";
 
 export interface TieredWisdomStoreLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -88,9 +90,19 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     const explicitScope = options?.scope;
     const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
+    const persona =
+      entry.persona ??
+      PersonaClassifier.classify({
+        category: entry.category,
+        errorClass: entry.errorClass,
+      });
+    const normalizedEntry: WisdomEntryInput = {
+      ...entry,
+      persona,
+    };
 
     if (targetScope === "global") {
-      const detected = this.secretDetector.scan(entry.content);
+      const detected = this.secretDetector.scan(normalizedEntry.content);
       if (detected.length > 0) {
         const warnMessage = 
           `Wisdom entry promotion to global: potential secrets detected ` +
@@ -107,15 +119,15 @@ export class TieredWisdomStore implements WisdomStoreInterface {
         } else {
           console.warn(warnMessage);
         }
-        return this.localStore.add(entry);
+        return this.localStore.add(normalizedEntry);
       }
-      return this.globalStore.add(entry);
+      return this.globalStore.add(normalizedEntry);
     }
 
-    return this.localStore.add(entry);
+    return this.localStore.add(normalizedEntry);
   }
 
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: WisdomEntry["persona"] }): WisdomEntry[] {
+  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
     const local = this.localStore.getRelevant({
       errorClass: options?.errorClass,
