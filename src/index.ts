@@ -1,7 +1,10 @@
 export { ErrorClassifier } from "./core/error-classifier";
 export { PlanParser } from "./core/plan-parser";
+export { ReviewRejectionDetector } from "./core/review-rejection-detector";
+export { REVIEW_REJECTION_PATTERNS, matchesReviewRejection } from "./core/review-rejection-patterns";
 export { TaskPackager } from "./core/task-packager";
 export * from "./core/types";
+export type { ReviewRejectionSignal } from "./core/review-rejection-detector";
 
 // Phase 2 Exports
 export { TriggerDetector } from "./core/trigger-detector";
