@@ -128,7 +128,7 @@ master
 - [ ] **Step 3: `OpenCodeLogEntry` 型は既存 `src/runtime/` の型を参照** — 既存定義がない場合は最小フィールド (`level`/`service`/`message`/`extra`) で local 定義し export。
 - [ ] **Step 4: `src/index.ts` から `OpenCodeNotifier` を export** (runtime 層の慣例に従う)
 - [ ] **Step 5: Devcontainer 内で `bun run typecheck && bun run lint && bun run test` を実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: `PersonaClassifier`
 
