@@ -6,6 +6,64 @@ import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file
 describe("WisdomPersistence", () => {
   const defaultPath = ".justice/wisdom.json";
 
+  it("should load a v1 wisdom file and partition entries by persona", async () => {
+    const legacy = {
+      entries: [
+        {
+          id: "w-1",
+          taskId: "t1",
+          category: "success_pattern",
+          content: "Hephaestus learns",
+          timestamp: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "w-2",
+          taskId: "t2",
+          persona: "atlas",
+          category: "design_decision",
+          content: "Atlas guidance",
+          timestamp: "2026-01-02T00:00:00Z",
+        },
+      ],
+      maxEntries: 100,
+    };
+
+    const persistence = new WisdomPersistence(
+      createMockFileReader({ [defaultPath]: JSON.stringify(legacy) }),
+      createMockFileWriter(),
+      defaultPath,
+    );
+
+    const store = await persistence.load();
+
+    expect(store.getRelevant({ persona: "hephaestus" })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "t1", persona: "hephaestus" })]),
+    );
+    expect(store.getRelevant({ persona: "atlas" })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "t2", persona: "atlas" })]),
+    );
+  });
+
+  it("should save v2 wisdom data with versioned entriesByAgent output", async () => {
+    const writer = createMockFileWriter();
+    const persistence = new WisdomPersistence(createMockFileReader({}), writer, defaultPath);
+
+    const store = await persistence.load();
+    store.add({ taskId: "t1", category: "success_pattern", content: "Works!" });
+    store.add({ taskId: "t2", persona: "atlas", category: "design_decision", content: "Atlas guidance" });
+
+    await persistence.save(store);
+
+    const parsed = JSON.parse(writer.writtenFiles[defaultPath] ?? "{}");
+    expect(parsed.version).toBe(2);
+    expect(parsed.entriesByAgent.hephaestus).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "t1", persona: "hephaestus" })]),
+    );
+    expect(parsed.entriesByAgent.atlas).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "t2", persona: "atlas" })]),
+    );
+  });
+
   it("should save and load wisdom entries round-trip", async () => {
     const writer = createMockFileWriter();
     const persistence = new WisdomPersistence(createMockFileReader({}), writer, defaultPath);
