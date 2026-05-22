@@ -1,9 +1,16 @@
 export { ErrorClassifier } from "./core/error-classifier";
+export { NoOpNotifier, formatBanner, iconFor } from "./core/justice-notifier";
 export { PlanParser } from "./core/plan-parser";
 export { DEFAULT_PERSONA, PersonaClassifier, classifyPersona } from "./core/persona-classifier";
 export { TaskPackager } from "./core/task-packager";
 export * from "./core/types";
 export type { PersonaClassificationInput } from "./core/persona-classifier";
+export type {
+  JusticeNotification,
+  JusticeNotifier,
+  NotificationLevel,
+  NotificationVariant,
+} from "./core/justice-notifier";
 
 // Phase 2 Exports
 export { TriggerDetector } from "./core/trigger-detector";
