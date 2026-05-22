@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import type { EventEvent, LoopDetectorPayload } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
@@ -87,6 +87,71 @@ describe("LoopDetectionHandler", () => {
       expect(writer.writtenFiles["plan.md"]).toContain(
         "⚠️ **Error**: loop_detected: Applied identical fix 3 times",
       );
+    });
+  });
+
+  describe("review rejection pivots", () => {
+    it("should pivot to Prometheus after three consecutive review rejections", () => {
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
+
+      handler.recordReviewOutput("s-1", "task-1", "BLOCKER: missing tests");
+      handler.recordReviewOutput("s-1", "task-1", "MUST FIX: improve error handling");
+      handler.recordReviewOutput("s-1", "task-1", "requested changes before merge");
+
+      const pivot = handler.evaluatePivot("s-1", "task-1");
+
+      expect(pivot).toEqual(
+        expect.objectContaining({
+          pivoted: true,
+          targetAgent: "prometheus",
+          rejections: 3,
+          reason: "review_rejection_threshold_exceeded",
+        }),
+      );
+      expect(pivot.summary).toContain("3 consecutive review rejections");
+    });
+
+    it("should reset the rejection streak after a non-rejection output", () => {
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
+
+      handler.recordReviewOutput("s-2", "task-2", "BLOCKER: missing tests");
+      handler.recordReviewOutput("s-2", "task-2", "Looks good to me");
+      handler.recordReviewOutput("s-2", "task-2", "MUST FIX: add coverage");
+
+      const pivot = handler.evaluatePivot("s-2", "task-2");
+
+      expect(pivot.pivoted).toBe(false);
+      expect(pivot.rejections).toBe(1);
+    });
+
+    it("should remove review rejection counts when a session is evicted", () => {
+      const reader = createMockFileReader({});
+      const writer = createMockFileWriter();
+      const handler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
+      const nowSpy = vi.spyOn(Date, "now");
+
+      try {
+        nowSpy.mockReturnValue(0);
+        handler.setActivePlan("old-session", "plan.md", "task-1", "hephaestus");
+        handler.recordReviewOutput("old-session", "task-1", "BLOCKER: missing tests");
+
+        nowSpy.mockReturnValue(30 * 60 * 1000 + 1);
+        handler.setActivePlan("new-session", "plan.md", "task-2", "hephaestus");
+
+        const pivot = handler.evaluatePivot("old-session", "task-1");
+        expect(pivot.rejections).toBe(0);
+        expect(pivot.pivoted).toBe(false);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });
