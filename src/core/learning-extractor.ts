@@ -75,7 +75,7 @@ export class LearningExtractor {
 
     const sanitizedOutput = rawOutput ? this.sanitizeRawOutput(rawOutput) : undefined;
 
-    if (rootCauseEntry) {
+    if (rootCauseEntry && errorClass === "design_error") {
       results.push(rootCauseEntry);
     }
 
@@ -183,16 +183,16 @@ export class LearningExtractor {
 
   private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
     const match = rawOutput.match(/Root cause:\s*(.+)/i);
-    const content = match?.[1];
+    const raw = match?.[1]?.trim();
 
-    if (!content) {
+    if (!raw) {
       return null;
     }
 
     return {
       taskId,
       category: "design_decision",
-      content: `Root cause identified:\n${this.sanitizeRawOutput(content.trim())}`,
+      content: `Root cause identified:\n${this.sanitizeRawOutput(raw)}`,
     };
   }
 
