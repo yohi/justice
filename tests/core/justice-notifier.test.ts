@@ -65,7 +65,7 @@ describe("justice-notifier", () => {
     },
   ] satisfies Array<JusticeNotification & { expected: string }>;
 
-  it.each(cases)("formats banner for %s/%s", ({ level, variant, title, message, expected }) => {
+  it.each(cases)("formats banner for $level/$variant", ({ level, variant, title, message, expected }) => {
     expect(formatBanner({ level, variant, title, message })).toBe(expected);
   });
 
@@ -149,5 +149,33 @@ describe("justice-notifier", () => {
     };
 
     expect(() => notifier.notify(notification)).not.toThrow();
+  });
+
+  it("documents that fail-open notifier implementations absorb asynchronous rejections", async () => {
+    class RejectingFailOpenNotifier implements JusticeNotifier {
+      async notify(_notification: JusticeNotification): Promise<void> {
+        try {
+          throw new Error("async transport failure");
+        } catch {
+          // JusticeNotifier implementations must absorb transport failures.
+        }
+      }
+
+      formatBanner(notification: Omit<JusticeNotification, "sessionId" | "taskId">): string {
+        return formatBanner(notification);
+      }
+    }
+
+    const notifier: JusticeNotifier = new RejectingFailOpenNotifier();
+    const notification: JusticeNotification = {
+      level: "error",
+      variant: "escalation",
+      title: "Escalation",
+      message: "Provider configuration failed.",
+      sessionId: "session-2",
+      taskId: "task-2",
+    };
+
+    await expect(notifier.notify(notification)).resolves.toBeUndefined();
   });
 });
