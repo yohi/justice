@@ -23,6 +23,31 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
+export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
+  if (a.action === "inject" && b.action === "inject") {
+    const injectedContext = [a.injectedContext, b.injectedContext].filter(Boolean).join("\n\n");
+    return {
+      action: "inject",
+      injectedContext,
+      modifiedPayload: b.modifiedPayload ?? a.modifiedPayload,
+    };
+  }
+
+  if (a.action === "inject") {
+    return a;
+  }
+
+  if (b.action === "inject") {
+    return b;
+  }
+
+  if (a.action === "skip" || b.action === "skip") {
+    return { action: "skip" };
+  }
+
+  return PROCEED;
+}
+
 export interface CreateGlobalFsResult {
   readonly fs: FileReader & FileWriter;
   readonly relativePath: string;
@@ -262,7 +287,10 @@ export class JusticePlugin {
       case "PreToolUse":
         return this.planBridge.handlePreToolUse(event);
       case "PostToolUse":
-        return this.taskFeedback.handlePostToolUse(event);
+        return mergePostToolUseResponses(
+          await this.planBridge.handlePostToolUse(event),
+          await this.taskFeedback.handlePostToolUse(event),
+        );
       case "Event":
         return this.handleEventType(event);
       default: {
