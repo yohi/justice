@@ -32,8 +32,12 @@ export function classifyPersona(input: PersonaClassificationInput): AgentId {
   return DEFAULT_PERSONA;
 }
 
-export class PersonaClassifier {
-  static classify(input: PersonaClassificationInput): AgentId {
+export const PersonaClassifier = {
+  /**
+   * Classifies a persona based on the given category and error class.
+   * This is a grouping object for the classification logic, replacing the previous static class.
+   */
+  classify(input: PersonaClassificationInput): AgentId {
     return classifyPersona(input);
-  }
-}
+  },
+} as const;

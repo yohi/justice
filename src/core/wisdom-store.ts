@@ -227,9 +227,9 @@ export class WisdomStore implements WisdomStoreInterface {
       return store;
     }
 
-    const validEntries = entries
-      .filter((e): e is StoredWisdomEntry => WisdomStore.isValidStoredEntry(e))
-      .map((e) => WisdomStore.withDefaultPersona(e));
+    const validEntries = (entries as unknown[])
+      .filter((e) => WisdomStore.isValidStoredEntry(e))
+      .map((e) => WisdomStore.withDefaultPersona(e as StoredWisdomEntry));
 
     store.replaceEntries(validEntries);
     return store;
