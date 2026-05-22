@@ -1,24 +1,28 @@
-import type { TaskFeedback, ErrorClass, WisdomEntryInput } from "./types";
+import type { AgentId, TaskFeedback, ErrorClass, WisdomEntryInput } from "./types";
 
 type WisdomEntryDraft = WisdomEntryInput;
+
+export interface LearningExtractionContext {
+  readonly persona?: AgentId;
+}
 
 export class LearningExtractor {
   /**
    * Analyzes a TaskFeedback result and extracts actionable wisdom entries.
    * Returns an empty array for non-actionable cases.
    */
-  extract(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
+  extract(feedback: TaskFeedback, rawOutput?: string, context?: LearningExtractionContext): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
 
     switch (feedback.status) {
       case "success":
-        results.push(...this.extractFromSuccess(feedback));
+        results.push(...this.extractFromSuccess(feedback, context));
         break;
       case "failure":
-        results.push(...this.extractFromFailure(feedback, rawOutput));
+        results.push(...this.extractFromFailure(feedback, rawOutput, context));
         break;
       case "timeout":
-        results.push(...this.extractFromTimeout(feedback));
+        results.push(...this.extractFromTimeout(feedback, context));
         break;
       case "compaction_risk":
         // No specific learning from compaction risk
@@ -27,14 +31,17 @@ export class LearningExtractor {
         this.assertUnreachable(feedback.status);
     }
 
-    return results;
+    return this.applyPersona(results, context?.persona);
   }
 
   private assertUnreachable(x: never): never {
     throw new Error(`Unexpected status encountered: ${JSON.stringify(x)}`);
   }
 
-  private extractFromSuccess(feedback: TaskFeedback): WisdomEntryDraft[] {
+  private extractFromSuccess(
+    feedback: TaskFeedback,
+    context?: LearningExtractionContext,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
 
@@ -56,18 +63,27 @@ export class LearningExtractor {
       });
     }
 
-    return results;
+    return this.applyPersona(results, context?.persona);
   }
 
-  private extractFromFailure(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
+  private extractFromFailure(
+    feedback: TaskFeedback,
+    rawOutput?: string,
+    context?: LearningExtractionContext,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const errorClass: ErrorClass = feedback.errorClassification ?? "unknown";
-
-    if (errorClass === "unknown") {
-      return results;
-    }
+    const rootCauseEntry = rawOutput ? this.extractRootCause(feedback.taskId, rawOutput) : null;
 
     const sanitizedOutput = rawOutput ? this.sanitizeRawOutput(rawOutput) : undefined;
+
+    if (rootCauseEntry) {
+      results.push(rootCauseEntry);
+    }
+
+    if (errorClass === "unknown") {
+      return this.applyPersona(results, context?.persona);
+    }
 
     if (errorClass === "timeout") {
       results.push({
@@ -127,7 +143,7 @@ export class LearningExtractor {
       });
     }
 
-    return results;
+    return this.applyPersona(results, context?.persona);
   }
 
   /**
@@ -153,14 +169,45 @@ export class LearningExtractor {
     return sanitized;
   }
 
-  private extractFromTimeout(feedback: TaskFeedback): WisdomEntryDraft[] {
-    return [
-      {
-        taskId: feedback.taskId,
-        category: "environment_quirk",
-        errorClass: "timeout",
-        content: `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
-      },
-    ];
+  private extractFromTimeout(
+    feedback: TaskFeedback,
+    context?: LearningExtractionContext,
+  ): WisdomEntryDraft[] {
+    return this.applyPersona(
+      [
+        {
+          taskId: feedback.taskId,
+          category: "environment_quirk",
+          errorClass: "timeout",
+          content:
+            `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
+        },
+      ],
+      context?.persona,
+    );
+  }
+
+  private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
+    const match = rawOutput.match(/Root cause:\s*(.+)/i);
+    if (!match || match[1] === undefined) {
+      return null;
+    }
+
+    return {
+      taskId,
+      category: "design_decision",
+      content: `Root cause identified:\n${this.sanitizeRawOutput(match[1].trim())}`,
+    };
+  }
+
+  private applyPersona(entries: WisdomEntryDraft[], persona?: AgentId): WisdomEntryDraft[] {
+    if (!persona) {
+      return entries;
+    }
+
+    return entries.map((entry) => ({
+      ...entry,
+      persona,
+    }));
   }
 }

@@ -101,6 +101,20 @@ describe("LearningExtractor", () => {
       expect(gotcha?.content).toContain("3");
     });
 
+    it("should attach the provided persona to every extracted entry", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-6b",
+        status: "success",
+        retryCount: 2,
+        testResults: { passed: 10, failed: 0, skipped: 0 },
+      };
+
+      const entries = extractor.extract(feedback, undefined, { persona: "atlas" });
+
+      expect(entries).toHaveLength(2);
+      expect(entries.every((entry) => entry.persona === "atlas")).toBe(true);
+    });
+
     it("should return empty array for non-actionable cases", () => {
       const feedback: TaskFeedback = {
         taskId: "task-7",
@@ -112,6 +126,30 @@ describe("LearningExtractor", () => {
       const entries = extractor.extract(feedback);
       // Unknown errors don't produce specific learnings
       expect(entries.length).toBe(0);
+    });
+
+    it("should extract a design_decision from a root cause marker", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "unknown",
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: missing dependency injection in the adapter layer",
+        { persona: "prometheus" },
+      );
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toEqual(
+        expect.objectContaining({
+          category: "design_decision",
+          persona: "prometheus",
+        }),
+      );
+      expect(entries[0]?.content).toContain("Root cause identified");
     });
 
     describe("sanitization", () => {
