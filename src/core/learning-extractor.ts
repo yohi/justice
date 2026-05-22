@@ -1,13 +1,17 @@
-import type { TaskFeedback, ErrorClass, WisdomEntryInput } from "./types";
+import type { AgentId, TaskFeedback, ErrorClass, WisdomEntryInput } from "./types";
 
 type WisdomEntryDraft = WisdomEntryInput;
+
+export interface LearningExtractionContext {
+  readonly persona?: AgentId;
+}
 
 export class LearningExtractor {
   /**
    * Analyzes a TaskFeedback result and extracts actionable wisdom entries.
    * Returns an empty array for non-actionable cases.
    */
-  extract(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
+  extract(feedback: TaskFeedback, rawOutput?: string, context?: LearningExtractionContext): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
 
     switch (feedback.status) {
@@ -27,14 +31,16 @@ export class LearningExtractor {
         this.assertUnreachable(feedback.status);
     }
 
-    return results;
+    return this.applyPersona(results, context?.persona);
   }
 
   private assertUnreachable(x: never): never {
     throw new Error(`Unexpected status encountered: ${JSON.stringify(x)}`);
   }
 
-  private extractFromSuccess(feedback: TaskFeedback): WisdomEntryDraft[] {
+  private extractFromSuccess(
+    feedback: TaskFeedback,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
 
@@ -59,15 +65,23 @@ export class LearningExtractor {
     return results;
   }
 
-  private extractFromFailure(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
+  private extractFromFailure(
+    feedback: TaskFeedback,
+    rawOutput?: string,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const errorClass: ErrorClass = feedback.errorClassification ?? "unknown";
+    const rootCauseEntry = rawOutput ? this.extractRootCause(feedback.taskId, rawOutput) : null;
+
+    const sanitizedOutput = rawOutput ? this.sanitizeRawOutput(rawOutput) : undefined;
+
+    if (rootCauseEntry && errorClass === "design_error") {
+      results.push(rootCauseEntry);
+    }
 
     if (errorClass === "unknown") {
       return results;
     }
-
-    const sanitizedOutput = rawOutput ? this.sanitizeRawOutput(rawOutput) : undefined;
 
     if (errorClass === "timeout") {
       results.push({
@@ -153,14 +167,43 @@ export class LearningExtractor {
     return sanitized;
   }
 
-  private extractFromTimeout(feedback: TaskFeedback): WisdomEntryDraft[] {
+  private extractFromTimeout(
+    feedback: TaskFeedback,
+  ): WisdomEntryDraft[] {
     return [
       {
         taskId: feedback.taskId,
         category: "environment_quirk",
         errorClass: "timeout",
-        content: `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
+        content:
+          `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
       },
     ];
+  }
+
+  private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
+    const match = rawOutput.match(/Root cause:\s*(.+)/i);
+    const raw = match?.[1]?.trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    return {
+      taskId,
+      category: "design_decision",
+      content: `Root cause identified:\n${this.sanitizeRawOutput(raw)}`,
+    };
+  }
+
+  private applyPersona(entries: WisdomEntryDraft[], persona?: AgentId): WisdomEntryDraft[] {
+    if (!persona) {
+      return entries;
+    }
+
+    return entries.map((entry) => ({
+      ...entry,
+      persona,
+    }));
   }
 }

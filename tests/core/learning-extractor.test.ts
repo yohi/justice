@@ -101,6 +101,20 @@ describe("LearningExtractor", () => {
       expect(gotcha?.content).toContain("3");
     });
 
+    it("should attach the provided persona to every extracted entry", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-6b",
+        status: "success",
+        retryCount: 2,
+        testResults: { passed: 10, failed: 0, skipped: 0 },
+      };
+
+      const entries = extractor.extract(feedback, undefined, { persona: "atlas" });
+
+      expect(entries).toHaveLength(2);
+      expect(entries.every((entry) => entry.persona === "atlas")).toBe(true);
+    });
+
     it("should return empty array for non-actionable cases", () => {
       const feedback: TaskFeedback = {
         taskId: "task-7",
@@ -112,6 +126,68 @@ describe("LearningExtractor", () => {
       const entries = extractor.extract(feedback);
       // Unknown errors don't produce specific learnings
       expect(entries.length).toBe(0);
+    });
+
+    it("should extract a design_decision from a root cause marker", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "design_error",
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: missing dependency injection in the adapter layer",
+        { persona: "prometheus" },
+      );
+
+      expect(entries).toHaveLength(2); // One for the root cause, one for the design_error itself
+      expect(entries[0]).toEqual(
+        expect.objectContaining({
+          category: "design_decision",
+          persona: "prometheus",
+        }),
+      );
+      expect(entries[0]?.content).toContain("Root cause identified");
+    });
+
+    it("should not extract a root cause if the matched content is only whitespace", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13b",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "design_error",
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause:   \n\t  ",
+      );
+
+      // We expect 1 entry here because of the 'design_error' itself, but NOT the rootCauseEntry.
+      // Wait, let's verify how many entries we expect.
+      expect(entries.length).toBe(1);
+      expect(entries[0]?.content).toContain("Design issue detected");
+      expect(entries[0]?.content).not.toContain("Root cause identified");
+    });
+
+    it("should not extract a root cause if the error classification is not design_error", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13c",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "syntax_error", // Not design_error
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: a simple typo",
+      );
+
+      // Since it's syntax_error and retryCount is 0, extractFromFailure might push something if it's the final failure.
+      // But the rootCauseEntry shouldn't be there.
+      expect(entries.every(e => !e.content.includes("Root cause identified"))).toBe(true);
     });
 
     describe("sanitization", () => {
