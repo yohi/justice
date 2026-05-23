@@ -208,6 +208,7 @@ export class OpenCodeAdapter {
       const response = await justice.handleEvent({
         type: "PreToolUse",
         sessionId: input.sessionID,
+        callId: input.callID,
         payload: {
           toolName: input.tool,
           toolInput: output.args,

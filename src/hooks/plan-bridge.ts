@@ -266,8 +266,8 @@ export class PlanBridge {
   async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "PostToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    const callId = event.callId ?? "";
-    const key = `${event.sessionId}:${callId}`;
+    if (!event.callId) return PROCEED;
+    const key = `${event.sessionId}:${event.callId}`;
     const completionInput = this.lastCompletionInputs.get(key);
     if (!completionInput) return PROCEED;
 
