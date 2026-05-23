@@ -252,6 +252,7 @@ export class OpenCodeAdapter {
       await justice.handleEvent({
         type: "PostToolUse",
         sessionId: input.sessionID,
+        callId: input.callID,
         payload: {
           toolName: input.tool,
           toolResult: output.output,

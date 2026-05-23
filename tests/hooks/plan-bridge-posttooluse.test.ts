@@ -26,6 +26,7 @@ describe("PlanBridge.handlePostToolUse", () => {
         content: "Delegate the next task from plan.md",
       },
       sessionId: "s-1",
+      callId: "c-1",
     });
 
     const response = await bridge.handlePostToolUse({
@@ -36,6 +37,7 @@ describe("PlanBridge.handlePostToolUse", () => {
         error: false,
       },
       sessionId: "s-1",
+      callId: "c-1",
     } as PostToolUseEvent);
 
     expect(response.action).toBe("inject");
@@ -54,6 +56,7 @@ describe("PlanBridge.handlePostToolUse", () => {
         error: false,
       },
       sessionId: "s-1",
+      callId: "c-1",
     } as PostToolUseEvent);
     expect(secondResponse.action).toBe("proceed");
   });
@@ -68,6 +71,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       type: "Message",
       payload: { role: "assistant", content: "Delegate from plan.md" },
       sessionId: "s-issue3",
+      callId: "c-issue3",
     });
 
     // Error event: detectCompletion returns null
@@ -79,6 +83,7 @@ describe("PlanBridge.handlePostToolUse", () => {
         error: true,
       },
       sessionId: "s-issue3",
+      callId: "c-issue3",
     } as PostToolUseEvent);
 
     expect(response1.action).toBe("proceed");
@@ -92,10 +97,9 @@ describe("PlanBridge.handlePostToolUse", () => {
         error: false,
       },
       sessionId: "s-issue3",
+      callId: "c-issue3",
     } as PostToolUseEvent);
 
     expect(response2.action).toBe("proceed");
   });
 });
-
-/* eslint-enable security/detect-object-injection */

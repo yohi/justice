@@ -347,8 +347,9 @@ export class PlanBridge {
   }
 
   private rememberCompletionInput(sessionId: string, callId: string | undefined, delegation: DelegationRequest): void {
+    if (!callId) return;
     const skillName = this.pickCompletionSkill(delegation.loadSkills);
-    this.lastCompletionInputs.set(`${sessionId}:${callId ?? ""}`, {
+    this.lastCompletionInputs.set(`${sessionId}:${callId}`, {
       prompt: delegation.prompt,
       category: delegation.category,
       skillName,
