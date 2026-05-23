@@ -101,7 +101,15 @@ export class PlanBridge {
   destroySession(sessionId: string): void {
     this.activePlanPaths.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
-    this.lastCompletionInputs.delete(sessionId);
+    this.clearSessionCompletionInputs(sessionId);
+  }
+
+  private clearSessionCompletionInputs(sessionId: string): void {
+    for (const key of this.lastCompletionInputs.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        this.lastCompletionInputs.delete(key);
+      }
+    }
   }
 
   /**
@@ -138,7 +146,7 @@ export class PlanBridge {
       planContent = content;
     } catch {
       this.setActivePlan(event.sessionId, null);
-      this.lastCompletionInputs.delete(event.sessionId);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
@@ -153,7 +161,7 @@ export class PlanBridge {
     if (!delegation) {
       // All tasks completed
       this.setActivePlan(event.sessionId, null);
-      this.lastCompletionInputs.delete(event.sessionId);
+      this.clearSessionCompletionInputs(event.sessionId);
       return {
         action: "inject",
         injectedContext: `[JUSTICE: All tasks in ${planRef.planPath} are already completed. No further delegation needed.]`,
@@ -215,7 +223,7 @@ export class PlanBridge {
       planContent = content;
     } catch {
       this.setActivePlan(event.sessionId, null);
-      this.lastCompletionInputs.delete(event.sessionId);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
@@ -230,7 +238,7 @@ export class PlanBridge {
     if (!delegation) {
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
-      this.lastCompletionInputs.delete(event.sessionId);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
