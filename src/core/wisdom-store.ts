@@ -299,9 +299,13 @@ export class WisdomStore implements WisdomStoreInterface {
   }
 
   private appendEntry(entry: WisdomEntry): void {
-    const existingEntries = this.entriesByAgent.get(entry.persona) ?? [];
-    this.entriesByAgent.set(entry.persona, [...existingEntries, entry]);
-    this.entryOrder = [...this.entryOrder, entry];
+    const existingEntries = this.entriesByAgent.get(entry.persona);
+    if (existingEntries) {
+      existingEntries.push(entry);
+    } else {
+      this.entriesByAgent.set(entry.persona, [entry]);
+    }
+    this.entryOrder.push(entry);
   }
 
   private trimToCapacity(): void {
@@ -332,8 +336,12 @@ export class WisdomStore implements WisdomStoreInterface {
 
     const orderedEntries: WisdomEntry[] = [];
     for (const entry of entries) {
-      const existingEntries = nextEntriesByAgent.get(entry.persona) ?? [];
-      nextEntriesByAgent.set(entry.persona, [...existingEntries, entry]);
+      const existingEntries = nextEntriesByAgent.get(entry.persona);
+      if (existingEntries) {
+        existingEntries.push(entry);
+      } else {
+        nextEntriesByAgent.set(entry.persona, [entry]);
+      }
       orderedEntries.push(entry);
     }
 
