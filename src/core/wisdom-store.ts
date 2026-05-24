@@ -43,8 +43,8 @@ export class WisdomStore implements WisdomStoreInterface {
    * Adds a new learning entry to the store.
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
-  add(entry: WisdomEntryInput, _options?: AddOptions): WisdomEntry {
-    const persona = _options?.persona ?? entry.persona ?? DEFAULT_PERSONA;
+  add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry {
+    const persona = options?.persona ?? entry.persona ?? DEFAULT_PERSONA;
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),
@@ -95,6 +95,16 @@ export class WisdomStore implements WisdomStoreInterface {
 
     const lines: string[] = [];
     lines.push("**[JUSTICE AI: Past Learnings & Gotchas]**");
+    lines.push(...WisdomStore.formatEntriesBody(entries));
+    return lines.join("\n");
+  }
+
+  /**
+   * Formats a list of wisdom entries into Markdown lines without any header.
+   * This is a pure function that does not depend on store state.
+   */
+  static formatEntriesBody(entries: readonly WisdomEntry[]): string[] {
+    const lines: string[] = [];
 
     for (const entry of entries) {
       const typeLabel =
@@ -116,7 +126,7 @@ export class WisdomStore implements WisdomStoreInterface {
       }
     }
 
-    return lines.join("\n");
+    return lines;
   }
 
   /**
@@ -299,9 +309,13 @@ export class WisdomStore implements WisdomStoreInterface {
   }
 
   private appendEntry(entry: WisdomEntry): void {
-    const existingEntries = this.entriesByAgent.get(entry.persona) ?? [];
-    this.entriesByAgent.set(entry.persona, [...existingEntries, entry]);
-    this.entryOrder = [...this.entryOrder, entry];
+    const existingEntries = this.entriesByAgent.get(entry.persona);
+    if (existingEntries) {
+      existingEntries.push(entry);
+    } else {
+      this.entriesByAgent.set(entry.persona, [entry]);
+    }
+    this.entryOrder.push(entry);
   }
 
   private trimToCapacity(): void {
@@ -332,8 +346,12 @@ export class WisdomStore implements WisdomStoreInterface {
 
     const orderedEntries: WisdomEntry[] = [];
     for (const entry of entries) {
-      const existingEntries = nextEntriesByAgent.get(entry.persona) ?? [];
-      nextEntriesByAgent.set(entry.persona, [...existingEntries, entry]);
+      const existingEntries = nextEntriesByAgent.get(entry.persona);
+      if (existingEntries) {
+        existingEntries.push(entry);
+      } else {
+        nextEntriesByAgent.set(entry.persona, [entry]);
+      }
       orderedEntries.push(entry);
     }
 
