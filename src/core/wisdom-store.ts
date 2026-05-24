@@ -1,4 +1,11 @@
-import type { AgentId, ErrorClass, WisdomEntry, WisdomEntryInput, WisdomStoreInterface, WisdomScope } from "./types";
+import type {
+  AgentId,
+  AddOptions,
+  ErrorClass,
+  WisdomEntry,
+  WisdomEntryInput,
+  WisdomStoreInterface,
+} from "./types";
 
 type StoredWisdomEntry = Omit<WisdomEntry, "persona"> & { readonly persona?: AgentId };
 
@@ -35,8 +42,8 @@ export class WisdomStore implements WisdomStoreInterface {
    * Adds a new learning entry to the store.
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
-  add(entry: WisdomEntryInput, _options?: { scope?: WisdomScope }): WisdomEntry {
-    const persona = entry.persona ?? DEFAULT_PERSONA;
+  add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry {
+    const persona = options?.persona ?? entry.persona ?? DEFAULT_PERSONA;
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
-import { createWisdomEntry } from "../helpers/wisdom-draft-factory";
+import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 describe("WisdomStore", () => {
   describe("add", () => {
@@ -149,15 +149,19 @@ describe("WisdomStore", () => {
   describe("formatForInjection", () => {
     it("should format entries as Markdown for prompt injection", () => {
       const store = new WisdomStore();
-      const entry: WisdomEntry = createWisdomEntry({
-        id: "w-123",
+      const draft = makeWisdomDraft({
         taskId: "task-test",
         persona: "hephaestus",
         category: "failure_gotcha",
         content: "Don't forget to await the database connection.",
-        errorClass: "type_error",
-        timestamp: "2024-01-01T00:00:00Z",
       });
+      const entry: WisdomEntry = {
+        id: "w-123",
+        timestamp: "2024-01-01T00:00:00Z",
+        ...draft,
+        persona: draft.persona ?? "hephaestus",
+        errorClass: "type_error",
+      };
 
       const formatted = store.formatForInjection([entry]);
 

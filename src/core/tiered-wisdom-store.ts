@@ -2,6 +2,7 @@ import type {
   AgentId,
   ErrorClass,
   WisdomEntry,
+  AddOptions,
   WisdomCategory,
   WisdomStoreInterface,
   WisdomScope,
@@ -24,10 +25,6 @@ export interface TieredWisdomStoreOptions {
   secretDetector?: SecretPatternDetector;
   globalDisplayPath?: string;
   logger?: TieredWisdomStoreLogger;
-}
-
-export interface AddOptions {
-  scope?: WisdomScope;
 }
 
 const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
@@ -91,6 +88,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
     const persona =
+      options?.persona ??
       entry.persona ??
       PersonaClassifier.classify({
         category: entry.category,
