@@ -162,7 +162,15 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   }
 
   formatForInjection(entries: WisdomEntry[]): string {
-    return this.localStore.formatForInjection(entries);
+    if (entries.length === 0) return "";
+    const personas = [...new Set(entries.map((e) => e.persona))];
+    const lines: string[] = [];
+    for (const persona of personas) {
+      const personaEntries = entries.filter((e) => e.persona === persona);
+      lines.push(`**[JUSTICE AI: Past Learnings for ${persona}]**`);
+      lines.push(...WisdomStore.formatEntriesBody(personaEntries));
+    }
+    return lines.join("\n");
   }
 
   async loadAll(): Promise<void> {

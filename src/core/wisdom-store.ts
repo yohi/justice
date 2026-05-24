@@ -95,6 +95,16 @@ export class WisdomStore implements WisdomStoreInterface {
 
     const lines: string[] = [];
     lines.push("**[JUSTICE AI: Past Learnings & Gotchas]**");
+    lines.push(...WisdomStore.formatEntriesBody(entries));
+    return lines.join("\n");
+  }
+
+  /**
+   * Formats a list of wisdom entries into Markdown lines without any header.
+   * This is a pure function that does not depend on store state.
+   */
+  static formatEntriesBody(entries: readonly WisdomEntry[]): string[] {
+    const lines: string[] = [];
 
     for (const entry of entries) {
       const typeLabel =
@@ -116,7 +126,7 @@ export class WisdomStore implements WisdomStoreInterface {
       }
     }
 
-    return lines.join("\n");
+    return lines;
   }
 
   /**
