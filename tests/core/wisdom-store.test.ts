@@ -115,11 +115,13 @@ describe("WisdomStore", () => {
       const store = new WisdomStore();
       store.add({ taskId: "h-1", persona: "hephaestus", category: "success_pattern", content: "H1" });
       store.add({ taskId: "a-1", persona: "atlas", category: "failure_gotcha", content: "A1" });
+      store.add({ taskId: "h-2", persona: "hephaestus", category: "design_decision", content: "H2" });
       store.add({ taskId: "a-2", persona: "atlas", category: "design_decision", content: "A2" });
 
-      const results = store.getRelevant({ persona: "atlas" });
+      const results = store.getRelevant({ persona: "hephaestus" });
       expect(results).toHaveLength(2);
-      expect(results.every((entry) => entry.persona === "atlas")).toBe(true);
+      expect(results.map((entry) => entry.taskId)).toEqual(["h-1", "h-2"]);
+      expect(results.every((entry) => entry.persona === "hephaestus")).toBe(true);
     });
 
     it("should fall back to all entries when the requested persona has none", () => {

@@ -24,7 +24,8 @@ const DEFAULT_PERSONA: AgentId = "hephaestus";
 const AGENT_ORDER: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
 
 export class WisdomStore implements WisdomStoreInterface {
-  private entries: WisdomEntry[] = [];
+  private entriesByAgent: Map<AgentId, WisdomEntry[]> = new Map();
+  private entryOrder: WisdomEntry[] = [];
   private _maxEntries = 0;
 
   constructor(maxEntries = 100) {
@@ -61,7 +62,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Retrieves all entries associated with a specific task ID.
    */
   getByTaskId(taskId: string): WisdomEntry[] {
-    return this.entries.filter((entry) => entry.taskId === taskId);
+    return this.entryOrder.filter((entry) => entry.taskId === taskId);
   }
 
   /**
@@ -70,12 +71,10 @@ export class WisdomStore implements WisdomStoreInterface {
    */
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
-    let results = options?.persona 
-      ? this.entries.filter((e) => e.persona === options.persona) 
-      : [...this.entries];
+    let results = options?.persona ? this.getEntriesForPersona(options.persona) : this.getOrderedEntries();
 
     if (options?.persona && results.length === 0) {
-      results = [...this.entries];
+      results = this.getOrderedEntries();
     }
 
     if (options?.errorClass) {
@@ -129,7 +128,7 @@ export class WisdomStore implements WisdomStoreInterface {
       entriesByAgent: Object.fromEntries(
         AGENT_ORDER.map((persona) => [
           persona, 
-          this.entries.filter((e) => e.persona === persona)
+          this.getEntriesForPersona(persona)
         ]),
       ) as Partial<Record<AgentId, readonly WisdomEntry[]>>,
       maxEntries: this._maxEntries,
@@ -188,7 +187,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Returns a readonly snapshot of all entries in insertion order.
    */
   getAllEntries(): readonly WisdomEntry[] {
-    return [...this.entries];
+    return this.getOrderedEntries();
   }
 
   /**
@@ -217,7 +216,13 @@ export class WisdomStore implements WisdomStoreInterface {
    * ensuring that other components holding references to this store see the updates.
    */
   replaceEntries(entries: readonly WisdomEntry[]): void {
-    this.entries = [...entries];
+    this.entriesByAgent = new Map();
+    this.entryOrder = [];
+
+    for (const entry of entries) {
+      this.appendEntry(entry);
+    }
+
     this.trimToCapacity();
   }
 
@@ -294,17 +299,53 @@ export class WisdomStore implements WisdomStoreInterface {
   }
 
   private appendEntry(entry: WisdomEntry): void {
-    this.entries.push(entry);
+    const existingEntries = this.entriesByAgent.get(entry.persona);
+    if (existingEntries) {
+      existingEntries.push(entry);
+    } else {
+      this.entriesByAgent.set(entry.persona, [entry]);
+    }
+    this.entryOrder.push(entry);
   }
 
   private trimToCapacity(): void {
     if (this._maxEntries <= 0) {
-      this.entries = [];
+      this.entriesByAgent = new Map();
+      this.entryOrder = [];
       return;
     }
 
-    if (this.entries.length > this._maxEntries) {
-      this.entries = this.entries.slice(-this._maxEntries);
+    if (this.entryOrder.length > this._maxEntries) {
+      this.rebuildFromOrderedEntries(this.entryOrder.slice(-this._maxEntries));
     }
+  }
+
+  private getEntriesForPersona(persona: AgentId): WisdomEntry[] {
+    return [...(this.entriesByAgent.get(persona) ?? [])];
+  }
+
+  private getOrderedEntries(): WisdomEntry[] {
+    return [...this.entryOrder];
+  }
+
+  private rebuildFromOrderedEntries(entries: readonly WisdomEntry[]): void {
+    const nextEntriesByAgent = new Map<AgentId, WisdomEntry[]>();
+    for (const persona of AGENT_ORDER) {
+      nextEntriesByAgent.set(persona, []);
+    }
+
+    const orderedEntries: WisdomEntry[] = [];
+    for (const entry of entries) {
+      const existingEntries = nextEntriesByAgent.get(entry.persona);
+      if (existingEntries) {
+        existingEntries.push(entry);
+      } else {
+        nextEntriesByAgent.set(entry.persona, [entry]);
+      }
+      orderedEntries.push(entry);
+    }
+
+    this.entriesByAgent = nextEntriesByAgent;
+    this.entryOrder = orderedEntries;
   }
 }
