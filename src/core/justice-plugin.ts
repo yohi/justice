@@ -29,29 +29,27 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
   }
 
   if (a.action === "inject" && b.action === "inject") {
-    const injectedContext = [a.injectedContext, b.injectedContext].filter(Boolean).join("\n\n");
-    const mergedPayload =
-      a.modifiedPayload && typeof a.modifiedPayload === "object" &&
-      b.modifiedPayload && typeof b.modifiedPayload === "object"
-        ? { ...a.modifiedPayload, ...b.modifiedPayload }
-        : b.modifiedPayload ?? a.modifiedPayload;
-
     return {
       action: "inject",
-      injectedContext,
-      modifiedPayload: mergedPayload,
+      injectedContext: `${a.injectedContext}\n\n---\n\n${b.injectedContext}`,
     };
   }
 
   if (a.action === "inject") {
-    return a;
+    return {
+      action: "inject",
+      injectedContext: a.injectedContext,
+    };
   }
 
   if (b.action === "inject") {
-    return b;
+    return {
+      action: "inject",
+      injectedContext: b.injectedContext,
+    };
   }
 
-  return PROCEED;
+  return { action: "proceed" };
 }
 
 export interface CreateGlobalFsResult {
