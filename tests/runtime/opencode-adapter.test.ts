@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
@@ -44,6 +45,19 @@ describe("OpenCodeAdapter skeleton", () => {
 
     expect(initSpy).toHaveBeenCalledTimes(1);
     initSpy.mockRestore();
+  });
+
+  it("wires OpenCodeNotifier into JusticePlugin during initialization", async () => {
+    const init = fakeInit({ worktree: "/tmp/ws", directory: "/tmp/ws" });
+    const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify");
+    const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    const adapter = new OpenCodeAdapter(init);
+
+    await adapter.ensureInitialized();
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalled();
+    notifySpy.mockRestore();
   });
 
   it("log wrapper invokes client.app.log and swallows thrown errors", async () => {
@@ -264,7 +278,7 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
 
     await adapter.onToolExecuteAfter(
       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-      { title: "done", output: "result body", metadata: undefined },
+      { output: "result body", metadata: undefined },
     );
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -284,7 +298,7 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
 
     await adapter.onToolExecuteAfter(
       { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
-      { title: "failed", output: "stack trace...", metadata: { error: true } },
+      { output: "stack trace...", metadata: { error: true } },
     );
 
     const [event] = spy.mock.calls[0];

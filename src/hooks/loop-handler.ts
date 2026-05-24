@@ -1,13 +1,16 @@
 import type { AgentId, FileReader, FileWriter, HookEvent, HookResponse } from "../core/types";
 import { TaskSplitter } from "../core/task-splitter";
 import { PlanParser } from "../core/plan-parser";
+import { matchesReviewRejection } from "../core/review-rejection-patterns";
 
 const PROCEED: HookResponse = { action: "proceed" };
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_SESSIONS = 50;
 
 const ESCALATION_TARGET: AgentId = "sisyphus";
+const PIVOT_TARGET: AgentId = "prometheus";
 const DEFAULT_MAX_RETRIES_BEFORE_ESCALATION = 3;
+const DEFAULT_MAX_REJECTIONS_BEFORE_PIVOT = 3;
 
 /**
  * `MAX_RETRIES_BEFORE_ESCALATION` 環境変数を読み取り、
@@ -47,11 +50,23 @@ export interface EscalationDecision {
   readonly historySummary: string;
 }
 
+export type PivotReason = "review_rejection_threshold_exceeded";
+
+export interface PivotDecision {
+  readonly pivoted: boolean;
+  readonly targetAgent: AgentId;
+  readonly rejections: number;
+  readonly reason?: PivotReason;
+  readonly summary: string;
+}
+
 export class LoopDetectionHandler {
   private readonly parser: PlanParser;
   private readonly sessions: Map<string, SessionState> = new Map();
   private readonly trials: Map<string, Map<string, TrialRecord[]>> = new Map();
+  private readonly reviewRejections: Map<string, Map<string, number>> = new Map();
   private readonly maxRetries: number;
+  private onSessionRemoved?: (sessionId: string) => void;
 
   constructor(
     private readonly fileReader: FileReader,
@@ -60,6 +75,13 @@ export class LoopDetectionHandler {
   ) {
     this.parser = new PlanParser();
     this.maxRetries = resolveMaxRetries();
+  }
+
+  /**
+   * Set a callback to be invoked when a session is removed (e.g., due to expiration).
+   */
+  setSessionRemovedCallback(callback: (sessionId: string) => void): void {
+    this.onSessionRemoved = callback;
   }
 
   setActivePlan(sessionId: string, planPath: string, taskId: string, agentId: AgentId): void {
@@ -85,6 +107,41 @@ export class LoopDetectionHandler {
     const list = sessionTrials.get(taskId) ?? [];
     list.push({ ...record, timestamp: Date.now() });
     sessionTrials.set(taskId, list);
+  }
+
+  /**
+   * レビュー出力から拒否回数を記録する。
+   * 連続拒否ではない出力が来た場合はカウントをリセットする。
+   */
+  recordReviewOutput(sessionId: string, taskId: string, output: string): void {
+    let sessionRejections = this.reviewRejections.get(sessionId);
+    if (!sessionRejections) {
+      sessionRejections = new Map();
+      this.reviewRejections.set(sessionId, sessionRejections);
+    }
+
+    const current = sessionRejections.get(taskId) ?? 0;
+    const next = matchesReviewRejection(output) ? current + 1 : 0;
+    sessionRejections.set(taskId, next);
+  }
+
+  /**
+   * 3 連続のレビュー拒否に到達した場合、Prometheus への pivot を返す。
+   */
+  evaluatePivot(sessionId: string, taskId: string): PivotDecision {
+    const rejections = this.reviewRejections.get(sessionId)?.get(taskId) ?? 0;
+    const pivoted = rejections >= DEFAULT_MAX_REJECTIONS_BEFORE_PIVOT;
+
+    return {
+      pivoted,
+      targetAgent: PIVOT_TARGET,
+      rejections,
+      reason: pivoted ? "review_rejection_threshold_exceeded" : undefined,
+      summary:
+        rejections === 0
+          ? "(no review rejections recorded)"
+          : `${rejections} consecutive review rejections recorded for ${taskId}`,
+    };
   }
 
   /**
@@ -244,5 +301,12 @@ export class LoopDetectionHandler {
     this.sessions.delete(sessionId);
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);
+    this.reviewRejections.delete(sessionId);
+
+    try {
+      this.onSessionRemoved?.(sessionId);
+    } catch (error) {
+      console.error(`[LoopDetectionHandler] Error in onSessionRemoved callback for session ${sessionId}:`, error);
+    }
   }
 }

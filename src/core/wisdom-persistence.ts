@@ -67,12 +67,21 @@ export class WisdomPersistence {
     }
 
     const store = WisdomStore.deserialize(data);
-    // Strict validation: if the file exists and is parsed but contains no valid entries
-    // where we expected a store structure, it might be corrupted.
-    // deserialize() returns an empty store on invalid entries, so we check if the
-    // input data was at least an object with an entries array if it wasn't empty.
-    if (data && typeof data === "object" && !("entries" in data)) {
-      throw new Error(`Invalid wisdom file format (missing entries): ${this.wisdomFilePath}`);
+    // Strict validation: accept either v1 ({ entries: [] }) or v2 ({ version: 2, entriesByAgent: {} }).
+    if (data && typeof data === "object") {
+      const hasValidV1 = "entries" in data && Array.isArray((data as { entries: unknown }).entries);
+      const hasValidV2 =
+        "version" in data &&
+        (data as { version?: unknown }).version === 2 &&
+        "entriesByAgent" in data &&
+        typeof (data as { entriesByAgent?: unknown }).entriesByAgent === "object" &&
+        (data as { entriesByAgent: unknown }).entriesByAgent !== null;
+
+      if (!hasValidV1 && !hasValidV2) {
+        throw new Error(`Invalid wisdom file format (missing valid entries or entriesByAgent): ${this.wisdomFilePath}`);
+      }
+    } else {
+      throw new Error(`Invalid wisdom file format (not an object): ${this.wisdomFilePath}`);
     }
 
     return store;

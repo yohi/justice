@@ -11,6 +11,7 @@ import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
+import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -21,8 +22,13 @@ export class PlanBridge {
   private readonly parser: PlanParser;
   private readonly progressReporter: ProgressReporter;
   private readonly dependencyAnalyzer: DependencyAnalyzer;
+  private readonly completionDetector: PlanCompletionDetector;
   private readonly activePlanPaths: Map<string, string> = new Map();
   private readonly lastUserMessages: Map<string, string> = new Map();
+  private readonly lastCompletionInputs: Map<
+    string,
+    Pick<PlanCompletionInput, "prompt" | "category" | "skillName">
+  > = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
 
@@ -37,6 +43,7 @@ export class PlanBridge {
     this.parser = new PlanParser();
     this.progressReporter = new ProgressReporter();
     this.dependencyAnalyzer = new DependencyAnalyzer();
+    this.completionDetector = new PlanCompletionDetector();
 
     // detect legacy argument order: new PlanBridge(reader, wisdomStore)
     if (this.isWisdomStore(loopHandlerOrWisdomStore)) {
@@ -89,6 +96,23 @@ export class PlanBridge {
   }
 
   /**
+   * Clear all internal state for a specific session.
+   */
+  destroySession(sessionId: string): void {
+    this.activePlanPaths.delete(sessionId);
+    this.lastUserMessages.delete(sessionId);
+    this.clearSessionCompletionInputs(sessionId);
+  }
+
+  private clearSessionCompletionInputs(sessionId: string): void {
+    for (const key of this.lastCompletionInputs.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        this.lastCompletionInputs.delete(key);
+      }
+    }
+  }
+
+  /**
    * Handle Message event: detect plan references and delegation intent.
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
@@ -114,11 +138,15 @@ export class PlanBridge {
       if (content === null) {
         // File missing: clear state and fail-open
         this.setActivePlan(event.sessionId, null);
+        for (const k of this.lastCompletionInputs.keys()) {
+          if (k.startsWith(`${event.sessionId}:`)) this.lastCompletionInputs.delete(k);
+        }
         return PROCEED;
       }
       planContent = content;
     } catch {
       this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
@@ -133,6 +161,7 @@ export class PlanBridge {
     if (!delegation) {
       // All tasks completed
       this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
       return {
         action: "inject",
         injectedContext: `[JUSTICE: All tasks in ${planRef.planPath} are already completed. No further delegation needed.]`,
@@ -151,6 +180,8 @@ export class PlanBridge {
         delegation.context.agentId ?? "hephaestus",
       );
     }
+
+    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
 
     let injectedContext = this.buildInjectedContext(planContent, delegation);
     if (fallbackTriggered) {
@@ -184,11 +215,15 @@ export class PlanBridge {
       if (content === null) {
         // File missing: clear state and fail-open
         this.setActivePlan(event.sessionId, null);
+        for (const k of this.lastCompletionInputs.keys()) {
+          if (k.startsWith(`${event.sessionId}:`)) this.lastCompletionInputs.delete(k);
+        }
         return PROCEED;
       }
       planContent = content;
     } catch {
       this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
@@ -203,6 +238,7 @@ export class PlanBridge {
     if (!delegation) {
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
@@ -216,9 +252,38 @@ export class PlanBridge {
       );
     }
 
+    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
+
     return {
       action: "inject",
       injectedContext: this.buildInjectedContext(planContent, delegation),
+    };
+  }
+
+  /**
+   * Handle PostToolUse event: emit completion guidance for finished delegated work.
+   */
+  async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
+    if (event.type !== "PostToolUse" || event.payload.toolName !== "task") return PROCEED;
+
+    if (!event.callId) return PROCEED;
+    const key = `${event.sessionId}:${event.callId}`;
+    const completionInput = this.lastCompletionInputs.get(key);
+    if (!completionInput) return PROCEED;
+
+    const completion = this.completionDetector.detectCompletion({
+      ...completionInput,
+      completed: !event.payload.error,
+      rawOutput: event.payload.toolResult,
+    });
+
+    this.lastCompletionInputs.delete(key);
+
+    if (!completion) return PROCEED;
+
+    return {
+      action: "inject",
+      injectedContext: completion.guidance,
     };
   }
 
@@ -279,5 +344,27 @@ export class PlanBridge {
     const entries = this.wisdomStore.getRelevant({ maxEntries: 5 });
     if (entries.length === 0) return undefined;
     return this.wisdomStore.formatForInjection(entries);
+  }
+
+  private rememberCompletionInput(sessionId: string, callId: string | undefined, delegation: DelegationRequest): void {
+    if (!callId) return;
+    const skillName = this.pickCompletionSkill(delegation.loadSkills);
+    this.lastCompletionInputs.set(`${sessionId}:${callId}`, {
+      prompt: delegation.prompt,
+      category: delegation.category,
+      skillName,
+    });
+  }
+
+  private pickCompletionSkill(loadSkills: readonly string[]): string | undefined {
+    if (loadSkills.includes("systematic-debugging")) {
+      return "systematic-debugging";
+    }
+
+    if (loadSkills.includes("code-review")) {
+      return "code-review";
+    }
+
+    return undefined;
   }
 }
