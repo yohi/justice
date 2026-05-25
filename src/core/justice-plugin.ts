@@ -32,10 +32,17 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
     const contexts = [a.injectedContext, b.injectedContext].filter(
       (ctx) => ctx !== "",
     );
-    return {
+    const result: InjectResponse = {
       action: "inject",
       injectedContext: contexts.join("\n\n---\n\n"),
     };
+    if (a.modifiedPayload !== undefined) {
+      return { ...result, modifiedPayload: a.modifiedPayload };
+    }
+    if (b.modifiedPayload !== undefined) {
+      return { ...result, modifiedPayload: b.modifiedPayload };
+    }
+    return result;
   }
 
   if (a.action === "inject") {

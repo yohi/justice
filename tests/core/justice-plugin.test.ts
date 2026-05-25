@@ -101,11 +101,29 @@ injectedContext,
       expect(result).not.toBe(a);
     });
 
-    it("should not preserve modifiedPayload on double inject merge", () => {
+    it("should preserve modifiedPayload from left on double inject merge", () => {
       const a: InjectResponse = {
         action: "inject",
         injectedContext: "from-a",
         modifiedPayload: { key: "a" },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a" },
+      });
+    });
+
+    it("should preserve modifiedPayload from right on double inject merge when left is absent", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
       };
       const b: InjectResponse = {
         action: "inject",
@@ -117,8 +135,28 @@ injectedContext,
       expect(result).toEqual({
         action: "inject",
         injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "b" },
       });
-      expect(result).not.toHaveProperty("modifiedPayload");
+    });
+
+    it("should prefer left modifiedPayload when both sides have it", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a", extra: true },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a", extra: true },
+      });
     });
   });
 
