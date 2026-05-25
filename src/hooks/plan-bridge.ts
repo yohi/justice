@@ -4,6 +4,7 @@ import type {
   HookResponse,
   DelegationRequest,
   WisdomStoreInterface,
+  PlanTask,
 } from "../core/types";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
@@ -14,7 +15,7 @@ import { DependencyAnalyzer } from "../core/dependency-analyzer";
 import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
-import { AgentRouter } from "../core/agent-router";
+import { AgentRouter, type RoutingCategory } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 
@@ -312,12 +313,13 @@ export class PlanBridge {
 
     if (writingCompletion) {
       const planPath = this.getActivePlan(sessionId) ?? "unknown";
-      let nextTask: import("../core/types").PlanTask | undefined;
+      let nextTask: PlanTask | undefined;
       let recommendedAgent = "hephaestus";
       let taskId = "unknown";
       let taskTitle = "Next Step";
       let parallelTasks = "";
-      let category: import("../core/agent-router").RoutingCategory = "quick";
+      let category: RoutingCategory = "quick";
+      let hasError = false;
 
       try {
         const content = await this.readPlanFile(planPath);
@@ -327,67 +329,126 @@ export class PlanBridge {
           if (nextTask) {
             taskId = nextTask.id;
             taskTitle = nextTask.title;
-            category = this.categoryClassifier.classify(nextTask) as import("../core/agent-router").RoutingCategory;
+            category = this.categoryClassifier.classify(nextTask) as RoutingCategory;
+            
             const relevantSkills: string[] = [];
-            if (nextTask.steps.some((s) => /(?:test|テスト)/i.test(s.description))) {
+            const textToCheck = (
+              nextTask.title +
+              " " +
+              nextTask.steps.map((s) => s.description).join(" ")
+            ).toLowerCase();
+
+            if (/(?:test|テスト)/i.test(textToCheck)) {
               relevantSkills.push("test-driven-development");
             }
+            if (/(?:debug|デバッグ|fix|修正|resolve|解決|error|エラー|bug|バグ)/i.test(textToCheck)) {
+              relevantSkills.push("systematic-debugging");
+            }
+            if (/(?:review|レビュー|refactor|リファクタ|clean|整理)/i.test(textToCheck)) {
+              relevantSkills.push("code-quality-reviewer");
+            }
+            if (/(?:spec|仕様|requirement|要件)/i.test(textToCheck)) {
+              relevantSkills.push("spec-reviewer");
+            }
+            if (/(?:plan|計画|design|設計|brainstorm|アイデア)/i.test(textToCheck)) {
+              relevantSkills.push("writing-plans");
+            }
+            if (/(?:implement|実装|create|作成|write|書く|add|追加|build|構築)/i.test(textToCheck)) {
+              relevantSkills.push("implementer-prompt");
+            }
+
             const routeResult = this.agentRouter.route(category, relevantSkills);
             recommendedAgent = routeResult.agentId;
             const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
             const otherParallel = parallelizable.filter((t) => t.id !== taskId);
             if (otherParallel.length > 0) {
-              parallelTasks = "**並列実行候補**: " + otherParallel.map((t) => t.id).join(", ");
+              parallelTasks = `**並列実行候補**: ${otherParallel.map((t) => t.id).join(", ")}`;
             }
           }
+        } else {
+          hasError = true;
         }
       } catch {
-        /* fail-open: keep defaults */
+        hasError = true;
       }
 
-      const source = "Detection source: " + writingCompletion.source + (writingCompletion.planFilePath ? " (" + writingCompletion.planFilePath + ")" : "");
-      const mediumNote = writingCompletion.confidence === "medium" ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n" : "\n";
+      if (!hasError) {
+        if (nextTask) {
+          const source = `Detection source: ${writingCompletion.source}${writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : ""}`;
+          const mediumNote = writingCompletion.confidence === "medium" ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n" : "\n";
 
-      const banner = formatBanner({
-        variant: "atlas_orchestration",
-        level: "info",
-        title: "Atlas Orchestration",
-        message: "Atlasがwriting-plansを完了しました。次のステップは " + recommendedAgent + " に委譲してください。",
-      });
+          const banner = formatBanner({
+            variant: "atlas_orchestration",
+            level: "info",
+            title: "Atlas Orchestration",
+            message: `Atlasがwriting-plansを完了しました。次のステップは ${recommendedAgent} に委譲してください。`,
+          });
 
-      const atlasGuidance = [
-        "---",
-        "[ATLAS ORCHESTRATION DIRECTIVE]",
-        "",
-        "**Plan completed**: " + planPath,
-        "**" + source + "**",
-        "",
-        "⚠️ 重要: Atlas として、ここからは自ら実装に着手せず、計画書に従って委譲してください。",
-        "",
-        "**次のアクション**:",
-        "> Step " + taskId + " \"" + taskTitle + "\" を `" + recommendedAgent + "` に委譲してください。",
-        "",
-        "**推奨エージェント**: " + recommendedAgent,
-        "（根拠: " + category + " カテゴリ・スキル推定）",
-        mediumNote,
-        parallelTasks,
-        "",
-        "---",
-      ].join("\n");
+          const atlasGuidance = [
+            "---",
+            "[ATLAS ORCHESTRATION DIRECTIVE]",
+            "",
+            `**Plan completed**: ${planPath}`,
+            `**${source}**`,
+            "",
+            "⚠️ 重要: Atlas として、ここからは自ら実装に着手せず、計画書に従って委譲してください。",
+            "",
+            "**次のアクション**:",
+            `> Step ${taskId} "${taskTitle}" を \`${recommendedAgent}\` に委譲してください。`,
+            "",
+            `**推奨エージェント**: ${recommendedAgent}`,
+            `（根拠: ${category} カテゴリ・スキル推定）`,
+            mediumNote,
+            parallelTasks,
+            "",
+            "---",
+          ].join("\n");
 
-      response = this.mergeResponses(response, {
-        action: "inject",
-        injectedContext: banner + "\n" + atlasGuidance,
-      });
+          response = this.mergeResponses(response, {
+            action: "inject",
+            injectedContext: `${banner}\n${atlasGuidance}`,
+          });
 
-      this.safeNotify(
-        sessionId,
-        taskId,
-        "info",
-        "atlas_orchestration",
-        "Atlas Orchestration",
-        "Atlas が writing-plans を完了 — 次のステップは " + recommendedAgent + " に委譲してください。",
-      );
+          this.safeNotify(
+            sessionId,
+            taskId,
+            "info",
+            "atlas_orchestration",
+            "Atlas Orchestration",
+            `Atlas が writing-plans を完了 — 次のステップは ${recommendedAgent} に委譲してください。`,
+          );
+        } else {
+          const banner = formatBanner({
+            variant: "atlas_orchestration",
+            level: "success",
+            title: "Atlas Orchestration",
+            message: "計画内のすべてのタスクが完了しました！ 🎉",
+          });
+          const atlasGuidance = [
+            "---",
+            "[ATLAS ORCHESTRATION DIRECTIVE]",
+            "",
+            `**Plan completed**: ${planPath}`,
+            "",
+            "計画書のすべてのタスクがチェックされました。これ以上の委譲は不要です。",
+            "---",
+          ].join("\n");
+
+          response = this.mergeResponses(response, {
+            action: "inject",
+            injectedContext: `${banner}\n${atlasGuidance}`,
+          });
+
+          this.safeNotify(
+            sessionId,
+            undefined,
+            "success",
+            "atlas_orchestration",
+            "Atlas Orchestration",
+            "計画内のすべてのタスクが完了しました。",
+          );
+        }
+      }
     }
 
     if (debuggingCompletion) {
@@ -396,12 +457,12 @@ export class PlanBridge {
         if (this.wisdomStore) {
           const drafts = this.learningExtractor.extract(
             {
-              taskId: "sisyphus-debug-" + sessionId,
+              taskId: `sisyphus-debug-${sessionId}`,
               status: "success",
               retryCount: 0,
             },
             toolResult,
-            { persona: "sisyphus" },
+            { persona: "sisyphus", debug: true },
           );
           for (const draft of drafts) {
             this.wisdomStore.add(draft, { persona: "sisyphus" });
@@ -416,15 +477,14 @@ export class PlanBridge {
         variant: "sisyphus_insight",
         level: "info",
         title: "Sisyphus Insight",
-        message: "Sisyphusがsystematic-debuggingを完了しました。" + savedCount + " 件のWisdomを保存しました。",
+        message: `Sisyphusがsystematic-debuggingを完了しました。${savedCount} 件のWisdomを保存しました。`,
       });
       response = this.mergeResponses(response, {
         action: "inject",
         injectedContext:
-          banner +
-          "\n---\n## 🔬 SISYPHUS INSIGHT DIRECTIVE\n\n" +
+          `${banner}\n---\n## 🔬 SISYPHUS INSIGHT DIRECTIVE\n\n` +
           `**Confidence**: ${debuggingCompletion.confidence}\n` +
-          "**Action**: 根本原因特定と修正を完了。" + savedCount + " 件のWisdomをSisyphus名前空間に保存しました。\n\n---",
+          `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました。\n\n---`,
       });
       this.safeNotify(
         sessionId,
@@ -432,7 +492,7 @@ export class PlanBridge {
         "info",
         "sisyphus_insight",
         "Sisyphus Insight",
-        "Sisyphus が debugging を完了しました。" + savedCount + " 件のWisdomを保存しました。",
+        `Sisyphus が debugging を完了しました。${savedCount} 件のWisdomを保存しました。`,
       );
     }
 
