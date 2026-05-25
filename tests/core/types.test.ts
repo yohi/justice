@@ -170,11 +170,11 @@ describe("Phase 5 wisdom types", () => {
         taskId: "task-3",
         category: "success_pattern",
         content: "Prefer readonly interfaces.",
-        persona: "draftPersona",
+        persona: "hephaestus",
       }),
-      { persona: "optionsPersona" },
+      { persona: "sisyphus" }
     );
 
-    expect(entry.persona).toBe("optionsPersona");
+    expect(entry.persona).toBe("sisyphus");
   });
 });
