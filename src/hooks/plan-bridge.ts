@@ -455,14 +455,15 @@ export class PlanBridge {
       let savedCount = 0;
       try {
         if (this.wisdomStore) {
+          const activeTaskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown-debug";
           const drafts = this.learningExtractor.extract(
             {
-              taskId: `sisyphus-debug-${sessionId}`,
+              taskId: activeTaskId,
               status: "success",
               retryCount: 0,
             },
             toolResult,
-            { persona: "sisyphus", debug: true },
+            { persona: "sisyphus" },
           );
           for (const draft of drafts) {
             this.wisdomStore.add(draft, { persona: "sisyphus" });
@@ -499,34 +500,50 @@ export class PlanBridge {
     // Prometheus pivot flow
     const lastPersona = this.completionDetector.lastInvokedPersona(sessionId);
     if (lastPersona === "prometheus" && this.loopHandler) {
-      const activePlanPath = this.getActivePlan(sessionId);
-      let taskId = "unknown";
-      if (activePlanPath) {
-        try {
-          const planContent = await this.fileReader.readFile(activePlanPath);
-          const tasks = this.parser.parse(planContent);
-          const activeTask = tasks.find((t) => t.status === "in_progress");
-          if (activeTask) taskId = activeTask.id;
-        } catch {
-          /* ignore */
-        }
-      }
+      const taskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown";
 
-      this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
-      const pivotDecision = this.loopHandler.evaluatePivot(sessionId, taskId);
-      if (pivotDecision.pivoted) {
+
+      const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
+      if (decision.pivoted) {
         const banner = formatBanner({
           variant: "architecture_pivot",
           level: "warning",
           title: "Architecture Pivot",
-          message: `Prometheusレビュー却下が${pivotDecision.rejections}回連続しました。`,
+          message: `Prometheusレビュー却下が${decision.rejections}回連続しました。`,
         });
+
+        const excerptBlock =
+          decision.recentExcerpts.length > 0
+            ? [
+                "",
+                "**直近の Prometheus 指摘抜粎**:",
+                ...decision.recentExcerpts.map((ex) => `- ${ex}`),
+              ]
+            : [];
+
+        const pivotBody = [
+          "---",
+          "**ARCHITECTURE PIVOT REQUIRED**",
+          "",
+          `Prometheus が直近 ${decision.rejections} 回のレビューで連続して却下を出しています（閾値: ${decision.maxRejections}）。`,
+          "このアプローチは手詰まりです。**通常の再試行ループを断ち、別の視座でアーキテクチャを再検討してください。**",
+          "",
+          "**検討すべき選択肢**:",
+          "1. 採用ライブラリの変更（同等機能で軽量・成熟したもの）",
+          "2. アプローチの簡略化（過剰な抽象化を削減）",
+          "3. 機能スコープの縮小（YAGNI 適用）",
+          "4. データ構造の根本的な見直し",
+          ...excerptBlock,
+          "",
+          "**次のアクション**:",
+          "> Hephaestus は、この pivot 指示に従って **別の実装アプローチ** を提案し、再実装してください。",
+          "> 同一の方針での修正は禁止です。",
+          "---",
+        ].join("\n");
+
         response = this.mergeResponses(response, {
           action: "inject",
-          injectedContext:
-            banner +
-            "\n---\n## \uD83D\uDEA7 ARCHITECTURE PIVOT DIRECTIVE\n\n" +
-            `**Status**: ${pivotDecision.rejections} 連続レビュー却下により Hephaestus にピボット\n\n---`,
+          injectedContext: `${banner}\n${pivotBody}`,
         });
         this.safeNotify(
           sessionId,
@@ -534,7 +551,7 @@ export class PlanBridge {
           "warning",
           "architecture_pivot",
           "Architecture Pivot",
-          `Prometheus レビュー却下が ${pivotDecision.rejections} 回連続 — Hephaestus にピボットします。`,
+          `Prometheus レビュー却下が ${decision.rejections} 回連続 — Hephaestus にピボットします。`,
         );
       }
     }
@@ -586,6 +603,24 @@ export class PlanBridge {
   }
 
   /**
+   * Get the active task ID for a session by reading the active plan.
+   */
+  private async getActiveTaskIdForSession(sessionId: string): Promise<string | undefined> {
+    const activePlanPath = this.getActivePlan(sessionId);
+    if (!activePlanPath) return undefined;
+    try {
+      const planContent = await this.readPlanFile(activePlanPath);
+      if (planContent === null) return undefined;
+      const tasks = this.parser.parse(planContent);
+      const activeTask = tasks.find((t) => t.status === "in_progress");
+      return activeTask?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Internal helper to build injected context for task delegation.
    * Internal helper to build injected context for task delegation.
    */
   private buildInjectedContext(planContent: string, delegation: DelegationRequest): string {

@@ -91,7 +91,22 @@ describe("LoopDetectionHandler", () => {
   });
 
   describe("review rejection pivots", () => {
-    it("should pivot to Prometheus after three consecutive review rejections", () => {
+    it("#1: single NG results in pivoted=false with 1 excerpt", () => {
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
+
+      const decision = handler.recordReviewOutput("s-1", "task-1", "BLOCKER: missing tests");
+
+      expect(decision.pivoted).toBe(false);
+      expect(decision.rejections).toBe(1);
+      expect(decision.recentExcerpts.length).toBe(1);
+      expect(decision.maxRejections).toBe(3);
+    });
+
+    it("#2: three consecutive NGs triggers pivot to hephaestus", () => {
       const handler = new LoopDetectionHandler(
         createMockFileReader({}),
         createMockFileWriter(),
@@ -100,22 +115,16 @@ describe("LoopDetectionHandler", () => {
 
       handler.recordReviewOutput("s-1", "task-1", "BLOCKER: missing tests");
       handler.recordReviewOutput("s-1", "task-1", "MUST FIX: improve error handling");
-      handler.recordReviewOutput("s-1", "task-1", "requested changes before merge");
+      const decision = handler.recordReviewOutput("s-1", "task-1", "requested changes before merge");
 
-      const pivot = handler.evaluatePivot("s-1", "task-1");
-
-      expect(pivot).toEqual(
-        expect.objectContaining({
-          pivoted: true,
-          targetAgent: "prometheus",
-          rejections: 3,
-          reason: "review_rejection_threshold_exceeded",
-        }),
-      );
-      expect(pivot.summary).toContain("3 consecutive review rejections");
+      expect(decision.pivoted).toBe(true);
+      expect(decision.targetAgent).toBe("hephaestus");
+      expect(decision.rejections).toBe(3);
+      expect(decision.reason).toBe("review_rejection_threshold");
+      expect(decision.recentExcerpts.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("should reset the rejection streak after a non-rejection output", () => {
+    it("#3: two NGs stays below threshold", () => {
       const handler = new LoopDetectionHandler(
         createMockFileReader({}),
         createMockFileWriter(),
@@ -123,16 +132,121 @@ describe("LoopDetectionHandler", () => {
       );
 
       handler.recordReviewOutput("s-2", "task-2", "BLOCKER: missing tests");
-      handler.recordReviewOutput("s-2", "task-2", "Looks good to me");
-      handler.recordReviewOutput("s-2", "task-2", "MUST FIX: add coverage");
+      const decision = handler.recordReviewOutput("s-2", "task-2", "MUST FIX: add coverage");
 
-      const pivot = handler.evaluatePivot("s-2", "task-2");
-
-      expect(pivot.pivoted).toBe(false);
-      expect(pivot.rejections).toBe(1);
+      expect(decision.pivoted).toBe(false);
+      expect(decision.rejections).toBe(2);
     });
 
-    it("should remove review rejection counts when a session is evicted", () => {
+    it("#4: non-rejection output keeps previous count and clears excerpts", () => {
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
+
+      handler.recordReviewOutput("s-3", "task-3", "BLOCKER: missing tests");
+      const decision = handler.recordReviewOutput("s-3", "task-3", "Looks good to me");
+
+      expect(decision.pivoted).toBe(false);
+      expect(decision.rejections).toBe(0);
+      expect(decision.recentExcerpts).toEqual([]);
+    });
+
+    it("#5: env var MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5 triggers on 5th", () => {
+      const prev = process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+      process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = "5";
+      try {
+        const handler = new LoopDetectionHandler(
+          createMockFileReader({}),
+          createMockFileWriter(),
+          new TaskSplitter(),
+        );
+
+        for (let i = 0; i < 4; i++) {
+          const d = handler.recordReviewOutput("s-5", "task-5", "BLOCKER: issue");
+          expect(d.pivoted).toBe(false);
+        }
+        const decision = handler.recordReviewOutput("s-5", "task-5", "MUST FIX: another");
+        expect(decision.pivoted).toBe(true);
+        expect(decision.rejections).toBe(5);
+        expect(decision.maxRejections).toBe(5);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+        } else {
+          process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = prev;
+        }
+      }
+    });
+
+    it("#6: env var 'abc' (NaN) falls back to default 3", () => {
+      const prev = process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+      process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = "abc";
+      try {
+        const handler = new LoopDetectionHandler(
+          createMockFileReader({}),
+          createMockFileWriter(),
+          new TaskSplitter(),
+        );
+
+        handler.recordReviewOutput("s-6", "task-6", "BLOCKER: issue");
+        handler.recordReviewOutput("s-6", "task-6", "BLOCKER: issue2");
+        const decision = handler.recordReviewOutput("s-6", "task-6", "MUST FIX: something");
+        expect(decision.pivoted).toBe(true);
+        expect(decision.maxRejections).toBe(3);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+        } else {
+          process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = prev;
+        }
+      }
+    });
+
+    it("#7: env var '0' or '-1' falls back to default 3", () => {
+      for (const value of ["0", "-1"]) {
+        const prev = process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+        process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = value;
+        try {
+          const handler = new LoopDetectionHandler(
+            createMockFileReader({}),
+            createMockFileWriter(),
+            new TaskSplitter(),
+          );
+
+          handler.recordReviewOutput("s-7", "task-7", "BLOCKER: issue");
+          handler.recordReviewOutput("s-7", "task-7", "BLOCKER: issue2");
+          const decision = handler.recordReviewOutput("s-7", "task-7", "MUST FIX: something");
+          expect(decision.pivoted).toBe(true);
+          expect(decision.maxRejections).toBe(3);
+        } finally {
+          if (prev === undefined) {
+            delete process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT;
+          } else {
+            process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT = prev;
+          }
+        }
+      }
+    });
+
+    it("#8: recordReviewOutput records trial with agent=prometheus, result=failure", () => {
+      const handler = new LoopDetectionHandler(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        new TaskSplitter(),
+      );
+
+      handler.recordReviewOutput("s-8", "task-8", "BLOCKER: missing tests");
+
+      const history = handler.getTrialHistory("s-8", "task-8");
+      expect(history.length).toBe(1);
+      expect(history[0].agent).toBe("prometheus");
+      expect(history[0].result).toBe("failure");
+      expect(history[0].wisdom).toContain("review_rejected");
+    });
+
+    it("#9: removeSession clears rejections and excerpts", () => {
       const reader = createMockFileReader({});
       const writer = createMockFileWriter();
       const handler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
@@ -142,6 +256,8 @@ describe("LoopDetectionHandler", () => {
         nowSpy.mockReturnValue(0);
         handler.setActivePlan("old-session", "plan.md", "task-1", "hephaestus");
         handler.recordReviewOutput("old-session", "task-1", "BLOCKER: missing tests");
+        handler.recordReviewOutput("old-session", "task-1", "BLOCKER: bad design");
+        handler.recordReviewOutput("old-session", "task-1", "MUST FIX: everything");
 
         nowSpy.mockReturnValue(30 * 60 * 1000 + 1);
         handler.setActivePlan("new-session", "plan.md", "task-2", "hephaestus");
@@ -149,9 +265,11 @@ describe("LoopDetectionHandler", () => {
         const pivot = handler.evaluatePivot("old-session", "task-1");
         expect(pivot.rejections).toBe(0);
         expect(pivot.pivoted).toBe(false);
+        expect(pivot.recentExcerpts).toEqual([]);
       } finally {
         nowSpy.mockRestore();
       }
     });
   });
 });
+/* eslint-enable security/detect-object-injection */

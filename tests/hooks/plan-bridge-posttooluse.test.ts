@@ -228,9 +228,9 @@ describe("PlanBridge.handlePostToolUse", () => {
     } as PostToolUseEvent);
 
     expect(response.action).toBe("inject");
-    expect(addedEntries).toHaveLength(2);
+    expect(addedEntries).toHaveLength(1);
     expect(addedEntries.some(e => e.category === "design_decision")).toBe(true);
-    expect(addedEntries.some(e => e.category === "success_pattern")).toBe(true);
-    expect(response.injectedContext).toContain("2 件のWisdomを保存しました");
+    expect(addedEntries.some(e => e.category === "success_pattern")).toBe(false);
+    expect(response.injectedContext).toContain("1 件のWisdomを保存しました");
   });
 });

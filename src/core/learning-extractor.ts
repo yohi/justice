@@ -28,7 +28,7 @@ export class LearningExtractor {
     } else {
       switch (feedback.status) {
         case "success":
-          results.push(...this.extractFromSuccess(feedback));
+          results.push(...this.extractFromSuccess(feedback, rawOutput));
           break;
         case "failure":
           results.push(...this.extractFromFailure(feedback, rawOutput));
@@ -53,9 +53,18 @@ export class LearningExtractor {
 
   private extractFromSuccess(
     feedback: TaskFeedback,
+    rawOutput?: string,
   ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
+
+    // systematic-debugging root cause marker detection (success path)
+    if (rawOutput) {
+      const rootCauseEntry = this.extractRootCause(feedback.taskId, rawOutput);
+      if (rootCauseEntry) {
+        results.push(rootCauseEntry);
+      }
+    }
 
     // Only extract pattern when tests actually ran
     if (hasTestResults) {

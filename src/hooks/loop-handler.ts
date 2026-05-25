@@ -1,14 +1,14 @@
 import type { AgentId, FileReader, FileWriter, HookEvent, HookResponse } from "../core/types";
 import { TaskSplitter } from "../core/task-splitter";
 import { PlanParser } from "../core/plan-parser";
-import { matchesReviewRejection } from "../core/review-rejection-patterns";
+import { ReviewRejectionDetector } from "../core/review-rejection-detector";
 
 const PROCEED: HookResponse = { action: "proceed" };
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_SESSIONS = 50;
 
 const ESCALATION_TARGET: AgentId = "sisyphus";
-const PIVOT_TARGET: AgentId = "prometheus";
+const PIVOT_TARGET: AgentId = "hephaestus";
 const DEFAULT_MAX_RETRIES_BEFORE_ESCALATION = 3;
 const DEFAULT_MAX_REJECTIONS_BEFORE_PIVOT = 3;
 
@@ -20,6 +20,17 @@ function resolveMaxRetries(): number {
   const raw = process.env.MAX_RETRIES_BEFORE_ESCALATION ?? "3";
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_MAX_RETRIES_BEFORE_ESCALATION;
+  return parsed;
+}
+
+/**
+ * `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` 環境変数を読み取り、
+ * NaN / 非正の値の場合はデフォルト値（3）にフォールバックする。
+ */
+function resolveMaxRejections(): number {
+  const raw = process.env.MAX_REVIEW_REJECTIONS_BEFORE_PIVOT ?? "3";
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_MAX_REJECTIONS_BEFORE_PIVOT;
   return parsed;
 }
 
@@ -50,14 +61,15 @@ export interface EscalationDecision {
   readonly historySummary: string;
 }
 
-export type PivotReason = "review_rejection_threshold_exceeded";
+export type PivotReason = "review_rejection_threshold";
 
 export interface PivotDecision {
   readonly pivoted: boolean;
   readonly targetAgent: AgentId;
   readonly rejections: number;
+  readonly maxRejections: number;
   readonly reason?: PivotReason;
-  readonly summary: string;
+  readonly recentExcerpts: readonly string[];
 }
 
 export class LoopDetectionHandler {
@@ -65,7 +77,10 @@ export class LoopDetectionHandler {
   private readonly sessions: Map<string, SessionState> = new Map();
   private readonly trials: Map<string, Map<string, TrialRecord[]>> = new Map();
   private readonly reviewRejections: Map<string, Map<string, number>> = new Map();
+  private readonly rejectionExcerpts: Map<string, Map<string, string[]>> = new Map();
+  private readonly detector: ReviewRejectionDetector;
   private readonly maxRetries: number;
+  private readonly maxRejections: number;
   private onSessionRemoved?: (sessionId: string) => void;
 
   constructor(
@@ -74,7 +89,9 @@ export class LoopDetectionHandler {
     private readonly splitter: TaskSplitter,
   ) {
     this.parser = new PlanParser();
+    this.detector = new ReviewRejectionDetector();
     this.maxRetries = resolveMaxRetries();
+    this.maxRejections = resolveMaxRejections();
   }
 
   /**
@@ -112,35 +129,77 @@ export class LoopDetectionHandler {
   /**
    * レビュー出力から拒否回数を記録する。
    * 連続拒否ではない出力が来た場合はカウントをリセットする。
+   * ReviewRejectionDetector を使用し、一致時は excerpts を追記・recordTrial 連動記録を行う。
    */
-  recordReviewOutput(sessionId: string, taskId: string, output: string): void {
+  recordReviewOutput(sessionId: string, taskId: string, output: string): PivotDecision {
+    const signal = this.detector.detect(output);
+
     let sessionRejections = this.reviewRejections.get(sessionId);
+    let sessionExcerpts = this.rejectionExcerpts.get(sessionId);
     if (!sessionRejections) {
       sessionRejections = new Map();
       this.reviewRejections.set(sessionId, sessionRejections);
     }
+    if (!sessionExcerpts) {
+      sessionExcerpts = new Map();
+      this.rejectionExcerpts.set(sessionId, sessionExcerpts);
+    }
 
     const current = sessionRejections.get(taskId) ?? 0;
-    const next = matchesReviewRejection(output) ? current + 1 : 0;
-    sessionRejections.set(taskId, next);
+
+    if (signal.matched) {
+      const next = current + 1;
+      sessionRejections.set(taskId, next);
+
+      const existing = sessionExcerpts.get(taskId) ?? [];
+      const merged = [...existing, ...signal.excerpts];
+      sessionExcerpts.set(taskId, merged);
+
+      this.recordTrial(sessionId, taskId, {
+        agent: "prometheus",
+        result: "failure",
+        wisdom: `review_rejected: ${signal.summary}`,
+      });
+
+      const pivoted = next >= this.maxRejections;
+      return {
+        pivoted,
+        targetAgent: PIVOT_TARGET,
+        rejections: next,
+        maxRejections: this.maxRejections,
+        reason: pivoted ? "review_rejection_threshold" : undefined,
+        recentExcerpts: merged.slice(-3),
+      };
+    }
+
+    // Not matched: reset streak
+    sessionRejections.set(taskId, 0);
+    sessionExcerpts.set(taskId, []);
+
+    return {
+      pivoted: false,
+      targetAgent: PIVOT_TARGET,
+      rejections: 0,
+      maxRejections: this.maxRejections,
+      recentExcerpts: [],
+    };
   }
 
   /**
-   * 3 連続のレビュー拒否に到達した場合、Prometheus への pivot を返す。
+   * 連続レビュー拒否の閾値に到達した場合、Hephaestus への pivot を返す。
    */
   evaluatePivot(sessionId: string, taskId: string): PivotDecision {
     const rejections = this.reviewRejections.get(sessionId)?.get(taskId) ?? 0;
-    const pivoted = rejections >= DEFAULT_MAX_REJECTIONS_BEFORE_PIVOT;
+    const excerpts = this.rejectionExcerpts.get(sessionId)?.get(taskId) ?? [];
+    const pivoted = rejections >= this.maxRejections;
 
     return {
       pivoted,
       targetAgent: PIVOT_TARGET,
       rejections,
-      reason: pivoted ? "review_rejection_threshold_exceeded" : undefined,
-      summary:
-        rejections === 0
-          ? "(no review rejections recorded)"
-          : `${rejections} consecutive review rejections recorded for ${taskId}`,
+      maxRejections: this.maxRejections,
+      reason: pivoted ? "review_rejection_threshold" : undefined,
+      recentExcerpts: excerpts.slice(-3),
     };
   }
 
@@ -302,6 +361,7 @@ export class LoopDetectionHandler {
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);
     this.reviewRejections.delete(sessionId);
+    this.rejectionExcerpts.delete(sessionId);
 
     try {
       this.onSessionRemoved?.(sessionId);
