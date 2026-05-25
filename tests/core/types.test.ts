@@ -7,7 +7,11 @@ import type {
   CompactionPayload,
   FileWriter,
   FeedbackAction,
+  WisdomEntryInput,
+  WisdomStoreInterface,
 } from "../../src/core/types";
+import { WisdomStore } from "../../src/core/wisdom-store";
+import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 describe("Hook Types Validation", () => {
   describe("HookEvent", () => {
@@ -80,6 +84,10 @@ describe("Phase 3 types", () => {
   it("should enforce FileWriter interface shape", () => {
     const writer: FileWriter = {
       writeFile: async (_path: string, _content: string) => {},
+      rename: async (_from: string, _to: string) => {},
+      mkdir: async (_path: string, _recursive: boolean) => {},
+      rmdir: async (_path: string) => {},
+      deleteFile: async (_path: string) => {},
     };
     expect(writer.writeFile).toBeDefined();
   });
@@ -125,5 +133,48 @@ describe("Phase 4 types", () => {
       reason: "context window limit reached",
     };
     expect(payload.eventType).toBe("compaction");
+  });
+});
+
+describe("Phase 5 wisdom types", () => {
+  it("should allow drafting wisdom entries with optional persona", () => {
+    const draft: WisdomEntryInput = makeWisdomDraft({
+      taskId: "task-1",
+      category: "design_decision",
+      content: "Use atomic persistence for wisdom writes.",
+      persona: "atlas",
+    });
+
+    expect(draft.persona).toBe("atlas");
+    expect(draft.taskId).toBe("task-1");
+  });
+
+  it("should accept AddOptions with persona", () => {
+    const store: WisdomStoreInterface = new WisdomStore();
+    const entry = store.add(
+      makeWisdomDraft({
+        taskId: "task-2",
+        category: "success_pattern",
+        content: "Prefer readonly interfaces.",
+      }),
+      { persona: "sisyphus" },
+    );
+
+    expect(entry.persona).toBe("sisyphus");
+  });
+
+  it("should let AddOptions.persona override entry.persona", () => {
+    const store: WisdomStoreInterface = new WisdomStore();
+    const entry = store.add(
+      makeWisdomDraft({
+        taskId: "task-3",
+        category: "success_pattern",
+        content: "Prefer readonly interfaces.",
+        persona: "hephaestus",
+      }),
+      { persona: "sisyphus" }
+    );
+
+    expect(entry.persona).toBe("sisyphus");
   });
 });

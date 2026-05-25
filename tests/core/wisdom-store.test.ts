@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
-import { createWisdomEntry } from "../helpers/wisdom-draft-factory";
+import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 describe("WisdomStore", () => {
   describe("add", () => {
@@ -115,11 +115,13 @@ describe("WisdomStore", () => {
       const store = new WisdomStore();
       store.add({ taskId: "h-1", persona: "hephaestus", category: "success_pattern", content: "H1" });
       store.add({ taskId: "a-1", persona: "atlas", category: "failure_gotcha", content: "A1" });
+      store.add({ taskId: "h-2", persona: "hephaestus", category: "design_decision", content: "H2" });
       store.add({ taskId: "a-2", persona: "atlas", category: "design_decision", content: "A2" });
 
-      const results = store.getRelevant({ persona: "atlas" });
+      const results = store.getRelevant({ persona: "hephaestus" });
       expect(results).toHaveLength(2);
-      expect(results.every((entry) => entry.persona === "atlas")).toBe(true);
+      expect(results.map((entry) => entry.taskId)).toEqual(["h-1", "h-2"]);
+      expect(results.every((entry) => entry.persona === "hephaestus")).toBe(true);
     });
 
     it("should fall back to all entries when the requested persona has none", () => {
@@ -149,15 +151,19 @@ describe("WisdomStore", () => {
   describe("formatForInjection", () => {
     it("should format entries as Markdown for prompt injection", () => {
       const store = new WisdomStore();
-      const entry: WisdomEntry = createWisdomEntry({
-        id: "w-123",
+      const draft = makeWisdomDraft({
         taskId: "task-test",
         persona: "hephaestus",
         category: "failure_gotcha",
         content: "Don't forget to await the database connection.",
-        errorClass: "type_error",
-        timestamp: "2024-01-01T00:00:00Z",
       });
+      const entry: WisdomEntry = {
+        id: "w-123",
+        timestamp: "2024-01-01T00:00:00Z",
+        ...draft,
+        persona: draft.persona ?? "hephaestus",
+        errorClass: "type_error",
+      };
 
       const formatted = store.formatForInjection([entry]);
 

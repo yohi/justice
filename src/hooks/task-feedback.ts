@@ -1,4 +1,5 @@
 import type {
+  AgentId,
   FileReader,
   FileWriter,
   HookEvent,
@@ -24,6 +25,7 @@ const MAX_SESSIONS = 50;
 interface SessionState {
   planPath: string;
   activeTaskId: string;
+  currentAgent?: AgentId;
   referenceFiles: string[];
   retryCounts: Map<string, number>; // errorClass -> count
   lastAccess: number;
@@ -68,11 +70,13 @@ export class TaskFeedbackHandler {
     planPath: string,
     taskId: string,
     referenceFiles: string[] = [],
+    agentId?: AgentId,
   ): void {
     this.cleanupSessions();
     this.sessions.set(sessionId, {
       planPath,
       activeTaskId: taskId,
+      currentAgent: agentId,
       referenceFiles,
       retryCounts: new Map(),
       lastAccess: Date.now(),
@@ -247,6 +251,7 @@ export class TaskFeedbackHandler {
     const learnings = this.learningExtractor.extract(
       { ...feedback, retryCount: totalRetries },
       rawResult,
+      { persona: session.currentAgent },
     );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
@@ -297,6 +302,7 @@ export class TaskFeedbackHandler {
         errorClassification: action.errorClass,
       },
       rawResult,
+      { persona: session.currentAgent },
     );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
