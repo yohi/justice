@@ -12,6 +12,8 @@ import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
 import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
+import { formatBanner } from "../core/justice-notifier";
+import type { JusticeNotifier } from "../core/justice-notifier";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -31,6 +33,7 @@ export class PlanBridge {
   > = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
+  private readonly notifier: JusticeNotifier | null;
 
   constructor(
     fileReader: FileReader,
@@ -53,6 +56,7 @@ export class PlanBridge {
       this.loopHandler = loopHandlerOrWisdomStore ?? null;
       this.wisdomStore = wisdomStore ?? null;
     }
+    this.notifier = null;
   }
 
   /**
@@ -199,10 +203,18 @@ export class PlanBridge {
 
   /**
    * Handle PreToolUse event: inject plan context when task() is called.
+   * Also records skill invocation intent for A+B completion detection.
    */
   async handlePreToolUse(event: HookEvent): Promise<HookResponse> {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
+
+    // B phase: record skill invocation for A+B completion detection
+    this.completionDetector.recordPreToolUseInvocation(
+      event.sessionId,
+      event.payload.toolName,
+      event.payload.toolInput,
+    );
 
     // Need an active plan to provide context for this session
     const activePlanPath = this.getActivePlan(event.sessionId);
@@ -262,29 +274,163 @@ export class PlanBridge {
 
   /**
    * Handle PostToolUse event: emit completion guidance for finished delegated work.
+   * Evaluates A+B hybrid skill completion, Prometheus pivot, and legacy fallback.
    */
   async handlePostToolUse(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "PostToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    if (!event.callId) return PROCEED;
-    const key = `${event.sessionId}:${event.callId}`;
-    const completionInput = this.lastCompletionInputs.get(key);
-    if (!completionInput) return PROCEED;
+    const sessionId = event.sessionId;
+    const toolResult = event.payload.toolResult;
+    const isError = event.payload.error;
+    let response: HookResponse = PROCEED;
 
-    const completion = this.completionDetector.detectCompletion({
-      ...completionInput,
-      completed: !event.payload.error,
-      rawOutput: event.payload.toolResult,
-    });
+    // A+B hybrid: evaluate skill completions
+    const writingCompletion = this.completionDetector.evaluateSkillCompletion(
+      sessionId,
+      event.payload.toolName,
+      toolResult,
+      isError,
+      "writing-plans",
+    );
+    const debuggingCompletion = this.completionDetector.evaluateSkillCompletion(
+      sessionId,
+      event.payload.toolName,
+      toolResult,
+      isError,
+      "systematic-debugging",
+    );
 
-    this.lastCompletionInputs.delete(key);
+    if (writingCompletion) {
+      const banner = formatBanner({
+        variant: "atlas_orchestration",
+        level: "info",
+        title: "Atlas Orchestration",
+        message: "Atlasがwriting-plansを完了しました。",
+      });
+      response = this.mergeResponses(response, {
+        action: "inject",
+        injectedContext:
+          banner +
+          "\n---\n## \uD83C\uDFAF ATLAS ORCHESTRATION DIRECTIVE\n\n" +
+          `**Confidence**: ${writingCompletion.confidence}\n` +
+          "**Next Action**: Hephaestusへのステップ引き渡しを推奨します。\n\n---",
+      });
+      this.safeNotify(
+        "info",
+        "atlas_orchestration",
+        "Atlas Orchestration",
+        "Atlas が writing-plans を完了しました。",
+      );
+    }
 
-    if (!completion) return PROCEED;
+    if (debuggingCompletion) {
+      const banner = formatBanner({
+        variant: "sisyphus_insight",
+        level: "info",
+        title: "Sisyphus Insight",
+        message: "Sisyphusがsystematic-debuggingを完了しました。",
+      });
+      response = this.mergeResponses(response, {
+        action: "inject",
+        injectedContext:
+          banner +
+          "\n---\n## \uD83D\uDD2C SISYPHUS INSIGHT DIRECTIVE\n\n" +
+          `**Confidence**: ${debuggingCompletion.confidence}\n` +
+          "**Action**: 根本原因特定と修正を完了。\n\n---",
+      });
+      this.safeNotify(
+        "info",
+        "sisyphus_insight",
+        "Sisyphus Insight",
+        "Sisyphus が debugging を完了しました。",
+      );
+    }
 
-    return {
-      action: "inject",
-      injectedContext: completion.guidance,
-    };
+    // Prometheus pivot flow
+    const lastPersona = this.completionDetector.lastInvokedPersona(sessionId);
+    if (lastPersona === "prometheus" && this.loopHandler) {
+      const activePlanPath = this.getActivePlan(sessionId);
+      let taskId = "unknown";
+      if (activePlanPath) {
+        try {
+          const planContent = await this.fileReader.readFile(activePlanPath);
+          const tasks = this.parser.parse(planContent);
+          const activeTask = tasks.find((t) => t.status === "in_progress");
+          if (activeTask) taskId = activeTask.id;
+        } catch {
+          /* ignore */
+        }
+      }
+
+      this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
+      const pivotDecision = this.loopHandler.evaluatePivot(sessionId, taskId);
+      if (pivotDecision.pivoted) {
+        const banner = formatBanner({
+          variant: "architecture_pivot",
+          level: "warning",
+          title: "Architecture Pivot",
+          message: `Prometheusレビュー却下が${pivotDecision.rejections}回連続しました。`,
+        });
+        response = this.mergeResponses(response, {
+          action: "inject",
+          injectedContext:
+            banner +
+            "\n---\n## \uD83D\uDEA7 ARCHITECTURE PIVOT DIRECTIVE\n\n" +
+            `**Status**: ${pivotDecision.rejections} 連続レビュー却下により Hephaestus にピボット\n\n---`,
+        });
+        this.safeNotify(
+          "warning",
+          "architecture_pivot",
+          "Architecture Pivot",
+          `Prometheus レビュー却下が ${pivotDecision.rejections} 回連続 — Hephaestus にピボットします。`,
+        );
+      }
+    }
+
+    // Legacy fallback — always clear input to prevent stale data
+    if (event.callId) {
+      const key = `${sessionId}:${event.callId}`;
+      const completionInput = this.lastCompletionInputs.get(key);
+      this.lastCompletionInputs.delete(key);
+      if (!writingCompletion && !debuggingCompletion && !isError && completionInput) {
+        const legacyCompletion = this.completionDetector.detectCompletion({
+          prompt: completionInput.prompt,
+          category: completionInput.category,
+          skillName: completionInput.skillName,
+          completed: true,
+          rawOutput: toolResult,
+        });
+        if (legacyCompletion) {
+          response = this.mergeResponses(response, {
+            action: "inject",
+            injectedContext: legacyCompletion.guidance,
+          });
+        }
+      }
+    }
+    if (!writingCompletion && !debuggingCompletion && !isError && event.callId) {
+      const key = `${sessionId}:${event.callId}`;
+      const completionInput = this.lastCompletionInputs.get(key);
+      // Always clear the input to prevent stale data
+      this.lastCompletionInputs.delete(key);
+      if (completionInput) {
+        const legacyCompletion = this.completionDetector.detectCompletion({
+          prompt: completionInput.prompt,
+          category: completionInput.category,
+          skillName: completionInput.skillName,
+          completed: !isError,
+          rawOutput: toolResult,
+        });
+        if (legacyCompletion) {
+          response = this.mergeResponses(response, {
+            action: "inject",
+            injectedContext: legacyCompletion.guidance,
+          });
+        }
+      }
+    }
+
+    return response;
   }
 
   /**
@@ -346,7 +492,11 @@ export class PlanBridge {
     return this.wisdomStore.formatForInjection(entries);
   }
 
-  private rememberCompletionInput(sessionId: string, callId: string | undefined, delegation: DelegationRequest): void {
+  private rememberCompletionInput(
+    sessionId: string,
+    callId: string | undefined,
+    delegation: DelegationRequest,
+  ): void {
     if (!callId) return;
     const skillName = this.pickCompletionSkill(delegation.loadSkills);
     this.lastCompletionInputs.set(`${sessionId}:${callId}`, {
@@ -366,5 +516,45 @@ export class PlanBridge {
     }
 
     return undefined;
+  }
+
+  private mergeResponses(a: HookResponse, b: HookResponse): HookResponse {
+    if (a.action === "skip" || b.action === "skip") return { action: "skip" };
+
+    if (a.action === "inject" && b.action === "inject") {
+      const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
+      if (contexts.length === 0) return { action: "inject", injectedContext: "" };
+      return {
+        action: "inject",
+        injectedContext: contexts.join("\n\n---\n\n"),
+      };
+    }
+
+    if (a.action === "inject") return a;
+    if (b.action === "inject") return b;
+
+    return PROCEED;
+  }
+
+  private safeNotify(
+    level: "info" | "success" | "warning" | "error",
+    variant:
+      | "atlas_orchestration"
+      | "architecture_pivot"
+      | "sisyphus_insight"
+      | "escalation"
+      | "wisdom_saved"
+      | "loop_detected",
+    title: string,
+    message: string,
+  ): void {
+    if (!this.notifier) return;
+    try {
+      void Promise.resolve(this.notifier.notify({ level, variant, title, message })).catch(() => {
+        /* fail-open */
+      });
+    } catch {
+      /* fail-open */
+    }
   }
 }

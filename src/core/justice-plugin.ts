@@ -6,6 +6,7 @@ import type {
   FileWriter,
   HookEvent,
   HookResponse,
+  InjectResponse,
   EventEvent,
   CompactionPayload,
 } from "./types";
