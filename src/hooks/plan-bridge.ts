@@ -39,6 +39,7 @@ export class PlanBridge {
     fileReader: FileReader,
     loopHandlerOrWisdomStore?: LoopDetectionHandler | WisdomStoreInterface,
     wisdomStore?: WisdomStoreInterface,
+    notifier?: JusticeNotifier,
   ) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
@@ -56,7 +57,7 @@ export class PlanBridge {
       this.loopHandler = loopHandlerOrWisdomStore ?? null;
       this.wisdomStore = wisdomStore ?? null;
     }
-    this.notifier = null;
+    this.notifier = notifier ?? null;
   }
 
   /**
@@ -316,6 +317,8 @@ export class PlanBridge {
           "**Next Action**: Hephaestusへのステップ引き渡しを推奨します。\n\n---",
       });
       this.safeNotify(
+        sessionId,
+        undefined,
         "info",
         "atlas_orchestration",
         "Atlas Orchestration",
@@ -339,6 +342,8 @@ export class PlanBridge {
           "**Action**: 根本原因特定と修正を完了。\n\n---",
       });
       this.safeNotify(
+        sessionId,
+        undefined,
         "info",
         "sisyphus_insight",
         "Sisyphus Insight",
@@ -379,6 +384,8 @@ export class PlanBridge {
             `**Status**: ${pivotDecision.rejections} 連続レビュー却下により Hephaestus にピボット\n\n---`,
         });
         this.safeNotify(
+          sessionId,
+          taskId,
           "warning",
           "architecture_pivot",
           "Architecture Pivot",
@@ -537,6 +544,8 @@ export class PlanBridge {
   }
 
   private safeNotify(
+    sessionId: string,
+    taskId: string | undefined,
     level: "info" | "success" | "warning" | "error",
     variant:
       | "atlas_orchestration"
@@ -550,7 +559,9 @@ export class PlanBridge {
   ): void {
     if (!this.notifier) return;
     try {
-      void Promise.resolve(this.notifier.notify({ level, variant, title, message })).catch(() => {
+      void Promise.resolve(
+        this.notifier.notify({ sessionId, taskId, level, variant, title, message })
+      ).catch(() => {
         /* fail-open */
       });
     } catch {

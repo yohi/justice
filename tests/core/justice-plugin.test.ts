@@ -31,10 +31,10 @@ describe("JusticePlugin", () => {
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };
-const inject = (injectedContext: string): HookResponse => ({
-action: "inject",
-injectedContext,
-});
+    const inject = (injectedContext: string): HookResponse => ({
+      action: "inject",
+      injectedContext,
+    });
 
     it("should merge proceed + proceed into proceed", () => {
       const result = mergePostToolUseResponses(proceed, proceed);
@@ -305,4 +305,4 @@ injectedContext,
       expect(spy).toHaveBeenCalled();
     });
   });
-});
+    });

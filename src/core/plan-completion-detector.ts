@@ -116,16 +116,19 @@ export class PlanCompletionDetector {
     if (skills.length === 0 && !detectedPersona) return;
 
     const now = Date.now();
-    const existing = this.pendingMap.get(sessionId);
 
-    const skillTargets = existing
-      ? new Set([...existing.skillTargets, ...skills])
-      : new Set(skills);
+    // Only create/update pendingMap when skills were detected
+    if (skills.length > 0) {
+      const existing = this.pendingMap.get(sessionId);
+      const skillTargets = existing
+        ? new Set([...existing.skillTargets, ...skills])
+        : new Set(skills);
 
-    this.pendingMap.set(sessionId, {
-      skillTargets,
-      lastAccess: now,
-    });
+      this.pendingMap.set(sessionId, {
+        skillTargets,
+        lastAccess: now,
+      });
+    }
 
     if (detectedPersona) {
       this.personaMap.set(sessionId, { agentId: detectedPersona, lastAccess: now });
@@ -153,10 +156,10 @@ export class PlanCompletionDetector {
     const pending = this.pendingMap.get(sessionId);
     const hasPending = pending?.skillTargets.has(target) ?? false;
 
-    if (hasPending) {
+    if (hasPending && pending) {
       // Clear only this target's pending flag
-      pending!.skillTargets.delete(target);
-      if (pending!.skillTargets.size === 0) {
+      pending.skillTargets.delete(target);
+      if (pending.skillTargets.size === 0) {
         this.pendingMap.delete(sessionId);
       }
 

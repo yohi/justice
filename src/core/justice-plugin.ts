@@ -255,7 +255,7 @@ export class JusticePlugin {
 
     // Use tieredWisdomStore for handlers that need cross-project context
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
-    this.planBridge = new PlanBridge(fileReader, this.loopHandler, this.tieredWisdomStore);
+    this.planBridge = new PlanBridge(fileReader, this.loopHandler, this.tieredWisdomStore, options.notifier);
 
     // Ensure session cleanup propagates from loopHandler to planBridge
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
