@@ -4,6 +4,7 @@ type WisdomEntryDraft = WisdomEntryInput;
 
 export interface LearningExtractionContext {
   readonly persona?: AgentId;
+  readonly debug?: boolean;
 }
 
 export class LearningExtractor {
@@ -14,21 +15,33 @@ export class LearningExtractor {
   extract(feedback: TaskFeedback, rawOutput?: string, context?: LearningExtractionContext): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
 
-    switch (feedback.status) {
-      case "success":
-        results.push(...this.extractFromSuccess(feedback));
-        break;
-      case "failure":
-        results.push(...this.extractFromFailure(feedback, rawOutput));
-        break;
-      case "timeout":
-        results.push(...this.extractFromTimeout(feedback));
-        break;
-      case "compaction_risk":
-        // No specific learning from compaction risk
-        break;
-      default:
-        this.assertUnreachable(feedback.status);
+    if (context?.debug && rawOutput) {
+      const rootCauseEntry = this.extractRootCause(feedback.taskId, rawOutput);
+      if (rootCauseEntry) {
+        results.push(rootCauseEntry);
+      }
+      results.push({
+        taskId: feedback.taskId,
+        category: "success_pattern",
+        content: "Systematic debugging successfully resolved the issue.",
+      });
+    } else {
+      switch (feedback.status) {
+        case "success":
+          results.push(...this.extractFromSuccess(feedback));
+          break;
+        case "failure":
+          results.push(...this.extractFromFailure(feedback, rawOutput));
+          break;
+        case "timeout":
+          results.push(...this.extractFromTimeout(feedback));
+          break;
+        case "compaction_risk":
+          // No specific learning from compaction risk
+          break;
+        default:
+          this.assertUnreachable(feedback.status);
+      }
     }
 
     return this.applyPersona(results, context?.persona);
