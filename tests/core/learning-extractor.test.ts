@@ -181,6 +181,34 @@ describe("LearningExtractor", () => {
       expect(rootCauseEntry?.content).toContain("競合状態");
     });
 
+    it("should extract a design_decision from a Japanese root cause marker with ASCII colon", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13-ja-ascii",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "design_error",
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "根本原因:競合状態",
+        { persona: "atlas" },
+      );
+
+      expect(entries).toHaveLength(2);
+      const rootCauseEntry = entries.find(
+        (entry) => entry.category === "design_decision" && entry.content.includes("Root cause identified"),
+      );
+      expect(rootCauseEntry).toBeDefined();
+      expect(rootCauseEntry).toEqual(
+        expect.objectContaining({
+          category: "design_decision",
+          persona: "atlas",
+        }),
+      );
+      expect(rootCauseEntry?.content).toContain("競合状態");
+    });
+
     it("should not extract a root cause if the matched content is only whitespace", () => {
       const feedback: TaskFeedback = {
         taskId: "task-13b",
