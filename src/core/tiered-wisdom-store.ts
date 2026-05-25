@@ -2,6 +2,7 @@ import type {
   AgentId,
   ErrorClass,
   WisdomEntry,
+  AddOptions,
   WisdomCategory,
   WisdomStoreInterface,
   WisdomScope,
@@ -24,10 +25,6 @@ export interface TieredWisdomStoreOptions {
   secretDetector?: SecretPatternDetector;
   globalDisplayPath?: string;
   logger?: TieredWisdomStoreLogger;
-}
-
-export interface AddOptions {
-  scope?: WisdomScope;
 }
 
 const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
@@ -91,6 +88,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
     const persona =
+      options?.persona ??
       entry.persona ??
       PersonaClassifier.classify({
         category: entry.category,
@@ -164,7 +162,18 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   }
 
   formatForInjection(entries: WisdomEntry[]): string {
-    return this.localStore.formatForInjection(entries);
+    if (entries.length === 0) return "";
+    const presentPersonas = new Set(entries.map((e) => e.persona));
+    const orderedPersonas: AgentId[] = (["hephaestus", "sisyphus", "prometheus", "atlas"] as AgentId[]).filter(
+      (p) => presentPersonas.has(p),
+    );
+    const lines: string[] = [];
+    for (const persona of orderedPersonas) {
+      const personaEntries = entries.filter((e) => e.persona === persona);
+      lines.push(`**[JUSTICE AI: Past Learnings for ${persona}]**`);
+      lines.push(...WisdomStore.formatEntriesBody(personaEntries));
+    }
+    return lines.join("\n");
   }
 
   async loadAll(): Promise<void> {

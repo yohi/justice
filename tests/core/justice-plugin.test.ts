@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { JusticePlugin } from "../../src/core/justice-plugin";
+import { JusticePlugin, mergePostToolUseResponses } from "../../src/core/justice-plugin";
 import type {
-  FileReader,
-  FileWriter,
-  MessageEvent,
-  PreToolUseEvent,
-  PostToolUseEvent,
-  EventEvent,
+FileReader,
+FileWriter,
+  HookResponse, InjectResponse,
+MessageEvent,
+PreToolUseEvent,
+PostToolUseEvent,
+  EventEvent
 } from "../../src/core/types";
 import {
   createMockFileReader,
@@ -25,6 +26,138 @@ describe("JusticePlugin", () => {
     });
     writer = createMockFileWriter();
     plugin = new JusticePlugin(reader, writer);
+  });
+
+  describe("mergePostToolUseResponses", () => {
+    const proceed: HookResponse = { action: "proceed" };
+    const skip: HookResponse = { action: "skip" };
+    const inject = (injectedContext: string): HookResponse => ({
+      action: "inject",
+      injectedContext,
+    });
+
+    it("should merge proceed + proceed into proceed", () => {
+      const result = mergePostToolUseResponses(proceed, proceed);
+
+      expect(result).toEqual({ action: "proceed" });
+      expect(result).not.toBe(proceed);
+    });
+
+    it("should merge inject + proceed into inject", () => {
+      const a = inject("from-a");
+      const result = mergePostToolUseResponses(a, proceed);
+
+      expect(result).toEqual(a);
+      expect(result).not.toBe(a);
+    });
+
+    it("should merge proceed + inject into inject", () => {
+      const b = inject("from-b");
+      const result = mergePostToolUseResponses(proceed, b);
+
+      expect(result).toEqual(b);
+      expect(result).not.toBe(b);
+    });
+
+    it("should merge inject + inject into concatenated inject", () => {
+      const result = mergePostToolUseResponses(inject("from-a"), inject("from-b"));
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+      });
+    });
+
+    it("should return skip when the left response is skip", () => {
+      const result = mergePostToolUseResponses(skip, inject("from-b"));
+
+      expect(result).toEqual({ action: "skip" });
+    });
+
+    it("should return skip when the right response is skip", () => {
+      const result = mergePostToolUseResponses(inject("from-a"), skip);
+
+      expect(result).toEqual({ action: "skip" });
+    });
+
+    it("should preserve empty injected contexts when concatenating", () => {
+      const result = mergePostToolUseResponses(inject(""), inject("tail"));
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "tail",
+      });
+    });
+
+    it("should preserve modifiedPayload when merging a single inject response", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { args: { loadSkills: ["skill-a"] } },
+      };
+      const result = mergePostToolUseResponses(a, proceed);
+
+      expect(result).toEqual(a);
+      expect(result).not.toBe(a);
+    });
+
+    it("should preserve modifiedPayload from left on double inject merge", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a" },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a" },
+      });
+    });
+
+    it("should preserve modifiedPayload from right on double inject merge when left is absent", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "b" },
+      });
+    });
+
+    it("should prefer left modifiedPayload when both sides have it", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a", extra: true },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a", extra: true },
+      });
+    });
   });
 
   describe("handleEvent", () => {
@@ -172,4 +305,4 @@ describe("JusticePlugin", () => {
       expect(spy).toHaveBeenCalled();
     });
   });
-});
+    });

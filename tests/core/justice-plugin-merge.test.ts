@@ -19,7 +19,7 @@ describe("mergePostToolUseResponses", () => {
     expect(merged).toEqual(
       expect.objectContaining({
         action: "inject",
-        injectedContext: "PlanBridge context\n\nTaskFeedback context",
+        injectedContext: "PlanBridge context\n\n---\n\nTaskFeedback context",
       }),
     );
   });
@@ -67,7 +67,7 @@ describe("JusticePlugin PostToolUse merge", () => {
     expect(response).toEqual(
       expect.objectContaining({
         action: "inject",
-        injectedContext: "PlanBridge context\n\nTaskFeedback context",
+        injectedContext: "PlanBridge context\n\n---\n\nTaskFeedback context",
       }),
     );
   });

@@ -49,9 +49,9 @@ export { SecretPatternDetector } from "./core/secret-pattern-detector";
 export {
   TieredWisdomStore,
   type TieredWisdomStoreOptions,
-  type AddOptions,
   type TieredWisdomStoreLogger,
 } from "./core/tiered-wisdom-store";
+export type { AddOptions } from "./core/types";
 
 // Phase 6 Exports
 export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
