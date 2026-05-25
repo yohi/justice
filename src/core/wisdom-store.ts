@@ -7,6 +7,7 @@ import type {
   WisdomStoreInterface,
 } from "./types";
 
+import { PersonaClassifier } from "./persona-classifier";
 type StoredWisdomEntry = Omit<WisdomEntry, "persona"> & { readonly persona?: AgentId };
 
 interface WisdomStoreDataV1 {
@@ -44,7 +45,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Auto-generates ID and timestamp. Evicts oldest entries if exceeding maxEntries.
    */
   add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry {
-    const persona = options?.persona ?? entry.persona ?? DEFAULT_PERSONA;
+    const persona = options?.persona ?? entry.persona ?? PersonaClassifier.classify(entry);
     const newEntry: WisdomEntry = {
       id: "w-" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       timestamp: new Date().toISOString(),
