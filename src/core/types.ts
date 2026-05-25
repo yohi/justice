@@ -287,6 +287,11 @@ export type WisdomEntryInput = Omit<WisdomEntry, "id" | "timestamp" | "persona">
   readonly persona?: AgentId;
 };
 
+export interface AddOptions {
+  readonly scope?: WisdomScope;
+  readonly persona?: AgentId;
+}
+
 export type WisdomCategory =
   | "success_pattern" // 成功した実装パターン
   | "failure_gotcha" // 失敗時の落とし穴
@@ -303,7 +308,7 @@ export type WisdomScope = "local" | "global";
 export interface WisdomStoreInterface {
   add(
     entry: WisdomEntryInput,
-    options?: { scope?: WisdomScope },
+    options?: AddOptions,
   ): WisdomEntry;
   getByTaskId(taskId: string): WisdomEntry[];
   getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[];
