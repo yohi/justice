@@ -29,24 +29,21 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
   }
 
   if (a.action === "inject" && b.action === "inject") {
+    const contexts = [a.injectedContext, b.injectedContext].filter(
+      (ctx) => ctx !== "",
+    );
     return {
       action: "inject",
-      injectedContext: `${a.injectedContext}\n\n---\n\n${b.injectedContext}`,
+      injectedContext: contexts.join("\n\n---\n\n"),
     };
   }
 
   if (a.action === "inject") {
-    return {
-      action: "inject",
-      injectedContext: a.injectedContext,
-    };
+    return { ...a };
   }
 
   if (b.action === "inject") {
-    return {
-      action: "inject",
-      injectedContext: b.injectedContext,
-    };
+    return { ...b };
   }
 
   return { action: "proceed" };

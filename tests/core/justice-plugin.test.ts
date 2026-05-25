@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { JusticePlugin, mergePostToolUseResponses } from "../../src/core/justice-plugin";
 import type {
-  FileReader,
-  FileWriter,
-  HookResponse,
-  MessageEvent,
-  PreToolUseEvent,
-  PostToolUseEvent,
-  EventEvent,
+FileReader,
+FileWriter,
+  HookResponse, InjectResponse,
+MessageEvent,
+PreToolUseEvent,
+PostToolUseEvent,
+  EventEvent
 } from "../../src/core/types";
 import {
   createMockFileReader,
@@ -31,10 +31,10 @@ describe("JusticePlugin", () => {
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };
-    const inject = (injectedContext: string): HookResponse => ({
-      action: "inject",
-      injectedContext,
-    });
+const inject = (injectedContext: string): HookResponse => ({
+action: "inject",
+injectedContext,
+});
 
     it("should merge proceed + proceed into proceed", () => {
       const result = mergePostToolUseResponses(proceed, proceed);
@@ -85,8 +85,40 @@ describe("JusticePlugin", () => {
 
       expect(result).toEqual({
         action: "inject",
-        injectedContext: "\n\n---\n\ntail",
+        injectedContext: "tail",
       });
+    });
+
+    it("should preserve modifiedPayload when merging a single inject response", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { args: { loadSkills: ["skill-a"] } },
+      };
+      const result = mergePostToolUseResponses(a, proceed);
+
+      expect(result).toEqual(a);
+      expect(result).not.toBe(a);
+    });
+
+    it("should not preserve modifiedPayload on double inject merge", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a" },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+      });
+      expect(result).not.toHaveProperty("modifiedPayload");
     });
   });
 
