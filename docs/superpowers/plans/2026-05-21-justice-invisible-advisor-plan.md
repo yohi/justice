@@ -184,12 +184,12 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: 型テスト先行作成** — `WisdomEntry.persona: AgentId` が必須であること、`WisdomEntryDraft.persona?: AgentId` がオプショナルであること、`AddOptions { scope?, persona? }` を含むこと、を `tsc --noEmit` 経由でコンパイル時検証。
-- [ ] **Step 2: `src/core/types.ts` を §3-1 通りに変更** — `WisdomEntry` に `readonly persona: AgentId` 追加、`WisdomEntryDraft` を `Omit<WisdomEntry, "id" | "timestamp" | "persona"> & { persona?: AgentId }` に変更、`AddOptions { scope?, persona? }` を追加。
-- [ ] **Step 3: `tests/helpers/wisdom-draft-factory.ts` を実装** — `makeWisdomDraft(partial?)` のデフォルト `{ taskId: "task-1", category: "success_pattern", content: "test", persona: "hephaestus" }`。既存テストの書き換え量最小化のため、新規ヘルパー経由で draft を構築する移行ガイドをコメントで明記。
-- [ ] **Step 4: 型変更で壊れる既存テスト箇所を一覧化** — `grep -rn "WisdomEntry" tests/` で全箇所列挙し、各テストで `makeWisdomDraft` 経由に変換するか、`persona` を明示。型エラー 0 になるまで修正。
-- [ ] **Step 5: Devcontainer 内で `bun run typecheck && bun run test` を実行し全 pass 確認**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: 型テスト先行作成** — `WisdomEntry.persona: AgentId` が必須であること、`WisdomEntryDraft.persona?: AgentId` がオプショナルであること、`AddOptions { scope?, persona? }` を含むこと、を `tsc --noEmit` 経由でコンパイル時検証。
+- [x] **Step 2: `src/core/types.ts` を §3-1 通りに変更** — `WisdomEntry` に `readonly persona: AgentId` 追加、`WisdomEntryDraft` を `Omit<WisdomEntry, "id" | "timestamp" | "persona"> & { persona?: AgentId }` に変更、`AddOptions { scope?, persona? }` を追加。
+- [x] **Step 3: `tests/helpers/wisdom-draft-factory.ts` を実装** — `makeWisdomDraft(partial?)` のデフォルト `{ taskId: "task-1", category: "success_pattern", content: "test", persona: "hephaestus" }`。既存テストの書き換え量最小化のため、新規ヘルパー経由で draft を構築する移行ガイドをコメントで明記。
+- [x] **Step 4: 型変更で壊れる既存テスト箇所を一覧化** — `grep -rn "WisdomEntry" tests/` で全箇所列挙し、各テストで `makeWisdomDraft` 経由に変換するか、`persona` を明示。型エラー 0 になるまで修正。
+- [x] **Step 5: Devcontainer 内で `bun run typecheck && bun run test` を実行し全 pass 確認**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 2: `WisdomStore` ペルソナ別内部表現
 
@@ -201,13 +201,13 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-7 の表 #1〜#10 を網羅。`add` の persona 確定優先順位 (options > draft.persona > classifier フォールバック)、`getRelevant({ persona })` 絞り込み、`getRelevant({ persona, maxEntries })`、persona 未指定時の昇順全件返却、LRU eviction が最古エントリ保有 bucket から削る挙動、`replaceEntries([])` の全 bucket クリア、persona 欠落 entry を `replaceEntries` で受けた際の classifier 振り分けを検証。#10 の persona 欠落テストでは v1 マイグレーション時のランタイム入力を模擬するため `as unknown as WisdomEntry` キャストを使用する。
-- [ ] **Step 2: `WisdomStore` 内部を `Map<AgentId, WisdomEntry[]>` に再実装** — 設計書 §5-1 の構造を踏襲。`entriesByPersona` は 4 ペルソナで初期化。`add` で persona 確定後 `entriesByPersona.get(persona).push()`。
-- [ ] **Step 3: `evictOldestIfOverflow` を実装** — 全 bucket の合計が `maxEntries` を超える限り、最古 timestamp を保有する bucket から `shift`。
-- [ ] **Step 4: `getRelevant`/`getAllEntries`/`replaceEntries` を新 API シグネチャに合わせて実装**
-- [ ] **Step 5: 既存 `WisdomStoreInterface` 契約との互換性確認** — `getRelevant({persona?})` の `persona` は optional のため、persona 未指定の既存呼び出しは無変更で通る。
-- [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-7 の表 #1〜#10 を網羅。`add` の persona 確定優先順位 (options > draft.persona > classifier フォールバック)、`getRelevant({ persona })` 絞り込み、`getRelevant({ persona, maxEntries })`、persona 未指定時の昇順全件返却、LRU eviction が最古エントリ保有 bucket から削る挙動、`replaceEntries([])` の全 bucket クリア、persona 欠落 entry を `replaceEntries` で受けた際の classifier 振り分けを検証。#10 の persona 欠落テストでは v1 マイグレーション時のランタイム入力を模擬するため `as unknown as WisdomEntry` キャストを使用する。
+- [x] **Step 2: `WisdomStore` 内部を `Map<AgentId, WisdomEntry[]>` に再実装** — 設計書 §5-1 の構造を踏襲。`entriesByPersona` は 4 ペルソナで初期化。`add` で persona 確定後 `entriesByPersona.get(persona).push()`。
+- [x] **Step 3: `evictOldestIfOverflow` を実装** — 全 bucket の合計が `maxEntries` を超える限り、最古 timestamp を保有する bucket から `shift`。
+- [x] **Step 4: `getRelevant`/`getAllEntries`/`replaceEntries` を新 API シグネチャに合わせて実装**
+- [x] **Step 5: 既存 `WisdomStoreInterface` 契約との互換性確認** — `getRelevant({persona?})` の `persona` は optional のため、persona 未指定の既存呼び出しは無変更で通る。
+- [x] **Step 6: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: `WisdomPersistence` v1/v2 マイグレーション
 
@@ -219,13 +219,13 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成** — 設計書 §9-4 の表 #1〜#11 を網羅。ファイル不在、空文字列、破損 JSON (`load` 空 / `loadStrict` throw)、v1 → v2 自動マイグレーション (classifier 経由で persona 付与)、v2 直読 (PascalCase ラベル → 内部小文字 AgentId 変換)、未知キー無視、`version === 2` 優先で `entries` 無視、`saveAtomic` 出力が v2 のみ、`mergeById` で新しい timestamp 側の persona 優先、認識不能形式の挙動、を全数検証。
-- [ ] **Step 2: v2 シリアル型を `src/core/types.ts` 隣接 or `wisdom-persistence.ts` 内部で定義** — `{ version: 2, maxEntries: number, byAgent: Record<PascalAgentLabel, WisdomEntry[]> }`。`AGENT_LABELS: Record<AgentId, string>` を定数化。
-- [ ] **Step 3: `loadStrict()` を §3-3 のフロー通りに実装** — 失敗時は `load()` が catch して空ストア (fail-open) 維持。
-- [ ] **Step 4: `saveAtomic()` は常に v2 形式で書き出し** — `mergeById` 内の persona 採用ルール (timestamp 新しい側) を実装。
-- [ ] **Step 5: テストフィクスチャ作成** — v1/v2/破損/未知キー混入の各 JSON サンプルを `tests/fixtures/` 配下 or テスト内インライン文字列で用意。
-- [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成** — 設計書 §9-4 の表 #1〜#11 を網羅。ファイル不在、空文字列、破損 JSON (`load` 空 / `loadStrict` throw)、v1 → v2 自動マイグレーション (classifier 経由で persona 付与)、v2 直読 (PascalCase ラベル → 内部小文字 AgentId 変換)、未知キー無視、`version === 2` 優先で `entries` 無視、`saveAtomic` 出力が v2 のみ、`mergeById` で新しい timestamp 側の persona 優先、認識不能形式の挙動、を全数検証。
+- [x] **Step 2: v2 シリアル型を `src/core/types.ts` 隣接 or `wisdom-persistence.ts` 内部で定義** — `{ version: 2, maxEntries: number, byAgent: Record<PascalAgentLabel, WisdomEntry[]> }`。`AGENT_LABELS: Record<AgentId, string>` を定数化。
+- [x] **Step 3: `loadStrict()` を §3-3 のフロー通りに実装** — 失敗時は `load()` が catch して空ストア (fail-open) 維持。
+- [x] **Step 4: `saveAtomic()` は常に v2 形式で書き出し** — `mergeById` 内の persona 採用ルール (timestamp 新しい側) を実装。
+- [x] **Step 5: テストフィクスチャ作成** — v1/v2/破損/未知キー混入の各 JSON サンプルを `tests/fixtures/` 配下 or テスト内インライン文字列で用意。
+- [x] **Step 6: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 4: `TieredWisdomStore` persona 伝播
 
@@ -237,12 +237,12 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを更新** — 設計書 §9-8 の表 #1〜#4 を網羅。local 3 + global 2 合算、local 1 + global 部分補完、persona 該当なし時の空配列、local/global 同一 id 重複排除を検証。
-- [ ] **Step 2: `getRelevant({ persona? })` を §5-2 通りに実装** — `localIds` Set で重複排除、`maxEntries` から `local.length` を差し引いた `remaining` 件のみ global から補完。
-- [ ] **Step 3: `formatForInjection(entries)` の ペルソナ別ヘッダ追加** — エントリの persona が混在する場合のみ `**[JUSTICE AI: Past Learnings for <Persona>]**` ヘッダでグルーピング (§5-2 末尾)。混在しない場合は既存出力を維持。
-- [ ] **Step 4: `formatForInjection` の単体テストを追加** — 単一ペルソナ時はヘッダ無し、混在時はペルソナごとにブロック分割。
-- [ ] **Step 5: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを更新** — 設計書 §9-8 の表 #1〜#4 を網羅。local 3 + global 2 合算、local 1 + global 部分補完、persona 該当なし時の空配列、local/global 同一 id 重複排除を検証。
+- [x] **Step 2: `getRelevant({ persona? })` を §5-2 通りに実装** — `localIds` Set で重複排除、`maxEntries` から `local.length` を差し引いた `remaining` 件のみ global から補完。
+- [x] **Step 3: `formatForInjection(entries)` の ペルソナ別ヘッダ追加** — エントリの persona が混在する場合のみ `**[JUSTICE AI: Past Learnings for <Persona>]**` ヘッダでグルーピング (§5-2 末尾)。混在しない場合は既存出力を維持。
+- [x] **Step 4: `formatForInjection` の単体テストを追加** — 単一ペルソナ時はヘッダ無し、混在時はペルソナごとにブロック分割。
+- [x] **Step 5: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ### Task 5: `LearningExtractor` の persona 付与
 
@@ -256,13 +256,13 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを更新** — 設計書 §9-9 の表 #1〜#5 を網羅。context 未指定時の classifier フォールバック、context 明示時の上書き、systematic-debugging 経路 (`Root cause:` / `根本原因:` マーカー検出時の `design_decision` draft 生成)、既存 success_pattern 経路の後方互換を検証。
-- [ ] **Step 2: `LearningExtractor.extract(feedback, rawOutput?, context?: { persona?: AgentId })` シグネチャ拡張** — §5-5 通り。各 draft の persona は context > classifier の順で確定。
-- [ ] **Step 3: `extractFromSuccess` 内に根本原因マーカー分岐を追加** — `learning-extractor.ts` 内 private 定数として `ROOT_CAUSE_MARKERS = [/Root cause:/i, /根本原因[:：]/u]` を保持。マッチ時 `category: "design_decision"` draft を生成。
-- [ ] **Step 4: `TaskFeedbackHandler.setActivePlan(plan, agentId?: AgentId)` シグネチャ拡張** — `session.currentAgent` として保持、`extract` 呼び出しに伝播。
-- [ ] **Step 5: 既存 `task-feedback.test.ts` の呼び出し箇所互換性確認** — `agentId` はオプショナル維持のため既存呼び出しは無変更で動作することを assert。
-- [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを更新** — 設計書 §9-9 の表 #1〜#5 を網羅。context 未指定時の classifier フォールバック、context 明示時の上書き、systematic-debugging 経路 (`Root cause:` / `根本原因:` マーカー検出時の `design_decision` draft 生成)、既存 success_pattern 経路の後方互換を検証。
+- [x] **Step 2: `LearningExtractor.extract(feedback, rawOutput?, context?: { persona?: AgentId })` シグネチャ拡張** — §5-5 通り。各 draft の persona は context > classifier の順で確定。
+- [x] **Step 3: `extractFromSuccess` 内に根本原因マーカー分岐を追加** — `learning-extractor.ts` 内 private 定数として `ROOT_CAUSE_MARKERS = [/Root cause:/i, /根本原因[:：]/u]` を保持。マッチ時 `category: "design_decision"` draft を生成。
+- [x] **Step 4: `TaskFeedbackHandler.setActivePlan(plan, agentId?: AgentId)` シグネチャ拡張** — `session.currentAgent` として保持、`extract` 呼び出しに伝播。
+- [x] **Step 5: 既存 `task-feedback.test.ts` の呼び出し箇所互換性確認** — `agentId` はオプショナル維持のため既存呼び出しは無変更で動作することを assert。
+- [x] **Step 6: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ---
 
@@ -280,51 +280,30 @@ master
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成** — 設計書 §9-3 の表 #1〜#15 を完全網羅。skill_marker (PreToolUse 保留)、result_path (specs パスマッチ)、result_marker (`## Architecture` + `## Implementation` 同時出現 / `Root cause:` / `根本原因:`)、isError=true で `null`、無関係文字列で `null`、保留消去後の再評価、TTL 境界 (5min ±1ms、`Date.now` モック必須)、最大件数 LRU (51 セッション登録で最古 evict)、`lastInvokedPersona` のスキル名/agent フィールド対応表 (§4-1 表)、不正 toolInput の防御的扱いを全数検証。
-- [ ] **Step 2: 内部状態として `(sessionId, SkillTarget)` 複合キーの保留 Map と `(sessionId → AgentId)` の `lastInvokedPersona` Map を実装** — TTL 5 分、最大 50 セッション、`LoopDetectionHandler` と同水準の LRU。
-- [ ] **Step 3: `recordPreToolUseInvocation(sessionId, toolName, toolInput)` を実装** — §4-1 の保留登録ロジック + `lastInvokedPersona` 対応表 (`toolInput.agent` > `skills`/`loadSkills` > `role`/`prompt` 部分一致)。同一 task() で複数スキル指定時は独立保留。
-- [ ] **Step 4: `evaluateSkillCompletion(sessionId, toolName, toolResult, isError, target)` を実装** — 保留あり → `confidence: high`、保留なくとも result マーカー一致 → `confidence: medium`。検出後 `(sessionId, target)` 保留のみ消去 (他 target は影響なし)。isError=true は常に null。
-- [ ] **Step 5: `lastInvokedPersona(sessionId): AgentId | undefined` を実装** — §4-1 表の優先順位通り。
-- [ ] **Step 6: 検出マーカー定数を private に保持** — writing-plans: `docs/superpowers/specs/\d{4}-\d{2}-\d{2}-.*-design\.md` + `## Architecture` + `## Implementation`、systematic-debugging: `Root cause:` / `根本原因:`。
-- [ ] **Step 7: `src/index.ts` から export**
-- [ ] **Step 8: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 9: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成** — 設計書 §9-3 の表 #1〜#15 を完全網羅。skill_marker (PreToolUse 保留)、result_path (specs パスマッチ)、result_marker (`## Architecture` + `## Implementation` 同時出現 / `Root cause:` / `根本原因:`)、isError=true で `null`、無関係文字列で `null`、保留消去後の再評価、TTL 境界 (5min ±1ms、`Date.now` モック必須)、最大件数 LRU (51 セッション登録で最古 evict)、`lastInvokedPersona` のスキル名/agent フィールド対応表 (§4-1 表)、不正 toolInput の防御的扱いを全数検証。
+- [x] **Step 2: 内部状態として `(sessionId, SkillTarget)` 複合キーの保留 Map と `(sessionId → AgentId)` の `lastInvokedPersona` Map を実装** — TTL 5 分、最大 50 セッション、`LoopDetectionHandler` と同水準の LRU。
+- [x] **Step 3: `recordPreToolUseInvocation(sessionId, toolName, toolInput)` を実装** — §4-1 の保留登録ロジック + `lastInvokedPersona` 対応表 (`toolInput.agent` > `skills`/`loadSkills` > `role`/`prompt` 部分一致)。同一 task() で複数スキル指定時は独立保留。
+- [x] **Step 4: `evaluateSkillCompletion(sessionId, toolName, toolResult, isError, target)` を実装** — 保留あり → `confidence: high`、保留なくとも result マーカー一致 → `confidence: medium`。検出後 `(sessionId, target)` 保留のみ消去 (他 target は影響なし)。isError=true は常に null。
+- [x] **Step 5: `lastInvokedPersona(sessionId): AgentId | undefined` を実装** — §4-1 表の優先順位通り。
+- [x] **Step 6: 検出マーカー定数を private に保持** — writing-plans: `docs/superpowers/specs/\d{4}-\d{2}-\d{2}-.*-design\.md` + `## Architecture` + `## Implementation`、systematic-debugging: `Root cause:` / `根本原因:`。
+- [x] **Step 7: `src/index.ts` から export**
+- [x] **Step 8: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 9: Phase Base に向けた Draft PR を作成**
 
-### Task 2: `mergePostToolUseResponses` 純粋関数
+- [x] **Step 1: Vitest テストを先行作成** — 4 ケース網羅: (1) 両方 `proceed` → `proceed`、(2) 片方 `inject` + 片方 `proceed` → `inject`、(3) 両方 `inject` → 連結 (`${a}\n\n---\n\n${b}`)、(4) 片方 `skip` を含む → `skip` (最優先)。境界として `a.injectedContext === ""` の場合も連結フォーマットに従うことを確認。
+- [x] **Step 2: `mergePostToolUseResponses(a, b): HookResponse` を §4-4 通りに純粋関数として実装** — 入力不変、戻り値毎回新規生成。
+- [x] **Step 3: `justice-plugin.ts` 内の `PostToolUse` 経路で `PlanBridge.handlePostToolUse` と `TaskFeedbackHandler.handlePostToolUse` を直列実行し `mergePostToolUseResponses` で合成する経路を準備** — ただし `PlanBridge.handlePostToolUse` 本体は Task 3 で実装するため、ここでは「未実装時に proceed を返すスタブ」を一時的に挟むか、`handlePostToolUse?.()` の optional chain で吸収。
+- [x] **Step 4: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 5: Phase Base に向けた Draft PR を作成**
 
-**Branch:** `feature/jia-phase3-task2_merge-posttooluse` ← Base 派生 (型依存: 既存 `HookResponse` のみ)
-
-**Files:**
-- Modify: `src/core/justice-plugin.ts`
-- Add: `tests/core/justice-plugin.test.ts` (新規 or 既存に追記)
-
-**Steps:**
-
-- [ ] **Step 1: Vitest テストを先行作成** — 4 ケース網羅: (1) 両方 `proceed` → `proceed`、(2) 片方 `inject` + 片方 `proceed` → `inject`、(3) 両方 `inject` → 連結 (`${a}\n\n---\n\n${b}`)、(4) 片方 `skip` を含む → `skip` (最優先)。境界として `a.injectedContext === ""` の場合も連結フォーマットに従うことを確認。
-- [ ] **Step 2: `mergePostToolUseResponses(a, b): HookResponse` を §4-4 通りに純粋関数として実装** — 入力不変、戻り値毎回新規生成。
-- [ ] **Step 3: `justice-plugin.ts` 内の `PostToolUse` 経路で `PlanBridge.handlePostToolUse` と `TaskFeedbackHandler.handlePostToolUse` を直列実行し `mergePostToolUseResponses` で合成する経路を準備** — ただし `PlanBridge.handlePostToolUse` 本体は Task 3 で実装するため、ここでは「未実装時に proceed を返すスタブ」を一時的に挟むか、`handlePostToolUse?.()` の optional chain で吸収。
-- [ ] **Step 4: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 5: Phase Base に向けた Draft PR を作成**
-
-### Task 3: `PlanBridge.handlePostToolUse` + Atlas Guidance 注入
-
-**Branch:** `feature/jia-phase3-task3_plan-bridge-handle-post` ← Task 2 派生 (Phase 1 Task 1, Phase 2 全タスク, Phase 3 Task 1/2 マージ後)
-
-**Files:**
-- Modify: `src/hooks/plan-bridge.ts`
-- Modify: `tests/hooks/plan-bridge.test.ts`
-- Modify: `src/core/justice-plugin.ts` (notifier/detector 注入)
-
-**Steps:**
-
-- [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-10 の表 #1, #4 (writing-plans 完了検知時のみ、Prometheus 経路と Sisyphus 経路は Phase 4 で網羅) を網羅。`action: "inject"`、`injectedContext` 先頭が 🎯 バナー (notifier.formatBanner 経由)、本文に「自ら実装に着手せず」を含むことを assert。`PreToolUse` 保留登録パスもテスト。
-- [ ] **Step 2: `JusticePlugin` コンストラクタで `notifier?: JusticeNotifier` を受け取り、デフォルト `NoOpNotifier` を設定** — `PlanBridge` コンストラクタにも propagate。
-- [ ] **Step 3: `PlanBridge.handlePreToolUse` を拡張** — `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` を呼び出し。既存ロジックは保持。
-- [ ] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — 早期リターンせず、writing-plans と systematic-debugging の両スキルを独立評価し、各結果を `mergePostToolUseResponses` で合成する。writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。Prometheus pivot 経路も合成結果に対して `mergePostToolUseResponses` で統合する。
-- [ ] **Step 5: `AgentRouter.route()` で推奨エージェントを決定** — `CategoryClassifier` 推定 + 関連スキルで呼び出し。`confidence: medium` 時のみ末尾に「自動検知。意図と異なる場合は無視可」注記を追加。
-- [ ] **Step 6: Phase 3 完了時点では Prometheus pivot 経路と Sisyphus Wisdom 保存経路は `PROCEED` を返すスタブとし `// TODO: Phase 4` コメントを付与** — Task 3 では writing-plans 経路のみ完成させる。合成ロジックの骨格（両スキル評価 + merge）は Task 3 時点で組み込む。
-- [ ] **Step 7: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 8: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-10 の表 #1, #4 (writing-plans 完了検知時のみ、Prometheus 経路と Sisyphus 経路は Phase 4 で網羅) を網羅。`action: "inject"`、`injectedContext` 先頭が 🎯 バナー (notifier.formatBanner 経由)、本文に「自ら実装に着手せず」を含むことを assert。`PreToolUse` 保留登録パスもテスト。
+- [x] **Step 2: `JusticePlugin` コンストラクタで `notifier?: JusticeNotifier` を受け取り、デフォルト `NoOpNotifier` を設定** — `PlanBridge` コンストラクタにも propagate。
+- [x] **Step 3: `PlanBridge.handlePreToolUse` を拡張** — `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` を呼び出し。既存ロジックは保持。
+- [~] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — 早期リターンせず、writing-plans と systematic-debugging の両スキルを独立評価し、各結果を `mergePostToolUseResponses` で合成する。writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。Prometheus pivot 経路も合成結果に対して `mergePostToolUseResponses` で統合する。**※ Atlas Guidance の動的プロンプト生成 (`AgentRouter.route` 等) は未実装。ダミーテキストで代替。**
+- [x] **Step 5: `AgentRouter.route()` で推奨エージェントを決定** — `CategoryClassifier` 推定 + 関連スキルで呼び出し。`confidence: medium` 時のみ末尾に「自動検知。意図と異なる場合は無視可」注記を追加。
+- [x] **Step 6: Phase 3 完了時点では Prometheus pivot 経路と Sisyphus Wisdom 保存経路は `PROCEED` を返すスタブとし `// TODO: Phase 4` コメントを付与** — Task 3 では writing-plans 経路のみ完成させる。合成ロジックの骨格（両スキル評価 + merge）は Task 3 時点で組み込む。
+- [x] **Step 7: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 8: Phase Base に向けた Draft PR を作成**
 
 ---
 
@@ -342,31 +321,21 @@ Prometheus 連続却下検知 → Hephaestus pivot 注入、および Sisyphus s
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-11 の表 #1〜#9 を完全網羅。NG 1 回 (pivoted: false)、3 回 (pivoted: true, reason: "review_rejection_threshold", targetAgent: "hephaestus")、2 回 (直前で pivoted: false)、マッチなし (rejections 据え置き)、環境変数 `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5` で 5 回目発火、環境変数 `"abc"`/`"0"`/`"-1"` のデフォルトフォールバック、`recordTrial` への連動記録 (`agent: "prometheus", result: "failure", wisdom: "review_rejected: ..."`)、`removeSession` 時の rejections Map クリーンアップを検証。
-- [ ] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。
-- [ ] **Step 3: 環境変数読み込みヘルパー** — `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` を `parseInt` し、`NaN` / `<= 0` ならデフォルト 3。
-- [ ] **Step 4: `removeSession` で `rejections` Map のセッションエントリも削除**
-- [ ] **Step 5: `PivotReason` 型と `PivotDecision` 型を export**
-- [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-11 の表 #1〜#9 を完全網羅。NG 1 回 (pivoted: false)、3 回 (pivoted: true, reason: "review_rejection_threshold", targetAgent: "hephaestus")、2 回 (直前で pivoted: false)、マッチなし (rejections 据え置き)、環境変数 `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5` で 5 回目発火、環境変数 `"abc"`/`"0"`/`"-1"` のデフォルトフォールバック、`recordTrial` への連動記録 (`agent: "prometheus", result: "failure", wisdom: "review_rejected: ..."`)、`removeSession` 時の rejections Map クリーンアップを検証。
+- [~] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。**※ 現在の実装では excerpts 追記と recordTrial 連動が未実装。**
+- [x] **Step 3: 環境変数読み込みヘルパー** — `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` を `parseInt` し、`NaN` / `<= 0` ならデフォルト 3。
+- [x] **Step 4: `removeSession` で `rejections` Map のセッションエントリも削除**
+- [x] **Step 5: `PivotReason` 型と `PivotDecision` 型を export**
+- [x] **Step 6: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
-### Task 2: `PlanBridge` の Prometheus 経路統合 + Pivot 注入
-
-**Branch:** `feature/jia-phase4-task2_plan-bridge-pivot-route` ← Task 1 派生
-
-**Files:**
-- Modify: `src/hooks/plan-bridge.ts`
-- Modify: `tests/hooks/plan-bridge.test.ts`
-
-**Steps:**
-
-- [ ] **Step 1: Vitest テストを更新** — 設計書 §9-10 の表 #3 (3 回目 NG で pivot バナー🚧 + Hephaestus 文言注入) を網羅。`lastInvokedPersona === "prometheus"` の場合のみ `recordReviewOutput` を呼ぶこと、それ以外の persona では呼ばないことを assert。
-- [ ] **Step 2: `PlanBridge.handlePostToolUse` 内の Phase 3 スタブを §4-2 ステップ 3 通りに実装** — `toolName === "task"` かつ `lastInvokedPersona === "prometheus"` の場合、`getActiveTaskIdForSession(sessionId)` で taskId 取得 → `loopHandler.recordReviewOutput()` 呼び出し → `decision.pivoted` なら `buildPivotInjectionResponse` で §6-4 の pivot プロンプトを生成。
-- [ ] **Step 3: `buildPivotInjectionResponse` を実装** — `notifier.formatBanner({ variant: "architecture_pivot", title: "Architecture Pivot", message: ... })` を先頭、続けて §6-4 のプロンプト本文 (excerpts は `decision.recentExcerpts` から最大 3 件表示)。`notifier.notify(...)` も呼び出し。
-- [ ] **Step 4: `PlanBridge` コンストラクタで `loopHandler` を optional 注入** — `loopHandler` 未注入時は Prometheus 経路をスキップして `proceed`。
-- [ ] **Step 5: `justice-plugin.ts` で `PlanBridge` 構築時に `loopHandler` を渡す**
-- [ ] **Step 6: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを更新** — 設計書 §9-10 の表 #3 (3 回目 NG で pivot バナー🚧 + Hephaestus 文言注入) を網羅。`lastInvokedPersona === "prometheus"` の場合のみ `recordReviewOutput` を呼ぶこと、それ以外の persona では呼ばないことを assert。
+- [~] **Step 2: `PlanBridge.handlePostToolUse` 内の Phase 3 スタブを §4-2 ステップ 3 通りに実装** — `toolName === "task"` かつ `lastInvokedPersona === "prometheus"` の場合、`getActiveTaskIdForSession(sessionId)` で taskId 取得 → `loopHandler.recordReviewOutput()` 呼び出し → `decision.pivoted` なら `buildPivotInjectionResponse` で §6-4 の pivot プロンプトを生成。**※ `recentExcerpts` は `PivotDecision` の型に含まれるが、抽出結果を活用した実装はまだ。**
+- [x] **Step 3: `buildPivotInjectionResponse` を実装** — `notifier.formatBanner({ variant: "architecture_pivot", title: "Architecture Pivot", message: ... })` を先頭、続けて §6-4 のプロンプト本文 (excerpts は `decision.recentExcerpts` から最大 3 件表示)。`notifier.notify(...)` も呼び出し。
+- [x] **Step 4: `PlanBridge` コンストラクタで `loopHandler` を optional 注入** — `loopHandler` 未注入時は Prometheus 経路をスキップして `proceed`。
+- [x] **Step 5: `justice-plugin.ts` で `PlanBridge` 構築時に `loopHandler` を渡す**
+- [x] **Step 6: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: Sisyphus Wisdom 保存経路
 
