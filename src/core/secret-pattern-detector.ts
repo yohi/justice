@@ -16,8 +16,8 @@ const SECRET_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> = Object
 
 export class SecretPatternDetector {
   scan(content: string): SecretMatch[] {
-    return SECRET_PATTERNS
-      .filter(({ pattern }) => pattern.test(content))
-      .map(({ name }) => ({ name }));
+    return SECRET_PATTERNS.filter(({ pattern }) => pattern.test(content)).map(({ name }) => ({
+      name,
+    }));
   }
 }

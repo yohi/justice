@@ -9,9 +9,11 @@ export const OpenCodePlugin: Plugin = async (init) => {
 
   return {
     event: async (input): Promise<void> => {
-      await adapter.onEvent(input as {
-        event: { type: string; properties?: Record<string, unknown> };
-      });
+      await adapter.onEvent(
+        input as {
+          event: { type: string; properties?: Record<string, unknown> };
+        },
+      );
     },
     "tool.execute.before": async (input, output): Promise<void> => {
       await adapter.onToolExecuteBefore(

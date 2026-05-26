@@ -211,8 +211,9 @@ export class AgentRouter {
   }
 
   private snapshotScoreboard(scores: Map<AgentId, number>): Record<AgentId, number> {
-    return Object.fromEntries(
-      AGENT_IDS.map((agent) => [agent, scores.get(agent) ?? 0]),
-    ) as Record<AgentId, number>;
+    return Object.fromEntries(AGENT_IDS.map((agent) => [agent, scores.get(agent) ?? 0])) as Record<
+      AgentId,
+      number
+    >;
   }
 }

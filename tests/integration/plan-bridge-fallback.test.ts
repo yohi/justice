@@ -16,14 +16,14 @@ describe("PlanBridge Fallback Guard Integration", () => {
     await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "user", content: "Please follow plan.md" }
+      payload: { role: "user", content: "Please follow plan.md" },
     });
 
     // 2. Assistant message mentioning plan (fallback path)
     const response = await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "assistant", content: "I will look into plan.md." }
+      payload: { role: "assistant", content: "I will look into plan.md." },
     });
 
     expect(response.action).toBe("inject");
@@ -38,14 +38,14 @@ describe("PlanBridge Fallback Guard Integration", () => {
     await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "user", content: "Hello" }
+      payload: { role: "user", content: "Hello" },
     });
 
     // 2. Assistant message mentioning plan
     const response = await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "assistant", content: "I found plan.md." }
+      payload: { role: "assistant", content: "I found plan.md." },
     });
 
     expect(response.action).toBe("proceed");
@@ -59,14 +59,14 @@ describe("PlanBridge Fallback Guard Integration", () => {
     await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "user", content: "Go ahead" }
+      payload: { role: "user", content: "Go ahead" },
     });
 
     // 2. Assistant message with delegation keyword
     const response = await bridge.handleMessage({
       type: "Message",
       sessionId,
-      payload: { role: "assistant", content: "I will execute the next task in plan.md." }
+      payload: { role: "assistant", content: "I will execute the next task in plan.md." },
     });
 
     expect(response.action).toBe("inject");

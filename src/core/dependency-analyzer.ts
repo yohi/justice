@@ -26,9 +26,7 @@ export class DependencyAnalyzer {
         const matches = step.description.matchAll(DEPENDS_GLOBAL_REGEX);
         for (const match of matches) {
           if (match[1]) {
-            const ids = match[1]
-              .split(",")
-              .map((s) => s.trim().toLowerCase());
+            const ids = match[1].split(",").map((s) => s.trim().toLowerCase());
             for (const id of ids) {
               taskDeps.add(id);
             }

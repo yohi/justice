@@ -3,7 +3,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import { createGlobalFs, NoOpPersistence, type CreateGlobalFsResult } from "../../src/core/justice-plugin";
+import {
+  createGlobalFs,
+  NoOpPersistence,
+  type CreateGlobalFsResult,
+} from "../../src/core/justice-plugin";
 import { WisdomStore } from "../../src/core/wisdom-store";
 
 let mockHomedir: string | undefined;

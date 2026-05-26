@@ -80,10 +80,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
    * (or explicit options.scope). Global writes trigger a secret-pattern scan
    * and a warn log (non-blocking) if patterns match.
    */
-  add(
-    entry: WisdomEntryInput,
-    options?: AddOptions,
-  ): WisdomEntry {
+  add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry {
     const explicitScope = options?.scope;
     const heuristicScope: WisdomScope = HEURISTIC_SCOPES[entry.category];
     const targetScope = explicitScope ?? heuristicScope;
@@ -102,7 +99,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     if (targetScope === "global") {
       const detected = this.secretDetector.scan(normalizedEntry.content);
       if (detected.length > 0) {
-        const warnMessage = 
+        const warnMessage =
           `Wisdom entry promotion to global: potential secrets detected ` +
           `(patterns matched: ${detected.map((m) => m.name).join(", ")}). ` +
           `Promotion canceled to prevent potential secret exposure. The entry has been saved to the project-local store instead. ` +
@@ -125,7 +122,11 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     return this.localStore.add(normalizedEntry);
   }
 
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
+  getRelevant(options?: {
+    errorClass?: ErrorClass;
+    maxEntries?: number;
+    persona?: AgentId;
+  }): WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
     const local = this.localStore.getRelevant({
       errorClass: options?.errorClass,
@@ -147,9 +148,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
       persona: options?.persona,
     });
 
-    const globalFiltered = globalRaw
-      .filter((e) => !localIds.has(e.id))
-      .slice(-remaining);
+    const globalFiltered = globalRaw.filter((e) => !localIds.has(e.id)).slice(-remaining);
 
     // Order: [local, global] per spec
     return [...local, ...globalFiltered];
@@ -164,9 +163,17 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   formatForInjection(entries: WisdomEntry[]): string {
     if (entries.length === 0) return "";
     const presentPersonas = new Set(entries.map((e) => e.persona));
-    const orderedPersonas: AgentId[] = (["hephaestus", "sisyphus", "prometheus", "atlas"] as AgentId[]).filter(
-      (p) => presentPersonas.has(p),
-    );
+    
+    if (presentPersonas.size <= 1) {
+      const lines: string[] = [];
+      lines.push("**[JUSTICE AI: Past Learnings & Gotchas]**");
+      lines.push(...WisdomStore.formatEntriesBody(entries));
+      return lines.join("\n");
+    }
+
+    const orderedPersonas: AgentId[] = (
+      ["hephaestus", "sisyphus", "prometheus", "atlas"] as AgentId[]
+    ).filter((p) => presentPersonas.has(p));
     const lines: string[] = [];
     for (const persona of orderedPersonas) {
       const personaEntries = entries.filter((e) => e.persona === persona);

@@ -4,7 +4,10 @@ export { PlanParser } from "./core/plan-parser";
 export { DEFAULT_PERSONA, PersonaClassifier, classifyPersona } from "./core/persona-classifier";
 export { ReviewRejectionDetector } from "./core/review-rejection-detector";
 export { PlanCompletionDetector } from "./core/plan-completion-detector";
-export { REVIEW_REJECTION_PATTERNS, matchesReviewRejection } from "./core/review-rejection-patterns";
+export {
+  REVIEW_REJECTION_PATTERNS,
+  matchesReviewRejection,
+} from "./core/review-rejection-patterns";
 export { TaskPackager } from "./core/task-packager";
 export * from "./core/types";
 export type { PersonaClassificationInput } from "./core/persona-classifier";
