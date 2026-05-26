@@ -17,7 +17,7 @@ RUN set -eux; \
         groupadd --gid "$USER_GID" "$USERNAME"; \
     fi; \
     if ! id -u "$USERNAME" >/dev/null 2>&1; then \
-        useradd --uid "$USER_UID" --gid "$USER_GID" -m "$USERNAME"; \
+        useradd --uid "$USER_UID" --gid "$USERNAME" -m "$USERNAME"; \
     fi; \
     echo "$USERNAME ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME"; \
     chmod 0440 "/etc/sudoers.d/$USERNAME"

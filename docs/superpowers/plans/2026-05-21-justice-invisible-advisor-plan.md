@@ -342,7 +342,7 @@ Prometheus 連続却下検知 → Hephaestus pivot 注入、および Sisyphus s
 **Steps:**
 
 - [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-11 の表 #1〜#9 を完全網羅。NG 1 回 (pivoted: false)、3 回 (pivoted: true, reason: "review_rejection_threshold", targetAgent: "hephaestus")、2 回 (直前で pivoted: false)、マッチなし (rejections 据え置き)、環境変数 `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5` で 5 回目発火、環境変数 `"abc"`/`"0"`/`"-1"` のデフォルトフォールバック、`recordTrial` への連動記録 (`agent: "prometheus", result: "failure", wisdom: "review_rejected: ..."`)、`removeSession` 時の rejections Map クリーンアップを検証。
-- [~] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。**※ 現在の実装では excerpts 追記と recordTrial 連動が未実装。**
+- [x] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。**※ 現在の実装では excerpts 追記と recordTrial 連動が未実装。**
 - [x] **Step 3: 環境変数読み込みヘルパー** — `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` を `parseInt` し、`NaN` / `<= 0` ならデフォルト 3。
 - [x] **Step 4: `removeSession` で `rejections` Map のセッションエントリも削除**
 - [x] **Step 5: `PivotReason` 型と `PivotDecision` 型を export**
