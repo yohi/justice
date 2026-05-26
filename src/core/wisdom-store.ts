@@ -301,7 +301,7 @@ export class WisdomStore implements WisdomStoreInterface {
   private static withDefaultPersona(entry: StoredWisdomEntry): WisdomEntry {
     return {
       ...entry,
-      persona: entry.persona ?? DEFAULT_PERSONA,
+      persona: entry.persona ?? PersonaClassifier.classify(entry),
     };
   }
 
