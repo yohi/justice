@@ -314,7 +314,7 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
     expect(formatted).toContain("Gotcha");
     expect(formatted).toContain("Quirk");
   });
-  it("should use persona-specific header for single persona (Issue 2 fix)", () => {
+  it("should use standard header for single persona (Issue 2 fix)", () => {
     const localStore = new WisdomStore(100);
     localStore.add({
       taskId: "t1",
@@ -327,8 +327,8 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
     const entries = tiered.getRelevant({ maxEntries: 10 });
     const formatted = tiered.formatForInjection(entries);
 
-    expect(formatted).toContain("**[JUSTICE AI: Past Learnings for hephaestus]**");
-    expect(formatted).not.toContain("& Gotchas");
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings & Gotchas]**");
+    expect(formatted).not.toContain("Past Learnings for hephaestus");
   });
 
   it("should NOT duplicate headers when multiple personas are present (Issue 1 fix)", () => {
@@ -370,7 +370,7 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
     const entries = tiered.getRelevant({ maxEntries: 10 });
     const formatted = tiered.formatForInjection(entries);
 
-    expect(formatted).toContain("**[JUSTICE AI: Past Learnings for atlas]**");
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings & Gotchas]**");
     expect(formatted).toContain("Quirk");
   });
 });

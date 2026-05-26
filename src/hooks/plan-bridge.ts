@@ -5,7 +5,9 @@ import type {
   DelegationRequest,
   WisdomStoreInterface,
   PlanTask,
+  AgentId,
 } from "../core/types";
+import { mergePostToolUseResponses } from "../core/justice-plugin";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
@@ -167,12 +169,10 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // Logic errors from core should propagate
-    const previousLearnings = this.getRelevantLearnings();
-    const delegation = this.core.buildDelegationFromPlan(planContent, {
+    // 1) delegation を仮生成して推奨エージェントを決定
+    let delegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: planRef.planPath,
       referenceFiles: [],
-      previousLearnings,
     });
 
     if (!delegation) {
@@ -184,6 +184,17 @@ export class PlanBridge {
         injectedContext: `[JUSTICE: All tasks in ${planRef.planPath} are already completed. No further delegation needed.]`,
       };
     }
+
+    // 2) 過去の知見を決定されたペルソナでロード
+    const persona = delegation.context.agentId ?? "hephaestus";
+    const previousLearnings = this.getRelevantLearnings(persona);
+
+    // 3) delegation を再構築
+    delegation = this.core.buildDelegationFromPlan(planContent, {
+      planFilePath: planRef.planPath,
+      referenceFiles: [],
+      previousLearnings,
+    });
 
     // Set as active plan for PreToolUse context injection
     this.setActivePlan(event.sessionId, planRef.planPath);
@@ -252,12 +263,10 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // Logic errors from core should propagate
-    const previousLearnings = this.getRelevantLearnings();
-    const delegation = this.core.buildDelegationFromPlan(planContent, {
+    // 1) delegation を仮生成して推奨エージェントを決定
+    let delegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
-      previousLearnings,
     });
 
     if (!delegation) {
@@ -266,6 +275,26 @@ export class PlanBridge {
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
+
+    // 2) ペルソナを解決
+    let persona: AgentId = "hephaestus";
+    if (this.isResolvableAgentId(delegation.context.agentId)) {
+      persona = delegation.context.agentId.toLowerCase() as AgentId;
+    } else {
+      const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
+      if (this.isResolvableAgentId(lastPersona)) {
+        persona = lastPersona;
+      }
+    }
+
+    const previousLearnings = this.getRelevantLearnings(persona);
+
+    // 3) delegation を再構築
+    delegation = this.core.buildDelegationFromPlan(planContent, {
+      planFilePath: activePlanPath,
+      referenceFiles: [],
+      previousLearnings,
+    });
 
     // Sync current task and agent to LoopDetectionHandler
     if (this.loopHandler) {
@@ -413,7 +442,7 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = this.mergeResponses(response, {
+          response = mergePostToolUseResponses(response, {
             action: "inject",
             injectedContext: `${banner}\n${atlasGuidance}`,
           });
@@ -443,7 +472,7 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = this.mergeResponses(response, {
+          response = mergePostToolUseResponses(response, {
             action: "inject",
             injectedContext: `${banner}\n${atlasGuidance}`,
           });
@@ -462,6 +491,7 @@ export class PlanBridge {
 
     if (debuggingCompletion) {
       let savedCount = 0;
+      let breakdown = "";
       try {
         if (this.wisdomStore) {
           const activeTaskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown-debug";
@@ -478,6 +508,14 @@ export class PlanBridge {
             this.wisdomStore.add(draft, { persona: "sisyphus" });
             savedCount++;
           }
+          const counts = drafts.reduce((acc, d) => {
+            acc[d.category] = (acc[d.category] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>);
+          const details = Object.entries(counts).map(([cat, count]) => `${cat}: ${count}`).join(", ");
+          if (details) {
+            breakdown = `（内訳: ${details}）`;
+          }
         }
       } catch {
         /* fail-open: continue even if wisdom save fails */
@@ -489,12 +527,13 @@ export class PlanBridge {
         title: "Sisyphus Insight",
         message: `Sisyphusがsystematic-debuggingを完了しました。${savedCount} 件のWisdomを保存しました。`,
       });
-      response = this.mergeResponses(response, {
+      const breakdownText = breakdown ? ` ${breakdown}` : "";
+      response = mergePostToolUseResponses(response, {
         action: "inject",
         injectedContext:
-          `${banner}\n---\n## 🔬 SISYPHUS INSIGHT DIRECTIVE\n\n` +
+          `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
           `**Confidence**: ${debuggingCompletion.confidence}\n` +
-          `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました。\n\n---`,
+          `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
       });
       this.safeNotify(
         sessionId,
@@ -549,7 +588,7 @@ export class PlanBridge {
           "---",
         ].join("\n");
 
-        response = this.mergeResponses(response, {
+        response = mergePostToolUseResponses(response, {
           action: "inject",
           injectedContext: `${banner}\n${pivotBody}`,
         });
@@ -578,7 +617,7 @@ export class PlanBridge {
           rawOutput: toolResult,
         });
         if (legacyCompletion) {
-          response = this.mergeResponses(response, {
+          response = mergePostToolUseResponses(response, {
             action: "inject",
             injectedContext: legacyCompletion.guidance,
           });
@@ -599,7 +638,7 @@ export class PlanBridge {
           rawOutput: toolResult,
         });
         if (legacyCompletion) {
-          response = this.mergeResponses(response, {
+          response = mergePostToolUseResponses(response, {
             action: "inject",
             injectedContext: legacyCompletion.guidance,
           });
@@ -679,11 +718,17 @@ export class PlanBridge {
   /**
    * Returns formatted learnings from the WisdomStore for injection into delegation context.
    */
-  private getRelevantLearnings(): string | undefined {
+  private getRelevantLearnings(persona?: AgentId): string | undefined {
     if (!this.wisdomStore) return undefined;
-    const entries = this.wisdomStore.getRelevant({ maxEntries: 5 });
+    const entries = this.wisdomStore.getRelevant({ maxEntries: 5, persona });
     if (entries.length === 0) return undefined;
     return this.wisdomStore.formatForInjection(entries);
+  }
+
+  private isResolvableAgentId(agentId: unknown): agentId is AgentId {
+    if (typeof agentId !== "string") return false;
+    const lower = agentId.trim().toLowerCase();
+    return ["atlas", "hephaestus", "sisyphus", "prometheus"].includes(lower);
   }
 
   private rememberCompletionInput(
@@ -710,24 +755,6 @@ export class PlanBridge {
     }
 
     return undefined;
-  }
-
-  private mergeResponses(a: HookResponse, b: HookResponse): HookResponse {
-    if (a.action === "skip" || b.action === "skip") return { action: "skip" };
-
-    if (a.action === "inject" && b.action === "inject") {
-      const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
-      if (contexts.length === 0) return { action: "inject", injectedContext: "" };
-      return {
-        action: "inject",
-        injectedContext: contexts.join("\n\n---\n\n"),
-      };
-    }
-
-    if (a.action === "inject") return a;
-    if (b.action === "inject") return b;
-
-    return PROCEED;
   }
 
   private safeNotify(

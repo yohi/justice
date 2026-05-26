@@ -290,16 +290,36 @@ master
 - [x] **Step 8: Devcontainer 内で全検証コマンド実行**
 - [x] **Step 9: Phase Base に向けた Draft PR を作成**
 
+### Task 2: `mergePostToolUseResponses`
+
+**Branch:** `feature/jia-phase3-task2_merge-posttooluse` ← Base 派生 (HookResponse 既存型のみ)
+
+**Files:**
+- Add: `src/core/plan-bridge-utils.ts`
+- Add: `tests/core/plan-bridge-utils.test.ts`
+
+**Steps:**
+
 - [x] **Step 1: Vitest テストを先行作成** — 4 ケース網羅: (1) 両方 `proceed` → `proceed`、(2) 片方 `inject` + 片方 `proceed` → `inject`、(3) 両方 `inject` → 連結 (`${a}\n\n---\n\n${b}`)、(4) 片方 `skip` を含む → `skip` (最優先)。境界として `a.injectedContext === ""` の場合も連結フォーマットに従うことを確認。
 - [x] **Step 2: `mergePostToolUseResponses(a, b): HookResponse` を §4-4 通りに純粋関数として実装** — 入力不変、戻り値毎回新規生成。
 - [x] **Step 3: `justice-plugin.ts` 内の `PostToolUse` 経路で `PlanBridge.handlePostToolUse` と `TaskFeedbackHandler.handlePostToolUse` を直列実行し `mergePostToolUseResponses` で合成する経路を準備** — ただし `PlanBridge.handlePostToolUse` 本体は Task 3 で実装するため、ここでは「未実装時に proceed を返すスタブ」を一時的に挟むか、`handlePostToolUse?.()` の optional chain で吸収。
 - [x] **Step 4: Devcontainer 内で全検証コマンド実行**
 - [x] **Step 5: Phase Base に向けた Draft PR を作成**
 
+### Task 3: `PlanBridge.handlePostToolUse` (Atlas Guidance)
+
+**Branch:** `feature/jia-phase3-task3_plan-bridge-handle-post` ← Task 2 派生
+
+**Files:**
+- Modify: `src/hooks/plan-bridge.ts`
+- Modify: `tests/hooks/plan-bridge.test.ts`
+
+**Steps:**
+
 - [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-10 の表 #1, #4 (writing-plans 完了検知時のみ、Prometheus 経路と Sisyphus 経路は Phase 4 で網羅) を網羅。`action: "inject"`、`injectedContext` 先頭が 🎯 バナー (notifier.formatBanner 経由)、本文に「自ら実装に着手せず」を含むことを assert。`PreToolUse` 保留登録パスもテスト。
 - [x] **Step 2: `JusticePlugin` コンストラクタで `notifier?: JusticeNotifier` を受け取り、デフォルト `NoOpNotifier` を設定** — `PlanBridge` コンストラクタにも propagate。
 - [x] **Step 3: `PlanBridge.handlePreToolUse` を拡張** — `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` を呼び出し。既存ロジックは保持。
-- [~] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — 早期リターンせず、writing-plans と systematic-debugging の両スキルを独立評価し、各結果を `mergePostToolUseResponses` で合成する。writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。Prometheus pivot 経路も合成結果に対して `mergePostToolUseResponses` で統合する。**※ Atlas Guidance の動的プロンプト生成 (`AgentRouter.route` 等) は未実装。ダミーテキストで代替。**
+- [x] **Step 4: `PlanBridge.handlePostToolUse` を §4-2 通りに実装** — 早期リターンせず、writing-plans と systematic-debugging の両スキルを独立評価し、各結果を `mergePostToolUseResponses` で合成する。writing-plans 検知 → `buildAtlasGuidanceResponse` で Atlas Guidance Directive (§4-3) を生成。`notifier.formatBanner({ variant: "atlas_orchestration", title: "Atlas Orchestration", message: ... })` を `injectedContext` 先頭に挿入、続けて Directive 本文。`notifier.notify(...)` も呼び出し。Prometheus pivot 経路も合成結果に対して `mergePostToolUseResponses` で統合する。
 - [x] **Step 5: `AgentRouter.route()` で推奨エージェントを決定** — `CategoryClassifier` 推定 + 関連スキルで呼び出し。`confidence: medium` 時のみ末尾に「自動検知。意図と異なる場合は無視可」注記を追加。
 - [x] **Step 6: Phase 3 完了時点では Prometheus pivot 経路と Sisyphus Wisdom 保存経路は `PROCEED` を返すスタブとし `// TODO: Phase 4` コメントを付与** — Task 3 では writing-plans 経路のみ完成させる。合成ロジックの骨格（両スキル評価 + merge）は Task 3 時点で組み込む。
 - [x] **Step 7: Devcontainer 内で全検証コマンド実行**
@@ -330,7 +350,7 @@ Prometheus 連続却下検知 → Hephaestus pivot 注入、および Sisyphus s
 - [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 - [x] **Step 1: Vitest テストを更新** — 設計書 §9-10 の表 #3 (3 回目 NG で pivot バナー🚧 + Hephaestus 文言注入) を網羅。`lastInvokedPersona === "prometheus"` の場合のみ `recordReviewOutput` を呼ぶこと、それ以外の persona では呼ばないことを assert。
-- [~] **Step 2: `PlanBridge.handlePostToolUse` 内の Phase 3 スタブを §4-2 ステップ 3 通りに実装** — `toolName === "task"` かつ `lastInvokedPersona === "prometheus"` の場合、`getActiveTaskIdForSession(sessionId)` で taskId 取得 → `loopHandler.recordReviewOutput()` 呼び出し → `decision.pivoted` なら `buildPivotInjectionResponse` で §6-4 の pivot プロンプトを生成。**※ `recentExcerpts` は `PivotDecision` の型に含まれるが、抽出結果を活用した実装はまだ。**
+- [x] **Step 2: `PlanBridge.handlePostToolUse` 内の Phase 3 スタブを §4-2 ステップ 3 通りに実装** — `toolName === "task"` かつ `lastInvokedPersona === "prometheus"` の場合、`getActiveTaskIdForSession(sessionId)` で taskId 取得 → `loopHandler.recordReviewOutput()` 呼び出し → `decision.pivoted` なら `buildPivotInjectionResponse` で §6-4 の pivot プロンプトを生成。
 - [x] **Step 3: `buildPivotInjectionResponse` を実装** — `notifier.formatBanner({ variant: "architecture_pivot", title: "Architecture Pivot", message: ... })` を先頭、続けて §6-4 のプロンプト本文 (excerpts は `decision.recentExcerpts` から最大 3 件表示)。`notifier.notify(...)` も呼び出し。
 - [x] **Step 4: `PlanBridge` コンストラクタで `loopHandler` を optional 注入** — `loopHandler` 未注入時は Prometheus 経路をスキップして `proceed`。
 - [x] **Step 5: `justice-plugin.ts` で `PlanBridge` 構築時に `loopHandler` を渡す**
@@ -347,12 +367,12 @@ Prometheus 連続却下検知 → Hephaestus pivot 注入、および Sisyphus s
 
 **Steps:**
 
-- [ ] **Step 1: Vitest テストを更新** — 設計書 §9-10 の表 #2, #5 を網羅。systematic-debugging 完了検知時に `wisdomStore.add` が `persona: "sisyphus"` で呼ばれること、wisdomStore が null の場合は保存をスキップして `proceed` を返すこと (エラーにしない) を assert。
-- [ ] **Step 2: `PlanBridge.handlePostToolUse` 内の Sisyphus 経路を §6-5 通りに実装** — `evaluateSkillCompletion(..., "systematic-debugging")` 検知時、`learningExtractor.extract(feedback, rawOutput, { persona: "sisyphus" })` で draft 抽出 → `wisdomStore.add(draft, { persona: "sisyphus" })` で全件保存。
-- [ ] **Step 3: `injectedContext` に Sisyphus Insight バナー (🔬 `variant: "sisyphus_insight"`) を挿入** — `notifier.formatBanner` + `notifier.notify` 経由。本文は「systematic-debugging 完了。N 件の Wisdom を Sisyphus 名前空間に保存しました」相当のサマリ。
-- [ ] **Step 4: fail-open 確認** — `wisdomStore.add` 内で例外発生時も hook は `proceed` で returnableを保証 (try/catch で吸収)。
-- [ ] **Step 5: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 6: Phase Base に向けた Draft PR を作成**
+- [x] **Step 1: Vitest テストを更新** — 設計書 §9-10 の表 #2, #5 を網羅。systematic-debugging 完了検知時に `wisdomStore.add` が `persona: "sisyphus"` で呼ばれること、wisdomStore が null の場合は保存をスキップして `proceed` を返すこと (エラーにしない) を assert。
+- [x] **Step 2: `PlanBridge.handlePostToolUse` 内の Sisyphus 経路を §6-5 通りに実装** — `evaluateSkillCompletion(..., "systematic-debugging")` 検知時、`learningExtractor.extract(feedback, rawOutput, { persona: "sisyphus" })` で draft 抽出 → `wisdomStore.add(draft, { persona: "sisyphus" })` で全件保存。
+- [x] **Step 3: `injectedContext` に Sisyphus Insight バナー (🔬 `variant: "sisyphus_insight"`) を挿入** — `notifier.formatBanner` + `notifier.notify` 経由。本文は「systematic-debugging 完了。N 件の Wisdom を Sisyphus 名前空間に保存しました」相当のサマリ。
+- [x] **Step 4: fail-open 確認** — `wisdomStore.add` 内で例外発生時も hook は `proceed` で returnableを保証 (try/catch で吸収)。
+- [x] **Step 5: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 6: Phase Base に向けた Draft PR を作成**
 
 ---
 
@@ -372,8 +392,8 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 **Steps:**
 
-- [ ] **Step 1: テストを先行作成・更新** — `OpenCodeAdapter.ensureInitialized()` 内で `OpenCodeNotifier` が `client.app.log` を bind して構築され、`JusticePlugin` の `notifier` オプションに渡されることを assert。モック client で `log` 呼び出しが発生することを確認。
-- [ ] **Step 2: `runtime/opencode-adapter.ts` を §7-6 通りに更新** — `const notifier = new OpenCodeNotifier(this.#init.client.app.log)` → `new JusticePlugin(localFs, localFs, { logger, onError, globalFileSystem, notifier })`。
+- [x] **Step 1: テストを先行作成・更新** — `OpenCodeAdapter.ensureInitialized()` 内で `OpenCodeNotifier` が `client.app.log` を bind して構築され、`JusticePlugin` の `notifier` オプションに渡されることを assert。モック client で `log` 呼び出しが発生することを確認。
+- [x] **Step 2: `runtime/opencode-adapter.ts` を §7-6 通りに更新** — `const notifier = new OpenCodeNotifier(this.#init.client.app.log)` → `new JusticePlugin(localFs, localFs, { logger, onError, globalFileSystem, notifier })`。
 - [ ] **Step 3: `PlanBridge.handleMessage` で persona 別 wisdom 注入を有効化** — §5-4 通り、`delegation.context.agentId ?? "hephaestus"` を `tieredWisdomStore.getRelevant({ persona })` に渡す。
 - [ ] **Step 4: `PlanBridge.handlePreToolUse` の task() 経路でも同様の persona 別注入を適用** — `toolInput` から推定したペルソナ (`PlanCompletionDetector.lastInvokedPersona` と同等ロジック or 直接) で wisdom を絞り込み。
 - [ ] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。

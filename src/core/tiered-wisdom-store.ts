@@ -163,6 +163,14 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   formatForInjection(entries: WisdomEntry[]): string {
     if (entries.length === 0) return "";
     const presentPersonas = new Set(entries.map((e) => e.persona));
+    
+    if (presentPersonas.size <= 1) {
+      const lines: string[] = [];
+      lines.push("**[JUSTICE AI: Past Learnings & Gotchas]**");
+      lines.push(...WisdomStore.formatEntriesBody(entries));
+      return lines.join("\n");
+    }
+
     const orderedPersonas: AgentId[] = (
       ["hephaestus", "sisyphus", "prometheus", "atlas"] as AgentId[]
     ).filter((p) => presentPersonas.has(p));
