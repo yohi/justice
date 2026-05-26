@@ -279,11 +279,16 @@ export class PlanBridge {
 
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
-    const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
-    if (this.isResolvableAgentId(lastPersona)) {
-      persona = lastPersona;
+    const inputPersona = this.completionDetector.inferPersonaFromToolInput(event.payload.toolInput);
+    if (this.isResolvableAgentId(inputPersona)) {
+      persona = inputPersona;
     } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
       persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
+    } else {
+      const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
+      if (this.isResolvableAgentId(lastPersona)) {
+        persona = lastPersona;
+      }
     }
 
     const previousLearnings = this.getRelevantLearnings(persona);
@@ -294,6 +299,7 @@ export class PlanBridge {
         planFilePath: activePlanPath,
         referenceFiles: [],
         previousLearnings,
+        agentId: persona,
       }) ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
