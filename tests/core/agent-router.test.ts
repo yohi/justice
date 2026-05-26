@@ -160,5 +160,25 @@ describe("AgentRouter", () => {
     it("should return undefined for other skills", () => {
       expect(inferPersonaFromToolInput({ skills: ["implementer-prompt"] })).toBeUndefined();
     });
+
+    it("should infer prometheus for code-quality-reviewer skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["code-quality-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer prometheus for spec-reviewer skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["spec-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer sisyphus for systematic-debugging skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["systematic-debugging"] })).toBe("sisyphus");
+    });
+
+    it("should infer atlas for writing-plans skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["writing-plans"] })).toBe("atlas");
+    });
+
+    it("should return undefined for other skills via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["implementer-prompt"] })).toBeUndefined();
+    });
   });
 });
