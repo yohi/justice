@@ -447,15 +447,15 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
   - [x] (4) systematic-debugging 完了 → Sisyphus 名前空間に保存
   - [x] (5) 全 hook 発火時、`injectedContext` 先頭にバナー + `client.app.log` 通知
   - [x] (6) 既存テスト破壊なし、新規含め全 pass
-- [ ] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
+- [x] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
 
 ---
 
 ## 完了の定義 (Definition of Done)
 
-- [ ] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
-- [ ] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
-- [ ] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
-- [ ] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
-- [ ] 新規 npm 依存ゼロ
-- [ ] `dist/opencode-plugin.js` が正常ビルドされる
+- [x] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
+- [x] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
+- [x] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
+- [x] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
+- [x] 新規 npm 依存ゼロ
+- [x] `dist/opencode-plugin.js` が正常ビルドされる
