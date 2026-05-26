@@ -250,7 +250,7 @@ describe("PlanBridge", () => {
         lastCompletionInputs: Map<string, { taskId?: string }>;
       }).lastCompletionInputs.get("s-1:call-1");
       expect(stored).toBeDefined();
-      expect(stored!.taskId).toBe("task-1");
+      expect(stored?.taskId).toBe("task-1");
 
       // 2. Simulate PostToolUse
       const postEvent: HookEvent = {

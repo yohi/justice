@@ -626,27 +626,6 @@ export class PlanBridge {
           prompt: completionInput.prompt,
           category: completionInput.category,
           skillName: completionInput.skillName,
-          completed: true,
-          rawOutput: toolResult,
-        });
-        if (legacyCompletion) {
-          response = mergePostToolUseResponses(response, {
-            action: "inject",
-            injectedContext: legacyCompletion.guidance,
-          });
-        }
-      }
-    }
-    if (!writingCompletion && !debuggingCompletion && !isError && event.callId) {
-      const key = `${sessionId}:${event.callId}`;
-      const completionInput = this.lastCompletionInputs.get(key);
-      // Always clear the input to prevent stale data
-      this.lastCompletionInputs.delete(key);
-      if (completionInput) {
-        const legacyCompletion = this.completionDetector.detectCompletion({
-          prompt: completionInput.prompt,
-          category: completionInput.category,
-          skillName: completionInput.skillName,
           completed: !isError,
           rawOutput: toolResult,
         });
