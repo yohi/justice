@@ -17,7 +17,7 @@ import { DependencyAnalyzer } from "../core/dependency-analyzer";
 import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
-import { AgentRouter, type RoutingCategory } from "../core/agent-router";
+import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 
@@ -264,10 +264,20 @@ export class PlanBridge {
       return PROCEED;
     }
 
+    // toolInput からスキルを抽出 (空配列の場合は loadSkills にフォールバックする長さを意識した判定)
+    const rawSkills = event.payload.toolInput.skills;
+    const hasSkills = Array.isArray(rawSkills) && rawSkills.some((v) => typeof v === "string");
+    const skillsVal = hasSkills ? rawSkills : event.payload.toolInput.loadSkills;
+
+    const toolInputSkills = Array.isArray(skillsVal)
+      ? (skillsVal.filter((v): v is string => typeof v === "string") as string[])
+      : [];
+
     // 1) delegation を仮生成して推奨エージェントを決定
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
+      loadSkills: toolInputSkills,
     });
 
     if (!initialDelegation) {
@@ -279,13 +289,22 @@ export class PlanBridge {
 
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
-    if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
+    const inputPersona = inferPersonaFromToolInput(event.payload.toolInput);
+
+    // dominant_override が発生するかどうかを確認
+    let dominantAgentId: AgentId | undefined;
+    const routingResult = this.agentRouter.route(initialDelegation.category, toolInputSkills);
+    if (routingResult.reason === "dominant_override") {
+      dominantAgentId = routingResult.agentId;
+    }
+
+    if (dominantAgentId) {
+      // dominant_override が有効な場合は、明示的な入力ペルソナより優先
+      persona = dominantAgentId;
+    } else if (this.isResolvableAgentId(inputPersona)) {
+      persona = inputPersona;
+    } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
       persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
-    } else {
-      const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
-      if (this.isResolvableAgentId(lastPersona)) {
-        persona = lastPersona;
-      }
     }
 
     const previousLearnings = this.getRelevantLearnings(persona);
@@ -296,6 +315,8 @@ export class PlanBridge {
         planFilePath: activePlanPath,
         referenceFiles: [],
         previousLearnings,
+        agentId: persona,
+        loadSkills: toolInputSkills,
       }) ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
@@ -422,7 +443,7 @@ export class PlanBridge {
               ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n"
               : "\n";
 
-          const banner = formatBanner({
+          const banner = this.formatNotificationBanner({
             variant: "atlas_orchestration",
             level: "info",
             title: "Atlas Orchestration",
@@ -463,7 +484,7 @@ export class PlanBridge {
             `Atlas が writing-plans を完了 — 次のステップは ${recommendedAgent} に委譲してください。`,
           );
         } else {
-          const banner = formatBanner({
+          const banner = this.formatNotificationBanner({
             variant: "atlas_orchestration",
             level: "success",
             title: "Atlas Orchestration",
@@ -518,11 +539,16 @@ export class PlanBridge {
             this.wisdomStore.add(draft, { persona: "sisyphus" });
             savedCount++;
           }
-          const counts = drafts.reduce((acc, d) => {
-            acc[d.category] = (acc[d.category] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>);
-          const details = Object.entries(counts).map(([cat, count]) => `${cat}: ${count}`).join(", ");
+          const counts = drafts.reduce(
+            (acc, d) => {
+              acc[d.category] = (acc[d.category] || 0) + 1;
+              return acc;
+            },
+            {} as Record<string, number>,
+          );
+          const details = Object.entries(counts)
+            .map(([cat, count]) => `${cat}: ${count}`)
+            .join(", ");
           if (details) {
             breakdown = `（内訳: ${details}）`;
           }
@@ -531,7 +557,7 @@ export class PlanBridge {
         /* fail-open: continue even if wisdom save fails */
       }
 
-      const banner = formatBanner({
+      const banner = this.formatNotificationBanner({
         variant: "sisyphus_insight",
         level: "info",
         title: "Sisyphus Insight",
@@ -559,13 +585,11 @@ export class PlanBridge {
     const lastPersona = this.completionDetector.lastInvokedPersona(sessionId);
     if (lastPersona === "prometheus" && this.loopHandler && !isError) {
       const taskId =
-        completionInput?.taskId ??
-        (await this.getActiveTaskIdForSession(sessionId)) ??
-        "unknown";
+        completionInput?.taskId ?? (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown";
 
       const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
       if (decision.pivoted) {
-        const banner = formatBanner({
+        const banner = this.formatNotificationBanner({
           variant: "architecture_pivot",
           level: "warning",
           title: "Architecture Pivot",
@@ -652,8 +676,7 @@ export class PlanBridge {
       if (planContent === null) return undefined;
       const tasks = this.parser.parse(planContent);
       const activeTask =
-        tasks.find((t) => t.status === "in_progress") ??
-        tasks.find((t) => t.status === "pending");
+        tasks.find((t) => t.status === "in_progress") ?? tasks.find((t) => t.status === "pending");
       return activeTask?.id;
     } catch {
       return undefined;
@@ -775,6 +798,15 @@ export class PlanBridge {
       });
     } catch {
       /* fail-open */
+    }
+  }
+
+  private formatNotificationBanner(notification: Parameters<typeof formatBanner>[0]): string {
+    if (!this.notifier) return formatBanner(notification);
+    try {
+      return this.notifier.formatBanner(notification);
+    } catch {
+      return formatBanner(notification);
     }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { AgentRouter, AGENT_IDS } from "../../src/core/agent-router";
+import { AgentRouter, AGENT_IDS, inferPersonaFromToolInput } from "../../src/core/agent-router";
 
 describe("AgentRouter", () => {
   const router = new AgentRouter();
@@ -132,6 +132,53 @@ describe("AgentRouter", () => {
       const result = router.route("deep", ["completely-unknown-skill"]);
       expect(result.reason).toBe("fallback");
       expect(result.agentId).toBe("hephaestus");
+    });
+  });
+
+  describe("inferPersonaFromToolInput", () => {
+    it("should infer prometheus for code-quality-reviewer skill", () => {
+      expect(inferPersonaFromToolInput({ skills: ["code-quality-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer prometheus for spec-reviewer skill", () => {
+      expect(inferPersonaFromToolInput({ skills: ["spec-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer prometheus when code-quality-reviewer or spec-reviewer is in role/prompt text", () => {
+      expect(inferPersonaFromToolInput({ role: "spec-reviewer" })).toBe("prometheus");
+      expect(inferPersonaFromToolInput({ prompt: "please run code-quality-reviewer checks" })).toBe("prometheus");
+    });
+
+    it("should infer sisyphus for systematic-debugging skill", () => {
+      expect(inferPersonaFromToolInput({ skills: ["systematic-debugging"] })).toBe("sisyphus");
+    });
+
+    it("should infer atlas for writing-plans skill", () => {
+      expect(inferPersonaFromToolInput({ skills: ["writing-plans"] })).toBe("atlas");
+    });
+
+    it("should return undefined for other skills", () => {
+      expect(inferPersonaFromToolInput({ skills: ["implementer-prompt"] })).toBeUndefined();
+    });
+
+    it("should infer prometheus for code-quality-reviewer skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["code-quality-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer prometheus for spec-reviewer skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["spec-reviewer"] })).toBe("prometheus");
+    });
+
+    it("should infer sisyphus for systematic-debugging skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["systematic-debugging"] })).toBe("sisyphus");
+    });
+
+    it("should infer atlas for writing-plans skill via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["writing-plans"] })).toBe("atlas");
+    });
+
+    it("should return undefined for other skills via loadSkills", () => {
+      expect(inferPersonaFromToolInput({ loadSkills: ["implementer-prompt"] })).toBeUndefined();
     });
   });
 });

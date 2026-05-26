@@ -21,7 +21,6 @@ interface WisdomStoreDataV2 {
   readonly maxEntries: number;
 }
 
-const DEFAULT_PERSONA: AgentId = "hephaestus";
 const AGENT_ORDER: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
 
 export class WisdomStore implements WisdomStoreInterface {
@@ -301,7 +300,7 @@ export class WisdomStore implements WisdomStoreInterface {
   private static withDefaultPersona(entry: StoredWisdomEntry): WisdomEntry {
     return {
       ...entry,
-      persona: entry.persona ?? DEFAULT_PERSONA,
+      persona: entry.persona ?? PersonaClassifier.classify(entry),
     };
   }
 

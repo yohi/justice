@@ -206,6 +206,16 @@ Reads combine both stores with **local-priority**: if the local store already
 has `maxEntries` relevant matches, those are returned; otherwise the remainder
 is filled from the global store (newest-first within each store).
 
+### Invisible Advisor flows
+
+Justice now also acts as an invisible advisor for SDD-oriented agent workflows:
+
+- **Atlas guidance**: when `writing-plans` completes, PostToolUse injects an Atlas Guidance Directive that tells Atlas to delegate the next plan step instead of implementing it directly.
+- **Persona-scoped wisdom**: stored learnings are namespaced by persona (`atlas`, `hephaestus`, `sisyphus`, `prometheus`) and task delegation injects only the matching namespace.
+- **Prometheus pivot**: repeated review rejections from Prometheus trigger a Hephaestus architecture-pivot directive after the configured threshold.
+- **Sisyphus debugging wisdom**: `systematic-debugging` root-cause output is saved into the Sisyphus namespace for future debugging sessions.
+- **Toast-equivalent notifications**: injected guidance starts with a visible banner and is also sent through the OpenCode app log notifier.
+
 ### Secret detection
 
 Entries promoted to the global store are scanned for common secret-like

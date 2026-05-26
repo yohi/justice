@@ -217,3 +217,54 @@ export class AgentRouter {
     >;
   }
 }
+
+/**
+ * Estimates the persona that will execute the tool invocation based on its tool input.
+ */
+export function inferPersonaFromToolInput(toolInput: Record<string, unknown>): AgentId | undefined {
+  const getString = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value;
+    return undefined;
+  };
+
+  const getStringArray = (value: unknown): string[] | undefined => {
+    if (Array.isArray(value)) {
+      const result = value.filter((v): v is string => typeof v === "string");
+      if (result.length > 0) return result;
+    }
+    return undefined;
+  };
+
+  // Priority 1: explicit agent field
+  const agent = getString(toolInput.agent);
+  if (agent) {
+    const lower = agent.toLowerCase();
+    if ((AGENT_IDS as readonly string[]).includes(lower)) {
+      return lower as AgentId;
+    }
+  }
+
+  // Priority 2-4: skills mapping
+  const skillList = getStringArray(toolInput.skills) ?? getStringArray(toolInput.loadSkills);
+  if (skillList) {
+    if (
+      skillList.includes("code-quality-reviewer") ||
+      skillList.includes("spec-reviewer")
+    )
+      return "prometheus";
+    if (skillList.includes("systematic-debugging")) return "sisyphus";
+    if (skillList.includes("writing-plans") || skillList.includes("brainstorming")) return "atlas";
+  }
+
+  // Priority 5: role / prompt partial match
+  const role = getString(toolInput.role);
+  const prompt = getString(toolInput.prompt);
+  const textToSearch = `${role ?? ""} ${prompt ?? ""}`;
+
+  if (/\b(?:code-quality-reviewer|spec-reviewer)\b/.test(textToSearch)) return "prometheus";
+  if (/\bsystematic-debugging\b/.test(textToSearch)) return "sisyphus";
+  if (/\bwriting-plans\b/.test(textToSearch) || /\bbrainstorming\b/.test(textToSearch))
+    return "atlas";
+
+  return undefined;
+}

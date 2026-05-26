@@ -342,7 +342,7 @@ Prometheus 連続却下検知 → Hephaestus pivot 注入、および Sisyphus s
 **Steps:**
 
 - [x] **Step 1: Vitest テストを先行作成・更新** — 設計書 §9-11 の表 #1〜#9 を完全網羅。NG 1 回 (pivoted: false)、3 回 (pivoted: true, reason: "review_rejection_threshold", targetAgent: "hephaestus")、2 回 (直前で pivoted: false)、マッチなし (rejections 据え置き)、環境変数 `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT=5` で 5 回目発火、環境変数 `"abc"`/`"0"`/`"-1"` のデフォルトフォールバック、`recordTrial` への連動記録 (`agent: "prometheus", result: "failure", wisdom: "review_rejected: ..."`)、`removeSession` 時の rejections Map クリーンアップを検証。
-- [~] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。**※ 現在の実装では excerpts 追記と recordTrial 連動が未実装。**
+- [x] **Step 2: `recordReviewOutput(sessionId, taskId, reviewerOutput): PivotDecision` を §6-3 通りに実装** — 内部で `ReviewRejectionDetector.detect()` 呼び出し → 一致時のみ rejections Map に excerpt 追記 + `recordTrial` 連動記録。`PivotDecision { pivoted, targetAgent, rejections, maxRejections, reason?, recentExcerpts }` を毎回新規生成。**※ 現在の実装では excerpts 追記と recordTrial 連動が未実装。**
 - [x] **Step 3: 環境変数読み込みヘルパー** — `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` を `parseInt` し、`NaN` / `<= 0` ならデフォルト 3。
 - [x] **Step 4: `removeSession` で `rejections` Map のセッションエントリも削除**
 - [x] **Step 5: `PivotReason` 型と `PivotDecision` 型を export**
@@ -394,12 +394,12 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 - [x] **Step 1: テストを先行作成・更新** — `OpenCodeAdapter.ensureInitialized()` 内で `OpenCodeNotifier` が `client.app.log` を bind して構築され、`JusticePlugin` の `notifier` オプションに渡されることを assert。モック client で `log` 呼び出しが発生することを確認。
 - [x] **Step 2: `runtime/opencode-adapter.ts` を §7-6 通りに更新** — `const notifier = new OpenCodeNotifier(this.#init.client.app.log)` → `new JusticePlugin(localFs, localFs, { logger, onError, globalFileSystem, notifier })`。
-- [ ] **Step 3: `PlanBridge.handleMessage` で persona 別 wisdom 注入を有効化** — §5-4 通り、`delegation.context.agentId ?? "hephaestus"` を `tieredWisdomStore.getRelevant({ persona })` に渡す。
-- [ ] **Step 4: `PlanBridge.handlePreToolUse` の task() 経路でも同様の persona 別注入を適用** — `toolInput` から推定したペルソナ (`PlanCompletionDetector.lastInvokedPersona` と同等ロジック or 直接) で wisdom を絞り込み。
-- [ ] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。
-- [ ] **Step 6: `src/index.ts` から Phase 1-4 で追加した全 export が含まれていることを最終確認**
-- [ ] **Step 7: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 8: Phase Base に向けた Draft PR を作成**
+- [x] **Step 3: `PlanBridge.handleMessage` で persona 別 wisdom 注入を有効化** — §5-4 通り、`delegation.context.agentId ?? "hephaestus"` を `tieredWisdomStore.getRelevant({ persona })` に渡す。
+- [x] **Step 4: `PlanBridge.handlePreToolUse` の task() 経路でも同様の persona 別注入を適用** — `toolInput` から推定したペルソナ (`PlanCompletionDetector.lastInvokedPersona` と同等ロジック or 直接) で wisdom を絞り込み。
+- [x] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。
+- [x] **Step 6: `src/index.ts` から Phase 1-4 で追加した全 export が含まれていることを最終確認**
+- [x] **Step 7: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 8: Phase Base に向けた Draft PR を作成**
 
 ### Task 2: 統合テスト
 
@@ -413,18 +413,18 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 **Steps:**
 
-- [ ] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。**加えて `mockNotifier.calls` に `variant: "atlas_orchestration"` の `notify` 呼び出しが 1 件記録され、`mockNotifier.banners` の最後の要素が `injectedContext` 先頭バナーと一致することを assert**。
-- [ ] **Step 2: `role-based-wisdom-flow.test.ts` を実装** — §9-12 シナリオ通り。hephaestus 3 件 + atlas 2 件追加 → `getRelevant({ persona: "atlas" })` で 2 件のみ取得、injectedContext に hephaestus wisdom が含まれないことを assert。
-- [ ] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。**加えて 3 回目で `mockNotifier.calls` に `variant: "architecture_pivot"` の呼び出しが追加されること、1〜2 回目では追加されないことを assert**。
-- [ ] **Step 4: `sisyphus-debugging-flow.test.ts` を実装 (新規)** — シナリオ: (1) PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` 発火 → 保留登録。(2) PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を渡す。期待:
+- [x] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。**加えて `mockNotifier.calls` に `variant: "atlas_orchestration"` の `notify` 呼び出しが 1 件記録され、`mockNotifier.banners` の最後の要素が `injectedContext` 先頭バナーと一致することを assert**。
+- [x] **Step 2: `role-based-wisdom-flow.test.ts` を実装** — §9-12 シナリオ通り。hephaestus 3 件 + atlas 2 件追加 → `getRelevant({ persona: "atlas" })` で 2 件のみ取得、injectedContext に hephaestus wisdom が含まれないことを assert。
+- [x] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。**加えて 3 回目で `mockNotifier.calls` に `variant: "architecture_pivot"` の呼び出しが追加されること、1〜2 回目では追加されないことを assert**。
+- [x] **Step 4: `sisyphus-debugging-flow.test.ts` を実装 (新規)** — シナリオ: (1) PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` 発火 → 保留登録。(2) PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を渡す。期待:
   - `inject` レスポンスの先頭に 🔬 バナー (`variant: "sisyphus_insight"`) が挿入される
   - `wisdomStore.add` が `persona: "sisyphus"` 指定で 1 件以上呼び出され、保存後 `wisdomStore.getRelevant({ persona: "sisyphus" })` で当該 entry が取得できる
   - 抽出された draft の少なくとも 1 件は `category: "design_decision"` を持つ (根本原因マーカー検出経路)
   - `mockNotifier.calls` に `variant: "sisyphus_insight"` の `notify` が 1 件記録される
   - 日本語マーカー `"根本原因: ..."` でも同じ経路が動作することを別ケースで確認
-- [ ] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
-- [ ] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
+- [x] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: 最終検証 + Phase Base マージ準備
 
@@ -436,26 +436,26 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 **Steps:**
 
-- [ ] **Step 1: Devcontainer 内で全コマンドを最終実行** — `bun install --frozen-lockfile && bun run typecheck && bun run lint && bun run test && bun run build`。検収基準すべて満たすこと。
-- [ ] **Step 2: `dist/opencode-plugin.js` の生成と最低限の smoke import** — `node -e "require('./dist/opencode-plugin.js')"` 相当が成功すること。
-- [ ] **Step 3: 全テスト pass を確認** — `bun run test` がエラー 0 で完了し、出力サマリの `failures: 0` および skip された不正な suite が無いことを確認。件数は Phase 1〜4 で累積追加されるため固定値で照合せず、定性的に「すべて pass」をもって合格とする。
-- [ ] **Step 4: `CHANGELOG.md` に 4 機能の追加を Conventional Commits 準拠で追記** — `feat(core): role-based wisdom store with v1→v2 migration`、`feat(hooks): plan-to-execution bridge with Atlas guidance`、`feat(hooks): SDD review-rejection pivot to Hephaestus`、`feat(runtime): toast-equivalent notifier (log + banner)`。
-- [ ] **Step 5: 設計書 §14 受け入れ条件 1〜6 をチェックリスト化し、各項目の検証手順を実行**:
-  - [ ] (1) writing-plans 完了直後 → Atlas Guidance Directive 注入
-  - [ ] (2) wisdom.json v2 形式で永続化、Atlas 起動時に atlas 名前空間のみ注入
-  - [ ] (3) Prometheus 連続 3 回 NG → Hephaestus pivot 注入
-  - [ ] (4) systematic-debugging 完了 → Sisyphus 名前空間に保存
-  - [ ] (5) 全 hook 発火時、`injectedContext` 先頭にバナー + `client.app.log` 通知
-  - [ ] (6) 既存テスト破壊なし、新規含め全 pass
-- [ ] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
+- [x] **Step 1: Devcontainer 内で全コマンドを最終実行** — `bun install --frozen-lockfile && bun run typecheck && bun run lint && bun run test && bun run build`。検収基準すべて満たすこと。
+- [x] **Step 2: `dist/opencode-plugin.js` の生成と最低限の smoke import** — `node -e "require('./dist/opencode-plugin.js')"` 相当が成功すること。
+- [x] **Step 3: 全テスト pass を確認** — `bun run test` がエラー 0 で完了し、出力サマリの `failures: 0` および skip された不正な suite が無いことを確認。件数は Phase 1〜4 で累積追加されるため固定値で照合せず、定性的に「すべて pass」をもって合格とする。
+- [x] **Step 4: `CHANGELOG.md` に 4 機能の追加を Conventional Commits 準拠で追記** — `feat(core): role-based wisdom store with v1→v2 migration`、`feat(hooks): plan-to-execution bridge with Atlas guidance`、`feat(hooks): SDD review-rejection pivot to Hephaestus`、`feat(runtime): toast-equivalent notifier (log + banner)`。
+- [x] **Step 5: 設計書 §14 受け入れ条件 1〜6 をチェックリスト化し、各項目の検証手順を実行**:
+  - [x] (1) writing-plans 完了直後 → Atlas Guidance Directive 注入
+  - [x] (2) wisdom.json v2 形式で永続化、Atlas 起動時に atlas 名前空間のみ注入
+  - [x] (3) Prometheus 連続 3 回 NG → Hephaestus pivot 注入
+  - [x] (4) systematic-debugging 完了 → Sisyphus 名前空間に保存
+  - [x] (5) 全 hook 発火時、`injectedContext` 先頭にバナー + `client.app.log` 通知
+  - [x] (6) 既存テスト破壊なし、新規含め全 pass
+- [x] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
 
 ---
 
 ## 完了の定義 (Definition of Done)
 
-- [ ] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
-- [ ] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
-- [ ] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
-- [ ] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
-- [ ] 新規 npm 依存ゼロ
-- [ ] `dist/opencode-plugin.js` が正常ビルドされる
+- [x] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
+- [x] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
+- [x] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
+- [x] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
+- [x] 新規 npm 依存ゼロ
+- [x] `dist/opencode-plugin.js` が正常ビルドされる
