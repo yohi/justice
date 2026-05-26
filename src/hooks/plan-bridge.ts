@@ -279,13 +279,11 @@ export class PlanBridge {
 
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
-    if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
+    const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
+    if (this.isResolvableAgentId(lastPersona)) {
+      persona = lastPersona;
+    } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
       persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
-    } else {
-      const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
-      if (this.isResolvableAgentId(lastPersona)) {
-        persona = lastPersona;
-      }
     }
 
     const previousLearnings = this.getRelevantLearnings(persona);
@@ -422,7 +420,7 @@ export class PlanBridge {
               ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n"
               : "\n";
 
-          const banner = formatBanner({
+          const banner = this.formatNotificationBanner({
             variant: "atlas_orchestration",
             level: "info",
             title: "Atlas Orchestration",
@@ -463,7 +461,7 @@ export class PlanBridge {
             `Atlas が writing-plans を完了 — 次のステップは ${recommendedAgent} に委譲してください。`,
           );
         } else {
-          const banner = formatBanner({
+          const banner = this.formatNotificationBanner({
             variant: "atlas_orchestration",
             level: "success",
             title: "Atlas Orchestration",
@@ -531,7 +529,7 @@ export class PlanBridge {
         /* fail-open: continue even if wisdom save fails */
       }
 
-      const banner = formatBanner({
+      const banner = this.formatNotificationBanner({
         variant: "sisyphus_insight",
         level: "info",
         title: "Sisyphus Insight",
@@ -565,7 +563,7 @@ export class PlanBridge {
 
       const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
       if (decision.pivoted) {
-        const banner = formatBanner({
+        const banner = this.formatNotificationBanner({
           variant: "architecture_pivot",
           level: "warning",
           title: "Architecture Pivot",
@@ -775,6 +773,15 @@ export class PlanBridge {
       });
     } catch {
       /* fail-open */
+    }
+  }
+
+  private formatNotificationBanner(notification: Parameters<typeof formatBanner>[0]): string {
+    if (!this.notifier) return formatBanner(notification);
+    try {
+      return this.notifier.formatBanner(notification);
+    } catch {
+      return formatBanner(notification);
     }
   }
 }

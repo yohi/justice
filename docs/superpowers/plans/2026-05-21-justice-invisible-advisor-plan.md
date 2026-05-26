@@ -413,17 +413,17 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 **Steps:**
 
-- [ ] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。**加えて `mockNotifier.calls` に `variant: "atlas_orchestration"` の `notify` 呼び出しが 1 件記録され、`mockNotifier.banners` の最後の要素が `injectedContext` 先頭バナーと一致することを assert**。
-- [ ] **Step 2: `role-based-wisdom-flow.test.ts` を実装** — §9-12 シナリオ通り。hephaestus 3 件 + atlas 2 件追加 → `getRelevant({ persona: "atlas" })` で 2 件のみ取得、injectedContext に hephaestus wisdom が含まれないことを assert。
-- [ ] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。**加えて 3 回目で `mockNotifier.calls` に `variant: "architecture_pivot"` の呼び出しが追加されること、1〜2 回目では追加されないことを assert**。
-- [ ] **Step 4: `sisyphus-debugging-flow.test.ts` を実装 (新規)** — シナリオ: (1) PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` 発火 → 保留登録。(2) PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を渡す。期待:
+- [x] **Step 1: `atlas-orchestration-flow.test.ts` を実装** — 設計書 §9-12 シナリオ通り。PreToolUse (skills: writing-plans) → PostToolUse (toolResult に planPath + Architecture/Implementation マーカー) → `inject` レスポンスに 🎯 バナー + 推奨エージェント "hephaestus" を含むこと、次の task() で `previousLearnings` が atlas wisdom 由来であることを検証。**加えて `mockNotifier.calls` に `variant: "atlas_orchestration"` の `notify` 呼び出しが 1 件記録され、`mockNotifier.banners` の最後の要素が `injectedContext` 先頭バナーと一致することを assert**。
+- [x] **Step 2: `role-based-wisdom-flow.test.ts` を実装** — §9-12 シナリオ通り。hephaestus 3 件 + atlas 2 件追加 → `getRelevant({ persona: "atlas" })` で 2 件のみ取得、injectedContext に hephaestus wisdom が含まれないことを assert。
+- [x] **Step 3: `review-rejection-pivot-flow.test.ts` を実装** — §9-12 シナリオ通り。PreToolUse (skills: code-quality-reviewer) × 3 連発 + PostToolUse "REJECTED: ..." × 3 → 3 回目で `inject` + 🚧 バナー + Hephaestus 文言、`getTrialHistory` に prometheus failure × 3 が記録されていることを assert。**加えて 3 回目で `mockNotifier.calls` に `variant: "architecture_pivot"` の呼び出しが追加されること、1〜2 回目では追加されないことを assert**。
+- [x] **Step 4: `sisyphus-debugging-flow.test.ts` を実装 (新規)** — シナリオ: (1) PreToolUse: `task`, `toolInput: { skills: ["systematic-debugging"], prompt: "..." }` 発火 → 保留登録。(2) PostToolUse: `toolResult` に `"Root cause: race condition in queue handler"` を含む文字列を渡す。期待:
   - `inject` レスポンスの先頭に 🔬 バナー (`variant: "sisyphus_insight"`) が挿入される
   - `wisdomStore.add` が `persona: "sisyphus"` 指定で 1 件以上呼び出され、保存後 `wisdomStore.getRelevant({ persona: "sisyphus" })` で当該 entry が取得できる
   - 抽出された draft の少なくとも 1 件は `category: "design_decision"` を持つ (根本原因マーカー検出経路)
   - `mockNotifier.calls` に `variant: "sisyphus_insight"` の `notify` が 1 件記録される
   - 日本語マーカー `"根本原因: ..."` でも同じ経路が動作することを別ケースで確認
-- [ ] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
-- [ ] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
+- [x] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
+- [x] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
 - [ ] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: 最終検証 + Phase Base マージ準備
