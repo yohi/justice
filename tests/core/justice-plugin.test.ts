@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { JusticePlugin, mergePostToolUseResponses } from "../../src/core/justice-plugin";
 import type {
-FileReader,
-FileWriter,
-  HookResponse, InjectResponse,
-MessageEvent,
-PreToolUseEvent,
-PostToolUseEvent,
-  EventEvent
+  FileReader,
+  FileWriter,
+  HookResponse,
+  InjectResponse,
+  MessageEvent,
+  PreToolUseEvent,
+  PostToolUseEvent,
+  EventEvent,
 } from "../../src/core/types";
 import {
   createMockFileReader,
@@ -305,4 +306,4 @@ describe("JusticePlugin", () => {
       expect(spy).toHaveBeenCalled();
     });
   });
-    });
+});

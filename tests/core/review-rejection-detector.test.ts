@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ReviewRejectionDetector } from "../../src/core/review-rejection-detector";
-import { REVIEW_REJECTION_PATTERNS, matchesReviewRejection } from "../../src/core/review-rejection-patterns";
+import {
+  REVIEW_REJECTION_PATTERNS,
+  matchesReviewRejection,
+} from "../../src/core/review-rejection-patterns";
 
 describe("ReviewRejectionDetector", () => {
   const detector = new ReviewRejectionDetector();
@@ -30,7 +33,11 @@ describe("ReviewRejectionDetector", () => {
     const signal = detector.detect("BLOCKER: race condition\nMUST FIX: nullable\ndo not merge");
 
     expect(signal.matched).toBe(true);
-    expect(signal.excerpts).toEqual(["BLOCKER: race condition", "MUST FIX: nullable", "do not merge"]);
+    expect(signal.excerpts).toEqual([
+      "BLOCKER: race condition",
+      "MUST FIX: nullable",
+      "do not merge",
+    ]);
     expect(signal.summary.length).toBeLessThanOrEqual(300);
   });
 
@@ -64,7 +71,9 @@ describe("ReviewRejectionDetector", () => {
 
   it("appends ellipsis when summary exceeds max length", () => {
     const longExcerpt = "x".repeat(400);
-    const signal = detector.detect(`BLOCKER: ${longExcerpt}\nMUST FIX: ${longExcerpt}\nDO NOT MERGE: ${longExcerpt}`);
+    const signal = detector.detect(
+      `BLOCKER: ${longExcerpt}\nMUST FIX: ${longExcerpt}\nDO NOT MERGE: ${longExcerpt}`,
+    );
 
     expect(signal.matched).toBe(true);
     expect(signal.excerpts).toHaveLength(3);

@@ -316,7 +316,12 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
   });
   it("should use persona-specific header for single persona (Issue 2 fix)", () => {
     const localStore = new WisdomStore(100);
-    localStore.add({ taskId: "t1", category: "failure_gotcha", content: "Gotcha", persona: "hephaestus" });
+    localStore.add({
+      taskId: "t1",
+      category: "failure_gotcha",
+      content: "Gotcha",
+      persona: "hephaestus",
+    });
 
     const { tiered } = makeTiered({ localStore, globalStore: new WisdomStore(500) });
     const entries = tiered.getRelevant({ maxEntries: 10 });
@@ -328,8 +333,18 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
 
   it("should NOT duplicate headers when multiple personas are present (Issue 1 fix)", () => {
     const localStore = new WisdomStore(100);
-    localStore.add({ taskId: "t1", category: "failure_gotcha", content: "Gotcha", persona: "hephaestus" });
-    localStore.add({ taskId: "t2", category: "environment_quirk", content: "Quirk", persona: "sisyphus" });
+    localStore.add({
+      taskId: "t1",
+      category: "failure_gotcha",
+      content: "Gotcha",
+      persona: "hephaestus",
+    });
+    localStore.add({
+      taskId: "t2",
+      category: "environment_quirk",
+      content: "Quirk",
+      persona: "sisyphus",
+    });
 
     const { tiered } = makeTiered({ localStore, globalStore: new WisdomStore(500) });
     const entries = tiered.getRelevant({ maxEntries: 10 });
@@ -344,7 +359,12 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
 
   it("should format global entries without delegating to localStore formatter (Issue 3 fix)", () => {
     const globalStore = new WisdomStore(500);
-    globalStore.add({ taskId: "t1", category: "environment_quirk", content: "Quirk", persona: "atlas" });
+    globalStore.add({
+      taskId: "t1",
+      category: "environment_quirk",
+      content: "Quirk",
+      persona: "atlas",
+    });
 
     const { tiered } = makeTiered({ localStore: new WisdomStore(100), globalStore });
     const entries = tiered.getRelevant({ maxEntries: 10 });
@@ -430,7 +450,9 @@ describe("TieredWisdomStore — persistence coordination", () => {
     });
 
     tiered.getLocalStore().add({ taskId: "t1", category: "failure_gotcha", content: "save-local" });
-    tiered.getGlobalStore().add({ taskId: "t2", category: "success_pattern", content: "save-global" });
+    tiered
+      .getGlobalStore()
+      .add({ taskId: "t2", category: "success_pattern", content: "save-global" });
 
     await tiered.persistAll();
 

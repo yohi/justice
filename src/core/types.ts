@@ -306,11 +306,12 @@ export type WisdomScope = "local" | "global";
  * ローカルストアと階層化ストアの両方で共通の操作を定義します。
  */
 export interface WisdomStoreInterface {
-  add(
-    entry: WisdomEntryInput,
-    options?: AddOptions,
-  ): WisdomEntry;
+  add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry;
   getByTaskId(taskId: string): WisdomEntry[];
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[];
+  getRelevant(options?: {
+    errorClass?: ErrorClass;
+    maxEntries?: number;
+    persona?: AgentId;
+  }): WisdomEntry[];
   formatForInjection(entries: WisdomEntry[]): string;
 }

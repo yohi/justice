@@ -76,8 +76,7 @@ export class PlanCompletionDetector {
         return {
           persona: "prometheus",
           trigger: "code_review_rejection",
-          guidance:
-            `Prometheus pivot: the review rejected the current approach. Rework the plan around the rejection signals and address these blockers first:\n${rejection.summary}`,
+          guidance: `Prometheus pivot: the review rejected the current approach. Rework the plan around the rejection signals and address these blockers first:\n${rejection.summary}`,
         };
       }
     }
@@ -223,7 +222,8 @@ export class PlanCompletionDetector {
   private extractSkills(toolInput: Record<string, unknown>): SkillTarget[] {
     const skills: SkillTarget[] = [];
 
-    const skillList = this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
+    const skillList =
+      this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
     if (skillList) {
       if (skillList.includes("writing-plans") || skillList.includes("brainstorming")) {
         skills.push("writing-plans");
@@ -243,10 +243,7 @@ export class PlanCompletionDetector {
     ) {
       skills.push("writing-plans");
     }
-    if (
-      !skills.includes("systematic-debugging") &&
-      /\bsystematic-debugging\b/.test(textToSearch)
-    ) {
+    if (!skills.includes("systematic-debugging") && /\bsystematic-debugging\b/.test(textToSearch)) {
       skills.push("systematic-debugging");
     }
 
@@ -264,11 +261,13 @@ export class PlanCompletionDetector {
     }
 
     // Priority 2-4: skills mapping
-    const skillList = this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
+    const skillList =
+      this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
     if (skillList) {
       if (skillList.includes("code-quality-reviewer")) return "prometheus";
       if (skillList.includes("systematic-debugging")) return "sisyphus";
-      if (skillList.includes("writing-plans") || skillList.includes("brainstorming")) return "atlas";
+      if (skillList.includes("writing-plans") || skillList.includes("brainstorming"))
+        return "atlas";
     }
 
     // Priority 5: role / prompt partial match
@@ -278,15 +277,13 @@ export class PlanCompletionDetector {
 
     if (/\bcode-quality-reviewer\b/.test(textToSearch)) return "prometheus";
     if (/\bsystematic-debugging\b/.test(textToSearch)) return "sisyphus";
-    if (/\bwriting-plans\b/.test(textToSearch) || /\bbrainstorming\b/.test(textToSearch)) return "atlas";
+    if (/\bwriting-plans\b/.test(textToSearch) || /\bbrainstorming\b/.test(textToSearch))
+      return "atlas";
 
     return undefined;
   }
 
-  private detectFromResult(
-    toolResult: string,
-    target: SkillTarget,
-  ): PlanCompletionSignal | null {
+  private detectFromResult(toolResult: string, target: SkillTarget): PlanCompletionSignal | null {
     if (target === "writing-plans") {
       // Check for plan file path
       const planPathMatch = toolResult.match(
@@ -312,8 +309,7 @@ export class PlanCompletionDetector {
     }
 
     if (target === "systematic-debugging") {
-      const hasRootCause =
-        /Root\s*cause:/i.test(toolResult) || /根本原因[:：]/.test(toolResult);
+      const hasRootCause = /Root\s*cause:/i.test(toolResult) || /根本原因[:：]/.test(toolResult);
       if (hasRootCause) {
         return {
           source: "result_marker",

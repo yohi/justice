@@ -12,7 +12,11 @@ export class LearningExtractor {
    * Analyzes a TaskFeedback result and extracts actionable wisdom entries.
    * Returns an empty array for non-actionable cases.
    */
-  extract(feedback: TaskFeedback, rawOutput?: string, context?: LearningExtractionContext): WisdomEntryDraft[] {
+  extract(
+    feedback: TaskFeedback,
+    rawOutput?: string,
+    context?: LearningExtractionContext,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
 
     if (context?.debug && rawOutput) {
@@ -28,7 +32,7 @@ export class LearningExtractor {
     } else {
       switch (feedback.status) {
         case "success":
-          results.push(...this.extractFromSuccess(feedback));
+          results.push(...this.extractFromSuccess(feedback, rawOutput));
           break;
         case "failure":
           results.push(...this.extractFromFailure(feedback, rawOutput));
@@ -51,11 +55,17 @@ export class LearningExtractor {
     throw new Error(`Unexpected status encountered: ${JSON.stringify(x)}`);
   }
 
-  private extractFromSuccess(
-    feedback: TaskFeedback,
-  ): WisdomEntryDraft[] {
+  private extractFromSuccess(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
+
+    // systematic-debugging root cause marker detection (success path)
+    if (rawOutput) {
+      const rootCauseEntry = this.extractRootCause(feedback.taskId, rawOutput);
+      if (rootCauseEntry) {
+        results.push(rootCauseEntry);
+      }
+    }
 
     // Only extract pattern when tests actually ran
     if (hasTestResults) {
@@ -78,10 +88,7 @@ export class LearningExtractor {
     return results;
   }
 
-  private extractFromFailure(
-    feedback: TaskFeedback,
-    rawOutput?: string,
-  ): WisdomEntryDraft[] {
+  private extractFromFailure(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const errorClass: ErrorClass = feedback.errorClassification ?? "unknown";
     const rootCauseEntry = rawOutput ? this.extractRootCause(feedback.taskId, rawOutput) : null;
@@ -180,22 +187,20 @@ export class LearningExtractor {
     return sanitized;
   }
 
-  private extractFromTimeout(
-    feedback: TaskFeedback,
-  ): WisdomEntryDraft[] {
+  private extractFromTimeout(feedback: TaskFeedback): WisdomEntryDraft[] {
     return [
       {
         taskId: feedback.taskId,
         category: "environment_quirk",
         errorClass: "timeout",
-        content:
-          `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
+        content: `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
       },
     ];
   }
 
   private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
-    const match = rawOutput.match(/Root cause:\s*(.+)/i) || rawOutput.match(/根本原因[:：]\s*(.+)/u);
+    const match =
+      rawOutput.match(/Root cause:\s*(.+)/i) || rawOutput.match(/根本原因[:：]\s*(.+)/u);
     const raw = match?.[1]?.trim();
 
     if (!raw) {

@@ -23,9 +23,7 @@ export class ReviewRejectionDetector {
 
     const joined = excerpts.join("\n");
     const isTruncated = joined.length > MAX_SUMMARY_LENGTH;
-    const summary = isTruncated
-      ? `${joined.slice(0, MAX_SUMMARY_LENGTH - 3)}...`
-      : joined;
+    const summary = isTruncated ? `${joined.slice(0, MAX_SUMMARY_LENGTH - 3)}...` : joined;
 
     return {
       matched: true,

@@ -70,9 +70,15 @@ export class WisdomStore implements WisdomStoreInterface {
    * Retrieves relevant entries based on optional filtering criteria.
    * Limits results to `maxEntries` (default: 10), returning the most recent first.
    */
-  getRelevant(options?: { errorClass?: ErrorClass; maxEntries?: number; persona?: AgentId }): WisdomEntry[] {
+  getRelevant(options?: {
+    errorClass?: ErrorClass;
+    maxEntries?: number;
+    persona?: AgentId;
+  }): WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
-    let results = options?.persona ? this.getEntriesForPersona(options.persona) : this.getOrderedEntries();
+    let results = options?.persona
+      ? this.getEntriesForPersona(options.persona)
+      : this.getOrderedEntries();
 
     if (options?.persona && results.length === 0) {
       results = this.getOrderedEntries();
@@ -137,10 +143,7 @@ export class WisdomStore implements WisdomStoreInterface {
     const data: WisdomStoreDataV2 = {
       version: 2,
       entriesByAgent: Object.fromEntries(
-        AGENT_ORDER.map((persona) => [
-          persona, 
-          this.getEntriesForPersona(persona)
-        ]),
+        AGENT_ORDER.map((persona) => [persona, this.getEntriesForPersona(persona)]),
       ) as Partial<Record<AgentId, readonly WisdomEntry[]>>,
       maxEntries: this._maxEntries,
     };
@@ -170,9 +173,15 @@ export class WisdomStore implements WisdomStoreInterface {
     const store = new WisdomStore(maxEntries);
 
     if (Array.isArray(data.entries)) {
-      const filtered = data.entries.filter((e): e is StoredWisdomEntry => WisdomStore.isValidStoredEntry(e));
+      const filtered = data.entries.filter((e): e is StoredWisdomEntry =>
+        WisdomStore.isValidStoredEntry(e),
+      );
       store.replaceEntries(filtered.map((entry) => WisdomStore.withDefaultPersona(entry)));
-    } else if (data.version === 2 && data.entriesByAgent && typeof data.entriesByAgent === "object") {
+    } else if (
+      data.version === 2 &&
+      data.entriesByAgent &&
+      typeof data.entriesByAgent === "object"
+    ) {
       const flattened: WisdomEntry[] = [];
       for (const persona of AGENT_ORDER) {
         const entries = WisdomStore.readEntriesByPersona(data.entriesByAgent, persona);
@@ -277,13 +286,16 @@ export class WisdomStore implements WisdomStoreInterface {
       typeof (e as StoredWisdomEntry).taskId === "string" &&
       typeof (e as StoredWisdomEntry).category === "string" &&
       typeof (e as StoredWisdomEntry).content === "string" &&
-      (typeof (e as StoredWisdomEntry).persona === "undefined" || WisdomStore.isAgentId((e as StoredWisdomEntry).persona)) &&
+      (typeof (e as StoredWisdomEntry).persona === "undefined" ||
+        WisdomStore.isAgentId((e as StoredWisdomEntry).persona)) &&
       typeof (e as StoredWisdomEntry).timestamp === "string"
     );
   }
 
   private static isAgentId(value: unknown): value is AgentId {
-    return value === "hephaestus" || value === "sisyphus" || value === "prometheus" || value === "atlas";
+    return (
+      value === "hephaestus" || value === "sisyphus" || value === "prometheus" || value === "atlas"
+    );
   }
 
   private static withDefaultPersona(entry: StoredWisdomEntry): WisdomEntry {

@@ -65,9 +65,12 @@ describe("justice-notifier", () => {
     },
   ] satisfies Array<JusticeNotification & { expected: string }>;
 
-  it.each(cases)("formats banner for $level/$variant", ({ level, variant, title, message, expected }) => {
-    expect(formatBanner({ level, variant, title, message })).toBe(expected);
-  });
+  it.each(cases)(
+    "formats banner for $level/$variant",
+    ({ level, variant, title, message, expected }) => {
+      expect(formatBanner({ level, variant, title, message })).toBe(expected);
+    },
+  );
 
   it("keeps the three-line banner structure when the message is empty", () => {
     expect(
