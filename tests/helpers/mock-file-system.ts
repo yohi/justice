@@ -8,7 +8,9 @@ export function createMockFileReader(files: Record<string, string>): FileReader 
     readFile: vi.fn(async (_path: string) => {
       const content = files[_path];
       if (content === undefined) {
-        const err = new Error(`ENOENT: no such file or directory, open '${_path}'`) as NodeJS.ErrnoException;
+        const err = new Error(
+          `ENOENT: no such file or directory, open '${_path}'`,
+        ) as NodeJS.ErrnoException;
         err.code = "ENOENT";
         throw err;
       }
@@ -62,13 +64,17 @@ export function createMockFileWriter(): MockFileWriter {
 
       const parent = dirname(path);
       if (parent !== "." && parent !== "/" && !directories.has(parent)) {
-        const err = new Error(`ENOENT: no such file or directory, mkdir '${path}'`) as NodeJS.ErrnoException;
+        const err = new Error(
+          `ENOENT: no such file or directory, mkdir '${path}'`,
+        ) as NodeJS.ErrnoException;
         err.code = "ENOENT";
         throw err;
       }
 
       if (directories.has(path)) {
-        const err = new Error(`EEXIST: file already exists, mkdir '${path}'`) as NodeJS.ErrnoException;
+        const err = new Error(
+          `EEXIST: file already exists, mkdir '${path}'`,
+        ) as NodeJS.ErrnoException;
         err.code = "EEXIST";
         throw err;
       }
@@ -118,7 +124,9 @@ export function createMockFileSystem(initialFiles: Record<string, string> = {}):
     readFile: vi.fn(async (path: string) => {
       const content = writer.writtenFiles[path];
       if (content === undefined) {
-        const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+        const err = new Error(
+          `ENOENT: no such file or directory, open '${path}'`,
+        ) as NodeJS.ErrnoException;
         err.code = "ENOENT";
         throw err;
       }

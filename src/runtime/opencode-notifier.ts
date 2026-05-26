@@ -1,7 +1,15 @@
-import { formatBanner as coreFormatBanner, iconFor, type JusticeNotification, type JusticeNotifier, type NotificationLevel } from "../core/justice-notifier";
+import {
+  formatBanner as coreFormatBanner,
+  iconFor,
+  type JusticeNotification,
+  type JusticeNotifier,
+  type NotificationLevel,
+} from "../core/justice-notifier";
 import type { OpenCodeLogEntry } from "./opencode-adapter";
 
-const LOG_LEVEL_BY_NOTIFICATION_LEVEL: Readonly<Record<NotificationLevel, OpenCodeLogEntry["level"]>> = {
+const LOG_LEVEL_BY_NOTIFICATION_LEVEL: Readonly<
+  Record<NotificationLevel, OpenCodeLogEntry["level"]>
+> = {
   info: "info",
   success: "info",
   warning: "warn",

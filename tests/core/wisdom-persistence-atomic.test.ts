@@ -45,7 +45,12 @@ describe("WisdomPersistence.saveAtomic", () => {
     const existing = {
       entries: [
         makeEntry({ id: "w-1", taskId: "t1", content: "old", timestamp: "2026-01-01T00:00:00Z" }),
-        makeEntry({ id: "w-2", taskId: "t2", content: "keep-disk", timestamp: "2026-01-02T00:00:00Z" }),
+        makeEntry({
+          id: "w-2",
+          taskId: "t2",
+          content: "keep-disk",
+          timestamp: "2026-01-02T00:00:00Z",
+        }),
       ],
       maxEntries: 100,
     };
@@ -64,13 +69,17 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomic(store);
     const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
     const byId = Object.fromEntries(
-      Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat().map((e) => [e.id, e]),
+      Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>)
+        .flat()
+        .map((e) => [e.id, e]),
     );
 
     expect(byId["w-1"]?.content).toBe("new");
     expect(byId["w-2"]?.content).toBe("keep-disk");
     expect(byId["w-3"]?.content).toBe("added");
-    expect(Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat()).toHaveLength(3);
+    expect(
+      Object.values(parsed.entriesByAgent as Record<string, WisdomEntry[]>).flat(),
+    ).toHaveLength(3);
   });
 
   it("should trim merged entries to maxEntries using the most-recent timestamps", async () => {
@@ -110,9 +119,7 @@ describe("WisdomPersistence.saveAtomic", () => {
 
     await expect(persistence.saveAtomic(store)).rejects.toThrow("rename failed");
     expect(writer.writtenFiles[defaultPath]).toBeUndefined();
-    expect(
-      Object.keys(writer.writtenFiles).filter((k) => k.includes(".tmp.")),
-    ).toHaveLength(0);
+    expect(Object.keys(writer.writtenFiles).filter((k) => k.includes(".tmp."))).toHaveLength(0);
     expect(writer.deleteFile).toHaveBeenCalledTimes(1); // temp file
   });
 
@@ -168,7 +175,9 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomic(store);
 
     const finalData = JSON.parse(writer.writtenFiles[defaultPath]!);
-    expect(Object.values(finalData.entriesByAgent as Record<string, WisdomEntry[]>).flat()).toHaveLength(0);
+    expect(
+      Object.values(finalData.entriesByAgent as Record<string, WisdomEntry[]>).flat(),
+    ).toHaveLength(0);
     expect(finalData.maxEntries).toBe(0);
   });
 });

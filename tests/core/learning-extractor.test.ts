@@ -143,7 +143,9 @@ describe("LearningExtractor", () => {
       );
 
       expect(entries).toHaveLength(2); // One for the root cause, one for the design_error itself
-      const rootCauseEntry = entries.find(e => e.category === "design_decision" && e.content.includes("Root cause identified"));
+      const rootCauseEntry = entries.find(
+        (e) => e.category === "design_decision" && e.content.includes("Root cause identified"),
+      );
       expect(rootCauseEntry).toBeDefined();
       expect(rootCauseEntry).toEqual(
         expect.objectContaining({
@@ -161,15 +163,12 @@ describe("LearningExtractor", () => {
         errorClassification: "design_error",
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "根本原因：競合状態",
-        { persona: "atlas" },
-      );
+      const entries = extractor.extract(feedback, "根本原因：競合状態", { persona: "atlas" });
 
       expect(entries).toHaveLength(2);
       const rootCauseEntry = entries.find(
-        (entry) => entry.category === "design_decision" && entry.content.includes("Root cause identified"),
+        (entry) =>
+          entry.category === "design_decision" && entry.content.includes("Root cause identified"),
       );
       expect(rootCauseEntry).toBeDefined();
       expect(rootCauseEntry).toEqual(
@@ -189,15 +188,12 @@ describe("LearningExtractor", () => {
         errorClassification: "design_error",
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "根本原因:競合状態",
-        { persona: "atlas" },
-      );
+      const entries = extractor.extract(feedback, "根本原因:競合状態", { persona: "atlas" });
 
       expect(entries).toHaveLength(2);
       const rootCauseEntry = entries.find(
-        (entry) => entry.category === "design_decision" && entry.content.includes("Root cause identified"),
+        (entry) =>
+          entry.category === "design_decision" && entry.content.includes("Root cause identified"),
       );
       expect(rootCauseEntry).toBeDefined();
       expect(rootCauseEntry).toEqual(
@@ -217,10 +213,7 @@ describe("LearningExtractor", () => {
         errorClassification: "design_error",
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "Root cause:   \n\t  ",
-      );
+      const entries = extractor.extract(feedback, "Root cause:   \n\t  ");
 
       // We expect 1 entry here because of the 'design_error' itself, but NOT the rootCauseEntry.
       // Wait, let's verify how many entries we expect.
@@ -237,14 +230,11 @@ describe("LearningExtractor", () => {
         errorClassification: "syntax_error", // Not design_error
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "Root cause: a simple typo",
-      );
+      const entries = extractor.extract(feedback, "Root cause: a simple typo");
 
       // Since it's syntax_error and retryCount is 0, extractFromFailure might push something if it's the final failure.
       // But the rootCauseEntry shouldn't be there.
-      expect(entries.every(e => !e.content.includes("Root cause identified"))).toBe(true);
+      expect(entries.every((e) => !e.content.includes("Root cause identified"))).toBe(true);
     });
 
     describe("sanitization", () => {
@@ -350,7 +340,7 @@ describe("LearningExtractor", () => {
       const entries = extractor.extract(
         feedback,
         "Root cause: missing test configuration in vitest config",
-        { persona: "sisyphus", debug: true }
+        { persona: "sisyphus", debug: true },
       );
 
       expect(entries).toHaveLength(2);

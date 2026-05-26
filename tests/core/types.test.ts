@@ -172,7 +172,7 @@ describe("Phase 5 wisdom types", () => {
         content: "Prefer readonly interfaces.",
         persona: "hephaestus",
       }),
-      { persona: "sisyphus" }
+      { persona: "sisyphus" },
     );
 
     expect(entry.persona).toBe("sisyphus");

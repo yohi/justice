@@ -115,7 +115,11 @@ describe("LoopDetectionHandler", () => {
 
       handler.recordReviewOutput("s-1", "task-1", "BLOCKER: missing tests");
       handler.recordReviewOutput("s-1", "task-1", "MUST FIX: improve error handling");
-      const decision = handler.recordReviewOutput("s-1", "task-1", "requested changes before merge");
+      const decision = handler.recordReviewOutput(
+        "s-1",
+        "task-1",
+        "requested changes before merge",
+      );
 
       expect(decision.pivoted).toBe(true);
       expect(decision.targetAgent).toBe("hephaestus");
@@ -138,7 +142,7 @@ describe("LoopDetectionHandler", () => {
       expect(decision.rejections).toBe(2);
     });
 
-    it("#4: non-rejection output keeps previous count and clears excerpts", () => {
+    it("#4: non-rejection output resets rejections and clears excerpts", () => {
       const handler = new LoopDetectionHandler(
         createMockFileReader({}),
         createMockFileWriter(),
@@ -272,4 +276,3 @@ describe("LoopDetectionHandler", () => {
     });
   });
 });
-/* eslint-enable security/detect-object-injection */

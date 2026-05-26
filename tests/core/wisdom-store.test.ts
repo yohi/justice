@@ -29,12 +29,27 @@ describe("WisdomStore", () => {
     it("should limit entries to maxEntries and evict oldest first", () => {
       const store = new WisdomStore(2); // max 2 entries
 
-      store.add({ taskId: "t1", persona: "hephaestus", category: "success_pattern", content: "first" });
-      store.add({ taskId: "t2", persona: "hephaestus", category: "failure_gotcha", content: "second" });
+      store.add({
+        taskId: "t1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "first",
+      });
+      store.add({
+        taskId: "t2",
+        persona: "hephaestus",
+        category: "failure_gotcha",
+        content: "second",
+      });
       expect(store.getRelevant()).toHaveLength(2);
 
       // This should evict the first one
-      store.add({ taskId: "t3", persona: "hephaestus", category: "design_decision", content: "third" });
+      store.add({
+        taskId: "t3",
+        persona: "hephaestus",
+        category: "design_decision",
+        content: "third",
+      });
 
       const all = store.getRelevant();
       expect(all).toHaveLength(2);
@@ -47,9 +62,24 @@ describe("WisdomStore", () => {
   describe("getByTaskId", () => {
     it("should return entries for a specific task", () => {
       const store = new WisdomStore();
-      store.add({ taskId: "common-task", persona: "hephaestus", category: "success_pattern", content: "A" });
-      store.add({ taskId: "other-task", persona: "hephaestus", category: "failure_gotcha", content: "B" });
-      store.add({ taskId: "common-task", persona: "hephaestus", category: "design_decision", content: "C" });
+      store.add({
+        taskId: "common-task",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "A",
+      });
+      store.add({
+        taskId: "other-task",
+        persona: "hephaestus",
+        category: "failure_gotcha",
+        content: "B",
+      });
+      store.add({
+        taskId: "common-task",
+        persona: "hephaestus",
+        category: "design_decision",
+        content: "C",
+      });
 
       const results = store.getByTaskId("common-task");
       expect(results).toHaveLength(2);
@@ -113,9 +143,19 @@ describe("WisdomStore", () => {
 
     it("should filter entries by persona when provided", () => {
       const store = new WisdomStore();
-      store.add({ taskId: "h-1", persona: "hephaestus", category: "success_pattern", content: "H1" });
+      store.add({
+        taskId: "h-1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "H1",
+      });
       store.add({ taskId: "a-1", persona: "atlas", category: "failure_gotcha", content: "A1" });
-      store.add({ taskId: "h-2", persona: "hephaestus", category: "design_decision", content: "H2" });
+      store.add({
+        taskId: "h-2",
+        persona: "hephaestus",
+        category: "design_decision",
+        content: "H2",
+      });
       store.add({ taskId: "a-2", persona: "atlas", category: "design_decision", content: "A2" });
 
       const results = store.getRelevant({ persona: "hephaestus" });
@@ -126,8 +166,18 @@ describe("WisdomStore", () => {
 
     it("should fall back to all entries when the requested persona has none", () => {
       const store = new WisdomStore();
-      store.add({ taskId: "h-1", persona: "hephaestus", category: "success_pattern", content: "H1" });
-      store.add({ taskId: "h-2", persona: "hephaestus", category: "failure_gotcha", content: "H2" });
+      store.add({
+        taskId: "h-1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "H1",
+      });
+      store.add({
+        taskId: "h-2",
+        persona: "hephaestus",
+        category: "failure_gotcha",
+        content: "H2",
+      });
 
       const results = store.getRelevant({ persona: "atlas" });
       expect(results).toHaveLength(2);
@@ -138,7 +188,12 @@ describe("WisdomStore", () => {
   describe("persona partitioning", () => {
     it("should store entries by persona and serialize them under entriesByAgent", () => {
       const store = new WisdomStore();
-      store.add({ taskId: "h-1", persona: "hephaestus", category: "success_pattern", content: "H1" });
+      store.add({
+        taskId: "h-1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "H1",
+      });
       store.add({ taskId: "a-1", persona: "atlas", category: "failure_gotcha", content: "A1" });
 
       const parsed = JSON.parse(store.serialize());
@@ -182,7 +237,12 @@ describe("WisdomStore", () => {
   describe("serialize / deserialize", () => {
     it("should round-trip through JSON serialization", () => {
       const original = new WisdomStore(50);
-      original.add({ taskId: "t1", persona: "hephaestus", category: "success_pattern", content: "Great code" });
+      original.add({
+        taskId: "t1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "Great code",
+      });
       original.add({
         taskId: "t2",
         persona: "hephaestus",
@@ -206,15 +266,32 @@ describe("WisdomStore", () => {
       expect(allRestored[1]?.errorClass).toBe("syntax_error");
 
       // Check maxEntries was restored or kept
-      restored.add({ taskId: "t3", persona: "hephaestus", category: "design_decision", content: "New code" });
+      restored.add({
+        taskId: "t3",
+        persona: "hephaestus",
+        category: "design_decision",
+        content: "New code",
+      });
       expect(restored.getRelevant()).toHaveLength(3);
     });
 
     it("should migrate v1 entries into persona buckets during deserialize", () => {
       const v1 = JSON.stringify({
         entries: [
-          { id: "w-1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "2026-01-01T00:00:00Z" },
-          { id: "w-2", taskId: "t2", category: "failure_gotcha", content: "B", timestamp: "2026-01-02T00:00:00Z" },
+          {
+            id: "w-1",
+            taskId: "t1",
+            category: "success_pattern",
+            content: "A",
+            timestamp: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "w-2",
+            taskId: "t2",
+            category: "failure_gotcha",
+            content: "B",
+            timestamp: "2026-01-02T00:00:00Z",
+          },
         ],
         maxEntries: 100,
       });
@@ -243,9 +320,27 @@ describe("WisdomStore", () => {
       const data = {
         maxEntries: 2,
         entries: [
-          { id: "w-1", taskId: "t1", category: "success_pattern", content: "A", timestamp: "2026-01-01T00:00:00Z" },
-          { id: "w-2", taskId: "t2", category: "success_pattern", content: "B", timestamp: "2026-01-02T00:00:00Z" },
-          { id: "w-3", taskId: "t3", category: "success_pattern", content: "C", timestamp: "2026-01-03T00:00:00Z" },
+          {
+            id: "w-1",
+            taskId: "t1",
+            category: "success_pattern",
+            content: "A",
+            timestamp: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "w-2",
+            taskId: "t2",
+            category: "success_pattern",
+            content: "B",
+            timestamp: "2026-01-02T00:00:00Z",
+          },
+          {
+            id: "w-3",
+            taskId: "t3",
+            category: "success_pattern",
+            content: "C",
+            timestamp: "2026-01-03T00:00:00Z",
+          },
         ],
       };
       const json = JSON.stringify(data);
@@ -262,16 +357,26 @@ describe("WisdomStore", () => {
     it("should maintain FIFO order across different personas (Issue 1 & 2)", () => {
       const store = new WisdomStore(2);
       store.add({ taskId: "t1", persona: "atlas", category: "success_pattern", content: "a1" });
-      store.add({ taskId: "t2", persona: "hephaestus", category: "success_pattern", content: "h1" });
-      
+      store.add({
+        taskId: "t2",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "h1",
+      });
+
       // Adding third entry should evict the oldest (a1)
-      store.add({ taskId: "t3", persona: "hephaestus", category: "success_pattern", content: "h2" });
-      
+      store.add({
+        taskId: "t3",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "h2",
+      });
+
       const all = store.getAllEntries();
       expect(all).toHaveLength(2);
       expect(all[0].content).toBe("h1");
       expect(all[1].content).toBe("h2");
-      expect(all.some(e => e.content === "a1")).toBe(false);
+      expect(all.some((e) => e.content === "a1")).toBe(false);
     });
   });
 });
@@ -359,8 +464,6 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     expect(store.getMaxEntries()).toBe(0);
   });
 
-
-
   describe("setMaxEntries boundary cases", () => {
     it("should handle non-number inputs by falling back to 0", () => {
       const store = new WisdomStore(10);
@@ -372,7 +475,12 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
       expect(store.getAllEntries()).toHaveLength(0);
 
       const store2 = new WisdomStore(10);
-      store2.add({ taskId: "t1", persona: "hephaestus", category: "success_pattern", content: "A" });
+      store2.add({
+        taskId: "t1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "A",
+      });
       // @ts-expect-error testing runtime safety
       store2.setMaxEntries(Symbol("test"));
       expect(store2.getMaxEntries()).toBe(0);
@@ -387,7 +495,12 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
       expect(store.getAllEntries()).toHaveLength(0);
 
       const store2 = new WisdomStore(10);
-      store2.add({ taskId: "t2", persona: "hephaestus", category: "success_pattern", content: "B" });
+      store2.add({
+        taskId: "t2",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "B",
+      });
       store2.setMaxEntries(Infinity);
       expect(store2.getMaxEntries()).toBe(0);
       expect(store2.getAllEntries()).toHaveLength(0);
@@ -409,7 +522,7 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
           category: "success_pattern" as const,
           content: "content 1",
           timestamp: "2026-01-01T00:00:00Z",
-        }
+        },
       ];
 
       // @ts-expect-error simulating V1 data which lacks 'persona'
@@ -425,13 +538,39 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
     it("should replace all entries and respect limit", () => {
       const store = new WisdomStore(2);
       // Pre-fill the store to verify "replace" behavior
-      store.add({ taskId: "old-1", persona: "hephaestus", category: "success_pattern", content: "Old entry" });
+      store.add({
+        taskId: "old-1",
+        persona: "hephaestus",
+        category: "success_pattern",
+        content: "Old entry",
+      });
       expect(store.getAllEntries()).toHaveLength(1);
 
       const entries: WisdomEntry[] = [
-        { id: "1", taskId: "t1", persona: "hephaestus", category: "success_pattern", content: "A", timestamp: "T1" },
-        { id: "2", taskId: "t2", persona: "hephaestus", category: "success_pattern", content: "B", timestamp: "T2" },
-        { id: "3", taskId: "t3", persona: "hephaestus", category: "success_pattern", content: "C", timestamp: "T3" },
+        {
+          id: "1",
+          taskId: "t1",
+          persona: "hephaestus",
+          category: "success_pattern",
+          content: "A",
+          timestamp: "T1",
+        },
+        {
+          id: "2",
+          taskId: "t2",
+          persona: "hephaestus",
+          category: "success_pattern",
+          content: "B",
+          timestamp: "T2",
+        },
+        {
+          id: "3",
+          taskId: "t3",
+          persona: "hephaestus",
+          category: "success_pattern",
+          content: "C",
+          timestamp: "T3",
+        },
       ];
 
       store.replaceEntries(entries);
@@ -445,7 +584,16 @@ describe("WisdomStore — additions for TieredWisdomStore", () => {
 
     it("should clear entries if maxEntries is 0", () => {
       const store = new WisdomStore(0);
-      const entries: WisdomEntry[] = [{ id: "1", taskId: "t1", persona: "hephaestus", category: "success_pattern", content: "A", timestamp: "T1" }];
+      const entries: WisdomEntry[] = [
+        {
+          id: "1",
+          taskId: "t1",
+          persona: "hephaestus",
+          category: "success_pattern",
+          content: "A",
+          timestamp: "T1",
+        },
+      ];
       store.replaceEntries(entries);
       expect(store.getAllEntries()).toHaveLength(0);
     });

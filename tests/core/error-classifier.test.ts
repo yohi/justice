@@ -174,24 +174,34 @@ describe("ErrorClassifier", () => {
 
   describe("priority / boundary cases", () => {
     it("should prioritize type_error over provider_transient", () => {
-      expect(classifier.classify("TypeError: caused by rate limit", { isProviderContext: true })).toBe("type_error");
+      expect(
+        classifier.classify("TypeError: caused by rate limit", { isProviderContext: true }),
+      ).toBe("type_error");
     });
 
     it("should prioritize test_failure over provider patterns", () => {
-      expect(classifier.classify("FAIL tests/quota.test.ts", { isProviderContext: true })).toBe("test_failure");
+      expect(classifier.classify("FAIL tests/quota.test.ts", { isProviderContext: true })).toBe(
+        "test_failure",
+      );
     });
 
     it("should prioritize provider_transient over generic timeout", () => {
       // "Gateway Timeout" contains "timeout", but should be "provider_transient"
-      expect(classifier.classify("Gateway Timeout", { isProviderContext: true })).toBe("provider_transient");
+      expect(classifier.classify("Gateway Timeout", { isProviderContext: true })).toBe(
+        "provider_transient",
+      );
     });
 
     it("should classify config-only text as provider_config in provider context", () => {
-      expect(classifier.classify("missing api key", { isProviderContext: true })).toBe("provider_config");
+      expect(classifier.classify("missing api key", { isProviderContext: true })).toBe(
+        "provider_config",
+      );
     });
 
     it("should classify transient-only text as provider_transient in provider context", () => {
-      expect(classifier.classify("rate limit", { isProviderContext: true })).toBe("provider_transient");
+      expect(classifier.classify("rate limit", { isProviderContext: true })).toBe(
+        "provider_transient",
+      );
     });
   });
 

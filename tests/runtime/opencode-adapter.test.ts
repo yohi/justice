@@ -16,7 +16,11 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("enters no-op mode when both worktree and directory are undefined", () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
+    const init = fakeInit({
+      worktree: undefined,
+      directory: undefined,
+      project: { root: undefined },
+    });
     const adapter = new OpenCodeAdapter(init);
     expect(adapter.isNoOp()).toBe(true);
   });
@@ -74,7 +78,11 @@ describe("OpenCodeAdapter skeleton", () => {
   });
 
   it("no-op adapter never initializes justice", async () => {
-    const init = fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } });
+    const init = fakeInit({
+      worktree: undefined,
+      directory: undefined,
+      project: { root: undefined },
+    });
     const adapter = new OpenCodeAdapter(init);
     await adapter.ensureInitialized();
     expect(adapter.isNoOp()).toBe(true);
@@ -136,7 +144,7 @@ describe("OpenCodeAdapter.onEvent", () => {
           role: "user",
           content: "hello",
         }),
-      })
+      }),
     );
   });
 

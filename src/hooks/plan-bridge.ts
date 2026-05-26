@@ -142,8 +142,10 @@ export class PlanBridge {
     const content = event.payload.content;
     const lastUserMessage = this.lastUserMessages.get(event.sessionId);
 
-    const { shouldTrigger, planRef, fallbackTriggered } =
-      this.triggerDetector.analyzeTrigger(content, { lastUserMessage });
+    const { shouldTrigger, planRef, fallbackTriggered } = this.triggerDetector.analyzeTrigger(
+      content,
+      { lastUserMessage },
+    );
     if (!shouldTrigger || !planRef) return PROCEED;
 
     // Fail-open ONLY on I/O error
@@ -330,7 +332,7 @@ export class PlanBridge {
             taskId = nextTask.id;
             taskTitle = nextTask.title;
             category = this.categoryClassifier.classify(nextTask) as RoutingCategory;
-            
+
             const relevantSkills: string[] = [];
             const textToCheck = (
               nextTask.title +
@@ -341,7 +343,9 @@ export class PlanBridge {
             if (/(?:test|テスト)/i.test(textToCheck)) {
               relevantSkills.push("test-driven-development");
             }
-            if (/(?:debug|デバッグ|fix|修正|resolve|解決|error|エラー|bug|バグ)/i.test(textToCheck)) {
+            if (
+              /(?:debug|デバッグ|fix|修正|resolve|解決|error|エラー|bug|バグ)/i.test(textToCheck)
+            ) {
               relevantSkills.push("systematic-debugging");
             }
             if (/(?:review|レビュー|refactor|リファクタ|clean|整理)/i.test(textToCheck)) {
@@ -353,7 +357,9 @@ export class PlanBridge {
             if (/(?:plan|計画|design|設計|brainstorm|アイデア)/i.test(textToCheck)) {
               relevantSkills.push("writing-plans");
             }
-            if (/(?:implement|実装|create|作成|write|書く|add|追加|build|構築)/i.test(textToCheck)) {
+            if (
+              /(?:implement|実装|create|作成|write|書く|add|追加|build|構築)/i.test(textToCheck)
+            ) {
               relevantSkills.push("implementer-prompt");
             }
 
@@ -375,7 +381,10 @@ export class PlanBridge {
       if (!hasError) {
         if (nextTask) {
           const source = `Detection source: ${writingCompletion.source}${writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : ""}`;
-          const mediumNote = writingCompletion.confidence === "medium" ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n" : "\n";
+          const mediumNote =
+            writingCompletion.confidence === "medium"
+              ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n"
+              : "\n";
 
           const banner = formatBanner({
             variant: "atlas_orchestration",
@@ -502,7 +511,6 @@ export class PlanBridge {
     if (lastPersona === "prometheus" && this.loopHandler) {
       const taskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown";
 
-
       const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
       if (decision.pivoted) {
         const banner = formatBanner({
@@ -516,7 +524,7 @@ export class PlanBridge {
           decision.recentExcerpts.length > 0
             ? [
                 "",
-                "**直近の Prometheus 指摘抜粎**:",
+                "**直近の Prometheus 指摘抜粋**:",
                 ...decision.recentExcerpts.map((ex) => `- ${ex}`),
               ]
             : [];
@@ -620,7 +628,6 @@ export class PlanBridge {
   }
 
   /**
-   * Internal helper to build injected context for task delegation.
    * Internal helper to build injected context for task delegation.
    */
   private buildInjectedContext(planContent: string, delegation: DelegationRequest): string {
@@ -740,7 +747,7 @@ export class PlanBridge {
     if (!this.notifier) return;
     try {
       void Promise.resolve(
-        this.notifier.notify({ sessionId, taskId, level, variant, title, message })
+        this.notifier.notify({ sessionId, taskId, level, variant, title, message }),
       ).catch(() => {
         /* fail-open */
       });

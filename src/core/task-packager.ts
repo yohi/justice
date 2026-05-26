@@ -57,7 +57,10 @@ export class TaskPackager {
     let agentId: AgentId = routingResult.agentId;
 
     if (options.agentId) {
-      if (routingResult.reason === "dominant_override" && options.agentId !== routingResult.agentId) {
+      if (
+        routingResult.reason === "dominant_override" &&
+        options.agentId !== routingResult.agentId
+      ) {
         console.warn(
           `[JUSTICE] Dominant override (skill: ${routingResult.overrideSkill}) takes precedence over requested agentId: ${options.agentId} -> ${routingResult.agentId}`,
         );

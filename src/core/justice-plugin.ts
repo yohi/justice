@@ -30,9 +30,7 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
   }
 
   if (a.action === "inject" && b.action === "inject") {
-    const contexts = [a.injectedContext, b.injectedContext].filter(
-      (ctx) => ctx !== "",
-    );
+    const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
     const result: InjectResponse = {
       action: "inject",
       injectedContext: contexts.join("\n\n---\n\n"),
@@ -82,7 +80,9 @@ function isSensitivePath(path: string): boolean {
       "c:\\users\\administrator",
       "c:\\programdata",
     ];
-    return sensitivePrefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix}${sep}`));
+    return sensitivePrefixes.some(
+      (prefix) => lower === prefix || lower.startsWith(`${prefix}${sep}`),
+    );
   }
 
   const sensitivePrefixes = ["/etc", "/usr", "/bin", "/sbin", "/var", "/boot", "/dev", "/root"];
@@ -255,7 +255,12 @@ export class JusticePlugin {
 
     // Use tieredWisdomStore for handlers that need cross-project context
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
-    this.planBridge = new PlanBridge(fileReader, this.loopHandler, this.tieredWisdomStore, options.notifier);
+    this.planBridge = new PlanBridge(
+      fileReader,
+      this.loopHandler,
+      this.tieredWisdomStore,
+      options.notifier,
+    );
 
     // Ensure session cleanup propagates from loopHandler to planBridge
     this.loopHandler.setSessionRemovedCallback((sessionId) => {

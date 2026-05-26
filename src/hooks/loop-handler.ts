@@ -152,7 +152,7 @@ export class LoopDetectionHandler {
       sessionRejections.set(taskId, next);
 
       const existing = sessionExcerpts.get(taskId) ?? [];
-      const merged = [...existing, ...signal.excerpts];
+      const merged = [...existing, ...signal.excerpts].slice(-50);
       sessionExcerpts.set(taskId, merged);
 
       this.recordTrial(sessionId, taskId, {
@@ -300,7 +300,11 @@ export class LoopDetectionHandler {
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
 
         // エスカレーション判定
-        const escalation = this.evaluateEscalation(event.sessionId, session.activeTaskId, lastAgent);
+        const escalation = this.evaluateEscalation(
+          event.sessionId,
+          session.activeTaskId,
+          lastAgent,
+        );
         const escalationBlock: string[] = escalation.escalated
           ? [
               "",
@@ -366,7 +370,10 @@ export class LoopDetectionHandler {
     try {
       this.onSessionRemoved?.(sessionId);
     } catch (error) {
-      console.error(`[LoopDetectionHandler] Error in onSessionRemoved callback for session ${sessionId}:`, error);
+      console.error(
+        `[LoopDetectionHandler] Error in onSessionRemoved callback for session ${sessionId}:`,
+        error,
+      );
     }
   }
 }

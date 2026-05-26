@@ -50,7 +50,12 @@ describe("WisdomPersistence", () => {
 
     const store = await persistence.load();
     store.add({ taskId: "t1", category: "success_pattern", content: "Works!" });
-    store.add({ taskId: "t2", persona: "atlas", category: "design_decision", content: "Atlas guidance" });
+    store.add({
+      taskId: "t2",
+      persona: "atlas",
+      category: "design_decision",
+      content: "Atlas guidance",
+    });
 
     await persistence.save(store);
 

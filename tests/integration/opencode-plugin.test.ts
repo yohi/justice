@@ -36,11 +36,12 @@ describe("OpenCodePlugin (integration)", () => {
           properties: { sessionID: "s", info: { role: "user", content: "hi" } },
         },
       }),
-      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)["tool.execute.before"]?.(
-        { tool: "task", sessionID: "s", callID: "c1" },
-        { args: { prompt: "p" } },
-      ),
-      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)["tool.execute.after"]?.(
+      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+        "tool.execute.before"
+      ]?.({ tool: "task", sessionID: "s", callID: "c1" }, { args: { prompt: "p" } }),
+      (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+        "tool.execute.after"
+      ]?.(
         { tool: "task", sessionID: "s", callID: "c1", args: { prompt: "p" } },
         { title: "done", output: "r", metadata: undefined },
       ),

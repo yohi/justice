@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
-import type { FileReader, PostToolUseEvent, WisdomEntryInput, WisdomEntry, WisdomStoreInterface } from "../../src/core/types";
+import type {
+  FileReader,
+  PostToolUseEvent,
+  WisdomEntryInput,
+  WisdomEntry,
+  WisdomStoreInterface,
+} from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
@@ -12,10 +18,7 @@ function createLoopHandler(reader: FileReader): LoopDetectionHandler {
 describe("PlanBridge.handlePostToolUse", () => {
   it("injects Atlas guidance after a completed writing task", async () => {
     const reader = createMockFileReader({
-      "plan.md": [
-        "## Task 1: Write docs",
-        "- [ ] Document the new workflow",
-      ].join("\n"),
+      "plan.md": ["## Task 1: Write docs", "- [ ] Document the new workflow"].join("\n"),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
@@ -105,10 +108,7 @@ describe("PlanBridge.handlePostToolUse", () => {
 
   it("injects completed-plan notification when no next task is available", async () => {
     const reader = createMockFileReader({
-      "plan.md": [
-        "## Task 1: Write docs",
-        "- [x] Document the new workflow",
-      ].join("\n"),
+      "plan.md": ["## Task 1: Write docs", "- [x] Document the new workflow"].join("\n"),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
@@ -118,8 +118,8 @@ describe("PlanBridge.handlePostToolUse", () => {
       payload: {
         toolName: "task",
         toolInput: {
-          skills: ["writing-plans"]
-        }
+          skills: ["writing-plans"],
+        },
       },
       sessionId: "s-completed",
       callId: "c-completed",
@@ -145,10 +145,9 @@ describe("PlanBridge.handlePostToolUse", () => {
 
   it("extracts relevant skills and routes correctly", async () => {
     const reader = createMockFileReader({
-      "plan.md": [
-        "## Task 1: Fix bug",
-        "- [ ] Debug the crash and fix connection error",
-      ].join("\n"),
+      "plan.md": ["## Task 1: Fix bug", "- [ ] Debug the crash and fix connection error"].join(
+        "\n",
+      ),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
@@ -158,8 +157,8 @@ describe("PlanBridge.handlePostToolUse", () => {
       payload: {
         toolName: "task",
         toolInput: {
-          skills: ["writing-plans"]
-        }
+          skills: ["writing-plans"],
+        },
       },
       sessionId: "s-skills",
       callId: "c-skills",
@@ -200,7 +199,11 @@ describe("PlanBridge.handlePostToolUse", () => {
       formatForInjection: (): string => "",
     };
 
-    const bridge = new PlanBridge(reader, undefined, mockWisdomStore as unknown as WisdomStoreInterface);
+    const bridge = new PlanBridge(
+      reader,
+      undefined,
+      mockWisdomStore as unknown as WisdomStoreInterface,
+    );
 
     bridge.setActivePlan("s-debug-wisdom", "plan.md");
 
@@ -209,8 +212,8 @@ describe("PlanBridge.handlePostToolUse", () => {
       payload: {
         toolName: "task",
         toolInput: {
-          skills: ["systematic-debugging"]
-        }
+          skills: ["systematic-debugging"],
+        },
       },
       sessionId: "s-debug-wisdom",
       callId: "c-debug-wisdom",
@@ -229,8 +232,8 @@ describe("PlanBridge.handlePostToolUse", () => {
 
     expect(response.action).toBe("inject");
     expect(addedEntries).toHaveLength(1);
-    expect(addedEntries.some(e => e.category === "design_decision")).toBe(true);
-    expect(addedEntries.some(e => e.category === "success_pattern")).toBe(false);
+    expect(addedEntries.some((e) => e.category === "design_decision")).toBe(true);
+    expect(addedEntries.some((e) => e.category === "success_pattern")).toBe(false);
     expect(response.injectedContext).toContain("1 件のWisdomを保存しました");
   });
 });
