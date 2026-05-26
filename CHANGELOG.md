@@ -8,6 +8,10 @@
 
 ### Features
 
+- feat(core): role-based wisdom store with v1→v2 migration.
+- feat(hooks): plan-to-execution bridge with Atlas guidance.
+- feat(hooks): SDD review-rejection pivot to Hephaestus.
+- feat(runtime): toast-equivalent notifier (log + banner).
 - **opencode-plugin:** add `@yohi/justice/opencode` subpath export with `OpenCodePlugin` entrypoint and `OpenCodeAdapter` runtime bridge for the current OpenCode plugin API.
 - **runtime:** add `OpenCodeAdapter` lazy initialization, fail-open hook boundaries, compaction injection, and loop-error mapping via generic `event` handling.
 - **core:** add `LOOP_ERROR_PATTERNS` and `matchesLoopError` for session loop detection.
