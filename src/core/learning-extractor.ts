@@ -24,11 +24,13 @@ export class LearningExtractor {
       if (rootCauseEntry) {
         results.push(rootCauseEntry);
       }
-      results.push({
-        taskId: feedback.taskId,
-        category: "success_pattern",
-        content: "Systematic debugging successfully resolved the issue.",
-      });
+      if (feedback.status === "success") {
+        results.push({
+          taskId: feedback.taskId,
+          category: "success_pattern",
+          content: "Systematic debugging successfully resolved the issue.",
+        });
+      }
     } else {
       switch (feedback.status) {
         case "success":

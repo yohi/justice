@@ -356,5 +356,29 @@ describe("LearningExtractor", () => {
       expect(successPattern?.content).toContain("Systematic debugging successfully resolved");
       expect(successPattern?.persona).toBe("sisyphus");
     });
+
+    it("should extract design_decision (root cause) but NOT success_pattern when debug context is active and task failed", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-debug-failure",
+        status: "failure",
+        retryCount: 0,
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: missing test configuration in vitest config",
+        { persona: "sisyphus", debug: true },
+      );
+
+      expect(entries).toHaveLength(1);
+
+      const rootCause = entries.find((e) => e.category === "design_decision");
+      expect(rootCause).toBeDefined();
+      expect(rootCause?.content).toContain("Root cause identified");
+      expect(rootCause?.persona).toBe("sisyphus");
+
+      const successPattern = entries.find((e) => e.category === "success_pattern");
+      expect(successPattern).toBeUndefined();
+    });
   });
 });

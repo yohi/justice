@@ -35,7 +35,7 @@ export class PlanBridge {
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly lastCompletionInputs: Map<
     string,
-    Pick<PlanCompletionInput, "prompt" | "category" | "skillName">
+    Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
   > = new Map();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
@@ -170,12 +170,12 @@ export class PlanBridge {
     }
 
     // 1) delegation を仮生成して推奨エージェントを決定
-    let delegation = this.core.buildDelegationFromPlan(planContent, {
+    const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: planRef.planPath,
       referenceFiles: [],
     });
 
-    if (!delegation) {
+    if (!initialDelegation) {
       // All tasks completed
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
@@ -186,15 +186,16 @@ export class PlanBridge {
     }
 
     // 2) 過去の知見を決定されたペルソナでロード
-    const persona = delegation.context.agentId ?? "hephaestus";
+    const persona = initialDelegation.context.agentId ?? "hephaestus";
     const previousLearnings = this.getRelevantLearnings(persona);
 
     // 3) delegation を再構築
-    delegation = this.core.buildDelegationFromPlan(planContent, {
-      planFilePath: planRef.planPath,
-      referenceFiles: [],
-      previousLearnings,
-    });
+    const delegation =
+      this.core.buildDelegationFromPlan(planContent, {
+        planFilePath: planRef.planPath,
+        referenceFiles: [],
+        previousLearnings,
+      }) ?? initialDelegation;
 
     // Set as active plan for PreToolUse context injection
     this.setActivePlan(event.sessionId, planRef.planPath);
@@ -264,12 +265,12 @@ export class PlanBridge {
     }
 
     // 1) delegation を仮生成して推奨エージェントを決定
-    let delegation = this.core.buildDelegationFromPlan(planContent, {
+    const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
     });
 
-    if (!delegation) {
+    if (!initialDelegation) {
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
@@ -278,8 +279,8 @@ export class PlanBridge {
 
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
-    if (this.isResolvableAgentId(delegation.context.agentId)) {
-      persona = delegation.context.agentId.toLowerCase() as AgentId;
+    if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
+      persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
     } else {
       const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
       if (this.isResolvableAgentId(lastPersona)) {
@@ -290,11 +291,12 @@ export class PlanBridge {
     const previousLearnings = this.getRelevantLearnings(persona);
 
     // 3) delegation を再構築
-    delegation = this.core.buildDelegationFromPlan(planContent, {
-      planFilePath: activePlanPath,
-      referenceFiles: [],
-      previousLearnings,
-    });
+    const delegation =
+      this.core.buildDelegationFromPlan(planContent, {
+        planFilePath: activePlanPath,
+        referenceFiles: [],
+        previousLearnings,
+      }) ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
     if (this.loopHandler) {
@@ -326,6 +328,9 @@ export class PlanBridge {
     const isError = event.payload.error;
     let response: HookResponse = PROCEED;
 
+    const key = event.callId ? `${sessionId}:${event.callId}` : undefined;
+    const completionInput = key ? this.lastCompletionInputs.get(key) : undefined;
+
     // A+B hybrid: evaluate skill completions
     const writingCompletion = this.completionDetector.evaluateSkillCompletion(
       sessionId,
@@ -356,7 +361,9 @@ export class PlanBridge {
         const content = await this.readPlanFile(planPath);
         if (content !== null) {
           const tasks = this.parser.parse(content);
-          nextTask = tasks.find((t) => t.status === "in_progress" || t.status === "pending");
+          nextTask =
+            tasks.find((t) => t.status === "in_progress") ??
+            tasks.find((t) => t.status === "pending");
           if (nextTask) {
             taskId = nextTask.id;
             taskTitle = nextTask.title;
@@ -494,7 +501,10 @@ export class PlanBridge {
       let breakdown = "";
       try {
         if (this.wisdomStore) {
-          const activeTaskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown-debug";
+          const activeTaskId =
+            completionInput?.taskId ??
+            (await this.getActiveTaskIdForSession(sessionId)) ??
+            "unknown-debug";
           const drafts = this.learningExtractor.extract(
             {
               taskId: activeTaskId,
@@ -547,8 +557,11 @@ export class PlanBridge {
 
     // Prometheus pivot flow
     const lastPersona = this.completionDetector.lastInvokedPersona(sessionId);
-    if (lastPersona === "prometheus" && this.loopHandler) {
-      const taskId = (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown";
+    if (lastPersona === "prometheus" && this.loopHandler && !isError) {
+      const taskId =
+        completionInput?.taskId ??
+        (await this.getActiveTaskIdForSession(sessionId)) ??
+        "unknown";
 
       const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
       if (decision.pivoted) {
@@ -659,7 +672,9 @@ export class PlanBridge {
       const planContent = await this.readPlanFile(activePlanPath);
       if (planContent === null) return undefined;
       const tasks = this.parser.parse(planContent);
-      const activeTask = tasks.find((t) => t.status === "in_progress" || t.status === "pending");
+      const activeTask =
+        tasks.find((t) => t.status === "in_progress") ??
+        tasks.find((t) => t.status === "pending");
       return activeTask?.id;
     } catch {
       return undefined;
@@ -742,6 +757,7 @@ export class PlanBridge {
       prompt: delegation.prompt,
       category: delegation.category,
       skillName,
+      taskId: delegation.context.taskId,
     });
   }
 
