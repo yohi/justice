@@ -61,25 +61,36 @@ Refer to this directory map before modifying logic or adding features:
 |:---|:---|:---|
 | `src/core/types.ts` | — | Readonly type definitions, scopes, and schema shapes |
 | `src/core/agent-router.ts` | `AgentRouter` | Assigns optimal agent according to affinity scoreboards and dominant overrides |
-| `src/core/plan-parser.ts` | `PlanParser` | Parses Markdown plans (`plan.md`), updates checkboxes and logs error blocks |
-| `src/core/task-packager.ts` | `TaskPackager` | Enriches tasks into structured `DelegationRequest` prompts |
-| `src/core/trigger-detector.ts` | `TriggerDetector` | Evaluates message content for plan references and delegation triggers |
+| `src/core/category-classifier.ts` | `CategoryClassifier` | Classifies task categories to map correct agent affinities |
+| `src/core/dependency-analyzer.ts` | `DependencyAnalyzer` | Analyzes file dependencies and determines safe build/test orders |
 | `src/core/error-classifier.ts` | `ErrorClassifier` | Classifies failures (syntax, test, loop) and resolves retry thresholds |
 | `src/core/feedback-formatter.ts` | `FeedbackFormatter` | Extracts test statistics and output results into structured feedback |
-| `src/core/plan-bridge-core.ts` | `PlanBridgeCore` | Pure pipeline processing for plan-to-delegation transformations |
-| `src/core/smart-retry-policy.ts` | `SmartRetryPolicy` | Jittered exponential backoffs and prompt context reduction |
-| `src/core/task-splitter.ts` | `TaskSplitter` | Formulates plan split proposals on timeout or loop aborts |
-| `src/core/wisdom-store.ts` | `WisdomStore` | In-memory persona-isolated wisdom cache with global LRU eviction |
-| `src/core/tiered-wisdom-store.ts` | `TieredWisdomStore` | Wires local + global stores; handles auto-routing and deduplication |
-| `src/core/secret-pattern-detector.ts` | `SecretPatternDetector` | Filters global promotions for secrets (API keys, home directory paths) |
-| `src/core/learning-extractor.ts` | `LearningExtractor` | Extracts wisdom drafts from feedback; includes debug cause detection |
-| `src/core/wisdom-persistence.ts` | `WisdomPersistence` | Implements v1→v2 migration and atomic save-atomic persistence |
-| `src/core/persona-classifier.ts` | `PersonaClassifier` | Infer appropriate `AgentId` namespace from wisdom categories |
-| `src/core/review-rejection-patterns.ts` | — | Frozen RegExp list representing review rejections |
-| `src/core/review-rejection-detector.ts` | `ReviewRejectionDetector` | Extracts rejections, summaries, and snippets from reviews |
-| `src/core/plan-completion-detector.ts` | `PlanCompletionDetector` | Hybrids skill start indicators (Pre) with result markers (Post) |
 | `src/core/justice-notifier.ts` | `JusticeNotifier` | Notification interfaces, level mappings, and banner formatters |
+| `src/core/justice-plugin.ts` | `JusticePlugin` | Main entry point that coordinates the initialization and hook orchestration |
+| `src/core/learning-extractor.ts` | `LearningExtractor` | Extracts wisdom drafts from feedback; includes debug cause detection |
+| `src/core/persona-classifier.ts` | `PersonaClassifier` | Infer appropriate `AgentId` namespace from wisdom categories |
+| `src/core/plan-bridge-core.ts` | `PlanBridgeCore` | Pure pipeline processing for plan-to-delegation transformations |
+| `src/core/plan-completion-detector.ts` | `PlanCompletionDetector` | Hybrids skill start indicators (Pre) with result markers (Post) |
+| `src/core/plan-parser.ts` | `PlanParser` | Parses Markdown plans (`plan.md`), updates checkboxes and logs error blocks |
+| `src/core/progress-reporter.ts` | `ProgressReporter` | Tracks tasks completion status and reports overall progress percentage |
+| `src/core/review-rejection-detector.ts` | `ReviewRejectionDetector` | Extracts rejections, summaries, and snippets from reviews |
+| `src/core/review-rejection-patterns.ts` | — | Frozen RegExp list representing review rejections |
+| `src/core/secret-pattern-detector.ts` | `SecretPatternDetector` | Filters global promotions for secrets (API keys, home directory paths) |
+| `src/core/smart-retry-policy.ts` | `SmartRetryPolicy` | Jittered exponential backoffs and prompt context reduction |
+| `src/core/status-command.ts` | `StatusCommand` | Implementation of runtime commands to display current plugin and task statuses |
+| `src/core/task-packager.ts` | `TaskPackager` | Enriches tasks into structured `DelegationRequest` prompts |
+| `src/core/task-splitter.ts` | `TaskSplitter` | Formulates plan split proposals on timeout or loop aborts |
+| `src/core/tiered-wisdom-store.ts` | `TieredWisdomStore` | Wires local + global stores; handles auto-routing and deduplication |
+| `src/core/trigger-detector.ts` | `TriggerDetector` | Evaluates message content for plan references and delegation triggers |
+| `src/core/wisdom-persistence.ts` | `WisdomPersistence` | Implements v1→v2 migration and atomic save-atomic persistence |
+| `src/core/wisdom-store.ts` | `WisdomStore` | In-memory persona-isolated wisdom cache with global LRU eviction |
+| `src/hooks/compaction-protector.ts` | `CompactionProtector` | Guards context compaction and enforces todo preservation rules |
+| `src/hooks/loop-handler.ts` | `LoopDetectionHandler` | Tracks repeated command logs and handles loop abort operations |
+| `src/hooks/plan-bridge.ts` | `PlanBridge` | Intercepts plan changes, PreToolUse setups, and PostToolUse delegation |
+| `src/hooks/task-feedback.ts` | `TaskFeedbackHandler` | Formats execution errors and updates task checkboxes on PostToolUse |
+| `src/runtime/debug.ts` | — | Debug logging utility functions and toggle detection |
 | `src/runtime/node-file-system.ts` | `NodeFileSystem` | Real I/O runtime using `Bun.file` and path traversal guards |
+| `src/runtime/opencode-adapter.ts` | `OpenCodeAdapter` | Adapts the OpenCode/oh-my-openagent execution context into the Justice plugin |
 | `src/runtime/opencode-notifier.ts` | `OpenCodeNotifier` | Runtime logger notifier piping directly to `client.app.log` |
 
 ---
@@ -112,8 +123,10 @@ bun run build                   # Compile plugin to dist/opencode-plugin.js
 
 ## 6. Upstream Drift & Maintenance
 
-When the upstream package `oh-my-openagent` updates, review its retry constants and error classification logic. Check these files for updates:
+When the upstream package `oh-my-openagent` updates, review its retry constants and error classification logic. Check these upstream files for updates:
+*   `oh-my-openagent/src/hooks/runtime-fallback/constants.ts` (in upstream repo)
+*   `oh-my-openagent/src/hooks/runtime-fallback/error-classifier.ts` (in upstream repo)
+
+Ensure any newly introduced transient or configuration error patterns are synced to the following local files to preserve optimal retry behavior:
 *   `src/core/provider-error-patterns.ts`
 *   `src/core/error-classifier.ts`
-
-Ensure any newly introduced transient or configuration error patterns are synced to preserve optimal retry behavior.

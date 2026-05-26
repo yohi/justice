@@ -146,7 +146,9 @@ describe("AgentRouter", () => {
 
     it("should infer prometheus when code-quality-reviewer or spec-reviewer is in role/prompt text", () => {
       expect(inferPersonaFromToolInput({ role: "spec-reviewer" })).toBe("prometheus");
-      expect(inferPersonaFromToolInput({ prompt: "please run code-quality-reviewer checks" })).toBe("prometheus");
+      expect(inferPersonaFromToolInput({ prompt: "please run code-quality-reviewer checks" })).toBe(
+        "prometheus",
+      );
     });
 
     it("should infer sisyphus for systematic-debugging skill", () => {
@@ -162,7 +164,9 @@ describe("AgentRouter", () => {
     });
 
     it("should infer prometheus for code-quality-reviewer skill via loadSkills", () => {
-      expect(inferPersonaFromToolInput({ loadSkills: ["code-quality-reviewer"] })).toBe("prometheus");
+      expect(inferPersonaFromToolInput({ loadSkills: ["code-quality-reviewer"] })).toBe(
+        "prometheus",
+      );
     });
 
     it("should infer prometheus for spec-reviewer skill via loadSkills", () => {
