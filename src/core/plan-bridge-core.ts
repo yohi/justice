@@ -3,6 +3,7 @@ import { TaskPackager, type PackageOptions } from "./task-packager";
 import { CategoryClassifier } from "./category-classifier";
 import { DependencyAnalyzer } from "./dependency-analyzer";
 import type { DelegationRequest, TaskCategory } from "./types";
+import type { AgentId } from "./types";
 
 export interface BuildDelegationOptions {
   planFilePath: string;
@@ -12,6 +13,7 @@ export interface BuildDelegationOptions {
   runInBackground?: boolean;
   category?: TaskCategory;
   loadSkills?: string[];
+  agentId?: AgentId;
 }
 
 export class PlanBridgeCore {
@@ -66,6 +68,7 @@ export class PlanBridgeCore {
       runInBackground: options.runInBackground ?? false,
       category: category,
       loadSkills: options.loadSkills,
+      agentId: options.agentId,
     };
 
     return this.packager.package(nextTask, packageOptions);
