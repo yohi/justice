@@ -436,26 +436,26 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 **Steps:**
 
-- [ ] **Step 1: Devcontainer 内で全コマンドを最終実行** — `bun install --frozen-lockfile && bun run typecheck && bun run lint && bun run test && bun run build`。検収基準すべて満たすこと。
-- [ ] **Step 2: `dist/opencode-plugin.js` の生成と最低限の smoke import** — `node -e "require('./dist/opencode-plugin.js')"` 相当が成功すること。
-- [ ] **Step 3: 全テスト pass を確認** — `bun run test` がエラー 0 で完了し、出力サマリの `failures: 0` および skip された不正な suite が無いことを確認。件数は Phase 1〜4 で累積追加されるため固定値で照合せず、定性的に「すべて pass」をもって合格とする。
-- [ ] **Step 4: `CHANGELOG.md` に 4 機能の追加を Conventional Commits 準拠で追記** — `feat(core): role-based wisdom store with v1→v2 migration`、`feat(hooks): plan-to-execution bridge with Atlas guidance`、`feat(hooks): SDD review-rejection pivot to Hephaestus`、`feat(runtime): toast-equivalent notifier (log + banner)`。
-- [ ] **Step 5: 設計書 §14 受け入れ条件 1〜6 をチェックリスト化し、各項目の検証手順を実行**:
-  - [ ] (1) writing-plans 完了直後 → Atlas Guidance Directive 注入
-  - [ ] (2) wisdom.json v2 形式で永続化、Atlas 起動時に atlas 名前空間のみ注入
-  - [ ] (3) Prometheus 連続 3 回 NG → Hephaestus pivot 注入
-  - [ ] (4) systematic-debugging 完了 → Sisyphus 名前空間に保存
-  - [ ] (5) 全 hook 発火時、`injectedContext` 先頭にバナー + `client.app.log` 通知
-  - [ ] (6) 既存テスト破壊なし、新規含め全 pass
-- [ ] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
+- [x] **Step 1: Devcontainer 内で全コマンドを最終実行** — `bun install --frozen-lockfile && bun run typecheck && bun run lint && bun run test && bun run build`。検収基準すべて満たすこと。
+- [x] **Step 2: `dist/opencode-plugin.js` の生成と最低限の smoke import** — `node -e "require('./dist/opencode-plugin.js')"` 相当が成功すること。
+- [x] **Step 3: 全テスト pass を確認** — `bun run test` がエラー 0 で完了し、出力サマリの `failures: 0` および skip された不正な suite が無いことを確認。件数は Phase 1〜4 で累積追加されるため固定値で照合せず、定性的に「すべて pass」をもって合格とする。
+- [x] **Step 4: `CHANGELOG.md` に 4 機能の追加を Conventional Commits 準拠で追記** — `feat(core): role-based wisdom store with v1→v2 migration`、`feat(hooks): plan-to-execution bridge with Atlas guidance`、`feat(hooks): SDD review-rejection pivot to Hephaestus`、`feat(runtime): toast-equivalent notifier (log + banner)`。
+- [x] **Step 5: 設計書 §14 受け入れ条件 1〜6 をチェックリスト化し、各項目の検証手順を実行**:
+  - [x] (1) writing-plans 完了直後 → Atlas Guidance Directive 注入
+  - [x] (2) wisdom.json v2 形式で永続化、Atlas 起動時に atlas 名前空間のみ注入
+  - [x] (3) Prometheus 連続 3 回 NG → Hephaestus pivot 注入
+  - [x] (4) systematic-debugging 完了 → Sisyphus 名前空間に保存
+  - [x] (5) 全 hook 発火時、`injectedContext` 先頭にバナー + `client.app.log` 通知
+  - [x] (6) 既存テスト破壊なし、新規含め全 pass
+- [x] **Step 6: Phase Base ブランチ (`feature/justice-invisible-advisor__base`) を `master` にマージするための最終 PR を Draft で作成** — Phase 5 Task 3 自体は Phase Base への Draft PR、最終マージは別途レビュー後。
 
 ---
 
 ## 完了の定義 (Definition of Done)
 
-- [ ] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
-- [ ] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
-- [ ] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
-- [ ] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
-- [ ] 新規 npm 依存ゼロ
-- [ ] `dist/opencode-plugin.js` が正常ビルドされる
+- [x] 全 Phase の全 Task が Devcontainer 内で `bun run typecheck && bun run lint && bun run test && bun run build` を pass している
+- [x] 各 Task に対応する Draft PR が `feature/justice-invisible-advisor__base` をターゲットに作成されている
+- [x] 設計書 §14 受け入れ条件 1〜6 すべてが Phase 5 Task 3 で検証済み
+- [x] `wisdom.json` v1 → v2 マイグレーションが既存ユーザーのデータを破壊しない (`load()` fail-open + classifier フォールバック)
+- [x] 新規 npm 依存ゼロ
+- [x] `dist/opencode-plugin.js` が正常ビルドされる
