@@ -1,5 +1,6 @@
 import type { AgentId, TaskCategory } from "./types";
 import { ReviewRejectionDetector } from "./review-rejection-detector";
+import { inferPersonaFromToolInput } from "./agent-router";
 
 const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_PENDING_SESSIONS = 50;
@@ -110,7 +111,7 @@ export class PlanCompletionDetector {
     this.cleanupExpired();
 
     const skills = this.extractSkills(toolInput);
-    const detectedPersona = this.inferPersonaFromToolInput(toolInput);
+    const detectedPersona = inferPersonaFromToolInput(toolInput);
 
     if (skills.length === 0 && !detectedPersona) return;
 
@@ -248,43 +249,6 @@ export class PlanCompletionDetector {
     }
 
     return skills;
-  }
-
-  /**
-   * @internal
-   * Estimates the persona that will execute the tool invocation.
-   */
-  inferPersonaFromToolInput(toolInput: Record<string, unknown>): AgentId | undefined {
-    // Priority 1: explicit agent field
-    const agent = this.getString(toolInput.agent);
-    if (agent) {
-      const lower = agent.toLowerCase();
-      if (["atlas", "hephaestus", "sisyphus", "prometheus"].includes(lower)) {
-        return lower as AgentId;
-      }
-    }
-
-    // Priority 2-4: skills mapping
-    const skillList =
-      this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
-    if (skillList) {
-      if (skillList.includes("code-quality-reviewer")) return "prometheus";
-      if (skillList.includes("systematic-debugging")) return "sisyphus";
-      if (skillList.includes("writing-plans") || skillList.includes("brainstorming"))
-        return "atlas";
-    }
-
-    // Priority 5: role / prompt partial match
-    const role = this.getString(toolInput.role);
-    const prompt = this.getString(toolInput.prompt);
-    const textToSearch = `${role ?? ""} ${prompt ?? ""}`;
-
-    if (/\bcode-quality-reviewer\b/.test(textToSearch)) return "prometheus";
-    if (/\bsystematic-debugging\b/.test(textToSearch)) return "sisyphus";
-    if (/\bwriting-plans\b/.test(textToSearch) || /\bbrainstorming\b/.test(textToSearch))
-      return "atlas";
-
-    return undefined;
   }
 
   private detectFromResult(toolResult: string, target: SkillTarget): PlanCompletionSignal | null {

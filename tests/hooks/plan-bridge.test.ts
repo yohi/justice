@@ -225,10 +225,7 @@ describe("PlanBridge", () => {
 
   describe("handlePostToolUse", () => {
     it("should prioritize stored taskId from rememberCompletionInput during post tool use analysis", async () => {
-      const planContent = [
-        "### Task 1: Setup",
-        "- [/] Init project",
-      ].join("\n");
+      const planContent = ["### Task 1: Setup", "- [/] Init project"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setActivePlan("s-1", "plan.md");
@@ -246,9 +243,11 @@ describe("PlanBridge", () => {
       await bridge.handlePreToolUse(preEvent);
 
       // Verify taskId was stored in lastCompletionInputs
-      const stored = (bridge as unknown as {
-        lastCompletionInputs: Map<string, { taskId?: string }>;
-      }).lastCompletionInputs.get("s-1:call-1");
+      const stored = (
+        bridge as unknown as {
+          lastCompletionInputs: Map<string, { taskId?: string }>;
+        }
+      ).lastCompletionInputs.get("s-1:call-1");
       expect(stored).toBeDefined();
       expect(stored?.taskId).toBe("task-1");
 
@@ -269,10 +268,7 @@ describe("PlanBridge", () => {
     });
 
     it("should skip Prometheus loop recordReviewOutput when isError is true", async () => {
-      const planContent = [
-        "### Task 1: Review",
-        "- [/] Code review",
-      ].join("\n");
+      const planContent = ["### Task 1: Review", "- [/] Code review"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const mockLoopHandler = createLoopHandler(reader);
       const recordSpy = vi.spyOn(mockLoopHandler, "recordReviewOutput");
@@ -281,19 +277,17 @@ describe("PlanBridge", () => {
       bridge.setActivePlan("s-2", "plan.md");
 
       // Setup completionDetector state to mimic last invoked persona as prometheus
-      (bridge as unknown as {
-        completionDetector: {
-          recordPreToolUseInvocation: (
-            sessionId: string,
-            toolName: string,
-            toolInput: Record<string, unknown>,
-          ) => void;
-        };
-      }).completionDetector.recordPreToolUseInvocation(
-        "s-2",
-        "task",
-        { agent: "prometheus" },
-      );
+      (
+        bridge as unknown as {
+          completionDetector: {
+            recordPreToolUseInvocation: (
+              sessionId: string,
+              toolName: string,
+              toolInput: Record<string, unknown>,
+            ) => void;
+          };
+        }
+      ).completionDetector.recordPreToolUseInvocation("s-2", "task", { agent: "prometheus" });
 
       // Simulate a failed PostToolUse execution
       const postEvent: HookEvent = {

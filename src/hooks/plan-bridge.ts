@@ -17,7 +17,7 @@ import { DependencyAnalyzer } from "../core/dependency-analyzer";
 import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
-import { AgentRouter, type RoutingCategory } from "../core/agent-router";
+import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 
@@ -289,7 +289,7 @@ export class PlanBridge {
 
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
-    const inputPersona = this.completionDetector.inferPersonaFromToolInput(event.payload.toolInput);
+    const inputPersona = inferPersonaFromToolInput(event.payload.toolInput);
 
     // dominant_override が発生するかどうかを確認
     let dominantAgentId: AgentId | undefined;
@@ -305,11 +305,6 @@ export class PlanBridge {
       persona = inputPersona;
     } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
       persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
-    } else {
-      const lastPersona = this.completionDetector.lastInvokedPersona(event.sessionId);
-      if (this.isResolvableAgentId(lastPersona)) {
-        persona = lastPersona;
-      }
     }
 
     const previousLearnings = this.getRelevantLearnings(persona);
@@ -544,11 +539,16 @@ export class PlanBridge {
             this.wisdomStore.add(draft, { persona: "sisyphus" });
             savedCount++;
           }
-          const counts = drafts.reduce((acc, d) => {
-            acc[d.category] = (acc[d.category] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>);
-          const details = Object.entries(counts).map(([cat, count]) => `${cat}: ${count}`).join(", ");
+          const counts = drafts.reduce(
+            (acc, d) => {
+              acc[d.category] = (acc[d.category] || 0) + 1;
+              return acc;
+            },
+            {} as Record<string, number>,
+          );
+          const details = Object.entries(counts)
+            .map(([cat, count]) => `${cat}: ${count}`)
+            .join(", ");
           if (details) {
             breakdown = `（内訳: ${details}）`;
           }
@@ -585,9 +585,7 @@ export class PlanBridge {
     const lastPersona = this.completionDetector.lastInvokedPersona(sessionId);
     if (lastPersona === "prometheus" && this.loopHandler && !isError) {
       const taskId =
-        completionInput?.taskId ??
-        (await this.getActiveTaskIdForSession(sessionId)) ??
-        "unknown";
+        completionInput?.taskId ?? (await this.getActiveTaskIdForSession(sessionId)) ?? "unknown";
 
       const decision = this.loopHandler.recordReviewOutput(sessionId, taskId, toolResult);
       if (decision.pivoted) {
@@ -678,8 +676,7 @@ export class PlanBridge {
       if (planContent === null) return undefined;
       const tasks = this.parser.parse(planContent);
       const activeTask =
-        tasks.find((t) => t.status === "in_progress") ??
-        tasks.find((t) => t.status === "pending");
+        tasks.find((t) => t.status === "in_progress") ?? tasks.find((t) => t.status === "pending");
       return activeTask?.id;
     } catch {
       return undefined;
