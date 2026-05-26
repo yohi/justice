@@ -81,4 +81,75 @@ describe("Role-based wisdom integration flow", () => {
     expect(response.injectedContext).toContain("hephaestus-only");
     expect(response.injectedContext).not.toContain("atlas-only");
   });
+
+  it("uses the dominant_override persona over an explicit toolInput agent when a review skill is present", async () => {
+    const reader = createMockFileReader({ "plan.md": plan });
+    const writer = createMockFileWriter();
+    const wisdomStore = new WisdomStore();
+    const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
+    const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+
+    wisdomStore.add(makeWisdomDraft({ content: "prometheus-wisdom", persona: "prometheus" }), {
+      persona: "prometheus",
+    });
+    wisdomStore.add(makeWisdomDraft({ content: "hephaestus-wisdom", persona: "hephaestus" }), {
+      persona: "hephaestus",
+    });
+
+    bridge.setActivePlan("s-override", "plan.md");
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s-override",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          agent: "hephaestus",
+          skills: ["code-quality-reviewer"],
+          prompt: "review the changes",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected injection");
+    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).toContain("prometheus-wisdom");
+    expect(response.injectedContext).not.toContain("hephaestus-wisdom");
+  });
+
+  it("falls back to loadSkills when skills array is empty and checks dominant_override", async () => {
+    const reader = createMockFileReader({ "plan.md": plan });
+    const writer = createMockFileWriter();
+    const wisdomStore = new WisdomStore();
+    const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
+    const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+
+    wisdomStore.add(makeWisdomDraft({ content: "prometheus-wisdom", persona: "prometheus" }), {
+      persona: "prometheus",
+    });
+    wisdomStore.add(makeWisdomDraft({ content: "hephaestus-wisdom", persona: "hephaestus" }), {
+      persona: "hephaestus",
+    });
+
+    bridge.setActivePlan("s-fallback", "plan.md");
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s-fallback",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          agent: "hephaestus",
+          skills: [],
+          loadSkills: ["code-quality-reviewer"],
+          prompt: "review the changes",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected injection");
+    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).toContain("prometheus-wisdom");
+    expect(response.injectedContext).not.toContain("hephaestus-wisdom");
+  });
 });

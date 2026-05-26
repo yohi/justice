@@ -264,10 +264,20 @@ export class PlanBridge {
       return PROCEED;
     }
 
+    // toolInput からスキルを抽出 (空配列の場合は loadSkills にフォールバックする長さを意識した判定)
+    const rawSkills = event.payload.toolInput.skills;
+    const hasSkills = Array.isArray(rawSkills) && rawSkills.some((v) => typeof v === "string");
+    const skillsVal = hasSkills ? rawSkills : event.payload.toolInput.loadSkills;
+
+    const toolInputSkills = Array.isArray(skillsVal)
+      ? (skillsVal.filter((v): v is string => typeof v === "string") as string[])
+      : [];
+
     // 1) delegation を仮生成して推奨エージェントを決定
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
+      loadSkills: toolInputSkills,
     });
 
     if (!initialDelegation) {
@@ -280,7 +290,18 @@ export class PlanBridge {
     // 2) ペルソナを解決
     let persona: AgentId = "hephaestus";
     const inputPersona = this.completionDetector.inferPersonaFromToolInput(event.payload.toolInput);
-    if (this.isResolvableAgentId(inputPersona)) {
+
+    // dominant_override が発生するかどうかを確認
+    let dominantAgentId: AgentId | undefined;
+    const routingResult = this.agentRouter.route(initialDelegation.category, toolInputSkills);
+    if (routingResult.reason === "dominant_override") {
+      dominantAgentId = routingResult.agentId;
+    }
+
+    if (dominantAgentId) {
+      // dominant_override が有効な場合は、明示的な入力ペルソナより優先
+      persona = dominantAgentId;
+    } else if (this.isResolvableAgentId(inputPersona)) {
       persona = inputPersona;
     } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
       persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
@@ -300,6 +321,7 @@ export class PlanBridge {
         referenceFiles: [],
         previousLearnings,
         agentId: persona,
+        loadSkills: toolInputSkills,
       }) ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler

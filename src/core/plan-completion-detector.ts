@@ -250,6 +250,10 @@ export class PlanCompletionDetector {
     return skills;
   }
 
+  /**
+   * @internal
+   * Estimates the persona that will execute the tool invocation.
+   */
   inferPersonaFromToolInput(toolInput: Record<string, unknown>): AgentId | undefined {
     // Priority 1: explicit agent field
     const agent = this.getString(toolInput.agent);
