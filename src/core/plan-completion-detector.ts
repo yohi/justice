@@ -110,7 +110,7 @@ export class PlanCompletionDetector {
     this.cleanupExpired();
 
     const skills = this.extractSkills(toolInput);
-    const detectedPersona = this.inferPersonaFromInput(toolInput);
+    const detectedPersona = this.inferPersonaFromToolInput(toolInput);
 
     if (skills.length === 0 && !detectedPersona) return;
 
@@ -250,7 +250,7 @@ export class PlanCompletionDetector {
     return skills;
   }
 
-  private inferPersonaFromInput(toolInput: Record<string, unknown>): AgentId | undefined {
+  inferPersonaFromToolInput(toolInput: Record<string, unknown>): AgentId | undefined {
     // Priority 1: explicit agent field
     const agent = this.getString(toolInput.agent);
     if (agent) {
