@@ -222,5 +222,96 @@ describe("PlanBridge", () => {
       }
     });
   });
+
+  describe("handlePostToolUse", () => {
+    it("should prioritize stored taskId from rememberCompletionInput during post tool use analysis", async () => {
+      const planContent = [
+        "### Task 1: Setup",
+        "- [/] Init project",
+      ].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setActivePlan("s-1", "plan.md");
+
+      // 1. Simulate PreToolUse to store delegation context with taskId
+      const preEvent: HookEvent = {
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do something", loadSkills: ["systematic-debugging"] },
+        },
+        sessionId: "s-1",
+        callId: "call-1",
+      };
+      await bridge.handlePreToolUse(preEvent);
+
+      // Verify taskId was stored in lastCompletionInputs
+      const stored = (bridge as unknown as {
+        lastCompletionInputs: Map<string, { taskId?: string }>;
+      }).lastCompletionInputs.get("s-1:call-1");
+      expect(stored).toBeDefined();
+      expect(stored?.taskId).toBe("task-1");
+
+      // 2. Simulate PostToolUse
+      const postEvent: HookEvent = {
+        type: "PostToolUse",
+        payload: {
+          toolName: "task",
+          toolResult: "Root cause: manual intervention\n",
+          error: false,
+        },
+        sessionId: "s-1",
+        callId: "call-1",
+      };
+
+      const response = await bridge.handlePostToolUse(postEvent);
+      expect(response).toBeDefined();
+    });
+
+    it("should skip Prometheus loop recordReviewOutput when isError is true", async () => {
+      const planContent = [
+        "### Task 1: Review",
+        "- [/] Code review",
+      ].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const mockLoopHandler = createLoopHandler(reader);
+      const recordSpy = vi.spyOn(mockLoopHandler, "recordReviewOutput");
+
+      const bridge = new PlanBridge(reader, mockLoopHandler);
+      bridge.setActivePlan("s-2", "plan.md");
+
+      // Setup completionDetector state to mimic last invoked persona as prometheus
+      (bridge as unknown as {
+        completionDetector: {
+          recordPreToolUseInvocation: (
+            sessionId: string,
+            toolName: string,
+            toolInput: Record<string, unknown>,
+          ) => void;
+        };
+      }).completionDetector.recordPreToolUseInvocation(
+        "s-2",
+        "task",
+        { agent: "prometheus" },
+      );
+
+      // Simulate a failed PostToolUse execution
+      const postEvent: HookEvent = {
+        type: "PostToolUse",
+        payload: {
+          toolName: "task",
+          toolResult: "Execution timeout",
+          error: true,
+        },
+        sessionId: "s-2",
+        callId: "call-2",
+      };
+
+      await bridge.handlePostToolUse(postEvent);
+
+      // recordReviewOutput should NOT be called because error is true
+      expect(recordSpy).not.toHaveBeenCalled();
+    });
+  });
 });
 /* eslint-enable security/detect-object-injection */

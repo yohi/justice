@@ -4,6 +4,7 @@ type WisdomEntryDraft = WisdomEntryInput;
 
 export interface LearningExtractionContext {
   readonly persona?: AgentId;
+  readonly debug?: boolean;
 }
 
 export class LearningExtractor {
@@ -11,24 +12,42 @@ export class LearningExtractor {
    * Analyzes a TaskFeedback result and extracts actionable wisdom entries.
    * Returns an empty array for non-actionable cases.
    */
-  extract(feedback: TaskFeedback, rawOutput?: string, context?: LearningExtractionContext): WisdomEntryDraft[] {
+  extract(
+    feedback: TaskFeedback,
+    rawOutput?: string,
+    context?: LearningExtractionContext,
+  ): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
 
-    switch (feedback.status) {
-      case "success":
-        results.push(...this.extractFromSuccess(feedback));
-        break;
-      case "failure":
-        results.push(...this.extractFromFailure(feedback, rawOutput));
-        break;
-      case "timeout":
-        results.push(...this.extractFromTimeout(feedback));
-        break;
-      case "compaction_risk":
-        // No specific learning from compaction risk
-        break;
-      default:
-        this.assertUnreachable(feedback.status);
+    if (context?.debug && rawOutput) {
+      const rootCauseEntry = this.extractRootCause(feedback.taskId, rawOutput);
+      if (rootCauseEntry) {
+        results.push(rootCauseEntry);
+      }
+      if (feedback.status === "success") {
+        results.push({
+          taskId: feedback.taskId,
+          category: "success_pattern",
+          content: "Systematic debugging successfully resolved the issue.",
+        });
+      }
+    } else {
+      switch (feedback.status) {
+        case "success":
+          results.push(...this.extractFromSuccess(feedback, rawOutput));
+          break;
+        case "failure":
+          results.push(...this.extractFromFailure(feedback, rawOutput));
+          break;
+        case "timeout":
+          results.push(...this.extractFromTimeout(feedback));
+          break;
+        case "compaction_risk":
+          // No specific learning from compaction risk
+          break;
+        default:
+          this.assertUnreachable(feedback.status);
+      }
     }
 
     return this.applyPersona(results, context?.persona);
@@ -38,11 +57,17 @@ export class LearningExtractor {
     throw new Error(`Unexpected status encountered: ${JSON.stringify(x)}`);
   }
 
-  private extractFromSuccess(
-    feedback: TaskFeedback,
-  ): WisdomEntryDraft[] {
+  private extractFromSuccess(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const hasTestResults = feedback.testResults && feedback.testResults.passed > 0;
+
+    // systematic-debugging root cause marker detection (success path)
+    if (rawOutput) {
+      const rootCauseEntry = this.extractRootCause(feedback.taskId, rawOutput);
+      if (rootCauseEntry) {
+        results.push(rootCauseEntry);
+      }
+    }
 
     // Only extract pattern when tests actually ran
     if (hasTestResults) {
@@ -65,10 +90,7 @@ export class LearningExtractor {
     return results;
   }
 
-  private extractFromFailure(
-    feedback: TaskFeedback,
-    rawOutput?: string,
-  ): WisdomEntryDraft[] {
+  private extractFromFailure(feedback: TaskFeedback, rawOutput?: string): WisdomEntryDraft[] {
     const results: WisdomEntryDraft[] = [];
     const errorClass: ErrorClass = feedback.errorClassification ?? "unknown";
     const rootCauseEntry = rawOutput ? this.extractRootCause(feedback.taskId, rawOutput) : null;
@@ -167,22 +189,20 @@ export class LearningExtractor {
     return sanitized;
   }
 
-  private extractFromTimeout(
-    feedback: TaskFeedback,
-  ): WisdomEntryDraft[] {
+  private extractFromTimeout(feedback: TaskFeedback): WisdomEntryDraft[] {
     return [
       {
         taskId: feedback.taskId,
         category: "environment_quirk",
         errorClass: "timeout",
-        content:
-          `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
+        content: `Task ${feedback.taskId} timed out. May be too complex for single delegation. Consider splitting into smaller subtasks.`,
       },
     ];
   }
 
   private extractRootCause(taskId: string, rawOutput: string): WisdomEntryDraft | null {
-    const match = rawOutput.match(/Root cause:\s*(.+)/i) || rawOutput.match(/根本原因[:：]?\s*(.+)/u);
+    const match =
+      rawOutput.match(/Root cause:\s*(.+)/i) || rawOutput.match(/根本原因[:：]\s*(.+)/u);
     const raw = match?.[1]?.trim();
 
     if (!raw) {

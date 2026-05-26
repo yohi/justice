@@ -1,5 +1,9 @@
 import { vi } from "vitest";
-import { formatBanner, type JusticeNotification, type JusticeNotifier } from "../../src/core/justice-notifier";
+import {
+  formatBanner,
+  type JusticeNotification,
+  type JusticeNotifier,
+} from "../../src/core/justice-notifier";
 
 export interface MockNotifier extends JusticeNotifier {
   readonly calls: JusticeNotification[];

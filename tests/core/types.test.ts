@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import type {
-  AddOptions,
   HookEvent,
   HookResponse,
   PostToolUsePayload,
@@ -150,12 +149,7 @@ describe("Phase 5 wisdom types", () => {
     expect(draft.taskId).toBe("task-1");
   });
 
-  it("should accept AddOptions with scope and persona", () => {
-    const options: AddOptions = {
-      scope: "global",
-      persona: "sisyphus",
-    };
-
+  it("should accept AddOptions with persona", () => {
     const store: WisdomStoreInterface = new WisdomStore();
     const entry = store.add(
       makeWisdomDraft({
@@ -163,10 +157,24 @@ describe("Phase 5 wisdom types", () => {
         category: "success_pattern",
         content: "Prefer readonly interfaces.",
       }),
-      options,
+      { persona: "sisyphus" },
     );
 
-    expect(options.scope).toBe("global");
+    expect(entry.persona).toBe("sisyphus");
+  });
+
+  it("should let AddOptions.persona override entry.persona", () => {
+    const store: WisdomStoreInterface = new WisdomStore();
+    const entry = store.add(
+      makeWisdomDraft({
+        taskId: "task-3",
+        category: "success_pattern",
+        content: "Prefer readonly interfaces.",
+        persona: "hephaestus",
+      }),
+      { persona: "sisyphus" },
+    );
+
     expect(entry.persona).toBe("sisyphus");
   });
 });

@@ -43,10 +43,7 @@ describe("AgentRouter", () => {
     });
 
     it("should force prometheus when spec-reviewer is requested", () => {
-      const agent = router.determineOptimalAgent("deep", [
-        "implementer-prompt",
-        "spec-reviewer",
-      ]);
+      const agent = router.determineOptimalAgent("deep", ["implementer-prompt", "spec-reviewer"]);
       expect(agent).toBe("prometheus");
     });
 

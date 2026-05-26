@@ -124,9 +124,7 @@ export class NodeFileSystem implements FileReader, FileWriter {
 
         // Return the canonical realpath of the existing part joined with non-existent segments.
         // This prevents TOCTOU where an ancestor is swapped for a symlink after validation.
-        return remaining.length > 0
-          ? join(currentReal, ...[...remaining].reverse())
-          : currentReal;
+        return remaining.length > 0 ? join(currentReal, ...[...remaining].reverse()) : currentReal;
       } catch (err: unknown) {
         if (
           err instanceof Error &&

@@ -314,6 +314,65 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
     expect(formatted).toContain("Gotcha");
     expect(formatted).toContain("Quirk");
   });
+  it("should use standard header for single persona (Issue 2 fix)", () => {
+    const localStore = new WisdomStore(100);
+    localStore.add({
+      taskId: "t1",
+      category: "failure_gotcha",
+      content: "Gotcha",
+      persona: "hephaestus",
+    });
+
+    const { tiered } = makeTiered({ localStore, globalStore: new WisdomStore(500) });
+    const entries = tiered.getRelevant({ maxEntries: 10 });
+    const formatted = tiered.formatForInjection(entries);
+
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings & Gotchas]**");
+    expect(formatted).not.toContain("Past Learnings for hephaestus");
+  });
+
+  it("should NOT duplicate headers when multiple personas are present (Issue 1 fix)", () => {
+    const localStore = new WisdomStore(100);
+    localStore.add({
+      taskId: "t1",
+      category: "failure_gotcha",
+      content: "Gotcha",
+      persona: "hephaestus",
+    });
+    localStore.add({
+      taskId: "t2",
+      category: "environment_quirk",
+      content: "Quirk",
+      persona: "sisyphus",
+    });
+
+    const { tiered } = makeTiered({ localStore, globalStore: new WisdomStore(500) });
+    const entries = tiered.getRelevant({ maxEntries: 10 });
+    const formatted = tiered.formatForInjection(entries);
+
+    const headerMatches = formatted.match(/\*\*\[JUSTICE AI: Past Learnings/g) ?? [];
+    expect(headerMatches).toHaveLength(2);
+
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings for hephaestus]**");
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings for sisyphus]**");
+  });
+
+  it("should format global entries without delegating to localStore formatter (Issue 3 fix)", () => {
+    const globalStore = new WisdomStore(500);
+    globalStore.add({
+      taskId: "t1",
+      category: "environment_quirk",
+      content: "Quirk",
+      persona: "atlas",
+    });
+
+    const { tiered } = makeTiered({ localStore: new WisdomStore(100), globalStore });
+    const entries = tiered.getRelevant({ maxEntries: 10 });
+    const formatted = tiered.formatForInjection(entries);
+
+    expect(formatted).toContain("**[JUSTICE AI: Past Learnings & Gotchas]**");
+    expect(formatted).toContain("Quirk");
+  });
 });
 
 describe("TieredWisdomStore — persistence coordination", () => {
@@ -391,7 +450,9 @@ describe("TieredWisdomStore — persistence coordination", () => {
     });
 
     tiered.getLocalStore().add({ taskId: "t1", category: "failure_gotcha", content: "save-local" });
-    tiered.getGlobalStore().add({ taskId: "t2", category: "success_pattern", content: "save-global" });
+    tiered
+      .getGlobalStore()
+      .add({ taskId: "t2", category: "success_pattern", content: "save-global" });
 
     await tiered.persistAll();
 

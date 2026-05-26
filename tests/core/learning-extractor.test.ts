@@ -143,7 +143,9 @@ describe("LearningExtractor", () => {
       );
 
       expect(entries).toHaveLength(2); // One for the root cause, one for the design_error itself
-      const rootCauseEntry = entries.find(e => e.category === "design_decision" && e.content.includes("Root cause identified"));
+      const rootCauseEntry = entries.find(
+        (e) => e.category === "design_decision" && e.content.includes("Root cause identified"),
+      );
       expect(rootCauseEntry).toBeDefined();
       expect(rootCauseEntry).toEqual(
         expect.objectContaining({
@@ -161,15 +163,37 @@ describe("LearningExtractor", () => {
         errorClassification: "design_error",
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "根本原因：競合状態",
-        { persona: "atlas" },
-      );
+      const entries = extractor.extract(feedback, "根本原因：競合状態", { persona: "atlas" });
 
       expect(entries).toHaveLength(2);
       const rootCauseEntry = entries.find(
-        (entry) => entry.category === "design_decision" && entry.content.includes("Root cause identified"),
+        (entry) =>
+          entry.category === "design_decision" && entry.content.includes("Root cause identified"),
+      );
+      expect(rootCauseEntry).toBeDefined();
+      expect(rootCauseEntry).toEqual(
+        expect.objectContaining({
+          category: "design_decision",
+          persona: "atlas",
+        }),
+      );
+      expect(rootCauseEntry?.content).toContain("競合状態");
+    });
+
+    it("should extract a design_decision from a Japanese root cause marker with ASCII colon", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-13-ja-ascii",
+        status: "failure",
+        retryCount: 0,
+        errorClassification: "design_error",
+      };
+
+      const entries = extractor.extract(feedback, "根本原因:競合状態", { persona: "atlas" });
+
+      expect(entries).toHaveLength(2);
+      const rootCauseEntry = entries.find(
+        (entry) =>
+          entry.category === "design_decision" && entry.content.includes("Root cause identified"),
       );
       expect(rootCauseEntry).toBeDefined();
       expect(rootCauseEntry).toEqual(
@@ -189,10 +213,7 @@ describe("LearningExtractor", () => {
         errorClassification: "design_error",
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "Root cause:   \n\t  ",
-      );
+      const entries = extractor.extract(feedback, "Root cause:   \n\t  ");
 
       // We expect 1 entry here because of the 'design_error' itself, but NOT the rootCauseEntry.
       // Wait, let's verify how many entries we expect.
@@ -209,14 +230,11 @@ describe("LearningExtractor", () => {
         errorClassification: "syntax_error", // Not design_error
       };
 
-      const entries = extractor.extract(
-        feedback,
-        "Root cause: a simple typo",
-      );
+      const entries = extractor.extract(feedback, "Root cause: a simple typo");
 
       // Since it's syntax_error and retryCount is 0, extractFromFailure might push something if it's the final failure.
       // But the rootCauseEntry shouldn't be there.
-      expect(entries.every(e => !e.content.includes("Root cause identified"))).toBe(true);
+      expect(entries.every((e) => !e.content.includes("Root cause identified"))).toBe(true);
     });
 
     describe("sanitization", () => {
@@ -310,6 +328,57 @@ describe("LearningExtractor", () => {
         expect(entry?.content.length).toBeLessThan(600); // 500 + prefix/suffix
         expect(entry?.content).toContain("(truncated)");
       });
+    });
+
+    it("should extract design_decision (root cause) and success_pattern when debug context is active", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-debug",
+        status: "success",
+        retryCount: 0,
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: missing test configuration in vitest config",
+        { persona: "sisyphus", debug: true },
+      );
+
+      expect(entries).toHaveLength(2);
+
+      const rootCause = entries.find((e) => e.category === "design_decision");
+      expect(rootCause).toBeDefined();
+      expect(rootCause?.content).toContain("Root cause identified");
+      expect(rootCause?.content).toContain("missing test configuration");
+      expect(rootCause?.persona).toBe("sisyphus");
+
+      const successPattern = entries.find((e) => e.category === "success_pattern");
+      expect(successPattern).toBeDefined();
+      expect(successPattern?.content).toContain("Systematic debugging successfully resolved");
+      expect(successPattern?.persona).toBe("sisyphus");
+    });
+
+    it("should extract design_decision (root cause) but NOT success_pattern when debug context is active and task failed", () => {
+      const feedback: TaskFeedback = {
+        taskId: "task-debug-failure",
+        status: "failure",
+        retryCount: 0,
+      };
+
+      const entries = extractor.extract(
+        feedback,
+        "Root cause: missing test configuration in vitest config",
+        { persona: "sisyphus", debug: true },
+      );
+
+      expect(entries).toHaveLength(1);
+
+      const rootCause = entries.find((e) => e.category === "design_decision");
+      expect(rootCause).toBeDefined();
+      expect(rootCause?.content).toContain("Root cause identified");
+      expect(rootCause?.persona).toBe("sisyphus");
+
+      const successPattern = entries.find((e) => e.category === "success_pattern");
+      expect(successPattern).toBeUndefined();
     });
   });
 });

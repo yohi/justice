@@ -49,7 +49,11 @@ export class WisdomPersistence {
     try {
       json = await this.fileReader.readFile(this.wisdomFilePath);
     } catch (err: unknown) {
-      if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
         return new WisdomStore();
       }
       throw err instanceof Error ? err : new Error(String(err), { cause: err });
@@ -78,7 +82,9 @@ export class WisdomPersistence {
         (data as { entriesByAgent: unknown }).entriesByAgent !== null;
 
       if (!hasValidV1 && !hasValidV2) {
-        throw new Error(`Invalid wisdom file format (missing valid entries or entriesByAgent): ${this.wisdomFilePath}`);
+        throw new Error(
+          `Invalid wisdom file format (missing valid entries or entriesByAgent): ${this.wisdomFilePath}`,
+        );
       }
     } else {
       throw new Error(`Invalid wisdom file format (not an object): ${this.wisdomFilePath}`);
@@ -125,7 +131,7 @@ export class WisdomPersistence {
     memoryEntries: readonly WisdomEntry[],
   ): WisdomEntry[] {
     const byId = new Map<string, WisdomEntry>();
-    
+
     const getTs = (e: WisdomEntry): number => {
       const ts = Date.parse(e.timestamp);
       return isNaN(ts) ? 0 : ts;

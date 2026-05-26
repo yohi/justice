@@ -4,6 +4,7 @@ import type {
   FileReader,
   FileWriter,
   HookResponse,
+  InjectResponse,
   MessageEvent,
   PreToolUseEvent,
   PostToolUseEvent,
@@ -85,7 +86,77 @@ describe("JusticePlugin", () => {
 
       expect(result).toEqual({
         action: "inject",
-        injectedContext: "\n\n---\n\ntail",
+        injectedContext: "tail",
+      });
+    });
+
+    it("should preserve modifiedPayload when merging a single inject response", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { args: { loadSkills: ["skill-a"] } },
+      };
+      const result = mergePostToolUseResponses(a, proceed);
+
+      expect(result).toEqual(a);
+      expect(result).not.toBe(a);
+    });
+
+    it("should preserve modifiedPayload from left on double inject merge", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a" },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a" },
+      });
+    });
+
+    it("should preserve modifiedPayload from right on double inject merge when left is absent", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "b" },
+      });
+    });
+
+    it("should prefer left modifiedPayload when both sides have it", () => {
+      const a: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-a",
+        modifiedPayload: { key: "a", extra: true },
+      };
+      const b: InjectResponse = {
+        action: "inject",
+        injectedContext: "from-b",
+        modifiedPayload: { key: "b" },
+      };
+      const result = mergePostToolUseResponses(a, b);
+
+      expect(result).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a", extra: true },
       });
     });
   });

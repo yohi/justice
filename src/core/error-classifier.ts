@@ -1,9 +1,6 @@
 import type { ErrorClass } from "./types";
 import { DEFAULT_RETRY_POLICY } from "./types";
-import {
-  PROVIDER_TRANSIENT_PATTERNS,
-  PROVIDER_CONFIG_PATTERNS,
-} from "./provider-error-patterns";
+import { PROVIDER_TRANSIENT_PATTERNS, PROVIDER_CONFIG_PATTERNS } from "./provider-error-patterns";
 import { matchesLoopError } from "./loop-error-patterns";
 
 interface ClassificationRule {

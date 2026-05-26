@@ -63,7 +63,9 @@ describe("FeedbackFormatter", () => {
 
   describe("parseTestResults", () => {
     it("should parse 'Tests: N passed, M failed' format", () => {
-      const result = formatter.parseTestResults("Tests: 10 passed, 2 failed, 3 skipped") as TestSummary;
+      const result = formatter.parseTestResults(
+        "Tests: 10 passed, 2 failed, 3 skipped",
+      ) as TestSummary;
       expect(result).not.toBeNull();
       expect(result.passed).toBe(10);
       expect(result.failed).toBe(2);
