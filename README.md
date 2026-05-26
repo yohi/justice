@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-327%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-563%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 
@@ -273,6 +273,7 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 | 6 | マルチエージェント協調 (Multi-Agent Coordination) | ✅ 完了 |
 | 7 | プラグインオーケストレーターとランタイム | ✅ 完了 |
 | 8 | OpenCode Plugin 統合 (`@yohi/justice/opencode` エントリ) | ✅ 完了 (v1.2.0) |
+| 9 | 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
 
 ## ドキュメント
 

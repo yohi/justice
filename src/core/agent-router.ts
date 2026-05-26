@@ -247,10 +247,7 @@ export function inferPersonaFromToolInput(toolInput: Record<string, unknown>): A
   // Priority 2-4: skills mapping
   const skillList = getStringArray(toolInput.skills) ?? getStringArray(toolInput.loadSkills);
   if (skillList) {
-    if (
-      skillList.includes("code-quality-reviewer") ||
-      skillList.includes("spec-reviewer")
-    )
+    if (skillList.includes("code-quality-reviewer") || skillList.includes("spec-reviewer"))
       return "prometheus";
     if (skillList.includes("systematic-debugging")) return "sisyphus";
     if (skillList.includes("writing-plans") || skillList.includes("brainstorming")) return "atlas";

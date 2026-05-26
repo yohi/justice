@@ -170,6 +170,16 @@ interface WisdomEntry {
   readonly content: string;
   readonly errorClass?: ErrorClass;
   readonly timestamp: string;
+  readonly persona: AgentId;        // 実行したペルソナ
+}
+
+type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp" | "persona"> & {
+  readonly persona?: AgentId;       // Draft 段階では未確定可
+};
+
+interface AddOptions {
+  readonly scope?: WisdomScope;
+  readonly persona?: AgentId;       // 明示指定で上書き可能
 }
 
 type WisdomCategory =
@@ -195,13 +205,14 @@ interface ProtectedContext {
 
 ## 4. フック仕様 (Hook Specifications)
 
-### 4.1 `plan-bridge` — タスク委譲の連携
+### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 
 | プロパティ | 設定値 |
 |----------|-------|
-| OmO イベント | `Message`, `PreToolUse` |
+| OmO イベント | `Message`, `PreToolUse`, `PostToolUse` |
 | トリガー (Message) | エージェントのメッセージ内に `plan.md` の参照 *および* 委譲キーワードが含まれている場合 |
 | トリガー (PreToolUse) | `task()` ツールが呼び出され、*かつ* アクティブなプランが登録されている場合 |
+| トリガー (PostToolUse) | `task()` ツールが終了し、*かつ* 該当セッションで `writing-plans` / `systematic-debugging` スキルの完了、または Prometheus レビュー却下が検知された場合 |
 
 **Message イベントの流れ（フロー）:**
 
@@ -211,8 +222,89 @@ interface ProtectedContext {
 4. `DependencyAnalyzer.getParallelizable(tasks)` — 並行処理可能なタスクを特定する
 5. `CategoryClassifier.classify(task)` — カテゴリを自動選択する
 6. `ProgressReporter.generateReport(tasks)` — 進捗状況を算出する
-7. `WisdomStore.getRelevant()` — 関連する学習内容（Wisdom）を取得する
+7. `WisdomStore.getRelevant({ persona: agentId ?? "hephaestus" })` — 関連する学習内容（Wisdom）を、セッション情報またはデフォルトのペルソナ（`"hephaestus"`）で絞り込んで取得する
 8. 委譲コンテキストをすべて含んだ `inject`（注入）レスポンスを返す
+
+**PreToolUse イベントの流れ（フロー）:**
+
+1. `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` — スキル（`writing-plans`, `systematic-debugging`）の起動保留と、`toolInput` に基づく実行ペルソナ（`AgentId`）の推定と記録を行う。
+2. **ペルソナの特定と Wisdom 取得**:
+   以下の優先順位で Wisdom 注入対象のペルソナを特定し、`tieredWisdomStore.getRelevant({ persona })` を呼び出す。
+   *   **優先順位 1**: 委譲時に設定された `delegation.context.agentId` が**解決可能（resolvable）**であればそれを採用。
+   *   **優先順位 2**: 未解決の場合、`PlanCompletionDetector.lastInvokedPersona(sessionId)`（`toolInput` から推定されるペルソナ）を採用。
+   *   **優先順位 3**: いずれも未解決の場合は `"hephaestus"`（デフォルト）にフォールバックする。
+3. **「解決可能（resolvable）」の判定基準（predicate）**:
+   対象の値が非空文字列であり、かつ大文字小文字を無視した状態で `AgentId` リテラルユニオン（`"atlas" | "hephaestus" | "sisyphus" | "prometheus"`）のいずれかに含まれる場合に「解決可能」とみなす。`undefined`、`null`、空文字列、空白のみの文字列、`"unknown"` などのプレースホルダは**未解決**として扱う。
+4. 取得された Wisdom をプロンプトの `PREVIOUS LEARNINGS` コンテキストとして注入する。
+
+**PostToolUse イベントの流れ（フロー）:**
+
+1. **評価実行**:
+   `PlanCompletionDetector.evaluateSkillCompletion` を呼び出し、`writing-plans` と `systematic-debugging` スキルの完了判定、および直前のペルソナが `"prometheus"` であれば `LoopDetectionHandler.recordReviewOutput` を呼び出して却下状態を判定します。
+2. **Atlas Guidance の注入 (writing-plans 完了)**:
+   計画フェーズの完了を検知すると、`[ATLAS ORCHESTRATION DIRECTIVE]` プロンプトを生成し、自ら実装を進めずに次のタスクをエージェントに委譲するよう強く誘導します。`injectedContext` 先頭にバナー（🎯）を埋め込み、同時に `atlas_orchestration` 通知を送信します。
+
+   **プロンプトテンプレート:**
+   ```text
+   ---
+   [ATLAS ORCHESTRATION DIRECTIVE]
+
+   **Plan completed**: <planPath>
+   **Detection source**: <skill_marker | result_marker | result_path>
+
+   ⚠️ **重要**: Atlas として、ここからは自ら実装に着手せず、計画書に従って委譲してください。
+
+   **次のアクション**:
+   > Step <task-id> "<title>" を `<recommended-agent>` に委譲してください。
+
+   **推奨エージェント**: <hephaestus | sisyphus | prometheus>
+   （根拠: <カテゴリ・スキル・スコアサマリ from AgentRouter>）
+
+   **委譲用プロンプト**:
+   <delegation.prompt>
+
+   **並列実行候補**: <task-X, task-Y, ...>
+   ---
+   ```
+   *※ `confidence: medium` で計画完了を検知した場合は、末尾に「（自動検知。意図と異なる場合は無視可）」の注記が自動で追加されます。*
+3. **Sisyphus Wisdom の自動保存 (systematic-debugging 完了)**:
+   デバッグスキルの完了を検知すると、`LearningExtractor` にて `persona: "sisyphus"` として Wisdom を抽出して保存し、件数をバナー（🔬）および `sisyphus_insight` 通知で報告します。
+4. **Hephaestus への Pivot 注入 (Prometheus 連続却下)**:
+   Prometheus 却下回数が閾値に達すると、`[ARCHITECTURE PIVOT REQUIRED]` プロンプトを生成し、通常の試行ループを絶ってアプローチの根本的な見直し（Hephaestus へのピボット）を指示します。警告バナー（🚧）と `architecture_pivot` 通知を送信します。
+
+   **プロンプトテンプレート:**
+   ```text
+   ---
+   **ARCHITECTURE PIVOT REQUIRED**
+
+   Prometheus が直近 <N> 回のレビューで連続して却下を出しています（閾値: <maxRejections>）。
+   このアプローチは手詰まりです。**通常の再試行ループを断ち、別の視座でアーキテクチャを再検討してください。**
+
+   **検討すべき選択肢**:
+   1. 採用ライブラリの変更（同等機能で軽量・成熟したもの）
+   2. アプローチの簡略化（過剰な抽象化を削減）
+   3. 機能スコープの縮小（YAGNI 適用）
+   4. データ構造の根本的な見直し
+
+   **直近の Prometheus 指摘抜粋**:
+   - <excerpt 1>
+   - <excerpt 2>
+   - <excerpt 3>
+
+   **次のアクション**:
+   > Hephaestus は、この pivot 指示に従って **別の実装アプローチ** を提案し、再実装してください。
+   > 同一の方針での修正は禁止です。
+   ---
+   ```
+
+#### PostToolUse レスポンスの合成ルール (`mergePostToolUseResponses`)
+
+複数の PostToolUse イベントによって生成された `HookResponse` は、以下の優先順位と合成ルールに従って単一のレスポンスにマージされます。
+
+1. **`skip` アクションの優先**: いずれかのレスポンスに `action: "skip"` が含まれている場合、最優先で全体のアクションを `skip` とします。
+2. **`proceed` 同士の合成**: 両方のレスポンスが `action: "proceed"` の場合、そのまま `proceed` を返します。
+3. **`inject` と `proceed` の合成**: 一方が `action: "inject"` でもう一方が `proceed` の場合、`inject` 側のレスポンスを採用します。
+4. **`inject` 同士の合成**: 両方が `action: "inject"` の場合、双方の `injectedContext` を `\n\n---\n\n` で連結して合成した `inject` レスポンスを生成します。
 
 **セッション状態:**
 
@@ -247,7 +339,7 @@ interface ProtectedContext {
 
 | 状況 | アクション |
 |-----------|--------|
-| 成功 (Success) | `plan.md` の該当全ステップに ✅ を付け、成功メッセージを注入し、学習内容を抽出する |
+| 成功 (Success) | `plan.md` の該当全ステップに ✅ を付け、成功メッセージを注入し、学習内容を抽出する（学習抽出時には、セッション情報から得られたペルソナ情報を `LearningExtractor.extract` に伝播して保存ペルソナを決定） |
 | 第1層エラー (文法/型エラー、リトライ上限未満) | 通知せずに進行（OmO が暗黙的に自動修正） |
 | 第2層エラー (テスト失敗、設計エラー、リトライ制限オーバーなど) | `plan.md` にエラーの情報を追記し、エスカレーション指示及び systematic-debugging（体系的デバッグ）ガイダンスを注入する |
 | タイムアウト | 分割指示と `TaskSplitter` 経由で生成されたタスク分割案をコンテキストに注入する |
@@ -275,13 +367,13 @@ interface ProtectedContext {
 
 ---
 
-### 4.4 `loop-handler` — ループ検出と対応
+### 4.4 `loop-handler` — ループ検出とレビュー却下の管理
 
 | プロパティ | 設定値 |
 |----------|-------|
-| OmO イベント | `Event` (eventType: `"loop-detector"`) |
+| OmO イベント | `Event` (eventType: `"loop-detector"`), `PostToolUse` (間接呼び出し) |
 
-**フロー:**
+**イベントフロー (eventType: loop-detector):**
 
 1. セッションから現在アクティブなタスクおよび実行中のエージェントを検出
 2. エージェントの失敗試行として記録を残し、試行履歴（Trial History）を更新（※試行履歴はインメモリでのみ管理され、セッション終了・再起動のタイミングでリセットされる）
@@ -289,6 +381,13 @@ interface ProtectedContext {
 4. `PlanParser.appendErrorNote(content, taskId, note)` — エラー情報を `plan.md` に書き込む
 5. エスカレーション判定: 失敗回数が `MAX_RETRIES_BEFORE_ESCALATION` (デフォルト 3) 以上の場合、`sisyphus` (デバッグ特化) への強制ルーティング（エスカレーション）を指示
 6. `plan.md` と互換性のある Markdown 形式のタスク分割提案とエスカレーション情報を含んだ `inject` （注入）レスポンスを返す
+
+**レビュー却下判定フロー (recordReviewOutput):**
+1. `ReviewRejectionDetector` にて Prometheus の出力内に却下マーカーを検出します。
+2. 検出時、該当セッション・タスクの `rejections` カウントをインクリメントし、指摘箇所（最大3件、各200文字以下）を抜粋（Excerpts）として蓄積。また、`recordTrial` にて `agent: "prometheus", result: "failure"` として失敗履歴に連動して記録します。
+3. 連続却下数が `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` （環境変数、またはデフォルト3）以上の場合、`pivoted: true` で Hephaestus へのアーキテクチャ・ピボット指示を発火させます。
+4. 却下マーカーが検出されない正常終了の場合、該当タスクの `rejections` と `rejectionExcerpts` の記録をクリア（リセット）します。
+5. セッション破棄 (`removeSession`) 時には、関連する全ての却下カウンタ・履歴（`trials`, `reviewRejections`, `rejectionExcerpts`）を一括消去します。
 
 ---
 
@@ -460,23 +559,25 @@ jitter = random(0, baseDelay × 0.5)
 
 ### 5.11 `WisdomStore`
 
-これまで蓄積した学習のエントリを保存するインメモリ（オンメモリ）ストア。
+これまで蓄積した学習のエントリを保存するインメモリ（オンメモリ）ストア。実行ペルソナ（`AgentId`）ごとの独立したバケット（`Map<AgentId, WisdomEntry[]>`）で学習内容を管理します。
 
-**`add(entry)`** — 新規追加時に `id` および `timestamp` は自動で生成される。
+**`add(entry, options?)`** — 新規追加時に `id` および `timestamp` は自動で生成されます。ペルソナは優先順位（`options.persona` ＞ `entry.persona` ＞ `PersonaClassifier` による自動分類）に従って確定されます。
 
-**`getRelevant({ errorClass?, maxEntries? })`** — エラーの種別ごとにフィルタリングし、結果の最大数を制限して取得する。
+**`getRelevant({ errorClass?, maxEntries?, persona? })`** — 指定されたペルソナ（`persona`）で絞り込み、エラーの種別でフィルタリングして、最新から指定件数を取得します。
 
-**`formatForInjection(entries)`** — 取得したエントリ群を Markdown の `PREVIOUS LEARNINGS` (過去の学習内容) セクション形式へフォーマットする。
+**`formatForInjection(entries)`** — 取得したエントリ群を Markdown の `PREVIOUS LEARNINGS` セクション形式へフォーマットします。ペルソナが混在する場合は、自動的に `**[JUSTICE AI: Past Learnings for <Persona>]**` ヘッダによるペルソナ別のグループ化を行います。
 
-**`serialize()` / `WisdomStore.deserialize(json)`** — ファイルの永続化向けに JSON 文字列への相互変換をサポートする。
+**`serialize()` / `WisdomStore.deserialize(json)`** — ファイルの永続化向けに JSON 文字列への相互変換をサポートします。
 
-**デフォルト制約:** 最大 100 件 (100件超過時は古い順・LRUから破棄)。
+**デフォルト制約:** 最大 100 件。エントリ数が上限を超過した際は、特定のペルソナバケットに偏らないよう、ストア全体で最も古いタイムスタンプを持つエントリが含まれるバケットから順に削除（LRU Eviction）します。
 
 ---
 
 ### 5.12 `LearningExtractor`
 
 `TaskFeedback` の結果から `WisdomEntry` へと学習草案を抽出します。
+
+**`extract(feedback, rawOutput?, context?)`** — フィードバックと生の実行出力から、学習のドラフト（`WisdomEntryDraft`）を抽出します。`context.persona` が指定されている場合はそのペルソナを優先し、未指定の場合は `PersonaClassifier` に基づいて自動的にペルソナを割り当てます。
 
 **抽出に関するルール:**
 
@@ -487,6 +588,10 @@ jitter = random(0, baseDelay × 0.5)
 | taskが失敗 + design_error が原因 | `design_decision` | ロジック・出力された結果の重要スニペット |
 | timeout による失敗 | `environment_quirk` | その時点のコンテキスト情報 |
 | 実質リトライが2回以上発生した後での成功 | `failure_gotcha` | 「N回のリトライの末に成功した点」について |
+| `systematic-debugging` 完了かつ `rawOutput` に根本原因マーカー（`Root cause:` / `根本原因:`）を含む成功 | `design_decision` | 根本原因の特定内容と修正アプローチの要約 |
+
+**ペルソナの連携**:
+`TaskFeedbackHandler.setActivePlan(plan, agentId?)` 経由でフック実行時のエージェント名（ペルソナ）がセッション内で追跡され、学習抽出時に自動的に `extract` メソッドの `context.persona` に伝播されて保存されます。
 
 **サニタイズ（機密情報の除外処理）:** データベースや API キー、パスワード、トークンのようなセキュリティに関する情報が保存される前にそれらのパターンをマスクし、無効化します。
 
@@ -494,11 +599,23 @@ jitter = random(0, baseDelay × 0.5)
 
 ### 5.13 `WisdomPersistence`
 
-`WisdomStore` 内の内容をローカルファイルの `.justice/wisdom.json` へ永続化（保存）および読み込みを行います。
+`WisdomStore` 内の内容をローカルファイルの `.justice/wisdom.json` へ永続化（保存）および読み込みを行います。書き込み時には、I/O処理による破損を防ぐためテンポラリファイルへ書き込んでから置換するアトミック永続化（`saveAtomic`）を使用します。
 
-**`load()`** — ファイルからの復元（ファイルが無かったり欠損していたりする場合は空の Store が返る）。
+**`load()`** — ファイルからの復元。ファイルが存在しない場合や内容が破損している場合は、空の `WisdomStore` を返して処理を続行します（Fail-Open設計）。
 
-**`save(store)`** — 完全な JSON のシリアライズ化と書き込みの実施。
+**`loadStrict()`** — より厳格な復元処理。JSON解析エラー時に例外をスローします。
+
+**v1 → v2 自動マイグレーション:**
+永続化ファイルが旧形式（`entries` 配列形式の v1）である場合、ロード時に自動検知され、各エントリに対して `PersonaClassifier` を使用してペルソナを推定・付与した上で、新形式（`byAgent` にペルソナ別に格納される v2）へ透過的にマイグレーションして展開します。
+
+**`saveAtomic(store)`** — ストア内容をペルソナ別の PascalCase ラベル（`Atlas`, `Hephaestus`, `Sisyphus`, `Prometheus`）に整理し、常に v2 フォーマットでディスクにアトミックに書き込みます。
+
+*   **マージ時の競合解決（`mergeById`）**: 書き込み前にディスク上のデータとメモリ上のデータをマージする際、同一 ID（`id`）を持つエントリが双方に存在する場合、タイムスタンプ（`timestamp`）がより新しい側の `persona` を優先して採用します。
+
+**シリアライズ境界における大文字・小文字の変換規約:**
+*   **メモリ・内部API上**: 常に小文字の `AgentId`（`"atlas"`, `"hephaestus"`, `"sisyphus"`, `"prometheus"`）を使用し、判定処理の不整合を防ぎます。
+*   **シリアライズ（ディスク書き出し）境界**: 永続化ファイル `wisdom.json` のキー（`byAgent` フィールド）には、PascalCase のラベル（`"Atlas"`, `"Hephaestus"`, `"Sisyphus"`, `"Prometheus"`）に変換して出力します。
+*   **デシリアライズ（ディスク読み込み）境界**: ファイルからロードした PascalCase のラベルを、小文字の `AgentId` に変換してストアに格納します。定義されていない未知のペルソナラベルが検出された場合は、fail-open 規約に基づき無視されます。
 
 ---
 
@@ -562,9 +679,9 @@ new TieredWisdomStore({
 **主な API:**
 
 - `add(entry, { scope? })` — category heuristic + 明示 scope で local/global 振り分け。global 昇格時に `SecretPatternDetector` でマッチした場合は、警告ログを出力し、**グローバルへの昇格をキャンセルしてプロジェクトローカルストアに保存します。** これにより、秘密情報がプロジェクトを跨いで漏洩することを防ぎます。環境変数や秘密情報の混入が疑われる場合は、内容を確認・修正した上で必要に応じて再登録してください。
-- `getRelevant({ errorClass?, maxEntries? })` — ローカル優先、不足分を global から補填。デフォルト `maxEntries=10`。
+- `getRelevant({ errorClass?, maxEntries?, persona? })` — 指定されたペルソナ（`persona`）に紐づく知見を対象に、ローカル優先で取得し、不足分を global から補填して重複排除した結果を返します。デフォルト `maxEntries=10`。
 - `getByTaskId(taskId)` — 両 store の該当エントリを連結。
-- `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲。
+- `formatForInjection(entries)` — `WisdomStore.formatForInjection` を委譲し、混在時のペルソナグループヘッダ出力をサポートします。
 - `loadAll()` — 永続ストレージから両 store を復元する処理。
 - `persistAll()` — `WisdomPersistence.saveAtomic` を用いて、両 store を並列かつ atomic に永続化する。
 
@@ -577,7 +694,7 @@ new TieredWisdomStore({
 | `failure_gotcha` | local |
 | `design_decision` | local |
 
-**ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぐ。
+**ローカル優先の読み込み挙動:** `localEntries.length >= maxEntries` なら global は参照されない。`WisdomStore.getRelevant` は配列末尾（新しいもの）から `slice(-limit)` する既存挙動を引き継ぎます。
 
 ---
 
@@ -595,6 +712,78 @@ new TieredWisdomStore({
    オーバーライドが発生しなかった場合、スコアボードの中で最も高い得点を持つエージェントを選択します。
 4. **Fallback:**
    すべてのスコアが 0 または判定不能な場合、最終的にデフォルトエージェント (`hephaestus`) が選択されます。
+
+---
+
+### 5.18 `PersonaClassifier`
+
+Wisdom のカテゴリとエラークラスから、実行ペルソナ（`AgentId`）を自動的に分類・決定します。
+
+**優先順位判定ルール:**
+1. `errorClass === "design_error"` の場合 → `"atlas"`
+2. `errorClass` が `"loop_detected"` または `"timeout"` の場合 → `"sisyphus"`
+3. `category === "design_decision"` の場合 → `"atlas"`
+4. `category === "environment_quirk"` の場合 → `"sisyphus"`
+5. `category` が `"success_pattern"` または `"failure_gotcha"` の場合 → `"hephaestus"`
+6. それ以外の場合は、デフォルトとして `"hephaestus"` を返却。
+
+---
+
+### 5.19 `ReviewRejectionDetector`
+
+Prometheus レビューコメント等から却下（Rejection）シグナルと関連する指摘内容を抽出します。
+
+**主な機能:**
+*   **`detect(text)`** — 指定された文字列内のレビュー却下メッセージを検出し、`ReviewRejectionSignal` （陽性判定、指摘抜粋配列、および300文字以下の要約）を生成して返します。
+*   **却下パターン (`REVIEW_REJECTION_PATTERNS`)**:
+    `reject`, `cannot approve`, `approval denied`, `requested changes`, `MUST FIX`, `BLOCKER`, `critical issue`, `❌`, `do not merge` などの表現、および日本語の「不承認」「却下」「要修正」「致命的」「ブロッカー」等のマーカーを正規表現で捕捉します。
+
+---
+
+### 5.20 `PlanCompletionDetector`
+
+A+B ハイブリッド完了検知アプローチを実装し、セッション保留状態を用いて計画フェーズおよびデバッグタスクの完了を検出します。
+
+**主な機能:**
+*   **`recordPreToolUseInvocation(sessionId, toolName, toolInput)`** — `PreToolUse` にて `writing-plans` や `systematic-debugging` スキルの起動が検出された場合、セッションごとに保留フラグをメモリに登録します（TTL: 5分、最大50セッション）。また、`toolInput` から次に実行されるペルソナを推定・記録します。
+*   **`evaluateSkillCompletion(sessionId, toolName, toolResult, isError, target)`** — 保留フラグに基づく `confidence: "high"`、または `toolResult` の成果物パス/マーカー（`## Architecture` + `## Implementation` または根本原因マーカー）一致による `confidence: "medium"` でタスクの完了を検出します。判定後、対象ターゲットの保留フラグのみを消去します（他ターゲットの保留状態には干渉しません）。`isError: true` の場合は完了とみなしません。
+*   **`lastInvokedPersona(sessionId)`** — 最後に登録された推定ペルソナ（`AgentId`）を返します。
+    *   **ペルソナの推定優先順位**:
+        1. `toolInput.agent`（`atlas` / `hephaestus` / `sisyphus` / `prometheus` に大文字小文字無視で所属）
+        2. `skills` / `loadSkills` 配列に `"code-quality-reviewer"` を含む場合 → `"prometheus"`
+        3. `skills` / `loadSkills` 配列に `"systematic-debugging"` を含む場合 → `"sisyphus"`
+        4. `skills` / `loadSkills` 配列に `"writing-plans"` / `"brainstorming"` を含む場合 → `"atlas"`
+        5. `role` / `prompt` 文字列内に上記いずれかのスキル名を含む（部分一致）場合 → スキルに応じたペルソナ
+        6. いずれにも該当しない場合は未登録（`undefined`）
+
+---
+
+### 5.21 `JusticeNotifier`
+
+フックの各発火状況において、トースト相当の2層（injectedContext 先頭の Markdown バナー + client.app.log 経由のログ出力）の通知を統合して管理するための最小限のインターフェースです。
+
+*   **`notify(notification)`** — 構造化された通知オブジェクトを受け取り、非同期でログ通知等を実行します。内部で全例外をキャッチして Fail-Open 契約を遵守します。
+*   **`formatBanner(notification)`** — レスポンスの先頭に埋め込むための Markdown バナー文字列を生成します。
+    *   **Markdown バナーフォーマット**: 生成されるバナーは、以下の通り3行構成の Markdown 引用ブロックとして成型されます。
+        ```text
+        > <icon> **JUSTICE NOTIFICATION** [<title>]
+        > <message>
+        [空行]
+        ```
+
+**通知の種類 (NotificationVariant):**
+*   `atlas_orchestration` (🎯) — Atlas の計画作成完了および委譲指示
+*   `architecture_pivot` (🚧) — Prometheus 却下回数超過時の Hephaestus ピボット指示
+*   `sisyphus_insight` (🔬) — Sisyphus による systematic-debugging 完了と Wisdom 保存
+*   `escalation` (🚨) — エラー過多時の Sisyphus 強制エスカレーション
+*   `wisdom_saved` (💡) — 新しい Wisdom が学習ストアに保存された通知
+*   `loop_detected` (🔁) — 無限ループ検知とタスク分割指示
+
+---
+
+### 5.22 `OpenCodeNotifier`
+
+`JusticeNotifier` を実装した runtime レイヤのクラスです。OpenCode から注入される `client.app.log` 関数をバインドし、`service: "justice"` 固定のログ出力を担当します。例外発生時はすべて握りつぶして Fail-Open を担保します。
 
 ---
 
@@ -760,7 +949,12 @@ justice/
 │   │   ├── category-classifier.ts    — タスクのカテゴリを自動判定する機能
 │   │   ├── progress-reporter.ts      — 各タスク進捗からの集計レポート生成
 │   │   ├── status-command.ts         — 命令からのステータス確認API
-│   │   └── justice-plugin.ts         — これらを繋げるオーケストレーターとイベントの共有箇所
+│   │   ├── justice-plugin.ts         — これらを繋げるオーケストレーターとイベントの共有箇所
+│   │   ├── persona-classifier.ts      — 実行ペルソナ（AgentId）分類器
+│   │   ├── review-rejection-patterns.ts — レビュー却下の検出用正規表現パターン
+│   │   ├── review-rejection-detector.ts — Prometheus 却下シグナルの検出・抽出
+│   │   ├── plan-completion-detector.ts — A+Bハイブリッド完了検知によるスキル・計画完了検出
+│   │   └── justice-notifier.ts         — トースト相当の通知処理のための最小限のインターフェース
 │   ├── hooks/
 │   │   ├── plan-bridge.ts            — Message/PreToolUse にバインドされるフック
 │   │   ├── task-feedback.ts          — PostToolUse エラー処理等へのフィードバック
@@ -768,16 +962,19 @@ justice/
 │   │   └── loop-handler.ts           — ループを検知するためのフック
 │   ├── runtime/
 │   │   ├── node-file-system.ts       — 実際の Bun.file ベースによるファイルの読み書き
-│   │   └── opencode-adapter.ts       — OpenCode hook ↔ Justice HookEvent adapter
+│   │   ├── opencode-adapter.ts       — OpenCode hook ↔ Justice HookEvent adapter
+│   │   └── opencode-notifier.ts      — client.app.log を使用したログ通知処理
 │   ├── opencode-plugin.ts            — OpenCode Plugin entrypoint
 │   └── index.ts                      — 上記の外部・公開APIの全エクスポート
 ├── tests/
-│   ├── core/          — コア層に対する 22 のテスト用ファイル群
-│   ├── hooks/         — フック層に対する 4 つのテスト・ファイル群
+│   ├── core/          — コア層に対するテスト用ファイル群
+│   ├── hooks/         — フック層に対するテスト・ファイル群
 │   ├── integration/   — 全体を統合・通貫した機能テスト
 │   ├── runtime/       — ランタイム処理と adapter の検証
 │   ├── helpers/
 │   │   ├── mock-file-system.ts       — インメモリベースのファイル操作モック
+│   │   ├── mock-notifier.ts          — テスト用通知モック
+│   │   ├── wisdom-draft-factory.ts   — テスト用 Wisdom Draft 生成ファクトリ
 │   │   └── fake-opencode-init.ts     — OpenCode Plugin init スタブ
 │   └── fixtures/
 │       ├── sample-plan.md
@@ -809,19 +1006,29 @@ justice/
 - `noUnusedLocals: true`, `noUnusedParameters: true` (未使用のものに対する警告)
 - コンパイル・モジュールターゲット: `ES2022`, Module: `ESNext`
 
+### 10.1 環境変数仕様 (Environment Variables)
+
+プラグインの動作閾値や永続化の挙動は、以下の環境変数でカスタマイズ可能です。
+
+| 変数名 | デフォルト値 | 説明・用途 |
+|---|---|---|
+| `MAX_RETRIES_BEFORE_ESCALATION` | `3` | 単一タスクでの失敗回数がこの値以上になった場合、`sisyphus` (デバッグ特化) に強制エスカレーションします。非正値や NaN の場合は `3` にフォールバック。 |
+| `MAX_REVIEW_REJECTIONS_BEFORE_PIVOT` | `3` | Prometheus からの連続却下回数がこの値以上になった場合、Hephaestus に対してアーキテクチャ・ピボット（別アプローチの提案）を要求します。非正値や NaN の場合は `3` にフォールバック。 |
+| `JUSTICE_GLOBAL_WISDOM_PATH` | (未設定時は `~/.justice/wisdom.json`) | ユーザー全体のグローバル Wisdom ファイルの書き出し・読み込み先（絶対パス）。相対パスは無視され警告ログ出力のうえ local のみで稼働。 |
+
 ---
 
 ## 11. テストカバレッジ・状態 (Test Coverage)
 
-### 11.1 テスト件数の内訳 (*Phase 7 完了時に基づく*)
+### 11.1 テスト件数の内訳 (*Invisible Advisor 実装完了時に基づく*)
 
 | 解析層 | 対象となるファイル数 | サンプルテスト件数 |
 |-------|-------|-------|
-| コアロジック部 | 22 ファイル | 約 250 件 |
-| フック・ハンドラ群 | 4 ファイル | 約 40 件 |
-| ランタイム処理 | 1 ファイル | 9 件 |
-| 実環境・結合検証 | 7 ファイル | 約 28 件 |
-| **合計総数** | **34 テストファイル** | **327 件** |
+| コアロジック部 | 27 ファイル | 約 440 件 |
+| フック・ハンドラ群 | 4 ファイル | 約 70 件 |
+| ランタイム処理 | 2 ファイル | 17 件 |
+| 実環境・結合検証 (統合テスト) | 19 ファイル | 約 36 件 |
+| **合計総数** | **52 テストファイル** | **563 件** |
 
 ### 11.2 テスト戦略と方針
 
@@ -836,25 +1043,27 @@ justice/
 
 ```typescript
 // メインとなるオーケストレーターとハブ
-export { JusticePlugin, createGlobalFs, NoOpPersistence } from "./core/justice-plugin";
+export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core/justice-plugin";
 
 // ステータス、および計画のレポーティングコマンド
 export { StatusCommand, type PlanStatus } from "./core/status-command";
 
 // 実際における利用環境からのランタイム
 export { NodeFileSystem } from "./runtime/node-file-system";
+export { OpenCodeNotifier } from "./runtime/opencode-notifier";
+export type { OpenCodeLogEntry } from "./runtime/opencode-adapter";
 
 // OpenCode plugin entrypoint
-export { OpenCodePlugin } from "./opencode-plugin";
+export { OpenCodePlugin as default, OpenCodePlugin } from "./opencode-plugin";
 
 // （高度な手法での利用に向けた）全公開コアクラス
-export { AgentRouter } from "./core/agent-router";
+export { AgentRouter, AGENT_IDS, type RoutingCategory, type RoutingReason, type RoutingResult } from "./core/agent-router";
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
 export { ErrorClassifier } from "./core/error-classifier";
 export { FeedbackFormatter } from "./core/feedback-formatter";
 export { TriggerDetector } from "./core/trigger-detector";
-export { DependencyAnalyzer } from "./core/dependency-analyzer";
+export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
 export { SmartRetryPolicy } from "./core/smart-retry-policy";
@@ -862,8 +1071,15 @@ export { TaskSplitter } from "./core/task-splitter";
 export { WisdomStore } from "./core/wisdom-store";
 export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
-export { TieredWisdomStore } from "./core/tiered-wisdom-store";
 export { SecretPatternDetector } from "./core/secret-pattern-detector";
+export { TieredWisdomStore, type TieredWisdomStoreOptions, type TieredWisdomStoreLogger } from "./core/tiered-wisdom-store";
+
+// Invisible Advisor 新規コアクラス・通知関連
+export { PersonaClassifier, classifyPersona, DEFAULT_PERSONA, type PersonaClassificationInput } from "./core/persona-classifier";
+export { ReviewRejectionDetector, type ReviewRejectionSignal } from "./core/review-rejection-detector";
+export { PlanCompletionDetector, type CompletionResult, type CompletionTrigger, type PlanCompletionInput } from "./core/plan-completion-detector";
+export { NoOpNotifier, formatBanner, iconFor, type JusticeNotification, type JusticeNotifier, type NotificationLevel, type NotificationVariant } from "./core/justice-notifier";
+export { REVIEW_REJECTION_PATTERNS, matchesReviewRejection } from "./core/review-rejection-patterns";
 
 // 直接各機能ごとのフックを利用したい場合
 export { PlanBridge } from "./hooks/plan-bridge";
@@ -884,10 +1100,12 @@ export type {
   FeedbackAction,
   HookEvent, HookResponse,
   FileReader, FileWriter,
-  WisdomEntry, WisdomCategory,
+  WisdomEntry, WisdomCategory, WisdomScope, WisdomStoreInterface,
   EventPayload, LoopDetectorPayload, CompactionPayload,
   SplitSuggestion, SubTaskSuggestion,
   RetryDecision, ContextReduction,
+  AddOptions, BuildDelegationOptions,
+  PlanReference, TriggerAnalysis,
 } from "./core/types";
 ```
 
@@ -933,6 +1151,7 @@ bun run build
 | Phase 5: 知恵としてのデータ蓄積 (Wisdom Integration) | ✅ 完了 |
 | Phase 6: オーケストレーションによる並行協調の確立 (Multi-Agent Coordination) | ✅ 完了 |
 | Phase 7: 実環境への統合オーケストレーター構築 (Plugin Orchestrator & Runtime) | ✅ 完了 |
+| Phase 8: 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
 | 拡張 CLI 用途のサポート (`justice init`, `justice status` など) | 🔲 計画中 |
 | VSCode 拡張機能などへのアダプタ | 🔲 計画中 |
 | Claude Code との連携における互換性の見直し | 🔲 計画中 |
