@@ -424,7 +424,7 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
   - 日本語マーカー `"根本原因: ..."` でも同じ経路が動作することを別ケースで確認
 - [x] **Step 5: `tests/helpers/mock-notifier.ts` + `tests/helpers/wisdom-draft-factory.ts` + 既存 `mock-file-system.ts` を活用して I/O はすべてモック経由に統一** — 全統合テストで `createMockNotifier()` を `JusticePluginOptions.notifier` 経由で注入し、`calls`/`banners` を経路ごとに検証可能にする。
 - [x] **Step 6: Devcontainer 内で `bun run test tests/integration` を含む全検証コマンド実行**
-- [ ] **Step 7: Phase Base に向けた Draft PR を作成**
+- [x] **Step 7: Phase Base に向けた Draft PR を作成**
 
 ### Task 3: 最終検証 + Phase Base マージ準備
 
