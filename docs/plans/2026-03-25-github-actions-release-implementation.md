@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `package.json`
 
-**Step 1: パッケージ名と公開設定の更新**
+- [x] **Step 1: パッケージ名と公開設定の更新**
 `name` を `@yohi/justice` に変更し、`publishConfig` と `repository` を追加します。
 
 ```json
@@ -32,14 +32,14 @@
 }
 ```
 
-**Step 2: 変更の確認**
+- [x] **Step 2: 変更の確認**
 `cat package.json` で内容を確認します。
 
-**Step 3: コマンド実行**
+- [x] **Step 3: コマンド実行**
 Run: `bun run build` (ビルドが通ることを確認)
 Expected: `dist/` ディレクトリが生成される
 
-**Step 4: コミット**
+- [x] **Step 4: コミット**
 ```bash
 git add package.json
 git commit -m "chore: パッケージ名を @yohi/justice に変更し公開設定を追加"
@@ -52,7 +52,7 @@ git commit -m "chore: パッケージ名を @yohi/justice に変更し公開設�
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-**Step 1: CI ワークフローファイルの作成**
+- [x] **Step 1: CI ワークフローファイルの作成**
 `ubuntu-slim` ランナーを使用し、Lint、Typecheck、Test、Build を実行する設定を記述します。
 
 ```yaml
@@ -77,10 +77,10 @@ jobs:
       - run: bun run build
 ```
 
-**Step 2: ファイルの確認**
+- [x] **Step 2: ファイルの確認**
 `cat .github/workflows/ci.yml` で内容を確認します。
 
-**Step 3: コミット**
+- [x] **Step 3: コミット**
 ```bash
 git add .github/workflows/ci.yml
 git commit -m "ci: ubuntu-slim ランナーを使用した CI ワークフローを追加"
@@ -93,7 +93,7 @@ git commit -m "ci: ubuntu-slim ランナーを使用した CI ワークフロー
 **Files:**
 - Create: `.github/workflows/release.yml`
 
-**Step 1: リリースワークフローファイルの作成**
+- [x] **Step 1: リリースワークフローファイルの作成**
 `release-please-action@v4` を使用し、リリース作成時に自動的に GitHub Packages へ公開する設定を記述します。
 
 ```yaml
@@ -138,10 +138,10 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
 ```
 
-**Step 2: ファイルの確認**
+- [x] **Step 2: ファイルの確認**
 `cat .github/workflows/release.yml` で内容を確認します。
 
-**Step 3: コミット**
+- [x] **Step 3: コミット**
 ```bash
 git add .github/workflows/release.yml
 git commit -m "ci: release-please による自動リリースと公開のワークフローを追加"
