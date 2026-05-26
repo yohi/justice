@@ -399,7 +399,7 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 - [x] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。
 - [x] **Step 6: `src/index.ts` から Phase 1-4 で追加した全 export が含まれていることを最終確認**
 - [x] **Step 7: Devcontainer 内で全検証コマンド実行**
-- [ ] **Step 8: Phase Base に向けた Draft PR を作成**
+- [x] **Step 8: Phase Base に向けた Draft PR を作成**
 
 ### Task 2: 統合テスト
 
