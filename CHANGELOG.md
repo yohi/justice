@@ -26,6 +26,64 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.3.0](https://github.com/yohi/justice/compare/v2.2.1...v2.3.0) (2026-05-26)
+
+
+### Features
+
+* **bridge:** add PlanBridge.handlePostToolUse and merge responses in JusticePlugin ([3514761](https://github.com/yohi/justice/commit/3514761b62dc35f65925c47871ac187d635186de))
+* **core:** add PlanCompletionDetector for Atlas/Sisyphus/Prometheus guidance ([eaeca38](https://github.com/yohi/justice/commit/eaeca38a23d75d1eed0df308d69e972ab56f92be))
+* **core:** justice-invisible-advisor機能に向けたイベント型とプラグインロジックの拡張 ([49bb260](https://github.com/yohi/justice/commit/49bb260fd711f47a288693a8eb77fa22258ec702))
+* **core:** JusticeNotifier 基盤を追加 ([79d29e3](https://github.com/yohi/justice/commit/79d29e374e2ab0003e4ad460161a2714d9d99b34))
+* **core:** JusticeNotifier 基盤を追加 ([d730ed6](https://github.com/yohi/justice/commit/d730ed6f0f40727191e303bef85237e49c0bc462))
+* **core:** LearningExtractor Japanese marker + TaskFeedbackHandler agent tracking ([49cdbbd](https://github.com/yohi/justice/commit/49cdbbdc1f2b68f27f9da701d303d35e2ed5a083))
+* **core:** mergePostToolUseResponses for combining HookResponses ([220677c](https://github.com/yohi/justice/commit/220677c7d82f8602bedc564e388da44df3e66932))
+* **core:** mergePostToolUseResponses for combining HookResponses ([f58ad3c](https://github.com/yohi/justice/commit/f58ad3c1210ec491ebe0e77f28b0269c767d5f10))
+* **core:** persona-classifierにおけるsuccess_patternおよびfailure_gotchaのルーティング修正 ([354e45f](https://github.com/yohi/justice/commit/354e45f931dab21c06b89d9693f4589cc8f7a7ff))
+* **core:** PersonaClassifier を追加 ([3608db4](https://github.com/yohi/justice/commit/3608db47cb2e1fba2a72f28b8360bb951d22b0e3))
+* **core:** PersonaClassifier を追加 ([f2451b1](https://github.com/yohi/justice/commit/f2451b18b52a91d54058383d6cd30c19ef234df8))
+* **core:** Phase 2 Task 1 - WisdomEntry persona extension and AddOptions ([d57e00d](https://github.com/yohi/justice/commit/d57e00da3a7cf42505aa2856d75716f0dc4799ec))
+* **core:** PlanCompletionDetectorにA+Bハイブリッド検出機能を追加 ([d8cd879](https://github.com/yohi/justice/commit/d8cd879a62254d87000d63576f1bbb301edea3ba))
+* **core:** refactor WisdomStore to Map&lt;AgentId, WisdomEntry[]&gt; ([038a998](https://github.com/yohi/justice/commit/038a99822ec8e650fe6240a470ff66adba0a3125))
+* **core:** ReviewRejectionDetector を追加 ([2d35b7f](https://github.com/yohi/justice/commit/2d35b7fdf7cae4ccc8bd774160af13901eaaa236))
+* **core:** ReviewRejectionDetector を追加 ([564ee76](https://github.com/yohi/justice/commit/564ee76dc91a02ee45cd3b0cffd4ea1ca9bc3685))
+* **core:** TieredWisdomStore persona-aware formatForInjection ([447b6ab](https://github.com/yohi/justice/commit/447b6abfa9937e0a3f679942f9e9a15d5c9184fd))
+* **core:** レビュー拒否パターンの大文字小文字区別解除とサマリー切り詰め処理の改善 ([7f95039](https://github.com/yohi/justice/commit/7f95039b505b0a87b4dd21831b48827f7b56876f))
+* **learning:** add persona context and root-cause marker detection ([93dd221](https://github.com/yohi/justice/commit/93dd221781cc8e166a3b335371d7f9185dd52933))
+* **loop:** add recordReviewOutput and PivotDecision for architecture pivots ([cf3408a](https://github.com/yohi/justice/commit/cf3408a876dfbd369084f614d49203942c7426d1))
+* **phase4:** implement SDD native error handling gap fixes ([0b81cba](https://github.com/yohi/justice/commit/0b81cba2c2a41f6b9df43b99c9a189cd7242205f))
+* **plan-bridge:** implement Atlas dynamic guidance and Sisyphus Wisdom persistence ([c422dac](https://github.com/yohi/justice/commit/c422dac3bce0e4b2a098892e9f76bcf1740f6117))
+* **runtime:** add OpenCodeNotifier implementing JusticeNotifier interface ([0ffda05](https://github.com/yohi/justice/commit/0ffda05a5743fc63560e54cc7fbd970179c65b5a))
+* **runtime:** wire OpenCodeNotifier into adapter and plugin options ([08fcbf1](https://github.com/yohi/justice/commit/08fcbf16cf41cc832fd067ddf2d775d91690f136))
+* **wisdom:** add v1→v2 persistence migration tests ([13a14b3](https://github.com/yohi/justice/commit/13a14b3482843668ac14957d07a49fcef215018f))
+* **wisdom:** add v1→v2 persistence migration tests ([be08ede](https://github.com/yohi/justice/commit/be08ede7b550a817b51f0c1217de51e72bd4fe7e))
+* **wisdom:** propagate persona through TieredWisdomStore and auto-classify on add ([7442769](https://github.com/yohi/justice/commit/744276910b861544a0a44d8fd820b62d7301c605))
+* **wisdom:** restructure store by AgentId and add persona field to WisdomEntry ([cf371e1](https://github.com/yohi/justice/commit/cf371e1e3f77c9f8d6f881fe0e4f8526d4c16e86))
+
+
+### Bug Fixes
+
+* address 4 code review issues including memory leak and priority logic ([c677a51](https://github.com/yohi/justice/commit/c677a511fb2851fb255790f8128e1e571e48b522))
+* **bridge:** デバッグ抽出ゲートの厳密化、タスクID優先解決によるレースコンディション解消、およびエラー時の Prometheus 却下ストリーク保護 ([4e79f43](https://github.com/yohi/justice/commit/4e79f43ddb2ae0684f55cf10c92d05d3a12b021f))
+* **core,hooks:** コードレビュー指摘への対応およびフォーマットの適用 ([32d754a](https://github.com/yohi/justice/commit/32d754a7ac89e58b0a1351ed88db348bfb19c4d7))
+* **core:** design_error時のみルートコーズを抽出するように修正 ([c876e38](https://github.com/yohi/justice/commit/c876e3827dde90b0c3a086c88be2bea510292bdf))
+* **core:** LearningExtractorでのルート原因抽出時のnullチェックを改善 ([57282d3](https://github.com/yohi/justice/commit/57282d34d9642d7b9fb78dfd5d06479a8e24ee42))
+* **core:** PostToolUseイベントにおけるcallIdの伝搬とハンドリングを修正 ([80bb93f](https://github.com/yohi/justice/commit/80bb93fbaf646d8974d4221572633a428d2e0e7e))
+* **core:** spec-reviewerのペルソナ推論追加およびDockerfileのuseradd修正 ([b8275f3](https://github.com/yohi/justice/commit/b8275f33d066c474b5e41d2b2a187745a5b27b92))
+* **core:** v1からv2へのWisdomマイグレーション時におけるペルソナ自動判定の乖離を修正 ([eb82282](https://github.com/yohi/justice/commit/eb82282407f5c4051d99dfcdc953c4681ab26681))
+* **core:** 賢知フォーマットにおけるペルソナ別ヘッダーの制御を修正 ([9711388](https://github.com/yohi/justice/commit/97113888e81882032a439c69aa198ca99d45d824))
+* devcontainerユーザー作成を堅牢化 ([428b832](https://github.com/yohi/justice/commit/428b832b51f3add2325f75ab724a74a7e037d64a))
+* **hooks:** PlanBridgeでセッション完了入力を正しく削除するように修正 ([83b35db](https://github.com/yohi/justice/commit/83b35dbfb0599d60f45239da1a3f78db82b37c66))
+* **hooks:** セッション終了時の例外処理と完了後のキャッシュクリアを改善 ([a85b878](https://github.com/yohi/justice/commit/a85b87818940397958b501acc7c415a6b6182eda))
+* **justice-plugin:** mergePostToolUseResponsesでmodifiedPayloadを保持するように修正 ([9f20fe2](https://github.com/yohi/justice/commit/9f20fe2b48651aa41abf42b985ce922fb710b9dc))
+* **justice:** callIdのハンドリング修正およびhandleEventへの引数追加 ([516104d](https://github.com/yohi/justice/commit/516104de7610dc157adca7c6cb2d7594604484f2))
+* **learning-extractor:** 根本原因検出の正規表現を修正 ([95c22b1](https://github.com/yohi/justice/commit/95c22b1c6c310475a114ddab7ecd3663b275694a))
+* Phase5ペルソナ解決を一貫化 ([5abe63b](https://github.com/yohi/justice/commit/5abe63bbc03184894eeb2c4d7232b08fd46b0409))
+* Phase5レビュー指摘を反映 ([7572a27](https://github.com/yohi/justice/commit/7572a273359aae7a4b04c4166fe5b02abe8b48a5))
+* **plan-bridge:** getActiveTaskIdForSessionにおいてpendingタスクもアクティブ候補とするよう修正 ([ac4624b](https://github.com/yohi/justice/commit/ac4624b9bc46102d327187174b8eeda7fe643b4f))
+* 可視性の明示と dominant_override 衝突時のペルソナ乖離の解消 ([a5bfe4e](https://github.com/yohi/justice/commit/a5bfe4e840276b58f2faedc970a058c04967ca63))
+* 空配列時の loadSkills フォールバック対応 ([884cfa6](https://github.com/yohi/justice/commit/884cfa67531c9e8ce9267b4dc235e90ca2f4ea0a))
+
 ## [2.2.1](https://github.com/yohi/justice/compare/v2.2.0...v2.2.1) (2026-05-13)
 
 
