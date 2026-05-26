@@ -88,6 +88,30 @@ describe("LoopDetectionHandler", () => {
         "⚠️ **Error**: loop_detected: Applied identical fix 3 times",
       );
     });
+
+    it("uses the latest currentAgent after setActivePlan is called again for the same session", async () => {
+      const reader = createMockFileReader({ "plan.md": samplePlan });
+      const writer = createMockFileWriter();
+      const handler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
+
+      handler.setActivePlan("s-agent", "plan.md", "task-1", "hephaestus");
+      handler.setActivePlan("s-agent", "plan.md", "task-1", "sisyphus");
+
+      const response = await handler.handleEvent({
+        type: "Event",
+        sessionId: "s-agent",
+        payload: {
+          eventType: "loop-detector",
+          sessionId: "s-agent",
+          message: "Repeated failing edit",
+        },
+      });
+
+      expect(response.action).toBe("inject");
+      const history = handler.getTrialHistory("s-agent", "task-1");
+      expect(history).toHaveLength(1);
+      expect(history[0].agent).toBe("sisyphus");
+    });
   });
 
   describe("review rejection pivots", () => {

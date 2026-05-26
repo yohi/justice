@@ -394,11 +394,11 @@ Adapter 配線、統合テスト、最終検証。Phase 1〜4 の全 Task がマ
 
 - [x] **Step 1: テストを先行作成・更新** — `OpenCodeAdapter.ensureInitialized()` 内で `OpenCodeNotifier` が `client.app.log` を bind して構築され、`JusticePlugin` の `notifier` オプションに渡されることを assert。モック client で `log` 呼び出しが発生することを確認。
 - [x] **Step 2: `runtime/opencode-adapter.ts` を §7-6 通りに更新** — `const notifier = new OpenCodeNotifier(this.#init.client.app.log)` → `new JusticePlugin(localFs, localFs, { logger, onError, globalFileSystem, notifier })`。
-- [ ] **Step 3: `PlanBridge.handleMessage` で persona 別 wisdom 注入を有効化** — §5-4 通り、`delegation.context.agentId ?? "hephaestus"` を `tieredWisdomStore.getRelevant({ persona })` に渡す。
-- [ ] **Step 4: `PlanBridge.handlePreToolUse` の task() 経路でも同様の persona 別注入を適用** — `toolInput` から推定したペルソナ (`PlanCompletionDetector.lastInvokedPersona` と同等ロジック or 直接) で wisdom を絞り込み。
-- [ ] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。
-- [ ] **Step 6: `src/index.ts` から Phase 1-4 で追加した全 export が含まれていることを最終確認**
-- [ ] **Step 7: Devcontainer 内で全検証コマンド実行**
+- [x] **Step 3: `PlanBridge.handleMessage` で persona 別 wisdom 注入を有効化** — §5-4 通り、`delegation.context.agentId ?? "hephaestus"` を `tieredWisdomStore.getRelevant({ persona })` に渡す。
+- [x] **Step 4: `PlanBridge.handlePreToolUse` の task() 経路でも同様の persona 別注入を適用** — `toolInput` から推定したペルソナ (`PlanCompletionDetector.lastInvokedPersona` と同等ロジック or 直接) で wisdom を絞り込み。
+- [x] **Step 5: `LoopDetectionHandler.setActivePlan` で `currentAgent` 変更検知** — §5-4 通り、必要なら wisdom 再注入トリガに繋ぐ。
+- [x] **Step 6: `src/index.ts` から Phase 1-4 で追加した全 export が含まれていることを最終確認**
+- [x] **Step 7: Devcontainer 内で全検証コマンド実行**
 - [ ] **Step 8: Phase Base に向けた Draft PR を作成**
 
 ### Task 2: 統合テスト
