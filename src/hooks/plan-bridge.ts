@@ -264,8 +264,11 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // toolInput からスキルを抽出
-    const skillsVal = event.payload.toolInput.skills ?? event.payload.toolInput.loadSkills;
+    // toolInput からスキルを抽出 (空配列の場合は loadSkills にフォールバックする長さを意識した判定)
+    const rawSkills = event.payload.toolInput.skills;
+    const hasSkills = Array.isArray(rawSkills) && rawSkills.some((v) => typeof v === "string");
+    const skillsVal = hasSkills ? rawSkills : event.payload.toolInput.loadSkills;
+
     const toolInputSkills = Array.isArray(skillsVal)
       ? (skillsVal.filter((v): v is string => typeof v === "string") as string[])
       : [];
