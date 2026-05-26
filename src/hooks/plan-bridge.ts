@@ -620,7 +620,7 @@ export class PlanBridge {
       const planContent = await this.readPlanFile(activePlanPath);
       if (planContent === null) return undefined;
       const tasks = this.parser.parse(planContent);
-      const activeTask = tasks.find((t) => t.status === "in_progress");
+      const activeTask = tasks.find((t) => t.status === "in_progress" || t.status === "pending");
       return activeTask?.id;
     } catch {
       return undefined;
