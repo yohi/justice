@@ -79,6 +79,11 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D49 | tool Evidence rawOutput の kind 別保存ポリシー | D34（message 本文非永続化）と同原則を tool Evidence に適用。`test`/`build`/`lint`/`command`（コマンド実行系）は `rawOutput` を redact+truncation して保存（合否観測に必要）。`read`/検索/ファイル本文系ツール出力は **rawOutput 全文を保存せず** `rawOutputHash`（必須）＋最小 snippet＋kind 分類のみ（plan/design/code 本文の複製を遮断） | read/bash(cat)/grep 出力に plan/design/code 本文が混入し `.justice/events` が外部 SoT の複製になる（FR-001 非目的・INV-008）。redaction+truncation は secrets/path 向けでコンテンツ境界を守れず、D34 と非対称だった穴を解消（本レビュー指摘3） |
 | D50 | `justice_gate` の dry-run 化（DecisionRecord 非生成） | `justice_gate` は **dry-run 表示のみ**で DecisionRecord を **append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成。justice_gate は現 projection/Evidence への評価結果表示に留め canonical log・replay・KPI を変えない | §7.5 read-only 注記は state.json キャッシュ書込のみ許容と述べ DecisionRecord 追記を沈黙。照会が判定ログを変えれば read-only・replay・verdict 分布 KPI を汚す（本レビュー指摘4・INV-002） |
 | D51 | ReflectionEvent `planRef` の path 化 | `planRef` を `{ path, taskId }` に改め `path` は **workspace 相対パス必須・絶対パス禁止**（グローバル No Absolute Paths 準拠）。値は `PlanBridge`/`TaskFeedbackHandler` の `setActivePlan(sessionId, planPath)` 追跡済み実 path を記録し "plan.md" 固定を廃止 | 本プロジェクトは `docs/superpowers/specs/*.md` 等 複数 plan/design を持ち basename 固定では v2.5 で所有者が更新対象を復元不能（本レビュー指摘5・No Absolute Paths） |
+| D52 | tool Evidence 保存ポリシーの schema 化（D49 の正規化） | D49 の保存方針を **`toolOutputClass`（`"command_exec"` / `"file_content"`）軸**（`kind` と直交）として §5.3 に追加。`rawOutput`（command_exec・redact+truncation 保存）と **`rawOutputHash`（必須）＋`rawOutputSnippet`（任意・最小・redact後）**（file_content）を discriminated union で排他化。分類器（§5.3）に read/grep/glob/cat 等→`file_content` 分岐を追加 | D49 の決定が §5.3 スキーマへ未伝播で、`kind` enum・分類器に file-content 軸も `rawOutputHash`/`rawOutputSnippet` フィールドも無く、read 出力が rawOutput 全文保存され plan/design/code 本文を複製する（FR-001 非目的・本レビュー指摘1・INV-008） |
+| D53 | assistant 本文の role 相関モデル | 本文（part・role 無し）と role（`message.updated`）を結合する一時 projection **`messageRoleBuffer: messageID → { role, partIDs[], finalized }`** を observation-handler に定義。part 先行（到着順逆転）時は pending 保留→後続 `message.updated` で role 解決後に評価、role≠assistant は破棄、`finalized`/TTL で GC。declaredClaims 抽出は role=assistant 確定 part のみ（§6.1.1） | 本文と role が別イベントのため相関機構なしでは role=assistant 強制が不能でユーザー入力を declared 誤抽出し得た（本レビュー指摘2・FR-004/INV-004） |
+| D54 | Review Summary Artifact の正本・authorship 確定 | Review Summary は **projection-derived Artifact**（正本=`review_observed` レコード→review-aggregator→`state.json` projection→`justice_review` on-demand 表示・別ファイル永続なし・§5.7）。**v2.0 は Artifact に `authority` のみ保持し `authorship` は持たない**（観測集約に作成者契約概念が無い・from→to を持つ Handoff の v2.5 で拡張） | Review Summary の具体表現が state.json projection のみで正本/永続/authorship が曖昧だった（本レビュー指摘3・憲章 §8.3/FR-006） |
+| D55 | writerId の採番方式・文字種 | writerId を **`"w-" + crypto.randomUUID()`** で Runtime が plugin インスタンス起動時に採番。**文字種 `[A-Za-z0-9-]` に制限**（ファイル名 `<writerId>.jsonl`＋参照鍵 `{…,writerId,…}` 安全性・パストラバーサル防止）、予約語 `system`（D38）と区別、衝突確率は無視可能だが万一の既存ファイル衝突時は再採番（§5.1/§9.4） | 「1 物理ファイル=1 writer」構造保証が writerId 一意性に依存する一方、採番方式/衝突/文字種が未定義だった（本レビュー指摘4・INV-008/NFR 並行性） |
+| D56 | ObservationAgentId 型の定義 | Observation の `agentId` 値域を **`ObservationAgentId = AgentId / "system" / "unknown"`**（AgentId=atlas/hephaestus/sisyphus/prometheus）として Core に定義（`system`=予約 shard・D38、`unknown`=agent 解決不能）。**persona isolation / wisdom routing には `AgentId`（4 persona）のみ流し `system`/`unknown` は流さない**（wisdom namespace 非汚染）（§5.1） | envelope の agentId が system/unknown を含むが既存 AgentId（4 persona・wisdom 用）型と同名で型が曖昧だった（本レビュー指摘5・persona isolation） |
 
 ---
 
@@ -159,9 +164,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "schemaVersion": 1,
   "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
-  "agentId": "hephaestus",            // 取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）
+  "agentId": "hephaestus",            // 値域 ObservationAgentId=AgentId("atlas"|"hephaestus"|"sisyphus"|"prometheus")|"system"|"unknown"（D56）。取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）。persona isolation/wisdom routing には AgentId(4 persona) のみ流す（system/unknown 非流入・D56）
   "sessionId": "ses_...",
-  "writerId": "w-...",          // 必須: writer segment 識別子（Runtime 採番・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39）
+  "writerId": "w-3f2a9c4e",     // 必須: writer segment 識別子（Runtime が "w-"+crypto.randomUUID() で採番・文字種 [A-Za-z0-9-]・予約語 system と区別・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39/D55）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
   "recordType": "observation" | "decision" | "learning"
 }
@@ -238,8 +243,14 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 {
   "evidenceId": "ev-1",                        // 必須: record 内で一意（参照鍵 {shardId, sequence, evidenceId} の末尾・§5.4/D31）
   "kind": "test" | "build" | "lint" | "command" | "generic",
-  "command": "bun run test",
-  "rawOutput": "...stdout(+stderr統合)...",     // kind 別保存: command系=redact+truncation 保存 / read・検索・ファイル本文系=rawOutputHash＋最小snippet＋分類のみ（D49）
+  "toolOutputClass": "command_exec" | "file_content",  // 必須: 保存ポリシー判別子（kind と直交・D49/D52）
+  "command": "bun run test",                   // command_exec 系で有効（file_content では省略可）
+  // ── 出力保存は toolOutputClass による discriminated union（D49/D52・FR-001 非目的「本文を保持しない」）──
+  //   command_exec（bash/test/build/lint 等の実行系）→ "rawOutput" を保存（redact+truncation・§9.4）
+  //   file_content（read/grep/glob/cat 等のファイル本文・検索系）→ "rawOutput" を持たず "rawOutputHash"(必須)＋"rawOutputSnippet"(任意・最小・redact後) のみ（plan/design/code 本文の複製を遮断）
+  "rawOutput": "...stdout(+stderr統合)...",     // command_exec のみ
+  "rawOutputHash": "sha256:...",               // file_content のみ（必須）
+  "rawOutputSnippet": "...",                   // file_content のみ（任意・最小・redact後）
   "provenance": "observed" | "declared" | "derived" | "unknown",
   "interpretation": {                          // 省略可。存在時は常に derived
     "outcome": "pass" | "fail" | "unknown",
@@ -257,7 +268,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   - `unknown`: 出所不明
 - `exit_code` は独立フィールドを持たず `interpretation.outcome` に集約（API に無く derived 確定）。
 - **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。**task サマリ由来の合否主張も declared 扱いで PASS 非算入**（raw transcript が出力に含まれ観測できる場合のみ `derived` 昇格可・§5.8/D29）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
-- **kind 分類**: evidence-engine が `command` パターンで決定論的に判定（test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他→command/generic）。純粋関数（FF-002）。
+- **kind 分類 / toolOutputClass 分類**: evidence-engine が `toolName`/`command` パターンで決定論的に判定。**kind**: test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他のコマンド実行→command/generic。**toolOutputClass**: bash/test/build/lint 等のコマンド実行系→`command_exec`（rawOutput 保存）、read/grep/glob/cat 等のファイル本文・検索系→`file_content`（rawOutputHash＋snippet のみ・本文非保存・D49/D52）。いずれも純粋関数（FF-002）。
 
 ### 5.4 DecisionRecord（Justice の判定 = Verdict）
 
@@ -301,7 +312,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | Handoff | ⏸ v2.5 | FR-003 |
 | Release Report | ⏸ v2.5 | FR-007 Final Verifier |
 
-> **Artifact メタデータ（憲章 §8.3 準拠）**: Artifact は Evidence の `provenance` ではなく **`authorship`（誰が作成した契約・定義か）/ `authority`（どの権威に基づくか）** を持つ。v2.0 の各 Artifact は最低限 `authority` を保持する — **Gate Definition（`gate.yaml`）= `human_approved`**（人間が承認・コミット）、**Review Summary = `observed_review_output`**（観測されたレビュー出力の集約）。Evidence と Artifact の属性系を混同しない。
+> **Artifact メタデータ（憲章 §8.3 準拠）**: Artifact は Evidence の `provenance` ではなく **`authorship`（誰が作成した契約・定義か）/ `authority`（どの権威に基づくか）** を持つ。**v2.0 は各 Artifact に `authority` のみを保持し `authorship` は保持しない（D54）** — 観測集約には「作成者の契約」概念が無く、`gate.yaml` も人間コミットで作成者が自明なため。`authorship` は from→to の作成者契約が必須となる Handoff（v2.5・FR-003）導入時に拡張する。具体値: **Gate Definition（`gate.yaml`）= `authority:"human_approved"`**（人間が承認・コミット）、**Review Summary = `authority:"observed_review_output"`**（観測されたレビュー出力の集約）。Evidence と Artifact の属性系を混同しない。
+>
+> **Review Summary の正本と永続化（D54）**: Review Summary は **projection-derived Artifact** である — 正本は Observation Log の `review_observed` レコード（§5.2(d)）であり、review-aggregator（§7.6）がそれを集約した結果を `state.json` projection（§5.6・再構築可能な非 SoT キャッシュ）に保持し、`justice_review`（§7.5）が on-demand で表示する。**別ファイル（例 `.justice/artifacts/`）へは永続化しない**（event log が常に権威・§9.4）。`gate.yaml`（人間が著作する実ファイル Artifact）との非対称は、この「派生 vs 著作」の違いに由来する。
 
 ### 5.8 Task 相関と Evidence 窓（Finding 1 対応）
 
@@ -337,12 +350,14 @@ OpenCode: tool.execute.after 発火（全ツール）
 OpenCode: event(message.part.updated=TextPart.text) / plugin hook experimental.text.complete 発火（message.updated は role/finish の lifecycle・chat.message=UserMessage は assistant 申告源ではない・D41）
   → opencode-adapter が JusticePlugin.handleEvent({ type:"Message" }) へ送出
   → observation-handler.handleMessage():
-       1. assistant の TextPart 本文（role=assistant のみ対象）から合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
+       0. role 相関（D53）: messageRoleBuffer（messageID → { role, partIDs[], finalized }）を更新。message.updated で role/finalized を確定、part（{messageID,partID,text}）受信時は messageID で role を解決。role 未確定（到着順逆転）なら pending 保留→後続 message.updated で解決、role≠assistant 確定なら破棄（ユーザー入力の declared 誤抽出を防止）
+       1. role=assistant 確定 part の本文からのみ合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
        2. ObservationRecord{ kind:"message" } を構築（本文全文は保持せず textHash＋最小 textSnippet のみ・FR-001 非目的・D34）
        3. 合否主張があれば Evidence{ provenance:"declared" } を付与（観測裏付け無し）
        4. SecretPatternDetector で textSnippet / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
        5. observation-log-store.append(shard={agentId, sessionId, writerId}, record)   ← Runtime I/O
   → declared は L0 advisory 入力限定（L1+ deny には不使用・FF-007）
+  → messageRoleBuffer は finalized 後 or TTL（既定: セッション終了 / N 分無更新）で GC（メモリ肥大防止・D53）
 ```
 
 - `declared` Evidence の**主な**生成経路はこの Message 観測である（tool 観測由来は observed/derived）。**加えて、task PostToolUse 出力サマリ（サブエージェント結果サマリ）由来の合否主張も `declared` として生成する（§5.8/§6.5/D29）。** 抽出ロジック（メッセージ／サマリ → 合否主張）は Core 純粋関数（FF-002）。
@@ -541,7 +556,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 
 | 領域 | v2.0 方針 |
 |---|---|
-| 並行性 | **shard 鍵=`{agentId, sessionId, writerId}`（per-writer segment）**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D30/D39）の JSONL シャード・active＋archive 全 segment 読取マージ（D40）。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**`writerId` を Runtime が plugin インスタンス起動時に採番し「1 物理ファイル=1 writer」を構造保証**するため、in-process queue の直列化が常に有効で、複数プロセス/セッションが同一ファイルへ並行 append する経路自体が存在しない（「単一ファイル並行 append 禁止」=憲章 NFR を構造的に充足）。これにより「同一 session=単一プロセス」前提に依存せず、read 側は全 writer segment を merge（FF-004 不変） |
+| 並行性 | **shard 鍵=`{agentId, sessionId, writerId}`（per-writer segment）**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D30/D39）の JSONL シャード・active＋archive 全 segment 読取マージ（D40）。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**`writerId` を Runtime が plugin インスタンス起動時に `"w-"+crypto.randomUUID()` で採番（文字種 `[A-Za-z0-9-]`・予約語 `system` と区別・衝突確率は無視可能で万一の既存ファイル衝突時は再採番・D55）し「1 物理ファイル=1 writer」を構造保証**するため、in-process queue の直列化が常に有効で、複数プロセス/セッションが同一ファイルへ並行 append する経路自体が存在しない（「単一ファイル並行 append 禁止」=憲章 NFR を構造的に充足）。これにより「同一 session=単一プロセス」前提に依存せず、read 側は全 writer segment を merge（FF-004 不変） |
 | スキーマ versioning | 全 `.justice/` に `schemaVersion`・`WisdomPersistence` 同様の移行戦略 |
 | 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/archive/events/<agentId>/<sessionId>/<writerId>.jsonl`（live shard 名前空間と物理分離・D40。**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。**憲章 NFR「無限増大を防ぐ」の総量上限は archive 単独では未達のため v2.0 では deferred と明記する（D36・§12 限界-4）**: rotation は active シャードのサイズ/年齢を抑制するが総量（active+archive）は単調増加し、物理削減は下記 prune 解禁後（v2.5+）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard（writer segment）の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
 | セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合・**kind 別保存ポリシー D49**: `test`/`build`/`lint`/`command` は redact+truncation して保存、`read`/検索/ファイル本文系は rawOutput 全文を保存せず `rawOutputHash`＋最小 snippet＋kind 分類のみ＝plan/design/code 本文の複製を遮断・FR-001 非目的）、(2) `message` の `textSnippet`・`declaredClaims`（**本文全文は永続化しない**・FR-001 非目的・D34）、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
