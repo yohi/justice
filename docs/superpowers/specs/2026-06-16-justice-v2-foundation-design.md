@@ -6,7 +6,7 @@
 |------|----|
 | 作成日 | 2026-06-16 |
 | ステータス | Design（Accepted・実装計画化待ち） |
-| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに部分準拠。ただし一部は意図的に部分縮退/deferred: ①FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5、②FR-002 の OmO agents awareness は v2.5 FR-003 Handoff へ deferred・D37/D43、③FR-005 の Acceptance Criteria は v2.5+ Feature Gate へ deferred・D35/D43） |
+| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに部分準拠。ただし一部は意図的に部分縮退/deferred: ①FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5、②FR-002 の OmO agents awareness は v2.5 FR-003 Handoff へ deferred・D37/D43、③FR-005 の Acceptance Criteria は v2.5+ Feature Gate へ deferred・D35/D43、④Artifact の `authorship` は v2.0 で保持せず `authority` のみ＝憲章 §8.3 属性体系の明示的縮退・v2.5 FR-003 Handoff で拡張・D54/D17改訂） |
 | 起点 | `@yohi/justice` v2.3.0（Phase 9 完了・563 tests passing） |
 | 上位文書 | [Architecture Charter v3.0](../../2026-06-16-justice-v2-v3-requirements.md)（Accepted / Frozen） |
 | 関連スキル | `superpowers/brainstorming`（本書作成）→ `superpowers/writing-plans`（次工程） |
@@ -44,7 +44,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D14 | レコード間参照の同一性 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}` 複合参照**化（shardId=`{agentId, sessionId, writerId}`・D39）。`sequence` 単体は shard（writer segment）内一意のみ。`evidenceId` で record 内の特定 Evidence/claim/item を一意化（D31 で改訂） | shard 横断マージ時の参照曖昧性とレコード内多根拠の曖昧性を排除（レビュー指摘 R1 / 第4R 指摘3） |
 | D15 | ReflectionEvent のスキーマ化 | **`ObservationRecord{kind:"reflection"}`** を追加し payload を定義。憲章の3レコード型（Observation/Decision/Learning）は維持 | DEBT-001 seam の直列化先を確定（レビュー指摘 R2） |
 | D16 | Message 観測経路 | assistant 自己申告の本文は **`message.part.updated`（TextPart.text）または plugin hook `experimental.text.complete`** から取得（`message.updated`=`EventMessageUpdated` は `info:Message` のみで本文を持たず role/finish の lifecycle 用、`chat.message` は `UserMessage`=ユーザー入力で assistant 申告源ではない）→ `ObservationRecord{kind:"message"}` → `declared` Evidence のフロー（§4.2/§5.2/§6.1.1・D41） | declared の生成元と具体 event payload mapping を確定（レビュー指摘 R3 / 本レビュー指摘5） |
-| D17 | Artifact メタデータ | Artifact（`gate.yaml` / Review Summary）に **authorship/authority** を付与（Evidence の provenance と対比） | 憲章 §8.3 と整合（レビュー指摘 R4） |
+| D17 | Artifact メタデータ | Artifact（`gate.yaml` / Review Summary）に **`authority`** を付与（Evidence の provenance と対比）。**v2.0 は `authorship` を保持しない（D54 で改訂）**＝authorship は from→to を持つ Handoff（v2.5・FR-003）導入時に拡張 | 憲章 §8.3 の属性体系（authorship/authority）と整合。v2.0 の authorship 省略は §0 逸脱リスト・D54 に明示（レビュー指摘 R4／本レビュー指摘3） |
 | D18 | shard 横断 replay の全順序化 | projection マージのソート鍵を `timestamp` → `shardId` → `sequence` の**全順序**にする（shardId=`{agentId, sessionId, writerId}`・D39）。`sequence` は shard（writer segment）内一意のため shardId で衝突を排除（D30/D39 で shardId 化） | 同 timestamp/同 sequence の shard 横断衝突で順序が未定義になる穴を解消（2026-06-16 レビュー第2R 指摘1・INV-009/FF-004） |
 | D19 | retention は archive 限定 | v2.0 は rotation=archive（移送）のみ。物理 prune（削除）は canonical snapshot/checkpoint イベント定義後（v2.5+）に解禁 | 「event log が常に権威・常に再構築可能」(§9.4) との矛盾を解消（2026-06-16 レビュー第2R 指摘2） |
 | D20 | Task Gate の Evidence 保証範囲 | 評価対象を親セッション観測 + task PostToolUse 出力からの **`declared`（PASS 非算入）** に限定と明記（D29 で改訂: 旧 `derived` は raw transcript 観測時のみ）。サブエージェント内 `observed` の厳密相関は v2.5 Handoff。委譲時 WARN 優勢を KPI/DoD に明記 | gate が subagent 実行結果をほぼ拾えず常時 WARN 化する懸念に対応（2026-06-16 レビュー第2R 指摘3） |
@@ -71,9 +71,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D41 | assistant 自己申告の event mapping 確定 | declared 経路の入力源を確定: 本文は **`message.part.updated`（`EventMessagePartUpdated`→`TextPart.text`）** または plugin hook **`experimental.text.complete`（`{messageID, partID}→{text}`）** から取得し、`message.updated`（`EventMessageUpdated.properties.info: Message`）は role/finish の lifecycle 確認に用いる。**`chat.message` は `UserMessage`（ユーザー入力）であり assistant 申告源には使わない** | `@opencode-ai/plugin` 型定義上 `chat.message`=UserMessage・`AssistantMessage` に本文フィールド無し（本文は Part 側）であり、`chat.message`/`message.updated` 等価扱いは declared 経路を空振りさせる（本レビュー指摘5） |
 | D42 | sequence 採番と参照生成の時間差解決 | `sequence` は append queue 内採番のため抽出時点で未確定。(a) **同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `sequence` を**省略可とし `evidenceId` のみで自レコード相対参照**、(b) **クロスレコード参照**（先行 observed への `derivedFrom`/`evidenceRefs`）は projection で採番済みの `{shardId, sequence, evidenceId}` を解決して埋める。Core は採番に関与せず projection 済み Evidence のみ参照 | 参照鍵が `sequence` を要求する一方 sequence は I/O 側採番のため、純粋 Core が抽出時に参照を作れない矛盾を解消（本レビュー指摘6・INV-009/Traceability 前提） |
 | D43 | v2.0 スコープ表現の精緻化と UI 表記残件 | D2 の「厳密準拠」を**明示的部分縮退付き準拠**へ緩和し、メタ情報（§0）逸脱リストに FR-002-agents（→v2.5・D37）と FR-005-AC（→v2.5・D35）を `exit_code`（D5）と並記。§11 トレーサビリティ表の `/justice-*` 表記を `justice_*` custom tool（D13/D22）へ統一 | 詳細スコープ表（§10.1）は分割済みだがサマリ見出しが完成度を過大表示し、UI 名統一後も一部 `/justice-*` が残存（本レビュー指摘1/2/7） |
-| D44 | §3 Phase 0 表の Message 観測主軸を確定版へ修正 | §3 能力表（event hook 行）の「v2.0 は message.updated 主軸」を **`message.part.updated`/`experimental.text.complete`（assistant 本文源）＋ `message.updated`（role/finish lifecycle）＋ session.error ＋ tool.execute** へ修正し D16/D41 の確定 binding と一致させる。憲章 §9 OpenCode Hooks の `message.updated`/`chat.message` 列挙との差分は **Phase 0 実測（§3・`@opencode-ai/plugin` 型定義調査）に基づく binding correction** であり、INV/ADR/Quality Protocol 不変更のため §16.3 凍結ガバナンス対象外（§4.5 互換的詳細化注記と同型） | §3 サマリが D16/D41 確定前の旧表記のまま残り、declared の本文取得源（`message.part.updated`/`experimental.text.complete`）を欠いて実装者のフック配線を誤認させ得た（本レビュー指摘2） |
+| D44 | §3 Phase 0 表の Message 観測主軸を確定版へ修正 | §3 能力表（event hook 行）の「v2.0 は message.updated 主軸」を **`message.part.updated`/`experimental.text.complete`（assistant 本文源）＋ `message.updated`（role/finish lifecycle）＋ session.error ＋ tool.execute** へ修正し D16/D41 の確定 binding と一致させる。憲章 §9 OpenCode Hooks の `message.updated`/`chat.message` 列挙との差分は **Phase 0 実測（§3・`@opencode-ai/plugin` 型定義調査）に基づく binding correction** であり、**INV/ADR/Quality Protocol 自体は不変更だが Requirement レベルの hook リスト訂正を含むため、「§16.3 対象外」とは自己認定せず D58 のとおり CODEOWNERS 追認対象とする（§4.5 と同じ扱い）** | §3 サマリが D16/D41 確定前の旧表記のまま残り、declared の本文取得源（`message.part.updated`/`experimental.text.complete`）を欠いて実装者のフック配線を誤認させ得た（本レビュー指摘2） |
 | D45 | `/justice-*` slash alias の実現可能性を未確定化 | §7.7 の「inject で**提供可能**」を訂正。`command.execute.before` は**登録/短絡(cancel) API は無いが `output.parts`(Part[]) 注入面は持つ**（`tool.execute.before` の `output.args` と同型）。よって正確には「読取専用」ではなく**「注入面あり・反映は未実証」**。反映可否の実証までは実現可能性を未確定とし、既定は `justice_*` custom tool 名のみ（slash 登録 API は無い） | §3 の「読取専用」表記（「登録・短絡不可の受信」の意）が型定義（`output:{parts:Part[]}` の注入面あり）と不一致だった。slash alias は元来 stretch（D13/D22）で設計根幹は不変。注入面の存在と反映未実証を正確化（本レビュー指摘 I2） |
-| D46 | FF-008 の位置づけ明確化（slice-local） | FF-008 を **v2.0 slice-local fitness check（既存 INV-004 の検証強化）** と明記。憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではなく、新規 INV/ADR/Quality Protocol 変更を伴わないため §16.3 ガバナンス（2 approvals/CODEOWNERS）対象外（§4.5 互換的詳細化注記と同型）。憲章正本へ昇格させる場合は §16.3 手続きを経る | 凍結憲章は FF-001〜007 のみ。設計が「§16.1」見出し下で FF-008 を追加し DoD で必須化していたが、憲章拡張か slice-local かが曖昧だった（本レビュー指摘4） |
+| D46 | FF-008 の位置づけ明確化（slice-local） | FF-008 を **v2.0 slice-local fitness check（既存 INV-004 の検証強化）** と明記。憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではなく、新規 INV/ADR/Quality Protocol 変更を伴わないため §16.3 ガバナンス（2 approvals/CODEOWNERS）対象外（D58 で FF-008 は slice-local fitness として「対象外で据置」と明記。CODEOWNERS 追認対象の §4.5/D44/D5 とは区別される）。憲章正本へ昇格させる場合は §16.3 手続きを経る | 凍結憲章は FF-001〜007 のみ。設計が「§16.1」見出し下で FF-008 を追加し DoD で必須化していたが、憲章拡張か slice-local かが曖昧だった（本レビュー指摘4） |
 | D47 | L0 advisory の PostToolUse 注入 surface（保証=notifier・output.output は要実証） | `tool.execute.after` は注入専用フィールド（parts/context）を持たず `output:{title,output,metadata}` のみ、かつ現 adapter は PostToolUse 戻り値を破棄する。advisory surface を**保証度で2段に分けて定義**: **(保証) (2) `JusticeNotifier`（`client.app.log`）でバナー送出**＝型上確実なチャネル。**(best-effort・要実証) (1) Runtime が可変 `output.output` 末尾へ `formatBanner` を追記**＝モデル文脈/ユーザー表示への反映は型定義に保証明記が無く Phase 0 スパイク（§3）で実証するまで断定しない（D45 の「未確認は未確認」基準を水平適用）。(3) on-demand `justice_gate` 表示。Core は `HookResponse{action:"inject"}` を返し adapter（拡張）が (1)(2) に適用（PreToolUse の prompt mutation と対称だが、Pre=実行前 args 消費が自明なのに対し Post=実行後 output の文脈反映は別問題） | `tool.execute.after`=`{title,output,metadata}`・PostToolUse 戻り値破棄（`onToolExecuteAfter`）・`output:{readonly output}` の readonly 撤廃と戻り値捕捉が (1) の前提。`experimental.session.compacting` と異なり反映明記の JSDoc が無い。中核 advisory の保証は notifier、output.output は実証後に確定（本レビュー指摘 C1・D45 と同基準） |
 | D48 | 全ツール観測 hook からの agentId 取得経路 | `tool.execute.before/after` の input は `{tool,sessionID,callID,args}` で agent を持たないため、Runtime が `chat.message`（`agent?`）/`chat.params`（`agent`）観測で `sessionID→agentId` マップを構築し tool 観測時に sessionID で解決。未解決時は予約 shard `{system,system}`（D38）または `agentId:"unknown"` へフォールバック。OpenCode agent 名（自由文字列）→ Justice `AgentId`（atlas/hephaestus/sisyphus/prometheus）の写像を Core に定義し未知は `unknown` | tool hook に agent 不在（`@opencode-ai/plugin` 型定義）。agentId 必須 shard（D39）・persona isolation・Evidence 帰属が実装者依存になる穴。`chat.*` に agent が実在し解決可能（本レビュー指摘2・FR-001） |
 | D49 | tool Evidence rawOutput の kind 別保存ポリシー | D34（message 本文非永続化）と同原則を tool Evidence に適用。`test`/`build`/`lint`/`command`（コマンド実行系）は `rawOutput` を redact+truncation して保存（合否観測に必要）。`read`/検索/ファイル本文系ツール出力は **rawOutput 全文を保存せず** `rawOutputHash`（必須）＋最小 snippet＋kind 分類のみ（plan/design/code 本文の複製を遮断） | read/bash(cat)/grep 出力に plan/design/code 本文が混入し `.justice/events` が外部 SoT の複製になる（FR-001 非目的・INV-008）。redaction+truncation は secrets/path 向けでコンテンツ境界を守れず、D34 と非対称だった穴を解消（本レビュー指摘3） |
@@ -86,6 +86,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D56 | ObservationAgentId 型の定義 | Observation の `agentId` 値域を **`ObservationAgentId = AgentId / "system" / "unknown"`**（AgentId=atlas/hephaestus/sisyphus/prometheus）として Core に定義（`system`=予約 shard・D38、`unknown`=agent 解決不能）。**persona isolation / wisdom routing には `AgentId`（4 persona）のみ流し `system`/`unknown` は流さない**（wisdom namespace 非汚染）（§5.1） | envelope の agentId が system/unknown を含むが既存 AgentId（4 persona・wisdom 用）型と同名で型が曖昧だった（本レビュー指摘5・persona isolation） |
 | D57 | review severity の決定論的導出 | severity は **語彙ベースの決定論的分類器**（凍結 RegExp・critical>major>minor 順位評価・一致無しは既定 minor）で導出し、現 `ReviewRejectionSignal`={matched,excerpts,summary} に新規付与（§7.6）。`itemKey`=severity＋正規化要約＋location の決定的合成で同一論点を安定化（D32 の前提）。AI 動的生成はしない（§11 V3-06） | 現検出器に severity 分類が無く（`review-rejection-detector.ts`）、`review_observed.items[].severity` 必須・itemKey 導出（D31）・解決規則（D32）が severity 依存のため、導出アルゴリズム未定義だと itemKey 不安定化→解決判定が破綻する（本レビュー指摘 I1・FR-006） |
 | D58 | Phase 0 由来の憲章訂正を CODEOWNERS 追認へ | hook リスト訂正（D44）・FR-001 保存パス詳細化（§4.5）・FR-004 exit_code の `derived` 縮退（D5/限界-2）は **Requirement レベルの実質変更/訂正**を含むため、設計側の「§16.3 対象外」自己認定を撤回し、**1 本の ADR にまとめ CODEOWNERS 追認**を得る（軽量可）。FF-008（D46）は slice-local fitness のため対象外で据置 | 凍結憲章（§16.3）の整合性。設計が逸脱を「互換的詳細化＝対象外」と自己認定し続けると凍結が形骸化する。各論の技術判断は妥当だが、対象外判断自体を憲章オーナーが追認する形にする（本レビュー指摘 I3・§16.3） |
+| D59 | Evidence の源泉判別（sourceClass union） | Evidence を **`sourceClass`（`"tool_output"` / `"declared_claim"`）の discriminated union**化。`tool_output`（ツール実行/ファイル本文の観測系）のみ `toolOutputClass`（`command_exec` / `file_content`・D52）＋ `rawOutput` / `rawOutputHash` / `rawOutputSnippet` を持つ。`declared_claim`（message 由来＋ task サマリ由来の自己申告）は `toolOutputClass` / `rawOutput*` を**持たず**、`declaredFrom`（`message` / `task_summary`）＋ `claim{claimKind, outcome}` ＋任意 `claimRef` を持つ（provenance は必ず `declared`・PASS 非算入・D24/D29/FF-008） | §5.3 が `toolOutputClass` を必須化し rawOutput/rawOutputHash union を前提するため、message（§5.2(b)）/ task サマリ（§5.8）由来の declared Evidence が無理な `toolOutputClass` 付与や空 `rawOutputHash` を強制され provenance/gate の型安全性が崩れる穴を解消（本レビュー指摘1・INV-004/FF-008） |
 
 ---
 
@@ -155,7 +156,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   wisdom.json              # 既存（不変）
 ```
 
-> **憲章保存先パスとの関係（互換的詳細化）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol を変更しない（凍結ガバナンス §16.3 の対象外）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
+> **憲章保存先パスとの関係（互換的詳細化＋D58 追認）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol 自体は変更しない。ただし FR-001 保存先パスの詳細化は Requirement レベルの実質的詳細化を含むため、**「§16.3 凍結ガバナンスの対象外」とは自己認定せず、D58 のとおり 1 本の ADR にまとめ CODEOWNERS 追認を得る**（軽量追認・§13 次工程 I3/D58）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
 
 ---
 
@@ -201,7 +202,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "textSnippet":"...",         // 任意: declaredClaims 文脈の最小スニペット（redact＋truncation 後）
   "declaredClaims":[           // 任意(0..n): 抽出した自己申告
     { "claimKind":"test"|"build"|"lint"|"generic", "outcome":"pass"|"fail"|"unknown" } ],
-  "evidence":{ /* §5.3, provenance:"declared" */ } }  // declaredClaims 存在時のみ付与
+  "evidence":{ /* §5.3, sourceClass:"declared_claim", provenance:"declared", declaredFrom:"message" */ } }  // declaredClaims 存在時のみ付与（D59）
 
 // (c) skill_invoked — tool 観測から derive（FR-002）
 { "...envelope":"...", "recordType":"observation", "kind":"skill_invoked",
@@ -247,16 +248,26 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 {
   "evidenceId": "ev-1",                        // 必須: record 内で一意（参照鍵 {shardId, sequence, evidenceId} の末尾・§5.4/D31）
   "kind": "test" | "build" | "lint" | "command" | "generic",
-  "toolOutputClass": "command_exec" | "file_content",  // 必須: 保存ポリシー判別子（kind と直交・D49/D52）
+  "sourceClass": "tool_output" | "declared_claim",     // 必須: Evidence 源泉の判別子（discriminated union の判別子・D59・本レビュー指摘1）
+  "provenance": "observed" | "declared" | "derived" | "unknown",
+
+  // ══ (A) sourceClass:"tool_output" — ツール実行/ファイル本文の観測（provenance: observed/derived）。下記フィールドは tool_output 時のみ ══
+  "toolOutputClass": "command_exec" | "file_content",  // tool_output 時のみ必須: 保存ポリシー判別子（kind と直交・D49/D52）
   "command": "bun run test",                   // command_exec 系で有効（file_content では省略可）
   // ── 出力保存は toolOutputClass による discriminated union（D49/D52・FR-001 非目的「本文を保持しない」）──
   //   command_exec（bash/test/build/lint 等の実行系）→ "rawOutput" を保存（redact+truncation・§9.4）
   //   file_content（read/grep/glob/cat 等のファイル本文・検索系）→ "rawOutput" を持たず "rawOutputHash"(必須)＋"rawOutputSnippet"(任意・最小・redact後) のみ（plan/design/code 本文の複製を遮断）
-  "rawOutput": "...stdout(+stderr統合)...",     // command_exec のみ
-  "rawOutputHash": "sha256:...",               // file_content のみ（必須）
-  "rawOutputSnippet": "...",                   // file_content のみ（任意・最小・redact後）
-  "provenance": "observed" | "declared" | "derived" | "unknown",
-  "interpretation": {                          // 省略可。存在時は常に derived
+  "rawOutput": "...stdout(+stderr統合)...",     // tool_output && command_exec のみ
+  "rawOutputHash": "sha256:...",               // tool_output && file_content のみ（必須）
+  "rawOutputSnippet": "...",                   // tool_output && file_content のみ（任意・最小・redact後）
+
+  // ══ (B) sourceClass:"declared_claim" — message/task サマリ由来の自己申告（provenance は必ず "declared"）。toolOutputClass/rawOutput* は持たない（D59・本レビュー指摘1）══
+  "declaredFrom": "message" | "task_summary",  // declared_claim 時のみ必須: 申告の出所（§5.2(b)/§5.8/D29）
+  "claim": { "claimKind": "test" | "build" | "lint" | "generic", "outcome": "pass" | "fail" | "unknown" },  // declared_claim 時のみ必須: 抽出した合否主張
+  "claimRef": { "agentId": "...", "sessionId": "...", "writerId": "...", "sequence": 0, "evidenceId": "...", "claimIndex": 0 },  // 任意: 申告元 message.declaredClaims[claimIndex] / task サマリへの複合参照（§5.2(b)/D31・監査用。declared は PASS 非算入）
+
+  // ══ interpretation は tool_output(observed) からの派生時のみ。declared_claim は interpretation を持たない（derived 起源は observed 限定・D29）══
+  "interpretation": {                          // 省略可。存在時は常に derived（起源は observed の tool_output のみ）
     "outcome": "pass" | "fail" | "unknown",
     "basis": "parsed_output" | "metadata_error",
     "provenance": "derived",
@@ -272,7 +283,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   - `unknown`: 出所不明
 - `exit_code` は独立フィールドを持たず `interpretation.outcome` に集約（API に無く derived 確定）。
 - **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。**task サマリ由来の合否主張も declared 扱いで PASS 非算入**（raw transcript が出力に含まれ観測できる場合のみ `derived` 昇格可・§5.8/D29）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
-- **kind 分類 / toolOutputClass 分類**: evidence-engine が `toolName`/`command` パターンで決定論的に判定。**kind**: test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他のコマンド実行→command/generic。**toolOutputClass**: bash/test/build/lint 等のコマンド実行系→`command_exec`（rawOutput 保存）、read/grep/glob/cat 等のファイル本文・検索系→`file_content`（rawOutputHash＋snippet のみ・本文非保存・D49/D52）。いずれも純粋関数（FF-002）。
+- **sourceClass / kind / toolOutputClass 分類**: evidence-engine が決定論的に判定。**sourceClass**: tool 観測（`tool.execute.after`）由来→`tool_output`、message/task サマリ由来の自己申告→`declared_claim`（D59）。**kind**: test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他のコマンド実行→command/generic。**toolOutputClass**（`tool_output` 時のみ）: bash/test/build/lint 等のコマンド実行系→`command_exec`（rawOutput 保存）、read/grep/glob/cat 等のファイル本文・検索系→`file_content`（rawOutputHash＋snippet のみ・本文非保存・D49/D52）。`declared_claim` は toolOutputClass/rawOutput* を持たない。いずれも純粋関数（FF-002）。
 - **INV-004 の字義整合（M4）**: 憲章 INV-004「observed/derived しか Evidence にしない」と本設計が `provenance:"declared"` を**記録**することの見かけの差は、**「declared の記録 ≠ 権威 Evidence 扱い」**で解消する。declared は監査可視性のため記録するが、gate 充足（PASS）・L1+ deny の**権威 Evidence には算入しない**（観測のみが PASS を生む・D24/D29/FF-007/FF-008）。憲章 §8.2 も declared を provenance 値として定義しており、本設計は用途を制限しているため整合する。
 
 ### 5.4 DecisionRecord（Justice の判定 = Verdict）
@@ -318,6 +329,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | Release Report | ⏸ v2.5 | FR-007 Final Verifier |
 
 > **Artifact メタデータ（憲章 §8.3 準拠）**: Artifact は Evidence の `provenance` ではなく **`authorship`（誰が作成した契約・定義か）/ `authority`（どの権威に基づくか）** を持つ。**v2.0 は各 Artifact に `authority` のみを保持し `authorship` は保持しない（D54）** — 観測集約には「作成者の契約」概念が無く、`gate.yaml` も人間コミットで作成者が自明なため。`authorship` は from→to の作成者契約が必須となる Handoff（v2.5・FR-003）導入時に拡張する。具体値: **Gate Definition（`gate.yaml`）= `authority:"human_approved"`**（人間が承認・コミット）、**Review Summary = `authority:"observed_review_output"`**（観測されたレビュー出力の集約）。Evidence と Artifact の属性系を混同しない。
+> なお、v2.0 の `authorship` 非保持は憲章 §8.3 属性体系の**明示的縮退**であり、§0 逸脱リスト（④）・D54・D17（改訂）に逸脱として記録する（FR-002/FR-005 の deferred と同じ統制下に置く・本レビュー指摘3）。
 >
 > **Review Summary の正本と永続化（D54）**: Review Summary は **projection-derived Artifact** である — 正本は Observation Log の `review_observed` レコード（§5.2(d)）であり、review-aggregator（§7.6）がそれを集約した結果を `state.json` projection（§5.6・再構築可能な非 SoT キャッシュ）に保持し、`justice_review`（§7.5）が on-demand で表示する。**別ファイル（例 `.justice/artifacts/`）へは永続化しない**（event log が常に権威・§9.4）。`gate.yaml`（人間が著作する実ファイル Artifact）との非対称は、この「派生 vs 著作」の違いに由来する。
 
@@ -542,7 +554,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 
 **FF-005 の扱い（D7・M2 精緻化）**: 「新 spine は plan.md に書かない」をアサートする。**実ディスク書込は `this.fileWriter.writeFile()` 呼出箇所**＝`src/hooks/task-feedback.ts`（成功時✅: `updateCheckbox` 適用後の writeFile）と `src/hooks/loop-handler.ts`（error-note: `appendErrorNote` 適用後の writeFile）に限られ、**allowlist はこの writeFile 呼出箇所を対象**とする。`PlanParser.updateCheckbox`/`appendErrorNote` は文字列を返す純粋関数で I/O せず書込元ではない（allowlist 対象は「pure 変換」ではなく「I/O 実行点」）。新規違反はブロックし、v2.5 で allowlist を空にして全域アサートへ移行。
 
-**FF-008 の扱い（D46）**: FF-008 は本 v2.0 スライスが追加する **slice-local fitness check**（既存 INV-004 の検証強化）であり、憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではない。新規 INV/ADR/Quality Protocol の変更を伴わないため §16.3 ガバナンス（2 approvals / CODEOWNERS）の対象外（§4.5 の互換的詳細化注記と同型）。将来 FF-008 を憲章正本へ昇格させる場合は §16.3 手続きを経る。
+**FF-008 の扱い（D46）**: FF-008 は本 v2.0 スライスが追加する **slice-local fitness check**（既存 INV-004 の検証強化）であり、憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではない。新規 INV/ADR/Quality Protocol の変更を伴わないため §16.3 ガバナンス（2 approvals / CODEOWNERS）の対象外（D58 が FF-008 を slice-local fitness として「対象外で据置」と明記。Requirement レベルの訂正を含み CODEOWNERS 追認対象となる §4.5（FR-001 保存パス）/D44（hook リスト）/D5（exit_code）とは区別される）。将来 FF-008 を憲章正本へ昇格させる場合は §16.3 手続きを経る。
 
 ### 9.2 Invariant ↔ FF ↔ Test マトリクス（§16.2）
 
