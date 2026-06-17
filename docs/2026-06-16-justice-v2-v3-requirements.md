@@ -280,7 +280,7 @@ Canonical Observation & Decision Log（基盤・追記専用）
   system.jsonl      … システムイベント
 ```
 
-読み取り時に `timestamp` / `sequence` でマージして state を再構築する（projection）。単一ファイルへの並行 append は禁止（§13 NFR）。
+読み取り時に `timestamp` → `agentId` → `sequence` の**安定な全順序**でマージして state を再構築する（projection）。`sequence` は shard（`<agentId>.jsonl`）内でのみ一意のため、同一 `timestamp` の複数エージェント事象でも `agentId` を tie-breaker に含めることで決定論的な replay を保証する（INV-009）。単一ファイルへの並行 append は禁止（§13 NFR）。
 
 **記録の3種別（Observation → Decision → Learning）**: 本ログは3種のレコードを収容する — **Observation Record**（観測した事実）、**Decision Record**（Justice が下した verdict）、**Learning Record**（失敗分析から得た学習）。Learning Record は **v3 の Failure Intelligence（V3-05）で実装**するが、ログモデルとして今から枠を確保しておく。
 
@@ -339,8 +339,10 @@ Artifacts
 **目的**: Agent 間引継ぎ契約の追跡。**Artifact として記録**する（§8.3）。`AgentStart/Complete` フックは存在しないため、`task()` の `tool.execute.before/after` から導出。
 
 ```json
-{ "type": "Handoff", "from": "", "to": "", "task": "", "timestamp": "", "authority": "observed" }
+{ "type": "Handoff", "from": "", "to": "", "task": "", "timestamp": "", "authority": "" }
 ```
+
+> **`authority` の値域**: Artifact の作成主体（誰が引継ぎ契約を定義したか）を表す authorship/authority であり、Evidence の provenance（`observed`/`declared`/`derived`/`unknown`）とは別軸である（§8.3）。`observed` 等の provenance 値は Artifact の `authority` に用いない。
 
 ### FR-004 Evidence Engine（生信号 ＋ provenance）
 
