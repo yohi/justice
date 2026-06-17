@@ -72,9 +72,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D42 | sequence 採番と参照生成の時間差解決 | `sequence` は append queue 内採番のため抽出時点で未確定。(a) **同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `sequence` を**省略可とし `evidenceId` のみで自レコード相対参照**、(b) **クロスレコード参照**（先行 observed への `derivedFrom`/`evidenceRefs`）は projection で採番済みの `{shardId, sequence, evidenceId}` を解決して埋める。Core は採番に関与せず projection 済み Evidence のみ参照 | 参照鍵が `sequence` を要求する一方 sequence は I/O 側採番のため、純粋 Core が抽出時に参照を作れない矛盾を解消（本レビュー指摘6・INV-009/Traceability 前提） |
 | D43 | v2.0 スコープ表現の精緻化と UI 表記残件 | D2 の「厳密準拠」を**明示的部分縮退付き準拠**へ緩和し、メタ情報（§0）逸脱リストに FR-002-agents（→v2.5・D37）と FR-005-AC（→v2.5・D35）を `exit_code`（D5）と並記。§11 トレーサビリティ表の `/justice-*` 表記を `justice_*` custom tool（D13/D22）へ統一 | 詳細スコープ表（§10.1）は分割済みだがサマリ見出しが完成度を過大表示し、UI 名統一後も一部 `/justice-*` が残存（本レビュー指摘1/2/7） |
 | D44 | §3 Phase 0 表の Message 観測主軸を確定版へ修正 | §3 能力表（event hook 行）の「v2.0 は message.updated 主軸」を **`message.part.updated`/`experimental.text.complete`（assistant 本文源）＋ `message.updated`（role/finish lifecycle）＋ session.error ＋ tool.execute** へ修正し D16/D41 の確定 binding と一致させる。憲章 §9 OpenCode Hooks の `message.updated`/`chat.message` 列挙との差分は **Phase 0 実測（§3・`@opencode-ai/plugin` 型定義調査）に基づく binding correction** であり、INV/ADR/Quality Protocol 不変更のため §16.3 凍結ガバナンス対象外（§4.5 互換的詳細化注記と同型） | §3 サマリが D16/D41 確定前の旧表記のまま残り、declared の本文取得源（`message.part.updated`/`experimental.text.complete`）を欠いて実装者のフック配線を誤認させ得た（本レビュー指摘2） |
-| D45 | `/justice-*` slash alias の実現可能性を未確定化 | §7.7 の「`command.execute.before` 傍受で tool 出力を inject する互換エイリアスとして**提供可能**」を §3 の「`command.execute.before` は読取専用傍受（登録・短絡 不可）」と整合させ、**inject 可否は未確認 → v2.0 では実現可能性を未確定（API 能力の追加確認待ち）、既定は `justice_*` custom tool 名のみ**へ弱める | 「読取専用・短絡不可」と「inject で提供可能」が文書内で衝突。slash alias は元来 stretch（D13/D22）で設計根幹は不変だが、実現可能性の断定のみ訂正（本レビュー指摘1） |
+| D45 | `/justice-*` slash alias の実現可能性を未確定化 | §7.7 の「inject で**提供可能**」を訂正。`command.execute.before` は**登録/短絡(cancel) API は無いが `output.parts`(Part[]) 注入面は持つ**（`tool.execute.before` の `output.args` と同型）。よって正確には「読取専用」ではなく**「注入面あり・反映は未実証」**。反映可否の実証までは実現可能性を未確定とし、既定は `justice_*` custom tool 名のみ（slash 登録 API は無い） | §3 の「読取専用」表記（「登録・短絡不可の受信」の意）が型定義（`output:{parts:Part[]}` の注入面あり）と不一致だった。slash alias は元来 stretch（D13/D22）で設計根幹は不変。注入面の存在と反映未実証を正確化（本レビュー指摘 I2） |
 | D46 | FF-008 の位置づけ明確化（slice-local） | FF-008 を **v2.0 slice-local fitness check（既存 INV-004 の検証強化）** と明記。憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではなく、新規 INV/ADR/Quality Protocol 変更を伴わないため §16.3 ガバナンス（2 approvals/CODEOWNERS）対象外（§4.5 互換的詳細化注記と同型）。憲章正本へ昇格させる場合は §16.3 手続きを経る | 凍結憲章は FF-001〜007 のみ。設計が「§16.1」見出し下で FF-008 を追加し DoD で必須化していたが、憲章拡張か slice-local かが曖昧だった（本レビュー指摘4） |
-| D47 | L0 advisory の PostToolUse 注入 surface 確定 | `tool.execute.after` は注入専用フィールド（parts/context）を持たず `output:{title,output,metadata}` のみ、かつ現 adapter は PostToolUse 戻り値を破棄するため、advisory を「inject」ではなく具体 surface で定義: (1) Runtime が `tool.execute.after` の可変 `output.output`（ツール結果文字列）末尾へ `formatBanner` を追記（agent/ユーザー双方に表示）、(2) `JusticeNotifier`（`client.app.log`）でバナー送出、(3) on-demand は `justice_gate` 表示。Core は `HookResponse{action:"inject"}` で advisory を返し adapter（拡張）が (1)(2) に適用（PreToolUse の prompt mutation と対称） | `tool.execute.after`=`{title,output,metadata}`・PostToolUse 戻り値破棄（`opencode-adapter.ts` `onToolExecuteAfter`）。素朴な inject 戻り値は surface しない。D45 の command.execute.before inject 保留と整合し中核 advisory surface を確定（本レビュー指摘1） |
+| D47 | L0 advisory の PostToolUse 注入 surface（保証=notifier・output.output は要実証） | `tool.execute.after` は注入専用フィールド（parts/context）を持たず `output:{title,output,metadata}` のみ、かつ現 adapter は PostToolUse 戻り値を破棄する。advisory surface を**保証度で2段に分けて定義**: **(保証) (2) `JusticeNotifier`（`client.app.log`）でバナー送出**＝型上確実なチャネル。**(best-effort・要実証) (1) Runtime が可変 `output.output` 末尾へ `formatBanner` を追記**＝モデル文脈/ユーザー表示への反映は型定義に保証明記が無く Phase 0 スパイク（§3）で実証するまで断定しない（D45 の「未確認は未確認」基準を水平適用）。(3) on-demand `justice_gate` 表示。Core は `HookResponse{action:"inject"}` を返し adapter（拡張）が (1)(2) に適用（PreToolUse の prompt mutation と対称だが、Pre=実行前 args 消費が自明なのに対し Post=実行後 output の文脈反映は別問題） | `tool.execute.after`=`{title,output,metadata}`・PostToolUse 戻り値破棄（`onToolExecuteAfter`）・`output:{readonly output}` の readonly 撤廃と戻り値捕捉が (1) の前提。`experimental.session.compacting` と異なり反映明記の JSDoc が無い。中核 advisory の保証は notifier、output.output は実証後に確定（本レビュー指摘 C1・D45 と同基準） |
 | D48 | 全ツール観測 hook からの agentId 取得経路 | `tool.execute.before/after` の input は `{tool,sessionID,callID,args}` で agent を持たないため、Runtime が `chat.message`（`agent?`）/`chat.params`（`agent`）観測で `sessionID→agentId` マップを構築し tool 観測時に sessionID で解決。未解決時は予約 shard `{system,system}`（D38）または `agentId:"unknown"` へフォールバック。OpenCode agent 名（自由文字列）→ Justice `AgentId`（atlas/hephaestus/sisyphus/prometheus）の写像を Core に定義し未知は `unknown` | tool hook に agent 不在（`@opencode-ai/plugin` 型定義）。agentId 必須 shard（D39）・persona isolation・Evidence 帰属が実装者依存になる穴。`chat.*` に agent が実在し解決可能（本レビュー指摘2・FR-001） |
 | D49 | tool Evidence rawOutput の kind 別保存ポリシー | D34（message 本文非永続化）と同原則を tool Evidence に適用。`test`/`build`/`lint`/`command`（コマンド実行系）は `rawOutput` を redact+truncation して保存（合否観測に必要）。`read`/検索/ファイル本文系ツール出力は **rawOutput 全文を保存せず** `rawOutputHash`（必須）＋最小 snippet＋kind 分類のみ（plan/design/code 本文の複製を遮断） | read/bash(cat)/grep 出力に plan/design/code 本文が混入し `.justice/events` が外部 SoT の複製になる（FR-001 非目的・INV-008）。redaction+truncation は secrets/path 向けでコンテンツ境界を守れず、D34 と非対称だった穴を解消（本レビュー指摘3） |
 | D50 | `justice_gate` の dry-run 化（DecisionRecord 非生成） | `justice_gate` は **dry-run 表示のみ**で DecisionRecord を **append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成。justice_gate は現 projection/Evidence への評価結果表示に留め canonical log・replay・KPI を変えない | §7.5 read-only 注記は state.json キャッシュ書込のみ許容と述べ DecisionRecord 追記を沈黙。照会が判定ログを変えれば read-only・replay・verdict 分布 KPI を汚す（本レビュー指摘4・INV-002） |
@@ -84,6 +84,8 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D54 | Review Summary Artifact の正本・authorship 確定 | Review Summary は **projection-derived Artifact**（正本=`review_observed` レコード→review-aggregator→`state.json` projection→`justice_review` on-demand 表示・別ファイル永続なし・§5.7）。**v2.0 は Artifact に `authority` のみ保持し `authorship` は持たない**（観測集約に作成者契約概念が無い・from→to を持つ Handoff の v2.5 で拡張） | Review Summary の具体表現が state.json projection のみで正本/永続/authorship が曖昧だった（本レビュー指摘3・憲章 §8.3/FR-006） |
 | D55 | writerId の採番方式・文字種 | writerId を **`"w-" + crypto.randomUUID()`** で Runtime が plugin インスタンス起動時に採番。**文字種 `[A-Za-z0-9-]` に制限**（ファイル名 `<writerId>.jsonl`＋参照鍵 `{…,writerId,…}` 安全性・パストラバーサル防止）、予約語 `system`（D38）と区別、衝突確率は無視可能だが万一の既存ファイル衝突時は再採番（§5.1/§9.4） | 「1 物理ファイル=1 writer」構造保証が writerId 一意性に依存する一方、採番方式/衝突/文字種が未定義だった（本レビュー指摘4・INV-008/NFR 並行性） |
 | D56 | ObservationAgentId 型の定義 | Observation の `agentId` 値域を **`ObservationAgentId = AgentId / "system" / "unknown"`**（AgentId=atlas/hephaestus/sisyphus/prometheus）として Core に定義（`system`=予約 shard・D38、`unknown`=agent 解決不能）。**persona isolation / wisdom routing には `AgentId`（4 persona）のみ流し `system`/`unknown` は流さない**（wisdom namespace 非汚染）（§5.1） | envelope の agentId が system/unknown を含むが既存 AgentId（4 persona・wisdom 用）型と同名で型が曖昧だった（本レビュー指摘5・persona isolation） |
+| D57 | review severity の決定論的導出 | severity は **語彙ベースの決定論的分類器**（凍結 RegExp・critical>major>minor 順位評価・一致無しは既定 minor）で導出し、現 `ReviewRejectionSignal`={matched,excerpts,summary} に新規付与（§7.6）。`itemKey`=severity＋正規化要約＋location の決定的合成で同一論点を安定化（D32 の前提）。AI 動的生成はしない（§11 V3-06） | 現検出器に severity 分類が無く（`review-rejection-detector.ts`）、`review_observed.items[].severity` 必須・itemKey 導出（D31）・解決規則（D32）が severity 依存のため、導出アルゴリズム未定義だと itemKey 不安定化→解決判定が破綻する（本レビュー指摘 I1・FR-006） |
+| D58 | Phase 0 由来の憲章訂正を CODEOWNERS 追認へ | hook リスト訂正（D44）・FR-001 保存パス詳細化（§4.5）・FR-004 exit_code の `derived` 縮退（D5/限界-2）は **Requirement レベルの実質変更/訂正**を含むため、設計側の「§16.3 対象外」自己認定を撤回し、**1 本の ADR にまとめ CODEOWNERS 追認**を得る（軽量可）。FF-008（D46）は slice-local fitness のため対象外で据置 | 凍結憲章（§16.3）の整合性。設計が逸脱を「互換的詳細化＝対象外」と自己認定し続けると凍結が形骸化する。各論の技術判断は妥当だが、対象外判断自体を憲章オーナーが追認する形にする（本レビュー指摘 I3・§16.3） |
 
 ---
 
@@ -93,13 +95,15 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 | 項目 | 結果 | 設計への反映 |
 |---|---|---|
-| スラッシュコマンド登録 | ❌ 登録 API 無し。`command.execute.before` は読取専用傍受（登録・短絡 不可） | `/justice-*` を `tool` hook でカスタム tool 化（D4） |
+| スラッシュコマンド登録 | ❌ コマンド登録・短絡(cancel) API 無し。ただし `command.execute.before` は `output.parts`(Part[]) **注入面を持つ**（`tool.execute.before` の `output.args` と同型・**反映は未実証**）＝「読取専用」ではない | `/justice-*` を `tool` hook でカスタム tool 化（D4）。slash alias は反映実証後に判断（D45） |
 | 全ツール観測 | ✅ `tool.execute.before/after` は全ツールで発火 | 観測拡張（task 限定撤廃）成立 |
 | exit_code / stderr | ❌ `tool.execute.after` は `{title, output, metadata}` のみ。exit_code 無し・stderr は output に統合 | Evidence の合否は `derived`（D5）。`metadata.error===true` を補助シグナルに使用 |
 | permission.ask | ✅ `"deny"/"allow"/"ask"` 返却可 | L1 enforcement 経路は実在（v2.5 で使用） |
-| event hook | ✅ 33 種（message.updated / message.part.updated / session.error / file.edited / vcs.branch.updated 等） | v2.0 は **message.part.updated / experimental.text.complete（assistant 本文源）＋ message.updated（role/finish lifecycle）＋ session.error ＋ tool.execute** を主軸（D16/D41/D44）。`chat.message`=UserMessage は申告源に使わない。残りは v2.5+ |
+| event hook | ✅ 32 種（`@opencode-ai/sdk` v1.14.21 `Event` union 実数・SDK 版で増減。message.updated / message.part.updated / session.error / file.edited / vcs.branch.updated 等） | v2.0 は **message.part.updated / experimental.text.complete（assistant 本文源）＋ message.updated（role/finish lifecycle）＋ session.error ＋ tool.execute** を主軸（D16/D41/D44）。`chat.message`=UserMessage は申告源に使わない。残りは v2.5+ |
 
-**Phase 0 で残る唯一の実測スパイク**: 観測拡張（全ツール `tool.execute.after`）の **レイテンシ計測**。実装初手で計測し予算（目標例: 観測オーバーヘッド p95 < 数 ms / tool 呼び出し）を満たすか検証。未達時は非同期キュー + flush を検討。
+**Phase 0 で残る実測スパイク（2 件・実装初手で実施）**:
+1. **観測拡張レイテンシ計測**: 全ツール `tool.execute.after` 観測のオーバーヘッド（目標例: p95 < 数 ms / tool 呼び出し）。未達時は非同期キュー + flush を検討。
+2. **L0 advisory 表示面の実証（C1 対応）**: `tool.execute.after` の可変 `output.output` 末尾追記が**モデル推論文脈／ユーザー表示に反映されるか**を実機確認。型定義（`@opencode-ai/plugin` v1.14.21 `tool.execute.after`）には反映を保証する JSDoc が無く、`experimental.session.compacting` のような明記も無いため未実証（D47）。反映不可なら**保証チャネルは notifier（`client.app.log`）**とし `output.output` 追記を best-effort と確定する。
 
 ---
 
@@ -116,7 +120,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | `evidence-engine.ts` | observation → `Evidence{kind,command,rawOutput,provenance,interpretation?}` 抽出 + provenance 付与 | FR-004, INV-004, FF-007 |
 | `rule-evaluation-engine.ts` | 純粋 `(gates, evidence, ctx) => Verdict`。副作用なし | FR-005, INV-009, FF-002/003 |
 | `gate-definition.ts` | gate.yaml スキーマ型 + 厳密バリデーション | FR-005, NFR(security) |
-| `review-aggregator.ts` | 既存 `ReviewRejectionDetector` 拡張。Artifact `{critical,major,minor,resolved,open}` 出力 | FR-006 |
+| `review-aggregator.ts` | 既存 `ReviewRejectionDetector` 拡張。**現 `ReviewRejectionSignal`={matched,excerpts,summary} に severity 分類（critical/major/minor）を新規追加（D57）**。Artifact `{critical,major,minor,resolved,open}` 出力 | FR-006 |
 
 ### 4.2 新規 Hook（調整・enforcement 発火のみ／ロジックは Core 委譲）
 
@@ -269,6 +273,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 - `exit_code` は独立フィールドを持たず `interpretation.outcome` に集約（API に無く derived 確定）。
 - **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。**task サマリ由来の合否主張も declared 扱いで PASS 非算入**（raw transcript が出力に含まれ観測できる場合のみ `derived` 昇格可・§5.8/D29）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
 - **kind 分類 / toolOutputClass 分類**: evidence-engine が `toolName`/`command` パターンで決定論的に判定。**kind**: test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他のコマンド実行→command/generic。**toolOutputClass**: bash/test/build/lint 等のコマンド実行系→`command_exec`（rawOutput 保存）、read/grep/glob/cat 等のファイル本文・検索系→`file_content`（rawOutputHash＋snippet のみ・本文非保存・D49/D52）。いずれも純粋関数（FF-002）。
+- **INV-004 の字義整合（M4）**: 憲章 INV-004「observed/derived しか Evidence にしない」と本設計が `provenance:"declared"` を**記録**することの見かけの差は、**「declared の記録 ≠ 権威 Evidence 扱い」**で解消する。declared は監査可視性のため記録するが、gate 充足（PASS）・L1+ deny の**権威 Evidence には算入しない**（観測のみが PASS を生む・D24/D29/FF-007/FF-008）。憲章 §8.2 も declared を provenance 値として定義しており、本設計は用途を制限しているため整合する。
 
 ### 5.4 DecisionRecord（Justice の判定 = Verdict）
 
@@ -323,6 +328,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 - サブエージェント（`task()` の子）の tool 実行は別セッション/シャードに記録され `taskId` 相関が付かない。ただし **task tool 自身の PostToolUse 出力（サブエージェントの結果サマリ）は親セッションの task 窓内で観測される**ため、evidence-engine（純粋）でそこから合否主張を抽出し当該 `taskId` に帰属させる。**この主張は申告由来のため provenance=`declared`（PASS 非算入）**とする（サマリは自己申告であり observed ではない・D29/§7.3）。例外として、出力に実コマンドの raw transcript が含まれ Justice が直接再パースできる場合に限り `derived` 昇格を許可する。
 - **Task Gate の保証範囲（明示）**: v2.0 で PASS 充足に使えるのは (1) 親セッション内で直接観測した `observed`/`derived` のみ。(2) task 出力サマリ由来は `declared`（PASS 非算入・raw transcript 観測時のみ `derived`・D29）。サブエージェント shard 内で完結した `observed` Evidence との厳密相関は best-effort（マージ可能範囲）で、完全相関は v2.5 Handoff（FR-003）依存。**よって委譲主体のワークフローでは Required Tests が `onMissingEvidence` 経路に入り WARN 優勢になる**（L0 advisory・非ブロッキング・§10.2 KPI と整合）。
 - 窓判定・刻印は決定論的（純粋）に保つ（FF-002/004）。
+- **agent 解決前の観測と shard 配置（D48・M3）**: `chat.message`（`agent?` は任意）/`chat.params` による `sessionID→agentId` 解決が確立する前に到着した冒頭ツール観測は `unknown`/`system` shard（D38/D56）へ落ち、解決後の観測と別 shard に分かれ得る。projection は全 shard をマージするため replay は無害（FF-004）。`taskId` 窓相関は `sessionId`＋task callId を鍵とし agentId に依存しないため、shard が分かれても窓相関自体は壊れず、帰属 agentId のみ後続解決に従う。
 
 ---
 
@@ -482,13 +488,14 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 ### 7.6 Review Aggregator の入力源と解決規則（Finding 4 対応）
 
 - **入力源**: `review_observed` 観測は、task/レビュー系ツールの PostToolUse 出力を既存 `ReviewRejectionDetector` で処理して生成（tool 出力 → 検出 → `ObservationRecord{ kind:"review_observed", reviewScope, items[] }`）。各 item は `itemKey`（severity ＋ 要約/該当箇所から決定的に導出）を持つ。
+- **severity の決定論的導出（D57・I1 対応）**: 現 `ReviewRejectionSignal`={matched,excerpts,summary} に severity が無いため、review-aggregator 拡張が**語彙ベースの決定論的分類器**で severity を新規付与する。凍結 RegExp 語彙（`review-rejection-patterns.ts` と同方式）で critical（例: `security|vulnerability|data ?loss|破壊的|重大`）> major（例: `must fix|required|bug|regression|要修正|不具合`）> minor（例: `nit|suggestion|optional|style|軽微|提案`）を順位評価し、最初に一致した最上位を採る（一致無しは保守的に minor）。AI 動的生成はしない（§11 V3-06）。`itemKey` は `severity` ＋ 正規化要約（小文字化・空白畳み込み・先頭 N 文字）＋ `location` から決定的に合成し、同一論点で itemKey が安定する（D32 解決判定の前提）。分類器・itemKey 合成は純粋関数（FF-002）。
 - **解決規則（D32・消失≠解決）**: `itemKey` ごとに集約する。`resolved` への遷移は次のいずれかでのみ成立する — (a) item に**明示的解決マーカー**がある、(b) **同一 `reviewScope` の完全スナップショット**な後続レビューで当該 item が不在、(c) **人間承認 artifact** が解決を示す。**単なる item 消失（レビュー範囲差・検出器の漏れ・出力形式変化）では `resolved` にせず `open` を据え置く**（未解決 major/critical の取りこぼしを防ぐ）。`reviewScope` が一致しない後続レビューは当該スコープ外 item の状態を変更しない。
 - **集約のみ（FR-006 準拠）**: Justice はレビューを行わず集約のみ。解決判定は AX-001/002（証拠なき消失を解決と前提しない）に従う。
 - `review_open_items` gate はこの `open` 集合を参照。
 
 ### 7.7 ユーザー露出インターフェース名（Finding 6 対応）
 
-v2.0 は **custom tool 名（`justice_status` 等）で提供**。`/justice-*` slash 体験は `command.execute.before` 経由の互換エイリアスとして提供できる**可能性はあるが、§3 のとおり `command.execute.before` は読取専用傍受（登録・短絡 不可）で inject 可否が未確認のため、v2.0 では実現可能性を未確定（API 能力の追加確認待ち）として扱い、既定は `justice_*` custom tool 名のみとする**（slash 登録 API は無い・§3・D45）。
+v2.0 は **custom tool 名（`justice_status` 等）で提供**。`/justice-*` slash 体験は `command.execute.before` の `output.parts` 注入面を使う互換エイリアスとして提供できる**可能性はあるが、§3/D45 のとおり同フックは登録・短絡(cancel) API を持たず `output.parts` の反映も未実証のため、v2.0 では実現可能性を未確定（実証待ち）とし、既定は `justice_*` custom tool 名のみとする**（slash 登録 API は無い・§3・D45）。
 
 ---
 
@@ -528,12 +535,12 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | FF-002 | Core 決定論 | INV-009 | 反復評価の等価性 `tests/core/rule-engine-determinism.test.ts` |
 | FF-003 | Rule Engine 副作用なし | INV-009 | I/O 不在アサート（純粋関数テスト） |
 | FF-004 | Observation Log が同一 projection に replay | INV-008 | `tests/core/observation-log-replay.test.ts` |
-| FF-005 | 新 spine は plan.md に書かない（+ DEBT-001 allowlist） | INV-005 | `tests/arch/no-planmd-write.test.ts`（allowlist: task-feedback / loop-handler / PlanParser） |
+| FF-005 | 新 spine は plan.md に書かない（+ DEBT-001 allowlist） | INV-005 | `tests/arch/no-planmd-write.test.ts`（allowlist は実 `writeFile` 呼出箇所=`task-feedback.ts`/`loop-handler.ts`。`PlanParser` は純粋関数で I/O せず対象外・M2） |
 | FF-006 | 全 hook が注入障害下でも有効 HookResponse | INV-006 | fault-injection `tests/hooks/fail-open.test.ts` |
 | FF-007 | L1+ deny の Evidence provenance ∈ {observed,derived} | INV-004 | provenance ゲーティングの単体テスト（先行実装・enforcement は v2.5） |
 | FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared／task サマリ由来は不算入・`derived` は observed 起源限定・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/gate-provenance-gating.test.ts` |
 
-**FF-005 の扱い（D7）**: v2.0 は「新 spine モジュールは plan.md に書かない」をアサートし、既知の DEBT-001 書込箇所（`task-feedback` ✅付与 / `loop-handler` error-note / `PlanParser.updateCheckbox`・`appendErrorNote`）を明示的 allowlist 例外として記録。新規違反はブロックしつつ、v2.5 で allowlist を空にして全域アサートへ移行。
+**FF-005 の扱い（D7・M2 精緻化）**: 「新 spine は plan.md に書かない」をアサートする。**実ディスク書込は `this.fileWriter.writeFile()` 呼出箇所**＝`src/hooks/task-feedback.ts`（成功時✅: `updateCheckbox` 適用後の writeFile）と `src/hooks/loop-handler.ts`（error-note: `appendErrorNote` 適用後の writeFile）に限られ、**allowlist はこの writeFile 呼出箇所を対象**とする。`PlanParser.updateCheckbox`/`appendErrorNote` は文字列を返す純粋関数で I/O せず書込元ではない（allowlist 対象は「pure 変換」ではなく「I/O 実行点」）。新規違反はブロックし、v2.5 で allowlist を空にして全域アサートへ移行。
 
 **FF-008 の扱い（D46）**: FF-008 は本 v2.0 スライスが追加する **slice-local fitness check**（既存 INV-004 の検証強化）であり、憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではない。新規 INV/ADR/Quality Protocol の変更を伴わないため §16.3 ガバナンス（2 approvals / CODEOWNERS）の対象外（§4.5 の互換的詳細化注記と同型）。将来 FF-008 を憲章正本へ昇格させる場合は §16.3 手続きを経る。
 
@@ -551,6 +558,17 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 ### 9.3 Core 単体テスト（100% 目標）
 
 新 Core 全モジュールを純粋関数としてモックデータで全網羅。既存 `createMockFileReader/Writer`（`tests/helpers/mock-file-system.ts`）/ `createMockNotifier`（`tests/helpers/mock-notifier.ts`）を使用、**ディスク非接触**。private 検証は `unknown` 経由キャスト（AGENTS.md）。
+
+### 9.3.1 Runtime 統合テスト（I4 対応・最高リスク経路）
+
+Core 純粋テスト（§9.3）では捕捉できない **Runtime/状態ロジック**に明示的な統合テスト target を設ける（モック FileReader/Writer ＋ 制御可能クロック/採番で決定化）:
+
+| 対象 | 検証内容 | 根拠 | Test（target path） |
+|---|---|---|---|
+| per-shard 直列化キュー | 同一 shard への並行 append が read-modify-write 競合なくイベントを失わず順次採番される | D23/§9.4 | `tests/runtime/observation-log-queue.test.ts` |
+| writerId 衝突再採番 | 既存ファイル衝突時に `"w-"+crypto.randomUUID()` を再採番し「1 ファイル=1 writer」を保つ | D55 | `tests/runtime/writer-id-collision.test.ts` |
+| rotation 跨ぎ sequence | active+archive 双方の最大 sequence から継続し `{shardId, sequence}` 一意性と replay 決定性を rotation 跨ぎで保つ | D33 | `tests/runtime/rotation-sequence-continuity.test.ts` |
+| messageRoleBuffer 相関/GC | part 先行（到着順逆転）→後続 role 解決、role≠assistant 破棄、finalized/TTL で GC | D53/§6.1.1 | `tests/hooks/message-role-buffer.test.ts` |
 
 ### 9.4 NFR
 
@@ -611,6 +629,8 @@ Phase 1(build):
 - `bun run typecheck` / `bun run lint` / `bun run build` green
 - DEBT-001 は **High・未解消として明示**（seam のみ作成）
 - Task Gate の Evidence 保証範囲（親セッション観測の `observed`/`derived` + task 出力サマリ由来は `declared`（PASS 非算入）・§5.8/D29）を仕様として明記済み。サブエージェント内 `observed` の厳密相関は **v2.5 Handoff スコープ**で本 DoD 対象外。
+- **Runtime 統合テスト（I4・§9.3.1）green**: per-shard 直列化キュー（D23）・writerId 衝突再採番（D55）・rotation 跨ぎ sequence 継続/一意性（D33）・messageRoleBuffer 相関/role 破棄/GC（D53）の4点を統合テストで固定。
+- **C1 前提充足**: Phase 0 で L0 advisory 表示面を実証し（`output.output` 反映可否を確定）、D47 を best-effort（output.output）＋保証チャネル（notifier）で確定済み。未実証のまま L0 出荷価値を断定しない。
 
 ---
 
@@ -645,3 +665,9 @@ Phase 1(build):
 ## 13. 次工程
 
 本設計を `superpowers/writing-plans` で実装計画へ展開する（§10.3 の実装順序を分解し、各ステップに検証チェックポイントを付与）。
+
+> **writing-plans 着手前の必須前提（本レビュー対応）**:
+> 1. **C1**: §3 Phase 0 スパイクに追加した「L0 advisory 表示面の実証」を完了し、`output.output` 反映可否を確定する（反映不可なら notifier を保証チャネルとして D47 を確定）。
+> 2. **I3/D58**: Phase 0 由来の憲章訂正（hook リスト=D44・FR-001 保存パス=§4.5・FR-004 exit_code=D5/限界-2）を D58 のとおり CODEOWNERS 追認へ回す（設計側の「§16.3 対象外」自己認定を撤回）。
+> 3. **I1/D57**: severity 決定論的分類器（§7.6）と itemKey 安定性テストを計画に含める。
+> 4. **I4**: §9.3.1 の Runtime 統合テスト4点を実装順序（§10.3）と DoD に組み込む。
