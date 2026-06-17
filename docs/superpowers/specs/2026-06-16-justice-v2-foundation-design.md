@@ -74,6 +74,11 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D44 | §3 Phase 0 表の Message 観測主軸を確定版へ修正 | §3 能力表（event hook 行）の「v2.0 は message.updated 主軸」を **`message.part.updated`/`experimental.text.complete`（assistant 本文源）＋ `message.updated`（role/finish lifecycle）＋ session.error ＋ tool.execute** へ修正し D16/D41 の確定 binding と一致させる。憲章 §9 OpenCode Hooks の `message.updated`/`chat.message` 列挙との差分は **Phase 0 実測（§3・`@opencode-ai/plugin` 型定義調査）に基づく binding correction** であり、INV/ADR/Quality Protocol 不変更のため §16.3 凍結ガバナンス対象外（§4.5 互換的詳細化注記と同型） | §3 サマリが D16/D41 確定前の旧表記のまま残り、declared の本文取得源（`message.part.updated`/`experimental.text.complete`）を欠いて実装者のフック配線を誤認させ得た（本レビュー指摘2） |
 | D45 | `/justice-*` slash alias の実現可能性を未確定化 | §7.7 の「`command.execute.before` 傍受で tool 出力を inject する互換エイリアスとして**提供可能**」を §3 の「`command.execute.before` は読取専用傍受（登録・短絡 不可）」と整合させ、**inject 可否は未確認 → v2.0 では実現可能性を未確定（API 能力の追加確認待ち）、既定は `justice_*` custom tool 名のみ**へ弱める | 「読取専用・短絡不可」と「inject で提供可能」が文書内で衝突。slash alias は元来 stretch（D13/D22）で設計根幹は不変だが、実現可能性の断定のみ訂正（本レビュー指摘1） |
 | D46 | FF-008 の位置づけ明確化（slice-local） | FF-008 を **v2.0 slice-local fitness check（既存 INV-004 の検証強化）** と明記。憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではなく、新規 INV/ADR/Quality Protocol 変更を伴わないため §16.3 ガバナンス（2 approvals/CODEOWNERS）対象外（§4.5 互換的詳細化注記と同型）。憲章正本へ昇格させる場合は §16.3 手続きを経る | 凍結憲章は FF-001〜007 のみ。設計が「§16.1」見出し下で FF-008 を追加し DoD で必須化していたが、憲章拡張か slice-local かが曖昧だった（本レビュー指摘4） |
+| D47 | L0 advisory の PostToolUse 注入 surface 確定 | `tool.execute.after` は注入専用フィールド（parts/context）を持たず `output:{title,output,metadata}` のみ、かつ現 adapter は PostToolUse 戻り値を破棄するため、advisory を「inject」ではなく具体 surface で定義: (1) Runtime が `tool.execute.after` の可変 `output.output`（ツール結果文字列）末尾へ `formatBanner` を追記（agent/ユーザー双方に表示）、(2) `JusticeNotifier`（`client.app.log`）でバナー送出、(3) on-demand は `justice_gate` 表示。Core は `HookResponse{action:"inject"}` で advisory を返し adapter（拡張）が (1)(2) に適用（PreToolUse の prompt mutation と対称） | `tool.execute.after`=`{title,output,metadata}`・PostToolUse 戻り値破棄（`opencode-adapter.ts` `onToolExecuteAfter`）。素朴な inject 戻り値は surface しない。D45 の command.execute.before inject 保留と整合し中核 advisory surface を確定（本レビュー指摘1） |
+| D48 | 全ツール観測 hook からの agentId 取得経路 | `tool.execute.before/after` の input は `{tool,sessionID,callID,args}` で agent を持たないため、Runtime が `chat.message`（`agent?`）/`chat.params`（`agent`）観測で `sessionID→agentId` マップを構築し tool 観測時に sessionID で解決。未解決時は予約 shard `{system,system}`（D38）または `agentId:"unknown"` へフォールバック。OpenCode agent 名（自由文字列）→ Justice `AgentId`（atlas/hephaestus/sisyphus/prometheus）の写像を Core に定義し未知は `unknown` | tool hook に agent 不在（`@opencode-ai/plugin` 型定義）。agentId 必須 shard（D39）・persona isolation・Evidence 帰属が実装者依存になる穴。`chat.*` に agent が実在し解決可能（本レビュー指摘2・FR-001） |
+| D49 | tool Evidence rawOutput の kind 別保存ポリシー | D34（message 本文非永続化）と同原則を tool Evidence に適用。`test`/`build`/`lint`/`command`（コマンド実行系）は `rawOutput` を redact+truncation して保存（合否観測に必要）。`read`/検索/ファイル本文系ツール出力は **rawOutput 全文を保存せず** `rawOutputHash`（必須）＋最小 snippet＋kind 分類のみ（plan/design/code 本文の複製を遮断） | read/bash(cat)/grep 出力に plan/design/code 本文が混入し `.justice/events` が外部 SoT の複製になる（FR-001 非目的・INV-008）。redaction+truncation は secrets/path 向けでコンテンツ境界を守れず、D34 と非対称だった穴を解消（本レビュー指摘3） |
+| D50 | `justice_gate` の dry-run 化（DecisionRecord 非生成） | `justice_gate` は **dry-run 表示のみ**で DecisionRecord を **append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成。justice_gate は現 projection/Evidence への評価結果表示に留め canonical log・replay・KPI を変えない | §7.5 read-only 注記は state.json キャッシュ書込のみ許容と述べ DecisionRecord 追記を沈黙。照会が判定ログを変えれば read-only・replay・verdict 分布 KPI を汚す（本レビュー指摘4・INV-002） |
+| D51 | ReflectionEvent `planRef` の path 化 | `planRef` を `{ path, taskId }` に改め `path` は **workspace 相対パス必須・絶対パス禁止**（グローバル No Absolute Paths 準拠）。値は `PlanBridge`/`TaskFeedbackHandler` の `setActivePlan(sessionId, planPath)` 追跡済み実 path を記録し "plan.md" 固定を廃止 | 本プロジェクトは `docs/superpowers/specs/*.md` 等 複数 plan/design を持ち basename 固定では v2.5 で所有者が更新対象を復元不能（本レビュー指摘5・No Absolute Paths） |
 
 ---
 
@@ -112,7 +117,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 | モジュール | 責務 |
 |---|---|
-| `observation-handler.ts` | 全ツールの Pre/PostToolUse ＋ **Message（assistant 本文は `message.part.updated`/`experimental.text.complete`、`message.updated` は role/finish lifecycle・§6.1.1/D41）** を観測 → Observation 生成 → gate 評価 → L0 advisory `inject`。既存ハンドラと `mergePostToolUseResponses` で合流 |
+| `observation-handler.ts` | 全ツールの Pre/PostToolUse ＋ **Message（assistant 本文は `message.part.updated`/`experimental.text.complete`、`message.updated` は role/finish lifecycle・§6.1.1/D41）** を観測 → Observation 生成 → gate 評価 → L0 advisory surface 出力（`output.output` 追記＋notifier・D47）。既存ハンドラと `mergePostToolUseResponses` で合流 |
 
 ### 4.3 新規 Runtime（実 I/O）
 
@@ -154,7 +159,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "schemaVersion": 1,
   "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
-  "agentId": "hephaestus",
+  "agentId": "hephaestus",            // 取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）
   "sessionId": "ses_...",
   "writerId": "w-...",          // 必須: writer segment 識別子（Runtime 採番・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
@@ -220,7 +225,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "...envelope": "...", "recordType": "observation", "kind": "reflection",
   "reflection": {
     "trigger": "task_succeeded" | "task_error",        // 発行契機
-    "planRef": { "file": "plan.md", "taskId": "task-3" },
+    "planRef": { "path": "docs/superpowers/specs/<plan>.md", "taskId": "task-3" },  // path=workspace 相対・絶対禁止・PlanBridge/TaskFeedback 追跡値・D51
     "intent": "check_complete" | "append_error_note",  // 所有者が反映すべき plan 変更
     "note": "..."                                       // error-note 本文（任意）
   }
@@ -234,7 +239,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "evidenceId": "ev-1",                        // 必須: record 内で一意（参照鍵 {shardId, sequence, evidenceId} の末尾・§5.4/D31）
   "kind": "test" | "build" | "lint" | "command" | "generic",
   "command": "bun run test",
-  "rawOutput": "...stdout(+stderr統合)...",
+  "rawOutput": "...stdout(+stderr統合)...",     // kind 別保存: command系=redact+truncation 保存 / read・検索・ファイル本文系=rawOutputHash＋最小snippet＋分類のみ（D49）
   "provenance": "observed" | "declared" | "derived" | "unknown",
   "interpretation": {                          // 省略可。存在時は常に derived
     "outcome": "pass" | "fail" | "unknown",
@@ -352,7 +357,7 @@ gate.yaml の rule が trigger 条件を宣言（task_complete / tool_observed�
        戻り値 Verdict{ status, reachableLevel, ruleResults[]{ ruleId, verdict, reason, evidenceRefs[] } }
   → DecisionRecord 構築 → shard へ append
   → verdict ∈ {WARN, FAIL} かつ appliedLevel==L0:
-       → formatBanner + チェックリストを inject（advisory）
+       → formatBanner + チェックリストを advisory surface へ出力（`tool.execute.after` の可変 `output.output` 末尾追記＋notifier・adapter が HookResponse を適用・D47）
   → それ以外は proceed
 ```
 
@@ -452,11 +457,12 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 | tool 名 | 責務 | v2.0 |
 |---|---|---|
 | `justice_status` | projection を読み現在状態を報告 | ✅ |
-| `justice_gate` | 現 Evidence に対し gate 評価を実行し verdict 表示 | ✅ |
+| `justice_gate` | 現 Evidence に対し gate 評価を実行し verdict 表示（**dry-run・DecisionRecord 非生成**・D50） | ✅ |
 | `justice_review` | Review Summary Artifact を表示 | ✅ |
 | `justice_verify` | Final Verifier（Release Report） | ⏸ v2.5（FR-007） |
 
 > **「read-only」のスコープ**: ここでの read-only は **workspace / コード / コマンド実行に対する** read-only（INV-002＝「コードを書かない・実行しない」）を指す。projection 読取に伴う `.justice/state.json` への**内部キャッシュ書込は許容**される（state.json は再構築可能な非 SoT キャッシュ・§5.6、書込失敗は fail-open・§9.4）。
+> **`justice_gate` の非変更性（D50）**: `justice_gate` は dry-run 表示のみで **DecisionRecord を append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成し、照会は canonical log・replay・KPI を変化させない。
 
 ### 7.6 Review Aggregator の入力源と解決規則（Finding 4 対応）
 
@@ -538,7 +544,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | 並行性 | **shard 鍵=`{agentId, sessionId, writerId}`（per-writer segment）**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D30/D39）の JSONL シャード・active＋archive 全 segment 読取マージ（D40）。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**`writerId` を Runtime が plugin インスタンス起動時に採番し「1 物理ファイル=1 writer」を構造保証**するため、in-process queue の直列化が常に有効で、複数プロセス/セッションが同一ファイルへ並行 append する経路自体が存在しない（「単一ファイル並行 append 禁止」=憲章 NFR を構造的に充足）。これにより「同一 session=単一プロセス」前提に依存せず、read 側は全 writer segment を merge（FF-004 不変） |
 | スキーマ versioning | 全 `.justice/` に `schemaVersion`・`WisdomPersistence` 同様の移行戦略 |
 | 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/archive/events/<agentId>/<sessionId>/<writerId>.jsonl`（live shard 名前空間と物理分離・D40。**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。**憲章 NFR「無限増大を防ぐ」の総量上限は archive 単独では未達のため v2.0 では deferred と明記する（D36・§12 限界-4）**: rotation は active シャードのサイズ/年齢を抑制するが総量（active+archive）は単調増加し、物理削減は下記 prune 解禁後（v2.5+）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard（writer segment）の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
-| セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合）、(2) `message` の `textSnippet`・`declaredClaims`（**本文全文は永続化しない**・FR-001 非目的・D34）、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
+| セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合・**kind 別保存ポリシー D49**: `test`/`build`/`lint`/`command` は redact+truncation して保存、`read`/検索/ファイル本文系は rawOutput 全文を保存せず `rawOutputHash`＋最小 snippet＋kind 分類のみ＝plan/design/code 本文の複製を遮断・FR-001 非目的）、(2) `message` の `textSnippet`・`declaredClaims`（**本文全文は永続化しない**・FR-001 非目的・D34）、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
 | 性能 | tool.execute.after レイテンシ予算（§3）・実装初手で実測 |
 | 信頼性 | 不変条件 (A) infra-error→fail-open を回帰テストで固定（FF-006）。L1+ 拡大は trust 蓄積後 |
 | projection 永続化 | state.json は FileWriter で atomic 書込（temp+rename）・fail-open（失敗→log＋キャッシュ skip）。**event log が常に権威**（state.json 欠損/破損/schema 不一致→log から再構築。state.json を log に優先しない） |
