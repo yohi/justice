@@ -6,7 +6,7 @@
 |------|----|
 | 作成日 | 2026-06-16 |
 | ステータス | Design（Accepted・実装計画化待ち） |
-| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 に厳密準拠） |
+| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに準拠。ただし FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5） |
 | 起点 | `@yohi/justice` v2.3.0（Phase 9 完了・563 tests passing） |
 | 上位文書 | [Architecture Charter v3.0](../../2026-06-16-justice-v2-v3-requirements.md)（Accepted / Frozen） |
 | 関連スキル | `superpowers/brainstorming`（本書作成）→ `superpowers/writing-plans`（次工程） |
@@ -121,12 +121,14 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 ```text
 .justice/
   events/<agentId>/<sessionId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId}・1 writer/shard）
-  events/system.jsonl
+  events/system.jsonl                 # 予約 shard: shardId={agentId:"system", sessionId:"system"}（session 非依存のシステムイベント。順序キーは他 shard 同様 timestamp→shardId→sequence）
   events/archive/          # retention rotation 退避先
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
   wisdom.json              # 既存（不変）
 ```
+
+> **憲章保存先パスとの関係（互換的詳細化）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId shard を置く（`events/<agentId>/<sessionId>.jsonl`）。これは並行 append 競合・イベント消失の回避（D30・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol を変更しない（凍結ガバナンス §16.3 の対象外）。読取時は全 shard をマージするため projection 再構築可能性（FF-004）は保たれる。
 
 ---
 
@@ -149,6 +151,8 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 読取時の projection 再構築は **2段階マージ**で行う（§6.3）: ① **shard 内**は `sequence` 昇順で整列（shard 内因果順＝単調増加の sequence を最優先。時計ずれや timestamp 逆転があっても shard 内の因果順を壊さない）、② **shard 間**は整列済みの各 shard を `timestamp` → `shardId` → `sequence` でマージ（shardId=`{agentId, sessionId}`。同 timestamp の shard 横断衝突は二次キー `shardId`・三次キー `sequence` で一意化）。これにより決定性（FF-004）と shard 内因果整合を両立する（INV-009）。
 
 > **レコード参照の同一性とソート順序**: `sequence` は **shard（=shardId=`{agentId, sessionId}`）内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{shardId, sequence, evidenceId}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（`evidenceId` は record 内の特定 Evidence/claim/item を一意化・§5.3 / §5.4 / D31）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`shardId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
+>
+> **参照のレコード表現（型の正本）**: 上記の複合参照は記録上 **`{agentId, sessionId, sequence, evidenceId}` の展開形**で直列化する（§5.3 `derivedFrom` / §5.4 `evidenceRefs` の JSON 例と一致）。`shardId` は `{agentId, sessionId}` の別称であって独立フィールドとしては直列化しない（L140 の等価関係 `{shardId, sequence}`＝`{agentId, sessionId, sequence}`）。実装の参照型はこの4要素オブジェクトを単一の正本とし、D14/D31 の `{shardId, …}` 表記はこの展開形を指す。
 
 ### 5.2 ObservationRecord（観測した事実）
 
@@ -321,7 +325,7 @@ OpenCode: event(message.updated) / chat.message 発火
   → declared は L0 advisory 入力限定（L1+ deny には不使用・FF-007）
 ```
 
-- `declared` Evidence の唯一の生成経路はこの Message 観測である（tool 観測由来は observed/derived）。抽出ロジック（メッセージ → 合否主張）は Core 純粋関数（FF-002）。
+- `declared` Evidence の**主な**生成経路はこの Message 観測である（tool 観測由来は observed/derived）。**加えて、task PostToolUse 出力サマリ（サブエージェント結果サマリ）由来の合否主張も `declared` として生成する（§5.8/§6.5/D29）。** 抽出ロジック（メッセージ／サマリ → 合否主張）は Core 純粋関数（FF-002）。
 - `session_error`（`kind:"session_error"`）も同様に `event(session.error)` 経由で取り込む。**`message` フィールドは append 前に上記 message と同一の SecretPatternDetector 走査・redact ＋ truncation を通す**。
 
 ### 6.2 Gate 評価（v2.0 は Task Gate のみ）
@@ -592,7 +596,7 @@ Phase 1(build):
 |---|---|---|
 | DEBT-001 | Justice が plan.md を直接書込（task-feedback / loop-handler / PlanParser） | v2.0 で seam（ReflectionEvent）のみ作成。完全カットオーバーは v2.5。FF-005 allowlist で明示 |
 | 限界-1 | サブエージェント横断 Evidence 相関が best-effort | 厳密な紐付けは v2.5 Handoff（FR-003）で解消 |
-| 限界-2 | exit_code を直接観測できない | `interpretation.outcome`（derived）で代替。上流 API 拡張要望を記録 |
+| 限界-2 | exit_code を直接観測できない（憲章 FR-004/§8.2 は `exit_code` を observed フィールドとして要求） | `tool.execute.after` に exit_code/stderr フィールドが無い（§3/D5）ため独立フィールドを持たず `interpretation.outcome`（provenance=`derived`）で代替し、stderr は `rawOutput` へ統合。FR-004 の「観測境界外は completeness を主張しない（INV-004）」に沿う既知の限界。上流 API 拡張要望を記録 |
 | 限界-3 | 憲章 KPI-1/3 は v2.0 で未測定 | v2.0 先行指標で代替。v2.5/v3 で測定可能化 |
 
 ---
