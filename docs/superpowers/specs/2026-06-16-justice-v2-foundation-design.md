@@ -93,6 +93,10 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D63 | authorship 縮退も CODEOWNERS 追認対象へ（Finding 2） | D54 の **Artifact authorship 非保持（憲章 §8.3 属性体系の明示的縮退）**を D58 の CODEOWNERS 追認 ADR に**追加**（§13 着手前提にも反映）。FR-002-agents/FR-005-AC の deferred が「憲章 §14 Phase 計画に沿う FR 単位の後送り＝追認不要」なのに対し、authorship は **v2.0 で実体化する Artifact（`gate.yaml`/Review Summary）の属性体系を縮退**させる requirement-level 逸脱のため D58 と同じ軽量追認に載せる | 設計が「明示的縮退」と自認しつつ追認対象から外すのは D58 自身の「逸脱の自己認定が凍結を形骸化させる」戒めに反する。逸脱種別（FR 後送り vs 属性縮退）を区別して統制（本レビュー Finding 2・§16.3） |
 | D64 | PostToolUse 三者合流時の payload マージ規則（Finding 5） | observation-handler の L0 advisory は **injectedContext（`mergePostToolUseResponses` で区切り線連結）＋ notifier（保証・D47）**で射出し、構造的 `modifiedPayload` は**使わない**。`output.output` 末尾追記（best-effort・D47）は adapter が**複数ハンドラの追記を決定論的ハンドラ順に連結**して適用（置換でなく追記のため衝突しない）。複数ハンドラが `modifiedPayload` を返す異常系は現実装の「a 優先」を踏襲しつつ衝突を log 警告（v2.0 は observation-handler が modifiedPayload 不使用のため未発生） | 現 `mergePostToolUseResponses`（`src/core/justice-plugin.ts`）は inject 連結のみ定義し `modifiedPayload` は片方優先で他方が黙って破棄される。plan-bridge/task-feedback と observation-handler の三者合流で payload mutation を取りこぼす穴（本レビュー Finding 5） |
 | D65 | messageRoleBuffer の鍵/TTL 確定（追加指摘4・D53 改訂） | `messageRoleBuffer` の鍵を **`{sessionId, messageID}` 複合鍵**に確定（messageID の全セッション一意性に依存せず session 終了 GC を容易化）。**TTL 既定=10 分無更新（設定可）**、`session.error`/セッション終了で即時 GC、`finalized` 後は次 projection flush で除去。**上限件数（LRU・既定 1000）**でバッファ肥大を防止 | D53 が鍵=messageID 単体・TTL=「N 分」プレースホルダのままで、跨セッション衝突耐性と GC 条件/上限が未確定だった（本レビュー追加指摘4・NFR メモリ/並行性） |
+| D66 | `review_open_items` の scope-aware 化（本レビュー Finding 1） | `review_open_items` gate を **scope 絞り込み**化する。(a) `state.json` の `reviewSummary` に **`byScope: {<reviewScope>: {critical,major,minor,resolved,open}}`** を追加（§5.6・グローバル集約は後方互換で併存）、(b) `GateContext` に **`reviewScope[]`（当該 task 窓内で観測した `review_observed.reviewScope` 集合・§5.8 で taskId 刻印済み）** を追加（§7.3）、(c) `review_open_items` は **`ctx.reviewScope[]` に一致する `byScope[scope].open` のみ**を参照し、別 task/別レビュー範囲の open を verdict に混入させない（§7.2/§7.6）。該当 scope に open 無し＝条件成立で PASS（レビュー未観測を FAIL にしない） | `reviewScope` が §7.6/D32 の**解決規則のみ**に使われ gate 評価（§7.2/§7.3）に scope 絞り込みが無く、`reviewSummary`（§5.6）がグローバル単一集約のため、別 task/別スコープの open が現 Task Gate を WARN/FAIL させ §5.8 の per-task 原則を破る穴（本レビュー Finding 1・FR-006/INV-009） |
+| D67 | declared 抽出のストリーミング確定・partID 上書き・dedup（本レビュー Finding 2） | message からの `declaredClaims` 抽出を **テキスト確定後のみ**に限定。(a) `messageRoleBuffer` に **`parts: Map<partID,{text,finalized}>`** を追加し、`message.part.updated` 受信時は当該 partID の text を**最新値で上書き**（中間ストリーミングは buffer 更新のみで抽出しない）、(b) 抽出契機は **`experimental.text.complete` または message.updated の finish 確定**で part を finalized 化した後とし、**finalized かつ role=assistant の part 本文からのみ**抽出（§6.1.1）、(c) 同一 `(messageID,partID)` からの再生成 claim は既存を**置換（dedup）**し、否定・修正された陳腐化主張（"tests pass"→後に fail）を残さない | §6.1.1 の抽出が **role でのみゲート**され text finalization でゲートされず、`finalized` が GC 用途（§6.1.1）に留まり buffer が partID 単位 latest-text を持たないため、ストリーミング途中の合否主張が確定・残存し得た穴（本レビュー Finding 2）。declared は PASS 非算入（D24/D29/FF-008）で gate 誤 PASS の実害は無いが監査ノイズ/誤 WARN を防ぐ（severity 実質 Medium） |
+| D68 | `tool_observed` trigger × taskId 不在時の評価規則（本レビュー Finding 3） | `gateType:"task"` の gate は **`ctx.taskId` 不在時は評価を skip**（DecisionRecord 非生成・PROCEED・§6.2/§7.3）。`trigger: tool_observed` が **task 窓外（taskId 未刻印）の観測で発火しても task gate は起動せず**観測記録のみ行う。task 窓内（taskId あり）の tool_observed のみ評価対象。v2.0 は gateType=task のみ（§5.4）で global/session gate が無いため、taskId 不在 tool_observed は gate 評価しない | trigger 語彙が `task_complete | tool_observed`（§6.2・gate.yaml）を許す一方 `task gate では taskId 必須`（§7.3/§5.8）で、窓外 `tool_observed` 発火時の skip/WARN/global 扱いが未定義で実装分岐し得た穴（本レビュー Finding 3） |
+| D69 | `sessionId` 等パスセグメントの safe-segment エンコード（本レビュー Finding 4） | 物理パス `events/<agentId>/<sessionId>/<writerId>.jsonl`（§4.5/§5.1）のうち**外部由来 `sessionId` を Runtime が FileWriter 直前に safe-segment へエンコード**: 許容 `[A-Za-z0-9_-]`・それ以外を `_` 置換・`.`/`..`/空文字は予約語へ・長さ上限 truncation・パストラバーサル防止。`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）は既に安全。**論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には生 `sessionId` を保持**し、エンコードは物理ファイル名生成にのみ適用（衝突回避が要る場合は短ハッシュ接尾辞）。§9.4 NFR security に統合 | パス3セグメントの安全性定義が `writerId`（D55）/`agentId`（D56）のみで、外部由来 `sessionId`（§5.1 `ses_...`）の文字種・エンコード・パストラバーサル防止が未定義だった穴（本レビュー Finding 4・NFR security・グローバル No Absolute Paths/パストラバーサル防止） |
 
 ---
 
@@ -164,6 +168,8 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 > **憲章保存先パスとの関係（互換的詳細化＋D58 追認）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol 自体は変更しない。ただし FR-001 保存先パスの詳細化は Requirement レベルの実質的詳細化を含むため、**「§16.3 凍結ガバナンスの対象外」とは自己認定せず、D58 のとおり 1 本の ADR にまとめ CODEOWNERS 追認を得る**（軽量追認・§13 次工程 I3/D58）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
 
+> **パスセグメントの安全性（D69・本レビュー Finding 4）**: 物理パス `events/<agentId>/<sessionId>/<writerId>.jsonl` の各セグメントは、`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）が安全な一方、**外部由来の `sessionId` は Runtime が FileWriter 直前に safe-segment へエンコード**する（許容 `[A-Za-z0-9_-]`・それ以外を `_` 置換・`.`/`..`/空文字は予約語へ・長さ上限 truncation・パストラバーサル防止）。論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には**生 `sessionId`** を保持し、エンコードは物理ファイル名生成にのみ適用（OpenCode の `ses_*` は通常無変換だが防御的に常時適用・衝突回避が要る場合は短ハッシュ接尾辞）。§9.4 NFR security と整合。
+
 ---
 
 ## 5. データモデル / イベントスキーマ
@@ -176,7 +182,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
   "agentId": "hephaestus",            // 値域 ObservationAgentId=AgentId("atlas"|"hephaestus"|"sisyphus"|"prometheus")|"system"|"unknown"（D56）。取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）。persona isolation/wisdom routing には AgentId(4 persona) のみ流す（system/unknown 非流入・D56）
-  "sessionId": "ses_...",
+  "sessionId": "ses_...",       // 物理パスセグメント化時は safe-segment エンコード（[A-Za-z0-9_-] 以外を置換・"."/".."/空を予約置換・パストラバーサル防止・D69）。論理鍵 shardId/参照には生値を保持
   "writerId": "w-3f2a9c4e",     // 必須: writer segment 識別子（Runtime が "w-"+crypto.randomUUID() で採番・文字種 [A-Za-z0-9-]・予約語 system と区別・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39/D55）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
   "recordType": "observation" | "decision" | "learning"
@@ -320,7 +326,10 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 {
   "schemaVersion": 1, "rebuiltAt": "...",
   "tasks": { "task-3": { "status": "...", "lastVerdict": "PASS" } },
-  "reviewSummary": { "authority": "observed_review_output", "critical": [], "major": [], "minor": [], "resolved": [], "open": [] }
+  "reviewSummary": {            // グローバル集約（後方互換・全 scope 横断表示）
+    "authority": "observed_review_output", "critical": [], "major": [], "minor": [], "resolved": [], "open": [],
+    "byScope": { /* "<reviewScope>": { "critical":[],"major":[],"minor":[],"resolved":[],"open":[] } — review_open_items gate はこの scope 別 open を参照・D66 */ }
+  }
   // current_branch / active_prs はキャッシュせず git/外部へ live クエリ（FR-001）
 }
 ```
@@ -374,8 +383,8 @@ OpenCode: tool.execute.after 発火（全ツール）
 OpenCode: event(message.part.updated=TextPart.text) / plugin hook experimental.text.complete 発火（message.updated は role/finish の lifecycle・chat.message=UserMessage は assistant 申告源ではない・D41）
   → opencode-adapter が JusticePlugin.handleEvent({ type:"Message" }) へ送出
   → observation-handler.handleMessage():
-       0. role 相関（D53）: messageRoleBuffer（messageID → { role, partIDs[], finalized }）を更新。message.updated で role/finalized を確定、part（{messageID,partID,text}）受信時は messageID で role を解決。role 未確定（到着順逆転）なら pending 保留→後続 message.updated で解決、role≠assistant 確定なら破棄（ユーザー入力の declared 誤抽出を防止）
-       1. role=assistant 確定 part の本文からのみ合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
+       0. role 相関（D53）: messageRoleBuffer（{sessionId,messageID} → { role, parts: Map<partID,{text,finalized}>, finalized }）を更新。message.updated で role/finalized を確定、part（{messageID,partID,text}）受信時は messageID で role を解決し **parts[partID].text を最新値で上書き**（同一 partID の更新を集約・D67）。role 未確定（到着順逆転）なら pending 保留→後続 message.updated で解決、role≠assistant 確定なら破棄（ユーザー入力の declared 誤抽出を防止）
+       1. **テキスト確定後のみ抽出（D67）**: `experimental.text.complete`（{messageID,partID}→{text}）または message.updated の finish 確定で part を finalized 化し、**finalized かつ role=assistant の part 本文からのみ**合否主張（"tests pass" 等の自己申告）を抽出して declaredClaims を生成（`message.part.updated` の中間ストリーミング本文では抽出しない）。同一 `(messageID,partID)` からの再生成 claim は既存 declaredClaims を**置換（dedup）**し、否定・修正された陳腐化主張を残さない
        2. ObservationRecord{ kind:"message" } を構築（本文全文は保持せず textHash＋最小 textSnippet のみ・FR-001 非目的・D34）
        3. 合否主張があれば Evidence{ provenance:"declared" } を付与（観測裏付け無し）
        4. SecretPatternDetector で textSnippet / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
@@ -463,7 +472,7 @@ gates:
 |---|---|
 | `evidence_outcome` | 指定 kind の Evidence が指定 outcome で存在するか |
 | `evidence_present` | 指定 kind の Evidence が1件以上あるか |
-| `review_open_items` | Review Summary に指定 severity 以上の open 項目が無いか |
+| `review_open_items` | **`ctx.reviewScope[]` に一致する** Review Summary の open 項目（指定 severity 以上）が無いか（別 task/別スコープの open を混入させない・§7.3/§7.6/D66） |
 
 新チェック型の追加は「AI 提案 → 人間承認 → gate.yaml + engine にコード追加」。Engine は語彙を決定論的に評価するのみ。
 
@@ -482,7 +491,8 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 
 - INV-009 / FF-002: 同一 `(gates, evidence, ctx)` → 同一 `Verdict`。
 - FF-003: 副作用ゼロ（I/O 不在をテストでアサート）。
-- **GateContext** は観測の文脈 `{ trigger, taskId, agentId, sessionId }` を持つ（**task gate では `taskId` 必須**・§5.8）。I/O・時計・乱数は含めない（決定論のため）。
+- **GateContext** は観測の文脈 `{ trigger, taskId, agentId, sessionId, reviewScope[] }` を持つ（**task gate では `taskId` 必須**・§5.8、`reviewScope[]`=当該 task 窓内で観測した `review_observed.reviewScope` 集合・D66）。I/O・時計・乱数は含めない（決定論のため）。
+- **`gateType:"task"` かつ `ctx.taskId` 不在時は評価を skip**（DecisionRecord 非生成・PROCEED・D68）。`trigger: tool_observed` が task 窓外（taskId 未刻印）の観測で発火しても task gate は起動せず観測記録のみ行う。v2.0 は gateType=task のみ（§5.4）で global/session gate が無いため、taskId 不在 tool_observed は gate 評価対象外。
 - **provenance ゲーティング（L0 充足条件・FF-008）**: `evidence_outcome` / `evidence_present` の**充足（PASS）判定に算入する Evidence は `observed` / `derived` のみ**。**ただし `derived` は起源が observed のものに限る**（task サマリ等 declared を起源とする派生は `declared` 扱いで PASS 非算入・§5.8/D29）。`declared`（自己申告）は充足に算入せず、当該 kind に observed/derived が無ければ `onMissingEvidence`（既定 WARN）として扱い、declared のみ存在する場合は「申告あり・観測なし」を WARN reason に明示する。L0 でも適用（観測のみが PASS を生む）。
 
 ### 7.4 組込デフォルト ＋ 上書き precedence ＋ trust モデル
@@ -509,7 +519,7 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 - **severity の決定論的導出（D57・I1 対応）**: 現 `ReviewRejectionSignal`={matched,excerpts,summary} に severity が無いため、review-aggregator 拡張が**語彙ベースの決定論的分類器**で severity を新規付与する。凍結 RegExp 語彙（`review-rejection-patterns.ts` と同方式）で critical（例: `security|vulnerability|data ?loss|破壊的|重大`）> major（例: `must fix|required|bug|regression|要修正|不具合`）> minor（例: `nit|suggestion|optional|style|軽微|提案`）を順位評価し、最初に一致した最上位を採る（一致無しは保守的に minor）。AI 動的生成はしない（§11 V3-06）。`itemKey` は `severity` ＋ 正規化要約（小文字化・空白畳み込み・先頭 N 文字）＋ `location` から決定的に合成し、同一論点で itemKey が安定する（D32 解決判定の前提）。分類器・itemKey 合成は純粋関数（FF-002）。
 - **解決規則（D32・消失≠解決）**: `itemKey` ごとに集約する。`resolved` への遷移は次のいずれかでのみ成立する — (a) item に**明示的解決マーカー**がある、(b) **同一 `reviewScope` の完全スナップショット**な後続レビューで当該 item が不在、(c) **人間承認 artifact** が解決を示す。**単なる item 消失（レビュー範囲差・検出器の漏れ・出力形式変化）では `resolved` にせず `open` を据え置く**（未解決 major/critical の取りこぼしを防ぐ）。`reviewScope` が一致しない後続レビューは当該スコープ外 item の状態を変更しない。
 - **集約のみ（FR-006 準拠）**: Justice はレビューを行わず集約のみ。解決判定は AX-001/002（証拠なき消失を解決と前提しない）に従う。
-- `review_open_items` gate はこの `open` 集合を参照。
+- `review_open_items` gate は **`GateContext.reviewScope[]`（task 窓内で観測した reviewScope 集合）に一致する `open` 集合のみ**を参照する（`reviewSummary.byScope[scope].open`・§5.6/§7.3/D66）。スコープ不一致の open（別 task/別レビュー範囲）は現 Task Gate の verdict に影響させない。該当スコープに open が無ければ条件成立で PASS（レビュー未観測を FAIL にしない）。
 
 ### 7.7 ユーザー露出インターフェース名（Finding 6 対応）
 
@@ -690,3 +700,4 @@ Phase 1(build):
 > 3. **I1/D57**: severity 決定論的分類器（§7.6）と itemKey 安定性テストを計画に含める。
 > 4. **I4**: §9.3.1 の Runtime 統合テスト4点を実装順序（§10.3）と DoD に組み込む。
 > 5. **本レビュー Finding 1〜5／追加4 反映（D60〜D65）**: bash 経由ファイル本文の `file_content` 分類（D60）・Evidence command/args の redaction（D61）・task サマリ transcript の `declared` 据置（D62）・authorship 縮退の CODEOWNERS 追認（D63）・PostToolUse payload マージ規則（D64）・messageRoleBuffer 鍵/TTL 確定（D65）を本設計に反映済み。実装計画では D60 分類器の語彙テスト・D61 redaction テスト・D64 マージ規則テストを §9.3/§9.3.1 と DoD に組み込む。
+> 6. **本レビュー（追補 R）Finding 1〜4 反映（D66〜D69）**: `review_open_items` の scope-aware 化（D66・§5.6/§7.2/§7.3/§7.6）・declared 抽出のテキスト確定/partID 上書き/dedup（D67・§6.1.1）・`tool_observed` × taskId 不在時 skip（D68・§6.2/§7.3）・`sessionId` 等パスセグメントの safe-segment エンコード（D69・§4.5/§5.1/§9.4）を本設計に反映済み。実装計画では D66 scope 投影テスト・D67 ストリーミング確定/dedup テスト・D68 taskId 不在 skip テスト・D69 sanitize/衝突回避テストを §9.3/§9.3.1 と DoD に組み込む。
