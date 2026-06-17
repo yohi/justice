@@ -6,7 +6,7 @@
 |------|----|
 | 作成日 | 2026-06-16 |
 | ステータス | Design（Accepted・実装計画化待ち） |
-| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに準拠。ただし FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5） |
+| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに準拠。ただし一部は意図的に部分縮退/deferred: ①FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5、②FR-002 の OmO agents awareness は v2.5 FR-003 Handoff へ deferred・D37/D43、③FR-005 の Acceptance Criteria は v2.5+ Feature Gate へ deferred・D35/D43） |
 | 起点 | `@yohi/justice` v2.3.0（Phase 9 完了・563 tests passing） |
 | 上位文書 | [Architecture Charter v3.0](../../2026-06-16-justice-v2-v3-requirements.md)（Accepted / Frozen） |
 | 関連スキル | `superpowers/brainstorming`（本書作成）→ `superpowers/writing-plans`（次工程） |
@@ -29,7 +29,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | # | 論点 | 決定 | 根拠 |
 |---|---|---|---|
 | D1 | 新 spine と既存コードの統合 | **加算シャドウ**。新 spine を並走追加し `ReflectionEvent` も発行するが、plan.md 書込は温存（dual）。完全カットオーバーは v2.5 | 既存 563 テストへの破壊最小・最短で出荷。INV-005 違反は DEBT-001 として明示存続 |
-| D2 | v2.0 の FR スコープ | **憲章 §14 Phase 1 に厳密準拠**。FR-001/002/004/005/006 + 観測拡張。FR-003 Handoff・FR-007 Final Verifier は v2.5 | 憲章の実装優先順位と整合 |
+| D2 | v2.0 の FR スコープ | 憲章 §14 Phase 1 の FR 優先順位に**準拠**（FR-001/004/005/006 + FR-002 partial + 観測拡張）。**部分縮退を明示**: FR-002 は skill 観測のみ（agents awareness は v2.5・D37）、FR-004 は exit_code を `derived` 縮退（D5）、FR-005 は Acceptance Criteria を deferred（D35）。FR-003 Handoff・FR-007 Final Verifier は v2.5 | 憲章の実装優先順位と整合。「厳密準拠」ではなく明示した部分縮退付き準拠（D43） |
 | D3 | 実装アプローチ | **Approach A（直交観測レイヤー）**。専用観測ハンドラを `mergePostToolUseResponses` で既存ハンドラと合流、全ツール観測 | Pure-Core 厳守・既存無改変・v2.5 移行容易 |
 | D4 | `/justice-*` 登録方式 | **カスタム tool として実装**（`tool` hook） | OpenCode に slash command 登録 API が無い（Phase 0 確定） |
 | D5 | Evidence の exit_code | **`observed` ではなく `derived`**（output パース or `metadata.error`） | `tool.execute.after` に exit_code/stderr フィールドが無い（Phase 0 確定） |
@@ -41,31 +41,36 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D11 | Review 入力/解決 | review_observed は task/レビュー出力を ReviewRejectionDetector で処理して生成。item キーで latest-review-wins、open/resolved 判定 | FR-006 の入力源と解決規則を明確化（Finding 4） |
 | D12 | state.json 永続化 | FileWriter atomic + fail-open + log 権威（破損→再構築） | AGENTS.md の I/O 方針準拠（Finding 5） |
 | D13 | UI 名 | v2.0 は custom tool 名のみ。slash 互換エイリアスは任意（stretch） | 後続計画の混乱回避（Finding 6） |
-| D14 | レコード間参照の同一性 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}` 複合参照**化（shardId=`{agentId, sessionId}`）。`sequence` 単体は shard 内一意のみ。`evidenceId` で record 内の特定 Evidence/claim/item を一意化（D31 で改訂） | shard 横断マージ時の参照曖昧性とレコード内多根拠の曖昧性を排除（レビュー指摘 R1 / 第4R 指摘3） |
+| D14 | レコード間参照の同一性 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}` 複合参照**化（shardId=`{agentId, sessionId, writerId}`・D39）。`sequence` 単体は shard（writer segment）内一意のみ。`evidenceId` で record 内の特定 Evidence/claim/item を一意化（D31 で改訂） | shard 横断マージ時の参照曖昧性とレコード内多根拠の曖昧性を排除（レビュー指摘 R1 / 第4R 指摘3） |
 | D15 | ReflectionEvent のスキーマ化 | **`ObservationRecord{kind:"reflection"}`** を追加し payload を定義。憲章の3レコード型（Observation/Decision/Learning）は維持 | DEBT-001 seam の直列化先を確定（レビュー指摘 R2） |
-| D16 | Message 観測経路 | `message.updated`/`chat.message` → `ObservationRecord{kind:"message"}` → `declared` Evidence のフローを明文化 | declared の生成元を確定（レビュー指摘 R3） |
+| D16 | Message 観測経路 | assistant 自己申告の本文は **`message.part.updated`（TextPart.text）または plugin hook `experimental.text.complete`** から取得（`message.updated`=`EventMessageUpdated` は `info:Message` のみで本文を持たず role/finish の lifecycle 用、`chat.message` は `UserMessage`=ユーザー入力で assistant 申告源ではない）→ `ObservationRecord{kind:"message"}` → `declared` Evidence のフロー（§4.2/§5.2/§6.1.1・D41） | declared の生成元と具体 event payload mapping を確定（レビュー指摘 R3 / 本レビュー指摘5） |
 | D17 | Artifact メタデータ | Artifact（`gate.yaml` / Review Summary）に **authorship/authority** を付与（Evidence の provenance と対比） | 憲章 §8.3 と整合（レビュー指摘 R4） |
-| D18 | shard 横断 replay の全順序化 | projection マージのソート鍵を `timestamp` → `shardId` → `sequence` の**全順序**にする（shardId=`{agentId, sessionId}`）。`sequence` は shard 内一意のため shardId で衝突を排除（D30 で shardId 化） | 同 timestamp/同 sequence の shard 横断衝突で順序が未定義になる穴を解消（2026-06-16 レビュー第2R 指摘1・INV-009/FF-004） |
+| D18 | shard 横断 replay の全順序化 | projection マージのソート鍵を `timestamp` → `shardId` → `sequence` の**全順序**にする（shardId=`{agentId, sessionId, writerId}`・D39）。`sequence` は shard（writer segment）内一意のため shardId で衝突を排除（D30/D39 で shardId 化） | 同 timestamp/同 sequence の shard 横断衝突で順序が未定義になる穴を解消（2026-06-16 レビュー第2R 指摘1・INV-009/FF-004） |
 | D19 | retention は archive 限定 | v2.0 は rotation=archive（移送）のみ。物理 prune（削除）は canonical snapshot/checkpoint イベント定義後（v2.5+）に解禁 | 「event log が常に権威・常に再構築可能」(§9.4) との矛盾を解消（2026-06-16 レビュー第2R 指摘2） |
 | D20 | Task Gate の Evidence 保証範囲 | 評価対象を親セッション観測 + task PostToolUse 出力からの **`declared`（PASS 非算入）** に限定と明記（D29 で改訂: 旧 `derived` は raw transcript 観測時のみ）。サブエージェント内 `observed` の厳密相関は v2.5 Handoff。委譲時 WARN 優勢を KPI/DoD に明記 | gate が subagent 実行結果をほぼ拾えず常時 WARN 化する懸念に対応（2026-06-16 レビュー第2R 指摘3） |
 | D21 | ObservationRecord の union 化 | `kind` ごとの discriminated union として tool_executed/message/skill_invoked/review_observed/session_error/reflection の各 payload の必須/任意項目を定義 | payload 未定義による実装者依存を排除（2026-06-16 レビュー第2R 指摘4） |
 | D22 | UI 名表記の統一 | §7.5 見出しを `justice_*` read-only custom tool に改称。`/justice-*` slash 表記は stretch alias に限定 | 章見出しの表記混在による誤解を解消（2026-06-16 レビュー第2R 指摘5） |
-| D23 | 並行 append のイベント消失 | 同一 shard への append を Runtime の **per-shard async write queue で直列化**し sequence 採番もキュー内で実施。temp+rename の read-modify-write 競合を構造的に排除。**shard 鍵は `{agentId, sessionId}` に固定**し 1 プロセス=1 writer を保証（D30 でプロセス境界対応） | 「単一ファイル並行 append 禁止」の**強制機構**が未定義だった穴を解消（2026-06-16 レビュー第3R 指摘1・INV-008） |
+| D23 | 並行 append のイベント消失 | 同一 shard への append を Runtime の **per-shard async write queue で直列化**し sequence 採番もキュー内で実施。temp+rename の read-modify-write 競合を構造的に排除。**shard 鍵を `{agentId, sessionId, writerId}`（per-writer segment）に固定し「1 物理ファイル=1 writer」を構造保証**（writerId は Runtime が plugin インスタンス起動時に採番する一意 id）。複数プロセスが同一ファイルを書く経路を排除（D30/D39 で正式採用） | 「単一ファイル並行 append 禁止」の**強制機構**が未定義だった穴を解消（2026-06-16 レビュー第3R 指摘1・INV-008） |
 | D24 | declared の gate 充足不算入 | 既定 gate の**充足（PASS）に算入する provenance を `observed`/`derived` に限定**。declared は「申告あり・観測なし」の WARN 材料に限定（自己申告 "tests pass" 単独で PASS させない）。FF-008 で固定 | declared が L0 gate を PASS させ警告を抑制し得る穴を解消（2026-06-16 レビュー第3R 指摘2・INV-004） |
 | D25 | message/session_error の保存前 redaction | `message` の `textSnippet`・`declaredClaims`・`session_error.message` も append 前に **SecretPatternDetector 走査・redact ＋ truncation** を必須化（§6.1.1・§9.4・D34） | チャット/エラー本文の secrets・絶対パス・肥大化を永続化前に遮断（2026-06-16 レビュー第3R 指摘3・NFR security） |
 | D26 | DecisionRecord の per-rule 化 | DecisionRecord/Verdict を **`ruleResults[]{ ruleId, verdict, reason, evidenceRefs[] }`** 化。全体 status は最悪値合成、各 rule の根拠を保持 | 複数 gate 同時 WARN/FAIL 時に単数 ruleId/reason が情報を落とす穴を解消（2026-06-16 レビュー第3R 指摘4） |
-| D27 | projection マージの2段階化 | **shard 内＝`sequence` 優先 → shard 間＝`timestamp`→`shardId`→`sequence`** の2段階マージ（shardId=`{agentId, sessionId}`）。timestamp 逆転下でも shard 内因果順を保持 | 全順序化が shard 内 causal order を壊し得る穴を解消（決定性と因果整合は別目的・2026-06-16 レビュー第3R 指摘5・INV-009/FF-004） |
+| D27 | projection マージの2段階化 | **shard 内＝`sequence` 優先 → shard 間＝`timestamp`→`shardId`→`sequence`** の2段階マージ（shardId=`{agentId, sessionId, writerId}`・D39）。timestamp 逆転下でも shard 内因果順を保持 | 全順序化が shard 内 causal order を壊し得る穴を解消（決定性と因果整合は別目的・2026-06-16 レビュー第3R 指摘5・INV-009/FF-004） |
 | D28 | read-only のスコープ明記 | §7.5 に「read-only は workspace/code/commands に対するもので `.justice/state.json` 内部キャッシュ書込は許容」と明記 | read-only 表記とキャッシュ書込の表現衝突（誤読）を解消（2026-06-16 レビュー第3R 指摘6・INV-002/§5.6） |
 | D29 | task サマリ由来 Evidence の provenance | task PostToolUse 出力（サブエージェント結果サマリ）から抽出した合否主張は **`declared`** として扱い、gate 充足（PASS）には**算入しない**。raw コマンド transcript が出力に含まれ観測可能な場合のみ `derived` 昇格を許可。`derived` は常に **observed 起源**に限定（憲章 derived 定義と整合） | declared を `derived` に偽装して PASS 充足を迂回できる穴を解消。§5.8/§10.2 KPI の内部矛盾も解消（2026-06-16 レビュー第4R 指摘1・INV-004/AX-002） |
-| D30 | shard 鍵のプロセス境界 | shard 鍵を **`{agentId, sessionId}` に固定**（physical: `events/<agentId>/<sessionId>.jsonl`）。in-process queue は単一プロセス内直列化にしか効かないため、shard をプロセス=writer 単位に分離し別プロセスが同一ファイルを書かない設計とする。read 側は全 shard を merge。さらなる堅牢化は `{agentId, sessionId, processId}` / per-writer segment | per-agentId 単独鍵では複数セッション/プロセスが同一ファイルへ並行 append しイベント消失する穴を解消（2026-06-16 レビュー第4R 指摘2・INV-008/NFR 並行性） |
-| D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`** とし、record 内の特定 Evidence/claim/item を一意特定。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
+| D30 | shard 鍵のプロセス境界 | shard 鍵を **`{agentId, sessionId, writerId}` に固定**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D39）。in-process queue は単一プロセス内直列化にしか効かないため、shard を **writer（=プロセスインスタンス）単位の segment に分離**し、別プロセスは別ファイルを書く。read 側は全 segment を merge（FF-004 不変）。これにより「同一 session を単一プロセスが扱う」前提に依存しない | 単純 `{agentId, sessionId}` 鍵では複数プロセスが同一ファイルへ並行 append しイベント消失する穴を構造的に解消（2026-06-16 レビュー第4R 指摘2 / 本レビュー指摘4・INV-008/NFR 並行性） |
+| D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`**（直列化形 `{agentId, sessionId, writerId, sequence, evidenceId}`・D39）とし、record 内の特定 Evidence/claim/item を一意特定。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
 | D32 | review 解決規則の厳格化 | `resolved` は (a) 明示的解決マーカー、(b) **同一レビュースコープの完全スナップショット**での不在、(c) 人間承認 artifact のいずれかでのみ成立。単なる item 消失（範囲差・検出漏れ・出力形式変化）では `open` 据置。`review_observed` に `reviewScope` を付与しスコープ一致を判定 | 消失=resolved により未解決 major/critical が誤って解決扱いになる穴を解消。FR-006 は集約のみ要求（2026-06-16 レビュー第4R 指摘4・AX-001/002） |
-| D33 | rotation 後の sequence 採番 | sequence 初回復元を当該 shard の **active + archive 双方の最大 sequence** から行う（writer state の monotonic counter も可）。`{shardId, sequence}` の一意性を rotation 跨ぎで保証 | active のみ参照だと rotation 後に sequence が reset し archive と衝突、参照鍵の一意性と replay 決定性が壊れる穴を解消（2026-06-16 レビュー第4R 指摘5・INV-008/INV-009/FF-004） |
+| D33 | rotation 後の sequence 採番 | sequence 初回復元を当該 shard（writer segment）の **active + archive 双方の最大 sequence** から行う（writer state の monotonic counter も可）。`{shardId, sequence}` の一意性を rotation 跨ぎで保証 | active のみ参照だと rotation 後に sequence が reset し archive と衝突、参照鍵の一意性と replay 決定性が壊れる穴を解消（2026-06-16 レビュー第4R 指摘5・INV-008/INV-009/FF-004） |
 | D34 | message 本文の非永続化 | `message` レコードは本文全文を保持せず **`textHash`（必須）＋ `textSnippet`（任意・最小）＋ `declaredClaims`** のみ保存。redaction も snippet に適用 | FR-001 非目的「設計内容・実装計画・タスク定義は保持しない」への抵触経路を遮断（レビュー指摘 ISS-002・INV-001/INV-008） |
 | D35 | Acceptance Criteria の v2.0 扱い | Task Gate の **Acceptance Criteria は v2.0 では観測・判定の対象外（deferred）**。固定語彙（§7.2）は Required Tests/Evidence/Review のみ対応。AC は plan.md 由来の feature 級基準で外部 SoT（INV-008）に属するため v2.5+（Feature Gate）で扱う | §6.2 の AC 評価宣言と §7.2 固定語彙の AC 機構欠如という内部不整合を解消（レビュー指摘 ISS-001・FR-005） |
 | D36 | retention NFR の v2.0 充足範囲 | v2.0 は rotation（サイズ/年齢→archive 移送）を定義するが、**「無限増大を防ぐ」総量上限は archive 単独では未達のため deferred と明示**。物理 prune は canonical snapshot/checkpoint 定義後（v2.5+）に解禁 | 憲章 §13 NFR「無限増大を防ぐ」の未達の明示化（レビュー指摘 ISS-003） |
 | D37 | FR-002 の v2.0 スコープ | v2.0 は **skill awareness（SkillInvoked 観測）に限定**。OmO agents awareness（どの agent が起動したか）は **FR-003 Handoff（v2.5）へ縮退** | FR-002「superpowers skills / OmO agents 把握」のうち agents 側スコープを明確化（レビュー指摘 ISS-004） |
-| D38 | system shard の物理パス統一 | 予約 shard `{system, system}` の物理パスを **`events/system/system.jsonl`** に統一し、他 shard の `events/<agentId>/<sessionId>.jsonl` 導出規則と一致（特例排除） | shardId→物理パス導出の例外を排除（レビュー指摘 ISS-005・D30 と整合） |
+| D38 | system shard の物理パス統一 | 予約 shard `{system, system}` の物理パスを **`events/system/system/<writerId>.jsonl`** とし、他 shard の `events/<agentId>/<sessionId>/<writerId>.jsonl` 導出規則と一致（特例排除・D39） | shardId→物理パス導出の例外を排除（レビュー指摘 ISS-005・D30/D39 と整合） |
+| D39 | per-writer segment の正式採用 | shardId を **`{agentId, sessionId, writerId}`** に再定義し物理レイアウトを **`events/<agentId>/<sessionId>/<writerId>.jsonl`** とする。`writerId` は Runtime が plugin インスタンス起動時に採番する一意 id（衝突回避目的・Core 決定論には不参加）。sequence は writer segment 内単調増加、global key=`{shardId, sequence}`、参照=`{agentId, sessionId, writerId, sequence, evidenceId}`。read は全 segment を merge | 旧 `{agentId, sessionId}` 鍵は「同一 session=単一プロセス」前提に依存し複数プロセス並行 append でイベント消失する穴があった。前提を排除し「1 ファイル=1 writer」を構造保証（本レビュー指摘4・INV-008/NFR 並行性） |
+| D40 | archive の物理レイアウト分離と走査規則 | rotation 退避先を **`events/` の外（`.justice/archive/events/<agentId>/<sessionId>/<writerId>.jsonl`）** に固定し live shard 名前空間（`events/<agentId>/...`）と物理分離。`agentId="archive"` 衝突と readAll 誤走査を排除。**readAll は active（`.justice/events/**`）＋ archive（`.justice/archive/events/**`）双方を列挙してマージ**し replay 可能性（FF-004）を保つと明文化 | 旧 `events/archive/` は agentId 階層と同位で衝突・誤走査の恐れがあり走査規則も未定義だった（本レビュー指摘3・INV-008/FF-004・D38 の特例排除方針と整合） |
+| D41 | assistant 自己申告の event mapping 確定 | declared 経路の入力源を確定: 本文は **`message.part.updated`（`EventMessagePartUpdated`→`TextPart.text`）** または plugin hook **`experimental.text.complete`（`{messageID, partID}→{text}`）** から取得し、`message.updated`（`EventMessageUpdated.properties.info: Message`）は role/finish の lifecycle 確認に用いる。**`chat.message` は `UserMessage`（ユーザー入力）であり assistant 申告源には使わない** | `@opencode-ai/plugin` 型定義上 `chat.message`=UserMessage・`AssistantMessage` に本文フィールド無し（本文は Part 側）であり、`chat.message`/`message.updated` 等価扱いは declared 経路を空振りさせる（本レビュー指摘5） |
+| D42 | sequence 採番と参照生成の時間差解決 | `sequence` は append queue 内採番のため抽出時点で未確定。(a) **同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `sequence` を**省略可とし `evidenceId` のみで自レコード相対参照**、(b) **クロスレコード参照**（先行 observed への `derivedFrom`/`evidenceRefs`）は projection で採番済みの `{shardId, sequence, evidenceId}` を解決して埋める。Core は採番に関与せず projection 済み Evidence のみ参照 | 参照鍵が `sequence` を要求する一方 sequence は I/O 側採番のため、純粋 Core が抽出時に参照を作れない矛盾を解消（本レビュー指摘6・INV-009/Traceability 前提） |
+| D43 | v2.0 スコープ表現の精緻化と UI 表記残件 | D2 の「厳密準拠」を**明示的部分縮退付き準拠**へ緩和し、メタ情報（§0）逸脱リストに FR-002-agents（→v2.5・D37）と FR-005-AC（→v2.5・D35）を `exit_code`（D5）と並記。§11 トレーサビリティ表の `/justice-*` 表記を `justice_*` custom tool（D13/D22）へ統一 | 詳細スコープ表（§10.1）は分割済みだがサマリ見出しが完成度を過大表示し、UI 名統一後も一部 `/justice-*` が残存（本レビュー指摘1/2/7） |
 
 ---
 
@@ -104,13 +109,13 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 | モジュール | 責務 |
 |---|---|
-| `observation-handler.ts` | 全ツールの Pre/PostToolUse ＋ **Message（`message.updated`/`chat.message`）** を観測 → Observation 生成 → gate 評価 → L0 advisory `inject`。既存ハンドラと `mergePostToolUseResponses` で合流 |
+| `observation-handler.ts` | 全ツールの Pre/PostToolUse ＋ **Message（assistant 本文は `message.part.updated`/`experimental.text.complete`、`message.updated` は role/finish lifecycle・§6.1.1/D41）** を観測 → Observation 生成 → gate 評価 → L0 advisory `inject`。既存ハンドラと `mergePostToolUseResponses` で合流 |
 
 ### 4.3 新規 Runtime（実 I/O）
 
 | モジュール | 責務 |
 |---|---|
-| `observation-log-store.ts` | `.justice/events/<agentId>/<sessionId>.jsonl`（shard 鍵=`{agentId, sessionId}`・§9.4/D30）への atomic 追記（temp+rename）+ 全 shard 読取マージ。**同一 shard への append は per-shard async write queue で直列化**（read-modify-write 競合とイベント消失を防止・§9.4 並行性）。sequence は直列化キュー内でインメモリ管理（初回は当該 shard の **active + archive 双方の最大 sequence** から復元・rotation 跨ぎ衝突を防止・D33） |
+| `observation-log-store.ts` | `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl`（shard 鍵=`{agentId, sessionId, writerId}`・per-writer segment・§9.4/D30/D39）への atomic 追記（temp+rename）+ active＋archive 全 segment 読取マージ（D40）。**同一 shard への append は per-shard async write queue で直列化**（read-modify-write 競合とイベント消失を防止・§9.4 並行性）。sequence は直列化キュー内でインメモリ管理（初回は当該 shard の **active + archive 双方の最大 sequence** から復元・rotation 跨ぎ衝突を防止・D33） |
 | `gate-loader.ts` | `.justice/gate.yaml` 読込・パース（+ 組込デフォルト）→ 純粋 engine へ data 注入 |
 | `justice-tools.ts` | `justice_status` / `justice_gate` / `justice_review` の tool 定義（read-only） |
 | `opencode-adapter.ts`（既存拡張） | `tool !== "task"` フィルタ撤廃 + 新観測イベント送出。`tool` hook 配線 |
@@ -125,15 +130,15 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```text
 .justice/
-  events/<agentId>/<sessionId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId}・1 writer/shard）
-  events/system/system.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system"}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
-  events/archive/          # retention rotation 退避先
+  events/<agentId>/<sessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId, writerId}・1 物理ファイル=1 writer・D39）
+  events/system/system/<writerId>.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system", writerId}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
+  archive/events/<agentId>/<sessionId>/<writerId>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
   wisdom.json              # 既存（不変）
 ```
 
-> **憲章保存先パスとの関係（互換的詳細化）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId shard を置く（`events/<agentId>/<sessionId>.jsonl`）。これは並行 append 競合・イベント消失の回避（D30・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol を変更しない（凍結ガバナンス §16.3 の対象外）。読取時は全 shard をマージするため projection 再構築可能性（FF-004）は保たれる。
+> **憲章保存先パスとの関係（互換的詳細化）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol を変更しない（凍結ガバナンス §16.3 の対象外）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
 
 ---
 
@@ -144,20 +149,21 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 ```jsonc
 {
   "schemaVersion": 1,
-  "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, sequence}）
+  "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
   "agentId": "hephaestus",
   "sessionId": "ses_...",
+  "writerId": "w-...",          // 必須: writer segment 識別子（Runtime 採番・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
   "recordType": "observation" | "decision" | "learning"
 }
 ```
 
-読取時の projection 再構築は **2段階マージ**で行う（§6.3）: ① **shard 内**は `sequence` 昇順で整列（shard 内因果順＝単調増加の sequence を最優先。時計ずれや timestamp 逆転があっても shard 内の因果順を壊さない）、② **shard 間**は整列済みの各 shard を `timestamp` → `shardId` → `sequence` でマージ（shardId=`{agentId, sessionId}`。同 timestamp の shard 横断衝突は二次キー `shardId`・三次キー `sequence` で一意化）。これにより決定性（FF-004）と shard 内因果整合を両立する（INV-009）。
+読取時の projection 再構築は **2段階マージ**で行う（§6.3）: ① **shard 内**は `sequence` 昇順で整列（shard 内因果順＝単調増加の sequence を最優先。時計ずれや timestamp 逆転があっても shard 内の因果順を壊さない）、② **shard 間**は整列済みの各 shard を `timestamp` → `shardId` → `sequence` でマージ（shardId=`{agentId, sessionId, writerId}`・D39。同 timestamp の shard 横断衝突は二次キー `shardId`・三次キー `sequence` で一意化）。これにより決定性（FF-004）と shard 内因果整合を両立する（INV-009）。
 
-> **レコード参照の同一性とソート順序**: `sequence` は **shard（=shardId=`{agentId, sessionId}`）内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{shardId, sequence, evidenceId}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（`evidenceId` は record 内の特定 Evidence/claim/item を一意化・§5.3 / §5.4 / D31）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`shardId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
+> **レコード参照の同一性とソート順序**: `sequence` は **shard（=shardId=`{agentId, sessionId, writerId}`）内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{shardId, sequence, evidenceId}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（`evidenceId` は record 内の特定 Evidence/claim/item を一意化・§5.3 / §5.4 / D31）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`shardId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
 >
-> **参照のレコード表現（型の正本）**: 上記の複合参照は記録上 **`{agentId, sessionId, sequence, evidenceId}` の展開形**で直列化する（§5.3 `derivedFrom` / §5.4 `evidenceRefs` の JSON 例と一致）。`shardId` は `{agentId, sessionId}` の別称であって独立フィールドとしては直列化しない（L140 の等価関係 `{shardId, sequence}`＝`{agentId, sessionId, sequence}`）。実装の参照型はこの4要素オブジェクトを単一の正本とし、D14/D31 の `{shardId, …}` 表記はこの展開形を指す。
+> **参照のレコード表現（型の正本）**: 上記の複合参照は記録上 **`{agentId, sessionId, writerId, sequence, evidenceId}` の展開形**で直列化する（§5.3 `derivedFrom` / §5.4 `evidenceRefs` の JSON 例と一致・D39）。`shardId` は `{agentId, sessionId, writerId}` の別称であって独立フィールドとしては直列化しない（§5.1 エンベロープの等価関係 `{shardId, sequence}`＝`{agentId, sessionId, writerId, sequence}`）。実装の参照型はこの5要素オブジェクトを単一の正本とし、D14/D31 の `{shardId, …}` 表記はこの展開形を指す。**同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `writerId`/`sequence` を省略し `evidenceId` のみで自レコードを相対参照、**クロスレコード参照**は projection で採番済みの値を解決して埋める（sequence は append queue 採番のため抽出時点では未確定・D42）。
 
 ### 5.2 ObservationRecord（観測した事実）
 
@@ -171,7 +177,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "callId":"call_...",         // 必須
   "evidence":{ /* §5.3 */ } }  // 必須: observed Evidence(+interpretation?)
 
-// (b) message — エージェント発話（declared 経路・§6.1.1）
+// (b) message — エージェント発話（declared 経路・本文源は message.part.updated/experimental.text.complete・§6.1.1/D41）
 { "...envelope":"...", "recordType":"observation", "kind":"message",
   "role":"assistant",          // 必須: 発話主体
   "textHash":"sha256:...",     // 必須: 本文のハッシュ（全文は保持しない・FR-001 非目的・§6.1.1/§9.4・D34）
@@ -231,7 +237,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
     "outcome": "pass" | "fail" | "unknown",
     "basis": "parsed_output" | "metadata_error",
     "provenance": "derived",
-    "derivedFrom": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 40, "evidenceId": "ev-0" }]   // 元 observed Evidence の複合参照（{shardId, sequence, evidenceId}・shard 横断一意・D31）
+    "derivedFrom": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-0" }]   // 元 observed Evidence の複合参照（{shardId,sequence,evidenceId}・shardId={agentId,sessionId,writerId}・shard 横断一意・D31/D39。同一レコード内 self-ref は writerId/sequence を省略し evidenceId のみ・D42）
   }
 }
 ```
@@ -256,9 +262,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "appliedEnforcementLevel": "L0",          // v2.0 は常に L0
   "ruleResults": [                          // 評価した各 rule の per-rule 結果（複数 gate 同時 WARN/FAIL でも情報を落とさない）
     { "ruleId": "required-tests", "verdict": "FAIL", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 40, "evidenceId": "ev-1" }] },   // 根拠 Evidence の複合参照（{shardId, sequence, evidenceId}・shard 横断＋record 内一意・D31）
+      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-1" }] },   // 根拠 Evidence の複合参照（{shardId,sequence,evidenceId}・shardId={agentId,sessionId,writerId}・shard 横断＋record 内一意・D31/D39）
     { "ruleId": "build-green", "verdict": "WARN", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 41, "evidenceId": "ev-2" }] }
+      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 41, "evidenceId": "ev-2" }] }
   ]
 }
 ```
@@ -311,7 +317,7 @@ OpenCode: tool.execute.after 発火（全ツール）
        1. evidence-engine: {output, metadata} → Evidence(observed) + interpretation(derived)
        2. SecretPatternDetector で rawOutput を走査・redact（§9 security）
        3. ObservationRecord 構築
-       4. observation-log-store.append(shard={agentId, sessionId}, record)   ← Runtime I/O
+       4. observation-log-store.append(shard={agentId, sessionId, writerId}, record)   ← Runtime I/O
        5. gate トリガ該当なら → 評価フロー（§6.2）
   → HookResponse 返却（proceed / WARN・FAIL なら inject）
   → mergePostToolUseResponses で plan-bridge / task-feedback と合流
@@ -320,14 +326,14 @@ OpenCode: tool.execute.after 発火（全ツール）
 ### 6.1.1 Message 観測と declared Evidence（FR-004・declared 経路）
 
 ```text
-OpenCode: event(message.updated) / chat.message 発火
+OpenCode: event(message.part.updated=TextPart.text) / plugin hook experimental.text.complete 発火（message.updated は role/finish の lifecycle・chat.message=UserMessage は assistant 申告源ではない・D41）
   → opencode-adapter が JusticePlugin.handleEvent({ type:"Message" }) へ送出
   → observation-handler.handleMessage():
-       1. メッセージ本文から合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
+       1. assistant の TextPart 本文（role=assistant のみ対象）から合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
        2. ObservationRecord{ kind:"message" } を構築（本文全文は保持せず textHash＋最小 textSnippet のみ・FR-001 非目的・D34）
        3. 合否主張があれば Evidence{ provenance:"declared" } を付与（観測裏付け無し）
        4. SecretPatternDetector で textSnippet / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
-       5. observation-log-store.append(shard={agentId, sessionId}, record)   ← Runtime I/O
+       5. observation-log-store.append(shard={agentId, sessionId, writerId}, record)   ← Runtime I/O
   → declared は L0 advisory 入力限定（L1+ deny には不使用・FF-007）
 ```
 
@@ -353,9 +359,9 @@ Task Gate は FR-005 の確認項目のうち **Required Tests / Evidence / Revi
 
 ```text
 トリガ: justice_status tool / 評価が横断状態を要する時
-  → observation-log-store.readAll(shards)             ← Runtime I/O
+  → observation-log-store.readAll(active + archive の全 segment)   ← Runtime I/O（D40）
   → state-projection.project(events): 純粋 fold
-       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId}）→ ProjectedState（決定論的・FF-004）
+       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId, writerId}・D39）→ ProjectedState（決定論的・FF-004）
   → state.json にキャッシュ
   → current_branch / active_prs は別途 live クエリ
 ```
@@ -524,9 +530,9 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 
 | 領域 | v2.0 方針 |
 |---|---|
-| 並行性 | **shard 鍵=`{agentId, sessionId}`**（physical: `events/<agentId>/<sessionId>.jsonl`・D30）の JSONL シャード・全 shard 読取マージ。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**ただし in-process queue はプロセス内直列化にしか効かない**ため、shard を `{agentId, sessionId}`=1 writer 単位に分離し、**複数セッション/プロセスが同一ファイルへ並行 append しない**設計で「単一ファイル並行 append 禁止」（憲章 NFR）を構造的に満たす。1 セッションが複数プロセスに跨る場合は `{agentId, sessionId, processId}` / per-writer segment へ細分化（read 側 merge で吸収） |
+| 並行性 | **shard 鍵=`{agentId, sessionId, writerId}`（per-writer segment）**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D30/D39）の JSONL シャード・active＋archive 全 segment 読取マージ（D40）。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**`writerId` を Runtime が plugin インスタンス起動時に採番し「1 物理ファイル=1 writer」を構造保証**するため、in-process queue の直列化が常に有効で、複数プロセス/セッションが同一ファイルへ並行 append する経路自体が存在しない（「単一ファイル並行 append 禁止」=憲章 NFR を構造的に充足）。これにより「同一 session=単一プロセス」前提に依存せず、read 側は全 writer segment を merge（FF-004 不変） |
 | スキーマ versioning | 全 `.justice/` に `schemaVersion`・`WisdomPersistence` 同様の移行戦略 |
-| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/events/archive/`（**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。**憲章 NFR「無限増大を防ぐ」の総量上限は archive 単独では未達のため v2.0 では deferred と明示する（D36・§12 限界-4）**: rotation は active シャードのサイズ/年齢を抑制するが総量（active+archive）は単調増加し、物理削減は下記 prune 解禁後（v2.5+）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
+| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/archive/events/<agentId>/<sessionId>/<writerId>.jsonl`（live shard 名前空間と物理分離・D40。**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。**憲章 NFR「無限増大を防ぐ」の総量上限は archive 単独では未達のため v2.0 では deferred と明記する（D36・§12 限界-4）**: rotation は active シャードのサイズ/年齢を抑制するが総量（active+archive）は単調増加し、物理削減は下記 prune 解禁後（v2.5+）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard（writer segment）の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
 | セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合）、(2) `message` の `textSnippet`・`declaredClaims`（**本文全文は永続化しない**・FR-001 非目的・D34）、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
 | 性能 | tool.execute.after レイテンシ予算（§3）・実装初手で実測 |
 | 信頼性 | 不変条件 (A) infra-error→fail-open を回帰テストで固定（FF-006）。L1+ 拡大は trust 蓄積後 |
@@ -587,7 +593,7 @@ Phase 1(build):
 | INV | 本設計での担保 |
 |---|---|
 | INV-001（設計を生成しない） | Justice は plan/design を著作しない。観測と判定のみ |
-| INV-002（コードを書かない・実行しない） | `/justice-*` は read-only tool。Core は OpenCode 非依存（FF-001） |
+| INV-002（コードを書かない・実行しない） | `justice_*` は read-only custom tool（§7.5/D13/D22）。Core は OpenCode 非依存（FF-001） |
 | INV-003（Verdict authority 保持） | rule-evaluation-engine が Verdict を産出 |
 | INV-004（observed/derived のみ Evidence） | Evidence に provenance 必須。declared（message 由来＋**task サマリ由来**）は記録のみで **gate 充足に不算入**、`derived` は **observed 起源に限定**（観測のみが PASS を生む・§5.8/D29）。L0 充足ゲーティング=FF-008／L1+ deny ゲーティング=FF-007 |
 | INV-005（plan.md 非著作） | 新 spine は書込まない（FF-005 新 spine 限定）。DEBT-001 は v2.5 で解消 |
