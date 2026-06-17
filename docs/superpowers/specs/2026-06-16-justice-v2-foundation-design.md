@@ -6,7 +6,7 @@
 |------|----|
 | 作成日 | 2026-06-16 |
 | ステータス | Design（Accepted・実装計画化待ち） |
-| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに準拠。ただし一部は意図的に部分縮退/deferred: ①FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5、②FR-002 の OmO agents awareness は v2.5 FR-003 Handoff へ deferred・D37/D43、③FR-005 の Acceptance Criteria は v2.5+ Feature Gate へ deferred・D35/D43） |
+| 対象スライス | **Phase 0 + v2.0 基盤**（憲章 §14 Phase 1 の FR スコープに部分準拠。ただし一部は意図的に部分縮退/deferred: ①FR-004 の `exit_code` は OpenCode binding 制約により直接 observed ではなく `derived` outcome へ縮退・§12 限界-2/D5、②FR-002 の OmO agents awareness は v2.5 FR-003 Handoff へ deferred・D37/D43、③FR-005 の Acceptance Criteria は v2.5+ Feature Gate へ deferred・D35/D43） |
 | 起点 | `@yohi/justice` v2.3.0（Phase 9 完了・563 tests passing） |
 | 上位文書 | [Architecture Charter v3.0](../../2026-06-16-justice-v2-v3-requirements.md)（Accepted / Frozen） |
 | 関連スキル | `superpowers/brainstorming`（本書作成）→ `superpowers/writing-plans`（次工程） |
@@ -71,6 +71,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D41 | assistant 自己申告の event mapping 確定 | declared 経路の入力源を確定: 本文は **`message.part.updated`（`EventMessagePartUpdated`→`TextPart.text`）** または plugin hook **`experimental.text.complete`（`{messageID, partID}→{text}`）** から取得し、`message.updated`（`EventMessageUpdated.properties.info: Message`）は role/finish の lifecycle 確認に用いる。**`chat.message` は `UserMessage`（ユーザー入力）であり assistant 申告源には使わない** | `@opencode-ai/plugin` 型定義上 `chat.message`=UserMessage・`AssistantMessage` に本文フィールド無し（本文は Part 側）であり、`chat.message`/`message.updated` 等価扱いは declared 経路を空振りさせる（本レビュー指摘5） |
 | D42 | sequence 採番と参照生成の時間差解決 | `sequence` は append queue 内採番のため抽出時点で未確定。(a) **同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `sequence` を**省略可とし `evidenceId` のみで自レコード相対参照**、(b) **クロスレコード参照**（先行 observed への `derivedFrom`/`evidenceRefs`）は projection で採番済みの `{shardId, sequence, evidenceId}` を解決して埋める。Core は採番に関与せず projection 済み Evidence のみ参照 | 参照鍵が `sequence` を要求する一方 sequence は I/O 側採番のため、純粋 Core が抽出時に参照を作れない矛盾を解消（本レビュー指摘6・INV-009/Traceability 前提） |
 | D43 | v2.0 スコープ表現の精緻化と UI 表記残件 | D2 の「厳密準拠」を**明示的部分縮退付き準拠**へ緩和し、メタ情報（§0）逸脱リストに FR-002-agents（→v2.5・D37）と FR-005-AC（→v2.5・D35）を `exit_code`（D5）と並記。§11 トレーサビリティ表の `/justice-*` 表記を `justice_*` custom tool（D13/D22）へ統一 | 詳細スコープ表（§10.1）は分割済みだがサマリ見出しが完成度を過大表示し、UI 名統一後も一部 `/justice-*` が残存（本レビュー指摘1/2/7） |
+| D44 | §3 Phase 0 表の Message 観測主軸を確定版へ修正 | §3 能力表（event hook 行）の「v2.0 は message.updated 主軸」を **`message.part.updated`/`experimental.text.complete`（assistant 本文源）＋ `message.updated`（role/finish lifecycle）＋ session.error ＋ tool.execute** へ修正し D16/D41 の確定 binding と一致させる。憲章 §9 OpenCode Hooks の `message.updated`/`chat.message` 列挙との差分は **Phase 0 実測（§3・`@opencode-ai/plugin` 型定義調査）に基づく binding correction** であり、INV/ADR/Quality Protocol 不変更のため §16.3 凍結ガバナンス対象外（§4.5 互換的詳細化注記と同型） | §3 サマリが D16/D41 確定前の旧表記のまま残り、declared の本文取得源（`message.part.updated`/`experimental.text.complete`）を欠いて実装者のフック配線を誤認させ得た（本レビュー指摘2） |
+| D45 | `/justice-*` slash alias の実現可能性を未確定化 | §7.7 の「`command.execute.before` 傍受で tool 出力を inject する互換エイリアスとして**提供可能**」を §3 の「`command.execute.before` は読取専用傍受（登録・短絡 不可）」と整合させ、**inject 可否は未確認 → v2.0 では実現可能性を未確定（API 能力の追加確認待ち）、既定は `justice_*` custom tool 名のみ**へ弱める | 「読取専用・短絡不可」と「inject で提供可能」が文書内で衝突。slash alias は元来 stretch（D13/D22）で設計根幹は不変だが、実現可能性の断定のみ訂正（本レビュー指摘1） |
+| D46 | FF-008 の位置づけ明確化（slice-local） | FF-008 を **v2.0 slice-local fitness check（既存 INV-004 の検証強化）** と明記。憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではなく、新規 INV/ADR/Quality Protocol 変更を伴わないため §16.3 ガバナンス（2 approvals/CODEOWNERS）対象外（§4.5 互換的詳細化注記と同型）。憲章正本へ昇格させる場合は §16.3 手続きを経る | 凍結憲章は FF-001〜007 のみ。設計が「§16.1」見出し下で FF-008 を追加し DoD で必須化していたが、憲章拡張か slice-local かが曖昧だった（本レビュー指摘4） |
 
 ---
 
@@ -84,7 +87,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | 全ツール観測 | ✅ `tool.execute.before/after` は全ツールで発火 | 観測拡張（task 限定撤廃）成立 |
 | exit_code / stderr | ❌ `tool.execute.after` は `{title, output, metadata}` のみ。exit_code 無し・stderr は output に統合 | Evidence の合否は `derived`（D5）。`metadata.error===true` を補助シグナルに使用 |
 | permission.ask | ✅ `"deny"/"allow"/"ask"` 返却可 | L1 enforcement 経路は実在（v2.5 で使用） |
-| event hook | ✅ 33 種（message.updated / session.error / file.edited / vcs.branch.updated 等） | v2.0 は message.updated / session.error + tool.execute を主軸。残りは v2.5+ |
+| event hook | ✅ 33 種（message.updated / message.part.updated / session.error / file.edited / vcs.branch.updated 等） | v2.0 は **message.part.updated / experimental.text.complete（assistant 本文源）＋ message.updated（role/finish lifecycle）＋ session.error ＋ tool.execute** を主軸（D16/D41/D44）。`chat.message`=UserMessage は申告源に使わない。残りは v2.5+ |
 
 **Phase 0 で残る唯一の実測スパイク**: 観測拡張（全ツール `tool.execute.after`）の **レイテンシ計測**。実装初手で計測し予算（目標例: 観測オーバーヘッド p95 < 数 ms / tool 呼び出し）を満たすか検証。未達時は非同期キュー + flush を検討。
 
@@ -464,7 +467,7 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 
 ### 7.7 ユーザー露出インターフェース名（Finding 6 対応）
 
-v2.0 は **custom tool 名（`justice_status` 等）で提供**。`/justice-*` slash 体験は `command.execute.before` 傍受で tool 出力を inject する **互換エイリアスとして提供可能だが v2.0 では任意（stretch）**、既定は tool 名のみ（slash 登録 API は無い・§3）。
+v2.0 は **custom tool 名（`justice_status` 等）で提供**。`/justice-*` slash 体験は `command.execute.before` 経由の互換エイリアスとして提供できる**可能性はあるが、§3 のとおり `command.execute.before` は読取専用傍受（登録・短絡 不可）で inject 可否が未確認のため、v2.0 では実現可能性を未確定（API 能力の追加確認待ち）として扱い、既定は `justice_*` custom tool 名のみとする**（slash 登録 API は無い・§3・D45）。
 
 ---
 
@@ -510,6 +513,8 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared／task サマリ由来は不算入・`derived` は observed 起源限定・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/gate-provenance-gating.test.ts` |
 
 **FF-005 の扱い（D7）**: v2.0 は「新 spine モジュールは plan.md に書かない」をアサートし、既知の DEBT-001 書込箇所（`task-feedback` ✅付与 / `loop-handler` error-note / `PlanParser.updateCheckbox`・`appendErrorNote`）を明示的 allowlist 例外として記録。新規違反はブロックしつつ、v2.5 で allowlist を空にして全域アサートへ移行。
+
+**FF-008 の扱い（D46）**: FF-008 は本 v2.0 スライスが追加する **slice-local fitness check**（既存 INV-004 の検証強化）であり、憲章 §16.1 の凍結 FF 一覧（FF-001〜007）の改訂ではない。新規 INV/ADR/Quality Protocol の変更を伴わないため §16.3 ガバナンス（2 approvals / CODEOWNERS）の対象外（§4.5 の互換的詳細化注記と同型）。将来 FF-008 を憲章正本へ昇格させる場合は §16.3 手続きを経る。
 
 ### 9.2 Invariant ↔ FF ↔ Test マトリクス（§16.2）
 
