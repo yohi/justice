@@ -464,6 +464,15 @@ gates:
     check: { type: evidence_outcome, evidenceKind: build, requireOutcome: pass }
     onViolation: warn
     onMissingEvidence: warn
+  - id: review-clean
+    description: "未解決レビュー指摘（minimumSeverity 以上）が無いこと"
+    gateType: task
+    trigger: { on: task_complete }
+    check:
+      type: review_open_items
+      minimumSeverity: major   # critical | major | minor（この severity 以上の open を違反・既定 major）
+    onViolation: warn
+    onMissingEvidence: warn    # 対象 scope のレビュー未観測時は FAIL にしない（§7.6/D66）
 ```
 
 ### 7.2 組込チェック型の固定語彙（v2.0・AI 動的生成は禁止 §11 V3-06）
@@ -472,9 +481,11 @@ gates:
 |---|---|
 | `evidence_outcome` | 指定 kind の Evidence が指定 outcome で存在するか |
 | `evidence_present` | 指定 kind の Evidence が1件以上あるか |
-| `review_open_items` | **`ctx.reviewScope[]` に一致する** Review Summary の open 項目（指定 severity 以上）が無いか（別 task/別スコープの open を混入させない・§7.3/§7.6/D66） |
+| `review_open_items` | **`ctx.reviewScope[]` に一致する** Review Summary の open 項目で **`check.minimumSeverity`（`critical`>`major`>`minor`・既定 `major`）以上**のものが無いか（別 task/別スコープの open を混入させない・§7.2 note/§7.3/§7.6/D66） |
 
 新チェック型の追加は「AI 提案 → 人間承認 → gate.yaml + engine にコード追加」。Engine は語彙を決定論的に評価するのみ。
+
+> **`review_open_items` の `minimumSeverity`（本レビュー Finding 1 対応）**: `check.minimumSeverity ∈ {critical, major, minor}`（既定 `major`）。`critical>major>minor` の順位で **当該値以上**の open 項目（`reviewSummary.byScope[scope]` の該当 severity バケット・§5.6）が1件でもあれば違反（`onViolation`）、無ければ PASS。`minor` 指定で全 open、`critical` 指定で critical のみを対象とする。閾値は gate.yaml で人間が承認し §7.4 precedence で上書き可。AI 動的生成はしない（§11 V3-06）。
 
 > **Acceptance Criteria の扱い（D35・ISS-001）**: 上記固定語彙は FR-005 の **Required Tests**（`evidence_outcome` / `evidence_present`）と **Review**（`review_open_items`）に対応する。**Acceptance Criteria を表現するチェック型は v2.0 では定義しない（deferred・§10.1）**。AC は plan.md/design.md 由来の feature 級受入条件で外部 SoT（INV-008）に属し、観測・判定には plan.md AC のパースまたは Feature Gate（v2.5+・憲章 §7.2 到達 level）が必要なため、本スライスの Task Gate では扱わない。
 
@@ -517,7 +528,7 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 
 - **入力源**: `review_observed` 観測は、task/レビュー系ツールの PostToolUse 出力を既存 `ReviewRejectionDetector` で処理して生成（tool 出力 → 検出 → `ObservationRecord{ kind:"review_observed", reviewScope, items[] }`）。各 item は `itemKey`（severity ＋ 要約/該当箇所から決定的に導出）を持つ。
 - **severity の決定論的導出（D57・I1 対応）**: 現 `ReviewRejectionSignal`={matched,excerpts,summary} に severity が無いため、review-aggregator 拡張が**語彙ベースの決定論的分類器**で severity を新規付与する。凍結 RegExp 語彙（`review-rejection-patterns.ts` と同方式）で critical（例: `security|vulnerability|data ?loss|破壊的|重大`）> major（例: `must fix|required|bug|regression|要修正|不具合`）> minor（例: `nit|suggestion|optional|style|軽微|提案`）を順位評価し、最初に一致した最上位を採る（一致無しは保守的に minor）。AI 動的生成はしない（§11 V3-06）。`itemKey` は `severity` ＋ 正規化要約（小文字化・空白畳み込み・先頭 N 文字）＋ `location` から決定的に合成し、同一論点で itemKey が安定する（D32 解決判定の前提）。分類器・itemKey 合成は純粋関数（FF-002）。
-- **解決規則（D32・消失≠解決）**: `itemKey` ごとに集約する。`resolved` への遷移は次のいずれかでのみ成立する — (a) item に**明示的解決マーカー**がある、(b) **同一 `reviewScope` の完全スナップショット**な後続レビューで当該 item が不在、(c) **人間承認 artifact** が解決を示す。**単なる item 消失（レビュー範囲差・検出器の漏れ・出力形式変化）では `resolved` にせず `open` を据え置く**（未解決 major/critical の取りこぼしを防ぐ）。`reviewScope` が一致しない後続レビューは当該スコープ外 item の状態を変更しない。
+- **解決規則（D32・消失≠解決）**: **`reviewScope` ごとに分離した上で（`byScope[reviewScope]`・§5.6）その scope 内で** `itemKey` ごとに集約する（同一 itemKey でも `reviewScope` が異なれば別エントリとなり、scope 横断で open/resolved を混同しない）。`resolved` への遷移は次のいずれかでのみ成立する — (a) item に**明示的解決マーカー**がある、(b) **同一 `reviewScope` の完全スナップショット**な後続レビューで当該 item が不在、(c) **人間承認 artifact** が解決を示す。**単なる item 消失（レビュー範囲差・検出器の漏れ・出力形式変化）では `resolved` にせず `open` を据え置く**（未解決 major/critical の取りこぼしを防ぐ）。`reviewScope` が一致しない後続レビューは当該スコープ外 item の状態を変更しない。
 - **集約のみ（FR-006 準拠）**: Justice はレビューを行わず集約のみ。解決判定は AX-001/002（証拠なき消失を解決と前提しない）に従う。
 - `review_open_items` gate は **`GateContext.reviewScope[]`（task 窓内で観測した reviewScope 集合）に一致する `open` 集合のみ**を参照する（`reviewSummary.byScope[scope].open`・§5.6/§7.3/D66）。スコープ不一致の open（別 task/別レビュー範囲）は現 Task Gate の verdict に影響させない。該当スコープに open が無ければ条件成立で PASS（レビュー未観測を FAIL にしない）。
 
