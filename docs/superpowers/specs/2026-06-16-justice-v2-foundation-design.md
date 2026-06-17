@@ -52,7 +52,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D22 | UI 名表記の統一 | §7.5 見出しを `justice_*` read-only custom tool に改称。`/justice-*` slash 表記は stretch alias に限定 | 章見出しの表記混在による誤解を解消（2026-06-16 レビュー第2R 指摘5） |
 | D23 | 並行 append のイベント消失 | 同一 shard への append を Runtime の **per-shard async write queue で直列化**し sequence 採番もキュー内で実施。temp+rename の read-modify-write 競合を構造的に排除。**shard 鍵は `{agentId, sessionId}` に固定**し 1 プロセス=1 writer を保証（D30 でプロセス境界対応） | 「単一ファイル並行 append 禁止」の**強制機構**が未定義だった穴を解消（2026-06-16 レビュー第3R 指摘1・INV-008） |
 | D24 | declared の gate 充足不算入 | 既定 gate の**充足（PASS）に算入する provenance を `observed`/`derived` に限定**。declared は「申告あり・観測なし」の WARN 材料に限定（自己申告 "tests pass" 単独で PASS させない）。FF-008 で固定 | declared が L0 gate を PASS させ警告を抑制し得る穴を解消（2026-06-16 レビュー第3R 指摘2・INV-004） |
-| D25 | message/session_error の保存前 redaction | `message` 本文・`declaredClaims`・`session_error.message` も append 前に **SecretPatternDetector 走査・redact ＋ truncation** を必須化（§6.1.1・§9.4） | チャット/エラー本文の secrets・絶対パス・肥大化を永続化前に遮断（2026-06-16 レビュー第3R 指摘3・NFR security） |
+| D25 | message/session_error の保存前 redaction | `message` の `textSnippet`・`declaredClaims`・`session_error.message` も append 前に **SecretPatternDetector 走査・redact ＋ truncation** を必須化（§6.1.1・§9.4・D34） | チャット/エラー本文の secrets・絶対パス・肥大化を永続化前に遮断（2026-06-16 レビュー第3R 指摘3・NFR security） |
 | D26 | DecisionRecord の per-rule 化 | DecisionRecord/Verdict を **`ruleResults[]{ ruleId, verdict, reason, evidenceRefs[] }`** 化。全体 status は最悪値合成、各 rule の根拠を保持 | 複数 gate 同時 WARN/FAIL 時に単数 ruleId/reason が情報を落とす穴を解消（2026-06-16 レビュー第3R 指摘4） |
 | D27 | projection マージの2段階化 | **shard 内＝`sequence` 優先 → shard 間＝`timestamp`→`shardId`→`sequence`** の2段階マージ（shardId=`{agentId, sessionId}`）。timestamp 逆転下でも shard 内因果順を保持 | 全順序化が shard 内 causal order を壊し得る穴を解消（決定性と因果整合は別目的・2026-06-16 レビュー第3R 指摘5・INV-009/FF-004） |
 | D28 | read-only のスコープ明記 | §7.5 に「read-only は workspace/code/commands に対するもので `.justice/state.json` 内部キャッシュ書込は許容」と明記 | read-only 表記とキャッシュ書込の表現衝突（誤読）を解消（2026-06-16 レビュー第3R 指摘6・INV-002/§5.6） |
@@ -61,6 +61,11 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`** とし、record 内の特定 Evidence/claim/item を一意特定。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
 | D32 | review 解決規則の厳格化 | `resolved` は (a) 明示的解決マーカー、(b) **同一レビュースコープの完全スナップショット**での不在、(c) 人間承認 artifact のいずれかでのみ成立。単なる item 消失（範囲差・検出漏れ・出力形式変化）では `open` 据置。`review_observed` に `reviewScope` を付与しスコープ一致を判定 | 消失=resolved により未解決 major/critical が誤って解決扱いになる穴を解消。FR-006 は集約のみ要求（2026-06-16 レビュー第4R 指摘4・AX-001/002） |
 | D33 | rotation 後の sequence 採番 | sequence 初回復元を当該 shard の **active + archive 双方の最大 sequence** から行う（writer state の monotonic counter も可）。`{shardId, sequence}` の一意性を rotation 跨ぎで保証 | active のみ参照だと rotation 後に sequence が reset し archive と衝突、参照鍵の一意性と replay 決定性が壊れる穴を解消（2026-06-16 レビュー第4R 指摘5・INV-008/INV-009/FF-004） |
+| D34 | message 本文の非永続化 | `message` レコードは本文全文を保持せず **`textHash`（必須）＋ `textSnippet`（任意・最小）＋ `declaredClaims`** のみ保存。redaction も snippet に適用 | FR-001 非目的「設計内容・実装計画・タスク定義は保持しない」への抵触経路を遮断（レビュー指摘 ISS-002・INV-001/INV-008） |
+| D35 | Acceptance Criteria の v2.0 扱い | Task Gate の **Acceptance Criteria は v2.0 では観測・判定の対象外（deferred）**。固定語彙（§7.2）は Required Tests/Evidence/Review のみ対応。AC は plan.md 由来の feature 級基準で外部 SoT（INV-008）に属するため v2.5+（Feature Gate）で扱う | §6.2 の AC 評価宣言と §7.2 固定語彙の AC 機構欠如という内部不整合を解消（レビュー指摘 ISS-001・FR-005） |
+| D36 | retention NFR の v2.0 充足範囲 | v2.0 は rotation（サイズ/年齢→archive 移送）を定義するが、**「無限増大を防ぐ」総量上限は archive 単独では未達のため deferred と明示**。物理 prune は canonical snapshot/checkpoint 定義後（v2.5+）に解禁 | 憲章 §13 NFR「無限増大を防ぐ」の未達の明示化（レビュー指摘 ISS-003） |
+| D37 | FR-002 の v2.0 スコープ | v2.0 は **skill awareness（SkillInvoked 観測）に限定**。OmO agents awareness（どの agent が起動したか）は **FR-003 Handoff（v2.5）へ縮退** | FR-002「superpowers skills / OmO agents 把握」のうち agents 側スコープを明確化（レビュー指摘 ISS-004） |
+| D38 | system shard の物理パス統一 | 予約 shard `{system, system}` の物理パスを **`events/system/system.jsonl`** に統一し、他 shard の `events/<agentId>/<sessionId>.jsonl` 導出規則と一致（特例排除） | shardId→物理パス導出の例外を排除（レビュー指摘 ISS-005・D30 と整合） |
 
 ---
 
@@ -121,7 +126,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 ```text
 .justice/
   events/<agentId>/<sessionId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId}・1 writer/shard）
-  events/system.jsonl                 # 予約 shard: shardId={agentId:"system", sessionId:"system"}（session 非依存のシステムイベント。順序キーは他 shard 同様 timestamp→shardId→sequence）
+  events/system/system.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system"}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
   events/archive/          # retention rotation 退避先
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
@@ -169,7 +174,8 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 // (b) message — エージェント発話（declared 経路・§6.1.1）
 { "...envelope":"...", "recordType":"observation", "kind":"message",
   "role":"assistant",          // 必須: 発話主体
-  "text":"...",                // 必須: 本文（redact＋truncation 後・§6.1.1/§9.4）
+  "textHash":"sha256:...",     // 必須: 本文のハッシュ（全文は保持しない・FR-001 非目的・§6.1.1/§9.4・D34）
+  "textSnippet":"...",         // 任意: declaredClaims 文脈の最小スニペット（redact＋truncation 後）
   "declaredClaims":[           // 任意(0..n): 抽出した自己申告
     { "claimKind":"test"|"build"|"lint"|"generic", "outcome":"pass"|"fail"|"unknown" } ],
   "evidence":{ /* §5.3, provenance:"declared" */ } }  // declaredClaims 存在時のみ付与
@@ -317,10 +323,10 @@ OpenCode: tool.execute.after 発火（全ツール）
 OpenCode: event(message.updated) / chat.message 発火
   → opencode-adapter が JusticePlugin.handleEvent({ type:"Message" }) へ送出
   → observation-handler.handleMessage():
-       1. メッセージ本文から合否主張（"tests pass" 等の自己申告）を抽出
-       2. ObservationRecord{ kind:"message" } を構築
+       1. メッセージ本文から合否主張（"tests pass" 等の自己申告）を抽出し declaredClaims を生成
+       2. ObservationRecord{ kind:"message" } を構築（本文全文は保持せず textHash＋最小 textSnippet のみ・FR-001 非目的・D34）
        3. 合否主張があれば Evidence{ provenance:"declared" } を付与（観測裏付け無し）
-       4. SecretPatternDetector で text / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
+       4. SecretPatternDetector で textSnippet / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
        5. observation-log-store.append(shard={agentId, sessionId}, record)   ← Runtime I/O
   → declared は L0 advisory 入力限定（L1+ deny には不使用・FF-007）
 ```
@@ -341,7 +347,7 @@ gate.yaml の rule が trigger 条件を宣言（task_complete / tool_observed�
   → それ以外は proceed
 ```
 
-Task Gate は「Acceptance Criteria / Required Tests / Evidence / Review」(FR-005) を、**§5.8 の task 窓で `taskId` 刻印された Evidence のみ**に対し task 完了時に評価する（無関係 Evidence を除外）。
+Task Gate は FR-005 の確認項目のうち **Required Tests / Evidence / Review** を、**§5.8 の task 窓で `taskId` 刻印された Evidence のみ**に対し task 完了時に評価する（無関係 Evidence を除外）。**Acceptance Criteria は v2.0 では観測・判定の対象外（deferred・§7.2/§10.1/D35）** — AC は plan.md 由来の feature 級受入基準で外部 SoT（INV-008）に属し、組込語彙（§7.2）では表現しないため v2.5+（Feature Gate）で扱う。
 
 ### 6.3 projection 再構築（読取時）
 
@@ -407,6 +413,8 @@ gates:
 | `review_open_items` | Review Summary に指定 severity 以上の open 項目が無いか |
 
 新チェック型の追加は「AI 提案 → 人間承認 → gate.yaml + engine にコード追加」。Engine は語彙を決定論的に評価するのみ。
+
+> **Acceptance Criteria の扱い（D35・ISS-001）**: 上記固定語彙は FR-005 の **Required Tests**（`evidence_outcome` / `evidence_present`）と **Review**（`review_open_items`）に対応する。**Acceptance Criteria を表現するチェック型は v2.0 では定義しない（deferred・§10.1）**。AC は plan.md/design.md 由来の feature 級受入条件で外部 SoT（INV-008）に属し、観測・判定には plan.md AC のパースまたは Feature Gate（v2.5+・憲章 §7.2 到達 level）が必要なため、本スライスの Task Gate では扱わない。
 
 ### 7.3 Engine の契約（純粋・決定論的）
 
@@ -518,8 +526,8 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 |---|---|
 | 並行性 | **shard 鍵=`{agentId, sessionId}`**（physical: `events/<agentId>/<sessionId>.jsonl`・D30）の JSONL シャード・全 shard 読取マージ。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**ただし in-process queue はプロセス内直列化にしか効かない**ため、shard を `{agentId, sessionId}`=1 writer 単位に分離し、**複数セッション/プロセスが同一ファイルへ並行 append しない**設計で「単一ファイル並行 append 禁止」（憲章 NFR）を構造的に満たす。1 セッションが複数プロセスに跨る場合は `{agentId, sessionId, processId}` / per-writer segment へ細分化（read 側 merge で吸収） |
 | スキーマ versioning | 全 `.justice/` に `schemaVersion`・`WisdomPersistence` 同様の移行戦略 |
-| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/events/archive/`（**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
-| セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合）、(2) `message` 本文・`declaredClaims`、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
+| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/events/archive/`（**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。**憲章 NFR「無限増大を防ぐ」の総量上限は archive 単独では未達のため v2.0 では deferred と明示する（D36・§12 限界-4）**: rotation は active シャードのサイズ/年齢を抑制するが総量（active+archive）は単調増加し、物理削減は下記 prune 解禁後（v2.5+）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
+| セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合）、(2) `message` の `textSnippet`・`declaredClaims`（**本文全文は永続化しない**・FR-001 非目的・D34）、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
 | 性能 | tool.execute.after レイテンシ予算（§3）・実装初手で実測 |
 | 信頼性 | 不変条件 (A) infra-error→fail-open を回帰テストで固定（FF-006）。L1+ 拡大は trust 蓄積後 |
 | projection 永続化 | state.json は FileWriter で atomic 書込（temp+rename）・fail-open（失敗→log＋キャッシュ skip）。**event log が常に権威**（state.json 欠損/破損/schema 不一致→log から再構築。state.json を log に優先しない） |
@@ -533,12 +541,12 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | in-scope（Phase 0 + v2.0） | deferred（v2.5+） |
 |---|---|
 | FR-001 Observation Log + projection | FR-003 Handoff Artifact |
-| FR-002 Skill Awareness（軽量・SkillInvoked 観測） | FR-007 Final Verifier / `justice_verify` |
+| FR-002 Skill Awareness（v2.0 は skill 観測のみ・SkillInvoked） | FR-007 Final Verifier / `justice_verify`・OmO agents awareness は FR-003 Handoff（v2.5）へ（D37） |
 | FR-004 Evidence Engine（observed/derived） | L1 permission deny |
-| FR-005 L0 Task Gate / Rule Engine（WARN 既定） | DEBT-001 完全カットオーバー |
+| FR-005 L0 Task Gate / Rule Engine（Required Tests/Evidence/Review・WARN 既定） | DEBT-001 完全カットオーバー |
 | FR-006 Review Aggregator | サブエージェント Evidence 相関 |
 | 観測拡張（全ツール）・`justice_status/gate/review` | 豊富な event タップ（file.edited 等） |
-| FF-001〜004,006〜008 + FF-005(新 spine 限定) | Phase/Feature Gate, L2 CI/PR |
+| FF-001〜004,006〜008 + FF-005(新 spine 限定) | Phase/Feature Gate, L2 CI/PR, Acceptance Criteria 観測・判定(FR-005・D35) |
 
 ### 10.2 KPI（v2.0 は基盤層・先行指標）
 
@@ -598,6 +606,7 @@ Phase 1(build):
 | 限界-1 | サブエージェント横断 Evidence 相関が best-effort | 厳密な紐付けは v2.5 Handoff（FR-003）で解消 |
 | 限界-2 | exit_code を直接観測できない（憲章 FR-004/§8.2 は `exit_code` を observed フィールドとして要求） | `tool.execute.after` に exit_code/stderr フィールドが無い（§3/D5）ため独立フィールドを持たず `interpretation.outcome`（provenance=`derived`）で代替し、stderr は `rawOutput` へ統合。FR-004 の「観測境界外は completeness を主張しない（INV-004）」に沿う既知の限界。上流 API 拡張要望を記録 |
 | 限界-3 | 憲章 KPI-1/3 は v2.0 で未測定 | v2.0 先行指標で代替。v2.5/v3 で測定可能化 |
+| 限界-4 | 憲章 NFR「無限増大を防ぐ」を v2.0 で完全充足しない（archive 移送のみ・物理削除なし） | rotation で active を抑制しつつ総量上限は未達。canonical snapshot/checkpoint 定義後（v2.5+）に物理 prune を解禁し充足（D36・§9.4 保持期間） |
 
 ---
 
