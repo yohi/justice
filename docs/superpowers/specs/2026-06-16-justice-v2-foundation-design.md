@@ -41,21 +41,26 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D11 | Review 入力/解決 | review_observed は task/レビュー出力を ReviewRejectionDetector で処理して生成。item キーで latest-review-wins、open/resolved 判定 | FR-006 の入力源と解決規則を明確化（Finding 4） |
 | D12 | state.json 永続化 | FileWriter atomic + fail-open + log 権威（破損→再構築） | AGENTS.md の I/O 方針準拠（Finding 5） |
 | D13 | UI 名 | v2.0 は custom tool 名のみ。slash 互換エイリアスは任意（stretch） | 後続計画の混乱回避（Finding 6） |
-| D14 | レコード間参照の同一性 | `evidenceRefs` / `derivedFrom` を **`{agentId, sequence}` 複合参照**化。`sequence` 単体は shard 内一意のみ | shard 横断マージ時の参照曖昧性を排除（レビュー指摘 R1） |
+| D14 | レコード間参照の同一性 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}` 複合参照**化（shardId=`{agentId, sessionId}`）。`sequence` 単体は shard 内一意のみ。`evidenceId` で record 内の特定 Evidence/claim/item を一意化（D31 で改訂） | shard 横断マージ時の参照曖昧性とレコード内多根拠の曖昧性を排除（レビュー指摘 R1 / 第4R 指摘3） |
 | D15 | ReflectionEvent のスキーマ化 | **`ObservationRecord{kind:"reflection"}`** を追加し payload を定義。憲章の3レコード型（Observation/Decision/Learning）は維持 | DEBT-001 seam の直列化先を確定（レビュー指摘 R2） |
 | D16 | Message 観測経路 | `message.updated`/`chat.message` → `ObservationRecord{kind:"message"}` → `declared` Evidence のフローを明文化 | declared の生成元を確定（レビュー指摘 R3） |
 | D17 | Artifact メタデータ | Artifact（`gate.yaml` / Review Summary）に **authorship/authority** を付与（Evidence の provenance と対比） | 憲章 §8.3 と整合（レビュー指摘 R4） |
-| D18 | shard 横断 replay の全順序化 | projection マージのソート鍵を `timestamp` → `agentId` → `sequence` の**全順序**にする。`sequence` は shard 内一意のため二次キー `agentId` で衝突を排除 | 同 timestamp/同 sequence の shard 横断衝突で順序が未定義になる穴を解消（2026-06-16 レビュー第2R 指摘1・INV-009/FF-004） |
+| D18 | shard 横断 replay の全順序化 | projection マージのソート鍵を `timestamp` → `shardId` → `sequence` の**全順序**にする（shardId=`{agentId, sessionId}`）。`sequence` は shard 内一意のため shardId で衝突を排除（D30 で shardId 化） | 同 timestamp/同 sequence の shard 横断衝突で順序が未定義になる穴を解消（2026-06-16 レビュー第2R 指摘1・INV-009/FF-004） |
 | D19 | retention は archive 限定 | v2.0 は rotation=archive（移送）のみ。物理 prune（削除）は canonical snapshot/checkpoint イベント定義後（v2.5+）に解禁 | 「event log が常に権威・常に再構築可能」(§9.4) との矛盾を解消（2026-06-16 レビュー第2R 指摘2） |
-| D20 | Task Gate の Evidence 保証範囲 | 評価対象を親セッション観測 + task PostToolUse 出力からの `derived` に限定と明記。サブエージェント内 `observed` の厳密相関は v2.5 Handoff。委譲時 WARN 優勢を KPI/DoD に明記 | gate が subagent 実行結果をほぼ拾えず常時 WARN 化する懸念に対応（2026-06-16 レビュー第2R 指摘3） |
+| D20 | Task Gate の Evidence 保証範囲 | 評価対象を親セッション観測 + task PostToolUse 出力からの **`declared`（PASS 非算入）** に限定と明記（D29 で改訂: 旧 `derived` は raw transcript 観測時のみ）。サブエージェント内 `observed` の厳密相関は v2.5 Handoff。委譲時 WARN 優勢を KPI/DoD に明記 | gate が subagent 実行結果をほぼ拾えず常時 WARN 化する懸念に対応（2026-06-16 レビュー第2R 指摘3） |
 | D21 | ObservationRecord の union 化 | `kind` ごとの discriminated union として tool_executed/message/skill_invoked/review_observed/session_error/reflection の各 payload の必須/任意項目を定義 | payload 未定義による実装者依存を排除（2026-06-16 レビュー第2R 指摘4） |
 | D22 | UI 名表記の統一 | §7.5 見出しを `justice_*` read-only custom tool に改称。`/justice-*` slash 表記は stretch alias に限定 | 章見出しの表記混在による誤解を解消（2026-06-16 レビュー第2R 指摘5） |
-| D23 | 並行 append のイベント消失 | 同一 shard への append を Runtime の **per-shard async write queue で直列化**し sequence 採番もキュー内で実施。temp+rename の read-modify-write 競合を構造的に排除。shard 鍵は `agentId`（必要時 `{agentId, sessionId}`） | 「単一ファイル並行 append 禁止」の**強制機構**が未定義だった穴を解消（2026-06-16 レビュー第3R 指摘1・INV-008） |
+| D23 | 並行 append のイベント消失 | 同一 shard への append を Runtime の **per-shard async write queue で直列化**し sequence 採番もキュー内で実施。temp+rename の read-modify-write 競合を構造的に排除。**shard 鍵は `{agentId, sessionId}` に固定**し 1 プロセス=1 writer を保証（D30 でプロセス境界対応） | 「単一ファイル並行 append 禁止」の**強制機構**が未定義だった穴を解消（2026-06-16 レビュー第3R 指摘1・INV-008） |
 | D24 | declared の gate 充足不算入 | 既定 gate の**充足（PASS）に算入する provenance を `observed`/`derived` に限定**。declared は「申告あり・観測なし」の WARN 材料に限定（自己申告 "tests pass" 単独で PASS させない）。FF-008 で固定 | declared が L0 gate を PASS させ警告を抑制し得る穴を解消（2026-06-16 レビュー第3R 指摘2・INV-004） |
 | D25 | message/session_error の保存前 redaction | `message` 本文・`declaredClaims`・`session_error.message` も append 前に **SecretPatternDetector 走査・redact ＋ truncation** を必須化（§6.1.1・§9.4） | チャット/エラー本文の secrets・絶対パス・肥大化を永続化前に遮断（2026-06-16 レビュー第3R 指摘3・NFR security） |
 | D26 | DecisionRecord の per-rule 化 | DecisionRecord/Verdict を **`ruleResults[]{ ruleId, verdict, reason, evidenceRefs[] }`** 化。全体 status は最悪値合成、各 rule の根拠を保持 | 複数 gate 同時 WARN/FAIL 時に単数 ruleId/reason が情報を落とす穴を解消（2026-06-16 レビュー第3R 指摘4） |
-| D27 | projection マージの2段階化 | **shard 内＝`sequence` 優先 → shard 間＝`timestamp`→`agentId`→`sequence`** の2段階マージ。timestamp 逆転下でも shard 内因果順を保持 | 全順序化が shard 内 causal order を壊し得る穴を解消（決定性と因果整合は別目的・2026-06-16 レビュー第3R 指摘5・INV-009/FF-004） |
+| D27 | projection マージの2段階化 | **shard 内＝`sequence` 優先 → shard 間＝`timestamp`→`shardId`→`sequence`** の2段階マージ（shardId=`{agentId, sessionId}`）。timestamp 逆転下でも shard 内因果順を保持 | 全順序化が shard 内 causal order を壊し得る穴を解消（決定性と因果整合は別目的・2026-06-16 レビュー第3R 指摘5・INV-009/FF-004） |
 | D28 | read-only のスコープ明記 | §7.5 に「read-only は workspace/code/commands に対するもので `.justice/state.json` 内部キャッシュ書込は許容」と明記 | read-only 表記とキャッシュ書込の表現衝突（誤読）を解消（2026-06-16 レビュー第3R 指摘6・INV-002/§5.6） |
+| D29 | task サマリ由来 Evidence の provenance | task PostToolUse 出力（サブエージェント結果サマリ）から抽出した合否主張は **`declared`** として扱い、gate 充足（PASS）には**算入しない**。raw コマンド transcript が出力に含まれ観測可能な場合のみ `derived` 昇格を許可。`derived` は常に **observed 起源**に限定（憲章 derived 定義と整合） | declared を `derived` に偽装して PASS 充足を迂回できる穴を解消。§5.8/§10.2 KPI の内部矛盾も解消（2026-06-16 レビュー第4R 指摘1・INV-004/AX-002） |
+| D30 | shard 鍵のプロセス境界 | shard 鍵を **`{agentId, sessionId}` に固定**（physical: `events/<agentId>/<sessionId>.jsonl`）。in-process queue は単一プロセス内直列化にしか効かないため、shard をプロセス=writer 単位に分離し別プロセスが同一ファイルを書かない設計とする。read 側は全 shard を merge。さらなる堅牢化は `{agentId, sessionId, processId}` / per-writer segment | per-agentId 単独鍵では複数セッション/プロセスが同一ファイルへ並行 append しイベント消失する穴を解消（2026-06-16 レビュー第4R 指摘2・INV-008/NFR 並行性） |
+| D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`** とし、record 内の特定 Evidence/claim/item を一意特定。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
+| D32 | review 解決規則の厳格化 | `resolved` は (a) 明示的解決マーカー、(b) **同一レビュースコープの完全スナップショット**での不在、(c) 人間承認 artifact のいずれかでのみ成立。単なる item 消失（範囲差・検出漏れ・出力形式変化）では `open` 据置。`review_observed` に `reviewScope` を付与しスコープ一致を判定 | 消失=resolved により未解決 major/critical が誤って解決扱いになる穴を解消。FR-006 は集約のみ要求（2026-06-16 レビュー第4R 指摘4・AX-001/002） |
+| D33 | rotation 後の sequence 採番 | sequence 初回復元を当該 shard の **active + archive 双方の最大 sequence** から行う（writer state の monotonic counter も可）。`{shardId, sequence}` の一意性を rotation 跨ぎで保証 | active のみ参照だと rotation 後に sequence が reset し archive と衝突、参照鍵の一意性と replay 決定性が壊れる穴を解消（2026-06-16 レビュー第4R 指摘5・INV-008/INV-009/FF-004） |
 
 ---
 
@@ -100,7 +105,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 | モジュール | 責務 |
 |---|---|
-| `observation-log-store.ts` | `.justice/events/<agentId>.jsonl` への atomic 追記（temp+rename）+ 読取マージ。**同一 shard への append は per-shard async write queue で直列化**（read-modify-write 競合とイベント消失を防止・§9.4 並行性）。sequence は直列化キュー内でインメモリ管理（初回のみシャード末尾から復元） |
+| `observation-log-store.ts` | `.justice/events/<agentId>/<sessionId>.jsonl`（shard 鍵=`{agentId, sessionId}`・§9.4/D30）への atomic 追記（temp+rename）+ 全 shard 読取マージ。**同一 shard への append は per-shard async write queue で直列化**（read-modify-write 競合とイベント消失を防止・§9.4 並行性）。sequence は直列化キュー内でインメモリ管理（初回は当該 shard の **active + archive 双方の最大 sequence** から復元・rotation 跨ぎ衝突を防止・D33） |
 | `gate-loader.ts` | `.justice/gate.yaml` 読込・パース（+ 組込デフォルト）→ 純粋 engine へ data 注入 |
 | `justice-tools.ts` | `justice_status` / `justice_gate` / `justice_review` の tool 定義（read-only） |
 | `opencode-adapter.ts`（既存拡張） | `tool !== "task"` フィルタ撤廃 + 新観測イベント送出。`tool` hook 配線 |
@@ -115,7 +120,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```text
 .justice/
-  events/<agentId>.jsonl   # 追記専用 Observation+Decision ログ（シャード）
+  events/<agentId>/<sessionId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId}・1 writer/shard）
   events/system.jsonl
   events/archive/          # retention rotation 退避先
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
@@ -132,7 +137,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 ```jsonc
 {
   "schemaVersion": 1,
-  "sequence": 42,               // シャード内 単調増加（グローバル一意キーは {agentId, sequence}）
+  "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, sequence}）
   "timestamp": "2026-06-16T07:00:00.000Z",
   "agentId": "hephaestus",
   "sessionId": "ses_...",
@@ -141,9 +146,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 }
 ```
 
-読取時の projection 再構築は **2段階マージ**で行う（§6.3）: ① **shard 内**は `sequence` 昇順で整列（shard 内因果順＝単調増加の sequence を最優先。時計ずれや timestamp 逆転があっても shard 内の因果順を壊さない）、② **shard 間**は整列済みの各 shard を `timestamp` → `agentId` → `sequence` でマージ（同 timestamp の shard 横断衝突は二次キー `agentId`・三次キー `sequence` で一意化）。これにより決定性（FF-004）と shard 内因果整合を両立する（INV-009）。
+読取時の projection 再構築は **2段階マージ**で行う（§6.3）: ① **shard 内**は `sequence` 昇順で整列（shard 内因果順＝単調増加の sequence を最優先。時計ずれや timestamp 逆転があっても shard 内の因果順を壊さない）、② **shard 間**は整列済みの各 shard を `timestamp` → `shardId` → `sequence` でマージ（shardId=`{agentId, sessionId}`。同 timestamp の shard 横断衝突は二次キー `shardId`・三次キー `sequence` で一意化）。これにより決定性（FF-004）と shard 内因果整合を両立する（INV-009）。
 
-> **レコード参照の同一性とソート順序**: `sequence` は **シャード内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{agentId, sequence}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（§5.3 / §5.4）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`agentId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
+> **レコード参照の同一性とソート順序**: `sequence` は **shard（=shardId=`{agentId, sessionId}`）内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{shardId, sequence, evidenceId}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（`evidenceId` は record 内の特定 Evidence/claim/item を一意化・§5.3 / §5.4 / D31）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`shardId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
 
 ### 5.2 ObservationRecord（観測した事実）
 
@@ -173,8 +178,10 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 // (d) review_observed — レビュー出力検出（FR-006・§7.6）
 { "...envelope":"...", "recordType":"observation", "kind":"review_observed",
+  "reviewScope":"...",                        // 必須: レビュー範囲識別子（解決判定のスコープ一致用・§7.6/D32）
   "items":[                                   // 必須(0..n): ReviewRejectionDetector 出力
-    { "severity":"critical"|"major"|"minor", "summary":"...",
+    { "itemKey":"...",                        // 必須: severity＋要約/該当箇所から決定的に導出（record 内一意・参照鍵・§7.6/D31）
+      "severity":"critical"|"major"|"minor", "summary":"...",
       "location":"...", "status":"open"|"resolved" } ] }
 
 // (e) session_error — event(session.error) 由来（§6.1.1）
@@ -205,6 +212,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```jsonc
 {
+  "evidenceId": "ev-1",                        // 必須: record 内で一意（参照鍵 {shardId, sequence, evidenceId} の末尾・§5.4/D31）
   "kind": "test" | "build" | "lint" | "command" | "generic",
   "command": "bun run test",
   "rawOutput": "...stdout(+stderr統合)...",
@@ -213,18 +221,18 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
     "outcome": "pass" | "fail" | "unknown",
     "basis": "parsed_output" | "metadata_error",
     "provenance": "derived",
-    "derivedFrom": [{ "agentId": "hephaestus", "sequence": 40 }]   // 元 observed Evidence の複合参照（shard 横断一意）
+    "derivedFrom": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 40, "evidenceId": "ev-0" }]   // 元 observed Evidence の複合参照（{shardId, sequence, evidenceId}・shard 横断一意・D31）
   }
 }
 ```
 
 - **provenance 4値の生成経路（Finding 2 対応）**:
   - `observed`: tool.execute.after の生 `rawOutput`/`metadata` を直接観測
-  - `derived`: observed から導出した解釈（`interpretation` 自身、または observed を集計した派生 Evidence）
-  - `declared`: エージェントの自己申告（message 観測由来。観測裏付けの無い合否主張）
+  - `derived`: **observed から**導出した解釈（`interpretation` 自身、または observed を集計した派生 Evidence）。**起源は必ず observed**（declared を起源とする派生は `derived` にしない・D29）
+  - `declared`: エージェントの自己申告（message 観測由来、**および task PostToolUse 出力サマリ由来**の合否主張。観測裏付けの無い主張・§5.8/D29）
   - `unknown`: 出所不明
 - `exit_code` は独立フィールドを持たず `interpretation.outcome` に集約（API に無く derived 確定）。
-- **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
+- **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。**task サマリ由来の合否主張も declared 扱いで PASS 非算入**（raw transcript が出力に含まれ観測できる場合のみ `derived` 昇格可・§5.8/D29）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
 - **kind 分類**: evidence-engine が `command` パターンで決定論的に判定（test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他→command/generic）。純粋関数（FF-002）。
 
 ### 5.4 DecisionRecord（Justice の判定 = Verdict）
@@ -238,9 +246,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "appliedEnforcementLevel": "L0",          // v2.0 は常に L0
   "ruleResults": [                          // 評価した各 rule の per-rule 結果（複数 gate 同時 WARN/FAIL でも情報を落とさない）
     { "ruleId": "required-tests", "verdict": "FAIL", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sequence": 40 }] },   // 根拠 Evidence の複合参照（{agentId, sequence}・shard 横断一意）
+      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 40, "evidenceId": "ev-1" }] },   // 根拠 Evidence の複合参照（{shardId, sequence, evidenceId}・shard 横断＋record 内一意・D31）
     { "ruleId": "build-green", "verdict": "WARN", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sequence": 41 }] }
+      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "sequence": 41, "evidenceId": "ev-2" }] }
   ]
 }
 ```
@@ -275,8 +283,8 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 - 共通エンベロープに任意の `taskId` を追加。observation-handler は **task tool の PreToolUse(callId) で「アクティブ task」を開始**し、同一セッションの後続観測に `taskId` を刻印、task PostToolUse で窓を閉じる。
 - **Task Gate は `GateContext.taskId` 一致の Evidence のみ評価**（窓外の無関係 pass を拾わない）。task gate では `taskId` 必須。
-- サブエージェント（`task()` の子）の tool 実行は別セッション/シャードに記録され `taskId` 相関が付かない。ただし **task tool 自身の PostToolUse 出力（サブエージェントの結果サマリ）は親セッションの task 窓内で観測される**ため、evidence-engine（純粋）でそこから `derived` Evidence を抽出し当該 `taskId` に帰属させる（申告由来のため `derived` 止まり・`observed` には昇格しない）。
-- **Task Gate の保証範囲（明示）**: v2.0 で評価できるのは (1) 親セッション内で直接観測した `observed`/`derived`、(2) task 出力から導出した `derived` のみ。サブエージェント shard 内で完結した `observed` Evidence との厳密相関は best-effort（マージ可能範囲）で、完全相関は v2.5 Handoff（FR-003）依存。委譲主体のワークフローでは Required Tests が `onMissingEvidence` 経路に入り **WARN 優勢になり得る**（L0 advisory・非ブロッキング）。
+- サブエージェント（`task()` の子）の tool 実行は別セッション/シャードに記録され `taskId` 相関が付かない。ただし **task tool 自身の PostToolUse 出力（サブエージェントの結果サマリ）は親セッションの task 窓内で観測される**ため、evidence-engine（純粋）でそこから合否主張を抽出し当該 `taskId` に帰属させる。**この主張は申告由来のため provenance=`declared`（PASS 非算入）**とする（サマリは自己申告であり observed ではない・D29/§7.3）。例外として、出力に実コマンドの raw transcript が含まれ Justice が直接再パースできる場合に限り `derived` 昇格を許可する。
+- **Task Gate の保証範囲（明示）**: v2.0 で PASS 充足に使えるのは (1) 親セッション内で直接観測した `observed`/`derived` のみ。(2) task 出力サマリ由来は `declared`（PASS 非算入・raw transcript 観測時のみ `derived`・D29）。サブエージェント shard 内で完結した `observed` Evidence との厳密相関は best-effort（マージ可能範囲）で、完全相関は v2.5 Handoff（FR-003）依存。**よって委譲主体のワークフローでは Required Tests が `onMissingEvidence` 経路に入り WARN 優勢になる**（L0 advisory・非ブロッキング・§10.2 KPI と整合）。
 - 窓判定・刻印は決定論的（純粋）に保つ（FF-002/004）。
 
 ---
@@ -293,7 +301,7 @@ OpenCode: tool.execute.after 発火（全ツール）
        1. evidence-engine: {output, metadata} → Evidence(observed) + interpretation(derived)
        2. SecretPatternDetector で rawOutput を走査・redact（§9 security）
        3. ObservationRecord 構築
-       4. observation-log-store.append(<agentId>.jsonl, record)   ← Runtime I/O
+       4. observation-log-store.append(shard={agentId, sessionId}, record)   ← Runtime I/O
        5. gate トリガ該当なら → 評価フロー（§6.2）
   → HookResponse 返却（proceed / WARN・FAIL なら inject）
   → mergePostToolUseResponses で plan-bridge / task-feedback と合流
@@ -309,7 +317,7 @@ OpenCode: event(message.updated) / chat.message 発火
        2. ObservationRecord{ kind:"message" } を構築
        3. 合否主張があれば Evidence{ provenance:"declared" } を付与（観測裏付け無し）
        4. SecretPatternDetector で text / declaredClaims を走査・redact ＋ サイズ truncation（§9.4 security）
-       5. observation-log-store.append(<agentId>.jsonl, record)   ← Runtime I/O
+       5. observation-log-store.append(shard={agentId, sessionId}, record)   ← Runtime I/O
   → declared は L0 advisory 入力限定（L1+ deny には不使用・FF-007）
 ```
 
@@ -337,7 +345,7 @@ Task Gate は「Acceptance Criteria / Required Tests / Evidence / Review」(FR-0
 トリガ: justice_status tool / 評価が横断状態を要する時
   → observation-log-store.readAll(shards)             ← Runtime I/O
   → state-projection.project(events): 純粋 fold
-       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, agentId, sequence) でマージ → ProjectedState（決定論的・FF-004）
+       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId}）→ ProjectedState（決定論的・FF-004）
   → state.json にキャッシュ
   → current_branch / active_prs は別途 live クエリ
 ```
@@ -355,7 +363,7 @@ v2.0 では (A)(B) いずれも非ブロッキング。差が効くのは L1 den
 
 ### 6.5 v2.0 の既知の限界
 
-- **サブエージェント横断 Evidence 相関**: `task()` が産むサブエージェントの tool 実行は別 agentId シャードへ記録される。projection の全シャードマージで best-effort に拾うほか、**補完として task PostToolUse 出力から `derived` Evidence を生成**して親 `taskId` に帰属させる（§5.8。ただし申告由来の `derived` で shard 内 `observed` の代替ではない）。親タスク↔サブエージェントの厳密な紐付けは Handoff 追跡（FR-003, v2.5）に依存。v2.0 の Task Gate は主に同一セッション観測 + マージ可能範囲で評価。
+- **サブエージェント横断 Evidence 相関**: `task()` が産むサブエージェントの tool 実行は別 shard（別 sessionId）へ記録される。projection の全シャードマージで best-effort に拾うほか、**補完として task PostToolUse 出力から合否主張を `declared` Evidence として生成**して親 `taskId` に帰属させる（§5.8/D29。PASS 非算入。raw transcript 観測時のみ `derived`）。親タスク↔サブエージェントの厳密な紐付けは Handoff 追跡（FR-003, v2.5）に依存。v2.0 の Task Gate は主に同一セッション観測 + マージ可能範囲で評価。
 
 ---
 
@@ -410,7 +418,7 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 - INV-009 / FF-002: 同一 `(gates, evidence, ctx)` → 同一 `Verdict`。
 - FF-003: 副作用ゼロ（I/O 不在をテストでアサート）。
 - **GateContext** は観測の文脈 `{ trigger, taskId, agentId, sessionId }` を持つ（**task gate では `taskId` 必須**・§5.8）。I/O・時計・乱数は含めない（決定論のため）。
-- **provenance ゲーティング（L0 充足条件・FF-008）**: `evidence_outcome` / `evidence_present` の**充足（PASS）判定に算入する Evidence は `observed` / `derived` のみ**。`declared`（自己申告）は充足に算入せず、当該 kind に observed/derived が無ければ `onMissingEvidence`（既定 WARN）として扱い、declared のみ存在する場合は「申告あり・観測なし」を WARN reason に明示する。L0 でも適用（観測のみが PASS を生む）。
+- **provenance ゲーティング（L0 充足条件・FF-008）**: `evidence_outcome` / `evidence_present` の**充足（PASS）判定に算入する Evidence は `observed` / `derived` のみ**。**ただし `derived` は起源が observed のものに限る**（task サマリ等 declared を起源とする派生は `declared` 扱いで PASS 非算入・§5.8/D29）。`declared`（自己申告）は充足に算入せず、当該 kind に observed/derived が無ければ `onMissingEvidence`（既定 WARN）として扱い、declared のみ存在する場合は「申告あり・観測なし」を WARN reason に明示する。L0 でも適用（観測のみが PASS を生む）。
 
 ### 7.4 組込デフォルト ＋ 上書き precedence ＋ trust モデル
 
@@ -431,8 +439,9 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 
 ### 7.6 Review Aggregator の入力源と解決規則（Finding 4 対応）
 
-- **入力源**: `review_observed` 観測は、task/レビュー系ツールの PostToolUse 出力を既存 `ReviewRejectionDetector` で処理して生成（tool 出力 → 検出 → `ObservationRecord{ kind:"review_observed", items[] }`）。
-- **解決規則**: item キー（severity ＋ 要約/該当箇所）ごとに **latest-review-wins**。後続 `review_observed` で同一 item の rejection が消える/解決マーカーがあれば `resolved`、無ければ `open`。
+- **入力源**: `review_observed` 観測は、task/レビュー系ツールの PostToolUse 出力を既存 `ReviewRejectionDetector` で処理して生成（tool 出力 → 検出 → `ObservationRecord{ kind:"review_observed", reviewScope, items[] }`）。各 item は `itemKey`（severity ＋ 要約/該当箇所から決定的に導出）を持つ。
+- **解決規則（D32・消失≠解決）**: `itemKey` ごとに集約する。`resolved` への遷移は次のいずれかでのみ成立する — (a) item に**明示的解決マーカー**がある、(b) **同一 `reviewScope` の完全スナップショット**な後続レビューで当該 item が不在、(c) **人間承認 artifact** が解決を示す。**単なる item 消失（レビュー範囲差・検出器の漏れ・出力形式変化）では `resolved` にせず `open` を据え置く**（未解決 major/critical の取りこぼしを防ぐ）。`reviewScope` が一致しない後続レビューは当該スコープ外 item の状態を変更しない。
+- **集約のみ（FR-006 準拠）**: Justice はレビューを行わず集約のみ。解決判定は AX-001/002（証拠なき消失を解決と前提しない）に従う。
 - `review_open_items` gate はこの `open` 集合を参照。
 
 ### 7.7 ユーザー露出インターフェース名（Finding 6 対応）
@@ -480,7 +489,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | FF-005 | 新 spine は plan.md に書かない（+ DEBT-001 allowlist） | INV-005 | `tests/arch/no-planmd-write.test.ts`（allowlist: task-feedback / loop-handler / PlanParser） |
 | FF-006 | 全 hook が注入障害下でも有効 HookResponse | INV-006 | fault-injection `tests/hooks/fail-open.test.ts` |
 | FF-007 | L1+ deny の Evidence provenance ∈ {observed,derived} | INV-004 | provenance ゲーティングの単体テスト（先行実装・enforcement は v2.5） |
-| FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared は不算入・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/gate-provenance-gating.test.ts` |
+| FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared／task サマリ由来は不算入・`derived` は observed 起源限定・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/gate-provenance-gating.test.ts` |
 
 **FF-005 の扱い（D7）**: v2.0 は「新 spine モジュールは plan.md に書かない」をアサートし、既知の DEBT-001 書込箇所（`task-feedback` ✅付与 / `loop-handler` error-note / `PlanParser.updateCheckbox`・`appendErrorNote`）を明示的 allowlist 例外として記録。新規違反はブロックしつつ、v2.5 で allowlist を空にして全域アサートへ移行。
 
@@ -503,9 +512,9 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 
 | 領域 | v2.0 方針 |
 |---|---|
-| 並行性 | per-agentId JSONL シャード・読取マージ。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で禁止を強制**（temp+rename は全置換型のため read-modify-write 競合でイベントを失う。queue で append を直列化し sequence 採番もキュー内で実施）。shard 鍵は `agentId`（必要時 `{agentId, sessionId}` へ細分化可） |
+| 並行性 | **shard 鍵=`{agentId, sessionId}`**（physical: `events/<agentId>/<sessionId>.jsonl`・D30）の JSONL シャード・全 shard 読取マージ。**同一 shard への並行 append は Runtime の per-shard async write queue（直列化キュー）で直列化**し sequence 採番もキュー内で実施（temp+rename は全置換型のため read-modify-write 競合でイベントを失う）。**ただし in-process queue はプロセス内直列化にしか効かない**ため、shard を `{agentId, sessionId}`=1 writer 単位に分離し、**複数セッション/プロセスが同一ファイルへ並行 append しない**設計で「単一ファイル並行 append 禁止」（憲章 NFR）を構造的に満たす。1 セッションが複数プロセスに跨る場合は `{agentId, sessionId, processId}` / per-writer segment へ細分化（read 側 merge で吸収） |
 | スキーマ versioning | 全 `.justice/` に `schemaVersion`・`WisdomPersistence` 同様の移行戦略 |
-| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/events/archive/`（**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。replay は active＋archive を読むため再構築可能性を損なわない。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
+| 保持期間 | シャードのサイズ/年齢ベース rotation → `.justice/events/archive/`（**v2.0 は archive=移送のみ／物理 prune（削除）はしない**）。replay は active＋archive を読むため再構築可能性を損なわない。**rotation 後の sequence 採番は active のみでなく当該 shard の active+archive 双方の最大 sequence から継続**し（D33）、`{shardId, sequence}` の一意性と replay 決定性（FF-004）を rotation 跨ぎで保証。旧 event の物理 prune は、replay 起点となる **canonical snapshot/checkpoint イベントを定義した後に解禁**（v2.5+）。これにより同表「projection 永続化」行の「event log が常に権威・state.json を信用しない」と矛盾しない |
 | セキュリティ | **永続化前 redaction（必須）**: `.justice/events` への append 前に (1) Evidence `rawOutput`（stdout/stderr 統合）、(2) `message` 本文・`declaredClaims`、(3) `session_error.message` を**すべて `SecretPatternDetector` で走査・redact**（チャット本文・エラー文は secrets / 絶対パス / ユーザー入力が混入しやすい）。併せて各テキストに**サイズ上限を設け truncation**（肥大化・ログ汚染防止）。gate.yaml injection 検証。projection は常に再構築可能（state.json を信用しない＝改ざん耐性） |
 | 性能 | tool.execute.after レイテンシ予算（§3）・実装初手で実測 |
 | 信頼性 | 不変条件 (A) infra-error→fail-open を回帰テストで固定（FF-006）。L1+ 拡大は trust 蓄積後 |
@@ -531,7 +540,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 
 憲章 §9 の KPI-1（設計乖離=Feature Gate 由来）・KPI-3（Handoff 連続性）は v2.5+ コンポーネント依存で v2.0 では測れない。v2.0 は以下の先行指標を定義:
 - 観測カバレッジ率（tool 実行のうちイベント化された割合）
-- Task Gate verdict 分布（PASS/WARN/FAIL）と provenance 分布（observed/declared/derived/unknown の4値）。**委譲主体のワークフローではサブエージェント内テストの `observed` Evidence が親 taskId に相関せず WARN（onMissingEvidence）が優勢になる前提**で解釈する（厳密相関は v2.5 Handoff 後・§5.8）。
+- Task Gate verdict 分布（PASS/WARN/FAIL）と provenance 分布（observed/declared/derived/unknown の4値）。**委譲主体のワークフローでは、サブエージェント内テストの `observed` が親 taskId に相関せず、task サマリ由来は `declared`（PASS 非算入）に留まるため WARN（onMissingEvidence）が優勢になる前提**で解釈する（§5.8/D29 と整合。厳密相関は v2.5 Handoff 後）。
 - replay 決定性（FF-004 pass）
 
 憲章 KPI は v2.5/v3 で Handoff/Feature Gate が載った時点で測定可能化。
@@ -557,7 +566,7 @@ Phase 1(build):
 - 新 Core **100% 単体テスト**／既存 **563 テスト不変（回帰なし）**
 - `bun run typecheck` / `bun run lint` / `bun run build` green
 - DEBT-001 は **High・未解消として明示**（seam のみ作成）
-- Task Gate の Evidence 保証範囲（親セッション観測 + task 出力 `derived`・§5.8）を仕様として明記済み。サブエージェント内 `observed` の厳密相関は **v2.5 Handoff スコープ**で本 DoD 対象外。
+- Task Gate の Evidence 保証範囲（親セッション観測の `observed`/`derived` + task 出力サマリ由来は `declared`（PASS 非算入）・§5.8/D29）を仕様として明記済み。サブエージェント内 `observed` の厳密相関は **v2.5 Handoff スコープ**で本 DoD 対象外。
 
 ---
 
@@ -568,7 +577,7 @@ Phase 1(build):
 | INV-001（設計を生成しない） | Justice は plan/design を著作しない。観測と判定のみ |
 | INV-002（コードを書かない・実行しない） | `/justice-*` は read-only tool。Core は OpenCode 非依存（FF-001） |
 | INV-003（Verdict authority 保持） | rule-evaluation-engine が Verdict を産出 |
-| INV-004（observed/derived のみ Evidence） | Evidence に provenance 必須。declared は記録のみで **gate 充足に不算入**（観測のみが PASS を生む）。L0 充足ゲーティング=FF-008／L1+ deny ゲーティング=FF-007 |
+| INV-004（observed/derived のみ Evidence） | Evidence に provenance 必須。declared（message 由来＋**task サマリ由来**）は記録のみで **gate 充足に不算入**、`derived` は **observed 起源に限定**（観測のみが PASS を生む・§5.8/D29）。L0 充足ゲーティング=FF-008／L1+ deny ゲーティング=FF-007 |
 | INV-005（plan.md 非著作） | 新 spine は書込まない（FF-005 新 spine 限定）。DEBT-001 は v2.5 で解消 |
 | INV-006（Fail-Open(A) 不破） | observation-handler / adapter の try/catch（FF-006） |
 | INV-007（Enforcement pluggable） | v2.0 は L0 固定。appliedEnforcementLevel フィールドで段階強化に備える |
