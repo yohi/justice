@@ -239,9 +239,7 @@ export class JusticePlugin {
       : new NoOpPersistence(500);
 
     const globalDisplayPath =
-      options.globalFileSystem && options.globalFileSystem.absolutePath
-        ? options.globalFileSystem.absolutePath
-        : "~/.justice/wisdom.json";
+      options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
 
     this.tieredWisdomStore = new TieredWisdomStore({
       localStore: this.wisdomStore,

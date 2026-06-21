@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-unsafe-regex -- Dependency markers are deliberately constrained and regex-parsed. */
 import type { PlanTask } from "./types";
 
-const DEPENDS_GLOBAL_REGEX = /\(depends:\s*(task-[\d]+(?:\s*,\s*task-[\d]+)*)\)/gi;
+const DEPENDS_GLOBAL_REGEX = /\(depends:\s*(task-\d+(?:\s*,\s*task-\d+)*)\)/gi;
 
 /**
  * 依存関係の解決中に発生したエラー。

@@ -17,7 +17,7 @@ describe("Sisyphus debugging integration flow", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected Sisyphus insight injection");
     expect(response.injectedContext).toContain("🔬");
-    expect(response.injectedContext.startsWith(notifier.banners[notifier.banners.length - 1])).toBe(
+    expect(response.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(
       true,
     );
 

@@ -190,7 +190,7 @@ describe("PlanBridge.handlePostToolUse", () => {
 
     const addedEntries: WisdomEntryInput[] = [];
     const mockWisdomStore = {
-      add: (entry: WisdomEntryInput): WisdomEntry => {
+      add: (entry: WisdomEntryInput, _options?: unknown): WisdomEntry => {
         addedEntries.push(entry);
         return { ...entry, id: "w-1", timestamp: "2026-05-25" } as WisdomEntry;
       },
@@ -202,7 +202,7 @@ describe("PlanBridge.handlePostToolUse", () => {
     const bridge = new PlanBridge(
       reader,
       undefined,
-      mockWisdomStore as unknown as WisdomStoreInterface,
+      mockWisdomStore satisfies WisdomStoreInterface,
     );
 
     bridge.setActivePlan("s-debug-wisdom", "plan.md");

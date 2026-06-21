@@ -113,14 +113,16 @@ export class WisdomStore implements WisdomStoreInterface {
     const lines: string[] = [];
 
     for (const entry of entries) {
-      const typeLabel =
-        entry.category === "success_pattern"
-          ? "🟢 Success Pattern"
-          : entry.category === "design_decision"
-            ? "🔵 Design Decision"
-            : entry.category === "environment_quirk"
-              ? "🟡 Environment Quirk"
-              : "🔴 Failure/Gotcha";
+      let typeLabel: string;
+      if (entry.category === "success_pattern") {
+        typeLabel = "🟢 Success Pattern";
+      } else if (entry.category === "design_decision") {
+        typeLabel = "🔵 Design Decision";
+      } else if (entry.category === "environment_quirk") {
+        typeLabel = "🟡 Environment Quirk";
+      } else {
+        typeLabel = "🔴 Failure/Gotcha";
+      }
 
       const errClassStr = entry.errorClass ? ` (${entry.errorClass})` : "";
 
@@ -285,7 +287,7 @@ export class WisdomStore implements WisdomStoreInterface {
       typeof (e as StoredWisdomEntry).taskId === "string" &&
       typeof (e as StoredWisdomEntry).category === "string" &&
       typeof (e as StoredWisdomEntry).content === "string" &&
-      (typeof (e as StoredWisdomEntry).persona === "undefined" ||
+      ((e as StoredWisdomEntry).persona === undefined ||
         WisdomStore.isAgentId((e as StoredWisdomEntry).persona)) &&
       typeof (e as StoredWisdomEntry).timestamp === "string"
     );

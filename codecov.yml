@@ -1,0 +1,20 @@
+ignore:
+  - ".github/**"
+  - "tests/**"
+  - "codecov.yml"
+  - "sonar-project.properties"
+
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "diff, flags, files"
+  behavior: default
+  require_changes: true

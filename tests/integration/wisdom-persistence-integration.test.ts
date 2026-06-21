@@ -43,8 +43,8 @@ describe("WisdomPersistence Integration (Real FS)", () => {
     const entries = finalStore.getAllEntries();
 
     expect(entries.length).toBeGreaterThanOrEqual(1);
-    const contents = entries.map((e) => e.content);
-    const hasOneOrTwo = contents.includes("concurrent-1") || contents.includes("concurrent-2");
+    const contents = new Set(entries.map((e) => e.content));
+    const hasOneOrTwo = contents.has("concurrent-1") || contents.has("concurrent-2");
     expect(hasOneOrTwo).toBe(true);
   });
 });

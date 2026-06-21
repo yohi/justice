@@ -46,10 +46,10 @@ describe("Review rejection pivot integration flow", () => {
     expect(results[1]?.action).toBe("proceed");
     expect(results[2]?.action).toBe("inject");
     const third = results[2];
-    if (!third || third.action !== "inject") throw new Error("expected pivot injection");
+    if (third?.action !== "inject") throw new Error("expected pivot injection");
     expect(third.injectedContext).toContain("🚧");
     expect(third.injectedContext).toContain("Hephaestus");
-    expect(third.injectedContext.startsWith(notifier.banners[notifier.banners.length - 1])).toBe(
+    expect(third.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(
       true,
     );
 

@@ -47,7 +47,7 @@ describe("SecretPatternDetector", () => {
   });
 
   it("should detect windows home paths", () => {
-    expect(detector.scan("error at C:\\Users\\Alice\\Documents")).toContainEqual({
+    expect(detector.scan(String.raw`error at C:\Users\Alice\Documents`)).toContainEqual({
       name: "home_path_windows",
     });
     expect(detector.scan("path is D:\\Users\\Bob\\")).toContainEqual({ name: "home_path_windows" });

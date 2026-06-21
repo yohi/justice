@@ -67,7 +67,7 @@ export class SmartRetryPolicy {
     }
 
     // Attempt simplify_prompt for retryCount >= 3 first (more specific)
-    if (retryCount >= 3 && context.rolePrompt && context.rolePrompt.includes("MUST NOT DO")) {
+    if (retryCount >= 3 && context.rolePrompt?.includes("MUST NOT DO")) {
       return {
         strategy: "simplify_prompt",
         removedItems: ["MUST NOT DO constraints"],
