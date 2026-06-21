@@ -2,8 +2,7 @@ import { PlanParser } from "./plan-parser";
 import { TaskPackager, type PackageOptions } from "./task-packager";
 import { CategoryClassifier } from "./category-classifier";
 import { DependencyAnalyzer } from "./dependency-analyzer";
-import type { DelegationRequest, TaskCategory } from "./types";
-import type { AgentId } from "./types";
+import type { DelegationRequest, TaskCategory, AgentId } from "./types";
 
 export interface BuildDelegationOptions {
   planFilePath: string;

@@ -388,7 +388,7 @@ export class PlanBridge {
           if (nextTask) {
             taskId = nextTask.id;
             taskTitle = nextTask.title;
-            category = this.categoryClassifier.classify(nextTask) as RoutingCategory;
+            category = this.categoryClassifier.classify(nextTask);
 
             const relevantSkills: string[] = [];
             const textToCheck = (
@@ -437,7 +437,8 @@ export class PlanBridge {
 
       if (!hasError) {
         if (nextTask) {
-          const source = `Detection source: ${writingCompletion.source}${writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : ""}`;
+          const planPathPart = writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : "";
+          const source = `Detection source: ${writingCompletion.source}${planPathPart}`;
           const mediumNote =
             writingCompletion.confidence === "medium"
               ? "\n> ⚠️ 自動検知。意図と異なる場合は無視可。\n"
@@ -650,7 +651,7 @@ export class PlanBridge {
           prompt: completionInput.prompt,
           category: completionInput.category,
           skillName: completionInput.skillName,
-          completed: !isError,
+          completed: !isError, // NOSONAR: evaluated as falsy in this branch but kept for explicitness
           rawOutput: toolResult,
         });
         if (legacyCompletion) {

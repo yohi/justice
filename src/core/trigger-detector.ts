@@ -41,7 +41,7 @@ export class TriggerDetector {
    */
   detectPlanReference(message: string): PlanReference | null {
     const match = message.match(PLAN_PATH_REGEX);
-    if (!match || match[1] === undefined) return null;
+    if (match?.[1] === undefined) return null;
 
     const rawPath = match[1];
 

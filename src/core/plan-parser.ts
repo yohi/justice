@@ -22,7 +22,7 @@ export class PlanParser {
       const lineNumber = i + 1; // 1-indexed
 
       const taskMatch = line.match(TASK_HEADING_REGEX);
-      if (taskMatch && taskMatch[1] !== undefined && taskMatch[2] !== undefined) {
+      if (taskMatch?.[1] !== undefined && taskMatch[2] !== undefined) {
         if (currentTask) {
           tasks.push(this.buildTask(currentTask));
         }
@@ -36,7 +36,7 @@ export class PlanParser {
 
       if (currentTask) {
         const checkboxMatch = line.match(CHECKBOX_ANY_REGEX);
-        if (checkboxMatch && checkboxMatch[2] !== undefined && checkboxMatch[3] !== undefined) {
+        if (checkboxMatch?.[2] !== undefined && checkboxMatch[3] !== undefined) {
           const stepNum = currentTask.steps.length + 1;
           currentTask.steps.push({
             id: `task-${currentTask.taskNum}-step-${stepNum}`,
@@ -73,7 +73,7 @@ export class PlanParser {
     }
 
     const match = line.match(CHECKBOX_ANY_REGEX);
-    if (!match || match[1] === undefined || match[3] === undefined) {
+    if (match?.[1] === undefined || match[3] === undefined) {
       throw new Error(`Line ${lineNumber} is not a checkbox: "${line}"`);
     }
 
@@ -93,7 +93,7 @@ export class PlanParser {
    */
   appendErrorNote(content: string, taskId: string, errorMessage: string): string {
     const idMatch = taskId.match(/^task-(\d+)$/);
-    if (!idMatch || idMatch[1] === undefined) {
+    if (idMatch?.[1] === undefined) {
       throw new Error(`Invalid taskId format: ${taskId}`);
     }
     const taskNum = parseInt(idMatch[1], 10);

@@ -154,7 +154,9 @@ export class WisdomPersistence {
     return [...byId.values()].sort((a, b) => {
       const tsA = getTs(a);
       const tsB = getTs(b);
-      return tsA < tsB ? -1 : tsA > tsB ? 1 : 0;
+      if (tsA < tsB) return -1;
+      if (tsA > tsB) return 1;
+      return 0;
     });
   }
 }
