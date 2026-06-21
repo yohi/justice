@@ -39,7 +39,7 @@ jobs:
         run: bun run build
         if: ${{ steps.release.outputs.release_created }}
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: justice-dist
           path: dist/
