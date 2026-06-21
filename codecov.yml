@@ -1,3 +1,9 @@
+ignore:
+  - ".github/**"
+  - "tests/**"
+  - "codecov.yml"
+  - "sonar-project.properties"
+
 coverage:
   status:
     project:
