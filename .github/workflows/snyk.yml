@@ -1,5 +1,9 @@
 name: Snyk Security
 
+permissions:
+  contents: read
+  security-events: write
+
 on:
   push:
     branches: ["master"]
