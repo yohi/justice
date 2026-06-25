@@ -5,6 +5,7 @@
 > **Devcontainer 強制:** すべてのテスト・型検査・静的解析は **Devcontainer 内**で実行すること。ローカルホストでの実行は認めない。
 
 **Goal:** Justice v2.0 Foundation 設計書（`docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`）を実装し、既存 563 テストを壊さずに Quality Control Plane の基盤層を追加する。
+> **Status:** DRAFT — NOT EXECUTABLE until the two pre-planning preflights below are completed and this plan is re-tagged.
 
 **Architecture:** 加算シャドウ（dual）アプローチ。新 Observation Log + projection spine を既存 plan-bridge/task-feedback/wisdom と並走追加。Core は純粋関数・I/O 非依存。Hook は観測を捕捉し Core へ委譲。Runtime は per-writer segment JSONL への atomic append + readAll merge を担う。v2.0 は L0 advisory のみ（非ブロッキング）。
 
@@ -25,6 +26,7 @@
 - ブランチ運用は [Graphite Stacked PR Workflow](https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnS4oioAtOOsRFxbhj7DasZszJsUzA6R74JH66RtuaZljfMTOMp01vNhWjcaM0hMPMpWGtEG2CqCiJRKUnxfpUq5IKUvCuw8ckJxEzV_S-lANVqatSiXDyPIwACDWLiYMx_FxpOVwVe-lN3OEfYJMKFB1HyzYW__8mfULCRcQthYXlSoLzc6GHSwYYLtJOMVUh3x34AuPc1rdosiFf2YYStsXJoCj9-iTs7BjmJ0E_-omFWTGPH0uOK-AXq_XLLxAltwuQt-Ct5q_9u-w_QBPhX7UxyHYfZJSstDIFryh_4uUFWBdWMCh0TSrYJxTw&lib=M0tqVErYg9kMB9ia8bpbmo4TD2knUOGjU) を使用。1 タスク 200 LOC 制限、命名 `feature/phaseN-taskM-...`、Base ブランチ `feature/phaseN-...__base`。各 Task 最後は **Phase Base に向けた Draft PR 作成**。
 
 > **Graphite 運用詳細:**
+>
 > - Base ブランチは `master` から `gt checkout master && gt trunk && gt branch create feature/phaseN-v2-...__base` で作成。
 > - 各 Task ブランチは Base から `gt checkout feature/phaseN-v2-...__base && gt branch create feature/phaseN-taskM-...` で分岐（Phase 内で連続する Task は直前 Task から分岐）。
 > - タスク完了時は `gt add . && gt commit` 後、`gt submit` で Phase Base 向け Draft PR を一括作成・更新する。
@@ -32,6 +34,15 @@
 > - 本計画内の「Phase Base に向けた Draft PR を作成する」は `gt submit` による Draft PR 作成を指す。
 
 ---
+
+## Pre-Planning Preflights (Exit criteria before executing this plan)
+
+These two items are **prerequisites for approving this implementation plan**, not implementation tasks. They must be completed and this plan re-tagged before any Phase 1+ work starts.
+
+1. **ADR-2026-06-26: v2.0 Charter Drift & CODEOWNERS Ratification** — Capture the charter deviations in §13 of `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md` (FR-001 path details, FR-004 exit_code derivation, hook list corrections, artifact authorship deprecation, INV-004 interpretation) into a single ADR. Obtain an explicit Approve comment from the repository CODEOWNERS before this plan becomes executable.
+2. **C1 / L0 Advisory Surface Validation** — Empirically verify whether appending a banner to `tool.execute.after` `output.output` is reflected in the model/user surface. If not, pin D47 to "notifier = guaranteed channel, `output.output` append = best-effort" and update §3 of the design doc accordingly.
+
+Until both preflights are closed, **Phase 1+ tasks must not be started** and this document must keep the DRAFT banner above.
 
 ## Phase 0: ベースライン確立と De-risk Spikes
 
@@ -43,19 +54,24 @@
 
 ---
 
-### Task 0.0: CODEOWNERS 追認 ADR の作成と承認取得
+### Task 0.0: CODEOWNERS 追認 ADR の作成と承認取得（Plan Approval Prerequisite）
+
+**⚠️ This is a pre-planning preflight, not an implementation task. Complete before this plan is re-tagged as executable.**
 
 **Files:**
+
 - Create: `docs/superpowers/adrs/2026-06-26-v2-charter-drift-adr.md`
 - Modify: `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`（ステータスとブロッカー欄を更新）
 
 **Interfaces:**
+
 - Consumes: 設計書 D5/D44/D54/D58/D63。
 - Produces: CODEOWNERS 承認済み ADR、設計書の実装計画化前提条件充足フラグ。
 
 - [ ] **Step 1: ADR 文書を作成**
 
 設計書で明示された Requirement レベルの憲章逸脱・縮退を 1 本の ADR に集約する。含める事項：
+
 - FR-001 保存先パスの詳細化（per-writer segment）。
 - FR-004 exit_code の derived 縮退。
 - hook リスト訂正（message.part.updated / experimental.text.complete）。
@@ -69,6 +85,7 @@
 - [ ] **Step 3: 設計書のステータスを更新**
 
 メタ情報欄に以下を追記する：
+
 - ステータス: Design（Accepted）/ CODEOWNERS 追認済み。
 - 実装計画化前提条件: ADR-2026-06-26 承認済み。
 - §13 ブロッカー欄を「完了」に更新。
@@ -80,24 +97,24 @@ git add docs/superpowers/adrs/2026-06-26-v2-charter-drift-adr.md docs/superpower
 git commit -m 'docs: ADR for v2.0 charter drift and CODEOWNERS approval'
 ```
 
-- [ ] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
+- [ ] **Step 5: 本計画書のステータスを Executable に更新**
 
-```bash
-gt submit
-```
+上記 Pre-Planning Preflights が両方完了したら、計画書先頭の `DRAFT — NOT EXECUTABLE` バナーを削除し、本計画を実行可能にマークする。
 
-**派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。本 Task のみ、Phase 0 以降の全 Task は本 Task の承認を前提とする。
+**派生元:** `master`（本 Task は Phase 0 Base 作成前に完了する preflight であるため、`feature/phase0-v2-baseline__base` より前に実施）。
 
 ---
 
 ### Task 0.1: Devcontainer ベースライン検証
 
 **Files:**
+
 - Modify: `.devcontainer/devcontainer.json`
 - Modify: `.github/workflows/ci.yml`（必要に応じて devcontainer 検証ステップ追加）
 - Test: `tests/devcontainer-smoke.test.ts`（新規・最小限の smoke test）
 
 **Interfaces:**
+
 - Consumes: 既存 `package.json` scripts (`bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`).
 - Produces: Devcontainer 内で全コマンドが成功する確認記録。
 
@@ -179,11 +196,18 @@ gt submit
 ### Task 0.2: Phase 0 De-risk Spikes
 
 **Files:**
+
 - Create: `docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`
 - Create: `spikes/observation-latency/`（一時的な実測スクリプト、マージ時は削除または docs に集約）
 - Modify: `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`（§3 Phase 0 スパイク結果を追記）
 
 **Interfaces:**
+
+- Consumes: `@opencode-ai/plugin` event hook 実装、`tool.execute.after` 型。
+- Produces:
+  - Pre-Planning Preflight C1 / L0 advisory surface の実測結果（Step 2 で完了し、設計書 §3 / D47 を確定）。
+  - 全ツール `tool.execute.after` 観測レイテンシ実測結果。
+  - Message 観測 fallback matrix の実測結果と設計書追認差分。
 - Consumes: `@opencode-ai/plugin` event hook 実装、`tool.execute.after` 型。
 - Produces: C1 / L0 advisory surface / Message 観測 fallback の実測結果と設計書追認差分。
 
@@ -198,7 +222,7 @@ import { Plugin } from "@opencode-ai/plugin";
 
 実測対象: `bun run test` 等のコマンド実行ツールを `tool.execute` 経由で 100 回呼び出し、before/after の差分を計測。目標: p95 < 数 ms / tool 呼び出し。未達の場合は非同期キュー + flush を検討し、設計書 §3 に追記。
 
-- [ ] **Step 2: L0 advisory 表示面実証（C1 / D47）**
+- [ ] **Step 2: L0 advisory 表示面実証（C1 / D47）— Plan Approval Preflight**
 
 `tool.execute.after` の戻り値 `HookResponse` に `action: "inject"` と `output` 末尾追記を試行し、実際にモデル文脈 / ユーザー表示に反映されるか確認。
 
@@ -212,11 +236,17 @@ return {
 };
 ```
 
-反映可否を記録。反映不可なら設計書 §3 / D47 を「notifier 保証チャネル」で確定。
+反映可否を記録。**反映不可なら設計書 §3 / D47 を「notifier 保証チャネル」で確定し、本計画先頭の Pre-Planning Preflight #2 をクローズする。反映可能なら `output.output` 追記を guaranteed チャネルの一つとして確定する。**
 
 - [ ] **Step 3: Message 観測 fallback matrix 実測（D41/D53）**
 
 OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`, `experimental.text.complete`, `chat.message`。`AssistantMessage` / `TextPart` のフィールドを出力して、どのイベントが assistant 本文源・role/finish 確定源となるか特定。
+
+**Acceptance criteria:**
+
+- `finalized=true` への mapping 可能性を実測する（`AssistantMessage.finish` / `time.completed` の挙動、イベント順序、重複・遅延の有無）。
+- 順序逆転・未発火・role/text 相関が確定できない場合は、declared claim 抽出を **skip** する条件を明示する。
+- Task 3.1 へ渡す adapter 契約（どのイベントを `text_complete` / `message_part_updated` / `message_updated` として変換し、`finalized` フラグをどう導出するか）を確定する。
 
 - [ ] **Step 4: スパイク結果を docs に集約し設計書を更新**
 
@@ -248,6 +278,7 @@ gt submit
 ### Task 1.1: Core Event Model / Types
 
 **Files:**
+
 - Create: `src/core/v2/observation-model.ts`
 - Create: `src/core/v2/decision-model.ts`
 - Create: `src/core/v2/references.ts`
@@ -255,6 +286,7 @@ gt submit
 - Test: `tests/core/v2/observation-model.test.ts`
 
 **Interfaces:**
+
 - Consumes: 既存 `AgentId`（atlas/hephaestus/sisyphus/prometheus）。
 - Produces:
   - `ObservationRecord` discriminated union (`kind: "tool_executed" | "message" | "skill_invoked" | "review_observed" | "session_error" | "reflection"`).
@@ -319,7 +351,36 @@ export type ToolExecutedRecord = {
   readonly evidence: Evidence;
 };
 
-// ... message, skill_invoked, review_observed, session_error, reflection
+// Additional record kinds are defined in later tasks where their Evidence/types are introduced.
+// For v2.0 the union must be closed enough for type-checking; stub types are acceptable here and refined in Task 1.2/3.1/4.3/4.4.
+export type MessageRecord = { readonly kind: "message"; /* refined in Task 3.1 */ };
+export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
+export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
+export type ReflectionRecord = { readonly kind: "reflection"; /* refined in Task 4.4 */ };
+
+export type ReviewItem = {
+  readonly itemKey: string;
+  readonly evidenceId: string;
+  readonly severity: "critical" | "major" | "minor";
+  readonly summary: string;
+  readonly location: string;
+  readonly status: "open" | "resolved";
+};
+
+export type ResolutionMarker = {
+  readonly itemKey: string;
+  readonly resolution: "explicit_marker" | "snapshot_absence" | "human_artifact";
+  readonly artifactRef?: string;
+};
+
+export type ReviewObservedRecord = {
+  readonly kind: "review_observed";
+  readonly reviewScope: string;
+  readonly isCompleteSnapshot?: boolean;
+  readonly items: readonly ReviewItem[];
+  readonly resolutionMarker?: readonly ResolutionMarker[];
+};
+
 export type ObservationRecord =
   | (CommonEnvelope & { readonly recordType: "observation" } & ToolExecutedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & MessageRecord)
@@ -412,6 +473,7 @@ gt submit
 ### Task 1.2: Evidence Engine + Source Classification
 
 **Files:**
+
 - Create: `src/core/v2/evidence-engine.ts`
 - Create: `src/core/v2/tool-output-classifier.ts`
 - Create: `src/core/v2/declared-claim-extractor.ts`
@@ -421,6 +483,7 @@ gt submit
 - Test: `tests/core/v2/declared-claim-extractor.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `MessagePayload` union (Task 1.3), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
 - Produces:
   - `Evidence` discriminated union with `sourceClass: "tool_output" | "declared_claim"`.
@@ -469,6 +532,12 @@ export type DeclaredClaimEvidence = {
 
 ```typescript
 // src/core/v2/tool-output-classifier.ts
+const COMMAND_EXEC_COMMANDS = new Set([
+  "bun", "npm", "yarn", "pnpm", "node", "ts-node",
+  "vitest", "jest", "mocha", "pytest",
+  "tsc", "eslint", "prettier", "biome", "rome", "stylelint", "deno",
+]);
+
 const FILE_CONTENT_COMMANDS = new Set([
   "cat", "head", "tail", "less", "more", "nl", "tac", "sed", "awk", "grep", "rg", "ag", "xxd", "od", "hexdump", "strings"
 ]);
@@ -482,8 +551,10 @@ export function classifyToolOutputClass(
     const command = args?.command ?? "";
     const tokens = command.trim().split(/\s+/).filter(Boolean);
     const firstToken = tokens[0] ?? "";
+    // Quality-verification compound commands must preserve rawOutput for auditability.
+    if (COMMAND_EXEC_COMMANDS.has(firstToken)) return "command_exec";
     if (FILE_CONTENT_COMMANDS.has(firstToken)) return "file_content";
-    // Conservative fallback for mixed pipes, compound commands, or unknown commands:
+    // Conservative fallback for mixed pipes/compound commands that are NOT quality verification:
     // treat as file_content-equivalent to avoid persisting full plan/design/code bodies.
     if (tokens.includes("|") || tokens.includes("&&") || tokens.includes("||") || tokens.includes(";")) {
       return "file_content";
@@ -546,6 +617,22 @@ export function extractDeclaredClaims(text: string): DeclaredClaim[] {
 }
 ```
 
+- [ ] **Step 4b: `tool-output-classifier.test.ts` に品質検証 compound command ケースを追加**
+
+```typescript
+// tests/core/v2/tool-output-classifier.test.ts
+it("classifies quality-verification compound commands as command_exec", () => {
+  expect(classifyToolOutputClass("bash", { command: "bun run lint && bun run test" })).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "bun run build; bun run typecheck" })).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "npm run test -- --coverage || echo failed" })).toBe("command_exec");
+});
+
+it("classifies file-content compound commands as file_content", () => {
+  expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" })).toBe("file_content");
+});
+```
+
 - [ ] **Step 5: テストを実行（Devcontainer 内）**
 
 ```bash
@@ -572,12 +659,23 @@ gt submit
 ### Task 1.3: Redaction Utilities + Secret Scanning for v2
 
 **Files:**
+
 - Modify: `src/core/secret-pattern-detector.ts`（または新規 `src/core/v2/redaction.ts`）
 - Create: `src/core/v2/safe-segment.ts`（D69/D73 sessionId 安全エンコーダ）
 - Test: `tests/core/v2/redaction.test.ts`
 - Test: `tests/core/v2/safe-segment.test.ts`
 
 **Interfaces:**
+
+- Consumes: existing `SecretPatternDetector` API.
+- Produces:
+  - `redactEvidenceCommand(command: string): string`
+  - `redactRawOutput(rawOutput: string): string`
+  - `redactMessageSnippet(snippet: string): string`
+  - `redactAbsolutePaths(text: string): string`
+  - `redactEnvironmentValues(text: string): string`
+  - `redactTokenUrls(text: string): string`
+  - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
 - Consumes: existing `SecretPatternDetector` API.
 - Produces:
   - `redactEvidenceCommand(command: string): string`
@@ -597,13 +695,26 @@ grep -n "export" src/core/secret-pattern-detector.ts
 // src/core/v2/redaction.ts
 import { SecretPatternDetector } from "../secret-pattern-detector.ts";
 
-export function redactForPersistence(text: string): string {
-  const redacted = SecretPatternDetector.redact(text); // 既存 API を使用
-  return truncate(redacted, 4096);
+export function redactAbsolutePaths(text: string): string {
+  return text
+    .replace(/(?:^|\s)(\/(?:home|tmp|workspace|Users|var|opt|etc)\/[^\s"']+)/g, " [REDACTED_PATH]")
+    .replace(/(?:^|\s)([A-Za-z]:\\[^\\\s"']+)/g, " [REDACTED_PATH]");
 }
 
-export function redactAbsolutePaths(text: string): string {
-  return text.replace(/\/home\/[^\s]+/g, "[REDACTED_PATH]");
+export function redactEnvironmentValues(text: string): string {
+  return text.replace(/\b[A-Z_]{3,}=[^\s"']+/g, "[REDACTED_ENV]");
+}
+
+export function redactTokenUrls(text: string): string {
+  return text.replace(/(https?:\/\/[^@\s]+@)([^\s"']+)/g, "$1[REDACTED_TOKEN_URL]");
+}
+
+export function redactForPersistence(text: string): string {
+  const redacted = SecretPatternDetector.redact(text); // existing API covers API keys / secrets
+  return truncate(
+    redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
+    4096
+  );
 }
 ```
 
@@ -661,12 +772,14 @@ gt submit
 ### Task 2.1: Writer ID + Safe Segment Encoding + File Layout
 
 **Files:**
+
 - Create: `src/core/v2/shard-layout.ts`
 - Create: `src/runtime/writer-id.ts`
 - Test: `tests/core/v2/shard-layout.test.ts`
 - Test: `tests/runtime/writer-id.test.ts`
 
 **Interfaces:**
+
 - Consumes: `encodeSafeSegment` from Task 1.3, `ObservationAgentId` from Task 1.1.
 - Produces:
   - `toPhysicalPath(shardId: ShardId): string` → `.justice/events/<agentId>/<safeSessionId>/<writerId>.jsonl`
@@ -733,12 +846,14 @@ gt submit
 ### Task 2.2: Atomic Append + Per-Shard Write Queue
 
 **Files:**
+
 - Create: `src/runtime/observation-log-store.ts`
 - Create: `src/runtime/write-queue.ts`
 - Test: `tests/runtime/observation-log-queue.test.ts`
 - Test: `tests/runtime/writer-id-collision.test.ts`
 
 **Interfaces:**
+
 - Consumes: `FileReader` / `FileWriter` interfaces, `toPhysicalPath`, `generateWriterId`.
 - Produces:
   - `ObservationLogStore` class with `append(record)` and `readAll()`.
@@ -749,31 +864,46 @@ gt submit
 
 ```typescript
 // src/runtime/write-queue.ts
-type QueueItem = { readonly record: object; readonly resolve: (seq: number) => void };
+type QueueItem = {
+  readonly record: object;
+  readonly resolve: (seq: number) => void;
+  readonly reject: (err: unknown) => void;
+};
 
 export function createShardWriteQueue(
   writer: { write(path: string, content: string): Promise<void> },
-  readExisting: (path: string) => Promise<string>
+  readExisting: (path: string) => Promise<string>,
+  onError: (path: string, err: unknown) => void
 ): (path: string, record: object) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
   const sequences = new Map<string, number>();
 
   async function process(path: string) {
     const items = queues.get(path) ?? [];
-    while (items.length > 0) {
-      const item = items.shift()!;
-      const nextSeq = (sequences.get(path) ?? 0) + 1;
-      const existing = await readExisting(path).catch(() => "");
-      const line = `${JSON.stringify({ ...item.record, sequence: nextSeq })}\n`;
-      await writer.write(path, existing + line);
-      sequences.set(path, nextSeq);
-      item.resolve(nextSeq);
+    try {
+      while (items.length > 0) {
+        const item = items.shift()!;
+        const nextSeq = (sequences.get(path) ?? 0) + 1;
+        const existing = await readExisting(path).catch(() => "");
+        const line = `${JSON.stringify({ ...item.record, sequence: nextSeq })}\n`;
+        await writer.write(path, existing + line);
+        sequences.set(path, nextSeq);
+        item.resolve(nextSeq);
+      }
+    } catch (err) {
+      onError(path, err);
+      // Drain remaining items with rejection so callers are not left hanging.
+      while (items.length > 0) {
+        items.shift()!.reject(err);
+      }
+    } finally {
+      queues.delete(path);
     }
   }
 
-  return (path, record) => new Promise((resolve) => {
+  return (path, record) => new Promise((resolve, reject) => {
     if (!queues.has(path)) queues.set(path, []);
-    queues.get(path)!.push({ record, resolve });
+    queues.get(path)!.push({ record, resolve, reject });
     if (queues.get(path)!.length === 1) process(path);
   });
 }
@@ -786,15 +916,28 @@ export function createShardWriteQueue(
 ```typescript
 // src/runtime/observation-log-store.ts
 export class ObservationLogStore {
+  private readonly enqueue: (path: string, record: object) => Promise<number>;
+
   constructor(
     private readonly fileWriter: FileWriter,
     private readonly fileReader: FileReader,
-    private readonly writerId: string
-  ) {}
+    private readonly writerId: string,
+    private readonly logger: { warn(message: string, err?: unknown): void } = console
+  ) {
+    this.enqueue = createShardWriteQueue(
+      { write: (path, content) => this.fileWriter.writeFile(path, content) },
+      async (path) => {
+        if (await this.fileReader.fileExists(path)) return await this.fileReader.readFile(path);
+        return "";
+      },
+      (path, err) => {
+        this.logger.warn(`ObservationLogStore: append failed for ${path}`, err);
+      }
+    );
+  }
 
   async append(shardId: ShardId, record: ObservationRecord | DecisionRecord): Promise<number> {
-    const path = toPhysicalPath(shardId);
-    // ...queue + atomic write...
+    return this.enqueue(toPhysicalPath(shardId), record);
   }
 
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
@@ -807,6 +950,20 @@ export class ObservationLogStore {
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
+```
+
+- [ ] **Step 3b: writer error 時の queue 復旧・reject テストを追加**
+
+```typescript
+// tests/runtime/observation-log-queue.test.ts
+it("rejects pending writes and reports error when writer fails", async () => {
+  const writer = createMockFileWriter();
+  writer.write = async () => { throw new Error("disk full"); };
+  const onError = vi.fn();
+  const enqueue = createShardWriteQueue(writer, async () => "", onError);
+  await expect(enqueue(".justice/events/test.jsonl", { kind: "test" })).rejects.toThrow("disk full");
+  expect(onError).toHaveBeenCalled();
+});
 ```
 
 - [ ] **Step 4: Commit**
@@ -829,12 +986,14 @@ gt submit
 ### Task 2.3: State Projection (Pure Fold)
 
 **Files:**
+
 - Create: `src/core/v2/state-projection.ts`
 - Create: `src/core/v2/integrity.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
 - Test: `tests/core/observation-log-replay.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationRecord`, `DecisionRecord`, `readAll()` output.
 - Produces:
   - `project(events): ProjectedState`
@@ -873,6 +1032,25 @@ export function project(events: readonly (ObservationRecord | DecisionRecord)[])
   // 4. compute integrity.maxSequenceByShard
   throw new Error("implement projection fold");
 }
+
+export function toSerializableProjectedState(state: ProjectedState): object {
+  // ProjectedState uses ReadonlyMap internally for immutability, but state.json must be a plain JSON object.
+  return {
+    ...state,
+    integrity: {
+      ...state.integrity,
+      maxSequenceByShard: Object.fromEntries(state.integrity.maxSequenceByShard),
+    },
+    tasks: Object.fromEntries(state.tasks),
+    reviewSummary: {
+      ...state.reviewSummary,
+      byScope: Object.fromEntries(
+        state.reviewSummary.byScope,
+      ),
+    },
+  };
+}
+}
 ```
 
 - [ ] **Step 2: `StateProjectionCache` を実装（§5.6 / §9.4）**
@@ -887,7 +1065,7 @@ export class StateProjectionCache {
 
   async write(state: ProjectedState): Promise<void> {
     try {
-      const content = JSON.stringify(state, null, 2);
+      const content = JSON.stringify(toSerializableProjectedState(state), null, 2);
       await this.fileWriter.writeFile(this.path, content); // NodeFileSystem writes atomically via temp+rename
     } catch (err) {
       // fail-open: log and continue
@@ -898,6 +1076,25 @@ export class StateProjectionCache {
 ```
 
 `ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。
+
+- [ ] **Step 2b: JSON round-trip テストを追加**
+
+`ProjectedState` 内部は `ReadonlyMap` であっても、`toSerializableProjectedState()` 経由で書き込んだ `state.json` が正しく `maxSequenceByShard` / `tasks` / `reviewSummary.byScope` を含むことを検証する。
+
+```typescript
+// tests/runtime/state-projection-cache.test.ts
+it("serializes ReadonlyMap fields to JSON objects", async () => {
+  const state = project(sampleEvents);
+  await cache.write(state);
+  const written = writer.getFile(".justice/state.json");
+  const parsed = JSON.parse(written);
+  expect(parsed.integrity.maxSequenceByShard).toBeDefined();
+  expect(Object.keys(parsed.integrity.maxSequenceByShard).length).toBeGreaterThan(0);
+  expect(parsed.reviewSummary.byScope).toBeDefined();
+  expect(typeof parsed.reviewSummary.byScope).toBe("object");
+  expect(Array.isArray(parsed.reviewSummary.byScope)).toBe(false);
+});
+```
 
 - [ ] **Step 3: FF-004 replay test を実装**
 
@@ -924,6 +1121,11 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/state-projecti
 - [ ] **Step 5: Commit**
 
 ```bash
+git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache.test.ts
+git commit -m "feat(v2): deterministic state projection and replay test"
+```
+
+```bash
 git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts
 git commit -m "feat(v2): deterministic state projection and replay test"
 ```
@@ -941,10 +1143,12 @@ gt submit
 ### Task 2.4: Rotation + Archive
 
 **Files:**
+
 - Modify: `src/runtime/observation-log-store.ts`
 - Test: `tests/runtime/rotation-sequence-continuity.test.ts`
 
 **Interfaces:**
+
 - Consumes: `toArchivePath`, `ProjectedState` projection.
 - Produces: `rotateIfNeeded(shardId)` that moves oversized/aged shards to archive and continues sequence numbering across active+archive.
 
@@ -1015,6 +1219,7 @@ gt submit
 ### Task 3.1: MessageRoleBuffer + Declared Extraction
 
 **Files:**
+
 - Create: `src/core/v2/message-role-buffer.ts`
 - Create: `src/core/v2/message-payload.ts`
 - Modify: `src/core/v2/declared-claim-extractor.ts`（finalized 後の抽出へ変更）
@@ -1022,6 +1227,7 @@ gt submit
 - Test: `tests/core/v2/message-payload.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationMessagePayload` union, `extractDeclaredClaims`.
 - Produces:
   - `MessageRoleBuffer` class with `{sessionId, messageID}` key, `parts: Map<partID, {text, finalized}>`.
@@ -1035,6 +1241,23 @@ export type ObservationMessagePayload =
   | { readonly kind: "message_part_updated"; readonly messageID: string; readonly partID: string; readonly text: string }
   | { readonly kind: "message_updated"; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
   | { readonly kind: "text_complete"; readonly messageID: string; readonly partID: string; readonly text: string };
+```
+
+- [ ] **Step 1b: `observation-model.ts` の `MessageRecord` を詳細化（D71）**
+
+Task 1.1 で stub とした `MessageRecord` を、Phase 0 spike で確定した adapter 契約に基づいて具体的なフィールドに拡張する。
+
+```typescript
+// src/core/v2/observation-model.ts
+export type MessageRecord = {
+  readonly kind: "message";
+  readonly messageID: string;
+  readonly partID?: string;
+  readonly role?: "assistant" | "user";
+  readonly textSnippet?: string;
+  readonly declaredClaims: readonly DeclaredClaimEvidence[];
+  readonly finalized: boolean;
+};
 ```
 
 - [ ] **Step 2: MessageRoleBuffer を実装（D53/D65/D67）**
@@ -1060,7 +1283,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/message-role-buf
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/message-payload.ts src/core/v2/message-role-buffer.ts tests/hooks/message-role-buffer.test.ts tests/core/v2/message-payload.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/message-payload.ts src/core/v2/message-role-buffer.ts tests/hooks/message-role-buffer.test.ts tests/core/v2/message-payload.test.ts
 git commit -m "feat(v2): message role buffer and finalized declared extraction"
 ```
 
@@ -1077,10 +1300,12 @@ gt submit
 ### Task 3.2: Adapter Extension (Tool Filter Removal + Message Routing)
 
 **Files:**
+
 - Modify: `src/runtime/opencode-adapter.ts`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationMessagePayload` from Task 3.1, `ObservationLogStore` from Phase 2.
 - Produces:
   - `onToolExecuteBefore/After` no longer filters `tool !== "task"`; all tools are forwarded to `JusticePlugin.handleEvent`.
@@ -1159,11 +1384,13 @@ gt submit
 ### Task 3.3: JusticePlugin Routing Guard
 
 **Files:**
+
 - Modify: `src/core/justice-plugin.ts`
 - Create: `src/hooks/observation-handler.ts`（最小の stub）
 - Test: `tests/core/justice-plugin-routing.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PlanBridge.handleMessage`, `PlanBridge.handlePreToolUse`, `PlanBridge.handlePostToolUse`, `TaskFeedbackHandler.handlePostToolUse`, new `observation-handler`.
 - Produces:
   - `handleEvent` routes:
@@ -1246,14 +1473,21 @@ gt submit
 ### Task 4.1: Tool Observation Handler
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Test: `tests/hooks/observation-handler-tool.test.ts`
 
 **Interfaces:**
-- Consumes: `ObservationLogStore`, `extractEvidenceFromTool`, `redactForPersistence`, `redactAbsolutePaths`.
+
+- Consumes: `ObservationLogStore`, `extractEvidenceFromTool`, `redactForPersistence`, `redactAbsolutePaths`, and a logger for fail-open warnings.
 - Produces:
   - `handlePostToolUse(payload)` → `ObservationRecord{kind:"tool_executed"}` append + gate trigger check + `HookResponse`.
   - `handlePreToolUse(payload)` → task window tracking (`activeTaskWindows: Map<callId, taskId>`).
+  - All log append/evaluation paths are wrapped in `try/catch` and degrade to `{ action: "proceed" }` on failure (FF-006).
+  - `appendTaskSummaryDeclaredEvidence(payload, taskId)` stubbed in this task and implemented in Task 4.3.
+  - `handlePostToolUse(payload)` → `ObservationRecord{kind:"tool_executed"}` append + gate trigger check + `HookResponse`.
+  - `handlePreToolUse(payload)` → task window tracking (`activeTaskWindows: Map<callId, taskId>`).
+  - All log append/evaluation paths are wrapped in `try/catch` and degrade to `{ action: "proceed" }` on failure (FF-006).
 
 - [ ] **Step 1: PreToolUse で task window を追跡（D74）**
 
@@ -1297,32 +1531,40 @@ async handlePreToolUse(payload: ToolUsePayload): Promise<HookResponse> {
   }
   return { action: "proceed" };
 }
+```
+
+- [ ] **Step 2: PostToolUse で tool_executed レコードを append**
+}
 
 - [ ] **Step 2: PostToolUse で tool_executed レコードを append**
 
 ```typescript
 async handlePostToolUse(payload: ToolUsePayload): Promise<HookResponse> {
-  const taskId = this.activeTaskWindows.get(payload.callId);
-  const evidence = extractEvidenceFromTool(payload.toolName, payload.args, payload.output);
-  const redactedEvidence: Evidence = {
-    ...evidence,
-    command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
-    rawOutput: evidence.rawOutput ? redactForPersistence(redactAbsolutePaths(evidence.rawOutput)) : undefined,
-  };
-  const record: ObservationRecord = {
-    ...this.buildEnvelope({ taskId }),
-    recordType: "observation",
-    kind: "tool_executed",
-    toolName: payload.toolName,
-    callId: payload.callId,
-    evidence: redactedEvidence,
-  };
-  await this.logStore.append(this.shardId, record);
-  if (payload.toolName === "task") {
-    this.activeTaskWindows.delete(payload.callId);
-    await this.appendTaskSummaryDeclaredEvidence(payload, taskId);
+  try {
+    const taskId = this.activeTaskWindows.get(payload.callId);
+    const evidence = extractEvidenceFromTool(payload.toolName, payload.args, payload.output);
+    const redactedEvidence: Evidence = {
+      ...evidence,
+      command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
+      rawOutput: evidence.rawOutput ? redactForPersistence(redactAbsolutePaths(evidence.rawOutput)) : undefined,
+    };
+    const record: ObservationRecord = {
+      ...this.buildEnvelope({ taskId }),
+      recordType: "observation",
+      kind: "tool_executed",
+      toolName: payload.toolName,
+      callId: payload.callId,
+      evidence: redactedEvidence,
+    };
+    await this.logStore.append(this.shardId, record);
+    if (payload.toolName === "task") {
+      this.activeTaskWindows.delete(payload.callId);
+      // task summary declared claim extraction is added in Task 4.3
+    }
+    await this.evaluateGateIfTriggered("tool_observed", taskId);
+  } catch (err) {
+    this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
   }
-  await this.evaluateGateIfTriggered("tool_observed", taskId);
   return { action: "proceed" };
 }
 ```
@@ -1353,10 +1595,12 @@ gt submit
 ### Task 4.2: Message Observation Handler
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Test: `tests/hooks/observation-handler-message.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MessageRoleBuffer`, `extractFinalizedAssistantClaims`, `redactForPersistence`.
 - Produces: `handleMessage(payload)` → `ObservationRecord{kind:"message"}` with `declaredClaims` + `declared_claim` Evidence.
 
@@ -1364,11 +1608,15 @@ gt submit
 
 ```typescript
 async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
-  this.messageRoleBuffer.update(payload);
-  if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
-    // finalize part and extract claims
+  try {
+    this.messageRoleBuffer.update(payload);
+    if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
+      // finalize part and extract claims
+    }
+    // build ObservationRecord{kind:"message"}
+  } catch (err) {
+    this.logger.warn("observation-handler: message observation failed, degrading to PROCEED", err);
   }
-  // build ObservationRecord{kind:"message"}
   return { action: "proceed" };
 }
 ```
@@ -1399,6 +1647,7 @@ gt submit
 ### Task 4.3: Skill Invoked + Task Summary Declared Evidence
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Create: `src/core/v2/skill-invoked-detector.ts`
 - Create: `src/core/v2/task-summary-claim-extractor.ts`
@@ -1407,8 +1656,12 @@ gt submit
 - Test: `tests/hooks/observation-handler-skill-task.test.ts`
 
 **Interfaces:**
+
 - Consumes: `toolName === "skill"` payload, `task` PostToolUse output (including `load_skills` argument).
 - Produces:
+  - `detectSkillInvoked(toolName, args): { skillName, source }` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
+  - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
+  - `appendTaskSummaryDeclaredEvidence(payload, taskId)` in `observation-handler.ts`, wrapped in `try/catch` and degrading to `PROCEED` on failure.
   - `detectSkillInvoked(toolName, args): { skillName, source }` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
   - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
 
@@ -1430,6 +1683,19 @@ export function detectSkillInvoked(toolName: string, args: unknown): { readonly 
 }
 ```
 
+- [ ] **Step 1b: `observation-model.ts` の `SkillInvokedRecord` を詳細化（D10）**
+
+Task 1.1 で stub とした `SkillInvokedRecord` を、skill 検出器の戻り値に合わせて拡張する。
+
+```typescript
+// src/core/v2/observation-model.ts
+export type SkillInvokedRecord = {
+  readonly kind: "skill_invoked";
+  readonly skillName: string;
+  readonly source: "skill_tool" | "task_load_skills";
+};
+```
+
 - [ ] **Step 2: task summary 抽出器を実装**
 
 ```typescript
@@ -1443,11 +1709,61 @@ export function extractTaskSummaryClaims(output: string): DeclaredClaim[] {
 - [ ] **Step 3: observation-handler に skill_invoked / task summary 経路を追加**
 
 ```typescript
-// tool_executed レコード生成時に併せて skill_invoked レコードも append
-if (skill) {
-  await this.logStore.append(this.shardId, { ...this.buildEnvelope({ taskId, recordType: "observation" }), kind: "skill_invoked", ...skill });
+// tool_executed レコード生成時に併せて skill_invoked レコードも append（fail-open）
+try {
+  if (skill) {
+    await this.logStore.append(this.shardId, { ...this.buildEnvelope({ taskId, recordType: "observation" }), kind: "skill_invoked", ...skill });
+  }
+} catch (err) {
+  this.logger.warn("observation-handler: skill_invoked observation failed", err);
 }
-// task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属
+// task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属（fail-open。declared は PASS 非算入・INV-004。失敗時も PROCEED へ縮退）
+
+- [ ] **Step 3c: `handlePostToolUse` に task summary 呼び出しを追加**
+
+```typescript
+// src/hooks/observation-handler.ts 内 handlePostToolUse
+if (payload.toolName === "task") {
+  this.activeTaskWindows.delete(payload.callId);
+  await this.appendTaskSummaryDeclaredEvidence(payload, taskId);
+}
+```
+
+- [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加**
+
+```typescript
+// src/hooks/observation-handler.ts
+private async appendTaskSummaryDeclaredEvidence(payload: ToolUsePayload, taskId?: string): Promise<void> {
+  if (!taskId) return;
+  try {
+    const summaryClaims = extractTaskSummaryClaims(payload.output.output ?? "");
+    if (summaryClaims.length === 0) return;
+    // Convert DeclaredClaim[] -> DeclaredClaimEvidence[] (implementation detail) and append a message observation.
+    const record: ObservationRecord = {
+      ...this.buildEnvelope({ taskId, recordType: "observation" }),
+      kind: "message",
+      messageID: `task-summary:${taskId}`,
+      role: "assistant",
+      textSnippet: redactForPersistence(redactAbsolutePaths(payload.output.output ?? "")).slice(0, 200),
+      declaredClaims: summaryClaims.map((c) => ({ ...c, sourceClass: "declared_claim", provenance: "declared", declaredFrom: "task_summary" })),
+      finalized: true,
+    };
+    await this.logStore.append(this.shardId, record);
+  } catch (err) {
+    this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
+  }
+}
+```
+
+- [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加**
+
+```typescript
+// tests/hooks/observation-handler-skill-task.test.ts
+it("returns PROCEED when task summary extraction throws", async () => {
+  const handler = new ObservationHandler(/* mock log store that throws on append */);
+  const result = await handler.handlePostToolUse({ toolName: "task", callId: "c1", args: { taskId: "task-1" }, output: { output: "tests pass" } });
+  expect(result.action).toBe("proceed");
+});
 ```
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
@@ -1459,7 +1775,7 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
 git commit -m "feat(v2): skill invoked detection and task summary declared claims"
 ```
 
@@ -1476,6 +1792,7 @@ gt submit
 ### Task 4.4: Session Error + ReflectionEvent Seam
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/hooks/task-feedback.ts`（ReflectionEvent 発行呼び出し追加）
 - Modify: `src/hooks/loop-handler.ts`（ReflectionEvent 発行呼び出し追加）
@@ -1484,6 +1801,7 @@ gt submit
 - Test: `tests/core/v2/reflection-event.test.ts`
 
 **Interfaces:**
+
 - Consumes: `session.error` event, task success/error signals, loop error notes.
 - Produces:
   - `handleSessionError(error)` → `ObservationRecord{kind:"session_error"}`.
@@ -1494,15 +1812,32 @@ gt submit
 
 ```typescript
 async handleSessionError(error: { readonly message: string; readonly kind?: string }): Promise<HookResponse> {
-  const record: ObservationRecord = {
-    ...this.buildEnvelope({ recordType: "observation" }),
-    kind: "session_error",
-    errorKind: error.kind ?? "unknown",
-    message: redactForPersistence(redactAbsolutePaths(error.message)),
-  };
-  await this.logStore.append(this.shardId, record);
+  try {
+    const record: ObservationRecord = {
+      ...this.buildEnvelope({ recordType: "observation" }),
+      kind: "session_error",
+      errorKind: error.kind ?? "unknown",
+      message: redactForPersistence(redactAbsolutePaths(error.message)),
+    };
+    await this.logStore.append(this.shardId, record);
+  } catch (err) {
+    this.logger.warn("observation-handler: session error observation failed, degrading to PROCEED", err);
+  }
   return { action: "proceed" };
 }
+```
+
+- [ ] **Step 1b: `observation-model.ts` の `SessionErrorRecord` を詳細化**
+
+Task 1.1 で stub とした `SessionErrorRecord` を、session_error ハンドラのフィールドに合わせて拡張する。
+
+```typescript
+// src/core/v2/observation-model.ts
+export type SessionErrorRecord = {
+  readonly kind: "session_error";
+  readonly errorKind: string;
+  readonly message: string;
+};
 ```
 
 - [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51）**
@@ -1518,6 +1853,23 @@ export function buildReflectionEvent(
 ): ReflectionRecord {
   return { ...envelope, recordType: "observation", kind: "reflection", reflection: { trigger, planRef, intent, note } };
 }
+```
+
+- [ ] **Step 2b: `observation-model.ts` の `ReflectionRecord` を詳細化（D15/D51）**
+
+Task 1.1 で stub とした `ReflectionRecord` を、ReflectionEvent ビルダーの戻り値に合わせて拡張する。
+
+```typescript
+// src/core/v2/observation-model.ts
+export type ReflectionRecord = {
+  readonly kind: "reflection";
+  readonly reflection: {
+    readonly trigger: "task_succeeded" | "task_error";
+    readonly planRef: { readonly path: string; readonly taskId: string };
+    readonly intent: "check_complete" | "append_error_note";
+    readonly note?: string;
+  };
+};
 ```
 
 - [ ] **Step 3: task-feedback / loop-handler に ReflectionEvent 発行を追加（§8.2/D7）**
@@ -1536,7 +1888,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/observation-hand
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/reflection-event.ts src/hooks/observation-handler.ts src/hooks/task-feedback.ts src/hooks/loop-handler.ts tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/reflection-event.ts src/hooks/observation-handler.ts src/hooks/task-feedback.ts src/hooks/loop-handler.ts tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts
 git commit -m "feat(v2): session error and reflection event seam"
 ```
 
@@ -1563,12 +1915,14 @@ gt submit
 ### Task 5.1: Gate Definition Schema + Validation
 
 **Files:**
+
 - Create: `src/core/v2/gate-definition.ts`
 - Create: `src/core/v2/gate-yaml-parser.ts`
 - Test: `tests/core/v2/gate-definition.test.ts`
 - Test: `tests/core/v2/gate-yaml-parser.test.ts`
 
 **Interfaces:**
+
 - Consumes: `zod` または純粋 TypeScript バリデーション（プロジェクトに zod 等が無いため、TypeScript 型 + 手動 validator）。
 - Produces:
   - `GateRule` type with `id`, `gateType`, `trigger`, `check`, `onViolation`, `onMissingEvidence`, `enabled`.
@@ -1689,12 +2043,14 @@ gt submit
 ### Task 5.2: Rule Evaluation Engine
 
 **Files:**
+
 - Create: `src/core/v2/rule-evaluation-engine.ts`
 - Create: `src/core/v2/gate-context.ts`
 - Test: `tests/core/v2/rule-evaluation-engine.test.ts`
 - Test: `tests/core/v2/gate-provenance-gating.test.ts`
 
 **Interfaces:**
+
 - Consumes: `GateRule`, `Evidence`, `ProjectedState`, `GateContext`.
 - Produces:
   - `evaluate(gates, evidence, ctx): Verdict` (pure, deterministic).
@@ -1776,6 +2132,7 @@ gt submit
 ### Task 5.3: Default Gates + Gate Loader
 
 **Files:**
+
 - Create: `src/runtime/gate-loader.ts`
 - Create: `src/core/v2/default-gates.ts`
 - Create: `.justice/gate.yaml`（リポジトリテンプレート。runtime state である `.justice/` ディレクトリ本体は `.gitignore` で無視し、テンプレートは `templates/gate.yaml` としてコミットする）
@@ -1783,6 +2140,7 @@ gt submit
 - Test: `tests/core/v2/default-gates.test.ts`
 
 **Interfaces:**
+
 - Consumes: `parseGateYaml`, `GateRule`, `FileReader`.
 - Produces:
   - `loadGates(fileReader, path): GateRule[]` with default fallback.
@@ -1824,7 +2182,8 @@ export async function loadGates(fileReader: FileReader, path = ".justice/gate.ya
 schemaVersion: 1
 authority: human_approved
 gates:
-  - id: required-tests
+
+- id: required-tests
     description: "タスク完了前にテストが pass していること"
     gateType: task
     trigger: { on: task_complete }
@@ -1832,6 +2191,7 @@ gates:
     onViolation: warn
     onMissingEvidence: warn
     enabled: true
+
 ```
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
@@ -1860,11 +2220,13 @@ gt submit
 ### Task 5.4: Gate Trigger + DecisionRecord Append
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/rule-evaluation-engine.ts`（trigger dispatch）
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationLogStore`, `project`, `loadGates`, `evaluate`, `GateContext`.
 - Produces: On `task_complete` / `tool_observed`, evaluate gates and append `DecisionRecord`.
 
@@ -1873,40 +2235,58 @@ gt submit
 ```typescript
 // src/hooks/observation-handler.ts 内
 private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId?: string): Promise<HookResponse> {
-  if (taskId === undefined) {
+  try {
+    if (taskId === undefined) {
+      return { action: "proceed" };
+    }
+    const events = await this.logStore.readAll();
+    const state = project(events);
+    const gates = await this.gateLoader.load();
+    const ctx: GateContext = {
+      trigger,
+      taskId,
+      agentId: this.agentId,
+      sessionId: this.sessionId,
+      reviewScope: collectReviewScopes(state, taskId),
+      reviewSummary: state.reviewSummary,
+    };
+    const evidence = state.tasks.get(taskId)?.evidence ?? [];
+    const verdict = evaluate(gates, evidence, ctx);
+    // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
+    const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, recordType: "decision" }), ...verdict };
+    await this.logStore.append(this.shardId, decision);
+    if (verdict.status === "PASS") {
+      return { action: "proceed" };
+    }
+    // L0 advisory surface: injectedContext (guaranteed via mergePostToolUseResponses) + notifier (guaranteed via adapter)
+    return { action: "inject", injectedContext: formatBanner(verdict) };
+  } catch (err) {
+    this.logger.warn("observation-handler: gate evaluation failed, degrading to PROCEED", err);
     return { action: "proceed" };
   }
-  const events = await this.logStore.readAll();
-  const state = project(events);
-  const gates = await this.gateLoader.load();
-  const ctx: GateContext = {
-    trigger,
-    taskId,
-    agentId: this.agentId,
-    sessionId: this.sessionId,
-    reviewScope: collectReviewScopes(state, taskId),
-    reviewSummary: state.reviewSummary,
-  };
-  const evidence = state.tasks.get(taskId)?.evidence ?? [];
-  const verdict = evaluate(gates, evidence, ctx);
-  // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
-  const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, recordType: "decision" }), ...verdict };
-  await this.logStore.append(this.shardId, decision);
-  if (verdict.status === "PASS") {
-    return { action: "proceed" };
-  }
-  // L0 advisory surface: injectedContext (guaranteed via mergePostToolUseResponses) + notifier (guaranteed via adapter)
-  return { action: "inject", injectedContext: formatBanner(verdict) };
 }
 ```
 
-- [ ] **Step 2: L0 advisory banner フォーマットを実装**
+- [ ] **Step 2: L0 advisory banner フォーマットを実装（AGENTS.md banner 契約準拠）**
 
 ```typescript
 function formatBanner(verdict: Verdict): string {
-  return `> **JUSTICE NOTIFICATION** [Task Gate]\n> ${verdict.status}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}\n`;
+  const icon = verdict.status === "FAIL" ? "🚨" : verdict.status === "WARN" ? "⚠️" : "💡";
+  const lines: string[] = [
+    `> ${icon} **JUSTICE NOTIFICATION** [Task Gate]`,
+    `> ${verdict.status}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}`,
+    ">",
+  ];
+  for (const r of verdict.ruleResults) {
+    if (r.verdict !== "PASS") {
+      lines.push(`> - [ ] ${r.ruleId}: ${r.verdict} — ${r.reason}`);
+    }
+  }
+  return lines.join("\n") + "\n";
 }
-```
+  ```
+
+> **Banner contract:** AGENTS.md §2 requires `> <icon> **JUSTICE NOTIFICATION** [<title>]`, `> <message>`, and a trailing empty line. The optional checklist follows the message line and preserves the 3-line quote layout when no checklist items are present.
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -1944,11 +2324,13 @@ gt submit
 ### Task 6.1: Review Severity Classifier + ItemKey
 
 **Files:**
+
 - Modify: `src/core/review-rejection-detector.ts`（severity フィールド追加）
 - Create: `src/core/v2/review-severity.ts`
 - Test: `tests/core/review-severity.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `ReviewRejectionSignal`.
 - Produces: `ReviewRejectionSignal` with `severity: "critical" | "major" | "minor"` and `itemKey`.
 
@@ -2012,19 +2394,23 @@ gt submit
 ### Task 6.2: Review Aggregator with Scope-Aware byScope
 
 **Files:**
+
 - Create: `src/core/v2/review-aggregator.ts`
 - Modify: `src/core/v2/state-projection.ts`（byScope 集約を追加）
 - Test: `tests/core/v2/review-aggregator.test.ts`
 - Test: `tests/core/v2/state-projection-review.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ReviewRejectionSignal`, `ObservationRecord{kind:"review_observed"}`.
-- Produces: `aggregateReviews(records): ReviewSummary` with `byScope` and resolution rules (D32).
+- Produces: `aggregateReviews(records): ReviewSummary` with `byScope` and deterministic resolution rules (D32).
 
 - [ ] **Step 1: review aggregator を実装（D32/D66）**
 
 ```typescript
 // src/core/v2/review-aggregator.ts
+import type { ReviewItem } from "./observation-model.ts";
+
 export type ReviewSummary = {
   readonly authority: "observed_review_output";
   readonly critical: readonly string[];
@@ -2036,8 +2422,66 @@ export type ReviewSummary = {
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
-  // scope ごとに itemKey で集約。resolved は明示的マーカー/同一 scope 完全スナップショット不在/人間承認 artifact のみ。
+  // 1. Group review_observed records by reviewScope.
+  // 2. Within each scope, aggregate items by itemKey.
+  // 3. Transition to `resolved` ONLY when one of the following is observed:
+  //    (a) explicit resolution marker for the itemKey,
+  //    (b) a complete snapshot (`isCompleteSnapshot: true`) for the scope where the itemKey is absent,
+  //    (c) a human-approved artifact (`resolution: "human_artifact"`) referencing the itemKey.
+  // 4. Mere disappearance (scope change, detector miss, output format change) keeps the item `open`.
 }
+```
+
+- [ ] **Step 1b: review 解決規則テストを追加（D32）**
+
+```typescript
+// tests/core/v2/review-aggregator.test.ts
+it("keeps item open on mere disappearance", () => {
+  const records = [
+    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
+    reviewObserved({ scope: "task-1", itemKey: "minor:bar", severity: "minor" }),
+  ];
+  const summary = aggregateReviews(records);
+  expect(summary.byScope.get("task-1")?.open).toContain("major:foo");
+});
+
+it("marks item resolved on explicit marker", () => {
+  const records = [
+    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
+    reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "explicit_marker" } }),
+  ];
+  const summary = aggregateReviews(records);
+  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
+  expect(summary.byScope.get("task-1")?.open).not.toContain("major:foo");
+});
+
+it("marks item resolved on complete snapshot absence", () => {
+  const records = [
+    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
+    reviewObserved({ scope: "task-1", isCompleteSnapshot: true, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
+  ];
+  const summary = aggregateReviews(records);
+  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
+  expect(summary.byScope.get("task-1")?.open).toContain("minor:bar");
+});
+
+it("keeps item open when snapshot is not marked complete", () => {
+  const records = [
+    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
+    reviewObserved({ scope: "task-1", isCompleteSnapshot: false, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
+  ];
+  const summary = aggregateReviews(records);
+  expect(summary.byScope.get("task-1")?.open).toContain("major:foo");
+});
+
+it("marks item resolved on human artifact", () => {
+  const records = [
+    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
+    reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" } }),
+  ];
+  const summary = aggregateReviews(records);
+  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
+});
 ```
 
 - [ ] **Step 2: state-projection に byScope マージを追加**
@@ -2068,11 +2512,17 @@ gt submit
 ### Task 6.3: Review Observed Generation in Handler
 
 **Files:**
+
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/review-scope.ts`
 - Test: `tests/hooks/observation-handler-review.test.ts`
 
 **Interfaces:**
+
+- Consumes: `ReviewRejectionDetector.detect(output)`, `aggregateReviews`, `deriveReviewScope`.
+- Produces:
+  - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs.
+  - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarker[]}` append when a human-approved resolution artifact is received (input path: message marker or future `justice_review_resolve` tool; seam only for v2.0).
 - Consumes: `ReviewRejectionDetector.detect(output)`, `aggregateReviews`, `deriveReviewScope`.
 - Produces: `ObservationRecord{kind:"review_observed", reviewScope, items[]}` append on task/PostToolUse outputs.
 
@@ -2086,20 +2536,56 @@ export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sess
 }
 ```
 
-- [ ] **Step 2: PostToolUse 時に review_observed を生成・append**
+- [ ] **Step 2: PostToolUse 時に review_observed を生成・append（通常観測）**
 
 ```typescript
 // src/hooks/observation-handler.ts 内
-const signal = ReviewRejectionDetector.detect(payload.output.output ?? "");
-if (signal.matched) {
-  const record: ObservationRecord = {
-    ...this.buildEnvelope({ taskId, recordType: "observation" }),
-    kind: "review_observed",
-    reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId: payload.callId, toolName: payload.toolName }),
-    items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
-  };
-  await this.logStore.append(this.shardId, record);
+try {
+  const signal = ReviewRejectionDetector.detect(payload.output.output ?? "");
+  if (signal.matched) {
+    const record: ObservationRecord = {
+      ...this.buildEnvelope({ taskId, recordType: "observation" }),
+      kind: "review_observed",
+      reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId: payload.callId, toolName: payload.toolName }),
+      isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
+      items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
+    };
+    await this.logStore.append(this.shardId, record);
+  }
+} catch (err) {
+  this.logger.warn("observation-handler: review_observed generation failed", err);
 }
+```
+
+- [ ] **Step 2b: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
+
+v2.0 では解決マーカーのデータモデルと集計ロジックを実装し、入力経路は seam のみ作成する。入力経路は `Message` イベント内の決められたマーカー文字列、または将来の `justice_review_resolve` custom tool とする。
+
+```typescript
+// src/hooks/observation-handler.ts 内（将来の拡張用 seam）
+private async handleReviewResolutionArtifact(payload: { reviewScope: string; itemKeys: string[]; artifactRef: string }): Promise<HookResponse> {
+  try {
+    const record: ObservationRecord = {
+      ...this.buildEnvelope({ recordType: "observation" }),
+      kind: "review_observed",
+      reviewScope: payload.reviewScope,
+      resolutionMarker: payload.itemKeys.map((itemKey) => ({
+        itemKey,
+        resolution: "human_artifact",
+        artifactRef: payload.artifactRef,
+      })),
+      items: [],
+    };
+    await this.logStore.append(this.shardId, record);
+  } catch (err) {
+    this.logger.warn("observation-handler: review resolution marker failed", err);
+  }
+  return { action: "proceed" };
+}
+```
+
+}
+
 ```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -2138,11 +2624,13 @@ gt submit
 ### Task 7.1: justice_status Tool
 
 **Files:**
+
 - Create: `src/runtime/justice-tools.ts`
 - Modify: `src/runtime/opencode-adapter.ts`（tool hook 登録）
 - Test: `tests/runtime/justice-status-tool.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
 
@@ -2150,6 +2638,8 @@ gt submit
 
 ```typescript
 // src/runtime/justice-tools.ts
+import { toSerializableProjectedState } from "../core/v2/state-projection.ts";
+
 export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinition {
   return {
     name: "justice_status",
@@ -2158,7 +2648,7 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
     execute: async () => {
       const events = await store.readAll();
       const state = project(events);
-      return { output: JSON.stringify({ tasks: Object.fromEntries(state.tasks), reviewSummary: state.reviewSummary }, null, 2) };
+      return { output: JSON.stringify(toSerializableProjectedState(state), null, 2) };
     },
   };
 }
@@ -2197,11 +2687,13 @@ gt submit
 ### Task 7.2: justice_gate Tool (Dry-Run)
 
 **Files:**
+
 - Modify: `src/runtime/justice-tools.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
 - Test: `tests/runtime/justice-gate-tool.test.ts`
 
 **Interfaces:**
+
 - Consumes: `project`, `loadGates`, `evaluate`, `GateContext`.
 - Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50).
 
@@ -2214,11 +2706,14 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
     description: "現 event log から gate を dry-run 評価します",
     inputSchema: { type: "object", properties: { taskId: { type: "string" } } },
     execute: async ({ taskId }) => {
+      if (typeof taskId !== "string" || taskId.length === 0) {
+        return { output: JSON.stringify({ status: "PASS", ruleResults: [], reason: "no taskId provided" }, null, 2) };
+      }
       const events = await store.readAll();
       const state = project(events);
       const gates = await gateLoader.load();
       const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
-      const evidence = state.tasks.get(taskId ?? "")?.evidence ?? [];
+      const evidence = state.tasks.get(taskId)?.evidence ?? [];
       const verdict = evaluate(gates, evidence, ctx);
       return { output: JSON.stringify(verdict, null, 2) };
     },
@@ -2252,11 +2747,13 @@ gt submit
 ### Task 7.3: justice_review Tool
 
 **Files:**
+
 - Modify: `src/runtime/justice-tools.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
 - Test: `tests/runtime/justice-review-tool.test.ts`
 
 **Interfaces:**
+
 - Consumes: `project`, `ReviewSummary`.
 - Produces: `justice_review` tool output (Review Summary Artifact rendering).
 
@@ -2271,7 +2768,9 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
     execute: async ({ scope }) => {
       const events = await store.readAll();
       const state = project(events);
-      const summary = scope ? state.reviewSummary.byScope.get(scope) : state.reviewSummary;
+      const summary = scope
+        ? state.reviewSummary.byScope.get(scope)
+        : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
       return { output: JSON.stringify(summary, null, 2) };
     },
   };
@@ -2314,10 +2813,12 @@ gt submit
 ### Task 8.1: FF-001 Core No OpenCode Imports
 
 **Files:**
+
 - Create: `tests/arch/core-no-opencode-imports.test.ts`
 - Modify: `.github/workflows/ci.yml`（FF テストを含むため変更は不要、既存 `bun run test` で含まれる）
 
 **Interfaces:**
+
 - Consumes: `src/core/` file list.
 - Produces: Test that no `src/core/` file imports from `@opencode-ai/*`.
 
@@ -2366,9 +2867,11 @@ gt submit
 ### Task 8.2: FF-002 Determinism + FF-003 No Side Effects
 
 **Files:**
+
 - Create: `tests/core/rule-engine-determinism.test.ts`
 
 **Interfaces:**
+
 - Consumes: `evaluate`, `project`, `extractEvidenceFromTool`.
 - Produces: Tests proving same input → same output, and no I/O during evaluation.
 
@@ -2418,10 +2921,12 @@ gt submit
 ### Task 8.3: FF-004 Replay Determinism + FF-005 No plan.md Write
 
 **Files:**
+
 - Create: `tests/core/observation-log-replay.test.ts`（Phase 2 で既に作成済みならスキップ/追加）
 - Create: `tests/arch/no-planmd-write.test.ts`
 
 **Interfaces:**
+
 - Consumes: `project`, `FileWriter` mock, `src/hooks/` file list.
 - Produces: Replay test and allowlist-based plan.md write check.
 
@@ -2469,9 +2974,11 @@ gt submit
 ### Task 8.4: FF-006 Fail-Open
 
 **Files:**
+
 - Create: `tests/hooks/fail-open.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ObservationHandler`, `ObservationLogStore`, `JusticePlugin`.
 - Produces: Fault-injection tests proving infra failures degrade to `PROCEED`.
 
@@ -2518,10 +3025,12 @@ gt submit
 ### Task 8.5: FF-007/008 Provenance Gating
 
 **Files:**
+
 - Create: `tests/core/evidence-provenance.test.ts`
 - Test: `tests/core/gate-provenance-gating.test.ts`（Phase 5 で既に作成済みなら統合）
 
 **Interfaces:**
+
 - Consumes: `Evidence`, `evaluate`, `GateRule`.
 - Produces: Tests proving `declared` and task-summary-derived claims do not satisfy PASS.
 
@@ -2565,11 +3074,13 @@ gt submit
 ### Task 8.6: NFR Security + Integrity + Reference Resolution Tests
 
 **Files:**
+
 - Create: `tests/core/v2/redaction-integration.test.ts`
 - Create: `tests/runtime/observation-log-integrity.test.ts`
 - Create: `tests/core/record-reference-resolution.test.ts`
 
 **Interfaces:**
+
 - Consumes: `redactForPersistence`, `redactAbsolutePaths`, `ObservationLogStore`, `project`, `DecisionRecord.evidenceRefs[]`.
 - Produces: Tests proving secrets and absolute paths are redacted before persistence; corrupted log triggers rebuild; message claim and review item are resolvable from `DecisionRecord.evidenceRefs[]`.
 
@@ -2577,16 +3088,29 @@ gt submit
 
 ```typescript
 // tests/core/v2/redaction-integration.test.ts
-it("redacts secrets and absolute paths before append", async () => {
+it("redacts secrets, absolute paths, env vars, and token URLs before append", async () => {
   const writer = createMockFileWriter();
   const store = new ObservationLogStore(writer, /* ... */);
   await store.append(shardId, {
     ...record,
-    evidence: { ...evidence, command: "echo /REDACTED_HOME/project/secret", rawOutput: "sk-abc123" },
+    evidence: {
+      ...evidence,
+      command: "echo /home/alice/project/secret /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com",
+      rawOutput: "sk-abc123 HOME=/home/alice",
+    },
   });
   const written = writer.getFile(path);
-  expect(written).not.toContain("/REDACTED_HOME/project");
+  expect(written).not.toContain("/home/alice/project");
+  expect(written).not.toContain("/tmp/foo");
+  expect(written).not.toContain("/workspace/src");
+  expect(written).not.toContain("/Users/bob/project");
+  expect(written).not.toContain("C:\\Users\\carol\\project");
+  expect(written).not.toContain("GITHUB_TOKEN=ghp_xxx");
+  expect(written).not.toContain("https://user:token@example.com");
   expect(written).not.toContain("sk-abc123");
+  expect(written).toContain("[REDACTED_PATH]");
+  expect(written).toContain("[REDACTED_ENV]");
+  expect(written).toContain("[REDACTED_TOKEN_URL]");
 });
 ```
 
@@ -2635,10 +3159,12 @@ gt submit
 ### Task 8.7: Full Regression + CI Finalization
 
 **Files:**
+
 - Modify: `.github/workflows/ci.yml`（FF tests を含むため変更は不要）
 - Modify: `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`（必要に応じて最終追記）
 
 **Interfaces:**
+
 - Consumes: 全 Phase 成果。
 - Produces: 全テスト green、CI green、v2.0 DoD 充足。
 
@@ -2687,7 +3213,8 @@ gt submit
 
 ## 依存関係とブランチ派生の総括
 
-**ルール:** Phase 0 Base のみ `master` から直接分岐する。Phase 1 以降の各 Phase Base は**直前の Phase Base**から分岐する（`gt checkout feature/phase<N-1>-v2-...__base && gt branch create feature/phaseN-v2-...__base`）。Phase 内の Task は原則 Phase Base から分岐するが、同一ファイル・同一型を連続して使用する Task は直前 Task から分岐する。Phase 間の stack 依存は Graphite が管理する。
+**ルール:** Phase 0 Base のみ `master` から直接分岐する。Phase 1〜7 の各 Phase Base は**直前の Phase Base**から分岐する（`gt checkout feature/phase<N-1>-v2-...__base && gt branch create feature/phaseN-v2-...__base`）。**Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐する。**Phase 内の Task は原則 Phase Base から分岐するが、同一ファイル・同一型を連続して使用する Task は直前 Task から分岐する。Phase 間の stack 依存は Graphite が管理する。
+
 ```text
 master
   └── feature/phase0-v2-baseline__base
@@ -2730,34 +3257,33 @@ master
   └── feature/phase7-v2-justice-tools__base
        ├── feature/phase7-task1-justice-status               (Base から派生)
        ├── feature/phase7-task2-justice-gate                 (Task 7.1 から派生)
-       └── feature/phase7-task3-justice-review               (Task 7.2 から派生)
-
-  └── feature/phase8-v2-fitness-nfr__base
-       ├── feature/phase8-task1-ff001-core-imports           (Base から派生)
-       ├── feature/phase8-task2-ff002-003-determinism        (Base から派生)
-       ├── feature/phase8-task3-ff004-005-replay-planmd      (Base から派生)
-       ├── feature/phase8-task4-ff006-fail-open               (Base から派生)
-       ├── feature/phase8-task5-ff007-008-provenance          (Base から派生)
-       ├── feature/phase8-task6-nfr-security-integrity        (Base から派生)
-       └── feature/phase8-task7-final-regression             (Base から派生)
+       ├── feature/phase7-task3-justice-review               (Task 7.2 から派生)
+       └── feature/phase8-v2-fitness-nfr__base                (Phase 7 Base から派生)
+            ├── feature/phase8-task1-ff001-core-imports           (Base から派生)
+            ├── feature/phase8-task2-ff002-003-determinism        (Base から派生)
+            ├── feature/phase8-task3-ff004-005-replay-planmd      (Base から派生)
+            ├── feature/phase8-task4-ff006-fail-open               (Base から派生)
+            ├── feature/phase8-task5-ff007-008-provenance          (Base から派生)
+            ├── feature/phase8-task6-nfr-security-integrity        (Base から派生)
+            └── feature/phase8-task7-final-regression             (Base から派生)
 ```
 
 ---
 
 ## 自己レビュー（Self-Review）
 
-- [x] **Spec coverage:** 設計書 §10.3 の 8 ビルドステップを Phase 1〜7 に網羅。§9 の FF/NFR を Phase 8 に網羅。Phase 0 は §3 の 3 スパイク + devcontainer ベースライン + CODEOWNERS 追認 ADR 作成を網羅。
-- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + CODEOWNERS 追認 ADR 作成 + 3 スパイクに充てる。Task 0.0 の承認が Phase 0 以降の全 Task の前提。
+- [x] **Spec coverage:** 設計書 §10.3 の 8 ビルドステップを Phase 1〜7 に網羅。§9 の FF/NFR を Phase 8 に網羅。Phase 0 は §3 の 3 スパイク + devcontainer ベースラインを網羅。CODEOWNERS 追認 ADR 作成は Pre-Planning Preflight として Phase 0 より前に実施。
+- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + 3 スパイクに充てる。Task 0.0（CODEOWNERS 追認 ADR）は Pre-Planning Preflight として Phase 0 Base 作成前に完了し、その承認が本計画の executable 化条件となる。
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
-- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1 以降の各 Phase Base は直前の Phase Base から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
+- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase Base から分岐。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
 - [x] **Placeholder scan:** `...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。`// ...` や空のテストブロックは削除または具体化済み。
 - [x] **Type consistency:** `Evidence` は `taskId` を持たず envelope が持つ。`ProjectedState.tasks` は `evidence` 配列を持つ。`RuleEngine.evaluate` は task-scoped evidence と `GateContext.reviewSummary` を受け取る。`extractEvidenceFromTool` は single `Evidence`（interpretation 内包）を返す。`EvidenceRef` は `FullEvidenceRef | SelfEvidenceRef` の union。
 - [x] **Graphite 一貫性:** `gh pr create` を `gt submit` に統一。PR タイトル/本文は commit message から生成されるため、commit ステップで内容を制御する。
 - [x] **File I/O 抽象化:** rotation 判定は `FileReader.readFileStats` 経由。`fs.stat` 直接呼び出しを排除。
 - [x] **L0 advisory surface:** `evaluateGateIfTriggered` は `injectedContext` を返し、adapter が notifier 保証チャネル + `output.output` best-effort 追記を適用（D47/D64）。
 - [x] **YAML enum:** `GateRule` verdict は lowercase (`pass`/`warn`/`fail`)。`parseGateYaml` は小文字 YAML を正規化する。
-- [x] **CODEOWNERS 追認:** Phase 0 Task 0.0 で ADR 作成・CODEOWNERS 承認取得を実施。未承認時は Phase 1 以降をブロック。
+- [x] **CODEOWNERS 追認:** Pre-Planning Preflight の Task 0.0 で ADR 作成・CODEOWNERS 承認取得を実施。未承認時は本計画を executable にしない。
 
 ---
 
