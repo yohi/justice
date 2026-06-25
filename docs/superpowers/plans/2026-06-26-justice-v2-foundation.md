@@ -5,7 +5,6 @@
 > **Devcontainer 強制:** すべてのテスト・型検査・静的解析は **Devcontainer 内**で実行すること。ローカルホストでの実行は認めない。
 
 **Goal:** Justice v2.0 Foundation 設計書（`docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`）を実装し、既存 563 テストを壊さずに Quality Control Plane の基盤層を追加する。
-> **Status:** DRAFT — NOT EXECUTABLE until the two pre-planning preflights below are completed and this plan is re-tagged.
 
 **Architecture:** 加算シャドウ（dual）アプローチ。新 Observation Log + projection spine を既存 plan-bridge/task-feedback/wisdom と並走追加。Core は純粋関数・I/O 非依存。Hook は観測を捕捉し Core へ委譲。Runtime は per-writer segment JSONL への atomic append + readAll merge を担う。v2.0 は L0 advisory のみ（非ブロッキング）。
 
@@ -17,7 +16,7 @@
 
 - 既存 563 テストは不変（回帰なし）。
 - Core（`src/core/`）は `@opencode-ai/*` を import しない（FF-001）。
-- すべての file I/O は `FileReader` / `FileWriter` 経由。テストでは mock を注入（`tests/helpers/mock-file-system.ts`）。
+- すべての file I/O は `FileReader` / `FileWriter` 経由。テストでは mock を注入（`tests/helpers/mock-file-system.ts`）。`FileReader` は `readFile` / `fileExists` / `listFiles(prefix)` を提供する。
 - 状態は immutable（`readonly` / `ReadonlyArray` / `ReadonlyMap`）。
 - すべての fail-open 境界は `try/catch` で保護し、`PROCEED` に縮退する。
 - 永続化前に SecretPatternDetector で redaction + 絶対パス redaction + truncation を実施（D25/D61）。
@@ -35,75 +34,19 @@
 
 ---
 
-## Pre-Planning Preflights (Exit criteria before executing this plan)
-
-These two items are **prerequisites for approving this implementation plan**, not implementation tasks. They must be completed and this plan re-tagged before any Phase 1+ work starts.
-
-1. **ADR-2026-06-26: v2.0 Charter Drift & CODEOWNERS Ratification** — Capture the charter deviations in §13 of `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md` (FR-001 path details, FR-004 exit_code derivation, hook list corrections, artifact authorship deprecation, INV-004 interpretation) into a single ADR. Obtain an explicit Approve comment from the repository CODEOWNERS before this plan becomes executable.
-2. **C1 / L0 Advisory Surface Validation** — Empirically verify whether appending a banner to `tool.execute.after` `output.output` is reflected in the model/user surface. If not, pin D47 to "notifier = guaranteed channel, `output.output` append = best-effort" and update §3 of the design doc accordingly.
-
-Until both preflights are closed, **Phase 1+ tasks must not be started** and this document must keep the DRAFT banner above.
-
+> **Pre-planning note:** The two items below must be completed *before* this plan is approved, but they are tracked **outside this plan** to avoid a circular dependency. Once both are closed, remove this note.
+>
+> 1. **ADR-2026-06-26: v2.0 Charter Drift & CODEOWNERS Ratification** — Create the ADR and obtain an explicit Approve comment from CODEOWNERS.
+> 2. **C1 / L0 Advisory Surface Validation** — Empirically verify whether appending a banner to `tool.execute.after` `output.output` is reflected in the model/user surface. If not, pin D47 to "notifier = guaranteed channel, `output.output` append = best-effort" and update §3 of the design doc accordingly.
+>
 ## Phase 0: ベースライン確立と De-risk Spikes
 
 **Base Branch:** `feature/phase0-v2-baseline__base`
 
-**目的:** 既存 CI/Devcontainer を v2.0 開発用に検証し、Phase 0 で決着すべき 3 つの実測スパイクを完了する。本 Phase の成果は設計書の前提を確定させるため、実装計画の最初に位置づける。
+**目的:** 既存 CI/Devcontainer を v2.0 開発用に検証し、Phase 0 で決着すべき 2 つの実測スパイクを完了する。本 Phase の成果は設計書の前提を確定させるため、実装計画の最初に位置づける。
 
-**判断:** Phase 0 のタスクは独立しているが、後続 Phase はこれらの前提（特に C1 L0 advisory 表示面）に依存する。Phase 0 Base は `master` から分岐する。
+**判断:** Phase 0 のタスクは独立しているが、後続 Phase はこれらの前提（Message 観測 fallback matrix）に依存する。Phase 0 Base は `master` から分岐する。
 
----
-
-### Task 0.0: CODEOWNERS 追認 ADR の作成と承認取得（Plan Approval Prerequisite）
-
-**⚠️ This is a pre-planning preflight, not an implementation task. Complete before this plan is re-tagged as executable.**
-
-**Files:**
-
-- Create: `docs/superpowers/adrs/2026-06-26-v2-charter-drift-adr.md`
-- Modify: `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`（ステータスとブロッカー欄を更新）
-
-**Interfaces:**
-
-- Consumes: 設計書 D5/D44/D54/D58/D63。
-- Produces: CODEOWNERS 承認済み ADR、設計書の実装計画化前提条件充足フラグ。
-
-- [ ] **Step 1: ADR 文書を作成**
-
-設計書で明示された Requirement レベルの憲章逸脱・縮退を 1 本の ADR に集約する。含める事項：
-
-- FR-001 保存先パスの詳細化（per-writer segment）。
-- FR-004 exit_code の derived 縮退。
-- hook リスト訂正（message.part.updated / experimental.text.complete）。
-- Artifact authorship 非保持（属性縮退）。
-- INV-004 の解釈追認（declared は記録するが gate PASS/L1 deny には算入しない）。
-
-- [ ] **Step 2: CODEOWNERS にレビュー依頼し承認を取得**
-
-リポジトリの CODEOWNERS をレビューアーに指定し、ADR に Approve コメントをもらう。
-
-- [ ] **Step 3: 設計書のステータスを更新**
-
-メタ情報欄に以下を追記する：
-
-- ステータス: Design（Accepted）/ CODEOWNERS 追認済み。
-- 実装計画化前提条件: ADR-2026-06-26 承認済み。
-- §13 ブロッカー欄を「完了」に更新。
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/superpowers/adrs/2026-06-26-v2-charter-drift-adr.md docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md
-git commit -m 'docs: ADR for v2.0 charter drift and CODEOWNERS approval'
-```
-
-- [ ] **Step 5: 本計画書のステータスを Executable に更新**
-
-上記 Pre-Planning Preflights が両方完了したら、計画書先頭の `DRAFT — NOT EXECUTABLE` バナーを削除し、本計画を実行可能にマークする。
-
-**派生元:** `master`（本 Task は Phase 0 Base 作成前に完了する preflight であるため、`feature/phase0-v2-baseline__base` より前に実施）。
-
----
 
 ### Task 0.1: Devcontainer ベースライン検証
 
@@ -205,11 +148,8 @@ gt submit
 
 - Consumes: `@opencode-ai/plugin` event hook 実装、`tool.execute.after` 型。
 - Produces:
-  - Pre-Planning Preflight C1 / L0 advisory surface の実測結果（Step 2 で完了し、設計書 §3 / D47 を確定）。
   - 全ツール `tool.execute.after` 観測レイテンシ実測結果。
   - Message 観測 fallback matrix の実測結果と設計書追認差分。
-- Consumes: `@opencode-ai/plugin` event hook 実装、`tool.execute.after` 型。
-- Produces: C1 / L0 advisory surface / Message 観測 fallback の実測結果と設計書追認差分。
 
 - [ ] **Step 1: 全ツール `tool.execute.after` 観測レイテンシ実測**
 
@@ -222,23 +162,7 @@ import { Plugin } from "@opencode-ai/plugin";
 
 実測対象: `bun run test` 等のコマンド実行ツールを `tool.execute` 経由で 100 回呼び出し、before/after の差分を計測。目標: p95 < 数 ms / tool 呼び出し。未達の場合は非同期キュー + flush を検討し、設計書 §3 に追記。
 
-- [ ] **Step 2: L0 advisory 表示面実証（C1 / D47）— Plan Approval Preflight**
-
-`tool.execute.after` の戻り値 `HookResponse` に `action: "inject"` と `output` 末尾追記を試行し、実際にモデル文脈 / ユーザー表示に反映されるか確認。
-
-```typescript
-// 擬似的な L0 advisory 注入
-return {
-  action: "inject",
-  output: {
-    output: originalOutput + "\n\n> **JUSTICE NOTIFICATION** [L0 Advisory]\n> ...",
-  },
-};
-```
-
-反映可否を記録。**反映不可なら設計書 §3 / D47 を「notifier 保証チャネル」で確定し、本計画先頭の Pre-Planning Preflight #2 をクローズする。反映可能なら `output.output` 追記を guaranteed チャネルの一つとして確定する。**
-
-- [ ] **Step 3: Message 観測 fallback matrix 実測（D41/D53）**
+- [ ] **Step 2: Message 観測 fallback matrix 実測（D41/D53）**
 
 OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`, `experimental.text.complete`, `chat.message`。`AssistantMessage` / `TextPart` のフィールドを出力して、どのイベントが assistant 本文源・role/finish 確定源となるか特定。
 
@@ -248,14 +172,14 @@ OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`,
 - 順序逆転・未発火・role/text 相関が確定できない場合は、declared claim 抽出を **skip** する条件を明示する。
 - Task 3.1 へ渡す adapter 契約（どのイベントを `text_complete` / `message_part_updated` / `message_updated` として変換し、`finalized` フラグをどう導出するか）を確定する。
 
-- [ ] **Step 4: スパイク結果を docs に集約し設計書を更新**
+- [ ] **Step 3: スパイク結果を docs に集約し設計書を更新**
 
 ```bash
 git add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md
 git commit -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録"
 ```
 
-- [ ] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Phase 0 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -676,17 +600,22 @@ gt submit
   - `redactEnvironmentValues(text: string): string`
   - `redactTokenUrls(text: string): string`
   - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
-- Consumes: existing `SecretPatternDetector` API.
-- Produces:
-  - `redactEvidenceCommand(command: string): string`
-  - `redactRawOutput(rawOutput: string): string`
-  - `redactMessageSnippet(snippet: string): string`
-  - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
 
-- [ ] **Step 1: 既存 `SecretPatternDetector` を確認**
+- [ ] **Step 1: `SecretPatternDetector` に `redact(text)` を追加**
 
-```bash
-grep -n "export" src/core/secret-pattern-detector.ts
+```typescript
+// src/core/secret-pattern-detector.ts
+export class SecretPatternDetector {
+  scan(content: string): SecretMatch[] { /* existing */ }
+
+  redact(content: string): string {
+    let redacted = content;
+    for (const { pattern } of SECRET_PATTERNS) {
+      redacted = redacted.replace(pattern, (match) => "[REDACTED_" + match.slice(0, 4) + "]");
+    }
+    return redacted;
+  }
+}
 ```
 
 - [ ] **Step 2: v2 redaction 関数を追加**
@@ -694,6 +623,20 @@ grep -n "export" src/core/secret-pattern-detector.ts
 ```typescript
 // src/core/v2/redaction.ts
 import { SecretPatternDetector } from "../secret-pattern-detector.ts";
+
+const DEFAULT_DETECTOR = new SecretPatternDetector();
+
+export function redactEvidenceCommand(command: string): string {
+  return redactForPersistence(command, DEFAULT_DETECTOR);
+}
+
+export function redactRawOutput(rawOutput: string): string {
+  return redactForPersistence(rawOutput, DEFAULT_DETECTOR);
+}
+
+export function redactMessageSnippet(snippet: string): string {
+  return redactForPersistence(snippet, DEFAULT_DETECTOR);
+}
 
 export function redactAbsolutePaths(text: string): string {
   return text
@@ -709,12 +652,17 @@ export function redactTokenUrls(text: string): string {
   return text.replace(/(https?:\/\/[^@\s]+@)([^\s"']+)/g, "$1[REDACTED_TOKEN_URL]");
 }
 
-export function redactForPersistence(text: string): string {
-  const redacted = SecretPatternDetector.redact(text); // existing API covers API keys / secrets
+export function redactForPersistence(text: string, detector = new SecretPatternDetector()): string {
+  const redacted = detector.redact(text); // covers API keys / secrets
   return truncate(
     redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
     4096
   );
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + "\n…[truncated]";
 }
 ```
 
@@ -745,9 +693,8 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction.test
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
-git commit -m "feat(v2): redaction and safe-segment encoding for persistence"
-```
+git add src/core/secret-pattern-detector.ts src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
+git commit -m "feat(v2): redaction, secret redaction, and safe-segment encoding for persistence"
 
 - [ ] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
 
@@ -854,12 +801,39 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `FileReader` / `FileWriter` interfaces, `toPhysicalPath`, `generateWriterId`.
+- Consumes: `FileReader` / `FileWriter` interfaces, `toPhysicalPath`, `generateWriterId`. `FileReader` must expose `listFiles(prefix: string): Promise<readonly string[]>` for `readAll()` to enumerate active + archive segments.
 - Produces:
   - `ObservationLogStore` class with `append(record)` and `readAll()`.
   - Per-shard async write queue ensuring serialization and sequence assignment.
   - Writer ID collision re-generation on existing file.
+- [ ] **Step 0: Extend `FileReader` with `listFiles(prefix)`**
 
+Add `listFiles(prefix: string): Promise<readonly string[]>` to `FileReader` in `src/core/types.ts`. Implement it in `src/runtime/node-file-system.ts` using `fs.readdir` with prefix filtering, and in `tests/helpers/mock-file-system.ts`. This is required for `ObservationLogStore.readAll()` to enumerate `.justice/events/**` and `.justice/archive/events/**` without direct `fs` access in Core or tests.
+
+```typescript
+// src/core/types.ts
+export interface FileReader {
+  readFile(path: string): Promise<string>;
+  fileExists(path: string): Promise<boolean>;
+  listFiles(prefix: string): Promise<readonly string[]>;
+}
+```
+
+```typescript
+// src/runtime/node-file-system.ts
+import { readdir } from "node:fs/promises";
+
+async listFiles(prefix: string): Promise<readonly string[]> {
+  const safePrefix = await this.resolveSafely(prefix);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const entries = await readdir(safePrefix, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
+    .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
+}
+```
+
+- [ ] **Step 1: write queue を実装（D23/D30）**
 - [ ] **Step 1: write queue を実装（D23/D30）**
 
 ```typescript
@@ -871,12 +845,18 @@ type QueueItem = {
 };
 
 export function createShardWriteQueue(
-  writer: { write(path: string, content: string): Promise<void> },
+  writer: { writeFile(path: string, content: string): Promise<void>; rename(from: string, to: string): Promise<void> },
   readExisting: (path: string) => Promise<string>,
   onError: (path: string, err: unknown) => void
 ): (path: string, record: object) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
   const sequences = new Map<string, number>();
+
+  async function atomicAppend(path: string, content: string) {
+    const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    await writer.writeFile(tempPath, content);
+    await writer.rename(tempPath, path);
+  }
 
   async function process(path: string) {
     const items = queues.get(path) ?? [];
@@ -886,7 +866,7 @@ export function createShardWriteQueue(
         const nextSeq = (sequences.get(path) ?? 0) + 1;
         const existing = await readExisting(path).catch(() => "");
         const line = `${JSON.stringify({ ...item.record, sequence: nextSeq })}\n`;
-        await writer.write(path, existing + line);
+        await atomicAppend(path, existing + line);
         sequences.set(path, nextSeq);
         item.resolve(nextSeq);
       }
@@ -909,7 +889,7 @@ export function createShardWriteQueue(
 }
 ```
 
-> Note: 上記は簡易実装。実際には temp+rename で atomic write を行う（`FileWriter` が `saveAtomic` を提供するはず）。
+> Note: `writeFile` alone is not atomic; the queue uses `writeFile(temp)` + `rename(temp, target)` via the provided `FileWriter.rename` API.
 
 - [ ] **Step 2: `ObservationLogStore` クラスを実装**
 
@@ -925,7 +905,10 @@ export class ObservationLogStore {
     private readonly logger: { warn(message: string, err?: unknown): void } = console
   ) {
     this.enqueue = createShardWriteQueue(
-      { write: (path, content) => this.fileWriter.writeFile(path, content) },
+      {
+        writeFile: (path, content) => this.fileWriter.writeFile(path, content),
+        rename: (from, to) => this.fileWriter.rename(from, to),
+      },
       async (path) => {
         if (await this.fileReader.fileExists(path)) return await this.fileReader.readFile(path);
         return "";
@@ -941,18 +924,46 @@ export class ObservationLogStore {
   }
 
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
-    // active + archive 列挙・マージ
+    try {
+      const activePaths = await this.fileReader.listFiles(".justice/events");
+      const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
+      const allPaths = [...activePaths, ...archivePaths].sort();
+      const lines: string[] = [];
+      for (const path of allPaths) {
+        const content = await this.fileReader.readFile(path).catch(() => "");
+        lines.push(...content.split("\n").filter((line) => line.trim() !== ""));
+      }
+      return lines.map((line) => JSON.parse(line) as ObservationRecord | DecisionRecord);
+    } catch (err) {
+      this.logger.warn("ObservationLogStore: readAll failed, returning empty events", err);
+      return [];
+    }
   }
-}
 ```
 
-- [ ] **Step 3: テストを実行（Devcontainer 内）**
+- [ ] **Step 3: `listFiles` mock 実装と列挙テストを追加**
+
+```typescript
+// tests/runtime/observation-log-queue.test.ts
+it("readAll merges active and archive segments", async () => {
+  const reader = createMockFileReader({
+    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"kind":"tool_executed"}\n',
+    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"kind":"tool_executed"}\n',
+  });
+  reader.listFiles = async (prefix) => Object.keys(reader.files).filter((p) => p.startsWith(prefix));
+  const store = new ObservationLogStore(writer, reader, "w-1");
+  const events = await store.readAll();
+  expect(events).toHaveLength(2);
+});
+```
+
+- [ ] **Step 4: テストを実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
 ```
 
-- [ ] **Step 3b: writer error 時の queue 復旧・reject テストを追加**
+- [ ] **Step 5: writer error 時の queue 復旧・reject テストを追加**
 
 ```typescript
 // tests/runtime/observation-log-queue.test.ts
@@ -966,14 +977,13 @@ it("rejects pending writes and reports error when writer fails", async () => {
 });
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/runtime/observation-log-store.ts src/runtime/write-queue.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
-git commit -m "feat(v2): atomic append and per-shard write queue for observation log"
-```
+git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts src/runtime/observation-log-store.ts src/runtime/write-queue.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
+git commit -m "feat(v2): atomic append, per-shard write queue, and listFiles abstraction"
 
-- [ ] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
+- [ ] **Step 7: Phase 2 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -1060,13 +1070,16 @@ export function toSerializableProjectedState(state: ProjectedState): object {
 export class StateProjectionCache {
   constructor(
     private readonly fileWriter: FileWriter,
-    private readonly path = ".justice/state.json"
+    private readonly path = ".justice/state.json",
+    private readonly logger: { warn(message: string, err?: unknown): void } = console
   ) {}
 
   async write(state: ProjectedState): Promise<void> {
     try {
-      const content = JSON.stringify(toSerializableProjectedState(state), null, 2);
-      await this.fileWriter.writeFile(this.path, content); // NodeFileSystem writes atomically via temp+rename
+
+      const tempPath = `${this.path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+      await this.fileWriter.writeFile(tempPath, content);
+      await this.fileWriter.rename(tempPath, this.path);
     } catch (err) {
       // fail-open: log and continue
       this.logger.warn("state.json cache write failed", err);
@@ -1254,8 +1267,10 @@ export type MessageRecord = {
   readonly messageID: string;
   readonly partID?: string;
   readonly role?: "assistant" | "user";
+  readonly textHash: string; // required per D34
   readonly textSnippet?: string;
   readonly declaredClaims: readonly DeclaredClaimEvidence[];
+  readonly evidence: readonly DeclaredClaimEvidence[]; // 1 claim = 1 Evidence per D59/D70
   readonly finalized: boolean;
 };
 ```
@@ -1306,32 +1321,92 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `ObservationMessagePayload` from Task 3.1, `ObservationLogStore` from Phase 2.
+- Consumes: `ObservationMessagePayload` from Task 3.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`.
 - Produces:
-  - `onToolExecuteBefore/After` no longer filters `tool !== "task"`; all tools are forwarded to `JusticePlugin.handleEvent`.
-  - `onMessage` / `onMessagePartUpdated` / `onTextComplete` hooks produce `ObservationMessagePayload` and forward to `JusticePlugin.handleEvent({ type: "Message" })`.
+  - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
+  - `onToolExecuteBefore/After` no longer filters `tool !== "task"`; all tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events.
+  - `onMessage` / `onMessagePartUpdated` / `onTextComplete` hooks produce `ObservationMessagePayload` and forward to `JusticePlugin.handleEvent({ type: "Message" })` alongside the existing user-message path (handled in Task 3.3).
   - `onSessionError` forwards to `JusticePlugin.handleEvent({ type: "Event", event: "session.error" })`.
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
+
+- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers**
+
+```typescript
+// src/runtime/opencode-adapter.ts
+type ToolObservationPayload = {
+  readonly toolName: string;
+  readonly callId: string;
+  readonly args?: Record<string, unknown>;
+  readonly output?: { readonly output?: string; readonly metadata?: Record<string, unknown> };
+  readonly error?: boolean;
+};
+
+function toPreToolObservationPayload(
+  input: { readonly tool: string; readonly callID: string },
+  output: { readonly args: Record<string, unknown> }
+): PreToolUseEvent {
+  return {
+    type: "PreToolUse",
+    sessionId: input.sessionID,
+    callId: input.callID,
+    payload: { toolName: input.tool, toolInput: output.args },
+  };
+}
+
+function toPostToolObservationPayload(
+  input: { readonly tool: string; readonly callID: string; readonly args: Record<string, unknown> },
+  output: { readonly output: string; readonly metadata?: Record<string, unknown> }
+): PostToolUseEvent {
+  return {
+    type: "PostToolUse",
+    sessionId: input.sessionID,
+    callId: input.callID,
+    payload: {
+      toolName: input.tool,
+      toolResult: output.output,
+      error: output.metadata?.error === true,
+    },
+  };
+}
+```
 
 - [ ] **Step 1: 既存 adapter の tool フィルタを撤廃**
 
 ```typescript
 // src/runtime/opencode-adapter.ts
-onToolExecuteAfter: async (input) => {
-  const response = await this.plugin.handleEvent({ type: "PostToolUse", payload: input });
+onToolExecuteBefore: async (input, output) => {
+  const response = await this.plugin.handleEvent(toPreToolObservationPayload(input, output));
+  if (response.action !== "inject") return;
+  // apply modifiedPayload.args to output.args if present
+  const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
+  if (!modified?.args) return;
+  for (const [key, value] of Object.entries(modified.args)) {
+    // eslint-disable-next-line security/detect-object-injection
+    output.args[key] = value;
+  }
+},
+onToolExecuteAfter: async (input, output) => {
+  const response = await this.plugin.handleEvent(toPostToolObservationPayload(input, output));
   // (1) guaranteed channel: notifier banner
-  if (response.action === "inject" && response.notification) {
-    await this.notifier.notify(response.notification);
+  if (response.action === "inject") {
+    await this.notifier.notify({
+      level: "warn",
+      variant: "justice_gate",
+      title: "Task Gate",
+      message: response.injectedContext,
+      sessionId: input.sessionID,
+      taskId: "unknown",
+    });
   }
   // (2) best-effort channel: append banner to output.output
-  if (response.action === "inject" && response.injectedContext && input.output && typeof input.output === "object") {
-    input.output.output = (input.output.output ?? "") + "\n\n" + response.injectedContext;
+  if (response.action === "inject" && response.injectedContext && typeof output.output === "object") {
+    output.output.output = (output.output.output ?? "") + "\n\n" + response.injectedContext;
   }
   return response;
 },
 ```
 
-- [ ] **Step 2: message / session.error イベントを追加**
+- [ ] **Step 2: message / session.error イベントを追加（既存 user message 経路は維持）**
 
 ```typescript
 onMessagePartUpdated: async (event) => {
@@ -1340,23 +1415,12 @@ onMessagePartUpdated: async (event) => {
 // ...
 ```
 
-- [ ] **Step 3: PostToolUse 戻り値を adapter で適用（D47/D64）**
+`onMessage`（`message.updated`）は既存の `{ role, content }` 形式の `MessageEvent` として `JusticePlugin.handleEvent` に渡し、plan-bridge の委譲トリガー機能を維持する。`message.part.updated` / `experimental.text.complete` は `ObservationMessagePayload` として同じ `Message` イベントで observation-handler に渡す。Task 3.3 で両方の経路をマージする。
 
-```typescript
-// src/runtime/opencode-adapter.ts
-onToolExecuteAfter: async (input) => {
-  const response = await this.plugin.handleEvent({ type: "PostToolUse", payload: input });
-  // (1) guaranteed channel: notifier banner
-  if (response.action === "inject" && response.notification) {
-    await this.notifier.notify(response.notification);
-  }
-  // (2) best-effort channel: append banner to output.output
-  if (response.action === "inject" && response.injectedContext && input.output && typeof input.output === "object") {
-    input.output.output = (input.output.output ?? "") + "\n\n" + response.injectedContext;
-  }
-  return response;
-},
-```
+- [ ] **Step 3: PostToolUse 戻り値を adapter で適用（D47/D64）— Step 1 と統合済み**
+
+(Step 1 の `onToolExecuteAfter` に統合。重複する独立ステップは削除。)
+
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
@@ -1393,11 +1457,41 @@ gt submit
 
 - Consumes: `PlanBridge.handleMessage`, `PlanBridge.handlePreToolUse`, `PlanBridge.handlePostToolUse`, `TaskFeedbackHandler.handlePostToolUse`, new `observation-handler`.
 - Produces:
+  - `mergePreToolUseResponses(a, b)` and `mergeMessageResponses(a, b)` helpers.
   - `handleEvent` routes:
-    - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge.
+    - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge, merged via `mergePreToolUseResponses`.
     - `PostToolUse`: observation-handler + (if toolName === "task") plan-bridge + task-feedback, merged via `mergePostToolUseResponses`.
-    - `Message`: observation-handler.
+    - `Message`: routed to both `planBridge.handleMessage(event)` (existing delegation triggers) and `observationHandler.handleMessage(payload)` (declared claim extraction), merged via `mergeMessageResponses`.
     - `Event`: existing handlers unchanged.
+
+- [ ] **Step 0: Add `mergePreToolUseResponses` and `mergeMessageResponses` helpers**
+
+```typescript
+// src/core/justice-plugin.ts
+function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
+  if (a.action === "skip" || b.action === "skip") return { action: "skip" };
+  if (a.action === "inject" && b.action === "inject") {
+    const contexts = [a.injectedContext, b.injectedContext].filter((c) => c !== "");
+    const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
+    if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
+    if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
+    return result;
+  }
+  if (a.action === "inject") return { ...a };
+  if (b.action === "inject") return { ...b };
+  return { action: "proceed" };
+}
+
+function mergeMessageResponses(a: HookResponse, b: HookResponse): HookResponse {
+  if (a.action === "inject" && b.action === "inject") {
+    const contexts = [a.injectedContext, b.injectedContext].filter((c) => c !== "");
+    return { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
+  }
+  if (a.action === "inject") return { ...a };
+  if (b.action === "inject") return { ...b };
+  return { action: "proceed" };
+}
+```
 
 - [ ] **Step 1: `JusticePlugin.handleEvent` に routing ガードを追加（§4.4/D64）**
 
@@ -1405,34 +1499,48 @@ gt submit
 // src/core/justice-plugin.ts
 async handleEvent(event: HookEvent): Promise<HookResponse> {
   switch (event.type) {
+    case "Message": {
+      const obs = await this.observationHandler.handleMessage(event.payload as ObservationMessagePayload).catch((err) => {
+        this.options.logger?.warn("observation-handler message failed", err);
+        return PROCEED;
+      });
+      const plan = await this.planBridge.handleMessage(event);
+      return mergeMessageResponses(obs, plan);
+    }
     case "PreToolUse": {
       const obs = await this.observationHandler.handlePreToolUse(event.payload);
       if (event.payload.toolName === "task") {
-        const plan = await this.planBridge.handlePreToolUse(event.payload);
-        return mergePostToolUseResponses? obs + plan : ...; // PreToolUse マージは別途定義
+        const plan = await this.planBridge.handlePreToolUse(event);
+        return mergePreToolUseResponses(obs, plan);
       }
       return obs;
     }
     case "PostToolUse": {
       const responses: HookResponse[] = [await this.observationHandler.handlePostToolUse(event.payload)];
       if (event.payload.toolName === "task") {
-        responses.push(await this.planBridge.handlePostToolUse(event.payload));
-        responses.push(await this.taskFeedbackHandler.handlePostToolUse(event.payload));
+        responses.push(await this.planBridge.handlePostToolUse(event));
+        responses.push(await this.taskFeedback.handlePostToolUse(event));
       }
       return mergePostToolUseResponses(responses);
     }
-    // ...
+    case "Event":
+      return this.handleEventType(event);
+    default: {
+      const _exhaustiveCheck: never = event;
+      void _exhaustiveCheck;
+      return PROCEED;
+    }
   }
 }
 ```
 
-- [ ] **Step 2: observation-handler stub を作成**
+- [ ] **Step 2: observation-handler stub を作成（`ToolUsePayload` 以外も受け取れるよう拡張）**
 
 ```typescript
 // src/hooks/observation-handler.ts
 export class ObservationHandler {
-  async handlePreToolUse(payload: ToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
-  async handlePostToolUse(payload: ToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
+  async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
+  async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
   async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> { return { action: "proceed" }; }
 }
 ```
@@ -1522,11 +1630,11 @@ private activeTaskIdForSession(sessionId: string): string | undefined {
   return this.sessionStateProvider?.getActiveTaskId(sessionId);
 }
 
-async handlePreToolUse(payload: ToolUsePayload): Promise<HookResponse> {
+async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> {
   if (payload.toolName === "task") {
-    const taskId = this.extractTaskIdFromTaskArgs(payload.args);
+    const taskId = this.extractTaskIdFromTaskArgs(payload.toolInput);
     if (taskId) {
-      this.activeTaskWindows.set(payload.callId, taskId);
+      this.activeTaskWindows.set(payload.callId ?? "", taskId);
     }
   }
   return { action: "proceed" };
@@ -1534,15 +1642,20 @@ async handlePreToolUse(payload: ToolUsePayload): Promise<HookResponse> {
 ```
 
 - [ ] **Step 2: PostToolUse で tool_executed レコードを append**
-}
-
-- [ ] **Step 2: PostToolUse で tool_executed レコードを append**
 
 ```typescript
-async handlePostToolUse(payload: ToolUsePayload): Promise<HookResponse> {
+
+
+```typescript
+async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> {
   try {
-    const taskId = this.activeTaskWindows.get(payload.callId);
-    const evidence = extractEvidenceFromTool(payload.toolName, payload.args, payload.output);
+    const callId = this.callId ?? ""; // injected by adapter via event.callId
+    const taskId = this.activeTaskWindows.get(callId);
+    const evidence = extractEvidenceFromTool(
+      payload.toolName,
+      payload.toolInput,
+      { output: payload.toolResult, metadata: { error: payload.error } }
+    );
     const redactedEvidence: Evidence = {
       ...evidence,
       command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
@@ -1553,12 +1666,12 @@ async handlePostToolUse(payload: ToolUsePayload): Promise<HookResponse> {
       recordType: "observation",
       kind: "tool_executed",
       toolName: payload.toolName,
-      callId: payload.callId,
+      callId,
       evidence: redactedEvidence,
     };
     await this.logStore.append(this.shardId, record);
     if (payload.toolName === "task") {
-      this.activeTaskWindows.delete(payload.callId);
+      this.activeTaskWindows.delete(callId);
       // task summary declared claim extraction is added in Task 4.3
     }
     await this.evaluateGateIfTriggered("tool_observed", taskId);
@@ -1611,9 +1724,30 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
   try {
     this.messageRoleBuffer.update(payload);
     if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
-      // finalize part and extract claims
+      this.messageRoleBuffer.finalize(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const fullText = this.messageRoleBuffer.getFinalizedText(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";      const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
+        evidenceId: c.evidenceId,
+        kind: c.claimKind,
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "message",
+        claim: { claimKind: c.claimKind, outcome: c.outcome },
+      }));
+      const record: ObservationRecord = {
+        ...this.buildEnvelope({ recordType: "observation" }),
+        kind: "message",
+        messageID: payload.messageID,
+        partID: payload.kind === "text_complete" ? payload.partID : undefined,
+        role: "assistant",
+        textHash: hashString(fullText),
+        textSnippet: redactForPersistence(redactAbsolutePaths(fullText)).slice(0, 200),
+        declaredClaims: claims,
+        evidence,
+        finalized: true,
+      };
+      await this.logStore.append(this.shardId, record);
     }
-    // build ObservationRecord{kind:"message"}
   } catch (err) {
     this.logger.warn("observation-handler: message observation failed, degrading to PROCEED", err);
   }
@@ -1729,23 +1863,34 @@ if (payload.toolName === "task") {
 }
 ```
 
-- [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加**
+- [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加（D34/D59/D70）**
 
 ```typescript
 // src/hooks/observation-handler.ts
-private async appendTaskSummaryDeclaredEvidence(payload: ToolUsePayload, taskId?: string): Promise<void> {
+private async appendTaskSummaryDeclaredEvidence(payload: PostToolUsePayload, taskId?: string): Promise<void> {
   if (!taskId) return;
   try {
-    const summaryClaims = extractTaskSummaryClaims(payload.output.output ?? "");
+    const summaryText = payload.toolResult ?? "";
+    const summaryClaims = extractTaskSummaryClaims(summaryText);
     if (summaryClaims.length === 0) return;
-    // Convert DeclaredClaim[] -> DeclaredClaimEvidence[] (implementation detail) and append a message observation.
+    const redactedSnippet = redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200);
+    const evidence: DeclaredClaimEvidence[] = summaryClaims.map((c) => ({
+      evidenceId: c.evidenceId,
+      kind: c.claimKind,
+      sourceClass: "declared_claim",
+      provenance: "declared",
+      declaredFrom: "task_summary",
+      claim: { claimKind: c.claimKind, outcome: c.outcome },
+    }));
     const record: ObservationRecord = {
       ...this.buildEnvelope({ taskId, recordType: "observation" }),
       kind: "message",
       messageID: `task-summary:${taskId}`,
       role: "assistant",
-      textSnippet: redactForPersistence(redactAbsolutePaths(payload.output.output ?? "")).slice(0, 200),
-      declaredClaims: summaryClaims.map((c) => ({ ...c, sourceClass: "declared_claim", provenance: "declared", declaredFrom: "task_summary" })),
+      textHash: hashString(summaryText),
+      textSnippet: redactedSnippet,
+      declaredClaims: summaryClaims,
+      evidence,
       finalized: true,
     };
     await this.logStore.append(this.shardId, record);
@@ -1761,7 +1906,7 @@ private async appendTaskSummaryDeclaredEvidence(payload: ToolUsePayload, taskId?
 // tests/hooks/observation-handler-skill-task.test.ts
 it("returns PROCEED when task summary extraction throws", async () => {
   const handler = new ObservationHandler(/* mock log store that throws on append */);
-  const result = await handler.handlePostToolUse({ toolName: "task", callId: "c1", args: { taskId: "task-1" }, output: { output: "tests pass" } });
+    const result = await handler.handlePostToolUse({ toolName: "task", callId: "c1", toolInput: { taskId: "task-1" }, toolResult: "tests pass", error: false });
   expect(result.action).toBe("proceed");
 });
 ```
@@ -1929,6 +2074,12 @@ gt submit
   - `check.type ∈ { "evidence_outcome", "evidence_present", "review_open_items" }`.
   - `parseGateYaml(yaml: string): GateRule[]`.
 
+- [ ] **Step 0: 依存パッケージ `yaml` を追加**
+
+```bash
+bun add -d yaml
+```
+
 - [ ] **Step 1: `GateRule` 型を定義**
 
 ```typescript
@@ -1967,6 +2118,8 @@ export type GateRule = {
 
 ```typescript
 // src/core/v2/gate-yaml-parser.ts
+import { parse as parseYaml } from "yaml";
+
 export function parseGateYaml(content: string): readonly GateRule[] {
   const parsed = parseYaml(content) as { readonly gates?: readonly unknown[] };
   if (!parsed || !Array.isArray(parsed.gates)) {
@@ -2026,7 +2179,7 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/gate-definitio
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/gate-definition.ts src/core/v2/gate-yaml-parser.ts tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
+git add package.json bun.lockb src/core/v2/gate-definition.ts src/core/v2/gate-yaml-parser.ts tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
 git commit -m "feat(v2): gate definition schema and yaml parser"
 ```
 
@@ -2539,14 +2692,16 @@ export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sess
 - [ ] **Step 2: PostToolUse 時に review_observed を生成・append（通常観測）**
 
 ```typescript
-// src/hooks/observation-handler.ts 内
+// src/hooks/observation-handler.ts 内 handlePostToolUse
+// After tool_executed append and before evaluateGateIfTriggered, append review_observed:
 try {
-  const signal = ReviewRejectionDetector.detect(payload.output.output ?? "");
+  const callId = this.callId ?? ""; // from event.callId
+  const signal = ReviewRejectionDetector.detect(payload.toolResult ?? "");
   if (signal.matched) {
     const record: ObservationRecord = {
       ...this.buildEnvelope({ taskId, recordType: "observation" }),
       kind: "review_observed",
-      reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId: payload.callId, toolName: payload.toolName }),
+      reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId, toolName: payload.toolName }),
       isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
       items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
     };
@@ -2555,7 +2710,7 @@ try {
 } catch (err) {
   this.logger.warn("observation-handler: review_observed generation failed", err);
 }
-```
+// evaluateGateIfTriggered("tool_observed", taskId) runs AFTER both tool_executed and review_observed are appended.
 
 - [ ] **Step 2b: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
 
@@ -2634,21 +2789,28 @@ gt submit
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
 
+- [ ] **Step 0: 依存パッケージ `zod` を追加**
+
+```bash
+bun add -d zod
+```
+
 - [ ] **Step 1: `justice_status` 実装**
 
 ```typescript
 // src/runtime/justice-tools.ts
+import { z } from "zod";
+import type { ToolDefinition } from "@opencode-ai/plugin";
 import { toSerializableProjectedState } from "../core/v2/state-projection.ts";
 
 export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinition {
   return {
-    name: "justice_status",
     description: "Justice の現在の投影状態を表示します",
-    inputSchema: { type: "object", properties: {} },
+    args: {},
     execute: async () => {
       const events = await store.readAll();
       const state = project(events);
-      return { output: JSON.stringify(toSerializableProjectedState(state), null, 2) };
+      return JSON.stringify(toSerializableProjectedState(state), null, 2);
     },
   };
 }
@@ -2658,7 +2820,10 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
 
 ```typescript
 // src/runtime/opencode-adapter.ts
-tools: [defineJusticeStatusTool(this.logStore), /* ... */],
+tool: {
+  justice_status: defineJusticeStatusTool(this.logStore),
+  // justice_gate / justice_review added in later tasks
+},
 ```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -2670,7 +2835,7 @@ devcontainer exec --workspace-folder . bun run test tests/runtime/justice-status
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
+git add package.json bun.lockb src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
 git commit -m "feat(v2): justice_status read-only custom tool"
 ```
 
@@ -2702,12 +2867,11 @@ gt submit
 ```typescript
 export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: GateLoader): ToolDefinition {
   return {
-    name: "justice_gate",
     description: "現 event log から gate を dry-run 評価します",
-    inputSchema: { type: "object", properties: { taskId: { type: "string" } } },
+    args: { taskId: z.string() },
     execute: async ({ taskId }) => {
       if (typeof taskId !== "string" || taskId.length === 0) {
-        return { output: JSON.stringify({ status: "PASS", ruleResults: [], reason: "no taskId provided" }, null, 2) };
+        return JSON.stringify({ status: "PASS", ruleResults: [], reason: "no taskId provided" }, null, 2);
       }
       const events = await store.readAll();
       const state = project(events);
@@ -2715,7 +2879,7 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
       const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
       const evidence = state.tasks.get(taskId)?.evidence ?? [];
       const verdict = evaluate(gates, evidence, ctx);
-      return { output: JSON.stringify(verdict, null, 2) };
+      return JSON.stringify(verdict, null, 2);
     },
   };
 }
@@ -2762,16 +2926,15 @@ gt submit
 ```typescript
 export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinition {
   return {
-    name: "justice_review",
     description: "Review Summary Artifact を表示します",
-    inputSchema: { type: "object", properties: { scope: { type: "string" } } },
+    args: { scope: z.string().optional() },
     execute: async ({ scope }) => {
       const events = await store.readAll();
       const state = project(events);
       const summary = scope
         ? state.reviewSummary.byScope.get(scope)
         : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
-      return { output: JSON.stringify(summary, null, 2) };
+      return JSON.stringify(summary, null, 2);
     },
   };
 }
@@ -2806,7 +2969,7 @@ gt submit
 
 **目的:** 設計書で定義された Architecture Fitness Functions（FF-001〜008）と NFR（並行性・セキュリティ・integrity）のテストを実装し、CI 必須 check として登録。本 Phase だけで品質担保テスト群が完成する。設計書 §9.3.1 の Runtime 統合テスト（`record sub-entity refs` 含む）も含める。
 
-**判断:** Phase 8 は全ての先行 Phase を横断的に検証。Task 8.1〜8.7 はそれぞれ独立したテストファイルなので、Base から並列に分岐してもよい。ただし FF-004 は Phase 2/3、FF-005 は Phase 4、FF-006 は adapter/handler、FF-007/008 は Phase 5、NFR は Phase 2/4/6 の実装に依存する。Phase 8 Base は `master` から切り、各 Task は独立に Base から分岐する（並列レビュー可能）。
+**判断:** Phase 8 は全ての先行 Phase を横断的に検証。Task 8.1〜8.7 はそれぞれ独立したテストファイルなので、Base から並列に分岐してもよい。ただし FF-004 は Phase 2/3、FF-005 は Phase 4、FF-006 は adapter/handler、FF-007/008 は Phase 5、NFR は Phase 2/4/6 の実装に依存する。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から切り、各 Task は独立に Base から分岐する（並列レビュー可能）。
 
 ---
 
@@ -2821,6 +2984,12 @@ gt submit
 
 - Consumes: `src/core/` file list.
 - Produces: Test that no `src/core/` file imports from `@opencode-ai/*`.
+
+- [ ] **Step 0: 依存パッケージ `glob` を追加**
+
+```bash
+bun add -d glob
+```
 
 - [ ] **Step 1: arch test を実装**
 
@@ -2850,7 +3019,7 @@ devcontainer exec --workspace-folder . bun run test tests/arch/core-no-opencode-
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/arch/core-no-opencode-imports.test.ts
+git add package.json bun.lockb tests/arch/core-no-opencode-imports.test.ts
 git commit -m "test(v2): FF-001 core no opencode imports"
 ```
 
@@ -3272,8 +3441,8 @@ master
 
 ## 自己レビュー（Self-Review）
 
-- [x] **Spec coverage:** 設計書 §10.3 の 8 ビルドステップを Phase 1〜7 に網羅。§9 の FF/NFR を Phase 8 に網羅。Phase 0 は §3 の 3 スパイク + devcontainer ベースラインを網羅。CODEOWNERS 追認 ADR 作成は Pre-Planning Preflight として Phase 0 より前に実施。
-- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + 3 スパイクに充てる。Task 0.0（CODEOWNERS 追認 ADR）は Pre-Planning Preflight として Phase 0 Base 作成前に完了し、その承認が本計画の executable 化条件となる。
+- [x] **Spec coverage:** 設計書 §10.3 の 8 ビルドステップを Phase 1〜7 に網羅。§9 の FF/NFR を Phase 8 に網羅。Phase 0 は §3 の 2 スパイク + devcontainer ベースラインを網羅。CODEOWNERS 追認 ADR 作成は Pre-Planning Preflight として本計画の executable 化条件となる。
+- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + 2 スパイクに充てる。Pre-Planning Preflight（ADR 追認 + C1 / L0 Advisory Surface Validation）が完了して初めて本計画を executable とする。
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
 - [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase Base から分岐。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
@@ -3283,7 +3452,7 @@ master
 - [x] **File I/O 抽象化:** rotation 判定は `FileReader.readFileStats` 経由。`fs.stat` 直接呼び出しを排除。
 - [x] **L0 advisory surface:** `evaluateGateIfTriggered` は `injectedContext` を返し、adapter が notifier 保証チャネル + `output.output` best-effort 追記を適用（D47/D64）。
 - [x] **YAML enum:** `GateRule` verdict は lowercase (`pass`/`warn`/`fail`)。`parseGateYaml` は小文字 YAML を正規化する。
-- [x] **CODEOWNERS 追認:** Pre-Planning Preflight の Task 0.0 で ADR 作成・CODEOWNERS 承認取得を実施。未承認時は本計画を executable にしない。
+- [x] **CODEOWNERS 追認:** Pre-Planning Preflight で ADR 作成・CODEOWNERS 承認取得を実施。未承認時は本計画を executable にしない。
 
 ---
 
