@@ -109,12 +109,29 @@ gt submit
 - [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加**
 - [ ] **Step 6: コンテナ内で再実行して確認**
 - [ ] **Step 7: Commit**
-- [ ] **Step 8: Phase 0 Base に向けた Draft PR を作成する**
+- [ ] **Step 8: Task 0.1 に向けた PR を作成する**
+
+```bash
+gt submit
+```
+
+**派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
+
+
+### Task 0.2: De-risk Spikes (実証スパイク)
+
+**Files:**
+
+- Create: `spikes/observation-latency/measure.ts`
+- Create: `docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`
+
+**Interfaces:**
 
 - Produces:
   - 全ツール `tool.execute.after` 観測レイテンシ実測結果。
   - Message 観測 fallback matrix の実測結果と設計書追認差分。
   - C1 / L0 advisory 表示面実測結果（`output.output` 反映可否）と設計書 D47 の確定差分。
+
 - [ ] **Step 1: 全ツール `tool.execute.after` 観測レイテンシ実測**
 
 ```typescript
@@ -135,6 +152,7 @@ import { Plugin } from "@opencode-ai/plugin";
 - 反映可否を boolean で記録し、設計書 §3 Phase 0 スパイク結果と D47 に追記する。
 - 反映不可の場合、adapter の L0 advisory 適用コード（Task 3.2）を `output.output` 追記を削除し notifier のみとする形に修正する。
 - 反映可の場合、型と実装を `output.output` が string である前提に統一する。
+
 - [ ] **Step 2: Message 観測 fallback matrix 実測（D41/D53）**
 
 OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`, `experimental.text.complete`, `chat.message`。`AssistantMessage` / `TextPart` のフィールドを出力して、どのイベントが assistant 本文源・role/finish 確定源となるか特定。
@@ -152,13 +170,13 @@ git add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md
 git commit -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録"
 ```
 
-- [ ] **Step 4: Phase 0 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Task 0.2 に向けた PR を作成する**
 
 ```bash
 gt submit
 ```
 
-**派生元:** `Task 0.1`（直前 Task から派生）。Task 0.1 の devcontainer 整備後に実行する。
+**派生元:** `feature/phase0-task1-devcontainer-baseline`（Task 0.1 から派生）。Task 0.1 の devcontainer 整備後に実行する。
 
 ---
 
@@ -395,7 +413,7 @@ gt submit
 - Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `MessagePayload` union (Task 1.3), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
 - Produces:
   - `Evidence` discriminated union with `sourceClass: "tool_output" | "declared_claim"`.
-  - `extractEvidenceFromTool(toolName, args, output, metadata): Evidence[]` (returns observed + derived interpretation).
+  - `extractEvidenceFromTool(toolName, args, output, metadata): Evidence` (returns observed + derived interpretation).
   - `classifyToolOutputClass(toolName, args): "command_exec" | "file_content"`.
   - `extractDeclaredClaims(text): DeclaredClaim[]` (from message text or task summary).
 
@@ -510,7 +528,6 @@ export function extractEvidenceFromTool(
   const rawOutput = output.output ?? "";
   const toolOutputClass = classifyToolOutputClass(toolName, args, rawOutput.length);
   const observedId = generateEvidenceId();
-  const rawOutput = output.output ?? "";
   return {
     evidenceId: observedId,
     kind: mapToolNameToKind(toolName, args),
@@ -767,6 +784,8 @@ export function toArchivePath(shardId: ShardId, timestamp: string): string {
 ```typescript
 // src/runtime/writer-id.ts
 import { randomUUID } from "crypto";
+import type { FileReader } from "../core/types.ts";
+import { toPhysicalPath } from "./shard-layout.ts";
 
 const WRITER_ID_RE = /^w-[A-Za-z0-9-]+$/;
 
@@ -777,19 +796,39 @@ export function generateWriterId(): string {
 export function isSafeWriterId(id: string): boolean {
   return WRITER_ID_RE.test(id) && id !== "w-system";
 }
+
+/**
+ * 既存ファイルと衝突しない一意な writerId を割り当てる。
+ * 衝突を検知した場合は再帰的に再生成を行う（D55）。
+ */
+export async function allocateWriterId(
+  fileReader: FileReader,
+  shardWithoutWriterId: { readonly agentId: string; readonly sessionId: string }
+): Promise<string> {
+  const candidate = generateWriterId();
+  const physicalPath = toPhysicalPath({ ...shardWithoutWriterId, writerId: candidate });
+  if (await fileReader.fileExists(physicalPath)) {
+    return await allocateWriterId(fileReader, shardWithoutWriterId);
+  }
+  return candidate;
+}
 ```
+
+- [ ] **Step 2b: writerId 衝突回避テストを追加（D55）**
+
+`tests/runtime/writer-id-collision.test.ts` を作成し、`fileReader` モックにおいて特定の候補パスが存在する場合に衝突が再帰的に回避され、「1ファイル=1writer」が保たれることを確認するテストを実装する。
 
 - [ ] **Step 3: Devcontainer 内でテスト実行**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts tests/runtime/writer-id-collision.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/shard-layout.ts src/runtime/writer-id.ts tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts
-git commit -m "feat(v2): shard file layout and writer ID generation"
+git add src/core/v2/shard-layout.ts src/runtime/writer-id.ts tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts tests/runtime/writer-id-collision.test.ts
+git commit -m "feat(v2): shard file layout, writer ID generation, and collision allocation"
 ```
 
 - [ ] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
@@ -1200,9 +1239,14 @@ export function toSerializableProjectedState(state: ProjectedState): object {
 
 ```typescript
 // src/runtime/state-projection-cache.ts
+import type { FileWriter, FileReader } from "../core/types.ts";
+import type { ProjectedState } from "../core/v2/observation-model.ts";
+import { toSerializableProjectedState, fromSerializableProjectedState } from "./serialization.ts"; // serialized mapping helpers
+
 export class StateProjectionCache {
   constructor(
     private readonly fileWriter: FileWriter,
+    private readonly fileReader: FileReader,
     private readonly path = ".justice/state.json",
     private readonly logger: { warn(message: string, err?: unknown): void } = console
   ) {}
@@ -1218,12 +1262,33 @@ export class StateProjectionCache {
       this.logger.warn("state.json cache write failed", err);
     }
   }
+
+  async read(): Promise<ProjectedState | undefined> {
+    try {
+      if (!(await this.fileReader.fileExists(this.path))) return undefined;
+      const content = await this.fileReader.readFile(this.path);
+      const parsed = JSON.parse(content);
+      // Validate schema and structural fields
+      if (!parsed || typeof parsed !== "object" || !("maxSequenceByShard" in parsed)) {
+        this.logger.warn("state.json structure invalid, triggering rebuild");
+        return undefined;
+      }
+      return fromSerializableProjectedState(parsed);
+    } catch (err) {
+      this.logger.warn("state.json read/parse failed, triggering rebuild", err);
+      return undefined;
+    }
+  }
 }
 ```
 
-`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。
+`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、これが `undefined` を返した（欠損、破損、schema 不一致、あるいは integrity 検証での sequence 逆転/重複や maxSequenceByShard 不一致検知時）場合は event log から再構築を行う。
 
-- [ ] **Step 2b: JSON round-trip テストを追加**
+- [ ] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
+
+`tests/runtime/state-projection-cache-read.test.ts` を作成し、`read()` がスキーマ不正や破損（例外発生など）時に `undefined` を返し、正常時のみ `ProjectedState` を復元することを確認する。
+
+- [ ] **Step 2c: JSON round-trip テストを追加**
 
 `ProjectedState` 内部は `ReadonlyMap` であっても、`toSerializableProjectedState()` 経由で書き込んだ `state.json` が正しく `maxSequenceByShard` / `tasks` / `reviewSummary.byScope` を含むことを検証する。
 
@@ -1913,7 +1978,11 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
         claim: { claimKind: c.claimKind, outcome: c.outcome },
       }));
       const record: ObservationRecord = {
-        ...this.buildEnvelope({ recordType: "observation" }),
+        ...this.buildEnvelope({
+          agentId: payload.agentId,
+          sessionId: payload.sessionId,
+          recordType: "observation",
+        }),
         kind: "message",
         messageID: payload.messageID,
         partID: payload.kind === "text_complete" ? payload.partID : undefined,
@@ -2024,7 +2093,16 @@ export function extractTaskSummaryClaims(output: string): DeclaredClaim[] {
 // tool_executed レコード生成時に併せて skill_invoked レコードも append（fail-open）
 try {
   if (skill) {
-    await this.logStore.append(this.shardId, { ...this.buildEnvelope({ taskId, recordType: "observation" }), kind: "skill_invoked", ...skill });
+    await this.logStore.append(this.shardId, {
+      ...this.buildEnvelope({
+        taskId,
+        agentId: payload.agentId,
+        sessionId: payload.sessionId,
+        recordType: "observation",
+      }),
+      kind: "skill_invoked",
+      ...skill,
+    });
   }
 } catch (err) {
   this.logger.warn("observation-handler: skill_invoked observation failed", err);
@@ -2061,7 +2139,12 @@ private async appendTaskSummaryDeclaredEvidence(payload: PostToolUsePayload, tas
       claim: { claimKind: c.claimKind, outcome: c.outcome },
     }));
     const record: ObservationRecord = {
-      ...this.buildEnvelope({ taskId, recordType: "observation" }),
+      ...this.buildEnvelope({
+        taskId,
+        agentId: payload.agentId,
+        sessionId: payload.sessionId,
+        recordType: "observation",
+      }),
       kind: "message",
       messageID: `task-summary:${taskId}`,
       role: "assistant",
@@ -2134,10 +2217,14 @@ gt submit
 - [ ] **Step 1: session_error ハンドラを実装**
 
 ```typescript
-async handleSessionError(error: { readonly message: string; readonly kind?: string }): Promise<HookResponse> {
+async handleSessionError(error: { readonly message: string; readonly kind?: string; readonly agentId: ObservationAgentId; readonly sessionId: string }): Promise<HookResponse> {
   try {
     const record: ObservationRecord = {
-      ...this.buildEnvelope({ recordType: "observation" }),
+      ...this.buildEnvelope({
+        agentId: error.agentId,
+        sessionId: error.sessionId,
+        recordType: "observation",
+      }),
       kind: "session_error",
       errorKind: error.kind ?? "unknown",
       message: redactForPersistence(redactAbsolutePaths(error.message)),
@@ -2941,7 +3028,12 @@ try {
   const signal = ReviewRejectionDetector.detect(payload.toolResult ?? "");
   if (signal.matched) {
     const record: ObservationRecord = {
-      ...this.buildEnvelope({ taskId, recordType: "observation" }),
+      ...this.buildEnvelope({
+        taskId,
+        agentId: payload.agentId,
+        sessionId: payload.sessionId,
+        recordType: "observation",
+      }),
       kind: "review_observed",
       reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId, toolName: payload.toolName }),
       isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
@@ -2961,10 +3053,14 @@ v2.0 では解決マーカーのデータモデルと集計ロジックを実装
 
 ```typescript
 // src/hooks/observation-handler.ts 内（将来の拡張用 seam）
-private async handleReviewResolutionArtifact(payload: { reviewScope: string; itemKeys: string[]; artifactRef: string }): Promise<HookResponse> {
+private async handleReviewResolutionArtifact(payload: { agentId: ObservationAgentId; sessionId: string; reviewScope: string; itemKeys: string[]; artifactRef: string }): Promise<HookResponse> {
   try {
     const record: ObservationRecord = {
-      ...this.buildEnvelope({ recordType: "observation" }),
+      ...this.buildEnvelope({
+        agentId: payload.agentId,
+        sessionId: payload.sessionId,
+        recordType: "observation",
+      }),
       kind: "review_observed",
       reviewScope: payload.reviewScope,
       resolutionMarker: payload.itemKeys.map((itemKey) => ({
@@ -3498,26 +3594,29 @@ gt submit
 
 ```typescript
 // tests/core/v2/redaction-integration.test.ts
-it("redacts secrets, absolute paths, env vars, and token URLs before append", async () => {
+it("redacts secrets, absolute paths, env vars, and token URLs before append via observation-handler", async () => {
   const writer = createMockFileWriter();
   const reader = createMockFileReader({});
   const store = new ObservationLogStore(writer, reader, "w-1");
+  const handler = new ObservationHandler({ logStore: store, sessionStateProvider });
+
   const rawCommand = "echo /home/alice/project/secret /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com";
   const rawOutput = "sk-abc123 HOME=/home/alice";
-  const evidence: Evidence = {
-    evidenceId: "ev-1",
-    kind: "command",
-    sourceClass: "tool_output",
-    provenance: "observed",
-    toolOutputClass: "command_exec",
-    command: redactForPersistence(redactAbsolutePaths(rawCommand)),
-    rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)),
+
+  // Raw payload that hasn't been redacted yet
+  const payload = {
+    sessionId: "session-1",
+    agentId: "atlas",
+    toolName: "execute_command",
+    args: { command: rawCommand },
+    output: { output: rawOutput },
   };
-  await store.append(shardId, {
-    ...record,
-    evidence,
-  });
-  const written = writer.getFile(path);
+
+  // Dispatch through handler which must trigger the redaction pipeline before append
+  await handler.handlePostToolUse(payload);
+
+  const physicalPath = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-1" });
+  const written = writer.getFile(physicalPath);
   expect(written).not.toContain("/home/alice/project");
   expect(written).not.toContain("/tmp/foo");
   expect(written).not.toContain("/workspace/src");
