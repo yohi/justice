@@ -16,7 +16,7 @@
 
 - 既存 563 テストは不変（回帰なし）。
 - Core（`src/core/`）は `@opencode-ai/*` を import しない（FF-001）。
-- すべての file I/O は `FileReader` / `FileWriter` 経由。テストでは mock を注入（`tests/helpers/mock-file-system.ts`）。`FileReader` は `readFile` / `fileExists` / `listFiles(prefix)` を提供する。
+- すべての file I/O は `FileReader` / `FileWriter` 経由。テストでは mock を注入（`tests/helpers/mock-file-system.ts`）。`FileReader` は `readFile` / `fileExists` / `listFiles(prefix)` を提供する。（例外として、テストコードにおけるリポジトリの静的ファイル（ADR等）の存在確認やアーキテクチャ検証目的の読取に限り、Node.js の `fs` モジュールの直接使用を許可します）。
 - 状態は immutable（`readonly` / `ReadonlyArray` / `ReadonlyMap`）。
 - すべての fail-open 境界は `try/catch` で保護し、`PROCEED` に縮退する。
 - 永続化前に SecretPatternDetector で redaction + 絶対パス redaction + truncation を実施（D25/D61）。
@@ -26,8 +26,8 @@
 
 > **Graphite 運用詳細:**
 >
-> - Base ブランチは `master` から `gt checkout master && gt trunk && gt branch create feature/phaseN-v2-...__base` で作成。
-> - 各 Task ブランチは Base から `gt checkout feature/phaseN-v2-...__base && gt branch create feature/phaseN-taskM-...` で分岐（Phase 内で連続する Task は直前 Task から分岐）。
+> - Base ブランチは、最初の Phase 0 は `master` から `gt checkout master && gt trunk && gt branch create feature/phase0-v2-baseline__base` で作成しますが、後続の Phase N+1 の Base ブランチは、前 Phase N の最終 Task ブランチ（前 Phase の全実装を含む状態）を起点として分岐させて作成します。これにより、次 Phase が前 Phase の実装成果を確実に含むようにします。
+> - 各 Task ブランチは Phase Base から `gt checkout feature/phaseN-v2-...__base && gt branch create feature/phaseN-taskM-...` で分岐（Phase 内で連続する Task は直前 Task から分岐）。
 > - タスク完了時は `gt add . && gt commit` 後、`gt submit` で Phase Base 向け Draft PR を一括作成・更新する。
 > - 下位 Task を修正した場合は `gt restack` で上位スタックを再整列する。
 > - 本計画内の「Phase Base に向けた Draft PR を作成する」は `gt submit` による Draft PR 作成を指す。
@@ -71,10 +71,17 @@ test("preflight verification: ADR ratification check", () => {
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
   expect(content).toContain("Status: APPROVED");
-  // NOTE: GitHub CLIによるPR承認ステータス確認(gh pr view 104)は、CIの認証エラーやローカル環境の破損を防ぐため、
-  // 通常の bun run test から外し、CI jobまたは手動Preflight checklistプロセスに分離しています。
+  // Verify placeholders have been replaced by real approvals
+  expect(content).not.toContain("@owner-alice");
+  expect(content).not.toContain("@owner-bob");
 });
 ```
+
+- [ ] **Step 2b: CI または手動チェックリストで PR #104 のマージ状態と実承認者を検証する**
+  - CIジョブ内またはリリース前チェックにおいて、以下のコマンドを実行し、PRがマージ済（MERGED）かつ CODEOWNERS による承認（APPROVED）を得ていることを直接検証する。
+  ```bash
+  gh pr view 104 --json reviewDecision,reviews,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
+  ```
 
 - [ ] **Step 3: テストの実行と検証**
 
@@ -278,7 +285,7 @@ export type ToolExecutedRecord = {
 };
 
 // Additional record kinds are defined in later tasks where their Evidence/types are introduced.
-// For v2.0 the union must be closed enough for type-checking; stub types are acceptable here and refined in Task 1.2/3.1/4.3/4.4.
+// For v2.0 the union must be closed enough for type-checking; stub types are acceptable here and refined in Task 1.3/3.1/4.3/4.4.
 export type MessageRecord = { readonly kind: "message"; /* refined in Task 3.1 */ };
 export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
 export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
@@ -396,7 +403,134 @@ gt submit
 
 ---
 
-### Task 1.2: Evidence Engine + Source Classification
+### Task 1.2: Redaction Utilities + Secret Scanning for v2
+
+**Files:**
+
+- Modify: `src/core/secret-pattern-detector.ts`（または新規 `src/core/v2/redaction.ts`）
+- Create: `src/core/v2/safe-segment.ts`（D69/D73 sessionId 安全エンコーダ）
+- Test: `tests/core/v2/redaction.test.ts`
+- Test: `tests/core/v2/safe-segment.test.ts`
+
+**Interfaces:**
+
+- Consumes: existing `SecretPatternDetector` API.
+- Produces:
+  - `redactEvidenceCommand(command: string): string`
+  - `redactRawOutput(rawOutput: string): string`
+  - `redactMessageSnippet(snippet: string): string`
+  - `redactAbsolutePaths(text: string): string`
+  - `redactEnvironmentValues(text: string): string`
+  - `redactTokenUrls(text: string): string`
+  - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
+
+- [ ] **Step 1: `SecretPatternDetector` に `redact(text)` を追加**
+
+```typescript
+// src/core/secret-pattern-detector.ts
+export class SecretPatternDetector {
+  scan(content: string): SecretMatch[] { /* existing */ }
+
+  redact(content: string): string {
+    let redacted = content;
+    for (const { pattern } of SECRET_PATTERNS) {
+      redacted = redacted.replace(pattern, () => "[REDACTED_SECRET]");
+    }
+    return redacted;
+  }
+}
+```
+
+- [ ] **Step 2: v2 redaction 関数を追加**
+
+```typescript
+// src/core/v2/redaction.ts
+import { SecretPatternDetector } from "../secret-pattern-detector.ts";
+
+const DEFAULT_DETECTOR = new SecretPatternDetector();
+
+export function redactEvidenceCommand(command: string): string {
+  return redactForPersistence(command, DEFAULT_DETECTOR);
+}
+
+export function redactRawOutput(rawOutput: string): string {
+  return redactForPersistence(rawOutput, DEFAULT_DETECTOR);
+}
+
+export function redactMessageSnippet(snippet: string): string {
+  return redactForPersistence(snippet, DEFAULT_DETECTOR);
+}
+
+export function redactAbsolutePaths(text: string): string {
+  return text
+    .replace(/(?:^|\s)(\/(?:home|tmp|workspace|Users|var|opt|etc)\/[^\s"']+)/g, " [REDACTED_PATH]")
+    .replace(/(?:^|\s)([A-Za-z]:\\[^\\\s"']+)/g, " [REDACTED_PATH]");
+}
+
+export function redactEnvironmentValues(text: string): string {
+  return text.replace(/\b[A-Z_]{3,}=[^\s"']+/g, "[REDACTED_ENV]");
+}
+
+export function redactTokenUrls(text: string): string {
+  return text.replace(/(https?:\/\/[^@\s]+@)([^\s"']+)/g, "$1[REDACTED_TOKEN_URL]");
+}
+
+export function redactForPersistence(text: string, detector = new SecretPatternDetector()): string {
+  const redacted = detector.redact(text); // covers API keys / secrets
+  return truncate(
+    redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
+    4096
+  );
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + "\n…[truncated]";
+}
+```
+
+- [ ] **Step 3: safe-segment エンコーダを実装（D69/D73）**
+
+```typescript
+// src/core/v2/safe-segment.ts
+import { createHash } from "crypto";
+
+export function encodeSafeSegment(segment: string): string {
+  const hash = createHash("sha256").update(segment).digest("hex").slice(0, 8);
+  if (segment === ".") return `_dot___${hash}`;
+  if (segment === "..") return `_dotdot___${hash}`;
+  if (segment === "") return `_empty___${hash}`;
+  const safe = segment
+    .replace(/[^A-Za-z0-9_-]/g, "_")
+    .slice(0, 64);
+  return `${safe}__${hash}`;
+}
+```
+
+- [ ] **Step 4: テスト実行（Devcontainer 内）**
+
+```bash
+devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/secret-pattern-detector.ts src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
+git commit -m "feat(v2): redaction, secret redaction, and safe-segment encoding for persistence"
+```
+
+- [ ] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
+
+```bash
+gt submit
+```
+
+**派生元:** `Task 1.1`（直前 Task から派生）。
+
+---
+
+### Task 1.3: Evidence Engine + Source Classification
 
 **Files:**
 
@@ -410,7 +544,7 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `MessagePayload` union (Task 1.3), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
+- Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `ObservationMessagePayload` union (Task 3.1), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
 - Produces:
   - `Evidence` discriminated union with `sourceClass: "tool_output" | "declared_claim"`.
   - `extractEvidenceFromTool(toolName, args, output, metadata): Evidence` (returns observed + derived interpretation).
@@ -603,135 +737,6 @@ git commit -m "feat(v2): Evidence engine with source classification and declared
 ```bash
 gt submit
 ```
-
-**派生元:** `Task 1.1`（直前 Task から派生）。`ObservationRecord` / `Evidence` 型を使用するため。
-
----
-
-### Task 1.3: Redaction Utilities + Secret Scanning for v2
-
-**Files:**
-
-- Modify: `src/core/secret-pattern-detector.ts`（または新規 `src/core/v2/redaction.ts`）
-- Create: `src/core/v2/safe-segment.ts`（D69/D73 sessionId 安全エンコーダ）
-- Test: `tests/core/v2/redaction.test.ts`
-- Test: `tests/core/v2/safe-segment.test.ts`
-
-**Interfaces:**
-
-- Consumes: existing `SecretPatternDetector` API.
-- Produces:
-  - `redactEvidenceCommand(command: string): string`
-  - `redactRawOutput(rawOutput: string): string`
-  - `redactMessageSnippet(snippet: string): string`
-  - `redactAbsolutePaths(text: string): string`
-  - `redactEnvironmentValues(text: string): string`
-  - `redactTokenUrls(text: string): string`
-  - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
-
-- [ ] **Step 1: `SecretPatternDetector` に `redact(text)` を追加**
-
-```typescript
-// src/core/secret-pattern-detector.ts
-export class SecretPatternDetector {
-  scan(content: string): SecretMatch[] { /* existing */ }
-
-  redact(content: string): string {
-    let redacted = content;
-    for (const { pattern } of SECRET_PATTERNS) {
-      redacted = redacted.replace(pattern, () => "[REDACTED_SECRET]");
-    }
-    return redacted;
-  }
-}
-```
-
-- [ ] **Step 2: v2 redaction 関数を追加**
-
-```typescript
-// src/core/v2/redaction.ts
-import { SecretPatternDetector } from "../secret-pattern-detector.ts";
-
-const DEFAULT_DETECTOR = new SecretPatternDetector();
-
-export function redactEvidenceCommand(command: string): string {
-  return redactForPersistence(command, DEFAULT_DETECTOR);
-}
-
-export function redactRawOutput(rawOutput: string): string {
-  return redactForPersistence(rawOutput, DEFAULT_DETECTOR);
-}
-
-export function redactMessageSnippet(snippet: string): string {
-  return redactForPersistence(snippet, DEFAULT_DETECTOR);
-}
-
-export function redactAbsolutePaths(text: string): string {
-  return text
-    .replace(/(?:^|\s)(\/(?:home|tmp|workspace|Users|var|opt|etc)\/[^\s"']+)/g, " [REDACTED_PATH]")
-    .replace(/(?:^|\s)([A-Za-z]:\\[^\\\s"']+)/g, " [REDACTED_PATH]");
-}
-
-export function redactEnvironmentValues(text: string): string {
-  return text.replace(/\b[A-Z_]{3,}=[^\s"']+/g, "[REDACTED_ENV]");
-}
-
-export function redactTokenUrls(text: string): string {
-  return text.replace(/(https?:\/\/[^@\s]+@)([^\s"']+)/g, "$1[REDACTED_TOKEN_URL]");
-}
-
-export function redactForPersistence(text: string, detector = new SecretPatternDetector()): string {
-  const redacted = detector.redact(text); // covers API keys / secrets
-  return truncate(
-    redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
-    4096
-  );
-}
-
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + "\n…[truncated]";
-}
-```
-
-- [ ] **Step 3: safe-segment エンコーダを実装（D69/D73）**
-
-```typescript
-// src/core/v2/safe-segment.ts
-import { createHash } from "crypto";
-
-export function encodeSafeSegment(segment: string): string {
-  const hash = createHash("sha256").update(segment).digest("hex").slice(0, 8);
-  if (segment === ".") return `_dot___${hash}`;
-  if (segment === "..") return `_dotdot___${hash}`;
-  if (segment === "") return `_empty___${hash}`;
-  const safe = segment
-    .replace(/[^A-Za-z0-9_-]/g, "_")
-    .slice(0, 64);
-  return `${safe}__${hash}`;
-}
-```
-
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
-
-```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/core/secret-pattern-detector.ts src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
-git commit -m "feat(v2): redaction, secret redaction, and safe-segment encoding for persistence"
-```
-
-- [ ] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
-
-```bash
-gt submit
-```
-
-**派生元:** `Task 1.2`（直前 Task から派生）。`toolOutputClass` 分類結果と連携するが、redaction は独立しても成立する。ただし 200 LOC 制限とレビュー単位を見て Task 1.2 から派生。
 
 ---
 
@@ -1055,21 +1060,15 @@ export class ObservationLogStore {
       }
     }
     
-    // Sort records: group by shard key first, then sort by sequence ascending to ensure archive (older) and active (newer) merge correctly
-    const sortedRecords = [...records].sort((a, b) => {
-      const keyA = `${a.agentId}:${a.sessionId}:${a.writerId}`;
-      const keyB = `${b.agentId}:${b.sessionId}:${b.writerId}`;
-      if (keyA !== keyB) return keyA.localeCompare(keyB);
-      return a.sequence - b.sequence;
-    });
-    
     try {
-      validateShardSequences(sortedRecords); // D72 sequence monotonicity & duplicate check
+      // Validate shard sequence monotonicity and duplicates per shard
+      validateShardSequences(records);
     } catch (err) {
-      this.logger.warn("ObservationLogStore: Global sequence validation failed", err);
+      this.logger.warn("ObservationLogStore: Shard sequence validation failed", err);
       throw err; // Propagate validation failure to trigger fail-open reconstruction of state.json
     }
-    return sortedRecords;
+    // Return records as read (unsorted); replay order and causal sorting is the sole responsibility of project()
+    return records;
   }
 }
 
@@ -1103,18 +1102,23 @@ export function validateRecordSchema(record: unknown): void {
 }
 
 export function validateShardSequences(records: readonly (ObservationRecord | DecisionRecord)[]): void {
-  const seqMap = new Map<string, number>();
+  const shardGroups = new Map<string, number[]>();
   for (const r of records) {
     const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
-    const lastSeq = seqMap.get(shardKey);
-    if (lastSeq !== undefined) {
-      // Must be strictly greater than lastSeq
-      if (r.sequence <= lastSeq) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: expected sequence > ${lastSeq}, got ${r.sequence}`);
+    if (!shardGroups.has(shardKey)) {
+      shardGroups.set(shardKey, []);
+    }
+    shardGroups.get(shardKey)!.push(r.sequence);
+  }
+  for (const [shardKey, seqs] of shardGroups.entries()) {
+    const sorted = [...seqs].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (sorted[i] === sorted[i + 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence ${sorted[i]}`);
       }
     }
-    seqMap.set(shardKey, r.sequence);
   }
+}
 ```
 
 - [ ] **Step 3: `listFiles` mock 実装と列挙テストを追加**
@@ -1217,12 +1221,18 @@ export type ProjectedState = {
   readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly ProjectedEvidence[]; readonly observedReviewScopes: readonly string[] }>;
   readonly reviewSummary: {
     readonly authority: "observed_review_output";
-    readonly critical: readonly string[];
-    readonly major: readonly string[];
-    readonly minor: readonly string[];
-    readonly resolved: readonly string[];
-    readonly open: readonly string[];
-    readonly byScope: ReadonlyMap<string, { readonly critical: readonly string[]; readonly major: readonly string[]; readonly minor: readonly string[]; readonly resolved: readonly string[]; readonly open: readonly string[] }>;
+    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly byScope: ReadonlyMap<string, {
+      readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    }>;
   };
 };
 
@@ -1879,18 +1889,18 @@ gt submit
 - Test: `tests/core/agent-id-resolution.test.ts`
 
 **Interfaces:**
-- Consumes: `chat.params` and `chat.message` events from OpenCode.
+- Consumes: Normalized agent mapped event (`{ type: "AgentMapped", payload: { sessionId: string; agentName: string } }`) produced by the adapter (complying with FF-001).
 - Produces: `sessionStateProvider.getAgentId(sessionId): Promise<ObservationAgentId>`
 
 - [ ] **Step 1: SessionStateProvider の実装（D48）**
-  - `chat.params` (agent パラメータ) または `chat.message` (agent プロパティ) を観測した際に、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
+  - アダプター側で検知・抽出された `AgentMapped` ペイロードを受け取り、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
   - OpenCode agent 名（自由文字列）から Justice `AgentId`（`atlas` / `hephaestus` / `sisyphus` / `prometheus`）への写像ロジックを実装し、マッピングできない場合は `unknown` とする。
 
-- [ ] **Step 2: routing イベントハンドラに chat 観測を追加**
-  - `JusticePlugin.handleEvent` で `chat.message` と `chat.params` の変更をフックし、`SessionStateProvider` のマップを更新する。
+- [ ] **Step 2: routing イベントハンドラに AgentMapped イベント処理を追加**
+  - `JusticePlugin.handleEvent` で `AgentMapped` イベント（ペイロード: `{ sessionId, agentName }`）を受信し、`SessionStateProvider` のマップを更新する。
 
 - [ ] **Step 3: テストの実装（tests/core/agent-id-resolution.test.ts）**
-  - `chat.message`/`chat.params` から `agentId` が正しく写像され、`SessionStateProvider` を経由して解決できることを検証する。
+  - `AgentMapped` イベントから `agentId` が正しく写像され、`SessionStateProvider` を経由して解決できることを検証する。
   - 不明なエージェントが `unknown` shard に落ちることを確認し、同時に wisdom namespace（4つのペルソナ）に `system` や `unknown` のデータが混入（汚染）しないことをテストで担保する。
 
 - [ ] **Step 4: Commit & Submit**
@@ -1981,6 +1991,18 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
   }
   return { action: "proceed" };
 }
+
+// Fail-open stub declarations to prevent compilation errors before Phase 5/6 implementations
+private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?: string): Promise<void> {
+  // Stub: implemented in Task 4.3
+}
+private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
+  // Stub: implemented in Task 6.3
+}
+private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId: string | undefined, agentId: string, sessionId: string): Promise<HookResponse> {
+  // Stub: implemented in Task 5.4
+  return { action: "proceed" };
+}
 ```
 
 - [ ] **Step 2: PostToolUse で tool_executed レコードを append**
@@ -2019,8 +2041,8 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
-      // Implementation placeholder for appending task summary declared claims (Task 4.3)
-      await this.appendTaskSummaryDeclaredClaims(shardId, taskId, event.sessionId, payload.toolResult);
+      // Implementation for appending task summary declared claims (Task 4.3)
+      await this.appendTaskSummaryDeclaredEvidence(event, taskId);
     }
 
     // 3. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
@@ -3052,12 +3074,18 @@ import type { ReviewItem } from "./observation-model.ts";
 export type ReviewSummary = {
   readonly authority: "observed_review_output";
   readonly authorship?: null;
-  readonly critical: readonly string[];
-  readonly major: readonly string[];
-  readonly minor: readonly string[];
-  readonly resolved: readonly string[];
-  readonly open: readonly string[];
-  readonly byScope: ReadonlyMap<string, { readonly critical: readonly string[]; readonly major: readonly string[]; readonly minor: readonly string[]; readonly resolved: readonly string[]; readonly open: readonly string[] }>;
+  readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly byScope: ReadonlyMap<string, {
+    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  }>;
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
@@ -3874,7 +3902,7 @@ gt submit
 
 ## 依存関係とブランチ派生の総括
 
-**ルール:** Phase 0 Base のみ `master` から直接分岐する。Phase 1〜7 の各 Phase Base は**直前の Phase Base**から分岐する（`gt checkout feature/phase<N-1>-v2-...__base && gt branch create feature/phaseN-v2-...__base`）。**Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐する。**Phase 内の Task は原則 Phase Base から分岐するが、同一ファイル・同一型を連続して使用する Task は直前 Task から分岐する。Phase 間の stack 依存は Graphite が管理する。
+**ルール:** Phase 0 Base のみ `master` から直接分岐する。後続の各 Phase N+1 Base は、前 Phase N のすべての実装を含む「最終 Task ブランチ」を起点として分岐させて作成します。これにより、上位の Phase Base が前 Phase の実装成果を継承することを保証します。Phase 内の Task は原則 Phase Base から分岐しますが、同一ファイル・同一型を連続して使用する Task は直前 Task から分岐します。Phase 間の stack 依存は Graphite が管理します。
 
 ```text
 master
