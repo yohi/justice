@@ -37,7 +37,7 @@
 > **Pre-planning note:** The two items below must be completed *before* this plan is approved, but they are tracked **outside this plan** to avoid a circular dependency. Once both are closed, remove this note.
 >
 > 1. **ADR-2026-06-26: v2.0 Charter Drift & CODEOWNERS Ratification** — Create the ADR and obtain an explicit Approve comment from CODEOWNERS.
-> 2. **C1 / L0 Advisory Surface Validation** — Empirically verify whether appending a banner to `tool.execute.after` `output.output` is reflected in the model/user surface. If not, pin D47 to "notifier = guaranteed channel, `output.output` append = best-effort" and update §3 of the design doc accordingly.
+> 2. ~~**C1 / L0 Advisory Surface Validation**~~ — Moved into Task 0.2 Step 1b as an executable spike. Remove this bullet once Task 0.2 is complete.
 >
 ## Phase 0: ベースライン確立と De-risk Spikes
 
@@ -150,7 +150,7 @@ gt submit
 - Produces:
   - 全ツール `tool.execute.after` 観測レイテンシ実測結果。
   - Message 観測 fallback matrix の実測結果と設計書追認差分。
-
+  - C1 / L0 advisory 表示面実測結果（`output.output` 反映可否）と設計書 D47 の確定差分。
 - [ ] **Step 1: 全ツール `tool.execute.after` 観測レイテンシ実測**
 
 ```typescript
@@ -162,6 +162,15 @@ import { Plugin } from "@opencode-ai/plugin";
 
 実測対象: `bun run test` 等のコマンド実行ツールを `tool.execute` 経由で 100 回呼び出し、before/after の差分を計測。目標: p95 < 数 ms / tool 呼び出し。未達の場合は非同期キュー + flush を検討し、設計書 §3 に追記。
 
+- [ ] **Step 1b: C1 / L0 advisory 表示面実証（D47）**
+
+実測対象: `tool.execute.after` の `output.output` 末尾への banner 追記が、モデル推論文脈／ユーザー表示に反映されるかを実機確認。`notifier.notify()` による `client.app.log` 出力は常に保証チャネルとする。`output.output` 反映が確認できない場合は、設計書 §3 / §6.2 / D47 を「notifier = 保証チャネル、`output.output` append = best-effort」に更新する。
+
+**Acceptance criteria:**
+
+- 反映可否を boolean で記録し、設計書 §3 Phase 0 スパイク結果と D47 に追記する。
+- 反映不可の場合、adapter の L0 advisory 適用コード（Task 3.2）を `output.output` 追記を削除し notifier のみとする形に修正する。
+- 反映可の場合、型と実装を `output.output` が string である前提に統一する。
 - [ ] **Step 2: Message 観測 fallback matrix 実測（D41/D53）**
 
 OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`, `experimental.text.complete`, `chat.message`。`AssistantMessage` / `TextPart` のフィールドを出力して、どのイベントが assistant 本文源・role/finish 確定源となるか特定。
@@ -266,6 +275,17 @@ export type CommonEnvelope = {
   readonly writerId: string;
   readonly taskId?: string;
   readonly recordType: "observation" | "decision" | "learning";
+};
+
+// Minimal Evidence stub refined into a discriminated union in Task 1.2.
+export type Evidence = {
+  readonly evidenceId: string;
+  readonly kind: string;
+  readonly sourceClass: string;
+  readonly provenance: string;
+  readonly toolOutputClass?: string;
+  readonly command?: string;
+  readonly rawOutput?: string;
 };
 
 export type ToolExecutedRecord = {
@@ -415,7 +435,9 @@ gt submit
   - `classifyToolOutputClass(toolName, args): "command_exec" | "file_content"`.
   - `extractDeclaredClaims(text): DeclaredClaim[]` (from message text or task summary).
 
-- [ ] **Step 1: `Evidence` discriminated union を定義**
+- [ ] **Step 1: `Evidence` discriminated union を定義（Task 1.1 の stub を置き換え）**
+
+Task 1.1 で追加した `Evidence` stub を本 discriminated union に置き換える。
 
 ```typescript
 // src/core/v2/observation-model.ts
@@ -695,6 +717,7 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction.test
 ```bash
 git add src/core/secret-pattern-detector.ts src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
 git commit -m "feat(v2): redaction, secret redaction, and safe-segment encoding for persistence"
+```
 
 - [ ] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
 
@@ -860,18 +883,22 @@ export function createShardWriteQueue(
 
   async function process(path: string) {
     const items = queues.get(path) ?? [];
+    let current: QueueItem | undefined;
     try {
       while (items.length > 0) {
-        const item = items.shift()!;
+        current = items.shift()!;
         const nextSeq = (sequences.get(path) ?? 0) + 1;
         const existing = await readExisting(path).catch(() => "");
-        const line = `${JSON.stringify({ ...item.record, sequence: nextSeq })}\n`;
+        const line = `${JSON.stringify({ ...current.record, sequence: nextSeq })}\n`;
         await atomicAppend(path, existing + line);
         sequences.set(path, nextSeq);
-        item.resolve(nextSeq);
+        current.resolve(nextSeq);
+        current = undefined;
       }
     } catch (err) {
       onError(path, err);
+      // Reject the item that was being processed when the failure occurred.
+      if (current) current.reject(err);
       // Drain remaining items with rejection so callers are not left hanging.
       while (items.length > 0) {
         items.shift()!.reject(err);
@@ -920,6 +947,8 @@ export class ObservationLogStore {
   }
 
   async append(shardId: ShardId, record: ObservationRecord | DecisionRecord): Promise<number> {
+    // Contract: `record` must already be redacted by the caller (e.g. observation-handler).
+    // ObservationLogStore does NOT redact; it only persists what it receives.
     return this.enqueue(toPhysicalPath(shardId), record);
   }
 
@@ -967,13 +996,24 @@ devcontainer exec --workspace-folder . bun run test tests/runtime/observation-lo
 
 ```typescript
 // tests/runtime/observation-log-queue.test.ts
-it("rejects pending writes and reports error when writer fails", async () => {
+it("rejects the current item, pending items, and items added during failure", async () => {
   const writer = createMockFileWriter();
-  writer.write = async () => { throw new Error("disk full"); };
+  let attempt = 0;
+  writer.writeFile = async () => {
+    attempt++;
+    if (attempt === 1) throw new Error("disk full");
+  };
   const onError = vi.fn();
   const enqueue = createShardWriteQueue(writer, async () => "", onError);
-  await expect(enqueue(".justice/events/test.jsonl", { kind: "test" })).rejects.toThrow("disk full");
+
+  // First append fails; its Promise must reject.
+  const p1 = enqueue(".justice/events/test.jsonl", { kind: "test", n: 1 });
+  await expect(p1).rejects.toThrow("disk full");
   expect(onError).toHaveBeenCalled();
+
+  // Subsequent append after the queue resets must succeed.
+  const p2 = await enqueue(".justice/events/test.jsonl", { kind: "test", n: 2 });
+  expect(p2).toBe(1);
 });
 ```
 
@@ -982,6 +1022,7 @@ it("rejects pending writes and reports error when writer fails", async () => {
 ```bash
 git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts src/runtime/observation-log-store.ts src/runtime/write-queue.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
 git commit -m "feat(v2): atomic append, per-shard write queue, and listFiles abstraction"
+```
 
 - [ ] **Step 7: Phase 2 Base に向けた Draft PR を作成する**
 
@@ -1040,7 +1081,26 @@ export function project(events: readonly (ObservationRecord | DecisionRecord)[])
   //    - decision with taskId -> update TaskState.lastVerdict
   // 3. fold review_observed -> reviewSummary (global + byScope)
   // 4. compute integrity.maxSequenceByShard
-  throw new Error("implement projection fold");
+  // Stub returns a type-valid state; the full deterministic fold is implemented in this task.
+  const maxSequenceByShard = new Map<string, number>();
+  return {
+    schemaVersion: 1,
+    rebuiltAt: new Date().toISOString(),
+    integrity: {
+      sourceHash: "sha256:" + hashString(events.map((e) => JSON.stringify(e)).join("\n")),
+      maxSequenceByShard,
+    },
+    tasks: new Map(),
+    reviewSummary: {
+      authority: "observed_review_output",
+      critical: [],
+      major: [],
+      minor: [],
+      resolved: [],
+      open: [],
+      byScope: new Map(),
+    },
+  };
 }
 
 export function toSerializableProjectedState(state: ProjectedState): object {
@@ -1060,7 +1120,6 @@ export function toSerializableProjectedState(state: ProjectedState): object {
     },
   };
 }
-}
 ```
 
 - [ ] **Step 2: `StateProjectionCache` を実装（§5.6 / §9.4）**
@@ -1076,7 +1135,7 @@ export class StateProjectionCache {
 
   async write(state: ProjectedState): Promise<void> {
     try {
-
+      const content = JSON.stringify(toSerializableProjectedState(state));
       const tempPath = `${this.path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
       await this.fileWriter.writeFile(tempPath, content);
       await this.fileWriter.rename(tempPath, this.path);
@@ -1172,6 +1231,7 @@ gt submit
 export interface FileReader {
   readFile(path: string): Promise<string>;
   fileExists(path: string): Promise<boolean>;
+  listFiles(prefix: string): Promise<readonly string[]>;
   readFileStats(path: string): Promise<{ readonly size: number; readonly mtimeMs: number } | null>;
 }
 ```
@@ -1329,7 +1389,9 @@ gt submit
   - `onSessionError` forwards to `JusticePlugin.handleEvent({ type: "Event", event: "session.error" })`.
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
 
-- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers**
+- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts`**
+
+Update `PostToolUsePayload` and `PreToolUsePayload` in `src/core/types.ts` to include the fields the adapter now forwards: `callId`, `toolInput` (Pre/Post), `toolResult`, and `metadata` (Post). This keeps `observation-handler` type-safe without casting.
 
 ```typescript
 // src/runtime/opencode-adapter.ts
@@ -1341,8 +1403,15 @@ type ToolObservationPayload = {
   readonly error?: boolean;
 };
 
+type ToolObservationInput = {
+  readonly tool: string;
+  readonly callID: string;
+  readonly sessionID: string;
+  readonly args: Record<string, unknown>;
+};
+
 function toPreToolObservationPayload(
-  input: { readonly tool: string; readonly callID: string },
+  input: ToolObservationInput,
   output: { readonly args: Record<string, unknown> }
 ): PreToolUseEvent {
   return {
@@ -1354,7 +1423,7 @@ function toPreToolObservationPayload(
 }
 
 function toPostToolObservationPayload(
-  input: { readonly tool: string; readonly callID: string; readonly args: Record<string, unknown> },
+  input: ToolObservationInput,
   output: { readonly output: string; readonly metadata?: Record<string, unknown> }
 ): PostToolUseEvent {
   return {
@@ -1363,8 +1432,10 @@ function toPostToolObservationPayload(
     callId: input.callID,
     payload: {
       toolName: input.tool,
+      callId: input.callID,
+      toolInput: input.args,
       toolResult: output.output,
-      error: output.metadata?.error === true,
+      metadata: { error: output.metadata?.error === true },
     },
   };
 }
@@ -1398,9 +1469,9 @@ onToolExecuteAfter: async (input, output) => {
       taskId: "unknown",
     });
   }
-  // (2) best-effort channel: append banner to output.output
-  if (response.action === "inject" && response.injectedContext && typeof output.output === "object") {
-    output.output.output = (output.output.output ?? "") + "\n\n" + response.injectedContext;
+  // (2) best-effort channel: append banner to output.output (string per plugin type; gated by C1 spike result)
+  if (response.action === "inject" && response.injectedContext && typeof output.output === "string") {
+    output.output = output.output + "\n\n" + response.injectedContext;
   }
   return response;
 },
@@ -1415,7 +1486,9 @@ onMessagePartUpdated: async (event) => {
 // ...
 ```
 
-`onMessage`（`message.updated`）は既存の `{ role, content }` 形式の `MessageEvent` として `JusticePlugin.handleEvent` に渡し、plan-bridge の委譲トリガー機能を維持する。`message.part.updated` / `experimental.text.complete` は `ObservationMessagePayload` として同じ `Message` イベントで observation-handler に渡す。Task 3.3 で両方の経路をマージする。
+`onMessage`（`message.updated`）は既存の `{ role, content }` 形式の `MessageEvent` として `JusticePlugin.handleEvent` に渡し、plan-bridge の委譲トリガー機能を維持する。`message.part.updated` / `experimental.text.complete` は `ObservationMessagePayload` として `Message` イベントで observation-handler に渡す。`JusticePlugin.handleEvent` では payload に `kind` がある場合は plan-bridge 経路をスキップし、`role`/`content` 形式の user message のみ plan-bridge に委譲する（D71）。
+
+**型更新:** `src/core/types.ts` の `MessageEvent` payload を `{ role, content } | ObservationMessagePayload` の union に拡張し、`handleEvent` が型安全に分岐できるようにする。
 
 - [ ] **Step 3: PostToolUse 戻り値を adapter で適用（D47/D64）— Step 1 と統合済み**
 
@@ -1500,10 +1573,13 @@ function mergeMessageResponses(a: HookResponse, b: HookResponse): HookResponse {
 async handleEvent(event: HookEvent): Promise<HookResponse> {
   switch (event.type) {
     case "Message": {
-      const obs = await this.observationHandler.handleMessage(event.payload as ObservationMessagePayload).catch((err) => {
+      const payload = event.payload as ObservationMessagePayload | { readonly role: string; readonly content: string };
+      const obs = await this.observationHandler.handleMessage(payload as ObservationMessagePayload).catch((err) => {
         this.options.logger?.warn("observation-handler message failed", err);
         return PROCEED;
       });
+      const isUserMessage = "role" in payload && "content" in payload;
+      if (!isUserMessage) return obs;
       const plan = await this.planBridge.handleMessage(event);
       return mergeMessageResponses(obs, plan);
     }
@@ -1644,17 +1720,14 @@ async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> {
 - [ ] **Step 2: PostToolUse で tool_executed レコードを append**
 
 ```typescript
-
-
-```typescript
 async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> {
   try {
-    const callId = this.callId ?? ""; // injected by adapter via event.callId
+    const callId = payload.callId ?? "";
     const taskId = this.activeTaskWindows.get(callId);
     const evidence = extractEvidenceFromTool(
       payload.toolName,
       payload.toolInput,
-      { output: payload.toolResult, metadata: { error: payload.error } }
+      { output: payload.toolResult, metadata: payload.metadata }
     );
     const redactedEvidence: Evidence = {
       ...evidence,
@@ -2288,7 +2361,7 @@ gt submit
 
 - Create: `src/runtime/gate-loader.ts`
 - Create: `src/core/v2/default-gates.ts`
-- Create: `.justice/gate.yaml`（リポジトリテンプレート。runtime state である `.justice/` ディレクトリ本体は `.gitignore` で無視し、テンプレートは `templates/gate.yaml` としてコミットする）
+- Create: `templates/gate.yaml`（リポジトリテンプレート。runtime 読込時は `.justice/gate.yaml` へコピー/配備する。`.justice/` ディレクトリ本体は `.gitignore` で無視する）
 - Test: `tests/runtime/gate-loader.test.ts`
 - Test: `tests/core/v2/default-gates.test.ts`
 
@@ -2332,11 +2405,12 @@ export async function loadGates(fileReader: FileReader, path = ".justice/gate.ya
 - [ ] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加**
 
 `.gitignore` に `.justice/` を追加（ただし `templates/gate.yaml` はコミット）。テンプレート内容：
+
+```yaml
 schemaVersion: 1
 authority: human_approved
 gates:
-
-- id: required-tests
+  - id: required-tests
     description: "タスク完了前にテストが pass していること"
     gateType: task
     trigger: { on: task_complete }
@@ -2344,7 +2418,6 @@ gates:
     onViolation: warn
     onMissingEvidence: warn
     enabled: true
-
 ```
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
@@ -2695,7 +2768,7 @@ export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sess
 // src/hooks/observation-handler.ts 内 handlePostToolUse
 // After tool_executed append and before evaluateGateIfTriggered, append review_observed:
 try {
-  const callId = this.callId ?? ""; // from event.callId
+  const callId = payload.callId ?? "";
   const signal = ReviewRejectionDetector.detect(payload.toolResult ?? "");
   if (signal.matched) {
     const record: ObservationRecord = {
@@ -2711,6 +2784,7 @@ try {
   this.logger.warn("observation-handler: review_observed generation failed", err);
 }
 // evaluateGateIfTriggered("tool_observed", taskId) runs AFTER both tool_executed and review_observed are appended.
+```
 
 - [ ] **Step 2b: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
 
@@ -2739,9 +2813,7 @@ private async handleReviewResolutionArtifact(payload: { reviewScope: string; ite
 }
 ```
 
-}
-
-```
+- [ ] **Step 3: テスト実行（Devcontainer 内）**
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -3259,14 +3331,22 @@ gt submit
 // tests/core/v2/redaction-integration.test.ts
 it("redacts secrets, absolute paths, env vars, and token URLs before append", async () => {
   const writer = createMockFileWriter();
-  const store = new ObservationLogStore(writer, /* ... */);
+  const reader = createMockFileReader({});
+  const store = new ObservationLogStore(writer, reader, "w-1");
+  const rawCommand = "echo /home/alice/project/secret /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com";
+  const rawOutput = "sk-abc123 HOME=/home/alice";
+  const evidence: Evidence = {
+    evidenceId: "ev-1",
+    kind: "command",
+    sourceClass: "tool_output",
+    provenance: "observed",
+    toolOutputClass: "command_exec",
+    command: redactForPersistence(redactAbsolutePaths(rawCommand)),
+    rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)),
+  };
   await store.append(shardId, {
     ...record,
-    evidence: {
-      ...evidence,
-      command: "echo /home/alice/project/secret /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com",
-      rawOutput: "sk-abc123 HOME=/home/alice",
-    },
+    evidence,
   });
   const written = writer.getFile(path);
   expect(written).not.toContain("/home/alice/project");
@@ -3442,15 +3522,15 @@ master
 ## 自己レビュー（Self-Review）
 
 - [x] **Spec coverage:** 設計書 §10.3 の 8 ビルドステップを Phase 1〜7 に網羅。§9 の FF/NFR を Phase 8 に網羅。Phase 0 は §3 の 2 スパイク + devcontainer ベースラインを網羅。CODEOWNERS 追認 ADR 作成は Pre-Planning Preflight として本計画の executable 化条件となる。
-- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + 2 スパイクに充てる。Pre-Planning Preflight（ADR 追認 + C1 / L0 Advisory Surface Validation）が完了して初めて本計画を executable とする。
+- [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + **3 スパイク**（観測レイテンシ・Message fallback matrix・C1/L0 advisory 表示面実証）に充てる。Pre-Planning Preflight（ADR 追認）が完了して初めて本計画を executable とする。
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
 - [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase Base から分岐。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
-- [x] **Placeholder scan:** `...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。`// ...` や空のテストブロックは削除または具体化済み。
+- [x] **Placeholder scan:** `throw new Error("implement projection fold")`、`StateProjectionCache.write` の未定義 `content`、Task 1.3 / Task 6.3 の未閉じ code fence、Task 6.3 の余分な `}` 等を修正済み。`...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。`// ...` や空のテストブロックは削除または具体化済み。
 - [x] **Type consistency:** `Evidence` は `taskId` を持たず envelope が持つ。`ProjectedState.tasks` は `evidence` 配列を持つ。`RuleEngine.evaluate` は task-scoped evidence と `GateContext.reviewSummary` を受け取る。`extractEvidenceFromTool` は single `Evidence`（interpretation 内包）を返す。`EvidenceRef` は `FullEvidenceRef | SelfEvidenceRef` の union。
 - [x] **Graphite 一貫性:** `gh pr create` を `gt submit` に統一。PR タイトル/本文は commit message から生成されるため、commit ステップで内容を制御する。
 - [x] **File I/O 抽象化:** rotation 判定は `FileReader.readFileStats` 経由。`fs.stat` 直接呼び出しを排除。
-- [x] **L0 advisory surface:** `evaluateGateIfTriggered` は `injectedContext` を返し、adapter が notifier 保証チャネル + `output.output` best-effort 追記を適用（D47/D64）。
+- [x] **L0 advisory surface:** `evaluateGateIfTriggered` は `injectedContext` を返し、adapter が notifier 保証チャネル + `output.output` best-effort 追記を適用（D47/D64）。**`output.output` 追記は Task 0.2 Step 1b の C1 実測結果で gate し、反映不可なら notifier のみに固定する。**
 - [x] **YAML enum:** `GateRule` verdict は lowercase (`pass`/`warn`/`fail`)。`parseGateYaml` は小文字 YAML を正規化する。
 - [x] **CODEOWNERS 追認:** Pre-Planning Preflight で ADR 作成・CODEOWNERS 承認取得を実施。未承認時は本計画を executable にしない。
 
