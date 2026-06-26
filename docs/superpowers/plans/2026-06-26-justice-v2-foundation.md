@@ -54,11 +54,11 @@
 - Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check).
 - Produces: Execution safety verification.
 
-- [ ] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）を作成し承認状況と証跡を記述**
+- [ ] **Step 1: 既に CODEOWNERS による承認と証跡が記述された ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）が存在することを確認する（自己承認は不可）**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、末尾に「STATUS: APPROVED」を含める。CODEOWNERSによる承認のやり取り（承認証跡）もファイル内に記載する。
+  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する。
 
-- [ ] **Step 2: ADR ドキュメントの承認状況をチェックするスクリプト/テストを作成**
+- [ ] **Step 2: ADR ドキュメントの承認状況を検証するスクリプト/テストを作成（未承認ならテスト失敗＝計画実行停止）**
 
 ```typescript
 // tests/preflight-verification.test.ts
@@ -69,7 +69,10 @@ test("ADR-2026-06-26 must be ratified", () => {
   const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
+  
+  // Verify both the STATUS and presence of human CODEOWNERS approval log to prevent self-ratification bypass
   expect(content).toContain("STATUS: APPROVED");
+  expect(content).toMatch(/CODEOWNERS\s*(?:Approval|Approved\s*by|承認)/i);
 });
 ```
 
@@ -543,6 +546,11 @@ export function classifyToolOutputClass(
   if (toolName === "bash" || toolName === "shell") {
     const command = args?.command ?? "";
     const tokens = command.trim().split(/\s+/).filter(Boolean);
+    
+    // If any token in the command matches a file content output command, prioritize file_content to avoid plan/design/code reproduction.
+    const hasFileContentCmd = tokens.some(t => FILE_CONTENT_COMMANDS.has(t));
+    if (hasFileContentCmd) return "file_content";
+
     const firstToken = tokens[0] ?? "";
     // Quality-verification compound commands must preserve rawOutput for auditability.
     if (COMMAND_EXEC_COMMANDS.has(firstToken)) return "command_exec";
@@ -617,12 +625,12 @@ export function extractDeclaredClaims(text: string): DeclaredClaim[] {
 it("classifies quality-verification compound commands as command_exec", () => {
   expect(classifyToolOutputClass("bash", { command: "bun run lint && bun run test" })).toBe("command_exec");
   expect(classifyToolOutputClass("bash", { command: "bun run build; bun run typecheck" })).toBe("command_exec");
-  expect(classifyToolOutputClass("bash", { command: "npm run test -- --coverage || echo failed" })).toBe("command_exec");
 });
 
 it("classifies file-content compound commands as file_content", () => {
   expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" })).toBe("file_content");
   expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "bun run test && cat docs/superpowers/plans/2026-06-26-justice-v2-foundation.md" })).toBe("file_content");
 });
 ```
 
@@ -680,7 +688,7 @@ export class SecretPatternDetector {
   redact(content: string): string {
     let redacted = content;
     for (const { pattern } of SECRET_PATTERNS) {
-      redacted = redacted.replace(pattern, (match) => "[REDACTED_" + match.slice(0, 4) + "]");
+      redacted = redacted.replace(pattern, () => "[REDACTED_SECRET]");
     }
     return redacted;
   }
@@ -999,26 +1007,36 @@ export class ObservationLogStore {
   }
 
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
-    try {
-      const activePaths = await this.fileReader.listFiles(".justice/events");
-      const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
-      const allPaths = [...activePaths, ...archivePaths].sort();
-      const records: (ObservationRecord | DecisionRecord)[] = [];
-      for (const path of allPaths) {
-        const content = await this.fileReader.readFile(path).catch(() => "");
+    const activePaths = await this.fileReader.listFiles(".justice/events");
+    const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
+    const allPaths = [...activePaths, ...archivePaths].sort();
+    const records: (ObservationRecord | DecisionRecord)[] = [];
+    
+    for (const path of allPaths) {
+      try {
+        const content = await this.fileReader.readFile(path);
         const lines = content.split("\n").filter((line) => line.trim() !== "");
+        const shardRecords: (ObservationRecord | DecisionRecord)[] = [];
         for (const line of lines) {
           const record = JSON.parse(line) as ObservationRecord | DecisionRecord;
           validateRecordSchema(record); // D72 schema validation
           records.push(record);
         }
+        records.push(...shardRecords);
+      } catch (err) {
+        // If a specific shard is corrupted or reading fails, log a warning and isolate it (quarantine),
+        // but preserve other healthy shards to avoid wiping out the entire authority log.
+        this.logger.warn(`ObservationLogStore: Shard corrupted or unreadable at ${path}. Isolating shard.`, err);
       }
-      validateShardSequences(records); // D72 sequence monotonicity & duplicate check
-      return records;
-    } catch (err) {
-      this.logger.warn("ObservationLogStore: readAll failed or corrupted, returning empty events", err);
-      return [];
     }
+    
+    try {
+      validateShardSequences(records); // D72 sequence monotonicity & duplicate check
+    } catch (err) {
+      this.logger.warn("ObservationLogStore: Global sequence validation failed", err);
+      throw err; // Propagate validation failure to trigger fail-open reconstruction of state.json
+    }
+    return records;
   }
 }
 
@@ -1406,7 +1424,7 @@ export type MessageRecord = {
   readonly role?: "assistant" | "user";
   readonly textHash: string; // required per D34
   readonly textSnippet?: string;
-  readonly declaredClaims: readonly DeclaredClaimEvidence[];
+  readonly declaredClaims: readonly DeclaredClaim[]; // D70: 軽量な申告のリスト
   readonly evidence: readonly DeclaredClaimEvidence[]; // 1 claim = 1 Evidence per D59/D70
   readonly finalized: boolean;
 };
@@ -1417,11 +1435,13 @@ export type MessageRecord = {
 ```typescript
 // src/core/v2/message-role-buffer.ts
 export class MessageRoleBuffer {
+  // key: {sessionId}:{messageID}
   private readonly buffer = new Map<string, { readonly role?: "assistant" | "user"; readonly parts: Map<string, { readonly text: string; readonly finalized: boolean }>; readonly lastUpdatedAt: number; readonly finalized: boolean }>();
 
-  update(payload: ObservationMessagePayload): void { /* ... */ }
-  finalize(messageID: string, partID: string): void { /* ... */ }
-  extractAssistantClaims(messageID: string, partID: string): DeclaredClaim[] { /* ... */ }
+  update(sessionId: string, payload: ObservationMessagePayload): void { /* ... */ }
+  finalize(sessionId: string, messageID: string, partID?: string): void { /* ... */ }
+  extractAssistantClaims(sessionId: string, messageID: string, partID?: string): DeclaredClaim[] { /* ... */ }
+  getFinalizedText(sessionId: string, messageID: string, partID?: string): string | undefined { /* ... */ }
   gc(maxAgeMs: number, maxEntries: number): void { /* ... */ }
 }
 ```
@@ -1834,7 +1854,10 @@ async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> {
       this.activeTaskWindows.delete(callId);
       // task summary declared claim extraction is added in Task 4.3
     }
-    await this.evaluateGateIfTriggered("tool_observed", taskId);
+    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId);
+    if (gateResponse.action === "inject") {
+      return gateResponse;
+    }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
   }
@@ -1882,11 +1905,12 @@ gt submit
 ```typescript
 async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
   try {
-    this.messageRoleBuffer.update(payload);
+    this.messageRoleBuffer.update(this.sessionId, payload);
     if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
-      this.messageRoleBuffer.finalize(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const fullText = this.messageRoleBuffer.getFinalizedText(payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";      const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
+      this.messageRoleBuffer.finalize(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const claims = this.messageRoleBuffer.extractAssistantClaims(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const fullText = this.messageRoleBuffer.getFinalizedText(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";
+      const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
         evidenceId: c.evidenceId,
         kind: c.claimKind,
         sourceClass: "declared_claim",
@@ -2237,7 +2261,7 @@ gt submit
 - [ ] **Step 0: 依存パッケージ `yaml` を追加**
 
 ```bash
-bun add -d yaml
+bun add yaml
 ```
 
 - [ ] **Step 1: `GateRule` 型を定義**
@@ -2281,7 +2305,10 @@ export type GateRule = {
 import { parse as parseYaml } from "yaml";
 
 export function parseGateYaml(content: string): readonly GateRule[] {
-  const parsed = parseYaml(content) as { readonly gates?: readonly unknown[] };
+  const parsed = parseYaml(content) as { readonly schemaVersion?: unknown; readonly authority?: unknown; readonly gates?: readonly unknown[] };
+  if (!parsed || parsed.schemaVersion !== 1 || parsed.authority !== "human_approved") {
+    throw new Error("gate.yaml: invalid schemaVersion (expected 1) or authority (expected 'human_approved')");
+  }
   if (!parsed || !Array.isArray(parsed.gates)) {
     throw new Error("gate.yaml: gates array is required");
   }
@@ -2394,7 +2421,14 @@ export type GateContext = {
 import { ProjectedState } from "./state-projection.ts";
 
 export function collectReviewScopes(state: ProjectedState, taskId: string): readonly string[] {
-  const scopes: string[] = [taskId];
+  // Collect actual reviewScopes from task window in ProjectedState to avoid PASS when unobserved
+  const scopes: string[] = [];
+  const taskState = state.tasks.get(taskId);
+  if (taskState) {
+    for (const scope of taskState.observedReviewScopes) {
+      scopes.push(scope);
+    }
+  }
   return scopes;
 }
 
@@ -2414,13 +2448,13 @@ export function evaluate(
   ctx: GateContext
 ): Verdict {
   if (ctx.taskId === undefined) {
-    return { status: "SKIPPED" as any, reachableLevel: "L1", appliedLevel: "L0", ruleResults: [] };
+    return { verdict: "PASS", reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults: [] };
   }
   const ruleResults = gates
     .filter((g) => g.enabled && g.trigger.on === ctx.trigger)
     .map((g) => evaluateRule(g, evidence, ctx));
-  const status = worstOf(ruleResults.map((r) => r.verdict));
-  return { status, reachableLevel: "L1", appliedLevel: "L0", ruleResults };
+  const verdict = worstOf(ruleResults.map((r) => r.verdict));
+  return { verdict, reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults };
 }
 
 function evaluateRule(gate: GateRule, evidence: readonly Evidence[], ctx: GateContext): RuleResult {
@@ -2587,7 +2621,7 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
     // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
     const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, recordType: "decision" }), ...verdict };
     await this.logStore.append(this.shardId, decision);
-    if (verdict.status === "PASS") {
+    if (verdict.verdict === "PASS") {
       return { action: "proceed" };
     }
     // L0 advisory surface: injectedContext (guaranteed raw message via mergePostToolUseResponses)
@@ -2960,7 +2994,7 @@ gt submit
 - [ ] **Step 0: 依存パッケージ `zod` を追加**
 
 ```bash
-bun add -d zod
+bun add zod
 ```
 
 - [ ] **Step 1: `justice_status` 実装**
