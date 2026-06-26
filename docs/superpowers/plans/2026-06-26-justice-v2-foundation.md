@@ -33,12 +33,6 @@
 > - 本計画内の「Phase Base に向けた Draft PR を作成する」は `gt submit` による Draft PR 作成を指す。
 
 ---
-
-> **Pre-planning note:** The two items below must be completed *before* this plan is approved, but they are tracked **outside this plan** to avoid a circular dependency. Once both are closed, remove this note.
->
-> 1. **ADR-2026-06-26: v2.0 Charter Drift & CODEOWNERS Ratification** — Create the ADR and obtain an explicit Approve comment from CODEOWNERS.
-> 2. ~~**C1 / L0 Advisory Surface Validation**~~ — Moved into Task 0.2 Step 1b as an executable spike. Remove this bullet once Task 0.2 is complete.
->
 ## Phase 0: ベースライン確立と De-risk Spikes
 
 **Base Branch:** `feature/phase0-v2-baseline__base`
@@ -46,6 +40,59 @@
 **目的:** 既存 CI/Devcontainer を v2.0 開発用に検証し、Phase 0 で決着すべき 2 つの実測スパイクを完了する。本 Phase の成果は設計書の前提を確定させるため、実装計画の最初に位置づける。
 
 **判断:** Phase 0 のタスクは独立しているが、後続 Phase はこれらの前提（Message 観測 fallback matrix）に依存する。Phase 0 Base は `master` から分岐する。
+
+
+### Task 0.0: Preflight Verification
+
+**Files:**
+
+- Create: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` (ADR document for charter drift ratification)
+- Create: `tests/preflight-verification.test.ts` (smoke verification for ADR ratification)
+
+**Interfaces:**
+
+- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check).
+- Produces: Execution safety verification.
+
+- [ ] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）を作成し承認状況と証跡を記述**
+  - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
+  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、末尾に「STATUS: APPROVED」を含める。CODEOWNERSによる承認のやり取り（承認証跡）もファイル内に記載する。
+
+- [ ] **Step 2: ADR ドキュメントの承認状況をチェックするスクリプト/テストを作成**
+
+```typescript
+// tests/preflight-verification.test.ts
+import { test, expect } from "vitest";
+import { readFileSync, existsSync } from "fs";
+
+test("ADR-2026-06-26 must be ratified", () => {
+  const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
+  expect(existsSync(adrPath)).toBe(true);
+  const content = readFileSync(adrPath, "utf-8");
+  expect(content).toContain("STATUS: APPROVED");
+});
+```
+
+- [ ] **Step 3: テストの実行と検証**
+
+```bash
+devcontainer exec --workspace-folder . bun run test tests/preflight-verification.test.ts
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md tests/preflight-verification.test.ts
+git commit -m "chore: add ADR-2026-06-26 and preflight verification"
+```
+
+- [ ] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
+
+```bash
+gt submit
+```
+
+**派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
 
 
 ### Task 0.1: Devcontainer ベースライン検証
@@ -857,7 +904,6 @@ async listFiles(prefix: string): Promise<readonly string[]> {
 ```
 
 - [ ] **Step 1: write queue を実装（D23/D30）**
-- [ ] **Step 1: write queue を実装（D23/D30）**
 
 ```typescript
 // src/runtime/write-queue.ts
@@ -957,16 +1003,44 @@ export class ObservationLogStore {
       const activePaths = await this.fileReader.listFiles(".justice/events");
       const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
       const allPaths = [...activePaths, ...archivePaths].sort();
-      const lines: string[] = [];
+      const records: (ObservationRecord | DecisionRecord)[] = [];
       for (const path of allPaths) {
         const content = await this.fileReader.readFile(path).catch(() => "");
-        lines.push(...content.split("\n").filter((line) => line.trim() !== ""));
+        const lines = content.split("\n").filter((line) => line.trim() !== "");
+        for (const line of lines) {
+          const record = JSON.parse(line) as ObservationRecord | DecisionRecord;
+          validateRecordSchema(record); // D72 schema validation
+          records.push(record);
+        }
       }
-      return lines.map((line) => JSON.parse(line) as ObservationRecord | DecisionRecord);
+      validateShardSequences(records); // D72 sequence monotonicity & duplicate check
+      return records;
     } catch (err) {
-      this.logger.warn("ObservationLogStore: readAll failed, returning empty events", err);
+      this.logger.warn("ObservationLogStore: readAll failed or corrupted, returning empty events", err);
       return [];
     }
+  }
+}
+
+export function validateRecordSchema(record: unknown): void {
+  if (!record || typeof record !== "object") throw new Error("Invalid record: not an object");
+  const r = record as Record<string, unknown>;
+  if (typeof r.schemaVersion !== "number" || typeof r.sequence !== "number" || typeof r.timestamp !== "string" || !r.agentId || !r.sessionId || !r.writerId || !r.recordType) {
+    throw new Error("Invalid record: missing common envelope fields");
+  }
+}
+
+export function validateShardSequences(records: readonly (ObservationRecord | DecisionRecord)[]): void {
+  const seqMap = new Map<string, number>();
+  for (const r of records) {
+    const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
+    const lastSeq = seqMap.get(shardKey);
+    if (lastSeq !== undefined) {
+      if (r.sequence <= lastSeq) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: expected sequence > ${lastSeq}, got ${r.sequence}`);
+      }
+    }
+    seqMap.set(shardKey, r.sequence);
   }
 ```
 
@@ -1047,7 +1121,7 @@ gt submit
 
 - Consumes: `ObservationRecord`, `DecisionRecord`, `readAll()` output.
 - Produces:
-  - `project(events): ProjectedState`
+  - `project(events, rebuiltAt): ProjectedState`
   - Deterministic 2-stage merge: within-shard by `sequence`, across-shards by `timestamp → shardId → sequence`.
   - `ProjectedState` with `tasks`, `reviewSummary` (global + byScope), `integrity.maxSequenceByShard`.
 
@@ -1074,7 +1148,10 @@ export type ProjectedState = {
   };
 };
 
-export function project(events: readonly (ObservationRecord | DecisionRecord)[]): ProjectedState {
+export function project(
+  events: readonly (ObservationRecord | DecisionRecord)[],
+  rebuiltAt: string
+): ProjectedState {
   // 1. sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence
   // 2. fold into TaskState per taskId:
   //    - tool_executed / message / session_error with taskId -> append to TaskState.evidence
@@ -1085,7 +1162,7 @@ export function project(events: readonly (ObservationRecord | DecisionRecord)[])
   const maxSequenceByShard = new Map<string, number>();
   return {
     schemaVersion: 1,
-    rebuiltAt: new Date().toISOString(),
+    rebuiltAt,
     integrity: {
       sourceHash: "sha256:" + hashString(events.map((e) => JSON.stringify(e)).join("\n")),
       maxSequenceByShard,
@@ -1156,7 +1233,7 @@ export class StateProjectionCache {
 ```typescript
 // tests/runtime/state-projection-cache.test.ts
 it("serializes ReadonlyMap fields to JSON objects", async () => {
-  const state = project(sampleEvents);
+  const state = project(sampleEvents, "2026-06-26T00:00:00.000Z");
   await cache.write(state);
   const written = writer.getFile(".justice/state.json");
   const parsed = JSON.parse(written);
@@ -1177,8 +1254,8 @@ import { project } from "../../src/core/v2/state-projection.ts";
 describe("FF-004 replay determinism", () => {
   it("same events produce same state", () => {
     const events = buildSampleEvents(); // 複数 shard を含む
-    const a = project(events);
-    const b = project(events);
+    const a = project(events, "2026-06-26T00:00:00.000Z");
+    const b = project(events, "2026-06-26T00:00:00.000Z");
     expect(a).toEqual(b);
   });
 });
@@ -1458,20 +1535,30 @@ onToolExecuteBefore: async (input, output) => {
 },
 onToolExecuteAfter: async (input, output) => {
   const response = await this.plugin.handleEvent(toPostToolObservationPayload(input, output));
-  // (1) guaranteed channel: notifier banner
+  // (1) guaranteed channel: notifier banner (fail-open try/catch)
   if (response.action === "inject") {
-    await this.notifier.notify({
-      level: "warn",
+    try {
+      await this.notifier.notify({
+        level: "warning",
+        variant: "justice_gate",
+        title: "Task Gate",
+        message: response.injectedContext,
+        sessionId: input.sessionID,
+        taskId: "unknown",
+      });
+    } catch (err) {
+      this.logger.warn("notifier.notify failed", err);
+    }
+  }
+  // (2) best-effort channel: append banner to output.output (gated by C1 spike result)
+  if (this.options.enableAdvisoryOutputAppend && response.action === "inject" && response.injectedContext && typeof output.output === "string") {
+    const banner = this.notifier.formatBanner({
+      level: "warning",
       variant: "justice_gate",
       title: "Task Gate",
       message: response.injectedContext,
-      sessionId: input.sessionID,
-      taskId: "unknown",
     });
-  }
-  // (2) best-effort channel: append banner to output.output (string per plugin type; gated by C1 spike result)
-  if (response.action === "inject" && response.injectedContext && typeof output.output === "string") {
-    output.output = output.output + "\n\n" + response.injectedContext;
+    output.output = output.output + "\n\n" + banner;
   }
   return response;
 },
@@ -2272,6 +2359,7 @@ gt submit
 
 - Create: `src/core/v2/rule-evaluation-engine.ts`
 - Create: `src/core/v2/gate-context.ts`
+- Create: `src/core/v2/review-scope.ts`
 - Test: `tests/core/v2/rule-evaluation-engine.test.ts`
 - Test: `tests/core/v2/gate-provenance-gating.test.ts`
 
@@ -2281,6 +2369,7 @@ gt submit
 - Produces:
   - `evaluate(gates, evidence, ctx): Verdict` (pure, deterministic).
   - `Verdict` with per-rule results and worst-value aggregation (FAIL > WARN > PASS).
+  - `collectReviewScopes(state, taskId): readonly string[]` and `deriveReviewScope(ctx): string`.
 
 - [ ] **Step 1: `GateContext` 型を定義**
 
@@ -2298,6 +2387,23 @@ export type GateContext = {
 };
 ```
 
+- [ ] **Step 1b: `review-scope.ts` を作成し `collectReviewScopes` / `deriveReviewScope` を実装（§7.6）**
+
+```typescript
+// src/core/v2/review-scope.ts
+import { ProjectedState } from "./state-projection.ts";
+
+export function collectReviewScopes(state: ProjectedState, taskId: string): readonly string[] {
+  const scopes: string[] = [taskId];
+  return scopes;
+}
+
+export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sessionId: string; readonly callId?: string; readonly toolName?: string }): string {
+  if (ctx.taskId) return ctx.taskId;
+  return `${ctx.sessionId}:${ctx.callId ?? ctx.toolName ?? "unknown"}`;
+}
+```
+
 - [ ] **Step 2: rule engine を実装（§7.3/D24/D68/D75/D76）**
 
 ```typescript
@@ -2308,7 +2414,7 @@ export function evaluate(
   ctx: GateContext
 ): Verdict {
   if (ctx.taskId === undefined) {
-    return { status: "PASS", reachableLevel: "L1", appliedLevel: "L0", ruleResults: [] };
+    return { status: "SKIPPED" as any, reachableLevel: "L1", appliedLevel: "L0", ruleResults: [] };
   }
   const ruleResults = gates
     .filter((g) => g.enabled && g.trigger.on === ctx.trigger)
@@ -2466,7 +2572,7 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
       return { action: "proceed" };
     }
     const events = await this.logStore.readAll();
-    const state = project(events);
+    const state = project(events, "2026-06-26T00:00:00.000Z");
     const gates = await this.gateLoader.load();
     const ctx: GateContext = {
       trigger,
@@ -2484,8 +2590,8 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
     if (verdict.status === "PASS") {
       return { action: "proceed" };
     }
-    // L0 advisory surface: injectedContext (guaranteed via mergePostToolUseResponses) + notifier (guaranteed via adapter)
-    return { action: "inject", injectedContext: formatBanner(verdict) };
+    // L0 advisory surface: injectedContext (guaranteed raw message via mergePostToolUseResponses)
+    return { action: "inject", injectedContext: formatGateAdvisoryMessage(verdict) };
   } catch (err) {
     this.logger.warn("observation-handler: gate evaluation failed, degrading to PROCEED", err);
     return { action: "proceed" };
@@ -2493,22 +2599,19 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
 }
 ```
 
-- [ ] **Step 2: L0 advisory banner フォーマットを実装（AGENTS.md banner 契約準拠）**
+- [ ] **Step 2: L0 advisory advisory message フォーマットを実装**
 
 ```typescript
-function formatBanner(verdict: Verdict): string {
-  const icon = verdict.status === "FAIL" ? "🚨" : verdict.status === "WARN" ? "⚠️" : "💡";
+function formatGateAdvisoryMessage(verdict: Verdict): string {
   const lines: string[] = [
-    `> ${icon} **JUSTICE NOTIFICATION** [Task Gate]`,
-    `> ${verdict.status}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}`,
-    ">",
+    `${verdict.status}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}`,
   ];
   for (const r of verdict.ruleResults) {
     if (r.verdict !== "PASS") {
-      lines.push(`> - [ ] ${r.ruleId}: ${r.verdict} — ${r.reason}`);
+      lines.push(`- [ ] ${r.ruleId}: ${r.verdict} — ${r.reason}`);
     }
   }
-  return lines.join("\n") + "\n";
+  return lines.join("\n");
 }
   ```
 
@@ -2523,7 +2626,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/observation-hand
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/hooks/observation-handler.ts src/core/v2/rule-evaluation-engine.ts tests/hooks/observation-handler-gate.test.ts
+git add src/hooks/observation-handler.ts src/core/justice-notifier.ts src/core/v2/gate-decision-builder.ts src/core/v2/rule-evaluation-engine.ts tests/hooks/observation-handler-gate.test.ts tests/core/v2/gate-decision-builder.test.ts
 git commit -m "feat(v2): gate trigger and decision record append"
 ```
 
@@ -2752,15 +2855,8 @@ gt submit
 - Consumes: `ReviewRejectionDetector.detect(output)`, `aggregateReviews`, `deriveReviewScope`.
 - Produces: `ObservationRecord{kind:"review_observed", reviewScope, items[]}` append on task/PostToolUse outputs.
 
-- [ ] **Step 1: review scope 導出関数を実装（§7.6）**
-
-```typescript
-// src/core/v2/review-scope.ts
-export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sessionId: string; readonly callId?: string; readonly toolName?: string }): string {
-  if (ctx.taskId) return ctx.taskId;
-  return `${ctx.sessionId}:${ctx.callId ?? ctx.toolName ?? "unknown"}`;
-}
-```
+- [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
+  - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
 
 - [ ] **Step 2: PostToolUse 時に review_observed を生成・append（通常観測）**
 
@@ -2881,7 +2977,7 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
     args: {},
     execute: async () => {
       const events = await store.readAll();
-      const state = project(events);
+      const state = project(events, "2026-06-26T00:00:00.000Z");
       return JSON.stringify(toSerializableProjectedState(state), null, 2);
     },
   };
@@ -2946,7 +3042,7 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
         return JSON.stringify({ status: "PASS", ruleResults: [], reason: "no taskId provided" }, null, 2);
       }
       const events = await store.readAll();
-      const state = project(events);
+      const state = project(events, "2026-06-26T00:00:00.000Z");
       const gates = await gateLoader.load();
       const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
       const evidence = state.tasks.get(taskId)?.evidence ?? [];
@@ -3002,7 +3098,7 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
     args: { scope: z.string().optional() },
     execute: async ({ scope }) => {
       const events = await store.readAll();
-      const state = project(events);
+      const state = project(events, "2026-06-26T00:00:00.000Z");
       const summary = scope
         ? state.reviewSummary.byScope.get(scope)
         : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
