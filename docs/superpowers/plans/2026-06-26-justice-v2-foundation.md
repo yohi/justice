@@ -102,101 +102,15 @@ gt submit
 
 **Files:**
 
-- Modify: `.devcontainer/devcontainer.json`
-- Modify: `.github/workflows/ci.yml`（必要に応じて devcontainer 検証ステップ追加）
-- Test: `tests/devcontainer-smoke.test.ts`（新規・最小限の smoke test）
-
-**Interfaces:**
-
-- Consumes: 既存 `package.json` scripts (`bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`).
-- Produces: Devcontainer 内で全コマンドが成功する確認記録。
-
-- [ ] **Step 1: VS Code Remote-Containers / Devcontainer CLI でコンテナを起動**
-
-```bash
-devcontainer up --workspace-folder .
-```
-
-- [ ] **Step 2: コンテナ内で依存関係をインストール**
-
-```bash
-bun install --frozen-lockfile
-```
-
-- [ ] **Step 3: コンテナ内で全検証コマンドを実行**
-
-```bash
-bun run lint
-bun run typecheck
-bun run test
-bun run build
-```
-
-Expected: 全コマンドが exit 0。`bun run test` は 563 passing。
-
-- [ ] **Step 4: 失敗時は `.devcontainer/devcontainer.json` または `.devcontainer/Dockerfile` を修正**
-
-Example: `postCreateCommand` に `bun install --frozen-lockfile` を追加する場合は以下に変更。
-
-```jsonc
-"postCreateCommand": "bun install --frozen-lockfile"
-```
-
-- [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加（オプション）**
-
-`.github/workflows/ci.yml` の `jobs:` 末尾に追加。ただし既存 `ubuntu-slim` ランナーは温存。
-
-```yaml
-  devcontainer-smoke:
-    runs-on: ubuntu-slim
-    steps:
-      - uses: actions/checkout@v4
-      - uses: devcontainers/ci@v0.3
-        with:
-          runCmd: |
-            bun install --frozen-lockfile
-            bun run lint
-            bun run typecheck
-            bun run test
-            bun run build
-```
-
+- [ ] **Step 1: `devcontainer up --workspace-folder .` でコンテナを起動**
+- [ ] **Step 2: `devcontainer exec --workspace-folder . bun install --frozen-lockfile` で依存インストール**
+- [ ] **Step 3: `devcontainer exec --workspace-folder . bun run lint` 等で全コマンド検証**
+- [ ] **Step 4: 失敗時は `.devcontainer/devcontainer.json` を修正**
+- [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加**
 - [ ] **Step 6: コンテナ内で再実行して確認**
-
-```bash
-devcontainer exec --workspace-folder . bun run test
-```
-
-Expected: 563 passing。
-
 - [ ] **Step 7: Commit**
-
-```bash
-git add .devcontainer/devcontainer.json .github/workflows/ci.yml
-git commit -m "chore: devcontainer ベースラインを v2.0 開発用に整備"
-```
-
 - [ ] **Step 8: Phase 0 Base に向けた Draft PR を作成する**
 
-```bash
-gt submit
-```
-
-**派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
-
----
-
-### Task 0.2: Phase 0 De-risk Spikes
-
-**Files:**
-
-- Create: `docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`
-- Create: `spikes/observation-latency/`（一時的な実測スクリプト、マージ時は削除または docs に集約）
-- Modify: `docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md`（§3 Phase 0 スパイク結果を追記）
-
-**Interfaces:**
-
-- Consumes: `@opencode-ai/plugin` event hook 実装、`tool.execute.after` 型。
 - Produces:
   - 全ツール `tool.execute.after` 観測レイテンシ実測結果。
   - Message 観測 fallback matrix の実測結果と設計書追認差分。
@@ -493,16 +407,29 @@ Task 1.1 で追加した `Evidence` stub を本 discriminated union に置き換
 // src/core/v2/observation-model.ts
 export type Evidence = ToolOutputEvidence | DeclaredClaimEvidence;
 
-export type ToolOutputEvidence = {
+export type ToolOutputEvidence = CommandExecEvidence | FileContentEvidence;
+
+export type CommandExecEvidence = {
   readonly evidenceId: string;
   readonly kind: "test" | "build" | "lint" | "command" | "generic";
   readonly sourceClass: "tool_output";
   readonly provenance: "observed" | "unknown";
-  readonly toolOutputClass: "command_exec" | "file_content";
+  readonly toolOutputClass: "command_exec";
+  readonly command: string;
+  readonly rawOutput: string;
+  readonly interpretation?: Interpretation;
+};
+
+export type FileContentEvidence = {
+  readonly evidenceId: string;
+  readonly kind: "test" | "build" | "lint" | "command" | "generic";
+  readonly sourceClass: "tool_output";
+  readonly provenance: "observed" | "unknown";
+  readonly toolOutputClass: "file_content";
   readonly command?: string;
-  readonly rawOutput?: string;
-  readonly rawOutputHash?: string;
-  readonly rawOutputSnippet?: string;
+  readonly rawOutput?: never; // rawOutput must not be stored in file_content
+  readonly rawOutputHash: string; // required
+  readonly rawOutputSnippet?: string; // optional
   readonly interpretation?: Interpretation;
 };
 
@@ -540,7 +467,8 @@ const FILE_CONTENT_COMMANDS = new Set([
 
 export function classifyToolOutputClass(
   toolName: string,
-  args: { readonly command?: string } | undefined
+  args: { readonly command?: string } | undefined,
+  rawOutputLength: number
 ): "command_exec" | "file_content" {
   if (toolName === "read" || toolName === "glob" || toolName === "grep") return "file_content";
   if (toolName === "bash" || toolName === "shell") {
@@ -553,13 +481,18 @@ export function classifyToolOutputClass(
 
     const firstToken = tokens[0] ?? "";
     // Quality-verification compound commands must preserve rawOutput for auditability.
-    if (COMMAND_EXEC_COMMANDS.has(firstToken)) return "command_exec";
+    if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
+      if (rawOutputLength > 20000) return "file_content"; // Size threshold fallback for very large outputs
+      return "command_exec";
+    }
     if (FILE_CONTENT_COMMANDS.has(firstToken)) return "file_content";
     // Conservative fallback for mixed pipes/compound commands that are NOT quality verification:
     // treat as file_content-equivalent to avoid persisting full plan/design/code bodies.
     if (tokens.includes("|") || tokens.includes("&&") || tokens.includes("||") || tokens.includes(";")) {
       return "file_content";
     }
+    // 未知のコマンド実行かつ出力が巨大な場合は file_content にフォールバック
+    if (rawOutputLength > 20000) return "file_content";
   }
   return "command_exec";
 }
@@ -574,7 +507,8 @@ export function extractEvidenceFromTool(
   args: { readonly command?: string } | undefined,
   output: { readonly output?: string; readonly metadata?: { readonly error?: boolean } }
 ): Evidence {
-  const toolOutputClass = classifyToolOutputClass(toolName, args);
+  const rawOutput = output.output ?? "";
+  const toolOutputClass = classifyToolOutputClass(toolName, args, rawOutput.length);
   const observedId = generateEvidenceId();
   const rawOutput = output.output ?? "";
   return {
@@ -1140,7 +1074,7 @@ it("rejects the current item, pending items, and items added during failure", as
     if (attempt === 1) throw new Error("disk full");
   };
   const onError = vi.fn();
-  const enqueue = createShardWriteQueue(writer, async () => "", onError);
+  const enqueue = createShardWriteQueue(writer, async () => "", async () => 0, onError);
 
   // First append fails; its Promise must reject.
   const p1 = enqueue(".justice/events/test.jsonl", { kind: "test", n: 1 });
@@ -1451,9 +1385,9 @@ gt submit
 ```typescript
 // src/core/v2/message-payload.ts
 export type ObservationMessagePayload =
-  | { readonly kind: "message_part_updated"; readonly messageID: string; readonly partID: string; readonly text: string }
-  | { readonly kind: "message_updated"; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
-  | { readonly kind: "text_complete"; readonly messageID: string; readonly partID: string; readonly text: string };
+  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
+  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
+  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
 ```
 
 - [ ] **Step 1b: `observation-model.ts` の `MessageRecord` を詳細化（D71）**
@@ -1526,7 +1460,7 @@ gt submit
 - Consumes: `ObservationMessagePayload` from Task 3.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`.
 - Produces:
   - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
-  - `onToolExecuteBefore/After` no longer filters `tool !== "task"`; all tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events.
+  - `onToolExecuteBefore/After` no longer filters `tool !== "task"` but explicitly excludes query tools matching `justice_*`; all other tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events to prevent query commands from altering the canonical Observation Log (D50).
   - `onMessage` / `onMessagePartUpdated` / `onTextComplete` hooks produce `ObservationMessagePayload` and forward to `JusticePlugin.handleEvent({ type: "Message" })` alongside the existing user-message path (handled in Task 3.3).
   - `onSessionError` forwards to `JusticePlugin.handleEvent({ type: "Event", event: "session.error" })`.
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
@@ -1633,7 +1567,7 @@ onToolExecuteAfter: async (input, output) => {
 
 ```typescript
 onMessagePartUpdated: async (event) => {
-  await this.plugin.handleEvent({ type: "Message", payload: { kind: "message_part_updated", messageID: event.messageID, partID: event.partID, text: event.text } });
+  await this.plugin.handleEvent({ type: "Message", payload: { kind: "message_part_updated", sessionId: event.sessionId, messageID: event.messageID, partID: event.partID, text: event.text } });
 },
 // ...
 ```
@@ -1965,11 +1899,11 @@ gt submit
 ```typescript
 async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
   try {
-    this.messageRoleBuffer.update(this.sessionId, payload);
+    this.messageRoleBuffer.update(payload.sessionId, payload);
     if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
-      this.messageRoleBuffer.finalize(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const claims = this.messageRoleBuffer.extractAssistantClaims(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const fullText = this.messageRoleBuffer.getFinalizedText(this.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";
+      this.messageRoleBuffer.finalize(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
+      const fullText = this.messageRoleBuffer.getFinalizedText(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";
       const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
         evidenceId: c.evidenceId,
         kind: c.claimKind,
@@ -2506,15 +2440,15 @@ export function evaluate(
   gates: readonly GateRule[],
   evidence: readonly Evidence[], // caller must pass task-scoped evidence (state.tasks.get(taskId)?.evidence ?? [])
   ctx: GateContext
-): Verdict {
+): (Verdict & { readonly gateType: "task" }) | { readonly verdict: "SKIP"; readonly reason: string } {
   if (ctx.taskId === undefined) {
-    return { verdict: "PASS", reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults: [] };
+    return { verdict: "SKIP", reason: "no taskId provided" };
   }
   const ruleResults = gates
     .filter((g) => g.enabled && g.trigger.on === ctx.trigger)
     .map((g) => evaluateRule(g, evidence, ctx));
   const verdict = worstOf(ruleResults.map((r) => r.verdict));
-  return { verdict, reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults };
+  return { verdict, gateType: "task", reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults };
 }
 
 function evaluateRule(gate: GateRule, evidence: readonly Evidence[], ctx: GateContext): RuleResult {
@@ -2587,7 +2521,26 @@ export const DEFAULT_GATES: readonly GateRule[] = [
     onMissingEvidence: "warn",
     enabled: true,
   },
-  // build-green, review-clean
+  {
+    id: "build-green",
+    description: "タスク完了前にビルドが pass していること",
+    gateType: "task",
+    trigger: { on: "task_complete" },
+    check: { type: "evidence_outcome", evidenceKind: "build", requireOutcome: "pass" },
+    onViolation: "warn",
+    onMissingEvidence: "warn",
+    enabled: true,
+  },
+  {
+    id: "review-clean",
+    description: "未解決レビュー指摘（minimumSeverity 以上）が無いこと",
+    gateType: "task",
+    trigger: { on: "task_complete" },
+    check: { type: "review_open_items", minimumSeverity: "major" },
+    onViolation: "warn",
+    onMissingEvidence: "warn",
+    enabled: true,
+  },
 ];
 ```
 
@@ -2615,6 +2568,22 @@ gates:
     gateType: task
     trigger: { on: task_complete }
     check: { type: evidence_outcome, evidenceKind: test, requireOutcome: pass }
+    onViolation: warn
+    onMissingEvidence: warn
+    enabled: true
+  - id: build-green
+    description: "タスク完了前にビルドが pass していること"
+    gateType: task
+    trigger: { on: task_complete }
+    check: { type: evidence_outcome, evidenceKind: build, requireOutcome: pass }
+    onViolation: warn
+    onMissingEvidence: warn
+    enabled: true
+  - id: review-clean
+    description: "未解決レビュー指摘（minimumSeverity 以上）が無いこと"
+    gateType: task
+    trigger: { on: task_complete }
+    check: { type: review_open_items, minimumSeverity: major }
     onViolation: warn
     onMissingEvidence: warn
     enabled: true
@@ -2684,7 +2653,11 @@ private async evaluateGateIfTriggered(
     };
     const evidence = state.tasks.get(taskId)?.evidence ?? [];
     const verdict = evaluate(gates, evidence, ctx);
+    if (verdict.verdict === "SKIP") {
+      return { action: "proceed" };
+    }
     // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
+    // verdict now contains gateType: "task" to satisfy DecisionRecord schema constraints.
     const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, agentId, sessionId, recordType: "decision" }), ...verdict };
     await this.logStore.append(shardId, decision);
     if (verdict.verdict === "PASS") {
@@ -3128,7 +3101,7 @@ gt submit
 **Interfaces:**
 
 - Consumes: `project`, `loadGates`, `evaluate`, `GateContext`.
-- Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50).
+- Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50). Note: `justice_*` tools are explicitly excluded from Observation Log processing in the adapter.
 
 - [ ] **Step 1: `justice_gate` 実装（D50）**
 
@@ -3139,7 +3112,7 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
     args: { taskId: z.string() },
     execute: async ({ taskId }) => {
       if (typeof taskId !== "string" || taskId.length === 0) {
-        return JSON.stringify({ status: "PASS", ruleResults: [], reason: "no taskId provided" }, null, 2);
+        return JSON.stringify({ status: "SKIP", ruleResults: [], reason: "no taskId provided" }, null, 2);
       }
       const events = await store.readAll();
       const state = project(events, "2026-06-26T00:00:00.000Z");
@@ -3722,7 +3695,7 @@ master
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
 - [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase Base から分岐。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
-- [x] **Placeholder scan:** `throw new Error("implement projection fold")`、`StateProjectionCache.write` の未定義 `content`、Task 1.3 / Task 6.3 の未閉じ code fence、Task 6.3 の余分な `}` 等を修正済み。`...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。`// ...` や空のテストブロックは削除または具体化済み。
+- [x] **Placeholder scan:** `throw new Error("implement projection fold")`、`StateProjectionCache.write` の未定義 `content`、Task 1.3 / Task 6.3 の未閉じ code fence、Task 6.3 の余分な `}` 等を修正済み。`...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。実装計画の簡略化のため、一部の難解な関数（`MessageRoleBuffer`、`evaluateRule`、`aggregateReviews` 等）の内部ロジックは擬似コード（pseudocode only / スタブ）として残している旨を明記。
 - [x] **Type consistency:** `Evidence` は `taskId` を持たず envelope が持つ。`ProjectedState.tasks` は `evidence` 配列を持つ。`RuleEngine.evaluate` は task-scoped evidence と `GateContext.reviewSummary` を受け取る。`extractEvidenceFromTool` は single `Evidence`（interpretation 内包）を返す。`EvidenceRef` は `FullEvidenceRef | SelfEvidenceRef` の union。
 - [x] **Graphite 一貫性:** `gh pr create` を `gt submit` に統一。PR タイトル/本文は commit message から生成されるため、commit ステップで内容を制御する。
 - [x] **File I/O 抽象化:** rotation 判定は `FileReader.readFileStats` 経由。`fs.stat` 直接呼び出しを排除。
