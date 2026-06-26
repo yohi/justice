@@ -46,7 +46,7 @@
 
 **Files:**
 
-- Create: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` (ADR document for charter drift ratification)
+- Modify: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` (Already created and ratified by CODEOWNERS prior to implementation)
 - Create: `tests/preflight-verification.test.ts` (smoke verification for ADR ratification)
 
 **Interfaces:**
@@ -54,9 +54,9 @@
 - Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check).
 - Produces: Execution safety verification.
 
-- [ ] **Step 1: 既に CODEOWNERS による承認と証跡が記述された ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）が存在することを確認する（自己承認は不可）**
+- [ ] **Step 1: 既に CODEOWNERS による承認と証跡が記述された ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在することを確認する（自己承認は不可）**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する。
+  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する（ADRの作成・承認は計画の実行前に完了していること）。
 
 - [ ] **Step 2: ADR ドキュメントの承認状況を検証するスクリプト/テストを作成（未承認ならテスト失敗＝計画実行停止）**
 
@@ -85,8 +85,8 @@ devcontainer exec --workspace-folder . bun run test tests/preflight-verification
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md tests/preflight-verification.test.ts
-git commit -m "chore: add ADR-2026-06-26 and preflight verification"
+git add tests/preflight-verification.test.ts
+git commit -m "chore: add preflight verification for ratified ADR"
 ```
 
 - [ ] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
@@ -924,6 +924,7 @@ type QueueItem = {
 export function createShardWriteQueue(
   writer: { writeFile(path: string, content: string): Promise<void>; rename(from: string, to: string): Promise<void> },
   readExisting: (path: string) => Promise<string>,
+  getInitialSequence: (path: string) => Promise<number>,
   onError: (path: string, err: unknown) => void
 ): (path: string, record: object) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
@@ -939,6 +940,10 @@ export function createShardWriteQueue(
     const items = queues.get(path) ?? [];
     let current: QueueItem | undefined;
     try {
+      if (!sequences.has(path)) {
+        const initSeq = await getInitialSequence(path).catch(() => 0);
+        sequences.set(path, initSeq);
+      }
       while (items.length > 0) {
         current = items.shift()!;
         const nextSeq = (sequences.get(path) ?? 0) + 1;
@@ -993,6 +998,45 @@ export class ObservationLogStore {
       async (path) => {
         if (await this.fileReader.fileExists(path)) return await this.fileReader.readFile(path);
         return "";
+      },
+      async (path) => {
+        let maxSeq = 0;
+        const readMaxSeq = async (p: string) => {
+          if (await this.fileReader.fileExists(p)) {
+            const content = await this.fileReader.readFile(p);
+            for (const line of content.split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const rec = JSON.parse(line);
+                if (typeof rec.sequence === "number" && rec.sequence > maxSeq) {
+                  maxSeq = rec.sequence;
+                }
+              } catch {}
+            }
+          }
+        };
+
+        // 1. Read active segment
+        await readMaxSeq(path);
+
+        // 2. Read archive segments for same writer in same session
+        const parts = path.split("/");
+        if (parts.length >= 5) {
+          const agentId = parts[2];
+          const safeSessionId = parts[3];
+          const writerId = parts[4].replace(".jsonl", "");
+          const archiveDir = `.justice/archive/events/${agentId}/${safeSessionId}`;
+          if (await this.fileReader.fileExists(archiveDir)) {
+            const archives = await this.fileReader.listFiles(archiveDir);
+            for (const arch of archives) {
+              const filename = arch.split("/").pop() ?? "";
+              if (filename.startsWith(`${writerId}.`)) {
+                await readMaxSeq(arch);
+              }
+            }
+          }
+        }
+        return maxSeq;
       },
       (path, err) => {
         this.logger.warn(`ObservationLogStore: append failed for ${path}`, err);
@@ -1154,7 +1198,7 @@ export type ProjectedState = {
     readonly sourceHash: string;
     readonly maxSequenceByShard: ReadonlyMap<string, number>;
   };
-  readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly Evidence[] }>;
+  readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly Evidence[]; readonly observedReviewScopes: readonly string[] }>;
   readonly reviewSummary: {
     readonly authority: "observed_review_output";
     readonly critical: readonly string[];
@@ -1173,6 +1217,7 @@ export function project(
   // 1. sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence
   // 2. fold into TaskState per taskId:
   //    - tool_executed / message / session_error with taskId -> append to TaskState.evidence
+  //    - review_observed with taskId -> append reviewScope to TaskState.observedReviewScopes
   //    - decision with taskId -> update TaskState.lastVerdict
   // 3. fold review_observed -> reviewSummary (global + byScope)
   // 4. compute integrity.maxSequenceByShard
@@ -1680,18 +1725,19 @@ function mergeMessageResponses(a: HookResponse, b: HookResponse): HookResponse {
 async handleEvent(event: HookEvent): Promise<HookResponse> {
   switch (event.type) {
     case "Message": {
-      const payload = event.payload as ObservationMessagePayload | { readonly role: string; readonly content: string };
-      const obs = await this.observationHandler.handleMessage(payload as ObservationMessagePayload).catch((err) => {
+      const payload = event.payload;
+      const isUserMessage = "role" in payload && "content" in payload;
+      if (isUserMessage) {
+        return await this.planBridge.handleMessage(event);
+      }
+      const obs = await this.observationHandler.handleMessage(event).catch((err) => {
         this.options.logger?.warn("observation-handler message failed", err);
         return PROCEED;
       });
-      const isUserMessage = "role" in payload && "content" in payload;
-      if (!isUserMessage) return obs;
-      const plan = await this.planBridge.handleMessage(event);
-      return mergeMessageResponses(obs, plan);
+      return obs;
     }
     case "PreToolUse": {
-      const obs = await this.observationHandler.handlePreToolUse(event.payload);
+      const obs = await this.observationHandler.handlePreToolUse(event);
       if (event.payload.toolName === "task") {
         const plan = await this.planBridge.handlePreToolUse(event);
         return mergePreToolUseResponses(obs, plan);
@@ -1699,7 +1745,7 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
       return obs;
     }
     case "PostToolUse": {
-      const responses: HookResponse[] = [await this.observationHandler.handlePostToolUse(event.payload)];
+      const responses: HookResponse[] = [await this.observationHandler.handlePostToolUse(event)];
       if (event.payload.toolName === "task") {
         responses.push(await this.planBridge.handlePostToolUse(event));
         responses.push(await this.taskFeedback.handlePostToolUse(event));
@@ -1722,9 +1768,9 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
 ```typescript
 // src/hooks/observation-handler.ts
 export class ObservationHandler {
-  async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
-  async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> { return { action: "proceed" }; }
-  async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> { return { action: "proceed" }; }
+  async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> { return { action: "proceed" }; }
+  async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> { return { action: "proceed" }; }
+  async handleMessage(event: MessageEvent): Promise<HookResponse> { return { action: "proceed" }; }
 }
 ```
 
@@ -1786,26 +1832,26 @@ gt submit
 // src/hooks/observation-handler.ts
 private readonly activeTaskWindows = new Map<string, string>();
 
-private buildEnvelope(extra: { readonly taskId?: string; readonly recordType: "observation" | "decision" | "learning" }): CommonEnvelope {
+private buildEnvelope(extra: { readonly taskId?: string; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly recordType: "observation" | "decision" | "learning" }): CommonEnvelope {
   return {
     schemaVersion: 1,
     sequence: 0, // ObservationLogStore.append assigns the actual monotonic sequence
     timestamp: new Date().toISOString(),
-    agentId: this.agentId,
-    sessionId: this.sessionId,
+    agentId: extra.agentId,
+    sessionId: extra.sessionId,
     writerId: this.writerId,
     taskId: extra.taskId,
     recordType: extra.recordType,
   };
 }
 
-private extractTaskIdFromTaskArgs(args: unknown): string | undefined {
+private extractTaskIdFromTaskArgs(args: unknown, sessionId: string): string | undefined {
   if (args && typeof args === "object" && "taskId" in args) {
     const value = (args as Record<string, unknown>).taskId;
     if (typeof value === "string" && value.startsWith("task-")) return value;
   }
   // Fallback: if the session already has an active task (set by PlanBridge), use it.
-  return this.activeTaskIdForSession(this.sessionId);
+  return this.activeTaskIdForSession(sessionId);
 }
 
 private activeTaskIdForSession(sessionId: string): string | undefined {
@@ -1813,11 +1859,16 @@ private activeTaskIdForSession(sessionId: string): string | undefined {
   return this.sessionStateProvider?.getActiveTaskId(sessionId);
 }
 
-async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> {
+private async resolveAgentId(sessionId: string): Promise<ObservationAgentId> {
+  return this.sessionStateProvider?.getAgentId(sessionId) ?? "unknown";
+}
+
+async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
+  const payload = event.payload;
   if (payload.toolName === "task") {
-    const taskId = this.extractTaskIdFromTaskArgs(payload.toolInput);
+    const taskId = this.extractTaskIdFromTaskArgs(payload.toolInput, event.sessionId);
     if (taskId) {
-      this.activeTaskWindows.set(payload.callId ?? "", taskId);
+      this.activeTaskWindows.set(event.callId ?? "", taskId);
     }
   }
   return { action: "proceed" };
@@ -1827,10 +1878,15 @@ async handlePreToolUse(payload: PreToolUsePayload): Promise<HookResponse> {
 - [ ] **Step 2: PostToolUse で tool_executed レコードを append**
 
 ```typescript
-async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> {
+async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   try {
-    const callId = payload.callId ?? "";
+    const payload = event.payload;
+    const callId = event.callId ?? "";
     const taskId = this.activeTaskWindows.get(callId);
+
+    const agentId = await this.resolveAgentId(event.sessionId);
+    const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
+
     const evidence = extractEvidenceFromTool(
       payload.toolName,
       payload.toolInput,
@@ -1842,19 +1898,23 @@ async handlePostToolUse(payload: PostToolUsePayload): Promise<HookResponse> {
       rawOutput: evidence.rawOutput ? redactForPersistence(redactAbsolutePaths(evidence.rawOutput)) : undefined,
     };
     const record: ObservationRecord = {
-      ...this.buildEnvelope({ taskId }),
+      ...this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" }),
       recordType: "observation",
       kind: "tool_executed",
       toolName: payload.toolName,
       callId,
       evidence: redactedEvidence,
     };
-    await this.logStore.append(this.shardId, record);
+    await this.logStore.append(shardId, record);
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
       // task summary declared claim extraction is added in Task 4.3
+      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+      if (taskGateResponse.action === "inject") {
+        return taskGateResponse;
+      }
     }
-    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId);
+    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
     if (gateResponse.action === "inject") {
       return gateResponse;
     }
@@ -2408,7 +2468,7 @@ export type GateContext = {
   readonly agentId: ObservationAgentId;
   readonly sessionId: string;
   readonly reviewScope: readonly string[];
-  readonly reviewSummary: {
+  readonly reviewSummary?: {
     readonly byScope: ReadonlyMap<string, { readonly critical: readonly string[]; readonly major: readonly string[]; readonly minor: readonly string[]; readonly resolved: readonly string[]; readonly open: readonly string[] }>;
   };
 };
@@ -2600,27 +2660,33 @@ gt submit
 
 ```typescript
 // src/hooks/observation-handler.ts 内
-private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId?: string): Promise<HookResponse> {
+private async evaluateGateIfTriggered(
+  trigger: "task_complete" | "tool_observed",
+  taskId?: string,
+  agentId: ObservationAgentId = "unknown",
+  sessionId: string = "unknown"
+): Promise<HookResponse> {
   try {
     if (taskId === undefined) {
       return { action: "proceed" };
     }
+    const shardId = { agentId, sessionId, writerId: this.writerId };
     const events = await this.logStore.readAll();
     const state = project(events, "2026-06-26T00:00:00.000Z");
     const gates = await this.gateLoader.load();
     const ctx: GateContext = {
       trigger,
       taskId,
-      agentId: this.agentId,
-      sessionId: this.sessionId,
+      agentId,
+      sessionId,
       reviewScope: collectReviewScopes(state, taskId),
       reviewSummary: state.reviewSummary,
     };
     const evidence = state.tasks.get(taskId)?.evidence ?? [];
     const verdict = evaluate(gates, evidence, ctx);
     // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
-    const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, recordType: "decision" }), ...verdict };
-    await this.logStore.append(this.shardId, decision);
+    const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, agentId, sessionId, recordType: "decision" }), ...verdict };
+    await this.logStore.append(shardId, decision);
     if (verdict.verdict === "PASS") {
       return { action: "proceed" };
     }
@@ -2638,7 +2704,7 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
 ```typescript
 function formatGateAdvisoryMessage(verdict: Verdict): string {
   const lines: string[] = [
-    `${verdict.status}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}`,
+    `${verdict.verdict}: ${verdict.ruleResults.map((r) => `${r.ruleId}=${r.verdict}`).join(", ")}`,
   ];
   for (const r of verdict.ruleResults) {
     if (r.verdict !== "PASS") {
@@ -3078,7 +3144,7 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
       const events = await store.readAll();
       const state = project(events, "2026-06-26T00:00:00.000Z");
       const gates = await gateLoader.load();
-      const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
+      const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId), reviewSummary: state.reviewSummary };
       const evidence = state.tasks.get(taskId)?.evidence ?? [];
       const verdict = evaluate(gates, evidence, ctx);
       return JSON.stringify(verdict, null, 2);
