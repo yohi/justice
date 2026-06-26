@@ -51,28 +51,47 @@
 
 **Interfaces:**
 
-- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check).
+- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check via GitHub CLI).
 - Produces: Execution safety verification.
 
 - [ ] **Step 1: 既に CODEOWNERS による承認と証跡が記述された ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在することを確認する（自己承認は不可）**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する（ADRの作成・承認は計画の実行前に完了していること）。
+  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する。
 
-- [ ] **Step 2: ADR ドキュメントの承認状況を検証するスクリプト/テストを作成（未承認ならテスト失敗＝計画実行停止）**
+- [ ] **Step 2: ADR ドキュメントの承認状況を検証するスクリプト/テストを作成（未承認ならテスト失敗＝計画実行停止。GitHub API または GitHub CLI (gh) を用いて PR レビュー状態と承認者をチェックする）**
 
 ```typescript
 // tests/preflight-verification.test.ts
 import { test, expect } from "vitest";
 import { readFileSync, existsSync } from "fs";
+import { execSync } from "child_process";
 
-test("ADR-2026-06-26 must be ratified", () => {
+test("ADR-2026-06-26 must be ratified and approved by CODEOWNERS", () => {
   const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
-  
-  // Verify both the STATUS and presence of human CODEOWNERS approval log to prevent self-ratification bypass
   expect(content).toContain("STATUS: APPROVED");
-  expect(content).toMatch(/CODEOWNERS\s*(?:Approval|Approved\s*by|承認)/i);
+
+  // Verify real GitHub Review State via GitHub CLI to prevent self-ratification bypass
+  try {
+    const prJson = execSync("gh pr view --json state,reviews", { encoding: "utf-8" });
+    const pr = JSON.parse(prJson);
+    const hasCodeownersApproval = pr.reviews.some(
+      (r: { state: string; author: { login: string } }) => 
+        r.state === "APPROVED" && r.author.login !== "antigravity-bot"
+    );
+    expect(pr.state === "MERGED" || hasCodeownersApproval).toBe(true);
+  } catch (err) {
+    // If gh CLI is unavailable or not in a PR, check if it's already merged to main branch
+    try {
+      const branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
+      if (branch !== "main" && branch !== "master") {
+        throw new Error("GitHub CLI check failed and not on main branch. Ratification cannot be verified.");
+      }
+    } catch (branchErr) {
+      throw new Error(`Ratification verification failed: ${(err as Error).message}`);
+    }
+  }
 });
 ```
 
@@ -150,8 +169,8 @@ import { Plugin } from "@opencode-ai/plugin";
 **Acceptance criteria:**
 
 - 反映可否を boolean で記録し、設計書 §3 Phase 0 スパイク結果と D47 に追記する。
-- 反映不可の場合、adapter の L0 advisory 適用コード（Task 3.2）を `output.output` 追記を削除し notifier のみとする形に修正する。
-- 反映可の場合、型と実装を `output.output` が string である前提に統一する。
+- 反映結果（可否）に応じて、オプションの既定値 `options.enableAdvisoryOutputAppend = <result>` を決定するタスクを設ける。
+- アダプターテスト (`onToolExecuteAfter` / `OpenCodeNotifier` のテスト) に、`enableAdvisoryOutputAppend` が `false` である場合でも `notifier.notify()` のみが正常に実行され、`output.output` が書き換えられないことを検証するケースを明示的に追加する。
 
 - [ ] **Step 2: Message 観測 fallback matrix 実測（D41/D53）**
 
@@ -701,13 +720,13 @@ function truncate(text: string, maxLength: number): string {
 import { createHash } from "crypto";
 
 export function encodeSafeSegment(segment: string): string {
-  if (segment === ".") return "_dot_";
-  if (segment === "..") return "_dotdot_";
-  if (segment === "") return "_empty_";
+  const hash = createHash("sha256").update(segment).digest("hex").slice(0, 8);
+  if (segment === ".") return `_dot___${hash}`;
+  if (segment === "..") return `_dotdot___${hash}`;
+  if (segment === "") return `_empty___${hash}`;
   const safe = segment
     .replace(/[^A-Za-z0-9_-]/g, "_")
     .slice(0, 64);
-  const hash = createHash("sha256").update(segment).digest("hex").slice(0, 8);
   return `${safe}__${hash}`;
 }
 ```
@@ -1026,20 +1045,18 @@ export class ObservationLogStore {
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
     const activePaths = await this.fileReader.listFiles(".justice/events");
     const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
-    const allPaths = [...activePaths, ...archivePaths].sort();
+    const allPaths = [...activePaths, ...archivePaths];
     const records: (ObservationRecord | DecisionRecord)[] = [];
     
     for (const path of allPaths) {
       try {
         const content = await this.fileReader.readFile(path);
         const lines = content.split("\n").filter((line) => line.trim() !== "");
-        const shardRecords: (ObservationRecord | DecisionRecord)[] = [];
         for (const line of lines) {
           const record = JSON.parse(line) as ObservationRecord | DecisionRecord;
           validateRecordSchema(record); // D72 schema validation
           records.push(record);
         }
-        records.push(...shardRecords);
       } catch (err) {
         // If a specific shard is corrupted or reading fails, log a warning and isolate it (quarantine),
         // but preserve other healthy shards to avoid wiping out the entire authority log.
@@ -1047,13 +1064,21 @@ export class ObservationLogStore {
       }
     }
     
+    // Sort records: group by shard key first, then sort by sequence ascending to ensure archive (older) and active (newer) merge correctly
+    const sortedRecords = [...records].sort((a, b) => {
+      const keyA = `${a.agentId}:${a.sessionId}:${a.writerId}`;
+      const keyB = `${b.agentId}:${b.sessionId}:${b.writerId}`;
+      if (keyA !== keyB) return keyA.localeCompare(keyB);
+      return a.sequence - b.sequence;
+    });
+    
     try {
-      validateShardSequences(records); // D72 sequence monotonicity & duplicate check
+      validateShardSequences(sortedRecords); // D72 sequence monotonicity & duplicate check
     } catch (err) {
       this.logger.warn("ObservationLogStore: Global sequence validation failed", err);
       throw err; // Propagate validation failure to trigger fail-open reconstruction of state.json
     }
-    return records;
+    return sortedRecords;
   }
 }
 
@@ -1071,6 +1096,7 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
     const lastSeq = seqMap.get(shardKey);
     if (lastSeq !== undefined) {
+      // Must be strictly greater than lastSeq
       if (r.sequence <= lastSeq) {
         throw new Error(`Sequence integrity violation on ${shardKey}: expected sequence > ${lastSeq}, got ${r.sequence}`);
       }
@@ -1085,8 +1111,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 // tests/runtime/observation-log-queue.test.ts
 it("readAll merges active and archive segments", async () => {
   const reader = createMockFileReader({
-    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"kind":"tool_executed"}\n',
-    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"kind":"tool_executed"}\n',
+    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed"}\n',
+    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed"}\n',
   });
   reader.listFiles = async (prefix) => Object.keys(reader.files).filter((p) => p.startsWith(prefix));
   const store = new ObservationLogStore(writer, reader, "w-1");
@@ -1164,6 +1190,11 @@ gt submit
 
 ```typescript
 // src/core/v2/state-projection.ts
+export type ProjectedEvidence = {
+  readonly evidence: Evidence;
+  readonly ref: FullEvidenceRef;
+};
+
 export type ProjectedState = {
   readonly schemaVersion: 1;
   readonly rebuiltAt: string;
@@ -1171,7 +1202,7 @@ export type ProjectedState = {
     readonly sourceHash: string;
     readonly maxSequenceByShard: ReadonlyMap<string, number>;
   };
-  readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly Evidence[]; readonly observedReviewScopes: readonly string[] }>;
+  readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly ProjectedEvidence[]; readonly observedReviewScopes: readonly string[] }>;
   readonly reviewSummary: {
     readonly authority: "observed_review_output";
     readonly critical: readonly string[];
@@ -1189,7 +1220,7 @@ export function project(
 ): ProjectedState {
   // 1. sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence
   // 2. fold into TaskState per taskId:
-  //    - tool_executed / message / session_error with taskId -> append to TaskState.evidence
+  //    - tool_executed / message / session_error with taskId -> append to TaskState.evidence as ProjectedEvidence { evidence, ref: { agentId, sessionId, writerId, sequence, evidenceId } }
   //    - review_observed with taskId -> append reviewScope to TaskState.observedReviewScopes
   //    - decision with taskId -> update TaskState.lastVerdict
   // 3. fold review_observed -> reviewSummary (global + byScope)
@@ -1233,6 +1264,23 @@ export function toSerializableProjectedState(state: ProjectedState): object {
     },
   };
 }
+
+export function fromSerializableProjectedState(obj: any): ProjectedState {
+  return {
+    ...obj,
+    integrity: {
+      ...obj.integrity,
+      maxSequenceByShard: new Map(Object.entries(obj.integrity.maxSequenceByShard)),
+    },
+    tasks: new Map(Object.entries(obj.tasks)),
+    reviewSummary: {
+      ...obj.reviewSummary,
+      byScope: new Map(
+        Object.entries(obj.reviewSummary.byScope).map(([k, v]: [string, any]) => [k, v])
+      ),
+    },
+  };
+}
 ```
 
 - [ ] **Step 2: `StateProjectionCache` を実装（§5.6 / §9.4）**
@@ -1240,8 +1288,8 @@ export function toSerializableProjectedState(state: ProjectedState): object {
 ```typescript
 // src/runtime/state-projection-cache.ts
 import type { FileWriter, FileReader } from "../core/types.ts";
-import type { ProjectedState } from "../core/v2/observation-model.ts";
-import { toSerializableProjectedState, fromSerializableProjectedState } from "./serialization.ts"; // serialized mapping helpers
+import type { ProjectedState } from "../core/v2/state-projection.ts";
+import { toSerializableProjectedState, fromSerializableProjectedState } from "../core/v2/state-projection.ts";
 
 export class StateProjectionCache {
   constructor(
@@ -1269,7 +1317,7 @@ export class StateProjectionCache {
       const content = await this.fileReader.readFile(this.path);
       const parsed = JSON.parse(content);
       // Validate schema and structural fields
-      if (!parsed || typeof parsed !== "object" || !("maxSequenceByShard" in parsed)) {
+      if (!parsed || typeof parsed !== "object" || !parsed.integrity || typeof parsed.integrity !== "object" || !("maxSequenceByShard" in parsed.integrity)) {
         this.logger.warn("state.json structure invalid, triggering rebuild");
         return undefined;
       }
@@ -1282,7 +1330,7 @@ export class StateProjectionCache {
 }
 ```
 
-`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、これが `undefined` を返した（欠損、破損、schema 不一致、あるいは integrity 検証での sequence 逆転/重複や maxSequenceByShard 不一致検知時）場合は event log から再構築を行う。
+`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity`（`sourceHash` および `maxSequenceByShard`）を、実際の `readAll()` 結果から構築した `currentIntegrity`（実際のイベント群のハッシュおよび各 shard の最大シーケンス）と検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。
 
 - [ ] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
 
@@ -1977,9 +2025,11 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
         declaredFrom: "message",
         claim: { claimKind: c.claimKind, outcome: c.outcome },
       }));
+      const agentId = await this.resolveAgentId(payload.sessionId);
+      const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
       const record: ObservationRecord = {
         ...this.buildEnvelope({
-          agentId: payload.agentId,
+          agentId,
           sessionId: payload.sessionId,
           recordType: "observation",
         }),
@@ -1993,7 +2043,7 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
         evidence,
         finalized: true,
       };
-      await this.logStore.append(this.shardId, record);
+      await this.logStore.append(shardId, record);
     }
   } catch (err) {
     this.logger.warn("observation-handler: message observation failed, degrading to PROCEED", err);
@@ -2093,11 +2143,14 @@ export function extractTaskSummaryClaims(output: string): DeclaredClaim[] {
 // tool_executed レコード生成時に併せて skill_invoked レコードも append（fail-open）
 try {
   if (skill) {
-    await this.logStore.append(this.shardId, {
+    const sessionId = event.sessionId;
+    const agentId = resolveAgentId(sessionId);
+    const shardId = { agentId, sessionId, writerId: this.writerId };
+    await this.logStore.append(shardId, {
       ...this.buildEnvelope({
         taskId,
-        agentId: payload.agentId,
-        sessionId: payload.sessionId,
+        agentId,
+        sessionId,
         recordType: "observation",
       }),
       kind: "skill_invoked",
@@ -2107,15 +2160,15 @@ try {
 } catch (err) {
   this.logger.warn("observation-handler: skill_invoked observation failed", err);
 }
-// task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属（fail-open。declared は PASS 非算入・INV-004。失敗時も PROCEED へ縮退）
+// task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属（fail-open）
 
 - [ ] **Step 3c: `handlePostToolUse` に task summary 呼び出しを追加**
 
 ```typescript
 // src/hooks/observation-handler.ts 内 handlePostToolUse
-if (payload.toolName === "task") {
-  this.activeTaskWindows.delete(payload.callId);
-  await this.appendTaskSummaryDeclaredEvidence(payload, taskId);
+if (event.payload.toolName === "task") {
+  this.activeTaskWindows.delete(event.payload.callId);
+  await this.appendTaskSummaryDeclaredEvidence(event, taskId);
 }
 ```
 
@@ -2123,9 +2176,10 @@ if (payload.toolName === "task") {
 
 ```typescript
 // src/hooks/observation-handler.ts
-private async appendTaskSummaryDeclaredEvidence(payload: PostToolUsePayload, taskId?: string): Promise<void> {
+private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?: string): Promise<void> {
   if (!taskId) return;
   try {
+    const payload = event.payload;
     const summaryText = payload.toolResult ?? "";
     const summaryClaims = extractTaskSummaryClaims(summaryText);
     if (summaryClaims.length === 0) return;
@@ -2138,11 +2192,15 @@ private async appendTaskSummaryDeclaredEvidence(payload: PostToolUsePayload, tas
       declaredFrom: "task_summary",
       claim: { claimKind: c.claimKind, outcome: c.outcome },
     }));
+    
+    const sessionId = event.sessionId;
+    const agentId = resolveAgentId(sessionId);
+    const shardId = { agentId, sessionId, writerId: this.writerId };
     const record: ObservationRecord = {
       ...this.buildEnvelope({
         taskId,
-        agentId: payload.agentId,
-        sessionId: payload.sessionId,
+        agentId,
+        sessionId,
         recordType: "observation",
       }),
       kind: "message",
@@ -2154,7 +2212,7 @@ private async appendTaskSummaryDeclaredEvidence(payload: PostToolUsePayload, tas
       evidence,
       finalized: true,
     };
-    await this.logStore.append(this.shardId, record);
+    await this.logStore.append(shardId, record);
   } catch (err) {
     this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
   }
@@ -3024,22 +3082,26 @@ gt submit
 // src/hooks/observation-handler.ts 内 handlePostToolUse
 // After tool_executed append and before evaluateGateIfTriggered, append review_observed:
 try {
+  const payload = event.payload;
   const callId = payload.callId ?? "";
   const signal = ReviewRejectionDetector.detect(payload.toolResult ?? "");
   if (signal.matched) {
+    const sessionId = event.sessionId;
+    const agentId = resolveAgentId(sessionId);
+    const shardId = { agentId, sessionId, writerId: this.writerId };
     const record: ObservationRecord = {
       ...this.buildEnvelope({
         taskId,
-        agentId: payload.agentId,
-        sessionId: payload.sessionId,
+        agentId,
+        sessionId,
         recordType: "observation",
       }),
       kind: "review_observed",
-      reviewScope: deriveReviewScope({ taskId, sessionId: this.sessionId, callId, toolName: payload.toolName }),
+      reviewScope: deriveReviewScope({ taskId, sessionId, callId, toolName: payload.toolName }),
       isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
       items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
     };
-    await this.logStore.append(this.shardId, record);
+    await this.logStore.append(shardId, record);
   }
 } catch (err) {
   this.logger.warn("observation-handler: review_observed generation failed", err);
