@@ -44,41 +44,47 @@
 
 ### Task 0.0: Preflight Verification
 
+**Prerequisites:**
+- The ADR document `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` must be created and ratified by CODEOWNERS (APPROVED) prior to this task's execution.
+
 **Files:**
 
-- Modify: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` (Already created and ratified by CODEOWNERS prior to implementation)
-- Create: `tests/preflight-verification.test.ts` (smoke verification for ADR ratification)
+- Create: `tests/preflight-verification.test.ts` (smoke verification for ADR ratification and PR verification)
 
 **Interfaces:**
 
-- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` or CODEOWNERS check via GitHub CLI).
+- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` and GitHub API status for PR #104).
 - Produces: Execution safety verification.
 
-- [ ] **Step 1: 既に CODEOWNERS による承認と証跡が記述された ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在することを確認する（自己承認は不可）**
+- [ ] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在し、正しい内容であることを確認する**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: Phase 0 Spike で確定した変更点（hook リスト、保存パス詳細化、authorship 縮退等）を整理し、人間である CODEOWNERS による承認のやり取り（承認証跡）と、最終的な「STATUS: APPROVED」がファイル内に既に記載されていることを確認する。
+  - 内容: `Status: APPROVED` および `PR: #104` などの承認証跡が正しく記載されていることをテストで検証する。
 
-- [ ] **Step 2: ADR ドキュメントの承認状況を検証するスクリプト/テストを作成（未承認ならテスト失敗＝計画実行停止。GitHub API または GitHub CLI (gh) を用いて PR レビュー状態と承認者をチェックする）**
+- [ ] **Step 2: テストコード（tests/preflight-verification.test.ts）の実装**
 
 ```typescript
-// tests/preflight-verification.test.ts
-import { test, expect } from "vitest";
 import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
+import { expect, test } from "vitest";
 
-test("ADR-2026-06-26 must be ratified and approved by CODEOWNERS", () => {
+test("preflight verification: ADR ratification check", () => {
   const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
-  expect(content).toContain("STATUS: APPROVED");
+  expect(content).toContain("Status: APPROVED");
+  expect(content).toContain("PR: #104");
 
   // Verify real GitHub Review State via GitHub CLI to prevent self-ratification bypass
   try {
-    const prJson = execSync("gh pr view --json state,reviews", { encoding: "utf-8" });
+    // Explicitly target PR 104 to avoid checking the current feature branch (ISS-006)
+    const prJson = execSync("gh pr view 104 --json state,reviews", { encoding: "utf-8" });
     const pr = JSON.parse(prJson);
+    
+    // Define expected CODEOWNERS list for strict verification (ISS-006)
+    const codeowners = ["owner-alice", "owner-bob"];
     const hasCodeownersApproval = pr.reviews.some(
       (r: { state: string; author: { login: string } }) => 
-        r.state === "APPROVED" && r.author.login !== "antigravity-bot"
+        r.state === "APPROVED" && codeowners.includes(r.author.login)
     );
     expect(pr.state === "MERGED" || hasCodeownersApproval).toBe(true);
   } catch (err) {
@@ -804,7 +810,7 @@ export function toArchivePath(shardId: ShardId, timestamp: string): string {
 // src/runtime/writer-id.ts
 import { randomUUID } from "crypto";
 import type { FileReader } from "../core/types.ts";
-import { toPhysicalPath } from "./shard-layout.ts";
+import { toPhysicalPath } from "../core/v2/shard-layout.ts";
 
 const WRITER_ID_RE = /^w-[A-Za-z0-9-]+$/;
 
@@ -1058,9 +1064,10 @@ export class ObservationLogStore {
           records.push(record);
         }
       } catch (err) {
-        // If a specific shard is corrupted or reading fails, log a warning and isolate it (quarantine),
-        // but preserve other healthy shards to avoid wiping out the entire authority log.
-        this.logger.warn(`ObservationLogStore: Shard corrupted or unreadable at ${path}. Isolating shard.`, err);
+        // Throw an integrity error instead of silently isolating, because the event log is the single source of truth. (ISS-004)
+        // Gate evaluations will capture this error and degrade to fail-open PROCEED.
+        this.logger.error(`ObservationLogStore: Shard corrupted or unreadable at ${path}.`, err);
+        throw new ObservationLogIntegrityError(`Shard corrupted at ${path}`, err);
       }
     }
     
@@ -1676,16 +1683,29 @@ onToolExecuteAfter: async (input, output) => {
 },
 ```
 
-- [ ] **Step 2: message / session.error イベントを追加（既存 user message 経路は維持）**
+- [ ] **Step 2: message / session.error イベントを追加（既存 user message 経路は維持し、状態確定イベントを分離）**
 
 ```typescript
 onMessagePartUpdated: async (event) => {
   await this.plugin.handleEvent({ type: "Message", payload: { kind: "message_part_updated", sessionId: event.sessionId, messageID: event.messageID, partID: event.partID, text: event.text } });
 },
+onMessageUpdated: async (event) => {
+  // Translate to ObservationMessagePayload with kind "message_updated" to propagate role & finalized metadata (ISS-002)
+  await this.plugin.handleEvent({
+    type: "Message",
+    payload: {
+      kind: "message_updated",
+      sessionId: event.sessionId,
+      messageID: event.messageID,
+      role: event.message.role,
+      finalized: event.message.finalized ?? false
+    }
+  });
+},
 // ...
 ```
 
-`onMessage`（`message.updated`）は既存の `{ role, content }` 形式の `MessageEvent` として `JusticePlugin.handleEvent` に渡し、plan-bridge の委譲トリガー機能を維持する。`message.part.updated` / `experimental.text.complete` は `ObservationMessagePayload` として `Message` イベントで observation-handler に渡す。`JusticePlugin.handleEvent` では payload に `kind` がある場合は plan-bridge 経路をスキップし、`role`/`content` 形式の user message のみ plan-bridge に委譲する（D71）。
+`onMessage`（`message.updated`）は既存の `{ role, content }` 形式の `MessageEvent` ではなく、メタデータ伝播のために `kind: "message_updated"` を含む `ObservationMessagePayload` として `JusticePlugin.handleEvent` に送出します。一方で、plan-bridge の委譲トリガーを維持するための `role`/`content` 形式の user message 経路は別途維持されます。
 
 **型更新:** `src/core/types.ts` の `MessageEvent` payload を `{ role, content } | ObservationMessagePayload` の union に拡張し、`handleEvent` が型安全に分岐できるようにする。
 
@@ -1844,6 +1864,40 @@ gt submit
 
 ---
 
+### Task 3.4: Agent ID Resolution & Session State Mapping
+
+**Files:**
+- Modify: `src/core/justice-plugin.ts`
+- Create: `src/core/session-state-provider.ts`
+- Test: `tests/core/agent-id-resolution.test.ts`
+
+**Interfaces:**
+- Consumes: `chat.params` and `chat.message` events from OpenCode.
+- Produces: `sessionStateProvider.getAgentId(sessionId): Promise<ObservationAgentId>`
+
+- [ ] **Step 1: SessionStateProvider の実装（D48）**
+  - `chat.params` (agent パラメータ) または `chat.message` (agent プロパティ) を観測した際に、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
+  - OpenCode agent 名（自由文字列）から Justice `AgentId`（`atlas` / `hephaestus` / `sisyphus` / `prometheus`）への写像ロジックを実装し、マッピングできない場合は `unknown` とする。
+
+- [ ] **Step 2: routing イベントハンドラに chat 観測を追加**
+  - `JusticePlugin.handleEvent` で `chat.message` と `chat.params` の変更をフックし、`SessionStateProvider` のマップを更新する。
+
+- [ ] **Step 3: テストの実装（tests/core/agent-id-resolution.test.ts）**
+  - `chat.message`/`chat.params` から `agentId` が正しく写像され、`SessionStateProvider` を経由して解決できることを検証する。
+  - 不明なエージェントが `unknown` shard に落ちることを確認し、同時に wisdom namespace（4つのペルソナ）に `system` や `unknown` のデータが混入（汚染）しないことをテストで担保する。
+
+- [ ] **Step 4: Commit & Submit**
+
+```bash
+git add src/core/justice-plugin.ts src/core/session-state-provider.ts tests/core/agent-id-resolution.test.ts
+git commit -m "feat(v2): implement agentId resolution and session state mapping"
+gt submit
+```
+
+**派生元:** `Task 3.3`
+
+---
+
 ## Phase 4: Observation Handler Implementation
 
 **Base Branch:** `feature/phase4-v2-observation-handler__base`
@@ -1953,9 +2007,15 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       evidence: redactedEvidence,
     };
     await this.logStore.append(shardId, record);
+    
+    // Ensure strict evaluation sequence (ISS-005):
+    // 1. Tool execution observed
+    // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
+    // 3. Review observed (if review trigger)
+    // 4. Update projected state and evaluate gates
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
-      // task summary declared claim extraction is added in Task 4.3
+      // task summary declared claim extraction is appended BEFORE evaluation (implemented in Task 4.3)
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
         return taskGateResponse;
@@ -2162,15 +2222,24 @@ try {
 }
 // task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属（fail-open）
 
-- [ ] **Step 3c: `handlePostToolUse` に task summary 呼び出しを追加**
+- [ ] **Step 3c: `handlePostToolUse` に task summary 呼び出しを追加（順序保証）**
 
 ```typescript
 // src/hooks/observation-handler.ts 内 handlePostToolUse
+// Ensure task summary append happens BEFORE evaluateGateIfTriggered("task_complete") (ISS-005)
 if (event.payload.toolName === "task") {
   this.activeTaskWindows.delete(event.payload.callId);
   await this.appendTaskSummaryDeclaredEvidence(event, taskId);
+  // task evaluation must immediately follow the summary append
+  const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+  if (taskGateResponse.action === "inject") {
+    return taskGateResponse;
+  }
 }
 ```
+
+- [ ] **Step 3d: 順序保証検証用回帰テストの作成**
+  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` append → `task_summary` append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
 
 - [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加（D34/D59/D70）**
 
