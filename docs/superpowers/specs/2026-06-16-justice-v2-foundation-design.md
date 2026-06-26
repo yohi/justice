@@ -744,9 +744,9 @@ Phase 1(build):
 
 本設計を `superpowers/writing-plans` で実装計画へ展開する（§10.3 の実装順序を分解し、各ステップに検証チェックポイントを付与）。
 
-> **writing-plans 着手前の必須前提（本レビュー対応）。下記が未解決の場合、実装計画化をブロックする**:
-> 1. **C1**: §3 Phase 0 スパイクに追加した「L0 advisory 表示面の実証」を完了し、`output.output` 反映可否を確定する（反映不可なら notifier を保証チャネルとして D47 を確定）。
-> 2. **I3/D58/D63（ブロッカー）**: Phase 0 由来の憲章訂正（hook リスト=D44・FR-001 保存パス=§4.5・FR-004 exit_code=D5/限界-2）**＋ Artifact authorship の意味値非保持（§8.3 属性縮退・D54/D63）**を D58 のとおり 1 本の ADR にまとめ、**CODEOWNERS 追認を得るまで実装計画化しない**（設計側の「§16.3 対象外」自己認定を撤回）。同 ADR には、INV-004 の「observed/derived しか Evidence にしない」を「gate PASS / L1+ deny に用いる権威 Evidence は observed/derived に限る」と解釈し、`declared` は監査可視性のため記録するが権威 Evidence には算入しない、という §5.3 M4 の解釈も含めて追認を得る。
+> **v2.0 本実装（Phase 1 以降）開始前の必須前提（本レビュー対応）。下記が未解決の場合、本実装フェーズへの移行をブロックする**:
+> 1. **C1**: §3 Phase 0 スパイク（計画書 Phase 0 にて実施）の「L0 advisory 表示面の実証」を完了し、`output.output` 反映可否を確定する（反映不可なら notifier を保証チャネルとして D47 を確定）。
+> 2. **I3/D58/D63（ブロッカー）**: Phase 0 由来の憲章訂正（hook リスト=D44・FR-001 保存パス=§4.5・FR-004 exit_code=D5/限界-2）**＋ Artifact authorship の意味値非保持（§8.3 属性縮退・D54/D63）**を D58 のとおり 1 本の ADR にまとめ、**CODEOWNERS 追認を得るまで本実装を開始しない**（設計側の「§16.3 対象外」自己認定を撤回）。同 ADR には、INV-004 の「observed/derived しか Evidence にしない」を「gate PASS / L1+ deny に用いる権威 Evidence は observed/derived に限る」と解釈し、`declared` は監査可視性のため記録するが権威 Evidence には算入しない、という §5.3 M4 の解釈も含めて追認を得る。
 > 3. **I1/D57**: severity 決定論的分類器（§7.6）と itemKey 安定性テストを計画に含める。
 > 4. **I4**: §9.3.1 の Runtime 統合テスト4点を実装順序（§10.3）と DoD に組み込む。
 > 5. **本レビュー Finding 1〜5／追加4 反映（D60〜D65）**: bash 経由ファイル本文の `file_content` 分類（D60）・Evidence command/args の redaction（D61）・task サマリ transcript の `declared` 据置（D62）・authorship 縮退の CODEOWNERS 追認（D63）・PostToolUse payload マージ規則（D64）・messageRoleBuffer 鍵/TTL 確定（D65）を本設計に反映済み。実装計画では D60 分類器の語彙テスト・D61 redaction テスト・D64 マージ規則テストを §9.3/§9.3.1 と DoD に組み込む。

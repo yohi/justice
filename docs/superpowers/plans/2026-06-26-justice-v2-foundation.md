@@ -902,6 +902,7 @@ export function createShardWriteQueue(
 ): (path: string, record: object) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
   const sequences = new Map<string, number>();
+  const runningPaths = new Set<string>();
 
   async function atomicAppend(path: string, content: string) {
     const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
@@ -910,40 +911,48 @@ export function createShardWriteQueue(
   }
 
   async function process(path: string) {
-    const items = queues.get(path) ?? [];
-    let current: QueueItem | undefined;
+    if (runningPaths.has(path)) return;
+    runningPaths.add(path);
+
     try {
       if (!sequences.has(path)) {
         const initSeq = await getInitialSequence(path).catch(() => 0);
         sequences.set(path, initSeq);
       }
-      while (items.length > 0) {
-        current = items.shift()!;
-        const nextSeq = (sequences.get(path) ?? 0) + 1;
-        const existing = await readExisting(path).catch(() => "");
-        const line = `${JSON.stringify({ ...current.record, sequence: nextSeq })}\n`;
-        await atomicAppend(path, existing + line);
-        sequences.set(path, nextSeq);
-        current.resolve(nextSeq);
-        current = undefined;
+      while (true) {
+        const items = queues.get(path);
+        if (!items || items.length === 0) break;
+
+        const current = items.shift()!;
+        try {
+          const nextSeq = (sequences.get(path) ?? 0) + 1;
+          const existing = await readExisting(path).catch(() => "");
+          const line = `${JSON.stringify({ ...current.record, sequence: nextSeq })}\n`;
+          await atomicAppend(path, existing + line);
+          sequences.set(path, nextSeq);
+          current.resolve(nextSeq);
+        } catch (err) {
+          current.reject(err);
+          throw err;
+        }
       }
     } catch (err) {
       onError(path, err);
-      // Reject the item that was being processed when the failure occurred.
-      if (current) current.reject(err);
       // Drain remaining items with rejection so callers are not left hanging.
+      const items = queues.get(path) ?? [];
       while (items.length > 0) {
         items.shift()!.reject(err);
       }
     } finally {
       queues.delete(path);
+      runningPaths.delete(path);
     }
   }
 
   return (path, record) => new Promise((resolve, reject) => {
     if (!queues.has(path)) queues.set(path, []);
     queues.get(path)!.push({ record, resolve, reject });
-    if (queues.get(path)!.length === 1) process(path);
+    if (!runningPaths.has(path)) process(path);
   });
 }
 ```
@@ -1082,7 +1091,7 @@ export function validateRecordSchema(record: unknown): void {
         throw new Error("Invalid review_observed record");
       }
     } else if (kind === "message") {
-      if (!r.textHash || !Array.isArray(r.declaredClaims)) {
+      if (r.role !== "assistant" || !r.textHash || !Array.isArray(r.declaredClaims)) {
         throw new Error("Invalid message record");
       }
     }
@@ -1114,8 +1123,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 // tests/runtime/observation-log-queue.test.ts
 it("readAll merges active and archive segments", async () => {
   const reader = createMockFileReader({
-    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed"}\n',
-    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed"}\n',
+    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-1","evidence":{}}\n',
+    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-2","evidence":{}}\n',
   });
   reader.listFiles = async (prefix) => Object.keys(reader.files).filter((p) => p.startsWith(prefix));
   const store = new ObservationLogStore(writer, reader, "w-1");
@@ -1333,7 +1342,7 @@ export class StateProjectionCache {
 }
 ```
 
-`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity`（`sourceHash` および `maxSequenceByShard`）を、実際の `readAll()` 結果から構築した `currentIntegrity`（実際のイベント群のハッシュおよび各 shard の最大シーケンス）と検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。
+`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity`（`sourceHash` および `maxSequenceByShard`）を、実際の `readAll()`結果から構築した `currentIntegrity`（実際のイベント群のハッシュおよび各 shard の最大シーケンス）と検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。ただし、`sourceHash` 乖離による再構築は、通常のイベント追記に伴う自然なキャッシュの stale 状態であるため、WARN や corruption/tamper 警告を出さずに静かに再構築（silent rebuild）を行う。一方、`maxSequenceByShard` 不一致や構造破損・スキーマ不正検知時は警告（WARN）を出した上で再構築を行う。
 
 - [ ] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
 
@@ -1516,7 +1525,7 @@ export type MessageRecord = {
   readonly kind: "message";
   readonly messageID: string;
   readonly partID?: string;
-  readonly role?: "assistant" | "user";
+  readonly role: "assistant"; // fixed per D22
   readonly textHash: string; // required per D34
   readonly textSnippet?: string;
   readonly declaredClaims: readonly DeclaredClaim[]; // D70: 軽量な申告のリスト
@@ -1986,6 +1995,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
 
+    // 1. Tool execution observed append
     const evidence = extractEvidenceFromTool(
       payload.toolName,
       payload.toolInput,
@@ -2006,14 +2016,18 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     };
     await this.logStore.append(shardId, record);
     
-    // Ensure strict evaluation sequence (ISS-005):
-    // 1. Tool execution observed
     // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
-    // 3. Review observed (if review trigger)
-    // 4. Update projected state and evaluate gates
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
-      // task summary declared claim extraction is appended BEFORE evaluation (implemented in Task 4.3)
+      // Implementation placeholder for appending task summary declared claims (Task 4.3)
+      await this.appendTaskSummaryDeclaredClaims(shardId, taskId, event.sessionId, payload.toolResult);
+    }
+
+    // 3. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
+    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
+
+    // 4. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
+    if (payload.toolName === "task") {
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
         return taskGateResponse;
@@ -2464,16 +2478,16 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `zod` または純粋 TypeScript バリデーション（プロジェクトに zod 等が無いため、TypeScript 型 + 手動 validator）。
+- Consumes: `zod`（Task 5.1 にてプロジェクトへ追加し、スキーマ定義とバリデーションを一貫して zod で実装する）。
 - Produces:
   - `GateRule` type with `id`, `gateType`, `trigger`, `check`, `onViolation`, `onMissingEvidence`, `enabled`.
   - `check.type ∈ { "evidence_outcome", "evidence_present", "review_open_items" }`.
   - `parseGateYaml(yaml: string): GateRule[]`.
 
-- [ ] **Step 0: 依存パッケージ `yaml` を追加**
+- [ ] **Step 0: 依存パッケージ `yaml` および `zod` を追加**
 
 ```bash
-bun add yaml
+bun add yaml zod
 ```
 
 - [ ] **Step 1: `GateRule` 型を定義**
@@ -3157,34 +3171,29 @@ gt submit
 - [ ] **Step 2: PostToolUse 時に review_observed を生成・append（通常観測）**
 
 ```typescript
-// src/hooks/observation-handler.ts 内 handlePostToolUse
-// After tool_executed append and before evaluateGateIfTriggered, append review_observed:
-try {
-  const payload = event.payload;
-  const callId = payload.callId ?? "";
-  const signal = ReviewRejectionDetector.detect(payload.toolResult ?? "");
-  if (signal.matched) {
-    const sessionId = event.sessionId;
-    const agentId = resolveAgentId(sessionId);
-    const shardId = { agentId, sessionId, writerId: this.writerId };
-    const record: ObservationRecord = {
-      ...this.buildEnvelope({
-        taskId,
-        agentId,
-        sessionId,
-        recordType: "observation",
-      }),
-      kind: "review_observed",
-      reviewScope: deriveReviewScope({ taskId, sessionId, callId, toolName: payload.toolName }),
-      isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
-      items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
-    };
-    await this.logStore.append(shardId, record);
+// src/hooks/observation-handler.ts 内に `appendReviewObservationsIfDetected` メソッドを実装
+private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
+  try {
+    const signal = ReviewRejectionDetector.detect(toolResult ?? "");
+    if (signal.matched) {
+      const record: ObservationRecord = {
+        ...this.buildEnvelope({
+          taskId,
+          agentId: shardId.agentId,
+          sessionId,
+          recordType: "observation",
+        }),
+        kind: "review_observed",
+        reviewScope: deriveReviewScope({ taskId, sessionId, callId, toolName }),
+        isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
+        items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
+      };
+      await this.logStore.append(shardId, record);
+    }
+  } catch (err) {
+    this.logger.warn("observation-handler: review_observed generation failed", err);
   }
-} catch (err) {
-  this.logger.warn("observation-handler: review_observed generation failed", err);
 }
-// evaluateGateIfTriggered("tool_observed", taskId) runs AFTER both tool_executed and review_observed are appended.
 ```
 
 - [ ] **Step 2b: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
@@ -3266,12 +3275,6 @@ gt submit
 
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
-
-- [ ] **Step 0: 依存パッケージ `zod` を追加**
-
-```bash
-bun add zod
-```
 
 - [ ] **Step 1: `justice_status` 実装**
 
