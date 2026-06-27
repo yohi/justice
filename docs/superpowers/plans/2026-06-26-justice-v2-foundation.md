@@ -238,15 +238,15 @@ grep -n "export type AgentId" src/core/types.ts
 export type ObservationAgentId = AgentId | "system" | "unknown";
 
 export type ShardId = {
-  readonly agentId: string;
+  readonly agentId: ObservationAgentId;
   readonly sessionId: string;
-  readonly writerId: string;
+  readonly writerId: string; // validated via isSafeWriterId
 };
 
 export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 export type FullEvidenceRef = {
-  readonly agentId: string;
+  readonly agentId: ObservationAgentId;
   readonly sessionId: string;
   readonly writerId: string;
   readonly sequence: number;
@@ -300,7 +300,7 @@ export type ToolExecutedRecord = {
   readonly kind: "tool_executed";
   readonly toolName: string;
   readonly callId: string;
-  readonly evidence: Evidence;
+  readonly evidence: Evidence | readonly Evidence[];
 };
 
 // MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
@@ -316,13 +316,7 @@ export type MessageRecord = {
 export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
 export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
 export type ReflectionRecord = { readonly kind: "reflection"; /* refined in Task 4.4 */ };
-export type TaskSummaryRecord = {
-  readonly kind: "task_summary";
-  readonly summaryTextHash: string;
-  readonly summaryTextSnippet?: string;
-  readonly declaredClaims: readonly DeclaredClaim[];
-  readonly evidence: readonly Evidence[];
-};
+
 
 export type ReviewItem = {
   readonly itemKey: string;
@@ -353,8 +347,8 @@ export type ObservationRecord =
   | (CommonEnvelope & { readonly recordType: "observation" } & SkillInvokedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & ReviewObservedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & SessionErrorRecord)
-  | (CommonEnvelope & { readonly recordType: "observation" } & ReflectionRecord)
-  | (CommonEnvelope & { readonly recordType: "observation" } & TaskSummaryRecord);
+  | (CommonEnvelope & { readonly recordType: "observation" } & ReflectionRecord);
+
 ```
 
 - [ ] **Step 3c: `hashString` 決定論的ユーティリティの実装（ISS-006）**
@@ -676,29 +670,36 @@ export function classifyToolOutputClass(
   if (toolName === "read" || toolName === "glob" || toolName === "grep") return "file_content";
   if (toolName === "bash" || toolName === "shell") {
     const command = args?.command ?? "";
-    const tokens = command.trim().split(/\s+/).filter(Boolean);
-    
-    const firstToken = tokens[0] ?? "";
-    // Quality-verification compound commands must preserve rawOutput for auditability.
-    // Note: Do NOT fall back to file_content on size threshold for known COMMAND_EXEC_COMMANDS!
-    if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
+    // Split by common shell delimiters to analyze individual subcommands (&&, ||, ;, |)
+    const subCommands = command.split(/&&|\|\||;|\|/);
+    let hasFileContent = false;
+    let hasCommandExec = false;
+
+    for (const sub of subCommands) {
+      const subTokens = sub.trim().split(/\s+/).filter(Boolean);
+      const firstToken = subTokens[0] ?? "";
+      if (FILE_CONTENT_COMMANDS.has(firstToken) || subTokens.some(t => FILE_CONTENT_COMMANDS.has(t))) {
+        hasFileContent = true;
+      }
+      if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
+        hasCommandExec = true;
+      }
+    }
+
+    if (hasFileContent) {
+      return "file_content";
+    }
+    if (hasCommandExec) {
       return "command_exec";
     }
 
-    // If any token in the command matches a file content output command, prioritize file_content to avoid plan/design/code reproduction.
-    const hasFileContentCmd = tokens.some(t => FILE_CONTENT_COMMANDS.has(t));
-    if (hasFileContentCmd) return "file_content";
-    if (FILE_CONTENT_COMMANDS.has(firstToken)) return "file_content";
-    // Conservative fallback for mixed pipes/compound commands that are NOT quality verification:
-    // treat as file_content-equivalent to avoid persisting full plan/design/code bodies.
-    if (tokens.includes("|") || tokens.includes("&&") || tokens.includes("||") || tokens.includes(";")) {
-      return "file_content";
-    }
+    const tokens = command.trim().split(/\s+/).filter(Boolean);
     // 未知のコマンド実行かつ出力が巨大な場合は file_content にフォールバック
     if (rawOutputLength > 20000) return "file_content";
   }
   return "command_exec";
 }
+
 ```
 
 - [ ] **Step 3: Evidence engine を実装**
@@ -826,12 +827,19 @@ gt submit
 // src/core/v2/shard-layout.ts
 import { encodeSafeSegment } from "./safe-segment.ts";
 import type { ShardId } from "../types.ts";
+import { isSafeWriterId } from "../../runtime/writer-id.ts";
 
 export function toPhysicalPath(shardId: ShardId): string {
+  if (!isSafeWriterId(shardId.writerId)) {
+    throw new Error(`toPhysicalPath: unsafe writerId: ${shardId.writerId}`);
+  }
   return `.justice/events/${shardId.agentId}/${encodeSafeSegment(shardId.sessionId)}/${shardId.writerId}.jsonl`;
 }
 
 export function toArchivePath(shardId: ShardId, timestamp: string): string {
+  if (!isSafeWriterId(shardId.writerId)) {
+    throw new Error(`toArchivePath: unsafe writerId: ${shardId.writerId}`);
+  }
   return `.justice/archive/events/${shardId.agentId}/${encodeSafeSegment(shardId.sessionId)}/${shardId.writerId}.${timestamp}.jsonl`;
 }
 ```
@@ -1084,13 +1092,13 @@ export class ObservationLogStore {
           const safeSessionId = parts[3];
           const writerId = parts[4].replace(".jsonl", "");
           const archiveDir = `.justice/archive/events/${agentId}/${safeSessionId}`;
-          if (await this.fileReader.fileExists(archiveDir)) {
-            const archives = await this.fileReader.listFiles(archiveDir);
-            for (const arch of archives) {
-              const filename = arch.split("/").pop() ?? "";
-              if (filename.startsWith(`${writerId}.`)) {
-                await readMaxSeq(arch);
-              }
+          // `listFiles` returns an empty array `[]` if the directory does not exist.
+          // By removing the `fileExists` gate, we ensure sequence continuity across rotation segments even if the reader behavior differs.
+          const archives = await this.fileReader.listFiles(archiveDir);
+          for (const arch of archives) {
+            const filename = arch.split("/").pop() ?? "";
+            if (filename.startsWith(`${writerId}.`)) {
+              await readMaxSeq(arch);
             }
           }
         }
@@ -1167,13 +1175,30 @@ export function validateRecordSchema(record: unknown): void {
       if (r.role !== "assistant" || !r.textHash || !Array.isArray(r.declaredClaims)) {
         throw new Error("Invalid message record");
       }
+    } else if (kind === "skill_invoked") {
+      if (typeof r.skillName !== "string" || typeof r.source !== "string") {
+        throw new Error("Invalid skill_invoked record");
+      }
+    } else if (kind === "session_error") {
+      if (typeof r.errorKind !== "string" || typeof r.message !== "string") {
+        throw new Error("Invalid session_error record");
+      }
+    } else if (kind === "reflection") {
+      if (!r.reflection || typeof r.reflection !== "object") {
+        throw new Error("Invalid reflection record");
+      }
+    } else {
+      throw new Error(`Invalid record: unknown observation kind: ${kind}`);
     }
   } else if (r.recordType === "decision") {
     if (r.gateType !== "task" || !Array.isArray(r.ruleResults)) {
       throw new Error("Invalid decision record");
     }
+  } else {
+    throw new Error(`Invalid record: unknown recordType: ${r.recordType}`);
   }
 }
+
 
 export function validateShardSequences(records: readonly (ObservationRecord | DecisionRecord)[]): void {
   const shardGroups = new Map<string, number[]>();
@@ -1217,7 +1242,19 @@ it("readAll merges active and archive segments", async () => {
 });
 ```
 
-- [ ] **Step 4: テストを実行（Devcontainer 内）**
+- [ ] **Step 3b: sequence recovery test (rotation, multiple archives, missing archive dir)**
+
+```typescript
+// tests/runtime/observation-log-queue.test.ts
+it("resolves sequence correctly when archiveDir does not exist or has multiple segments", async () => {
+  // 1. Setup mock file reader with no archive directory (listFiles returns [] for archiveDir)
+  //    Verify that enqueue returns maxSeq starting at 0 (first sequence).
+  // 2. Setup mock file reader with multiple archive segments (e.g. w-1.timestamp1.jsonl, w-1.timestamp2.jsonl)
+  //    and active segments. Verify that enqueue reads all sequences and recovers the correct next sequence number.
+});
+```
+
+- [ ] **Step 4: テストを実行（Devcontainer 内）****
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts
@@ -1578,8 +1615,9 @@ devcontainer exec --workspace-folder . bun run test tests/runtime/rotation-seque
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/observation-log-store.ts tests/runtime/rotation-sequence-continuity.test.ts
+git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts src/runtime/observation-log-store.ts tests/runtime/rotation-sequence-continuity.test.ts
 git commit -m "feat(v2): shard rotation and archive sequence continuity"
+
 ```
 
 - [ ] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
@@ -2227,13 +2265,13 @@ export function buildToolExecutedRecord(
 ```typescript
 // src/hooks/observation-handler.ts
 async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
+  const payload = event.payload;
+  const callId = event.callId;
+  if (!callId) {
+    this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
+    return { action: "proceed" };
+  }
   try {
-    const payload = event.payload;
-    const callId = event.callId;
-    if (!callId) {
-      this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
-      return { action: "proceed" };
-    }
     const taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
@@ -2252,7 +2290,6 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     
     // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
     if (payload.toolName === "task") {
-      this.activeTaskWindows.delete(callId);
       await this.appendTaskSummaryDeclaredEvidence(event, taskId);
     }
 
@@ -2272,6 +2309,10 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
+  } finally {
+    if (payload.toolName === "task") {
+      this.activeTaskWindows.delete(callId);
+    }
   }
   return { action: "proceed" };
 }
@@ -2489,7 +2530,8 @@ export function buildSkillInvokedRecord(
 export function buildTaskSummaryRecord(
   envelope: CommonEnvelope,
   summaryText: string,
-  summaryClaims: readonly DeclaredClaim[]
+  summaryClaims: readonly DeclaredClaim[],
+  callId: string
 ): ObservationRecord {
   const evidence: DeclaredClaimEvidence[] = summaryClaims.map((c) => ({
     evidenceId: c.evidenceId,
@@ -2502,13 +2544,13 @@ export function buildTaskSummaryRecord(
   return {
     ...envelope,
     recordType: "observation",
-    kind: "task_summary",
-    summaryTextHash: hashString(summaryText),
-    summaryTextSnippet: redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200),
-    declaredClaims: summaryClaims,
+    kind: "tool_executed",
+    toolName: "task",
+    callId,
     evidence,
   };
 }
+
 ```
 
 ```typescript
@@ -2545,7 +2587,7 @@ private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?
     const shardId = { agentId, sessionId, writerId: this.writerId };
     const envelope = this.buildEnvelope({ taskId, agentId, sessionId, recordType: "observation" });
 
-    const record = buildTaskSummaryRecord(envelope, summaryText, summaryClaims);
+    const record = buildTaskSummaryRecord(envelope, summaryText, summaryClaims, event.callId ?? "call_unknown");
     await this.logStore.append(shardId, record);
   } catch (err) {
     this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
@@ -2629,6 +2671,7 @@ gt submit
 - Consumes: `session.error` event, task success/error signals, loop error notes.
 - Produces:
   - `handleSessionError(error)` → `ObservationRecord{kind:"session_error"}`.
+  - `emitReflectionEvent(params)` → ReflectionEvent append to logStore.
   - `buildReflectionEvent(trigger, planRef, intent, note)`.
   - ReflectionEvent append on task success/error and loop error-note.
 
@@ -2667,6 +2710,29 @@ export type SessionErrorRecord = {
   readonly errorKind: string;
   readonly message: string;
 };
+```
+
+- [ ] **Step 1c: `observation-handler.ts` に `emitReflectionEvent` を実装**
+
+```typescript
+// src/hooks/observation-handler.ts
+async emitReflectionEvent(params: {
+  readonly trigger: "task_succeeded" | "task_error";
+  readonly planRef: { readonly path: string; readonly taskId: string };
+  readonly intent: "check_complete" | "append_error_note";
+  readonly note?: string;
+}): Promise<void> {
+  try {
+    const sessionId = this.currentSessionId; // tracked session context
+    const agentId = await this.resolveAgentId(sessionId);
+    const shardId = { agentId, sessionId, writerId: this.writerId };
+    const envelope = this.buildEnvelope({ taskId: params.planRef.taskId, agentId, sessionId, recordType: "observation" });
+    const record = buildReflectionEvent(envelope, params.trigger, params.planRef, params.intent, params.note);
+    await this.logStore.append(shardId, record);
+  } catch (err) {
+    this.logger.warn("observation-handler: emitReflectionEvent failed, degrading gracefully", err);
+  }
+}
 ```
 
 - [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51）**
@@ -2764,38 +2830,43 @@ gt submit
 bun add yaml zod
 ```
 
-- [ ] **Step 1: `GateRule` 型を定義**
+- [ ] **Step 1: `GateRule` 型と zod スキーマを定義**
 
 ```typescript
 // src/core/v2/gate-definition.ts
-export type EvidenceOutcomeCheck = {
-  readonly type: "evidence_outcome";
-  readonly evidenceKind: "test" | "build" | "lint";
-  readonly requireOutcome: "pass" | "fail";
-};
+import { z } from "zod";
 
-export type EvidencePresentCheck = {
-  readonly type: "evidence_present";
-  readonly evidenceKind: "test" | "build" | "lint";
-};
+export const GateCheckSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("evidence_outcome"),
+    evidenceKind: z.enum(["test", "build", "lint"]),
+    requireOutcome: z.enum(["pass", "fail"]),
+  }),
+  z.object({
+    type: z.literal("evidence_present"),
+    evidenceKind: z.enum(["test", "build", "lint"]),
+  }),
+  z.object({
+    type: z.literal("review_open_items"),
+    minimumSeverity: z.enum(["critical", "major", "minor"]),
+  }),
+]);
 
-export type ReviewOpenItemsCheck = {
-  readonly type: "review_open_items";
-  readonly minimumSeverity: "critical" | "major" | "minor";
-};
+export const GateRuleSchema = z.object({
+  id: z.string(),
+  description: z.string().optional(),
+  gateType: z.literal("task"),
+  trigger: z.object({
+    on: z.enum(["task_complete", "tool_observed"]),
+  }),
+  check: GateCheckSchema,
+  onViolation: z.enum(["pass", "warn", "fail"]),
+  onMissingEvidence: z.enum(["pass", "warn", "fail"]),
+  enabled: z.boolean().default(true),
+});
 
-export type GateCheck = EvidenceOutcomeCheck | EvidencePresentCheck | ReviewOpenItemsCheck;
-
-export type GateRule = {
-  readonly id: string;
-  readonly description?: string;
-  readonly gateType: "task";
-  readonly trigger: { readonly on: "task_complete" | "tool_observed" };
-  readonly check: GateCheck;
-  readonly onViolation: "pass" | "warn" | "fail";
-  readonly onMissingEvidence: "pass" | "warn" | "fail";
-  readonly enabled: boolean;
-};
+export type GateCheck = z.infer<typeof GateCheckSchema>;
+export type GateRule = z.infer<typeof GateRuleSchema>;
 ```
 
 - [ ] **Step 2: YAML parser / validator を実装**
@@ -2803,35 +2874,22 @@ export type GateRule = {
 ```typescript
 // src/core/v2/gate-yaml-parser.ts
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
+import { GateRuleSchema, type GateRule } from "./gate-definition.ts";
+
+const GateConfigSchema = z.object({
+  schemaVersion: z.literal(1),
+  authority: z.literal("human_approved"),
+  authorship: z.null().optional(),
+  gates: z.array(GateRuleSchema),
+});
 
 export function parseGateYaml(content: string): readonly GateRule[] {
-  const parsed = parseYaml(content) as { readonly schemaVersion?: unknown; readonly authority?: unknown; readonly authorship?: unknown; readonly gates?: readonly unknown[] };
-  if (!parsed || parsed.schemaVersion !== 1 || parsed.authority !== "human_approved") {
-    throw new Error("gate.yaml: invalid schemaVersion (expected 1) or authority (expected 'human_approved')");
-  }
-  if ("authorship" in parsed && parsed.authorship !== null) {
-    throw new Error("gate.yaml: authorship must be null if specified");
-  }
-  if (!parsed || !Array.isArray(parsed.gates)) {
-    throw new Error("gate.yaml: gates array is required");
-  }
-  return parsed.gates.map((g) => normalizeGateRule(g));
+  const parsed = parseYaml(content);
+  const validated = GateConfigSchema.parse(parsed);
+  return validated.gates;
 }
-
-function normalizeGateRule(raw: unknown): GateRule {
-  if (!raw || typeof raw !== "object") throw new Error("Invalid gate rule");
-  const g = raw as Record<string, unknown>;
-  return {
-    id: requiredString(g.id, "id"),
-    description: optionalString(g.description),
-    gateType: "task",
-    trigger: { on: normalizeTriggerOn(g.trigger) },
-    check: normalizeCheck(g.check),
-    onViolation: normalizeVerdict(g.onViolation),
-    onMissingEvidence: normalizeVerdict(g.onMissingEvidence),
-    enabled: g.enabled === false ? false : true,
-  };
-}
+```
 
 function normalizeVerdict(value: unknown): "pass" | "warn" | "fail" {
   const s = String(value).toLowerCase();
@@ -2977,12 +3035,37 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
 }
 ```
 
+- [ ] **Step 2b: rule evaluation engine skip test（D68）を実装**
+
+```typescript
+// tests/core/v2/rule-evaluation-engine.test.ts
+it("skips task gate evaluation when taskId is undefined (no active task window)", () => {
+  // 1. Setup a GateContext with trigger: "tool_observed" and taskId: undefined
+  // 2. Call evaluate() and verify that it returns { verdict: "SKIP", reason: "no taskId provided" }
+  // 3. Ensure no DecisionRecord is generated or appended for this evaluation
+});
+```
+
 - [ ] **Step 3: provenance gating test（FF-008）を実装**
+
 
 ```typescript
 // tests/core/v2/gate-provenance-gating.test.ts
 it("declared evidence does not satisfy evidence_outcome", () => {
   // ...
+});
+```
+
+- [ ] **Step 3b: review_open_items gate semantics test（D76）を実装**
+
+```typescript
+// tests/core/v2/rule-evaluation-engine.test.ts
+it("evaluates review_open_items correctly with scopes and severity thresholds", () => {
+  // Test cases:
+  // 1. reviewScope=[] (empty scope): expect onMissingEvidence verdict.
+  // 2. reviewScope with matching scope but no open items: expect PASS.
+  // 3. reviewScope with open items of other scopes: expect no leakage (PASS if matching scope is clear).
+  // 4. reviewScope with matching scope open items but severity below minimumSeverity threshold: expect PASS/WARN based on threshold config.
 });
 ```
 
@@ -3618,9 +3701,13 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
     description: "Justice の現在の投影状態を表示します",
     args: {},
     execute: async () => {
-      const events = await store.readAll();
-      const state = project(events, "2026-06-26T00:00:00.000Z");
-      return JSON.stringify(toSerializableProjectedState(state), null, 2);
+      try {
+        const events = await store.readAll();
+        const state = project(events, new Date().toISOString());
+        return JSON.stringify(toSerializableProjectedState(state), null, 2);
+      } catch (err: any) {
+        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+      }
     },
   };
 }
@@ -3634,6 +3721,21 @@ tool: {
   justice_status: defineJusticeStatusTool(this.logStore),
   // justice_gate / justice_review added in later tasks
 },
+```
+
+- [ ] **Step 2b: justice_status resilience tests**
+
+```typescript
+// tests/runtime/justice-status-tool.test.ts
+it("fails open and returns ERROR status if log store is corrupted", async () => {
+  // 1. Setup store.readAll() to throw ObservationLogIntegrityError
+  // 2. Call justice_status execute() and verify it returns JSON with status: "ERROR" and reason.
+});
+
+it("uses current ISO timestamp for rebuilding state during production runs", async () => {
+  // 1. Mock global Date.prototype.toISOString to return a fixed mock clock.
+  // 2. Verify that project is called with the mock date.
+});
 ```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -3683,16 +3785,30 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
       if (typeof taskId !== "string" || taskId.length === 0) {
         return JSON.stringify({ status: "SKIP", ruleResults: [], reason: "no taskId provided" }, null, 2);
       }
-      const events = await store.readAll();
-      const state = project(events, "2026-06-26T00:00:00.000Z");
-      const gates = await gateLoader.load();
-      const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId), reviewSummary: state.reviewSummary };
-      const evidence = state.tasks.get(taskId)?.evidence ?? [];
-      const verdict = evaluate(gates, evidence, ctx);
-      return JSON.stringify(verdict, null, 2);
+      try {
+        const events = await store.readAll();
+        const state = project(events, new Date().toISOString());
+        const gates = await gateLoader.load();
+        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId), reviewSummary: state.reviewSummary };
+        const evidence = state.tasks.get(taskId)?.evidence ?? [];
+        const verdict = evaluate(gates, evidence, ctx);
+        return JSON.stringify(verdict, null, 2);
+      } catch (err: any) {
+        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+      }
     },
   };
 }
+```
+
+- [ ] **Step 1.5: justice_gate resilience tests**
+
+```typescript
+// tests/runtime/justice-gate-tool.test.ts
+it("fails open and returns ERROR status if log store is corrupted", async () => {
+  // 1. Setup store.readAll() to throw ObservationLogIntegrityError
+  // 2. Call justice_gate execute() and verify it returns JSON with status: "ERROR" and reason.
+});
 ```
 
 - [ ] **Step 2: テスト実行（Devcontainer 内）**
@@ -3739,15 +3855,29 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
     description: "Review Summary Artifact を表示します",
     args: { scope: z.string().optional() },
     execute: async ({ scope }) => {
-      const events = await store.readAll();
-      const state = project(events, "2026-06-26T00:00:00.000Z");
-      const summary = scope
-        ? state.reviewSummary.byScope.get(scope)
-        : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
-      return JSON.stringify(summary, null, 2);
+      try {
+        const events = await store.readAll();
+        const state = project(events, new Date().toISOString());
+        const summary = scope
+          ? state.reviewSummary.byScope.get(scope)
+          : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
+        return JSON.stringify(summary, null, 2);
+      } catch (err: any) {
+        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+      }
     },
   };
 }
+```
+
+- [ ] **Step 1.5: justice_review resilience tests**
+
+```typescript
+// tests/runtime/justice-review-tool.test.ts
+it("fails open and returns ERROR status if log store is corrupted", async () => {
+  // 1. Setup store.readAll() to throw ObservationLogIntegrityError
+  // 2. Call justice_review execute() and verify it returns JSON with status: "ERROR" and reason.
+});
 ```
 
 - [ ] **Step 2: テスト実行（Devcontainer 内）**
@@ -4134,6 +4264,11 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
 
 ```typescript
 // tests/runtime/observation-log-integrity.test.ts
+it("validates record schema for all kinds and throws error for invalid fields or unknown kinds", () => {
+  // 1. Verify validateRecordSchema throws for missing common envelope
+  // 2. Verify validateRecordSchema works for all valid kinds (tool_executed, review_observed, message, skill_invoked, session_error, reflection)
+  // 3. Verify validateRecordSchema throws for unknown kinds or missing mandatory properties per kind
+});
 it("rebuilds state.json on sequence inversion (e.g. sequence 3, 2, 4 in physical order)", async () => {
   // 1. Write corrupted jsonl containing sequence inversion (non-monotonicity)
   // 2. Trigger projection rebuild and verify that state.json is rebuilt and WARN logged
@@ -4142,6 +4277,7 @@ it("rebuilds state.json on sequence duplicate", async () => {
   // 1. Write corrupted jsonl containing duplicate sequences
   // 2. Trigger projection rebuild and verify rebuild
 });
+
 ```
 
 - [ ] **Step 3: record sub-entity reference resolution test を実装（D70）**
