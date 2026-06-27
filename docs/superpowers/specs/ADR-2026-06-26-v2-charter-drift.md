@@ -21,5 +21,5 @@ We modify and ratify the Charter with the following adjustments:
 
 ## Evidence of Ratification
 * **PR:** #104
-* **Approvers:** `@owner-alice`, `@owner-bob` (CODEOWNERS)
+* **Approvers:** `@alice`, `@bob` (CODEOWNERS)
 * **Status:** APPROVED & MERGED to `master`

@@ -242,17 +242,13 @@ export type ShardId = {
   readonly writerId: string;
 };
 
-export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
+export type EvidenceRef = FullEvidenceRef;
 
 export type FullEvidenceRef = {
   readonly agentId: string;
   readonly sessionId: string;
   readonly writerId: string;
   readonly sequence: number;
-  readonly evidenceId: string;
-};
-
-export type SelfEvidenceRef = {
   readonly evidenceId: string;
 };
 ```
@@ -372,7 +368,7 @@ export type RuleResult = {
   readonly ruleId: string;
   readonly verdict: "PASS" | "WARN" | "FAIL";
   readonly reason: string;
-  readonly evidenceRefs: readonly EvidenceRef[];
+  readonly evidenceRefs: readonly FullEvidenceRef[];
 };
 
 export type DecisionRecord = CommonEnvelope & {
@@ -1191,8 +1187,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 // tests/runtime/observation-log-queue.test.ts
 it("readAll merges active and archive segments", async () => {
   const reader = createMockFileReader({
-    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-1","evidence":{}}\n',
-    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-2","evidence":{}}\n',
+    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-2","evidence":{}}\n',
+    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-1","evidence":{}}\n',
   });
   reader.listFiles = async (prefix) => Object.keys(reader.files).filter((p) => p.startsWith(prefix));
   const store = new ObservationLogStore(writer, reader, "w-1");
@@ -1317,7 +1313,16 @@ export function project(
     schemaVersion: 1,
     rebuiltAt,
     integrity: {
-      sourceHash: hashString(events.map((e) => JSON.stringify(e)).join("\n")),
+      sourceHash: hashString(
+        [...events]
+          .sort((a, b) => {
+            const keyA = `${a.agentId}:${a.sessionId}:${a.writerId}:${a.sequence}`;
+            const keyB = `${b.agentId}:${b.sessionId}:${b.writerId}:${b.sequence}`;
+            return keyA.localeCompare(keyB);
+          })
+          .map((e) => JSON.stringify(e))
+          .join("\n")
+      ),
       maxSequenceByShard,
     },
     tasks: new Map(),
@@ -1351,21 +1356,22 @@ export function toSerializableProjectedState(state: ProjectedState): object {
   };
 }
 
-export function fromSerializableProjectedState(obj: any): ProjectedState {
+export function fromSerializableProjectedState(obj: unknown): ProjectedState {
+  const raw = obj as Record<string, any>;
   return {
-    ...obj,
+    ...raw,
     integrity: {
-      ...obj.integrity,
-      maxSequenceByShard: new Map(Object.entries(obj.integrity.maxSequenceByShard)),
+      ...raw.integrity,
+      maxSequenceByShard: new Map(Object.entries(raw.integrity.maxSequenceByShard)),
     },
-    tasks: new Map(Object.entries(obj.tasks)),
+    tasks: new Map(Object.entries(raw.tasks)),
     reviewSummary: {
-      ...obj.reviewSummary,
+      ...raw.reviewSummary,
       byScope: new Map(
-        Object.entries(obj.reviewSummary.byScope).map(([k, v]: [string, any]) => [k, v])
+        Object.entries(raw.reviewSummary.byScope).map(([k, v]: [string, unknown]) => [k, v])
       ),
     },
-  };
+  } as unknown as ProjectedState;
 }
 ```
 
@@ -1982,7 +1988,7 @@ describe("D64 - PostToolUse merge rules", () => {
     ];
     const result = mergePostToolUseResponses(responses);
     expect(result.action).toBe("inject");
-    expect((result as any).modifiedPayload).toEqual({ toolName: "task", modified: 1 });
+    expect((result as unknown as { modifiedPayload: unknown }).modifiedPayload).toEqual({ toolName: "task", modified: 1 });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Conflict detected"));
     warnSpy.mockRestore();
   });
@@ -2155,7 +2161,7 @@ export function buildToolExecutedRecord(
   toolOutput: { readonly output?: string; readonly metadata?: { readonly error?: boolean } },
   callId: string
 ): ObservationRecord {
-  const evidence = extractEvidenceFromTool(toolName, toolInput as any, toolOutput, callId);
+  const evidence = extractEvidenceFromTool(toolName, toolInput as Record<string, unknown>, toolOutput, callId);
   let redactedEvidence: Evidence;
   if (evidence.toolOutputClass === "command_exec") {
     redactedEvidence = {
@@ -2638,7 +2644,7 @@ export function buildReflectionEvent(
   planRef: { readonly path: string; readonly taskId: string },
   intent: "check_complete" | "append_error_note",
   note?: string
-): ReflectionRecord {
+): ObservationRecord {
   return { ...envelope, recordType: "observation", kind: "reflection", reflection: { trigger, planRef, intent, note } };
 }
 ```
