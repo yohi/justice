@@ -45,7 +45,7 @@
 ### Task 0.0: Preflight Verification
 
 **Prerequisites:**
-- The ADR document `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` must be created and ratified by CODEOWNERS (APPROVED) prior to this task's execution.
+- **[重要・手動前提作業]** 本実装計画の実行前に、ADRドキュメント `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` の作成および CODEOWNERS による承認取得（APPROVED）が完了している必要があります。これらは本実装計画のスコープ外で事前に実施される手動プロセスであり、Task 0.0 はその完了を静的に検証・追認する役割のみを持ちます。
 
 **Files:**
 
@@ -950,12 +950,17 @@ export interface FileWriter {
 import { readdir, rename } from "node:fs/promises";
 
 async listFiles(prefix: string): Promise<readonly string[]> {
-  const safePrefix = await this.resolveSafely(prefix);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  const entries = await readdir(safePrefix, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
-    .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
+  try {
+    const safePrefix = await this.resolveSafely(prefix);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    const entries = await readdir(safePrefix, { recursive: true, withFileTypes: true });
+    return entries
+      .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
+      .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return [];
+    throw err;
+  }
 }
 
 async rename(from: string, to: string): Promise<void> {
@@ -1004,7 +1009,9 @@ export function createShardWriteQueue(
       }
       while (true) {
         const items = queues.get(path);
-        if (!items || items.length === 0) break;
+        if (!items || items.length === 0) {
+          break;
+        }
 
         const current = items.shift()!;
         try {
@@ -1014,7 +1021,6 @@ export function createShardWriteQueue(
           await atomicAppend(path, existing + line);
           sequences.set(path, nextSeq);
           
-          // rotation 等を同一キュー内で append 直後に実行する（D23）
           if (onAppendComplete) {
             await onAppendComplete(path).catch((err) => onError(path, err));
           }
@@ -1033,15 +1039,22 @@ export function createShardWriteQueue(
         items.shift()!.reject(err);
       }
     } finally {
-      queues.delete(path);
       runningPaths.delete(path);
+      // Race check: if a new item was enqueued after the loop check but before runningPaths.delete,
+      // start processing again to prevent event loss.
+      const items = queues.get(path);
+      if (items && items.length > 0) {
+        process(path);
+      } else {
+        queues.delete(path);
+      }
     }
   }
 
   return (path, record) => new Promise((resolve, reject) => {
     if (!queues.has(path)) queues.set(path, []);
     queues.get(path)!.push({ record, resolve, reject });
-    if (!runningPaths.has(path)) process(path);
+    process(path);
   });
 }
 ```
@@ -1366,40 +1379,75 @@ export type ProjectedState = {
   };
 };
 
+export function toEvidenceArray(evidence: Evidence | readonly Evidence[] | undefined): readonly Evidence[] {
+  if (!evidence) return [];
+  return Array.isArray(evidence) ? evidence : [evidence];
+}
+
 export function project(
   events: readonly (ObservationRecord | DecisionRecord)[],
   rebuiltAt: string
 ): ProjectedState {
-  // 1. Sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence (D27/D18/D39)
-  const sorted = [...events].sort((a, b) => {
-    const shardA = `${a.agentId}:${a.sessionId}:${a.writerId}`;
-    const shardB = `${b.agentId}:${b.sessionId}:${b.writerId}`;
-    if (shardA === shardB) {
-      return a.sequence - b.sequence; // within-shard causal sequence order
+  // 1. Sort events: 2-stage merge (D27/D18/D39). Group by shardId, sort each by sequence, then k-way merge by timestamp -> shardId -> sequence
+  const groups = new Map<string, (ObservationRecord | DecisionRecord)[]>();
+  for (const event of events) {
+    const shardKey = `${event.agentId}:${event.sessionId}:${event.writerId}`;
+    if (!groups.has(shardKey)) groups.set(shardKey, []);
+    groups.get(shardKey)!.push(event);
+  }
+
+  // Sort each shard stream by sequence
+  const streams = Array.from(groups.values()).map(stream => 
+    stream.sort((a, b) => a.sequence - b.sequence)
+  );
+
+  // K-way merge using timestamp -> shardId -> sequence
+  const sorted: (ObservationRecord | DecisionRecord)[] = [];
+  const indices = new Array(streams.length).fill(0);
+
+  while (true) {
+    let bestStreamIdx = -1;
+    let bestVal: ObservationRecord | DecisionRecord | null = null;
+
+    for (let i = 0; i < streams.length; i++) {
+      if (indices[i] >= streams[i].length) continue;
+      const val = streams[i][indices[i]];
+      if (bestVal === null) {
+        bestStreamIdx = i;
+        bestVal = val;
+      } else {
+        const timeA = new Date(val.timestamp).getTime();
+        const timeB = new Date(bestVal.timestamp).getTime();
+        if (timeA !== timeB) {
+          if (timeA < timeB) {
+            bestStreamIdx = i;
+            bestVal = val;
+          }
+        } else {
+          const shardA = `${val.agentId}:${val.sessionId}:${val.writerId}`;
+          const shardB = `${bestVal.agentId}:${bestVal.sessionId}:${bestVal.writerId}`;
+          const shardComp = shardA.localeCompare(shardB);
+          if (shardComp < 0) {
+            bestStreamIdx = i;
+            bestVal = val;
+          } else if (shardComp === 0) {
+            if (val.sequence < bestVal.sequence) {
+              bestStreamIdx = i;
+              bestVal = val;
+            }
+          }
+        }
+      }
     }
-    const timeA = new Date(a.timestamp).getTime();
-    const timeB = new Date(b.timestamp).getTime();
-    if (timeA !== timeB) return timeA - timeB;
-    return shardA.localeCompare(shardB);
-  });
+
+    if (bestStreamIdx === -1) break;
+    sorted.push(bestVal!);
+    indices[bestStreamIdx]++;
+  }
 
   const maxSequenceByShard = new Map<string, number>();
   const tasks = new Map<string, { status: string; lastVerdict: string; evidence: ProjectedEvidence[]; observedReviewScopes: string[] }>();
   
-  // reviewSummary structures
-  const globalCritical: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const globalMajor: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const globalMinor: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const globalResolved: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const globalOpen: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const byScope = new Map<string, {
-    critical: { itemKey: string; ref: FullEvidenceRef }[];
-    major: { itemKey: string; ref: FullEvidenceRef }[];
-    minor: { itemKey: string; ref: FullEvidenceRef }[];
-    resolved: { itemKey: string; ref: FullEvidenceRef }[];
-    open: { itemKey: string; ref: FullEvidenceRef }[];
-  }>();
-
   for (const event of sorted) {
     const shardKey = `${event.agentId}:${event.sessionId}:${event.writerId}`;
     const seq = event.sequence;
@@ -1408,7 +1456,7 @@ export function project(
       maxSequenceByShard.set(shardKey, seq);
     }
 
-    const ref: FullEvidenceRef = {
+    const ref = {
       agentId: event.agentId,
       sessionId: event.sessionId,
       writerId: event.writerId,
@@ -1425,8 +1473,8 @@ export function project(
         }
         const taskState = tasks.get(taskId)!;
 
-        if (event.kind === "tool_executed" || event.kind === "message" || event.kind === "session_error") {
-          const evidenceList = event.evidence ?? [];
+        if (event.kind === "tool_executed" || event.kind === "message") {
+          const evidenceList = toEvidenceArray((event as any).evidence || []);
           for (const ev of evidenceList) {
             taskState.evidence.push({
               evidence: ev,
@@ -1439,52 +1487,23 @@ export function project(
           }
         }
       }
-
-      // Review aggregator fold (D11/D32/D66/D57)
-      if (event.kind === "review_observed") {
-        const scope = event.reviewScope ?? "default";
-        if (!byScope.has(scope)) {
-          byScope.set(scope, { critical: [], major: [], minor: [], resolved: [], open: [] });
-        }
-        const scopeSummary = byScope.get(scope)!;
-
-        // Reset open items for the scope on a new snapshot (D32)
-        scopeSummary.open = [];
-        scopeSummary.critical = [];
-        scopeSummary.major = [];
-        scopeSummary.minor = [];
-
-        for (const item of event.items ?? []) {
-          const itemRef = { itemKey: item.itemKey, ref: { ...ref, evidenceId: item.itemKey } };
-          if (item.resolved) {
-            scopeSummary.resolved.push(itemRef);
-            globalResolved.push(itemRef);
-          } else {
-            scopeSummary.open.push(itemRef);
-            globalOpen.push(itemRef);
-            if (item.severity === "critical") {
-              scopeSummary.critical.push(itemRef);
-              globalCritical.push(itemRef);
-            } else if (item.severity === "major") {
-              scopeSummary.major.push(itemRef);
-              globalMajor.push(itemRef);
-            } else {
-              scopeSummary.minor.push(itemRef);
-              globalMinor.push(itemRef);
-            }
-          }
-        }
-      }
     } else if (event.recordType === "decision") {
       const taskId = event.taskId;
       if (taskId) {
         if (!tasks.has(taskId)) {
           tasks.set(taskId, { status: "open", lastVerdict: "NONE", evidence: [], observedReviewScopes: [] });
         }
-        tasks.get(taskId)!.lastVerdict = event.status; // WARN/FAIL/PASS
+        tasks.get(taskId)!.lastVerdict = event.verdict; // WARN/FAIL/PASS
       }
     }
   }
+
+  // Review aggregator fold (D11/D32/D66/D57) - Unified with Task 6.2 aggregateReviews
+  const reviewObservedEvents = sorted.filter(
+    (e): e is ObservationRecord & { kind: "review_observed" } =>
+      e.recordType === "observation" && e.kind === "review_observed"
+  );
+  const aggregated = aggregateReviews(reviewObservedEvents);
 
   return {
     schemaVersion: 1,
@@ -1494,15 +1513,7 @@ export function project(
       maxSequenceByShard,
     },
     tasks,
-    reviewSummary: {
-      authority: "observed_review_output",
-      critical: globalCritical,
-      major: globalMajor,
-      minor: globalMinor,
-      resolved: globalResolved,
-      open: globalOpen,
-      byScope,
-    },
+    reviewSummary: aggregated,
   };
 }
 
@@ -2104,7 +2115,7 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
       if (isUserMessage) {
         return await this.planBridge.handleMessage(event);
       }
-      const obs = await this.observationHandler.handleMessage(event).catch((err) => {
+      const obs = await this.observationHandler.handleMessage(payload as ObservationMessagePayload).catch((err) => {
         this.options.logger?.warn("observation-handler message failed", err);
         return PROCEED;
       });
@@ -2125,6 +2136,9 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
         responses.push(await this.taskFeedback.handlePostToolUse(event));
       }
       return mergePostToolUseResponses(responses);
+    }
+    case "AgentMapped": {
+      return PROCEED;
     }
     case "Event":
       return this.handleEventType(event);
@@ -2607,17 +2621,17 @@ gt submit
 
 ```typescript
 // src/core/v2/skill-invoked-detector.ts
-export function detectSkillInvoked(toolName: string, args: unknown): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills" }[] {
-  const result: { skillName: string; source: "skill_tool" | "task_load_skills" }[] = [];
+export function detectSkillInvoked(toolName: string, args: unknown, callId?: string): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[] {
+  const result: { skillName: string; source: "skill_tool" | "task_load_skills"; callId?: string }[] = [];
   if (toolName === "skill" && args && typeof args === "object" && "name" in args) {
-    result.push({ skillName: args.name as string, source: "skill_tool" });
+    result.push({ skillName: args.name as string, source: "skill_tool", callId });
   }
   if (toolName === "task" && args && typeof args === "object" && "load_skills" in args) {
     const loadSkills = (args as Record<string, unknown>).load_skills;
     if (Array.isArray(loadSkills)) {
       for (const skill of loadSkills) {
         if (typeof skill === "string") {
-          result.push({ skillName: skill, source: "task_load_skills" });
+          result.push({ skillName: skill, source: "task_load_skills", callId });
         }
       }
     }
@@ -2636,6 +2650,7 @@ export type SkillInvokedRecord = {
   readonly kind: "skill_invoked";
   readonly skillName: string;
   readonly source: "skill_tool" | "task_load_skills";
+  readonly callId?: string;
 };
 ```
 
@@ -2881,9 +2896,10 @@ async emitReflectionEvent(params: {
   readonly planRef: { readonly path: string; readonly taskId: string };
   readonly intent: "check_complete" | "append_error_note";
   readonly note?: string;
+  readonly sessionId: string;
 }): Promise<void> {
   try {
-    const sessionId = this.currentSessionId; // tracked session context
+    const sessionId = params.sessionId;
     const agentId = await this.resolveAgentId(sessionId);
     const shardId = { agentId, sessionId, writerId: this.writerId };
     const envelope = this.buildEnvelope({ taskId: params.planRef.taskId, agentId, sessionId, recordType: "observation" });
@@ -2930,8 +2946,8 @@ export type ReflectionRecord = {
 - [ ] **Step 3: task-feedback / loop-handler に ReflectionEvent 発行を追加（§8.2/D7）**
 
 ```typescript
-// src/hooks/task-feedback.ts（既存 checkbox 更新後に追加）
-await this.observationHandler.emitReflectionEvent({ trigger: "task_succeeded", planRef, intent: "check_complete" });
+// src/hooks/task-feedback.ts（既存 checkbox 更新後に追加。注：TaskFeedbackHandler はコンストラクタで ObservationHandler もしくは emitter インタフェースの注入を受けるタスクを Task 4.4 / 4.1 等で追加する）
+await this.observationHandler.emitReflectionEvent({ trigger: "task_succeeded", planRef, intent: "check_complete", sessionId });
 ```
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
@@ -3311,9 +3327,27 @@ export const DEFAULT_GATES: readonly GateRule[] = [
 
 ```typescript
 // src/runtime/gate-loader.ts
+export function mergeWithDefaults(customGates: readonly GateRule[]): readonly GateRule[] {
+  const mergedMap = new Map<string, GateRule>();
+  for (const gate of DEFAULT_GATES) {
+    mergedMap.set(gate.id, gate);
+  }
+  for (const custom of customGates) {
+    const existing = mergedMap.get(custom.id);
+    if (existing) {
+      // Override attributes or disable (D6/D57)
+      mergedMap.set(custom.id, { ...existing, ...custom });
+    } else {
+      // Add new custom gates
+      mergedMap.set(custom.id, custom);
+    }
+  }
+  return Array.from(mergedMap.values()).filter(g => g.enabled !== false);
+}
+
 export async function loadGates(fileReader: FileReader, path = ".justice/gate.yaml"): Promise<readonly GateRule[]> {
   const content = await fileReader.readFile(path).catch(() => null);
-  if (!content) return DEFAULT_GATES;
+  if (!content) return DEFAULT_GATES.filter(g => g.enabled !== false);
   return mergeWithDefaults(parseGateYaml(content));
 }
 ```
@@ -3351,6 +3385,12 @@ gates:
     onMissingEvidence: warn
     enabled: true
 ```
+
+- [ ] **Step 3b: `tests/runtime/gate-loader.test.ts` に同一 id override / 新規追加 / enabled:false 無効化のテストを追加（ISS-007）**
+  - 次のケースをカバーする Vitest テストケースを作成する：
+    1. デフォルト gate のプロパティ（例: `onViolation`）が custom gate で override されること。
+    2. 新規の `id` を持つ gate が追加され、`DEFAULT_GATES` にないルールとして認識されること。
+    3. `enabled: false` に設定された gate が `mergeWithDefaults` の結果から排除（無効化）されること。
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
@@ -3403,8 +3443,13 @@ private async evaluateGateIfTriggered(
       return { action: "proceed" };
     }
     const shardId = { agentId, sessionId, writerId: this.writerId };
+    
+    // To ensure strict D60-76 evaluation sequence, we must load all events including the newly appended record
     const events = await this.logStore.readAll();
-    const state = project(events, "2026-06-26T00:00:00.000Z");
+    const state = project(events, new Date().toISOString());
+    // Silent cache write in background to update status check cache
+    await this.projectionCache.write(state).catch(() => {});
+
     const gates = await this.gateLoader.load();
     const ctx: GateContext = {
       trigger,
@@ -3419,14 +3464,21 @@ private async evaluateGateIfTriggered(
     if (verdict.verdict === "SKIP") {
       return { action: "proceed" };
     }
-    // DecisionRecord is appended for PASS/WARN/FAIL to preserve verdict distribution and replay audit (§6.2).
-    // verdict now contains gateType: "task" to satisfy DecisionRecord schema constraints.
     const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, agentId, sessionId, recordType: "decision" }), ...verdict };
     await this.logStore.append(shardId, decision);
+
+    // Refresh state projection with the new decision and update cache
+    if (!events.length) {
+      events = await this.logStore.readAll();
+    } else {
+      events.push(decision);
+    }
+    const newState = project(events, new Date().toISOString());
+    await this.projectionCache.write(newState).catch(() => {});
+
     if (verdict.verdict === "PASS") {
       return { action: "proceed" };
     }
-    // L0 advisory surface: injectedContext (guaranteed raw message via mergePostToolUseResponses)
     return { action: "inject", injectedContext: formatGateAdvisoryMessage(verdict) };
   } catch (err) {
     this.logger.warn("observation-handler: gate evaluation failed, degrading to PROCEED", err);
@@ -3856,7 +3908,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@opencode-ai/plugin";
 import { toSerializableProjectedState } from "../core/v2/state-projection.ts";
 
-export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinition {
+export function defineJusticeStatusTool(store: ObservationLogStore, cache: StateProjectionCache): ToolDefinition {
   return {
     description: "Justice の現在の投影状態を表示します",
     args: {},
@@ -3864,6 +3916,7 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
       try {
         const events = await store.readAll();
         const state = project(events, new Date().toISOString());
+        await cache.write(state).catch(() => {});
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
       } catch (err: any) {
         return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
@@ -3873,14 +3926,23 @@ export function defineJusticeStatusTool(store: ObservationLogStore): ToolDefinit
 }
 ```
 
-- [ ] **Step 2: adapter に tool 登録を追加（D4）**
+- [ ] **Step 2: adapter に tool 定義を返す getTools() を実装し、opencode-plugin.ts 側から公開登録（D4）**
 
 ```typescript
 // src/runtime/opencode-adapter.ts
-tool: {
-  justice_status: defineJusticeStatusTool(this.logStore),
-  // justice_gate / justice_review added in later tasks
-},
+getTools(): Record<string, ToolDefinition> {
+  return {
+    justice_status: defineJusticeStatusTool(this.logStore, this.projectionCache),
+    // justice_gate / justice_review added in later tasks
+  };
+}
+
+// src/opencode-plugin.ts (plugin return object)
+return {
+  tool: adapter.getTools(),
+  event: async (input) => { ... },
+  ...
+};
 ```
 
 - [ ] **Step 2b: justice_status resilience tests**
