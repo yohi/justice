@@ -50,7 +50,6 @@
 **Files:**
 
 - Create: `tests/preflight-verification.test.ts` (static verification for ADR existence and ratification status)
-- Modify: `.github/workflows/ci.yml` (add preflight step to verify current PR status dynamically using GitHub API)
 
 **Interfaces:**
 
@@ -78,9 +77,9 @@ test("preflight verification: ADR ratification check", () => {
 });
 ```
 
-- [ ] **Step 2b: ADR 追認の手動 Preflight および CI での静的検証**
+- [ ] **Step 2b: ADR 追認の手動 Preflight の確認**
   - ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等の静的チェックは CI ジョブ内（`preflight-verification.test.ts` を通じた通常テスト実行）で検証する。
-  - PR がマージされているかどうかの動的ステータス確認は、マージ前の PR CI 自体を壊すのを防ぐため、開発者の手動 preflight または専用の post-merge ワークフローに分離する。
+  - PR がマージされているかどうかの動的ステータス確認は、マージ前の PR CI 自体を壊すのを防ぐため、開発者の手動 preflight または専用の post-merge ワークフローに分離し、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）には追加しない。
   ```bash
   # 手動 preflight または専用ワークフローでの確認コマンド例
   gh pr view "$PR_NUMBER" --json reviewDecision,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
@@ -95,7 +94,7 @@ devcontainer exec --workspace-folder . bun run test tests/preflight-verification
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/preflight-verification.test.ts .github/workflows/ci.yml
+git add tests/preflight-verification.test.ts
 git commit -m "chore: add preflight verification for ratified ADR"
 ```
 
@@ -1233,13 +1232,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     if (uniqueSeqs.size !== seqs.length) {
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
-    // 2. Check for physical/logical sequence inversion (strictly monotonic sorting check)
-    // DO NOT sort to detect sequence inversion in physical traversal/read order!
-    for (let i = 0; i < seqs.length - 1; i++) {
-      if (seqs[i] >= seqs[i + 1]) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (${seqs[i]} -> ${seqs[i + 1]})`);
-      }
-    }
+    // Note: Do NOT require strictly monotonic physical order during read list traversal.
+    // Causality sorting is done via 2-stage merge sort in state-projection.ts.
   }
 }
 ```
@@ -1498,12 +1492,16 @@ export function project(
     }
   }
 
-  // Review aggregator fold (D11/D32/D66/D57) - Unified with Task 6.2 aggregateReviews
-  const reviewObservedEvents = sorted.filter(
-    (e): e is ObservationRecord & { kind: "review_observed" } =>
-      e.recordType === "observation" && e.kind === "review_observed"
-  );
-  const aggregated = aggregateReviews(reviewObservedEvents);
+  // Review aggregator fold (D11/D32/D66/D57) - Stub for Phase 2 to prevent compilation errors. To be implemented in Task 6.2.
+  const reviewSummary: ReviewSummary = {
+    authority: "observed_review_output",
+    critical: [],
+    major: [],
+    minor: [],
+    resolved: [],
+    open: [],
+    byScope: {},
+  };
 
   return {
     schemaVersion: 1,
@@ -1513,7 +1511,7 @@ export function project(
       maxSequenceByShard,
     },
     tasks,
-    reviewSummary: aggregated,
+    reviewSummary,
   };
 }
 
@@ -2296,6 +2294,13 @@ gt submit
 ```typescript
 // src/hooks/observation-handler.ts
 private readonly activeTaskWindows = new Map<string, string>();
+private readonly sessionActiveTasks = new Map<string, Set<string>>();
+
+private getActiveTaskIdForSession(sessionId: string): string | undefined {
+  const tasks = this.sessionActiveTasks.get(sessionId);
+  if (!tasks || tasks.size === 0) return undefined;
+  return Array.from(tasks).pop();
+}
 
 private buildEnvelope(extra: { readonly taskId?: string; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly recordType: "observation" | "decision" | "learning" }): CommonEnvelope {
   return {
@@ -2338,6 +2343,10 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
         return { action: "proceed" };
       }
       this.activeTaskWindows.set(event.callId, taskId);
+      if (!this.sessionActiveTasks.has(event.sessionId)) {
+        this.sessionActiveTasks.set(event.sessionId, new Set());
+      }
+      this.sessionActiveTasks.get(event.sessionId)!.add(taskId);
     }
   }
   return { action: "proceed" };
@@ -2431,7 +2440,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     return { action: "proceed" };
   }
   try {
-    const taskId = this.activeTaskWindows.get(callId);
+    // D74/ISS-005: If it is the task tool itself, get taskId by its callId.
+    // Otherwise (e.g. bash executed inside a task), fall back to the active taskId of the session.
+    const taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -2467,6 +2478,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   } finally {
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
+      if (taskId) {
+        this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
+      }
     }
   }
   return { action: "proceed" };
@@ -2740,7 +2754,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     return { action: "proceed" };
   }
   try {
-    const taskId = this.activeTaskWindows.get(callId);
+    const taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -2773,6 +2787,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     // 3. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
+      if (taskId) {
+        this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
+      }
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
         return taskGateResponse;
@@ -2787,6 +2804,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   } finally {
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
+      if (taskId) {
+        this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
+      }
     }
   }
   return { action: "proceed" };
@@ -3468,12 +3488,10 @@ private async evaluateGateIfTriggered(
     await this.logStore.append(shardId, decision);
 
     // Refresh state projection with the new decision and update cache
-    if (!events.length) {
-      events = await this.logStore.readAll();
-    } else {
-      events.push(decision);
-    }
-    const newState = project(events, new Date().toISOString());
+    const refreshedEvents = events.length === 0
+      ? await this.logStore.readAll()
+      : [...events, decision];
+    const newState = project(refreshedEvents, new Date().toISOString());
     await this.projectionCache.write(newState).catch(() => {});
 
     if (verdict.verdict === "PASS") {
@@ -3719,7 +3737,7 @@ it("marks item resolved on human artifact", () => {
 });
 ```
 
-- [ ] **Step 2: state-projection に byScope マージを追加**
+- [ ] **Step 2: state-projection に byScope マージを追加し、Phase 2 の最小 stub を aggregateReviews(reviewObservedEvents) 連携へ差し替える**
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
