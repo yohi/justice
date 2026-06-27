@@ -78,11 +78,12 @@ test("preflight verification: ADR ratification check", () => {
 });
 ```
 
-- [ ] **Step 2b: CI 設定（.github/workflows/ci.yml）に PR マージと承認状態の確認ステップを追加**
-  - PR がマージ済みかつ CODEOWNERS による承認（APPROVED）を得ていることの動的な検証は、単体テストではなく CI ジョブの preflight ステップとして分離する。
+- [ ] **Step 2b: ADR 追認の手動 Preflight および CI での静的検証**
+  - ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等の静的チェックは CI ジョブ内（`preflight-verification.test.ts` を通じた通常テスト実行）で検証する。
+  - PR がマージされているかどうかの動的ステータス確認は、マージ前の PR CI 自体を壊すのを防ぐため、開発者の手動 preflight または専用の post-merge ワークフローに分離する。
   ```bash
-  # CI ジョブ内で実行される preflight コマンドの例。PR番号は GitHub Actions イベントコンテキストから動的に抽出する
-  gh pr view "$PR_NUMBER" --json reviewDecision,reviews,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
+  # 手動 preflight または専用ワークフローでの確認コマンド例
+  gh pr view "$PR_NUMBER" --json reviewDecision,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
   ```
 
 - [ ] **Step 3: テストの実行と検証**
@@ -125,7 +126,7 @@ gt submit
 gt submit
 ```
 
-**派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
+**派生元:** `feature/phase0-task0-preflight`（Task 0.0 から派生）。
 
 
 ### Task 0.2: De-risk Spikes (実証スパイク)
@@ -221,7 +222,7 @@ gt submit
   - `ObservationRecord` discriminated union (`kind: "tool_executed" | "message" | "skill_invoked" | "review_observed" | "session_error" | "reflection"`).
   - `ObservationMessagePayload` union.
   - `DecisionRecord` with `ruleResults[]`.
-  - `EvidenceRef = { readonly agentId: string; readonly sessionId: string; readonly writerId: string; readonly sequence: number; readonly evidenceId: string }`.
+  - `EvidenceRef = FullEvidenceRef | SelfEvidenceRef`.
   - `ShardId = { readonly agentId: string; readonly sessionId: string; readonly writerId: string }`.
 
 - [ ] **Step 1: 既存 `AgentId` 型を確認**
@@ -242,13 +243,17 @@ export type ShardId = {
   readonly writerId: string;
 };
 
-export type EvidenceRef = FullEvidenceRef;
+export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 export type FullEvidenceRef = {
   readonly agentId: string;
   readonly sessionId: string;
   readonly writerId: string;
   readonly sequence: number;
+  readonly evidenceId: string;
+};
+
+export type SelfEvidenceRef = {
   readonly evidenceId: string;
 };
 ```
@@ -311,6 +316,13 @@ export type MessageRecord = {
 export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
 export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
 export type ReflectionRecord = { readonly kind: "reflection"; /* refined in Task 4.4 */ };
+export type TaskSummaryRecord = {
+  readonly kind: "task_summary";
+  readonly summaryTextHash: string;
+  readonly summaryTextSnippet?: string;
+  readonly declaredClaims: readonly DeclaredClaim[];
+  readonly evidence: readonly Evidence[];
+};
 
 export type ReviewItem = {
   readonly itemKey: string;
@@ -341,7 +353,8 @@ export type ObservationRecord =
   | (CommonEnvelope & { readonly recordType: "observation" } & SkillInvokedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & ReviewObservedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & SessionErrorRecord)
-  | (CommonEnvelope & { readonly recordType: "observation" } & ReflectionRecord);
+  | (CommonEnvelope & { readonly recordType: "observation" } & ReflectionRecord)
+  | (CommonEnvelope & { readonly recordType: "observation" } & TaskSummaryRecord);
 ```
 
 - [ ] **Step 3c: `hashString` 決定論的ユーティリティの実装（ISS-006）**
@@ -665,16 +678,16 @@ export function classifyToolOutputClass(
     const command = args?.command ?? "";
     const tokens = command.trim().split(/\s+/).filter(Boolean);
     
-    // If any token in the command matches a file content output command, prioritize file_content to avoid plan/design/code reproduction.
-    const hasFileContentCmd = tokens.some(t => FILE_CONTENT_COMMANDS.has(t));
-    if (hasFileContentCmd) return "file_content";
-
     const firstToken = tokens[0] ?? "";
     // Quality-verification compound commands must preserve rawOutput for auditability.
     // Note: Do NOT fall back to file_content on size threshold for known COMMAND_EXEC_COMMANDS!
     if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
       return "command_exec";
     }
+
+    // If any token in the command matches a file content output command, prioritize file_content to avoid plan/design/code reproduction.
+    const hasFileContentCmd = tokens.some(t => FILE_CONTENT_COMMANDS.has(t));
+    if (hasFileContentCmd) return "file_content";
     if (FILE_CONTENT_COMMANDS.has(firstToken)) return "file_content";
     // Conservative fallback for mixed pipes/compound commands that are NOT quality verification:
     // treat as file_content-equivalent to avoid persisting full plan/design/code bodies.
@@ -954,7 +967,8 @@ export function createShardWriteQueue(
   writer: { writeFile(path: string, content: string): Promise<void>; rename(from: string, to: string): Promise<void> },
   readExisting: (path: string) => Promise<string>,
   getInitialSequence: (path: string) => Promise<number>,
-  onError: (path: string, err: unknown) => void
+  onError: (path: string, err: unknown) => void,
+  onAppendComplete?: (path: string) => Promise<void>
 ): (path: string, record: object) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
   const sequences = new Map<string, number>();
@@ -986,6 +1000,12 @@ export function createShardWriteQueue(
           const line = `${JSON.stringify({ ...current.record, sequence: nextSeq })}\n`;
           await atomicAppend(path, existing + line);
           sequences.set(path, nextSeq);
+          
+          // rotation 等を同一キュー内で append 直後に実行する（D23）
+          if (onAppendComplete) {
+            await onAppendComplete(path).catch((err) => onError(path, err));
+          }
+          
           current.resolve(nextSeq);
         } catch (err) {
           current.reject(err);
@@ -1210,21 +1230,29 @@ devcontainer exec --workspace-folder . bun run test tests/runtime/observation-lo
 it("rejects the current item, pending items, and items added during failure", async () => {
   const writer = createMockFileWriter();
   let attempt = 0;
+  // 書込処理を遅延させて、その間に並行 append を行えるようにする
   writer.writeFile = async () => {
     attempt++;
+    await new Promise((resolve) => setTimeout(resolve, 50));
     if (attempt === 1) throw new Error("disk full");
   };
   const onError = vi.fn();
   const enqueue = createShardWriteQueue(writer, async () => "", async () => 0, onError);
 
-  // First append fails; its Promise must reject.
+  // 1件目を enqueue（これは失敗する）
   const p1 = enqueue(".justice/events/test.jsonl", { kind: "test", n: 1 });
+  // 1件目の書き込み処理中に、2件目（pending）を enqueue
+  const p2 = enqueue(".justice/events/test.jsonl", { kind: "test", n: 2 });
+
+  // 1件目が失敗することを確認
   await expect(p1).rejects.toThrow("disk full");
+  // 待機中だった2件目も、1件目の失敗によって reject されることを確認
+  await expect(p2).rejects.toThrow("disk full");
   expect(onError).toHaveBeenCalled();
 
-  // Subsequent append after the queue resets must succeed.
-  const p2 = await enqueue(".justice/events/test.jsonl", { kind: "test", n: 2 });
-  expect(p2).toBe(1);
+  // 失敗処理が完了してキューがリセットされた後の新たな append は成功することを確認
+  const p3 = await enqueue(".justice/events/test.jsonl", { kind: "test", n: 3 });
+  expect(p3).toBe(1);
 });
 ```
 
@@ -1466,19 +1494,14 @@ describe("FF-004 replay determinism", () => {
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache-read.test.ts tests/runtime/state-projection-cache.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache.test.ts
-git commit -m "feat(v2): deterministic state projection and replay test"
-```
-
-```bash
-git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts
-git commit -m "feat(v2): deterministic state projection and replay test"
+git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache-read.test.ts tests/runtime/state-projection-cache.test.ts
+git commit -m "feat(v2): deterministic state projection, replay, and cache validation tests"
 ```
 
 - [ ] **Step 6: Phase 2 Base に向けた Draft PR を作成する**
@@ -1531,11 +1554,22 @@ async function shouldRotate(path: string, now: Date): Promise<boolean> {
 }
 ```
 
-- [ ] **Step 3: rotation 後の sequence 連続性を実装（D33）**
+- [ ] **Step 3: rotation 後の sequence 連続性と直列化キューとの結合を実装（D23/D33）**
 
 active+archive の最大 sequence を計算し、次回 append からその値+1 を使用。
+`ObservationLogStore` は `createShardWriteQueue` の `onAppendComplete` 引数として `rotateIfNeeded` を渡し、書き込み完了直後かつ Promise が resolve される前に、同一直列化キュー内で rotation が判定・実行されることを保証する。
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [ ] **Step 4: rotation 統合テストの実装（tests/runtime/rotation-sequence-continuity.test.ts）**
+
+以下のテストを追加して、append と rotation が並行せずに直列実行され、かつ rotation 跨ぎで sequence が決定論的に継続することを確認する。
+
+```typescript
+it("performs rotation inside the serialization queue after append and prevents race conditions", async () => {
+  // append 中に rotation が同期的に実行され、同時に発生した他の append がキューで待機し、順序が保証されることを検証するテストケースを実装
+});
+```
+
+- [ ] **Step 5: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/rotation-sequence-continuity.test.ts
@@ -1617,12 +1651,14 @@ export class MessageRoleBuffer {
   finalize(sessionId: string, messageID: string, partID?: string): void { /* ... */ }
   extractAssistantClaims(sessionId: string, messageID: string, partID?: string): DeclaredClaim[] { /* ... */ }
   getFinalizedText(sessionId: string, messageID: string, partID?: string): string | undefined { /* ... */ }
+  getFinalizedAssistantText(sessionId: string, messageID: string, partID?: string): string | undefined { /* ... */ }
   gc(maxAgeMs: number, maxEntries: number): void { /* ... */ }
 }
 ```
 
-- [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）テストの実装**
+- [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）および role フィルタリングのテスト実装**
   - `tests/hooks/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageID, partID)` でストリーミング中に一度「tests pass」と判定された後、同じ partID の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
+  - さらに、roleが未確定の場合、user roleの場合、あるいはclaimsが空の場合における `extractAssistantClaims` / `getFinalizedAssistantText` の挙動をテストで検証し、これらにおいて空配列または `undefined` が返されることを確認するテストを追加する。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -1832,7 +1868,7 @@ git commit -m "feat(v2): adapter forwards all tool and message events"
 gt submit
 ```
 
-**派生元:** `feature/phase3-v2-message-adapter__base`（Base から派生）。独立した adapter 変更だが、Task 3.1 と同じ Phase 内で並列にレビューできる。
+**派生元:** `feature/phase3-task1-message-role-buffer`（Task 3.1 から派生）。
 
 ---
 
@@ -2320,15 +2356,17 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
     if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
       const partID = payload.kind === "text_complete" ? payload.partID : undefined;
       this.messageRoleBuffer.finalize(payload.sessionId, payload.messageID, partID);
-      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, partID);
-      const fullText = this.messageRoleBuffer.getFinalizedText(payload.sessionId, payload.messageID, partID) ?? "";
+      const fullText = this.messageRoleBuffer.getFinalizedAssistantText(payload.sessionId, payload.messageID, partID);
       
-      const agentId = await this.resolveAgentId(payload.sessionId);
-      const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
-      const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
+      if (fullText !== undefined) {
+        const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, partID);
+        const agentId = await this.resolveAgentId(payload.sessionId);
+        const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
+        const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
 
-      const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
-      await this.logStore.append(shardId, record);
+        const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
+        await this.logStore.append(shardId, record);
+      }
     }
     return { action: "proceed" };
   } catch (err) {
@@ -2464,14 +2502,11 @@ export function buildTaskSummaryRecord(
   return {
     ...envelope,
     recordType: "observation",
-    kind: "message",
-    messageID: `task-summary:${envelope.taskId ?? "unknown"}`,
-    role: "assistant",
-    textHash: hashString(summaryText),
-    textSnippet: redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200),
+    kind: "task_summary",
+    summaryTextHash: hashString(summaryText),
+    summaryTextSnippet: redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200),
     declaredClaims: summaryClaims,
     evidence,
-    finalized: true,
   };
 }
 ```
@@ -3744,7 +3779,7 @@ gt submit
 
 **目的:** 設計書で定義された Architecture Fitness Functions（FF-001〜008）と NFR（並行性・セキュリティ・integrity）のテストを実装し、CI 必須 check として登録。本 Phase だけで品質担保テスト群が完成する。設計書 §9.3.1 の Runtime 統合テスト（`record sub-entity refs` 含む）も含める。
 
-**判断:** Phase 8 は全ての先行 Phase を横断的に検証。Task 8.1〜8.7 はそれぞれ独立したテストファイルなので、Base から並列に分岐してもよい。ただし FF-004 は Phase 2/3、FF-005 は Phase 4、FF-006 は adapter/handler、FF-007/008 は Phase 5、NFR は Phase 2/4/6 の実装に依存する。Phase 8 Base は `feature/phase7-task3-justice-review` から切り、各 Task は独立に Base から分岐する（並列レビュー可能）。
+**判断:** Phase 8 は全ての先行 Phase を横断的に検証。各テストを蓄積した状態で最終回帰テスト（Task 8.7）を実行する必要があるため、Graphite Stacking の原則に従い、Task 8.1〜8.7 は前段の Task から順に派生させて積層（Stack）する。Phase 8 Base は `feature/phase7-task3-justice-review` から切り、Task 8.1 は Base から、Task 8.2 は 8.1 からという形で順次派生させる。
 
 ---
 
@@ -3858,21 +3893,20 @@ git commit -m "test(v2): FF-002 determinism and FF-003 no side effects"
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.1`（直前 Task から派生）。
 
 ---
 
-### Task 8.3: FF-004 Replay Determinism + FF-005 No plan.md Write
+### Task 8.3: FF-005 No plan.md Write (FF-004 is verified in Task 2.3)
 
 **Files:**
 
-- Create: `tests/core/observation-log-replay.test.ts`（Phase 2 で既に作成済みならスキップ/追加）
 - Create: `tests/arch/no-planmd-write.test.ts`
 
 **Interfaces:**
 
-- Consumes: `project`, `FileWriter` mock, `src/hooks/` file list.
-- Produces: Replay test and allowlist-based plan.md write check.
+- Consumes: `FileWriter` mock, `src/hooks/` file list.
+- Produces: Allowlist-based plan.md write check.
 
 - [ ] **Step 1: FF-005 allowlist test を実装（D7/FF-005）**
 
@@ -3898,7 +3932,7 @@ function getFiles(dir: string): string[] {
 }
 
 describe("FF-005", () => {
-  it("new spine does not write plan.md", () => {
+  it("new spine does not call writeFile or write files in unauthorized hooks", () => {
     // allowlist: task-feedback.ts and loop-handler.ts are allowed to write plan.md
     const allowed = [
       "src/hooks/task-feedback.ts",
@@ -3906,9 +3940,12 @@ describe("FF-005", () => {
     ];
     const files = getFiles("src/hooks");
     for (const file of files) {
-      if (allowed.includes(file.replace(/\\/g, "/"))) continue;
+      if (allowed.some(a => file.replace(/\\/g, "/").endsWith(a))) continue;
       const content = readFileSync(file, "utf-8");
-      expect(content).not.toMatch(/writeFile.*plan\.md/);
+      
+      // 変数経由（writeFile(planPath, ...) 等）も含め、allowlist 以外の hooks に 
+      // FileWriter.writeFile の呼び出し（.writeFile(）が存在しないことを検証
+      expect(content).not.toMatch(/\.writeFile\s*\(/);
     }
   });
 });
@@ -3933,7 +3970,7 @@ git commit -m "test(v2): FF-004 replay and FF-005 no plan.md write"
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.2`（直前 Task から派生）。
 
 ---
 
@@ -3984,7 +4021,7 @@ git commit -m "test(v2): FF-006 fail-open behavior"
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.3`（直前 Task から派生）。
 
 ---
 
@@ -4033,7 +4070,7 @@ git commit -m "test(v2): FF-007/008 provenance gating"
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.4`（直前 Task から派生）。
 
 ---
 
@@ -4136,7 +4173,7 @@ git commit -m "test(v2): NFR security, integrity, and record sub-entity referenc
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.5`（直前 Task から派生）。
 
 ---
 
@@ -4191,7 +4228,7 @@ git commit -m "ci: finalize v2.0 CI with devcontainer and full regression"
 gt submit
 ```
 
-**派生元:** `feature/phase8-v2-fitness-nfr__base`（Base から派生）。
+**派生元:** `Task 8.6`（直前 Task から派生）。
 
 ---
 
@@ -4202,9 +4239,9 @@ gt submit
 ```text
 master
   └── feature/phase0-v2-baseline__base
-       ├── feature/phase0-task0-preflight                     (Base から派生)
-       ├── feature/phase0-task1-devcontainer-baseline        (Base から派生)
-       └── feature/phase0-task2-v2-spikes                     (Task 0.1 から派生)
+       └── feature/phase0-task0-preflight                     (Base から派生)
+            └── feature/phase0-task1-devcontainer-baseline    (Task 0.0 から派生)
+                 └── feature/phase0-task2-v2-spikes           (Task 0.1 から派生)
 
   └── feature/phase1-v2-core-model__base                      (feature/phase0-task2-v2-spikes から派生)
        ├── feature/phase1-task1-core-types                   (Base から派生)
@@ -4218,10 +4255,10 @@ master
        └── feature/phase2-task4-rotation-archive              (Task 2.3 から派生)
 
   └── feature/phase3-v2-message-adapter__base                (feature/phase2-task4-rotation-archive から派生)
-       ├── feature/phase3-task1-message-role-buffer          (Base から派生)
-       ├── feature/phase3-task2-adapter-extension            (Base から派生)
-       ├── feature/phase3-task3-justice-routing              (Task 3.2 から派生)
-       └── feature/phase3-task4-agent-id-resolution          (Task 3.3 から派生)
+       └── feature/phase3-task1-message-role-buffer          (Base から派生)
+            └── feature/phase3-task2-adapter-extension        (Task 3.1 から派生)
+                 └── feature/phase3-task3-justice-routing     (Task 3.2 から派生)
+                      └── feature/phase3-task4-agent-id-resolution (Task 3.3 から派生)
 
   └── feature/phase4-v2-observation-handler__base            (feature/phase3-task4-agent-id-resolution から派生)
        ├── feature/phase4-task1-tool-observation             (Base から派生)
@@ -4246,13 +4283,13 @@ master
        └── feature/phase7-task3-justice-review               (Task 7.2 から派生)
 
   └── feature/phase8-v2-fitness-nfr__base                    (feature/phase7-task3-justice-review から派生)
-       ├── feature/phase8-task1-ff001-core-imports           (Base から派生)
-       ├── feature/phase8-task2-ff002-003-determinism        (Base から派生)
-       ├── feature/phase8-task3-ff004-005-replay-planmd      (Base から派生)
-       ├── feature/phase8-task4-ff006-fail-open               (Base から派生)
-       ├── feature/phase8-task5-ff007-008-provenance          (Base から派生)
-       ├── feature/phase8-task6-nfr-security-integrity        (Base から派生)
-       └── feature/phase8-task7-final-regression             (Base から派生)
+       └── feature/phase8-task1-ff001-core-imports           (Base から派生)
+            └── feature/phase8-task2-ff002-003-determinism        (Task 8.1 から派生)
+                 └── feature/phase8-task3-ff004-005-replay-planmd      (Task 8.2 から派生)
+                      └── feature/phase8-task4-ff006-fail-open               (Task 8.3 から派生)
+                           └── feature/phase8-task5-ff007-008-provenance          (Task 8.4 から派生)
+                                └── feature/phase8-task6-nfr-security-integrity        (Task 8.5 から派生)
+                                     └── feature/phase8-task7-final-regression             (Task 8.6 から派生)
 ```
 
 ---
@@ -4263,7 +4300,7 @@ master
 - [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + **3 スパイク**（観測レイテンシ・Message fallback matrix・C1/L0 advisory 表示面実証）に充てる。Pre-Planning Preflight（ADR 追認）が完了して初めて本計画を executable とする。
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
-- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase の最終 Task ブランチから分岐。Phase 8 Base は `feature/phase7-task3-justice-review` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
+- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase の最終 Task ブランチから分岐。Phase 8 Base は `feature/phase7-task3-justice-review` から分岐。独立して単体完結する Task は Base から派生（ただし Phase 8 は、最終回帰テストにすべてのテストを蓄積するため順次積層）。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
 - [x] **Placeholder scan:** `throw new Error("implement projection fold")`、`StateProjectionCache.write` の未定義 `content`、Task 1.3 / Task 6.3 の未閉じ code fence、Task 6.3 の余分な `}` 等を修正済み。`...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。実装計画の簡略化のため、一部の難解な関数（`MessageRoleBuffer`、`evaluateRule`、`aggregateReviews` 等）の内部ロジックは擬似コード（pseudocode only / スタブ）として残している旨を明記。
 - [x] **Type consistency:** `Evidence` は `taskId` を持たず envelope が持つ。`ProjectedState.tasks` は `evidence` 配列を持つ。`RuleEngine.evaluate` は task-scoped evidence と `GateContext.reviewSummary` を受け取る。`extractEvidenceFromTool` は single `Evidence`（interpretation 内包）を返す。`EvidenceRef` は `FullEvidenceRef | SelfEvidenceRef` の union。
 - [x] **Graphite 一貫性:** `gh pr create` を `gt submit` に統一。PR タイトル/本文は commit message から生成されるため、commit ステップで内容を制御する。
