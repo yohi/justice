@@ -50,7 +50,7 @@
 **Files:**
 
 - Create: `tests/preflight-verification.test.ts` (static verification for ADR existence and ratification status)
-- Modify: `.github/workflows/ci.yml` (add preflight step to verify PR #104 status using GitHub API)
+- Modify: `.github/workflows/ci.yml` (add preflight step to verify current PR status dynamically using GitHub API)
 
 **Interfaces:**
 
@@ -81,8 +81,8 @@ test("preflight verification: ADR ratification check", () => {
 - [ ] **Step 2b: CI 設定（.github/workflows/ci.yml）に PR マージと承認状態の確認ステップを追加**
   - PR がマージ済みかつ CODEOWNERS による承認（APPROVED）を得ていることの動的な検証は、単体テストではなく CI ジョブの preflight ステップとして分離する。
   ```bash
-  # CI ジョブ内で実行される preflight コマンドの例
-  gh pr view 104 --json reviewDecision,reviews,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
+  # CI ジョブ内で実行される preflight コマンドの例。PR番号は GitHub Actions イベントコンテキストから動的に抽出する
+  gh pr view "$PR_NUMBER" --json reviewDecision,reviews,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
   ```
 
 - [ ] **Step 3: テストの実行と検証**
@@ -1317,7 +1317,7 @@ export function project(
     schemaVersion: 1,
     rebuiltAt,
     integrity: {
-      sourceHash: "sha256:" + hashString(events.map((e) => JSON.stringify(e)).join("\n")),
+      sourceHash: hashString(events.map((e) => JSON.stringify(e)).join("\n")),
       maxSequenceByShard,
     },
     tasks: new Map(),
@@ -1837,19 +1837,21 @@ gt submit
 - Modify: `src/core/justice-plugin.ts`
 - Create: `src/hooks/observation-handler.ts`（最小の stub）
 - Test: `tests/core/justice-plugin-routing.test.ts`
+- Test: `tests/core/v2/post-tool-use-merge.test.ts`
 
 **Interfaces:**
 
 - Consumes: `PlanBridge.handleMessage`, `PlanBridge.handlePreToolUse`, `PlanBridge.handlePostToolUse`, `TaskFeedbackHandler.handlePostToolUse`, new `observation-handler`.
 - Produces:
-  - `mergePreToolUseResponses(a, b)` and `mergeMessageResponses(a, b)` helpers.
-  - `handleEvent` routes:
-    - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge, merged via `mergePreToolUseResponses`.
-    - `PostToolUse`: observation-handler + (if toolName === "task") plan-bridge + task-feedback, merged via `mergePostToolUseResponses`.
-    - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(payload)` (declared claim extraction).
-    - `Event`: existing handlers unchanged.
+- `mergePreToolUseResponses(a, b)` and `mergeMessageResponses(a, b)` helpers.
+- `mergePostToolUseResponses(responses)` helper.
+- `handleEvent` routes:
+  - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge, merged via `mergePreToolUseResponses`.
+  - `PostToolUse`: observation-handler + (if toolName === "task") plan-bridge + task-feedback, merged via `mergePostToolUseResponses`.
+  - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(payload)` (declared claim extraction).
+  - `Event`: existing handlers unchanged.
 
-- [ ] **Step 0: Add `mergePreToolUseResponses` helper**
+- [ ] **Step 0: Add `mergePreToolUseResponses` and `mergePostToolUseResponses` helpers**
 
 ```typescript
 // src/core/justice-plugin.ts
@@ -1864,6 +1866,25 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
   }
   if (a.action === "inject") return { ...a };
   if (b.action === "inject") return { ...b };
+  return { action: "proceed" };
+}
+
+export function mergePostToolUseResponses(responses: HookResponse[]): HookResponse {
+  if (responses.some((r) => r.action === "skip")) return { action: "skip" };
+  const injects = responses.filter((r): r is InjectResponse => r.action === "inject");
+  if (injects.length > 0) {
+    const contexts = injects.map((i) => i.injectedContext).filter((c) => c !== "");
+    const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
+    const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
+    if (modifieds.length > 0) {
+      if (modifieds.length > 1) {
+        // D64: modifiedPayload 衝突時はログを出して最初のものを使用
+        console.warn("Conflict detected in post-tool-use modifiedPayload. Using the first one.");
+      }
+      return { ...result, modifiedPayload: modifieds[0].modifiedPayload };
+    }
+    return result;
+  }
   return { action: "proceed" };
 }
 ```
@@ -1924,17 +1945,61 @@ export class ObservationHandler {
 }
 ```
 
+- [ ] **Step 2b: PostToolUse マージテスト（tests/core/v2/post-tool-use-merge.test.ts）の実装（D64）**
+
+```typescript
+// tests/core/v2/post-tool-use-merge.test.ts
+import { describe, expect, it, vi } from "vitest";
+import { mergePostToolUseResponses } from "../../../src/core/justice-plugin";
+
+describe("D64 - PostToolUse merge rules", () => {
+  it("should prioritize skip action over inject and proceed", () => {
+    const responses = [
+      { action: "proceed" as const },
+      { action: "skip" as const },
+      { action: "inject" as const, injectedContext: "test" }
+    ];
+    expect(mergePostToolUseResponses(responses)).toEqual({ action: "skip" });
+  });
+
+  it("should concatenate injectedContext from multiple inject actions", () => {
+    const responses = [
+      { action: "inject" as const, injectedContext: "context A" },
+      { action: "proceed" as const },
+      { action: "inject" as const, injectedContext: "context B" }
+    ];
+    expect(mergePostToolUseResponses(responses)).toEqual({
+      action: "inject",
+      injectedContext: "context A\n\n---\n\ncontext B"
+    });
+  });
+
+  it("should use the first modifiedPayload when conflicts occur and log warning", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const responses = [
+      { action: "inject" as const, injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
+      { action: "inject" as const, injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } }
+    ];
+    const result = mergePostToolUseResponses(responses);
+    expect(result.action).toBe("inject");
+    expect((result as any).modifiedPayload).toEqual({ toolName: "task", modified: 1 });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Conflict detected"));
+    warnSpy.mockRestore();
+  });
+});
+```
+
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/justice-plugin-routing.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/justice-plugin-routing.test.ts tests/core/v2/post-tool-use-merge.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/justice-plugin.ts src/hooks/observation-handler.ts tests/core/justice-plugin-routing.test.ts
-git commit -m "feat(v2): JusticePlugin routing guard for all tools + observation handler"
+git add src/core/justice-plugin.ts src/hooks/observation-handler.ts tests/core/justice-plugin-routing.test.ts tests/core/v2/post-tool-use-merge.test.ts
+git commit -m "feat(v2): JusticePlugin routing guard for all tools + observation handler + merge tests"
 ```
 
 - [ ] **Step 5: Phase 3 Base に向けた Draft PR を作成する**
@@ -2051,7 +2116,11 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
   if (payload.toolName === "task") {
     const taskId = this.extractTaskIdFromTaskArgs(payload.toolInput, event.sessionId);
     if (taskId) {
-      this.activeTaskWindows.set(event.callId ?? "", taskId);
+      if (!event.callId) {
+        this.options.logger?.warn("PreToolUse task callId is missing. Skipping task window creation.", { taskId, sessionId: event.sessionId });
+        return { action: "proceed" };
+      }
+      this.activeTaskWindows.set(event.callId, taskId);
     }
   }
   return { action: "proceed" };
@@ -2118,7 +2187,11 @@ export function buildToolExecutedRecord(
 async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   try {
     const payload = event.payload;
-    const callId = event.callId ?? "";
+    const callId = event.callId;
+    if (!callId) {
+      this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
+      return { action: "proceed" };
+    }
     const taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
@@ -2251,11 +2324,16 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
       const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
       await this.logStore.append(shardId, record);
     }
-  return { action: "proceed" };
+    return { action: "proceed" };
+  } catch (err) {
+    this.options.logger?.warn("observation-handler message failed", err);
+    return { action: "proceed" };
+  }
 }
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [ ] **Step 2: テストコードの実装と実行（Devcontainer 内）**
+  - `tests/hooks/observation-handler-message.test.ts` に、`logStore.append` の書き込み失敗（例外発生）時に、エラーログが記録されつつ全体がクラッシュせずに `{ action: "proceed" }` を返すという縮退動作（Fail-Open）を検証するテストを追加します。
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-message.test.ts
@@ -2265,7 +2343,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/observation-hand
 
 ```bash
 git add src/hooks/observation-handler.ts tests/hooks/observation-handler-message.test.ts
-git commit -m "feat(v2): message observation handler with declared claims"
+git commit -m "feat(v2): message observation handler with declared claims and fail-open verification"
 ```
 
 - [ ] **Step 4: Phase 4 Base に向けた Draft PR を作成する**
@@ -3795,15 +3873,37 @@ gt submit
 ```typescript
 // tests/arch/no-planmd-write.test.ts
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
+import { join } from "path";
+
+function getFiles(dir: string): string[] {
+  const files: string[] = [];
+  if (readdirSync === undefined) return files;
+  const items = readdirSync(dir);
+  for (const item of items) {
+    const path = join(dir, item);
+    if (statSync(path).isDirectory()) {
+      files.push(...getFiles(path));
+    } else if (path.endsWith(".ts")) {
+      files.push(path);
+    }
+  }
+  return files;
+}
 
 describe("FF-005", () => {
   it("new spine does not write plan.md", () => {
-    const observationHandler = readFileSync("src/hooks/observation-handler.ts", "utf-8");
-    expect(observationHandler).not.toMatch(/writeFile.*plan\.md/);
-    // allowlist: task-feedback.ts and loop-handler.ts are allowed
-    const allowed = ["src/hooks/task-feedback.ts", "src/hooks/loop-handler.ts"];
-    // ...
+    // allowlist: task-feedback.ts and loop-handler.ts are allowed to write plan.md
+    const allowed = [
+      "src/hooks/task-feedback.ts",
+      "src/hooks/loop-handler.ts"
+    ];
+    const files = getFiles("src/hooks");
+    for (const file of files) {
+      if (allowed.includes(file.replace(/\\/g, "/"))) continue;
+      const content = readFileSync(file, "utf-8");
+      expect(content).not.toMatch(/writeFile.*plan\.md/);
+    }
   });
 });
 ```
