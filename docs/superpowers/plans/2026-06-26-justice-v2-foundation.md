@@ -49,16 +49,17 @@
 
 **Files:**
 
-- Create: `tests/preflight-verification.test.ts` (smoke verification for ADR ratification and PR verification)
+- Create: `tests/preflight-verification.test.ts` (static verification for ADR existence and ratification status)
+- Modify: `.github/workflows/ci.yml` (add preflight step to verify PR #104 status using GitHub API)
 
 **Interfaces:**
 
-- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` and GitHub API status for PR #104).
+- Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`).
 - Produces: Execution safety verification.
 
 - [ ] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在し、正しい内容であることを確認する**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: `Status: APPROVED` および `PR: #104` などの承認証跡が正しく記載されていることをテストで検証する。
+  - 内容: `Status: APPROVED` などの承認証跡が記載されていることをテストで検証する（将来の再実行時に破綻するのを防ぐため、単体テスト内に具体的な PR 番号や個人名をハードコードすることは避ける）。
 
 - [ ] **Step 2: テストコード（tests/preflight-verification.test.ts）の実装**
 
@@ -77,9 +78,10 @@ test("preflight verification: ADR ratification check", () => {
 });
 ```
 
-- [ ] **Step 2b: CI または手動チェックリストで PR #104 のマージ状態と実承認者を検証する**
-  - CIジョブ内またはリリース前チェックにおいて、以下のコマンドを実行し、PRがマージ済（MERGED）かつ CODEOWNERS による承認（APPROVED）を得ていることを直接検証する。
+- [ ] **Step 2b: CI 設定（.github/workflows/ci.yml）に PR マージと承認状態の確認ステップを追加**
+  - PR がマージ済みかつ CODEOWNERS による承認（APPROVED）を得ていることの動的な検証は、単体テストではなく CI ジョブの preflight ステップとして分離する。
   ```bash
+  # CI ジョブ内で実行される preflight コマンドの例
   gh pr view 104 --json reviewDecision,reviews,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
   ```
 
@@ -92,7 +94,7 @@ devcontainer exec --workspace-folder . bun run test tests/preflight-verification
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/preflight-verification.test.ts
+git add tests/preflight-verification.test.ts .github/workflows/ci.yml
 git commit -m "chore: add preflight verification for ratified ADR"
 ```
 
@@ -103,6 +105,7 @@ gt submit
 ```
 
 **派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
+
 
 
 ### Task 0.1: Devcontainer ベースライン検証
@@ -173,8 +176,8 @@ OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`,
 - [ ] **Step 3: スパイク結果を docs に集約し設計書を更新**
 
 ```bash
-git add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md
-git commit -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録"
+git add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md
+git commit -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録および設計書更新"
 ```
 
 - [ ] **Step 4: Task 0.2 に向けた PR を作成する**
@@ -203,15 +206,20 @@ gt submit
 
 - Create: `src/core/v2/observation-model.ts`
 - Create: `src/core/v2/decision-model.ts`
+- Create: `src/core/v2/message-payload.ts` (ObservationMessagePayload union moved forward here to resolve Graphite dependencies)
 - Create: `src/core/v2/references.ts`
+- Create: `src/core/v2/hash.ts` (hashString utility definition)
 - Modify: `src/core/types.ts`（必要に応じて `ObservationAgentId`, `EvidenceRef`, `ShardId` 等を追加）
 - Test: `tests/core/v2/observation-model.test.ts`
+- Test: `tests/core/v2/message-payload.test.ts`
+- Test: `tests/core/v2/hash.test.ts`
 
 **Interfaces:**
 
 - Consumes: 既存 `AgentId`（atlas/hephaestus/sisyphus/prometheus）。
 - Produces:
   - `ObservationRecord` discriminated union (`kind: "tool_executed" | "message" | "skill_invoked" | "review_observed" | "session_error" | "reflection"`).
+  - `ObservationMessagePayload` union.
   - `DecisionRecord` with `ruleResults[]`.
   - `EvidenceRef = { readonly agentId: string; readonly sessionId: string; readonly writerId: string; readonly sequence: number; readonly evidenceId: string }`.
   - `ShardId = { readonly agentId: string; readonly sessionId: string; readonly writerId: string }`.
@@ -249,7 +257,17 @@ export type SelfEvidenceRef = {
 };
 ```
 
-- [ ] **Step 3: `ObservationRecord` union を実装**
+- [ ] **Step 3: `ObservationMessagePayload` を `src/core/v2/message-payload.ts` に実装（前倒し定義・D71）**
+
+```typescript
+// src/core/v2/message-payload.ts
+export type ObservationMessagePayload =
+  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
+  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
+  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
+```
+
+- [ ] **Step 3b: `ObservationRecord` union を実装**
 
 ```typescript
 // src/core/v2/observation-model.ts
@@ -284,9 +302,16 @@ export type ToolExecutedRecord = {
   readonly evidence: Evidence;
 };
 
-// Additional record kinds are defined in later tasks where their Evidence/types are introduced.
-// For v2.0 the union must be closed enough for type-checking; stub types are acceptable here and refined in Task 1.3/3.1/4.3/4.4.
-export type MessageRecord = { readonly kind: "message"; /* refined in Task 3.1 */ };
+// MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
+export type MessageRecord = {
+  readonly kind: "message";
+  readonly messageID: string;
+  readonly role: "assistant";
+  readonly textHash: string;
+  readonly textSnippet?: string;
+  readonly finalized: boolean;
+};
+
 export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
 export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
 export type ReflectionRecord = { readonly kind: "reflection"; /* refined in Task 4.4 */ };
@@ -321,6 +346,22 @@ export type ObservationRecord =
   | (CommonEnvelope & { readonly recordType: "observation" } & ReviewObservedRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & SessionErrorRecord)
   | (CommonEnvelope & { readonly recordType: "observation" } & ReflectionRecord);
+```
+
+- [ ] **Step 3c: `hashString` 決定論的ユーティリティの実装（ISS-006）**
+
+```typescript
+// src/core/v2/hash.ts
+import { createHash } from "crypto";
+
+/**
+ * 与えられた文字列の SHA-256 ハッシュを計算し、プレフィックス "sha256:" を付与した文字列を返します。
+ * 証拠保存時の決定論的なハッシュ生成に使用されます。
+ */
+export function hashString(value: string): string {
+  const hash = createHash("sha256").update(value).digest("hex");
+  return `sha256:${hash}`;
+}
 ```
 
 - [ ] **Step 4: `DecisionRecord` 型を実装**
@@ -472,7 +513,8 @@ export function redactEnvironmentValues(text: string): string {
 }
 
 export function redactTokenUrls(text: string): string {
-  return text.replace(/(https?:\/\/[^@\s]+@)([^\s"']+)/g, "$1[REDACTED_TOKEN_URL]");
+  // Redact the entire token URL to prevent leaking userinfo (user:token) credentials (D61)
+  return text.replace(/https?:\/\/[^@\s]+@[^\s"']+/g, "[REDACTED_TOKEN_URL]");
 }
 
 export function redactForPersistence(text: string, detector = new SecretPatternDetector()): string {
@@ -1053,8 +1095,10 @@ export class ObservationLogStore {
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
     const activePaths = await this.fileReader.listFiles(".justice/events");
     const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
-    // Place archive (old) before active (new) to naturally preserve physical sequence progression (FIND-002)
-    const allPaths = [...archivePaths, ...activePaths];
+    
+    // Sort paths deterministically to ensure physical file sequence progression across iterations (FIND-002/ISS-002)
+    const sortPaths = (paths: readonly string[]) => [...paths].sort();
+    const allPaths = [...sortPaths(archivePaths), ...sortPaths(activePaths)];
     const records: (ObservationRecord | DecisionRecord)[] = [];
     
     for (const path of allPaths) {
@@ -1523,27 +1567,18 @@ gt submit
 **Files:**
 
 - Create: `src/core/v2/message-role-buffer.ts`
-- Create: `src/core/v2/message-payload.ts`
 - Modify: `src/core/v2/declared-claim-extractor.ts`（finalized 後の抽出へ変更）
 - Test: `tests/hooks/message-role-buffer.test.ts`
-- Test: `tests/core/v2/message-payload.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ObservationMessagePayload` union, `extractDeclaredClaims`.
+- Consumes: `ObservationMessagePayload` union (from Task 1.1), `extractDeclaredClaims`.
 - Produces:
   - `MessageRoleBuffer` class with `{sessionId, messageID}` key, `parts: Map<partID, {text, finalized}>`.
   - `extractFinalizedAssistantClaims(buffer, messageID, partID): DeclaredClaim[]`.
 
-- [ ] **Step 1: Message payload union を定義（D71）**
-
-```typescript
-// src/core/v2/message-payload.ts
-export type ObservationMessagePayload =
-  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
-  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
-  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
-```
+- [ ] **Step 1: Message payload union を確認（D71）**
+  - Task 1.1 で前倒し実装した `src/core/v2/message-payload.ts` の `ObservationMessagePayload` をそのままインポートして利用できることを確認します。
 
 - [ ] **Step 1b: `observation-model.ts` の `MessageRecord` を詳細化（D71）**
 
@@ -1592,7 +1627,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/message-role-buf
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/message-payload.ts src/core/v2/message-role-buffer.ts tests/hooks/message-role-buffer.test.ts tests/core/v2/message-payload.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/message-role-buffer.ts tests/hooks/message-role-buffer.test.ts
 git commit -m "feat(v2): message role buffer and finalized declared extraction"
 ```
 
@@ -1611,11 +1646,13 @@ gt submit
 **Files:**
 
 - Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/core/types.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ObservationMessagePayload` from Task 3.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`.
+- Consumes: `ObservationMessagePayload` from Task 1.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`.
 - Produces:
   - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
   - `onToolExecuteBefore/After` no longer filters `tool !== "task"` but explicitly excludes query tools matching `justice_*`; all other tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events to prevent query commands from altering the canonical Observation Log (D50).
@@ -1626,9 +1663,11 @@ gt submit
   - Sets the default value of `options.enableAdvisoryOutputAppend` based on C1 spike results (Task 0.2 Step 1b). If C1 shows banner is not visible in user-facing context, it defaults to false; otherwise true (D47).
   - Step 1 implementation includes tests asserting that when `options.enableAdvisoryOutputAppend` is false, `notifier.notify()` executes normally while `output.output` remains unmodified (D47).
 
-- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts`**
+- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts` & `src/core/justice-plugin.ts` (ISS-002)**
 
-Update `PostToolUsePayload` and `PreToolUsePayload` in `src/core/types.ts` to include the fields the adapter now forwards: `callId`, `toolInput` (Pre/Post), `toolResult`, and `metadata` (Post). This keeps `observation-handler` type-safe without casting.
+Update `PostToolUsePayload` and `PreToolUsePayload` in `src/core/types.ts` to include the fields the adapter now forwards: `callId`, `toolInput` (Pre/Post), `toolResult`, and `metadata` (Post).
+Also add `AgentMappedEvent` type to `src/core/types.ts` and include it in the `HookEvent` union type.
+In `src/core/justice-plugin.ts` (`handleEvent`), add a fallback handling case for `"AgentMapped"` to proceed without error until its state mapping is fully implemented in Task 3.4. This keeps `observation-handler` type-safe and avoids compilation errors.
 
 ```typescript
 // src/runtime/opencode-adapter.ts
@@ -1683,6 +1722,7 @@ function toPostToolObservationPayload(
 ```typescript
 // src/runtime/opencode-adapter.ts
 onToolExecuteBefore: async (input, output) => {
+  if (input.tool.startsWith("justice_")) return;
   const response = await this.plugin.handleEvent(toPreToolObservationPayload(input, output));
   if (response.action !== "inject") return;
   // apply modifiedPayload.args to output.args if present
@@ -1694,6 +1734,7 @@ onToolExecuteBefore: async (input, output) => {
   }
 },
 onToolExecuteAfter: async (input, output) => {
+  if (input.tool.startsWith("justice_")) return;
   const response = await this.plugin.handleEvent(toPostToolObservationPayload(input, output));
   // (1) guaranteed channel: notifier banner (fail-open try/catch)
   if (response.action === "inject") {
@@ -1954,20 +1995,19 @@ gt submit
 
 **Files:**
 
-- Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/hooks/observation-handler.ts` (Hook: skeleton only, no business logic)
+- Create: `src/core/v2/record-builder.ts` (Core: pure record builder functions)
 - Test: `tests/hooks/observation-handler-tool.test.ts`
+- Test: `tests/core/v2/record-builder.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ObservationLogStore`, `extractEvidenceFromTool`, `redactForPersistence`, `redactAbsolutePaths`, and a logger for fail-open warnings.
+- Consumes: `ObservationLogStore`, `extractEvidenceFromTool`, `record-builder.ts` pure functions.
 - Produces:
   - `handlePostToolUse(payload)` → `ObservationRecord{kind:"tool_executed"}` append + gate trigger check + `HookResponse`.
   - `handlePreToolUse(payload)` → task window tracking (`activeTaskWindows: Map<callId, taskId>`).
   - All log append/evaluation paths are wrapped in `try/catch` and degrade to `{ action: "proceed" }` on failure (FF-006).
   - `appendTaskSummaryDeclaredEvidence(payload, taskId)` stubbed in this task and implemented in Task 4.3.
-  - `handlePostToolUse(payload)` → `ObservationRecord{kind:"tool_executed"}` append + gate trigger check + `HookResponse`.
-  - `handlePreToolUse(payload)` → task window tracking (`activeTaskWindows: Map<callId, taskId>`).
-  - All log append/evaluation paths are wrapped in `try/catch` and degrade to `{ action: "proceed" }` on failure (FF-006).
 
 - [ ] **Step 1: PreToolUse で task window を追跡（D74）**
 
@@ -2030,9 +2070,51 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
 }
 ```
 
-- [ ] **Step 2: PostToolUse で tool_executed レコードを append**
+- [ ] **Step 2: Core 純粋レコードビルダーを実装（src/core/v2/record-builder.ts）**
+  - Hook 側に業務ロジックを残さない制約に従い、`ObservationRecord` や `Evidence` の構築、および redaction 処理を行う純粋関数を実装します。
 
 ```typescript
+// src/core/v2/record-builder.ts
+import { extractEvidenceFromTool } from "./evidence-engine.ts";
+import { redactForPersistence, redactAbsolutePaths } from "./redaction.ts";
+import type { CommonEnvelope, ObservationRecord, Evidence } from "./observation-model.ts";
+
+export function buildToolExecutedRecord(
+  envelope: CommonEnvelope,
+  toolName: string,
+  toolInput: unknown,
+  toolOutput: { readonly output?: string; readonly metadata?: { readonly error?: boolean } },
+  callId: string
+): ObservationRecord {
+  const evidence = extractEvidenceFromTool(toolName, toolInput as any, toolOutput, callId);
+  let redactedEvidence: Evidence;
+  if (evidence.toolOutputClass === "command_exec") {
+    redactedEvidence = {
+      ...evidence,
+      command: redactForPersistence(redactAbsolutePaths(evidence.command ?? "")),
+      rawOutput: redactForPersistence(redactAbsolutePaths(evidence.rawOutput ?? "")),
+    };
+  } else {
+    redactedEvidence = {
+      ...evidence,
+      command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
+    };
+  }
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "tool_executed",
+    toolName,
+    callId,
+    evidence: redactedEvidence,
+  };
+}
+```
+
+- [ ] **Step 3: Hook からビルダーを呼び出して LogStore に append するように実装**
+
+```typescript
+// src/hooks/observation-handler.ts
 async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   try {
     const payload = event.payload;
@@ -2041,42 +2123,21 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
+    const envelope = this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" });
 
-    // 1. Tool execution observed append
-    const evidence = extractEvidenceFromTool(
+    // 1. Tool execution observed append (業務ロジックは record-builder へ完全に委譲)
+    const record = buildToolExecutedRecord(
+      envelope,
       payload.toolName,
       payload.toolInput,
       { output: payload.toolResult, metadata: payload.metadata },
       callId
     );
-    let redactedEvidence: Evidence;
-    if (evidence.toolOutputClass === "command_exec") {
-      redactedEvidence = {
-        ...evidence,
-        command: redactForPersistence(redactAbsolutePaths(evidence.command)),
-        rawOutput: redactForPersistence(redactAbsolutePaths(evidence.rawOutput ?? "")),
-      };
-    } else {
-      redactedEvidence = {
-        ...evidence,
-        command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
-        // rawOutput property is completely omitted/not generated for file_content
-      };
-    }
-    const record: ObservationRecord = {
-      ...this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" }),
-      recordType: "observation",
-      kind: "tool_executed",
-      toolName: payload.toolName,
-      callId,
-      evidence: redactedEvidence,
-    };
     await this.logStore.append(shardId, record);
     
     // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
-      // Implementation for appending task summary declared claims (Task 4.3)
       await this.appendTaskSummaryDeclaredEvidence(event, taskId);
     }
 
@@ -2101,17 +2162,17 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
 }
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [ ] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-tool.test.ts
+devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-tool.test.ts tests/core/v2/record-builder.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/hooks/observation-handler.ts tests/hooks/observation-handler-tool.test.ts
-git commit -m "feat(v2): tool observation handler with task window tracking"
+git add src/core/v2/record-builder.ts src/hooks/observation-handler.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/record-builder.test.ts
+git commit -m "feat(v2): extract record building logic from Hook to pure Core record-builder"
 ```
 
 - [ ] **Step 5: Phase 4 Base に向けた Draft PR を作成する**
@@ -2137,46 +2198,59 @@ gt submit
 - Produces: `handleMessage(payload)` → `ObservationRecord{kind:"message"}` with `declaredClaims` + `declared_claim` Evidence.
 
 - [ ] **Step 1: `handleMessage` を実装（D53/D67）**
+  - レコード構築およびスニペットの redaction 処理（ドメインロジック）は `src/core/v2/record-builder.ts` の純粋関数へ委譲します。
 
 ```typescript
+// src/core/v2/record-builder.ts に追加
+export function buildMessageRecord(
+  envelope: CommonEnvelope,
+  messageID: string,
+  partID: string | undefined,
+  fullText: string,
+  claims: readonly DeclaredClaim[]
+): ObservationRecord {
+  const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
+    evidenceId: c.evidenceId,
+    kind: c.claimKind,
+    sourceClass: "declared_claim",
+    provenance: "declared",
+    declaredFrom: "message",
+    claim: { claimKind: c.claimKind, outcome: c.outcome },
+  }));
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "message",
+    messageID,
+    partID,
+    role: "assistant",
+    textHash: hashString(fullText),
+    textSnippet: redactForPersistence(redactAbsolutePaths(fullText)).slice(0, 200),
+    declaredClaims: claims,
+    evidence,
+    finalized: true,
+  };
+}
+```
+
+```typescript
+// src/hooks/observation-handler.ts
 async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
   try {
     this.messageRoleBuffer.update(payload.sessionId, payload);
     if (payload.kind === "text_complete" || (payload.kind === "message_updated" && payload.finalized)) {
-      this.messageRoleBuffer.finalize(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined);
-      const fullText = this.messageRoleBuffer.getFinalizedText(payload.sessionId, payload.messageID, payload.kind === "text_complete" ? payload.partID : undefined) ?? "";
-      const evidence: DeclaredClaimEvidence[] = claims.map((c) => ({
-        evidenceId: c.evidenceId,
-        kind: c.claimKind,
-        sourceClass: "declared_claim",
-        provenance: "declared",
-        declaredFrom: "message",
-        claim: { claimKind: c.claimKind, outcome: c.outcome },
-      }));
+      const partID = payload.kind === "text_complete" ? payload.partID : undefined;
+      this.messageRoleBuffer.finalize(payload.sessionId, payload.messageID, partID);
+      const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, partID);
+      const fullText = this.messageRoleBuffer.getFinalizedText(payload.sessionId, payload.messageID, partID) ?? "";
+      
       const agentId = await this.resolveAgentId(payload.sessionId);
       const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
-      const record: ObservationRecord = {
-        ...this.buildEnvelope({
-          agentId,
-          sessionId: payload.sessionId,
-          recordType: "observation",
-        }),
-        kind: "message",
-        messageID: payload.messageID,
-        partID: payload.kind === "text_complete" ? payload.partID : undefined,
-        role: "assistant",
-        textHash: hashString(fullText),
-        textSnippet: redactForPersistence(redactAbsolutePaths(fullText)).slice(0, 200),
-        declaredClaims: claims,
-        evidence,
-        finalized: true,
-      };
+      const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
+
+      const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
       await this.logStore.append(shardId, record);
     }
-  } catch (err) {
-    this.logger.warn("observation-handler: message observation failed, degrading to PROCEED", err);
-  }
   return { action: "proceed" };
 }
 ```
@@ -2271,54 +2345,69 @@ export function extractTaskSummaryClaims(output: string): DeclaredClaim[] {
 }
 ```
 
-- [ ] **Step 3: observation-handler に skill_invoked / task summary 経路を追加**
+- [ ] **Step 3: observation-handler に skill_invoked 記録処理を追加**
+  - `ObservationRecord` の構築処理は `src/core/v2/record-builder.ts` へ委譲し、Hook 側は純粋関数を呼び出すだけに抑えます。
+
+```typescript
+// src/core/v2/record-builder.ts に追加
+export function buildSkillInvokedRecord(
+  envelope: CommonEnvelope,
+  skillName: string,
+  source: "skill_tool" | "task_load_skills"
+): ObservationRecord {
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "skill_invoked",
+    skillName,
+    source,
+  };
+}
+
+export function buildTaskSummaryRecord(
+  envelope: CommonEnvelope,
+  summaryText: string,
+  summaryClaims: readonly DeclaredClaim[]
+): ObservationRecord {
+  const evidence: DeclaredClaimEvidence[] = summaryClaims.map((c) => ({
+    evidenceId: c.evidenceId,
+    kind: c.claimKind,
+    sourceClass: "declared_claim",
+    provenance: "declared",
+    declaredFrom: "task_summary",
+    claim: { claimKind: c.claimKind, outcome: c.outcome },
+  }));
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "message",
+    messageID: `task-summary:${envelope.taskId ?? "unknown"}`,
+    role: "assistant",
+    textHash: hashString(summaryText),
+    textSnippet: redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200),
+    declaredClaims: summaryClaims,
+    evidence,
+    finalized: true,
+  };
+}
+```
 
 ```typescript
 // tool_executed レコード生成時に併せて skill_invoked レコードも append（fail-open）
 try {
-  if (skill) {
-    const sessionId = event.sessionId;
-    const agentId = resolveAgentId(sessionId);
-    const shardId = { agentId, sessionId, writerId: this.writerId };
-    await this.logStore.append(shardId, {
-      ...this.buildEnvelope({
-        taskId,
-        agentId,
-        sessionId,
-        recordType: "observation",
-      }),
-      kind: "skill_invoked",
-      ...skill,
-    });
+  const invokedSkills = detectSkillInvoked(payload.toolName, payload.toolInput);
+  const sessionId = event.sessionId;
+  const agentId = await this.resolveAgentId(sessionId);
+  const shardId = { agentId, sessionId, writerId: this.writerId };
+  const envelope = this.buildEnvelope({ taskId, agentId, sessionId, recordType: "observation" });
+  for (const skill of invokedSkills) {
+    const record = buildSkillInvokedRecord(envelope, skill.skillName, skill.source);
+    await this.logStore.append(shardId, record);
   }
 } catch (err) {
   this.logger.warn("observation-handler: skill_invoked observation failed", err);
 }
-// task 完了時: task summary から declared_claim Evidence を生成して taskId に帰属（fail-open）
-
-- [ ] **Step 3c: `handlePostToolUse` に task summary 呼び出しを追加（順序保証）**
-
-```typescript
-// src/hooks/observation-handler.ts 内 handlePostToolUse
-// Ensure task summary append happens BEFORE evaluateGateIfTriggered("task_complete") (ISS-005)
-if (event.payload.toolName === "task") {
-  this.activeTaskWindows.delete(event.payload.callId);
-  // The correct lifecycle ordering guarantee is:
-  // ① tool_executed append -> ② task_summary append -> ③ review_observed append -> ④ projection rebuild -> ⑤ gate evaluation.
-  // All concurrent or predecessor appends in this lifecycle must finish and rebuild state projection before evaluating.
-  await this.appendTaskSummaryDeclaredEvidence(event, taskId);
-  await this.appendReviewObservationsIfDetected(event, taskId); // Ensure review_observed append (FIND-005)
-  await this.ensureProjectionUpdated(event.sessionId); 
-  
-  const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
-  if (taskGateResponse.action === "inject") {
-    return taskGateResponse;
-  }
-}
 ```
-
-- [ ] **Step 3d: 順序保証検証用回帰テストの作成**
-  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` append → `task_summary` append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
 
 - [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加（D34/D59/D70）**
 
@@ -2331,41 +2420,45 @@ private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?
     const summaryText = payload.toolResult ?? "";
     const summaryClaims = extractTaskSummaryClaims(summaryText);
     if (summaryClaims.length === 0) return;
-    const redactedSnippet = redactForPersistence(redactAbsolutePaths(summaryText)).slice(0, 200);
-    const evidence: DeclaredClaimEvidence[] = summaryClaims.map((c) => ({
-      evidenceId: c.evidenceId,
-      kind: c.claimKind,
-      sourceClass: "declared_claim",
-      provenance: "declared",
-      declaredFrom: "task_summary",
-      claim: { claimKind: c.claimKind, outcome: c.outcome },
-    }));
     
     const sessionId = event.sessionId;
-    const agentId = resolveAgentId(sessionId);
+    const agentId = await this.resolveAgentId(sessionId);
     const shardId = { agentId, sessionId, writerId: this.writerId };
-    const record: ObservationRecord = {
-      ...this.buildEnvelope({
-        taskId,
-        agentId,
-        sessionId,
-        recordType: "observation",
-      }),
-      kind: "message",
-      messageID: `task-summary:${taskId}`,
-      role: "assistant",
-      textHash: hashString(summaryText),
-      textSnippet: redactedSnippet,
-      declaredClaims: summaryClaims,
-      evidence,
-      finalized: true,
-    };
+    const envelope = this.buildEnvelope({ taskId, agentId, sessionId, recordType: "observation" });
+
+    const record = buildTaskSummaryRecord(envelope, summaryText, summaryClaims);
     await this.logStore.append(shardId, record);
   } catch (err) {
     this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
   }
 }
 ```
+
+- [ ] **Step 3c: `handlePostToolUse` の仮置ブロックを task summary 呼び出し（順序保証）に置換・最新化（ISS-005）**
+
+```typescript
+// src/hooks/observation-handler.ts 内 handlePostToolUse
+// Ensure task summary append happens BEFORE evaluateGateIfTriggered("task_complete") (ISS-005)
+if (event.payload.toolName === "task") {
+  this.activeTaskWindows.delete(event.callId ?? "");
+  // The correct lifecycle ordering guarantee is:
+  // ① tool_executed append -> ② task_summary append -> ③ review_observed append -> ④ projection rebuild -> ⑤ gate evaluation.
+  // All concurrent or predecessor appends in this lifecycle must finish and rebuild state projection before evaluating.
+  await this.appendTaskSummaryDeclaredEvidence(event, taskId);
+  // Ensure review_observed append using correct 6-argument signature (FIND-005)
+  await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, event.callId ?? "", event.payload.toolName, event.payload.toolResult);
+  await this.ensureProjectionUpdated(event.sessionId); 
+  
+  const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+  if (taskGateResponse.action === "inject") {
+    return taskGateResponse;
+  }
+}
+```
+
+- [ ] **Step 3d: 順序保証検証用回帰テストの作成**
+  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` append → `task_summary` append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
+
 
 - [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加**
 
@@ -2755,6 +2848,10 @@ export function evaluate(
 }
 
 function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ctx: GateContext): RuleResult {
+  // Map lowercase configuration verdicts ("pass" | "warn" | "fail") to uppercase VerdictStatus ("PASS" | "WARN" | "FAIL") (ISS-005)
+  const mapVerdict = (v: "pass" | "warn" | "fail"): "PASS" | "WARN" | "FAIL" => {
+    return v.toUpperCase() as "PASS" | "WARN" | "FAIL";
+  };
   // evidence_outcome / evidence_present: PASS only from observed/derived Evidence; declared yields onMissingEvidence or WARN
   // review_open_items: scope-aware via ctx.reviewScope and ctx.reviewSummary.byScope
   // ruleResult.evidenceRefs can be extracted from evidence.map(e => e.ref)
@@ -2799,7 +2896,7 @@ gt submit
 
 - Create: `src/runtime/gate-loader.ts`
 - Create: `src/core/v2/default-gates.ts`
-- Create: `templates/gate.yaml`（リポジトリテンプレート。runtime 読込時は `.justice/gate.yaml` へコピー/配備する。`.justice/` ディレクトリ本体は `.gitignore` で無視する）
+- Create: `templates/gate.yaml`（リポジトリテンプレート。runtime 読込時は `.justice/gate.yaml` へコピー/配備する。`.justice/*` は無視するが、人間承認済みの正本 `.justice/gate.yaml` を置けるよう `.gitignore` で例外設定する）
 - Test: `tests/runtime/gate-loader.test.ts`
 - Test: `tests/core/v2/default-gates.test.ts`
 
@@ -2859,9 +2956,9 @@ export async function loadGates(fileReader: FileReader, path = ".justice/gate.ya
 }
 ```
 
-- [ ] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加**
+- [ ] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加（ISS-007）**
 
-`.gitignore` に `.justice/` を追加（ただし `templates/gate.yaml` はコミット）。テンプレート内容：
+`.gitignore` に `.justice/*` を追加して配下の自動生成ファイルやログを無視しつつ、正本としての `.justice/gate.yaml` が追跡対象に含まれるよう例外設定（`!.justice/gate.yaml` および `!.justice/`）を追加。テンプレート内容：
 
 ```yaml
 schemaVersion: 1
@@ -3155,7 +3252,9 @@ it("keeps item open on mere disappearance", () => {
     reviewObserved({ scope: "task-1", itemKey: "minor:bar", severity: "minor" }),
   ];
   const summary = aggregateReviews(records);
-  expect(summary.byScope.get("task-1")?.open).toContain("major:foo");
+  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
+  expect(openItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
 });
 
 it("marks item resolved on explicit marker", () => {
@@ -3164,8 +3263,11 @@ it("marks item resolved on explicit marker", () => {
     reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "explicit_marker" } }),
   ];
   const summary = aggregateReviews(records);
-  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
-  expect(summary.byScope.get("task-1")?.open).not.toContain("major:foo");
+  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
+  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
+  expect(resolvedItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
+  expect(openItems.find(i => i.itemKey === "major:foo")).toBeUndefined();
 });
 
 it("marks item resolved on complete snapshot absence", () => {
@@ -3174,8 +3276,11 @@ it("marks item resolved on complete snapshot absence", () => {
     reviewObserved({ scope: "task-1", isCompleteSnapshot: true, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
   ];
   const summary = aggregateReviews(records);
-  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
-  expect(summary.byScope.get("task-1")?.open).toContain("minor:bar");
+  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
+  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
+  expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "minor:bar" }));
+  expect(openItems.find(i => i.itemKey === "minor:bar")?.ref.evidenceId).toBe("minor:bar");
 });
 
 it("keeps item open when snapshot is not marked complete", () => {
@@ -3184,7 +3289,8 @@ it("keeps item open when snapshot is not marked complete", () => {
     reviewObserved({ scope: "task-1", isCompleteSnapshot: false, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
   ];
   const summary = aggregateReviews(records);
-  expect(summary.byScope.get("task-1")?.open).toContain("major:foo");
+  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
 });
 
 it("marks item resolved on human artifact", () => {
@@ -3193,7 +3299,9 @@ it("marks item resolved on human artifact", () => {
     reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" } }),
   ];
   const summary = aggregateReviews(records);
-  expect(summary.byScope.get("task-1")?.resolved).toContain("major:foo");
+  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
+  expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
+  expect(resolvedItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
 });
 ```
 
@@ -3228,40 +3336,80 @@ gt submit
 
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/review-scope.ts`
+- Modify: `src/core/review-rejection-detector.ts` (add detectMultiple method)
 - Test: `tests/hooks/observation-handler-review.test.ts`
+- Test: `tests/core/review-rejection-detector.test.ts`
 
 **Interfaces:**
 
-- Consumes: `ReviewRejectionDetector.detect(output)`, `aggregateReviews`, `deriveReviewScope`.
+- Consumes: `ReviewRejectionDetector.detectMultiple(output)`, `aggregateReviews`, `deriveReviewScope`.
 - Produces:
-  - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs.
-  - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarker[]}` append when a human-approved resolution artifact is received (input path: message marker or future `justice_review_resolve` tool; seam only for v2.0).
-- Consumes: `ReviewRejectionDetector.detect(output)`, `aggregateReviews`, `deriveReviewScope`.
-- Produces: `ObservationRecord{kind:"review_observed", reviewScope, items[]}` append on task/PostToolUse outputs.
+  - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs (now supporting multiple review items parsed from output).
+  - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarker[]}` append when a human-approved resolution artifact is received.
 
 - [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
   - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
 
-- [ ] **Step 2: PostToolUse 時に review_observed を生成・append（通常観測）**
+- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output)` を実装し、複数指摘の分解に対応する**
+  - 単一のシグナル抽出から、レビュー出力内に含まれる複数の指摘事項（severity, summary, location 含む）を正規表現や構造解析により分解し、`ReviewItem[]` にパースするメソッドを `ReviewRejectionDetector`（`src/core/review-rejection-detector.ts`）に追加し、そのテストを `tests/core/review-rejection-detector.test.ts` に追加する。
+
+- [ ] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
+
+```typescript
+// src/core/v2/record-builder.ts に追加
+export function buildReviewObservedRecord(
+  envelope: CommonEnvelope,
+  reviewScope: string,
+  items: readonly ReviewItem[]
+): ObservationRecord {
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "review_observed",
+    reviewScope,
+    isCompleteSnapshot: false,
+    items,
+  };
+}
+
+export function buildReviewResolutionRecord(
+  envelope: CommonEnvelope,
+  reviewScope: string,
+  itemKeys: string[],
+  artifactRef: string
+): ObservationRecord {
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "review_observed",
+    reviewScope,
+    resolutionMarker: itemKeys.map((itemKey) => ({
+      itemKey,
+      resolution: "human_artifact" as const,
+      artifactRef,
+    })),
+    items: [],
+  };
+}
+```
+
+- [ ] **Step 2b: PostToolUse 時に review_observed を生成・append（通常観測）**
+  - `ReviewRejectionDetector.detectMultiple` を用いて、見つかったすべての指摘アイテムを `items` に含めて記録します。レコード構築は `buildReviewObservedRecord`（純粋関数）に委譲します。
 
 ```typescript
 // src/hooks/observation-handler.ts 内に `appendReviewObservationsIfDetected` メソッドを実装
 private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
   try {
-    const signal = ReviewRejectionDetector.detect(toolResult ?? "");
-    if (signal.matched) {
-      const record: ObservationRecord = {
-        ...this.buildEnvelope({
-          taskId,
-          agentId: shardId.agentId,
-          sessionId,
-          recordType: "observation",
-        }),
-        kind: "review_observed",
-        reviewScope: deriveReviewScope({ taskId, sessionId, callId, toolName }),
-        isCompleteSnapshot: false, // detector output is a partial observation, not a full snapshot
-        items: [{ itemKey: signal.itemKey, evidenceId: signal.itemKey, severity: signal.severity, summary: signal.summary, location: "", status: "open" }],
-      };
+    const items = ReviewRejectionDetector.detectMultiple(toolResult ?? "");
+    if (items.length > 0) {
+      const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
+      const envelope = this.buildEnvelope({
+        taskId,
+        agentId: shardId.agentId,
+        sessionId,
+        recordType: "observation",
+      });
+      const record = buildReviewObservedRecord(envelope, reviewScope, items);
       await this.logStore.append(shardId, record);
     }
   } catch (err) {
@@ -3270,29 +3418,19 @@ private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: strin
 }
 ```
 
-- [ ] **Step 2b: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
-
-v2.0 では解決マーカーのデータモデルと集計ロジックを実装し、入力経路は seam のみ作成する。入力経路は `Message` イベント内の決められたマーカー文字列、または将来の `justice_review_resolve` custom tool とする。
+- [ ] **Step 2c: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
+  - レコード構築は `buildReviewResolutionRecord` に委譲します。
 
 ```typescript
 // src/hooks/observation-handler.ts 内（将来の拡張用 seam）
 private async handleReviewResolutionArtifact(payload: { agentId: ObservationAgentId; sessionId: string; reviewScope: string; itemKeys: string[]; artifactRef: string }): Promise<HookResponse> {
   try {
-    const record: ObservationRecord = {
-      ...this.buildEnvelope({
-        agentId: payload.agentId,
-        sessionId: payload.sessionId,
-        recordType: "observation",
-      }),
-      kind: "review_observed",
-      reviewScope: payload.reviewScope,
-      resolutionMarker: payload.itemKeys.map((itemKey) => ({
-        itemKey,
-        resolution: "human_artifact",
-        artifactRef: payload.artifactRef,
-      })),
-      items: [],
-    };
+    const envelope = this.buildEnvelope({
+      agentId: payload.agentId,
+      sessionId: payload.sessionId,
+      recordType: "observation",
+    });
+    const record = buildReviewResolutionRecord(envelope, payload.reviewScope, payload.itemKeys, payload.artifactRef);
     const shardId = { agentId: payload.agentId, sessionId: payload.sessionId, writerId: this.writerId };
     await this.logStore.append(shardId, record);
   } catch (err) {
@@ -3304,17 +3442,15 @@ private async handleReviewResolutionArtifact(payload: { agentId: ObservationAgen
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
-
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-review.test.ts
+devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/review-scope.ts src/hooks/observation-handler.ts tests/hooks/observation-handler-review.test.ts
-git commit -m "feat(v2): review_observed generation in observation handler"
+git add src/core/v2/review-scope.ts src/core/v2/record-builder.ts src/hooks/observation-handler.ts src/core/review-rejection-detector.ts tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
+git commit -m "feat(v2): review_observed generation using record-builder and multi-item detection"
 ```
 
 - [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
@@ -3524,7 +3660,7 @@ gt submit
 
 **目的:** 設計書で定義された Architecture Fitness Functions（FF-001〜008）と NFR（並行性・セキュリティ・integrity）のテストを実装し、CI 必須 check として登録。本 Phase だけで品質担保テスト群が完成する。設計書 §9.3.1 の Runtime 統合テスト（`record sub-entity refs` 含む）も含める。
 
-**判断:** Phase 8 は全ての先行 Phase を横断的に検証。Task 8.1〜8.7 はそれぞれ独立したテストファイルなので、Base から並列に分岐してもよい。ただし FF-004 は Phase 2/3、FF-005 は Phase 4、FF-006 は adapter/handler、FF-007/008 は Phase 5、NFR は Phase 2/4/6 の実装に依存する。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から切り、各 Task は独立に Base から分岐する（並列レビュー可能）。
+**判断:** Phase 8 は全ての先行 Phase を横断的に検証。Task 8.1〜8.7 はそれぞれ独立したテストファイルなので、Base から並列に分岐してもよい。ただし FF-004 は Phase 2/3、FF-005 は Phase 4、FF-006 は adapter/handler、FF-007/008 は Phase 5、NFR は Phase 2/4/6 の実装に依存する。Phase 8 Base は `feature/phase7-task3-justice-review` から切り、各 Task は独立に Base から分岐する（並列レビュー可能）。
 
 ---
 
@@ -3842,6 +3978,8 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
   expect(written).not.toContain("C:\\Users\\carol\\project");
   expect(written).not.toContain("GITHUB_TOKEN=ghp_xxx");
   expect(written).not.toContain("https://user:token@example.com");
+  expect(written).not.toContain("user:token");
+  expect(written).not.toContain("https://user:token@");
   expect(written).not.toContain("sk-abc123");
   expect(written).toContain("[REDACTED_PATH]");
   expect(written).toContain("[REDACTED_ENV]");
@@ -3958,6 +4096,7 @@ gt submit
 ```text
 master
   └── feature/phase0-v2-baseline__base
+       ├── feature/phase0-task0-preflight                     (Base から派生)
        ├── feature/phase0-task1-devcontainer-baseline        (Base から派生)
        └── feature/phase0-task2-v2-spikes                     (Task 0.1 から派生)
 
