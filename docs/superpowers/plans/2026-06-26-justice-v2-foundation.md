@@ -1111,11 +1111,16 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     shardGroups.get(shardKey)!.push(r.sequence);
   }
   for (const [shardKey, seqs] of shardGroups.entries()) {
-    const sorted = [...seqs].sort((a, b) => a - b);
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (sorted[i] === sorted[i + 1]) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence ${sorted[i]}`);
+    // 1. Check for physical/logical sequence inversion (strict monotonicity check in traversal order)
+    for (let i = 0; i < seqs.length - 1; i++) {
+      if (seqs[i] >= seqs[i + 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion or duplicate detected (${seqs[i]} -> ${seqs[i + 1]})`);
       }
+    }
+    // 2. Extra safety duplicate check using a Set
+    const uniqueSeqs = new Set(seqs);
+    if (uniqueSeqs.size !== seqs.length) {
+      throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
   }
 }
@@ -1559,6 +1564,9 @@ export class MessageRoleBuffer {
   gc(maxAgeMs: number, maxEntries: number): void { /* ... */ }
 }
 ```
+
+- [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）テストの実装**
+  - `tests/hooks/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageID, partID)` でストリーミング中に一度「tests pass」と判定された後、同じ partID の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -2023,11 +2031,20 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       payload.toolInput,
       { output: payload.toolResult, metadata: payload.metadata }
     );
-    const redactedEvidence: Evidence = {
-      ...evidence,
-      command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
-      rawOutput: evidence.rawOutput ? redactForPersistence(redactAbsolutePaths(evidence.rawOutput)) : undefined,
-    };
+    let redactedEvidence: Evidence;
+    if (evidence.toolOutputClass === "command_exec") {
+      redactedEvidence = {
+        ...evidence,
+        command: redactForPersistence(redactAbsolutePaths(evidence.command)),
+        rawOutput: redactForPersistence(redactAbsolutePaths(evidence.rawOutput ?? "")),
+      };
+    } else {
+      redactedEvidence = {
+        ...evidence,
+        command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
+        // rawOutput property is completely omitted/not generated for file_content
+      };
+    }
     const record: ObservationRecord = {
       ...this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" }),
       recordType: "observation",
@@ -2268,8 +2285,12 @@ try {
 // Ensure task summary append happens BEFORE evaluateGateIfTriggered("task_complete") (ISS-005)
 if (event.payload.toolName === "task") {
   this.activeTaskWindows.delete(event.payload.callId);
+  // The correct lifecycle ordering guarantee is:
+  // ① tool_executed append -> ② task_summary append -> ③ review_observed append -> ④ projection rebuild -> ⑤ gate evaluation.
+  // All concurrent or predecessor appends in this lifecycle must finish and rebuild state projection before evaluating.
   await this.appendTaskSummaryDeclaredEvidence(event, taskId);
-  // task evaluation must immediately follow the summary append
+  await this.ensureProjectionUpdated(event.sessionId); 
+  
   const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
   if (taskGateResponse.action === "inject") {
     return taskGateResponse;
@@ -3807,8 +3828,13 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
 
 ```typescript
 // tests/runtime/observation-log-integrity.test.ts
-it("rebuilds state.json on sequence inversion", async () => {
-  // ...
+it("rebuilds state.json on sequence inversion (e.g. sequence 3, 2, 4 in physical order)", async () => {
+  // 1. Write corrupted jsonl containing sequence inversion (non-monotonicity)
+  // 2. Trigger projection rebuild and verify that state.json is rebuilt and WARN logged
+});
+it("rebuilds state.json on sequence duplicate", async () => {
+  // 1. Write corrupted jsonl containing duplicate sequences
+  // 2. Trigger projection rebuild and verify rebuild
 });
 ```
 
@@ -3912,8 +3938,8 @@ master
 
   └── feature/phase1-v2-core-model__base
        ├── feature/phase1-task1-core-types                   (Base から派生)
-       ├── feature/phase1-task2-evidence-engine              (Task 1.1 から派生)
-       └── feature/phase1-task3-redaction-safe-segment       (Task 1.2 から派生)
+       ├── feature/phase1-task2-redaction-safe-segment       (Task 1.1 から派生)
+       └── feature/phase1-task3-evidence-engine              (Task 1.2 から派生)
 
   └── feature/phase2-v2-log-projection__base
        ├── feature/phase2-task1-shard-layout                 (Base から派生)
@@ -3924,9 +3950,10 @@ master
   └── feature/phase3-v2-message-adapter__base
        ├── feature/phase3-task1-message-role-buffer          (Base から派生)
        ├── feature/phase3-task2-adapter-extension            (Base から派生)
-       └── feature/phase3-task3-justice-routing              (Task 3.2 から派生)
+       ├── feature/phase3-task3-justice-routing              (Task 3.2 から派生)
+       └── feature/phase3-task4-agent-id-resolution          (Task 3.3 から派生)
 
-  └── feature/phase4-v2-observation-handler__base
+  └── feature/phase4-v2-observation-handler__base            (Phase 3 Base(Task 3.4含む) から派生)
        ├── feature/phase4-task1-tool-observation             (Base から派生)
        ├── feature/phase4-task2-message-observation          (Task 4.1 から派生)
        ├── feature/phase4-task3-skill-task-summary           (Task 4.2 から派生)
