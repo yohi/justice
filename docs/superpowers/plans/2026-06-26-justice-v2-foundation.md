@@ -808,6 +808,7 @@ gt submit
 **Files:**
 
 - Create: `src/core/v2/shard-layout.ts`
+- Create: `src/core/v2/writer-id-validation.ts`
 - Create: `src/runtime/writer-id.ts`
 - Test: `tests/core/v2/shard-layout.test.ts`
 - Test: `tests/runtime/writer-id.test.ts`
@@ -821,13 +822,22 @@ gt submit
   - `generateWriterId(): string` → `w-${uuid}`
   - `isSafeWriterId(id: string): boolean`
 
-- [ ] **Step 1: shard layout 関数を実装**
+- [ ] **Step 1: shard layout 関数と writer-id バリデーションを実装**
+
+```typescript
+// src/core/v2/writer-id-validation.ts
+const WRITER_ID_RE = /^w-[A-Za-z0-9-]+$/;
+
+export function isSafeWriterId(id: string): boolean {
+  return WRITER_ID_RE.test(id) && id !== "w-system";
+}
+```
 
 ```typescript
 // src/core/v2/shard-layout.ts
 import { encodeSafeSegment } from "./safe-segment.ts";
 import type { ShardId } from "../types.ts";
-import { isSafeWriterId } from "../../runtime/writer-id.ts";
+import { isSafeWriterId } from "./writer-id-validation.ts";
 
 export function toPhysicalPath(shardId: ShardId): string {
   if (!isSafeWriterId(shardId.writerId)) {
@@ -851,15 +861,10 @@ export function toArchivePath(shardId: ShardId, timestamp: string): string {
 import { randomUUID } from "crypto";
 import type { FileReader } from "../core/types.ts";
 import { toPhysicalPath } from "../core/v2/shard-layout.ts";
-
-const WRITER_ID_RE = /^w-[A-Za-z0-9-]+$/;
+import { isSafeWriterId } from "../core/v2/writer-id-validation.ts";
 
 export function generateWriterId(): string {
   return `w-${randomUUID()}`;
-}
-
-export function isSafeWriterId(id: string): boolean {
-  return WRITER_ID_RE.test(id) && id !== "w-system";
 }
 
 /**
@@ -1365,40 +1370,138 @@ export function project(
   events: readonly (ObservationRecord | DecisionRecord)[],
   rebuiltAt: string
 ): ProjectedState {
-  // 1. sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence
-  // 2. fold into TaskState per taskId:
-  //    - tool_executed / message / session_error with taskId -> append to TaskState.evidence as ProjectedEvidence { evidence, ref: { agentId, sessionId, writerId, sequence, evidenceId } }
-  //    - review_observed with taskId -> append reviewScope to TaskState.observedReviewScopes
-  //    - decision with taskId -> update TaskState.lastVerdict
-  // 3. fold review_observed -> reviewSummary (global + byScope)
-  // 4. compute integrity.maxSequenceByShard
-  // Stub returns a type-valid state; the full deterministic fold is implemented in this task.
+  // 1. Sort events: within-shard by sequence, across-shards by timestamp -> shardId -> sequence (D27/D18/D39)
+  const sorted = [...events].sort((a, b) => {
+    const shardA = `${a.agentId}:${a.sessionId}:${a.writerId}`;
+    const shardB = `${b.agentId}:${b.sessionId}:${b.writerId}`;
+    if (shardA === shardB) {
+      return a.sequence - b.sequence; // within-shard causal sequence order
+    }
+    const timeA = new Date(a.timestamp).getTime();
+    const timeB = new Date(b.timestamp).getTime();
+    if (timeA !== timeB) return timeA - timeB;
+    return shardA.localeCompare(shardB);
+  });
+
   const maxSequenceByShard = new Map<string, number>();
+  const tasks = new Map<string, { status: string; lastVerdict: string; evidence: ProjectedEvidence[]; observedReviewScopes: string[] }>();
+  
+  // reviewSummary structures
+  const globalCritical: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const globalMajor: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const globalMinor: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const globalResolved: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const globalOpen: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const byScope = new Map<string, {
+    critical: { itemKey: string; ref: FullEvidenceRef }[];
+    major: { itemKey: string; ref: FullEvidenceRef }[];
+    minor: { itemKey: string; ref: FullEvidenceRef }[];
+    resolved: { itemKey: string; ref: FullEvidenceRef }[];
+    open: { itemKey: string; ref: FullEvidenceRef }[];
+  }>();
+
+  for (const event of sorted) {
+    const shardKey = `${event.agentId}:${event.sessionId}:${event.writerId}`;
+    const seq = event.sequence;
+    const currentMax = maxSequenceByShard.get(shardKey) ?? -1;
+    if (seq > currentMax) {
+      maxSequenceByShard.set(shardKey, seq);
+    }
+
+    const ref: FullEvidenceRef = {
+      agentId: event.agentId,
+      sessionId: event.sessionId,
+      writerId: event.writerId,
+      sequence: event.sequence,
+    };
+
+    if (event.recordType === "observation") {
+      const taskId = event.taskId;
+      
+      // Task evidence fold (D8/D20/D68)
+      if (taskId) {
+        if (!tasks.has(taskId)) {
+          tasks.set(taskId, { status: "open", lastVerdict: "NONE", evidence: [], observedReviewScopes: [] });
+        }
+        const taskState = tasks.get(taskId)!;
+
+        if (event.kind === "tool_executed" || event.kind === "message" || event.kind === "session_error") {
+          const evidenceList = event.evidence ?? [];
+          for (const ev of evidenceList) {
+            taskState.evidence.push({
+              evidence: ev,
+              ref: { ...ref, evidenceId: ev.evidenceId },
+            });
+          }
+        } else if (event.kind === "review_observed") {
+          if (event.reviewScope) {
+            taskState.observedReviewScopes.push(event.reviewScope);
+          }
+        }
+      }
+
+      // Review aggregator fold (D11/D32/D66/D57)
+      if (event.kind === "review_observed") {
+        const scope = event.reviewScope ?? "default";
+        if (!byScope.has(scope)) {
+          byScope.set(scope, { critical: [], major: [], minor: [], resolved: [], open: [] });
+        }
+        const scopeSummary = byScope.get(scope)!;
+
+        // Reset open items for the scope on a new snapshot (D32)
+        scopeSummary.open = [];
+        scopeSummary.critical = [];
+        scopeSummary.major = [];
+        scopeSummary.minor = [];
+
+        for (const item of event.items ?? []) {
+          const itemRef = { itemKey: item.itemKey, ref: { ...ref, evidenceId: item.itemKey } };
+          if (item.resolved) {
+            scopeSummary.resolved.push(itemRef);
+            globalResolved.push(itemRef);
+          } else {
+            scopeSummary.open.push(itemRef);
+            globalOpen.push(itemRef);
+            if (item.severity === "critical") {
+              scopeSummary.critical.push(itemRef);
+              globalCritical.push(itemRef);
+            } else if (item.severity === "major") {
+              scopeSummary.major.push(itemRef);
+              globalMajor.push(itemRef);
+            } else {
+              scopeSummary.minor.push(itemRef);
+              globalMinor.push(itemRef);
+            }
+          }
+        }
+      }
+    } else if (event.recordType === "decision") {
+      const taskId = event.taskId;
+      if (taskId) {
+        if (!tasks.has(taskId)) {
+          tasks.set(taskId, { status: "open", lastVerdict: "NONE", evidence: [], observedReviewScopes: [] });
+        }
+        tasks.get(taskId)!.lastVerdict = event.status; // WARN/FAIL/PASS
+      }
+    }
+  }
+
   return {
     schemaVersion: 1,
     rebuiltAt,
     integrity: {
-      sourceHash: hashString(
-        [...events]
-          .sort((a, b) => {
-            const keyA = `${a.agentId}:${a.sessionId}:${a.writerId}:${a.sequence}`;
-            const keyB = `${b.agentId}:${b.sessionId}:${b.writerId}:${b.sequence}`;
-            return keyA.localeCompare(keyB);
-          })
-          .map((e) => JSON.stringify(e))
-          .join("\n")
-      ),
+      sourceHash: hashString(sorted.map((e) => JSON.stringify(e)).join("\n")),
       maxSequenceByShard,
     },
-    tasks: new Map(),
+    tasks,
     reviewSummary: {
       authority: "observed_review_output",
-      critical: [],
-      major: [],
-      minor: [],
-      resolved: [],
-      open: [],
-      byScope: new Map(),
+      critical: globalCritical,
+      major: globalMajor,
+      minor: globalMinor,
+      resolved: globalResolved,
+      open: globalOpen,
+      byScope,
     },
   };
 }
@@ -1732,7 +1835,7 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `ObservationMessagePayload` from Task 1.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`.
+- Consumes: `ObservationMessagePayload` from Task 1.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`, `allocateWriterId` from Task 2.1.
 - Produces:
   - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
   - `onToolExecuteBefore/After` no longer filters `tool !== "task"` but explicitly excludes query tools matching `justice_*`; all other tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events to prevent query commands from altering the canonical Observation Log (D50).
@@ -1742,12 +1845,32 @@ gt submit
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
   - Sets the default value of `options.enableAdvisoryOutputAppend` based on C1 spike results (Task 0.2 Step 1b). If C1 shows banner is not visible in user-facing context, it defaults to false; otherwise true (D47).
   - Step 1 implementation includes tests asserting that when `options.enableAdvisoryOutputAppend` is false, `notifier.notify()` executes normally while `output.output` remains unmodified (D47).
+  - Bootstraps global unique `writerId` dynamically resolved during initialization and injects it into both `ObservationLogStore` and `ObservationHandler` via `JusticePluginOptions` to satisfy structural invariants (D55/D39/指摘3).
 
 - [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts` & `src/core/justice-plugin.ts` (ISS-002)**
 
 Update `PostToolUsePayload` and `PreToolUsePayload` in `src/core/types.ts` to include the fields the adapter now forwards: `callId`, `toolInput` (Pre/Post), `toolResult`, and `metadata` (Post).
 Also add `AgentMappedEvent` type to `src/core/types.ts` and include it in the `HookEvent` union type.
 In `src/core/justice-plugin.ts` (`handleEvent`), add a fallback handling case for `"AgentMapped"` to proceed without error until its state mapping is fully implemented in Task 3.4. This keeps `observation-handler` type-safe and avoids compilation errors.
+In `src/core/justice-plugin.ts` `JusticePluginOptions`, add an optional field `writerId?: string`.
+
+- [ ] **Step 0b: Runtime/bootstrap 初期化配線と `writerId` の割当（D55/D39/指摘3）**
+
+`src/runtime/opencode-adapter.ts` の lazy-initialization フェーズにて以下を実装する：
+```typescript
+import { allocateWriterId } from "./writer-id.ts";
+
+// Inside lazy initialization (#runInit):
+const writerId = await allocateWriterId(localFs, { agentId: "system", sessionId: "system" });
+const justice = new JusticePlugin(localFs, localFs, {
+  logger: loggerAdapter,
+  onError: (err) => { ... },
+  globalFileSystem: globalFs ?? undefined,
+  notifier,
+  writerId, // Inject the dynamically allocated writerId
+});
+```
+これにより、`ObservationLogStore` と `ObservationHandler` で同一の `writerId` が配線されることを保証する。テスト `tests/runtime/opencode-adapter-v2.test.ts` で起動時に同一の `writerId` が配線されることを確認する。
 
 ```typescript
 // src/runtime/opencode-adapter.ts
@@ -2233,29 +2356,51 @@ export function buildToolExecutedRecord(
   toolName: string,
   toolInput: unknown,
   toolOutput: { readonly output?: string; readonly metadata?: { readonly error?: boolean } },
-  callId: string
+  callId: string,
+  summaryClaims?: readonly DeclaredClaim[]
 ): ObservationRecord {
-  const evidence = extractEvidenceFromTool(toolName, toolInput as Record<string, unknown>, toolOutput, callId);
-  let redactedEvidence: Evidence;
-  if (evidence.toolOutputClass === "command_exec") {
-    redactedEvidence = {
-      ...evidence,
-      command: redactForPersistence(redactAbsolutePaths(evidence.command ?? "")),
-      rawOutput: redactForPersistence(redactAbsolutePaths(evidence.rawOutput ?? "")),
-    };
-  } else {
-    redactedEvidence = {
-      ...evidence,
-      command: evidence.command ? redactForPersistence(redactAbsolutePaths(evidence.command)) : undefined,
-    };
+  const evidence: Evidence[] = [];
+  
+  // (a) observed evidence from tool output
+  const observed = extractEvidenceFromTool(toolName, toolInput as Record<string, unknown>, toolOutput, callId);
+  if (observed) {
+    let redactedEvidence: Evidence;
+    if (observed.toolOutputClass === "command_exec") {
+      redactedEvidence = {
+        ...observed,
+        command: redactForPersistence(redactAbsolutePaths(observed.command ?? "")),
+        rawOutput: redactForPersistence(redactAbsolutePaths(observed.rawOutput ?? "")),
+      };
+    } else {
+      redactedEvidence = {
+        ...observed,
+        command: observed.command ? redactForPersistence(redactAbsolutePaths(observed.command)) : undefined,
+      };
+    }
+    evidence.push(redactedEvidence);
   }
+
+  // (b) declared evidence from task summary (D59)
+  if (summaryClaims) {
+    for (const c of summaryClaims) {
+      evidence.push({
+        evidenceId: c.evidenceId,
+        kind: c.claimKind,
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "task_summary",
+        claim: { claimKind: c.claimKind, outcome: c.outcome },
+      });
+    }
+  }
+
   return {
     ...envelope,
     recordType: "observation",
     kind: "tool_executed",
     toolName,
     callId,
-    evidence: redactedEvidence,
+    evidence,
   };
 }
 ```
@@ -2279,6 +2424,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     const envelope = this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" });
 
     // 1. Tool execution observed append (業務ロジックは record-builder へ完全に委譲)
+    // D59: task ツールの場合は、後続の Task 4.3 で task summary から declared claims も抽出して同居させる
     const record = buildToolExecutedRecord(
       envelope,
       payload.toolName,
@@ -2287,11 +2433,6 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       callId
     );
     await this.logStore.append(shardId, record);
-    
-    // 2. Task summary declared evidence (if toolName === "task", appended in Task 4.3)
-    if (payload.toolName === "task") {
-      await this.appendTaskSummaryDeclaredEvidence(event, taskId);
-    }
 
     // 3. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
@@ -2570,55 +2711,74 @@ try {
 }
 ```
 
-- [ ] **Step 3b: `appendTaskSummaryDeclaredEvidence` メソッドを追加（D34/D59/D70）**
+- [ ] **Step 3b: `handlePostToolUse` での task summary declared claims 同居と配線（D59/D70/指摘4）**
+
+`src/hooks/observation-handler.ts` の `handlePostToolUse` 内で `toolName === "task"` の場合に `extractTaskSummaryClaims` を使ってサマリーから declared claims を抽出し、`buildToolExecutedRecord` に渡して同居させるように修正・拡張する。
 
 ```typescript
 // src/hooks/observation-handler.ts
-private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?: string): Promise<void> {
-  if (!taskId) return;
+async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
+  const payload = event.payload;
+  const callId = event.callId;
+  if (!callId) {
+    this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
+    return { action: "proceed" };
+  }
   try {
-    const payload = event.payload;
-    const summaryText = payload.toolResult ?? "";
-    const summaryClaims = extractTaskSummaryClaims(summaryText);
-    if (summaryClaims.length === 0) return;
-    
-    const sessionId = event.sessionId;
-    const agentId = await this.resolveAgentId(sessionId);
-    const shardId = { agentId, sessionId, writerId: this.writerId };
-    const envelope = this.buildEnvelope({ taskId, agentId, sessionId, recordType: "observation" });
+    const taskId = this.activeTaskWindows.get(callId);
 
-    const record = buildTaskSummaryRecord(envelope, summaryText, summaryClaims, event.callId ?? "call_unknown");
+    const agentId = await this.resolveAgentId(event.sessionId);
+    const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
+    const envelope = this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" });
+
+    // 1. Tool execution observed and declared evidence (cohabitated in a single tool_executed record)
+    let summaryClaims: readonly DeclaredClaim[] | undefined;
+    if (payload.toolName === "task") {
+      try {
+        const summaryText = payload.toolResult ?? "";
+        summaryClaims = extractTaskSummaryClaims(summaryText);
+      } catch (err) {
+        this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
+      }
+    }
+
+    const record = buildToolExecutedRecord(
+      envelope,
+      payload.toolName,
+      payload.toolInput,
+      { output: payload.toolResult, metadata: payload.metadata },
+      callId,
+      summaryClaims
+    );
     await this.logStore.append(shardId, record);
+
+    // 2. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
+    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
+
+    // 3. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
+    if (payload.toolName === "task") {
+      this.activeTaskWindows.delete(callId);
+      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+      if (taskGateResponse.action === "inject") {
+        return taskGateResponse;
+      }
+    }
+    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
+    if (gateResponse.action === "inject") {
+      return gateResponse;
+    }
   } catch (err) {
-    this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
+    this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
+  } finally {
+    if (payload.toolName === "task") {
+      this.activeTaskWindows.delete(callId);
+    }
   }
+  return { action: "proceed" };
 }
 ```
-
-- [ ] **Step 3c: `handlePostToolUse` の仮置ブロックを task summary 呼び出し（順序保証）に置換・最新化（ISS-005）**
-
-```typescript
-// src/hooks/observation-handler.ts 内 handlePostToolUse
-// Ensure task summary append happens BEFORE evaluateGateIfTriggered("task_complete") (ISS-005)
-if (event.payload.toolName === "task") {
-  this.activeTaskWindows.delete(event.callId ?? "");
-  // The correct lifecycle ordering guarantee is:
-  // ① tool_executed append -> ② task_summary append -> ③ review_observed append -> ④ projection rebuild -> ⑤ gate evaluation.
-  // All concurrent or predecessor appends in this lifecycle must finish and rebuild state projection before evaluating.
-  await this.appendTaskSummaryDeclaredEvidence(event, taskId);
-  // Ensure review_observed append using correct 6-argument signature (FIND-005)
-  await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, event.callId ?? "", event.payload.toolName, event.payload.toolResult);
-  await this.ensureProjectionUpdated(event.sessionId); 
-  
-  const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
-  if (taskGateResponse.action === "inject") {
-    return taskGateResponse;
-  }
-}
-```
-
 - [ ] **Step 3d: 順序保証検証用回帰テストの作成**
-  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` append → `task_summary` append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
+  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` (declared claims 同居) append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
 
 
 - [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加**
@@ -3940,11 +4100,14 @@ import { glob } from "glob";
 import { readFileSync } from "fs";
 
 describe("FF-001", () => {
-  it("src/core does not import @opencode-ai/*", () => {
+  it("src/core does not import @opencode-ai/*, src/runtime/*, or node/bun I/O APIs", () => {
     const files = glob.sync("src/core/**/*.ts");
     for (const file of files) {
       const content = readFileSync(file, "utf-8");
       expect(content).not.toMatch(/from ['"]@opencode-ai/);
+      expect(content).not.toMatch(/from ['"](\.\.\/)*runtime/);
+      expect(content).not.toMatch(/from ['"](node:)?fs/);
+      expect(content).not.toMatch(/Bun\.file/);
     }
   });
 });
