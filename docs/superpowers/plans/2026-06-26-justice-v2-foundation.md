@@ -657,11 +657,12 @@ export function classifyToolOutputClass(
 export function extractEvidenceFromTool(
   toolName: string,
   args: { readonly command?: string } | undefined,
-  output: { readonly output?: string; readonly metadata?: { readonly error?: boolean } }
+  output: { readonly output?: string; readonly metadata?: { readonly error?: boolean } },
+  callId: string // determinism: use callId as evidenceId (FIND-003)
 ): Evidence {
   const rawOutput = output.output ?? "";
   const toolOutputClass = classifyToolOutputClass(toolName, args, rawOutput.length);
-  const observedId = generateEvidenceId();
+  const observedId = callId; // Deterministic evidenceId from tool callId (FF-002/FF-003)
   return {
     evidenceId: observedId,
     kind: mapToolNameToKind(toolName, args),
@@ -1040,7 +1041,8 @@ export class ObservationLogStore {
   async readAll(): Promise<readonly (ObservationRecord | DecisionRecord)[]> {
     const activePaths = await this.fileReader.listFiles(".justice/events");
     const archivePaths = await this.fileReader.listFiles(".justice/archive/events");
-    const allPaths = [...activePaths, ...archivePaths];
+    // Place archive (old) before active (new) to naturally preserve physical sequence progression (FIND-002)
+    const allPaths = [...archivePaths, ...activePaths];
     const records: (ObservationRecord | DecisionRecord)[] = [];
     
     for (const path of allPaths) {
@@ -1111,16 +1113,18 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     shardGroups.get(shardKey)!.push(r.sequence);
   }
   for (const [shardKey, seqs] of shardGroups.entries()) {
-    // 1. Check for physical/logical sequence inversion (strict monotonicity check in traversal order)
-    for (let i = 0; i < seqs.length - 1; i++) {
-      if (seqs[i] >= seqs[i + 1]) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion or duplicate detected (${seqs[i]} -> ${seqs[i + 1]})`);
-      }
-    }
-    // 2. Extra safety duplicate check using a Set
+    // 1. Check for duplicate sequence numbers using a Set (independent of traversal order)
     const uniqueSeqs = new Set(seqs);
     if (uniqueSeqs.size !== seqs.length) {
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
+    }
+    // 2. Check for physical/logical sequence inversion (strictly monotonic sorting check)
+    // Sort to avoid false positives due to traversal order (FIND-002)
+    const sortedSeqs = [...seqs].sort((a, b) => a - b);
+    for (let i = 0; i < sortedSeqs.length - 1; i++) {
+      if (sortedSeqs[i] >= sortedSeqs[i + 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (${sortedSeqs[i]} -> ${sortedSeqs[i + 1]})`);
+      }
     }
   }
 }
@@ -1605,6 +1609,7 @@ gt submit
   - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
   - `onToolExecuteBefore/After` no longer filters `tool !== "task"` but explicitly excludes query tools matching `justice_*`; all other tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events to prevent query commands from altering the canonical Observation Log (D50).
   - `onMessage` / `onMessagePartUpdated` / `onTextComplete` hooks produce `ObservationMessagePayload` and forward to `JusticePlugin.handleEvent({ type: "Message" })` alongside the existing user-message path (handled in Task 3.3).
+  - Triggers `AgentMapped` event forwarding when observing `agent` property in message parameters (`chat.params` / `chat.message`) (D48, FIND-001).
   - `onSessionError` forwards to `JusticePlugin.handleEvent({ type: "Event", event: "session.error" })`.
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
 
@@ -1713,6 +1718,15 @@ onMessagePartUpdated: async (event) => {
   await this.plugin.handleEvent({ type: "Message", payload: { kind: "message_part_updated", sessionId: event.sessionId, messageID: event.messageID, partID: event.partID, text: event.text } });
 },
 onMessageUpdated: async (event) => {
+  // Translate and forward AgentMapped event if agent property is present (D48, FIND-001)
+  const agentName = event.message.agent || event.properties?.info?.agent || event.properties?.params?.agent;
+  if (agentName) {
+    await this.plugin.handleEvent({
+      type: "AgentMapped",
+      payload: { sessionId: event.sessionId, agentName }
+    });
+  }
+
   // Translate to ObservationMessagePayload with kind "message_updated" to propagate role & finalized metadata (ISS-002)
   // Map finalized=true if finish indicator is present (e.g. AssistantMessage.finish / time.completed based on Phase 0 spike)
   const isFinalized = !!(event.message.finish || event.time?.completed || event.message.finalized);
@@ -2289,6 +2303,7 @@ if (event.payload.toolName === "task") {
   // ① tool_executed append -> ② task_summary append -> ③ review_observed append -> ④ projection rebuild -> ⑤ gate evaluation.
   // All concurrent or predecessor appends in this lifecycle must finish and rebuild state projection before evaluating.
   await this.appendTaskSummaryDeclaredEvidence(event, taskId);
+  await this.appendReviewObservationsIfDetected(event, taskId); // Ensure review_observed append (FIND-005)
   await this.ensureProjectionUpdated(event.sessionId); 
   
   const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
@@ -2681,7 +2696,13 @@ export type GateContext = {
   readonly sessionId: string;
   readonly reviewScope: readonly string[];
   readonly reviewSummary?: {
-    readonly byScope: ReadonlyMap<string, { readonly critical: readonly string[]; readonly major: readonly string[]; readonly minor: readonly string[]; readonly resolved: readonly string[]; readonly open: readonly string[] }>;
+    readonly byScope: ReadonlyMap<string, {
+      readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    }>;
   };
 };
 ```
