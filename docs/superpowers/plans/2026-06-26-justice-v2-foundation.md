@@ -547,7 +547,7 @@ gt submit
 - Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `ObservationMessagePayload` union (Task 3.1), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
 - Produces:
   - `Evidence` discriminated union with `sourceClass: "tool_output" | "declared_claim"`.
-  - `extractEvidenceFromTool(toolName, args, output, metadata): Evidence` (returns observed + derived interpretation).
+  - `extractEvidenceFromTool(toolName, args, output, metadata, callId): Evidence` (returns observed + derived interpretation).
   - `classifyToolOutputClass(toolName, args): "command_exec" | "file_content"`.
   - `extractDeclaredClaims(text): DeclaredClaim[]` (from message text or task summary).
 
@@ -633,8 +633,8 @@ export function classifyToolOutputClass(
 
     const firstToken = tokens[0] ?? "";
     // Quality-verification compound commands must preserve rawOutput for auditability.
+    // Note: Do NOT fall back to file_content on size threshold for known COMMAND_EXEC_COMMANDS!
     if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
-      if (rawOutputLength > 20000) return "file_content"; // Size threshold fallback for very large outputs
       return "command_exec";
     }
     if (FILE_CONTENT_COMMANDS.has(firstToken)) return "file_content";
@@ -747,7 +747,7 @@ gt submit
 
 **目的:** per-writer segment JSONL への atomic append + active/archive 読取マージ + 純粋 state projection を実装。本 Phase だけで event log I/O と replay 決定性が検証できる。
 
-**判断:** Phase 2 は Phase 1 の型を使用（`ObservationRecord`, `DecisionRecord`, `EvidenceRef`）。したがって Phase 2 Base は Phase 1 Base マージ後を想定し、**Phase 1 Base から分岐する**（`gt checkout feature/phase1-v2-core-model__base && gt branch create feature/phase2-v2-log-projection__base`）。Graphite stacking では Phase 2 Base を Phase 1 Base から派生させ、各 Task は Phase 2 Base から分岐する。Task 2.1 は独立した I/O 基盤（writerId, safe-segment）なので Base から、Task 2.2 は 2.1 のファイルレイアウトを使用するため Task 2.1 から、Task 2.3 は 2.2 の readAll 結果を使用するため Task 2.2 から、Task 2.4 は 2.2 の append 経路を使用するため Task 2.3 から。
+**判断:** Phase 2 は Phase 1 の型を使用（`ObservationRecord`, `DecisionRecord`, `EvidenceRef`）。したがって Phase 2 Base は Phase 1 の最終 Task ブランチ（`feature/phase1-task3-evidence-engine`）から分岐する（`gt checkout feature/phase1-task3-evidence-engine && gt branch create feature/phase2-v2-log-projection__base`）。Graphite stacking では Phase 2 Base を前 Phase 1 の最終 Task から派生させ、各 Task は Phase 2 Base から分岐する。Task 2.1 は独立した I/O 基盤（writerId, safe-segment）なので Base から、Task 2.2 は 2.1 のファイルレイアウトを使用するため Task 2.1 から、Task 2.3 は 2.2 の readAll 結果を使用するため Task 2.2 から、Task 2.4 は 2.2 の append 経路を使用するため Task 2.3 から。
 
 ---
 
@@ -863,9 +863,9 @@ gt submit
   - `ObservationLogStore` class with `append(record)` and `readAll()`.
   - Per-shard async write queue ensuring serialization and sequence assignment.
   - Writer ID collision re-generation on existing file.
-- [ ] **Step 0: Extend `FileReader` with `listFiles(prefix)`**
+- [ ] **Step 0: Extend `FileReader` with `listFiles(prefix)` and `FileWriter` with `rename(from, to)`**
 
-Add `listFiles(prefix: string): Promise<readonly string[]>` to `FileReader` in `src/core/types.ts`. Implement it in `src/runtime/node-file-system.ts` using `fs.readdir` with prefix filtering, and in `tests/helpers/mock-file-system.ts`. This is required for `ObservationLogStore.readAll()` to enumerate `.justice/events/**` and `.justice/archive/events/**` without direct `fs` access in Core or tests.
+Add `listFiles(prefix: string): Promise<readonly string[]>` to `FileReader` and `rename(from: string, to: string): Promise<void>` to `FileWriter` in `src/core/types.ts`. Implement them in `src/runtime/node-file-system.ts` using `fs.readdir` with prefix filtering and `fs.rename` for atomic file moves, and in `tests/helpers/mock-file-system.ts`. This is required for `ObservationLogStore.readAll()` to enumerate `.justice/events/**` and `.justice/archive/events/**`, and for `createShardWriteQueue` to atomically save files without direct `fs` access in Core or tests.
 
 ```typescript
 // src/core/types.ts
@@ -874,11 +874,16 @@ export interface FileReader {
   fileExists(path: string): Promise<boolean>;
   listFiles(prefix: string): Promise<readonly string[]>;
 }
+
+export interface FileWriter {
+  writeFile(path: string, content: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+}
 ```
 
 ```typescript
 // src/runtime/node-file-system.ts
-import { readdir } from "node:fs/promises";
+import { readdir, rename } from "node:fs/promises";
 
 async listFiles(prefix: string): Promise<readonly string[]> {
   const safePrefix = await this.resolveSafely(prefix);
@@ -887,6 +892,13 @@ async listFiles(prefix: string): Promise<readonly string[]> {
   return entries
     .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
     .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
+}
+
+async rename(from: string, to: string): Promise<void> {
+  const safeFrom = await this.resolveSafely(from);
+  const safeTo = await this.resolveSafely(to);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  await rename(safeFrom, safeTo);
 }
 ```
 
@@ -1119,11 +1131,10 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
     // 2. Check for physical/logical sequence inversion (strictly monotonic sorting check)
-    // Sort to avoid false positives due to traversal order (FIND-002)
-    const sortedSeqs = [...seqs].sort((a, b) => a - b);
-    for (let i = 0; i < sortedSeqs.length - 1; i++) {
-      if (sortedSeqs[i] >= sortedSeqs[i + 1]) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (${sortedSeqs[i]} -> ${sortedSeqs[i + 1]})`);
+    // DO NOT sort to detect sequence inversion in physical traversal/read order!
+    for (let i = 0; i < seqs.length - 1; i++) {
+      if (seqs[i] >= seqs[i + 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (${seqs[i]} -> ${seqs[i + 1]})`);
       }
     }
   }
@@ -1612,6 +1623,8 @@ gt submit
   - Triggers `AgentMapped` event forwarding when observing `agent` property in message parameters (`chat.params` / `chat.message`) (D48, FIND-001).
   - `onSessionError` forwards to `JusticePlugin.handleEvent({ type: "Event", event: "session.error" })`.
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
+  - Sets the default value of `options.enableAdvisoryOutputAppend` based on C1 spike results (Task 0.2 Step 1b). If C1 shows banner is not visible in user-facing context, it defaults to false; otherwise true (D47).
+  - Step 1 implementation includes tests asserting that when `options.enableAdvisoryOutputAppend` is false, `notifier.notify()` executes normally while `output.output` remains unmodified (D47).
 
 - [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts`**
 
@@ -1792,10 +1805,10 @@ gt submit
   - `handleEvent` routes:
     - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge, merged via `mergePreToolUseResponses`.
     - `PostToolUse`: observation-handler + (if toolName === "task") plan-bridge + task-feedback, merged via `mergePostToolUseResponses`.
-    - `Message`: routed to both `planBridge.handleMessage(event)` (existing delegation triggers) and `observationHandler.handleMessage(payload)` (declared claim extraction), merged via `mergeMessageResponses`.
+    - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(payload)` (declared claim extraction).
     - `Event`: existing handlers unchanged.
 
-- [ ] **Step 0: Add `mergePreToolUseResponses` and `mergeMessageResponses` helpers**
+- [ ] **Step 0: Add `mergePreToolUseResponses` helper**
 
 ```typescript
 // src/core/justice-plugin.ts
@@ -1807,16 +1820,6 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
     if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
     if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
     return result;
-  }
-  if (a.action === "inject") return { ...a };
-  if (b.action === "inject") return { ...b };
-  return { action: "proceed" };
-}
-
-function mergeMessageResponses(a: HookResponse, b: HookResponse): HookResponse {
-  if (a.action === "inject" && b.action === "inject") {
-    const contexts = [a.injectedContext, b.injectedContext].filter((c) => c !== "");
-    return { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
   }
   if (a.action === "inject") return { ...a };
   if (b.action === "inject") return { ...b };
@@ -2043,7 +2046,8 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     const evidence = extractEvidenceFromTool(
       payload.toolName,
       payload.toolInput,
-      { output: payload.toolResult, metadata: payload.metadata }
+      { output: payload.toolResult, metadata: payload.metadata },
+      callId
     );
     let redactedEvidence: Evidence;
     if (evidence.toolOutputClass === "command_exec") {
@@ -3957,52 +3961,53 @@ master
        ├── feature/phase0-task1-devcontainer-baseline        (Base から派生)
        └── feature/phase0-task2-v2-spikes                     (Task 0.1 から派生)
 
-  └── feature/phase1-v2-core-model__base
+  └── feature/phase1-v2-core-model__base                      (feature/phase0-task2-v2-spikes から派生)
        ├── feature/phase1-task1-core-types                   (Base から派生)
        ├── feature/phase1-task2-redaction-safe-segment       (Task 1.1 から派生)
        └── feature/phase1-task3-evidence-engine              (Task 1.2 から派生)
 
-  └── feature/phase2-v2-log-projection__base
+  └── feature/phase2-v2-log-projection__base                 (feature/phase1-task3-evidence-engine から派生)
        ├── feature/phase2-task1-shard-layout                 (Base から派生)
        ├── feature/phase2-task2-atomic-append                (Task 2.1 から派生)
        ├── feature/phase2-task3-state-projection             (Task 2.2 から派生)
        └── feature/phase2-task4-rotation-archive              (Task 2.3 から派生)
 
-  └── feature/phase3-v2-message-adapter__base
+  └── feature/phase3-v2-message-adapter__base                (feature/phase2-task4-rotation-archive から派生)
        ├── feature/phase3-task1-message-role-buffer          (Base から派生)
        ├── feature/phase3-task2-adapter-extension            (Base から派生)
        ├── feature/phase3-task3-justice-routing              (Task 3.2 から派生)
        └── feature/phase3-task4-agent-id-resolution          (Task 3.3 から派生)
 
-  └── feature/phase4-v2-observation-handler__base            (Phase 3 Base(Task 3.4含む) から派生)
+  └── feature/phase4-v2-observation-handler__base            (feature/phase3-task4-agent-id-resolution から派生)
        ├── feature/phase4-task1-tool-observation             (Base から派生)
        ├── feature/phase4-task2-message-observation          (Task 4.1 から派生)
        ├── feature/phase4-task3-skill-task-summary           (Task 4.2 から派生)
        └── feature/phase4-task4-session-error-reflection     (Task 4.3 から派生)
 
-  └── feature/phase5-v2-rule-engine__base
+  └── feature/phase5-v2-rule-engine__base                    (feature/phase4-task4-session-error-reflection から派生)
        ├── feature/phase5-task1-gate-schema                  (Base から派生)
        ├── feature/phase5-task2-rule-engine                  (Task 5.1 から派生)
        ├── feature/phase5-task3-default-gates                (Task 5.2 から派生)
        └── feature/phase5-task4-gate-trigger                 (Task 5.3 から派生)
 
-  └── feature/phase6-v2-review-aggregator__base
+  └── feature/phase6-v2-review-aggregator__base              (feature/phase5-task4-gate-trigger から派生)
        ├── feature/phase6-task1-severity-classifier          (Base から派生)
        ├── feature/phase6-task2-review-aggregator            (Task 6.1 から派生)
        └── feature/phase6-task3-review-observed              (Task 6.2 から派生)
 
-  └── feature/phase7-v2-justice-tools__base
+  └── feature/phase7-v2-justice-tools__base                  (feature/phase6-task3-review-observed から派生)
        ├── feature/phase7-task1-justice-status               (Base から派生)
        ├── feature/phase7-task2-justice-gate                 (Task 7.1 から派生)
-       ├── feature/phase7-task3-justice-review               (Task 7.2 から派生)
-       └── feature/phase8-v2-fitness-nfr__base                (Phase 7 Base から派生)
-            ├── feature/phase8-task1-ff001-core-imports           (Base から派生)
-            ├── feature/phase8-task2-ff002-003-determinism        (Base から派生)
-            ├── feature/phase8-task3-ff004-005-replay-planmd      (Base から派生)
-            ├── feature/phase8-task4-ff006-fail-open               (Base から派生)
-            ├── feature/phase8-task5-ff007-008-provenance          (Base から派生)
-            ├── feature/phase8-task6-nfr-security-integrity        (Base から派生)
-            └── feature/phase8-task7-final-regression             (Base から派生)
+       └── feature/phase7-task3-justice-review               (Task 7.2 から派生)
+
+  └── feature/phase8-v2-fitness-nfr__base                    (feature/phase7-task3-justice-review から派生)
+       ├── feature/phase8-task1-ff001-core-imports           (Base から派生)
+       ├── feature/phase8-task2-ff002-003-determinism        (Base から派生)
+       ├── feature/phase8-task3-ff004-005-replay-planmd      (Base から派生)
+       ├── feature/phase8-task4-ff006-fail-open               (Base から派生)
+       ├── feature/phase8-task5-ff007-008-provenance          (Base から派生)
+       ├── feature/phase8-task6-nfr-security-integrity        (Base から派生)
+       └── feature/phase8-task7-final-regression             (Base から派生)
 ```
 
 ---
@@ -4013,7 +4018,7 @@ master
 - [x] **Phase 0:** CI/CD（`.github/workflows/ci.yml` with `master` trigger + `ubuntu-slim`）と Devcontainer（`.devcontainer/devcontainer.json` + `Dockerfile`）は既存。Phase 0 はこれらの検証 + **3 スパイク**（観測レイテンシ・Message fallback matrix・C1/L0 advisory 表示面実証）に充てる。Pre-Planning Preflight（ADR 追認）が完了して初めて本計画を executable とする。
 - [x] **Devcontainer 強制:** 各 Task の検証手順に `devcontainer exec --workspace-folder . ...` を明記。
 - [x] **ブランチ運用:** Graphite Stacked PR Workflow に準拠。各 Phase には `feature/phaseN-v2-...__base`、各 Task には `feature/phaseN-taskM-...` ブランチを定義。各 Task 最後は `gt submit` による Phase Base 向け Draft PR 作成・更新。
-- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase Base から分岐。Phase 8 Base は `feature/phase7-v2-justice-tools__base` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
+- [x] **派生元:** Phase 0 Base のみ `master` から直接分岐。Phase 1〜7 の各 Phase Base は直前の Phase の最終 Task ブランチから分岐。Phase 8 Base は `feature/phase7-task3-justice-review` から分岐。独立して単体完結する Task は Base から派生。同一ファイル・同一型を連続して使用する Task は直前 Task から派生。
 - [x] **Placeholder scan:** `throw new Error("implement projection fold")`、`StateProjectionCache.write` の未定義 `content`、Task 1.3 / Task 6.3 の未閉じ code fence、Task 6.3 の余分な `}` 等を修正済み。`...envelope...` 等のプレースホルダは `buildEnvelope` ヘルパーに置き換え。実装計画の簡略化のため、一部の難解な関数（`MessageRoleBuffer`、`evaluateRule`、`aggregateReviews` 等）の内部ロジックは擬似コード（pseudocode only / スタブ）として残している旨を明記。
 - [x] **Type consistency:** `Evidence` は `taskId` を持たず envelope が持つ。`ProjectedState.tasks` は `evidence` 配列を持つ。`RuleEngine.evaluate` は task-scoped evidence と `GateContext.reviewSummary` を受け取る。`extractEvidenceFromTool` は single `Evidence`（interpretation 内包）を返す。`EvidenceRef` は `FullEvidenceRef | SelfEvidenceRef` の union。
 - [x] **Graphite 一貫性:** `gh pr create` を `gt submit` に統一。PR タイトル/本文は commit message から生成されるため、commit ステップで内容を制御する。
