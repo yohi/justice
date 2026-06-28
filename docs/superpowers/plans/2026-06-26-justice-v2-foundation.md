@@ -37,7 +37,7 @@
 
 **Base Branch:** `feature/phase0-v2-baseline__base`
 
-**目的:** 既存 CI/Devcontainer を v2.0 開発用に検証し、Phase 0 で決着すべき 2 つの実測スパイクを完了する。本 Phase の成果は設計書の前提を確定させるため、実装計画の最初に位置づける。
+**目的:** 既存 CI/Devcontainer を v2.0 開発用に検証し、Phase 0 で決着すべき 3 つの実測スパイクを完了する。本 Phase の成果は設計書の前提を確定させるため、実装計画の最初に位置づける。
 
 **判断:** Phase 0 のタスクは独立しているが、後続 Phase はこれらの前提（Message 観測 fallback matrix）に依存する。Phase 0 Base は `master` から分岐する。
 
@@ -1819,7 +1819,7 @@ MessageRoleBuffer の動作仕様：
 - `extractAssistantClaims(sessionId, messageId, partId?)`:
   - バッファから該当メッセージを取得。`role !== "assistant"` の場合は空配列 `[]` を返す。
   - `partId` が指定されている場合はその part のテキストから、未指定の場合は全 part のテキストを partID 順に結合したテキストから、`tests pass` などの申告パターン（D70）を検出。
-  - 戻り値：`DeclaredClaim[]` のリスト。各 claim は `{ evidenceId: string, claimKind: "test" | "build", outcome: "pass" | "fail", provenance: "declared" }` の形状。
+  - 戻り値：`DeclaredClaim[]` のリスト。各 claim は `{ evidenceId: string, claimKind: "test" | "build", outcome: "pass" | "fail" }` の形状。
   - 重複排除 (D67): 同一 `partId` が更新された場合、前回の抽出結果を破棄して最新のテキスト状態から再判定。確定 (finalized) 時に初めて永続化対象となる。
 - `getFinalizedText(sessionId, messageId, partId?)` / `getFinalizedAssistantText(...)`:
   - メッセージ全体、または指定された part が `finalized === true` である場合のみ、テキストを結合して返す。role が assistant でない場合は `undefined`。
@@ -2785,21 +2785,7 @@ export function buildTaskSummaryRecord(
 
 ```
 
-```typescript
-// tool_executed レコード生成時に併せて skill_invoked レコードも append（fail-open）
-try {
-  const invokedSkills = detectSkillInvoked(payload.toolName, payload.toolInput);
-  const sessionId = event.sessionId;
-  const agentId = await this.resolveAgentId(sessionId);
-  const shardId = { agentId, sessionId, writerId: this.writerId };
-  const envelope = this.buildEnvelope({ taskId, agentId, sessionId, recordType: "observation" });
-  for (const skill of invokedSkills) {
-    const record = buildSkillInvokedRecord(envelope, skill.skillName, skill.source);
-    await this.logStore.append(shardId, record);
-  }
-} catch (err) {
-  this.logger.warn("observation-handler: skill_invoked observation failed", err);
-}
+（※実際の `skill_invoked` 観測と append 処理の配線コードは、後述の **Step 3b** にて `handlePostToolUse` の実装内に統合して記述します。）
 ```
 
 - [ ] **Step 3b: `handlePostToolUse` での task summary declared claims 同居と配線（D59/D70/指摘4）**
@@ -3251,32 +3237,7 @@ export function parseGateYaml(content: string): readonly GateRule[] {
   return validated.gates;
 }
 ```
-
-function normalizeVerdict(value: unknown): "pass" | "warn" | "fail" {
-  const s = String(value).toLowerCase();
-  if (s === "pass" || s === "warn" || s === "fail") return s;
-  throw new Error(`Invalid verdict: ${value}`);
-}
-
-function normalizeTriggerOn(raw: unknown): "task_complete" | "tool_observed" {
-  const value = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).on : raw;
-  const s = String(value);
-  if (s === "task_complete" || s === "tool_observed") return s;
-  throw new Error(`Invalid trigger: ${value}`);
-}
-
-function normalizeCheck(raw: unknown): GateCheck {
-  // ... dispatch by raw.type
-}
-
-function requiredString(value: unknown, name: string): string {
-  if (typeof value !== "string") throw new Error(`${name} must be a string`);
-  return value;
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+// (注: 設計通り Zod スキーマ `GateConfigSchema.parse(parsed)` によって一貫してバリデーションと型キャストを行うため、上記のような手動の normalize / validate 関数群は実装不要です。Zod に検証と型解決を委ねるように実装してください。)
 ```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -4727,7 +4688,7 @@ describe("FF-005", () => {
 ```typescript
 // tests/core/observation-log-replay.test.ts
 import { describe, expect, it } from "vitest";
-import { project } from "../../src/core/v2/projection.ts";
+import { project } from "../../src/core/v2/state-projection.ts";
 import { type ObservationRecord } from "../../src/core/v2/observation-model.ts";
 
 describe("FF-004 - Observation Log Replay Validation", () => {
@@ -4748,9 +4709,14 @@ describe("FF-004 - Observation Log Replay Validation", () => {
           {
             evidenceId: "ev-1",
             kind: "test",
-            sourceClass: "observed_outcome",
-            provenance: "observed",
-            outcome: "pass",
+            sourceClass: "tool_output",
+            toolOutputClass: "command_exec",
+            interpretation: {
+              outcome: "pass",
+              provenance: "derived",
+              basis: "parsed_output",
+              derivedFrom: []
+            }
           }
         ]
       }
@@ -5081,9 +5047,10 @@ master
   └── feature/phase3-v2-message-adapter__base                (feature/phase2-task4-rotation-archive から派生)
        └── feature/phase3-task1-message-role-buffer          (Base から派生)
             └── feature/phase3-task2-adapter-extension        (Task 3.1 から派生)
-                 └── feature/phase3-task3-agent-id-resolution (Task 3.2 から派生)
+                 └── feature/phase3-task3-routing-guard       (Task 3.2 から派生)
+                      └── feature/phase3-task4-agent-id-resolution (Task 3.3 から派生)
 
-  └── feature/phase4-v2-observation-handler__base            (feature/phase3-task3-agent-id-resolution から派生)
+  └── feature/phase4-v2-observation-handler__base            (feature/phase3-task4-agent-id-resolution から派生)
        ├── feature/phase4-task1-tool-observation             (Base から派生)
        ├── feature/phase4-task2-message-observation          (Task 4.1 から派生)
        ├── feature/phase4-task3-skill-task-summary           (Task 4.2 から派生)
