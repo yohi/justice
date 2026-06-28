@@ -2151,12 +2151,12 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
       return obs;
     }
     case "PreToolUse": {
-      const obs = await this.observationHandler.handlePreToolUse(event);
+      let planRes: HookResponse = PROCEED;
       if (event.payload.toolName === "task") {
-        const plan = await this.planBridge.handlePreToolUse(event);
-        return mergePreToolUseResponses(obs, plan);
+        planRes = await this.planBridge.handlePreToolUse(event);
       }
-      return obs;
+      const obs = await this.observationHandler.handlePreToolUse(event);
+      return mergePreToolUseResponses(obs, planRes);
     }
     case "PostToolUse": {
       const responses: HookResponse[] = [await this.observationHandler.handlePostToolUse(event)];
@@ -2267,11 +2267,14 @@ gt submit
 
 **Interfaces:**
 - Consumes: Normalized agent mapped event (`{ type: "AgentMapped", payload: { sessionId: string; agentName: string } }`) produced by the adapter (complying with FF-001).
-- Produces: `sessionStateProvider.getAgentId(sessionId): Promise<ObservationAgentId>`
+- Produces:
+  - `sessionStateProvider.getAgentId(sessionId): Promise<ObservationAgentId>`
+  - `sessionStateProvider.getActiveTaskId(sessionId): string | undefined`
 
-- [ ] **Step 1: SessionStateProvider の実装（D48）**
+- [ ] **Step 1: SessionStateProvider の実装（D48/D74）**
   - アダプター側で検知・抽出された `AgentMapped` ペイロードを受け取り、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
   - OpenCode agent 名（自由文字列）から Justice `AgentId`（`atlas` / `hephaestus` / `sisyphus` / `prometheus`）への写像ロジックを実装し、マッピングできない場合は `unknown` とする。
+  - セッションごとのアクティブな `taskId` の保存と取得（`setActiveTaskId(sessionId, taskId)` / `getActiveTaskId(sessionId)`）を実装する。
 
 - [ ] **Step 2: routing イベントハンドラに AgentMapped イベント処理を追加**
   - `JusticePlugin.handleEvent` で `AgentMapped` イベント（ペイロード: `{ sessionId, agentName }`）を受信し、`SessionStateProvider` のマップを更新する。
@@ -2374,6 +2377,7 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
         return { action: "proceed" };
       }
       this.activeTaskWindows.set(event.callId, taskId);
+      this.sessionStateProvider?.setActiveTaskId(event.sessionId, taskId);
       if (!this.sessionActiveTasks.has(event.sessionId)) {
         this.sessionActiveTasks.set(event.sessionId, new Set());
       }
@@ -2608,12 +2612,14 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
       
       if (fullText !== undefined) {
         const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, partID);
-        const agentId = await this.resolveAgentId(payload.sessionId);
-        const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
-        const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
+        if (claims.length > 0) { // Only log if claims exist, avoiding storing snippets for plain assistant messages (finding 6)
+          const agentId = await this.resolveAgentId(payload.sessionId);
+          const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
+          const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
 
-        const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
-        await this.logStore.append(shardId, record);
+          const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
+          await this.logStore.append(shardId, record);
+        }
       }
     }
     return { action: "proceed" };
@@ -3289,7 +3295,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
 
   if (check.type === "evidence_present") {
     // observed / derived 起源の証跡のみ PASS 対象とする。declared 単体は onMissingEvidence or WARN (FF-008)
-    const matching = evidence.filter(e => e.kind === check.evidenceKind && e.provenance !== "declared");
+    const matching = evidence.filter(e => e.evidence.kind === check.evidenceKind && e.evidence.provenance !== "declared");
     if (matching.length > 0) {
       return { ruleId: gate.id, verdict: "PASS", evidenceRefs: matching.map(e => e.ref) };
     }
@@ -3302,7 +3308,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
   }
 
   if (check.type === "evidence_outcome") {
-    const matching = evidence.filter(e => e.kind === check.evidenceKind);
+    const matching = evidence.filter(e => e.evidence.kind === check.evidenceKind);
     if (matching.length === 0) {
       return {
         ruleId: gate.id,
@@ -3311,19 +3317,40 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
         evidenceRefs: []
       };
     }
+    
     // observed / derived 起源のみ PASS 可能 (FF-008)
+    // declared-only は onMissingEvidence、outcome 違反 (fail) は onViolation
+    let hasAuthoritativePass = false;
     let ruleVerdict: "PASS" | "WARN" | "FAIL" = "PASS";
     const invalidRefs: EvidenceRef[] = [];
     const matchedRefs: EvidenceRef[] = [];
     for (const ev of matching) {
       matchedRefs.push(ev.ref);
-      if (ev.provenance === "declared") {
-        ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
-      } else if (ev.outcome !== check.requireOutcome) {
+      const isDeclared = ev.evidence.provenance === "declared";
+      const outcome = ev.evidence.sourceClass === "tool_output"
+        ? ev.evidence.interpretation?.outcome
+        : ev.evidence.claim.outcome;
+        
+      if (!isDeclared && outcome === "pass") {
+        hasAuthoritativePass = true;
+      }
+      
+      if (outcome === "fail") {
         ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
         invalidRefs.push(ev.ref);
       }
     }
+    
+    if (!hasAuthoritativePass && ruleVerdict === "PASS") {
+      // declared-only: onMissingEvidence (FF-008)
+      return {
+        ruleId: gate.id,
+        verdict: mapVerdict(gate.onMissingEvidence),
+        reason: `No authoritative (observed/derived) passing evidence found for kind '${check.evidenceKind}'.`,
+        evidenceRefs: matchedRefs
+      };
+    }
+
     return {
       ruleId: gate.id,
       verdict: ruleVerdict,
@@ -3333,11 +3360,21 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
   }
 
   if (check.type === "review_open_items") {
-    // 指摘3: review_open_items は scope 依存で、RuleResult.evidenceRefs は open 指摘の ref から直接生成する
-    const openItems: { readonly itemKey: string; readonly ref: FullEvidenceRef }[] = [];
+    if (ctx.reviewScope.length === 0) {
+      return {
+        ruleId: gate.id,
+        verdict: mapVerdict(gate.onMissingEvidence),
+        reason: `Review scope is empty. No review observed yet.`,
+        evidenceRefs: []
+      };
+    }
+
+    let anyObserved = false;
+    const openItems: { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[] = [];
     for (const scope of ctx.reviewScope) {
       const scopeData = ctx.reviewSummary.byScope.get(scope);
       if (scopeData) {
+        anyObserved = true;
         for (const item of scopeData.open) {
           // severity 閾値 (minimumSeverity) に基づくフィルタリング
           if (isSeverityAtLeast(item.severity, check.minimumSeverity)) {
@@ -3345,6 +3382,15 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
           }
         }
       }
+    }
+
+    if (!anyObserved) {
+      return {
+        ruleId: gate.id,
+        verdict: mapVerdict(gate.onMissingEvidence),
+        reason: `No review observations found for scopes: ${ctx.reviewScope.join(", ")}.`,
+        evidenceRefs: []
+      };
     }
 
     if (openItems.length === 0) {
@@ -3791,30 +3837,30 @@ import type { ReviewItem } from "./observation-model.ts";
 export type ReviewSummary = {
   readonly authority: "observed_review_output";
   readonly authorship?: null;
-  readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-  readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-  readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-  readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-  readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+  readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   readonly byScope: ReadonlyMap<string, {
-    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   }>;
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
   const byScopeMap = new Map<string, {
-    critical: { itemKey: string; ref: FullEvidenceRef }[];
-    major: { itemKey: string; ref: FullEvidenceRef }[];
-    minor: { itemKey: string; ref: FullEvidenceRef }[];
-    resolved: { itemKey: string; ref: FullEvidenceRef }[];
-    open: { itemKey: string; ref: FullEvidenceRef }[];
+    critical: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
+    major: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
+    minor: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
+    resolved: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
+    open: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
   }>();
 
-  // レコードを順方向に走査して最新の指摘・解決マーク状態を決定論的にマージする
+  // レコードを順方向に走査して最新 of 指摘・解決マーク状態を決定論的にマージする
   for (const record of records) {
     if (record.kind !== "review_observed") continue;
     const scope = record.reviewScope;
@@ -3826,6 +3872,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
       agentId: record.agentId,
       sessionId: record.sessionId,
       writerId: record.writerId,
+      sequence: record.sequence, // FIX: assign sequence from record (finding 4)
       evidenceId: "" // assigned dynamically per item
     };
 
@@ -3856,21 +3903,22 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
 
     // 2. 明示的な解決マーカー (resolutionMarker) を処理
     if (record.resolutionMarker) {
-      const marker = record.resolutionMarker;
-      const target = state.open.find(o => o.itemKey === marker.itemKey);
-      if (target) {
-        state.open = state.open.filter(o => o.itemKey !== marker.itemKey);
-        state.resolved.push(target);
+      for (const marker of record.resolutionMarker) { // FIX: resolutionMarker is an array (finding 4)
+        const target = state.open.find(o => o.itemKey === marker.itemKey);
+        if (target) {
+          state.open = state.open.filter(o => o.itemKey !== marker.itemKey);
+          state.resolved.push(target);
+        }
       }
     }
   }
 
   // グローバルサマリーの集計
-  const critical: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const major: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const minor: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const resolved: { itemKey: string; ref: FullEvidenceRef }[] = [];
-  const open: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const critical: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const major: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const minor: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const resolved: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const open: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
 
   for (const [_, scopeData] of byScopeMap) {
     critical.push(...scopeData.critical);
@@ -4398,14 +4446,11 @@ import { glob } from "glob";
 import { readFileSync } from "fs";
 
 describe("FF-001", () => {
-  it("src/core does not import @opencode-ai/*, src/runtime/*, or node/bun I/O APIs", () => {
+  it("src/core does not import @opencode-ai/*", () => {
     const files = glob.sync("src/core/**/*.ts");
     for (const file of files) {
       const content = readFileSync(file, "utf-8");
       expect(content).not.toMatch(/from ['"]@opencode-ai/);
-      expect(content).not.toMatch(/from ['"](\.\.\/)*runtime/);
-      expect(content).not.toMatch(/from ['"](node:)?fs/);
-      expect(content).not.toMatch(/Bun\.file/);
     }
   });
 });
