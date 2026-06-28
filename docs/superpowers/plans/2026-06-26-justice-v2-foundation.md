@@ -1200,17 +1200,53 @@ export function validateRecordSchema(record: unknown): void {
   if (typeof r.schemaVersion !== "number" || typeof r.sequence !== "number" || typeof r.timestamp !== "string" || !r.agentId || !r.sessionId || !r.writerId || !r.recordType) {
     throw new Error("Invalid record: missing common envelope fields");
   }
+  
+  // D72: strict evidence union validation helper
+  const validateEvidence = (ev: unknown) => {
+    if (!ev || typeof ev !== "object") throw new Error("Invalid evidence: not an object");
+    const e = ev as Record<string, unknown>;
+    if (typeof e.evidenceId !== "string") throw new Error("Invalid evidenceId");
+    
+    if (e.sourceClass === "tool_output") {
+      if (!["command_exec", "file_content"].includes(e.toolOutputClass as string)) {
+        throw new Error("Invalid toolOutputClass for tool_output");
+      }
+      if (e.toolOutputClass === "file_content" && e.rawOutput !== undefined) {
+        throw new Error("rawOutput is forbidden for file_content toolOutputClass");
+      }
+    } else if (e.sourceClass === "declared_claim") {
+      if (e.toolOutputClass !== undefined || e.rawOutput !== undefined || e.exitCode !== undefined || e.stdOut !== undefined || e.stdErr !== undefined) {
+        throw new Error("Forbidden fields present in declared_claim evidence");
+      }
+    } else {
+      throw new Error("Invalid sourceClass: must be tool_output or declared_claim");
+    }
+  };
+
   // Kind-specific validation
   if (r.recordType === "observation") {
     const kind = r.kind;
     if (kind === "tool_executed") {
-      if (typeof r.toolName !== "string" || typeof r.callId !== "string" || !r.evidence) {
+      if (typeof r.toolName !== "string" || typeof r.callId !== "string" || !Array.isArray(r.evidence)) {
         throw new Error("Invalid tool_executed record");
       }
+      r.evidence.forEach(validateEvidence);
     } else if (kind === "review_observed") {
       if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
         throw new Error("Invalid review_observed record");
       }
+      r.items.forEach((item: unknown) => {
+        if (!item || typeof item !== "object") throw new Error("Invalid review item: not an object");
+        const i = item as Record<string, unknown>;
+        if (typeof i.itemKey !== "string" || !["critical", "major", "minor"].includes(i.severity as string) || !["open", "resolved"].includes(i.status as string) || typeof i.summary !== "string" || typeof i.location !== "string") {
+          throw new Error("Invalid review item fields");
+        }
+        if (r.evidence) {
+          if (!Array.isArray(r.evidence)) throw new Error("review_observed evidence must be an array");
+          const hasEvidence = r.evidence.some((ev: any) => ev.evidenceId === i.itemKey);
+          if (!hasEvidence) throw new Error(`Missing evidence correlation for review item ${i.itemKey}`);
+        }
+      });
     } else if (kind === "message") {
       if (r.role !== "assistant" || !r.textHash || !Array.isArray(r.declaredClaims)) {
         throw new Error("Invalid message record");
@@ -1515,7 +1551,9 @@ export function project(
         if (!tasks.has(taskId)) {
           tasks.set(taskId, { status: "open", lastVerdict: "NONE", evidence: [], observedReviewScopes: [] });
         }
-        tasks.get(taskId)!.lastVerdict = event.verdict; // WARN/FAIL/PASS
+        const taskState = tasks.get(taskId)!;
+        taskState.lastVerdict = event.verdict; // WARN/FAIL/PASS
+        taskState.status = event.verdict; // Update status to match test expectations (PASS/FAIL/WARN)
       }
     }
   }
@@ -1871,16 +1909,16 @@ gt submit
 
 **Files:**
 
-- Create: `src/core/v2/message-role-buffer.ts`
-- Modify: `src/core/v2/declared-claim-extractor.ts`（finalized 後の抽出へ変更）
-- Test: `tests/hooks/message-role-buffer.test.ts`
+- Create: `src/runtime/message-role-buffer.ts` (Core 純粋性を維持するため、mutable なバッファは runtime 配下に配置する)
+- Modify: `src/core/v2/declared-claim-extractor.ts`（finalized 後の抽出ロジックおよび純粋関数を定義）
+- Test: `tests/runtime/message-role-buffer.test.ts`
 
 **Interfaces:**
 
 - Consumes: `ObservationMessagePayload` union (from Task 1.1), `extractDeclaredClaims`.
 - Produces:
-  - `MessageRoleBuffer` class with `{sessionId, messageID}` key, `parts: Map<partID, {text, finalized}>`.
-  - `extractFinalizedAssistantClaims(buffer, messageID, partID): DeclaredClaim[]`.
+  - `MessageRoleBuffer` class (in `src/runtime/`) with `{sessionId, messageID}` key, `parts: Map<partID, {text, finalized}>`.
+  - `extractFinalizedAssistantClaims(buffer, messageID, partID): DeclaredClaim[]` (implemented in `src/core/v2/declared-claim-extractor.ts` as a pure function).
 
 - [ ] **Step 1: Message payload union を確認（D71）**
   - Task 1.1 で前倒し実装した `src/core/v2/message-payload.ts` の `ObservationMessagePayload` をそのままインポートして利用できることを確認します。
@@ -1912,8 +1950,10 @@ MessageRoleBuffer の動作仕様：
   各エントリは `{ role?: "assistant" | "user", parts: Map<string, { text: string, finalized: boolean }>, lastUpdatedAt: number, finalized: boolean }`。
 - `update(sessionId, payload)`:
   - `key` が存在しない場合は新規作成。
-  - `payload.role` が提供された場合はバッファの `role` に反映。
-  - `payload.partId` ごとに `parts` の `{ text: payload.text, finalized: payload.finalized }` を上書き。
+  - `payload.kind` に応じて分岐処理を行う：
+    - `"message_part_updated"`: `payload.partId` ごとに `parts` の `{ text: payload.text, finalized: false }` を上書き。
+    - `"text_complete"`: `payload.partId` ごとに `parts` の `{ text: payload.text, finalized: true }` を上書き。
+    - `"message_updated"`: `payload.role` が提供された場合はバッファの `role` に反映し、`payload.finalized` が `true` の場合はメッセージ全体の `finalized` フラグを `true` に設定する。
   - `lastUpdatedAt` を現在のタイムスタンプ（ミリ秒）に更新。
 - `finalize(sessionId, messageId, partId?)`:
   - `partId` が指定された場合は、該当する `part` の `finalized` を `true` に設定。全 part が finalized かつ `message` 自体が finalized と判定された場合、または `partId` 未指定で呼び出された場合は、メッセージ全体を `finalized = true` とする。
@@ -1929,7 +1969,7 @@ MessageRoleBuffer の動作仕様：
   - エントリ数が `maxEntries` を超える場合、`lastUpdatedAt` が古い順にエントリを削除。
 
 ```typescript
-// src/core/v2/message-role-buffer.ts
+// src/runtime/message-role-buffer.ts
 export class MessageRoleBuffer {
   private readonly buffer = new Map<string, {
     role?: "assistant" | "user";
@@ -2425,11 +2465,13 @@ gt submit
 
 ---
 
-### Task 4.1: Tool Observation Handler
+### Task 4.1: Tool Observation Handler & Task ID Correlation
 
 **Files:**
 
 - Modify: `src/hooks/observation-handler.ts` (Hook: skeleton only, no business logic)
+- Modify: `src/hooks/plan-bridge.ts` (Implement stable taskId injection contract)
+- Modify: `src/core/task-packager.ts` (Support taskId enrichment)
 - Create: `src/core/v2/record-builder.ts` (Core: pure record builder functions)
 - Test: `tests/hooks/observation-handler-tool.test.ts`
 - Test: `tests/core/v2/record-builder.test.ts`
@@ -2442,6 +2484,11 @@ gt submit
   - `handlePreToolUse(payload)` → task window tracking (`activeTaskWindows: Map<callId, taskId>`).
   - All log append/evaluation paths are wrapped in `try/catch` and degrade to `{ action: "proceed" }` on failure (FF-006).
   - `appendTaskSummaryDeclaredEvidence(payload, taskId)` stubbed in this task and implemented in Task 4.3.
+  - **Correlation Contract:** `PlanBridge`/`TaskPackager` (またはツール実行前インターセプタ) が `task` ツール実行前に args 内へ決定論的かつ安定した `taskId` を確実に注入する実装。
+  - **Regression Test:** `tests/hooks/observation-handler-tool.test.ts` にて、実際に `taskId` が含まれる実ペイロードを用いて、correlation 解決とそれに基づくゲート判定が正確に行われることを担保するテストケースを追加。
+
+- [ ] **Step 0: PlanBridge および TaskPackager にて taskId 注入処理を実装（D74）**
+  - `src/hooks/plan-bridge.ts` または `src/core/task-packager.ts` を修正し、`task` ツールの実行前 (`PreToolUse` ハンドラやタスク構築処理) に、タスク引数 (`args`) に対し一意かつ決定論的に決定された `taskId` (例: `task-1` など) を自動注入するロジックを実装する。これにより、実行される `task` ツールの引数から安定して `taskId` が解決できる状態を作る。
 
 - [ ] **Step 1: PreToolUse で task window を追跡（D74）**
 
