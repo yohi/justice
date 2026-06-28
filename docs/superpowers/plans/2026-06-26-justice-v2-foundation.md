@@ -2476,12 +2476,10 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   }
   let taskId: string | undefined;
   try {
-    // D74/ISS-005: If it is the task tool itself, get taskId by its callId.
-    // Otherwise (e.g. bash executed inside a task), fall back to the active taskId of the session.
     // D74/ISS-005: If it is the task tool itself or has an explicit callId-to-taskId mapping, get taskId from activeTaskWindows.
-    // Non-task tools (e.g. bash executed inside a task) MUST NOT fallback to the last active task to prevent window confusion.
-    // Instead, they use activeTaskWindows.get(callId), which will be undefined if no deterministic correlation exists.
-    taskId = this.activeTaskWindows.get(callId);
+    // For non-task tools (e.g. bash executed inside a task), fall back to the activeTaskId tracked for the session
+    // to ensure that command execution (observed evidence) is correlated to the current task window.
+    taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -2797,9 +2795,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
     return { action: "proceed" };
   }
-  let taskId: string | undefined;
   try {
-    taskId = this.activeTaskWindows.get(callId);
+    // D74/ISS-005: Fallback to the active taskId of the session for non-task tools (e.g. bash executed inside a task)
+    taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -3228,7 +3226,7 @@ export type GateContext = {
       readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     }>;
   };
 };
@@ -3331,11 +3329,12 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
         ? ev.evidence.interpretation?.outcome
         : ev.evidence.claim.outcome;
         
-      if (!isDeclared && outcome === "pass") {
+      const expectedOutcome = check.type === "evidence_outcome" ? check.requireOutcome : "pass";
+      if (!isDeclared && outcome === expectedOutcome) {
         hasAuthoritativePass = true;
       }
       
-      if (outcome === "fail") {
+      if (outcome !== expectedOutcome) {
         ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
         invalidRefs.push(ev.ref);
       }
@@ -4782,6 +4781,11 @@ it("rebuilds state.json on sequence inversion (e.g. sequence 3, 2, 4 in physical
 it("rebuilds state.json on sequence duplicate", async () => {
   // 1. Write corrupted jsonl containing duplicate sequences
   // 2. Trigger projection rebuild and verify rebuild
+});
+it("rebuilds state.json on maxSequenceByShard discrepancy", async () => {
+  // 1. Write state.json with maxSequenceByShard containing sequence 10 for a shard
+  // 2. Write actual event log containing sequence 5 for that shard (discrepancy)
+  // 3. Trigger projection read/rebuild and verify rebuild and WARN logged
 });
 
 ```
