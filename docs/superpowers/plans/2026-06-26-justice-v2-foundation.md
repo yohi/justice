@@ -2492,6 +2492,11 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   }
   let taskId: string | undefined;
   try {
+    // D50: Skip internal justice plugin tools to prevent polluting observation log
+    if (payload.toolName.startsWith("justice_")) {
+      return { action: "proceed" };
+    }
+
     // D74/ISS-005: Resolve taskId strictly from activeTaskWindows to prevent cross-task window pollution.
     // Fallback is omitted to strictly align with safety design.
     taskId = this.activeTaskWindows.get(callId);
@@ -2887,13 +2892,36 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` (declared claims 同居) append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
 
 
-- [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加**
+- [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加（S-1）**
 
 ```typescript
 // tests/hooks/observation-handler-skill-task.test.ts
-it("returns PROCEED when task summary extraction throws", async () => {
-  const handler = new ObservationHandler(/* mock log store that throws on append */);
-    const result = await handler.handlePostToolUse({ toolName: "task", callId: "c1", toolInput: { taskId: "task-1" }, toolResult: "tests pass", error: false });
+it("returns PROCEED when task summary extraction throws due to store append error", async () => {
+  const mockLogStore = {
+    append: vi.fn().mockRejectedValue(new Error("Disk write failure")),
+    readAll: vi.fn().mockResolvedValue([]),
+  } as unknown as ObservationLogStore;
+
+  const mockFs = createMockFileReader();
+  const handler = new ObservationHandler(mockLogStore, mockFs, {
+    writerId: "w1",
+    logger: console,
+  });
+
+  const event: PostToolUseEvent = {
+    type: "PostToolUse",
+    sessionId: "s1",
+    callId: "c1",
+    payload: {
+      toolName: "task",
+      callId: "c1",
+      toolInput: { name: "task", args: { taskId: "task-1" } },
+      toolResult: "tests pass",
+      metadata: { error: false }
+    }
+  };
+
+  const result = await handler.handlePostToolUse(event);
   expect(result.action).toBe("proceed");
 });
 ```
@@ -4641,11 +4669,14 @@ gt submit
 **Files:**
 
 - Create: `tests/arch/no-planmd-write.test.ts`
+- Create: `tests/core/observation-log-replay.test.ts`
 
 **Interfaces:**
 
-- Consumes: `FileWriter` mock, `src/hooks/` file list.
-- Produces: Allowlist-based plan.md write check.
+- Consumes: `FileWriter` mock, `src/hooks/` file list, historical `ObservationRecord` log structures.
+- Produces:
+  - Allowlist-based plan.md write check.
+  - Replay tests verifying state projection equivalence across logged events.
 
 - [ ] **Step 1: FF-005 allowlist test を実装（D7/FF-005）**
 
@@ -4690,6 +4721,49 @@ describe("FF-005", () => {
 });
 ```
 
+- [ ] **Step 1.5: `observation-log-replay.test.ts` の作成（S-5）**
+  - 保存された Observation Log（JSONL履歴）をメモリ上に読み込ませて `project` を実行した際、中間および最終の状態投影（Projection）が一貫して決定論的に再現され、同一の状態（PASS/FAILなどの判定状態）が再現されることを検証する。
+
+```typescript
+// tests/core/observation-log-replay.test.ts
+import { describe, expect, it } from "vitest";
+import { project } from "../../src/core/v2/projection.ts";
+import { type ObservationRecord } from "../../src/core/v2/observation-model.ts";
+
+describe("FF-004 - Observation Log Replay Validation", () => {
+  it("reproduces identical projected state when replaying a sequence of logged events", () => {
+    const historicalLogs: ObservationRecord[] = [
+      {
+        schemaVersion: 1,
+        sequence: 1,
+        timestamp: "2026-06-28T12:00:00Z",
+        agentId: "atlas",
+        sessionId: "session-123",
+        writerId: "w1",
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "task",
+        callId: "c1",
+        evidence: [
+          {
+            evidenceId: "ev-1",
+            kind: "test",
+            sourceClass: "observed_outcome",
+            provenance: "observed",
+            outcome: "pass",
+          }
+        ]
+      }
+    ];
+
+    const state1 = project(historicalLogs, "2026-06-28T12:05:00Z");
+    const state2 = project(historicalLogs, "2026-06-28T12:05:00Z");
+    expect(state1).toEqual(state2);
+    expect(state1.tasks.get("task-1")?.evidence).toBeUndefined(); // as taskId wasn't set or matched
+  });
+});
+```
+
 - [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
@@ -4699,7 +4773,7 @@ devcontainer exec --workspace-folder . bun run test tests/arch/no-planmd-write.t
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/arch/no-planmd-write.test.ts
+git add tests/arch/no-planmd-write.test.ts tests/core/observation-log-replay.test.ts
 git commit -m "test(v2): FF-004 replay and FF-005 no plan.md write"
 ```
 
@@ -5007,10 +5081,9 @@ master
   └── feature/phase3-v2-message-adapter__base                (feature/phase2-task4-rotation-archive から派生)
        └── feature/phase3-task1-message-role-buffer          (Base から派生)
             └── feature/phase3-task2-adapter-extension        (Task 3.1 から派生)
-                 └── feature/phase3-task3-justice-routing     (Task 3.2 から派生)
-                      └── feature/phase3-task4-agent-id-resolution (Task 3.3 から派生)
+                 └── feature/phase3-task3-agent-id-resolution (Task 3.2 から派生)
 
-  └── feature/phase4-v2-observation-handler__base            (feature/phase3-task4-agent-id-resolution から派生)
+  └── feature/phase4-v2-observation-handler__base            (feature/phase3-task3-agent-id-resolution から派生)
        ├── feature/phase4-task1-tool-observation             (Base から派生)
        ├── feature/phase4-task2-message-observation          (Task 4.1 から派生)
        ├── feature/phase4-task3-skill-task-summary           (Task 4.2 から派生)
