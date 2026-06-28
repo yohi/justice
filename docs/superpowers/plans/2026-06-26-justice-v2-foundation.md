@@ -1371,17 +1371,17 @@ export type ProjectedState = {
   readonly tasks: ReadonlyMap<string, { readonly status: string; readonly lastVerdict: string; readonly evidence: readonly ProjectedEvidence[]; readonly observedReviewScopes: readonly string[] }>;
   readonly reviewSummary: {
     readonly authority: "observed_review_output";
-    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     readonly byScope: ReadonlyMap<string, {
-      readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-      readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-      readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-      readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
-      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
+      readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+      readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+      readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+      readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+      readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     }>;
   };
 };
@@ -1643,13 +1643,95 @@ it("serializes ReadonlyMap fields to JSON objects", async () => {
 ```typescript
 // tests/core/observation-log-replay.test.ts
 import { project } from "../../src/core/v2/state-projection.ts";
+import type { ObservationRecord, DecisionRecord } from "../../src/core/v2/observation-model.ts";
 
-describe("FF-004 replay determinism", () => {
-  it("same events produce same state", () => {
-    const events = buildSampleEvents(); // 複数 shard を含む
-    const a = project(events, "2026-06-26T00:00:00.000Z");
-    const b = project(events, "2026-06-26T00:00:00.000Z");
+describe("FF-004 replay determinism and state validation", () => {
+  it("same events produce same state and correctly map taskId, decision records, and reviews", () => {
+    const events: (ObservationRecord | DecisionRecord)[] = [
+      {
+        schemaVersion: 1,
+        sequence: 1,
+        timestamp: "2026-06-28T12:00:00Z",
+        agentId: "atlas",
+        sessionId: "session-123",
+        writerId: "w1",
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "task",
+        callId: "c1",
+        taskId: "task-1",
+        evidence: [
+          {
+            evidenceId: "ev-1",
+            kind: "test",
+            sourceClass: "tool_output",
+            toolOutputClass: "command_exec",
+            interpretation: {
+              outcome: "pass",
+              provenance: "derived",
+              basis: "parsed_output",
+              derivedFrom: []
+            }
+          }
+        ]
+      },
+      {
+        schemaVersion: 1,
+        sequence: 2,
+        timestamp: "2026-06-28T12:01:00Z",
+        agentId: "atlas",
+        sessionId: "session-123",
+        writerId: "w1",
+        recordType: "decision",
+        taskId: "task-1",
+        verdict: "PASS",
+        ruleResults: [
+          {
+            ruleId: "gate-1",
+            verdict: "PASS",
+            reason: "All tests passed",
+            evidenceRefs: [{ agentId: "atlas", sessionId: "session-123", writerId: "w1", sequence: 1, evidenceId: "ev-1" }]
+          }
+        ]
+      },
+      {
+        schemaVersion: 1,
+        sequence: 1,
+        timestamp: "2026-06-28T12:00:30Z",
+        agentId: "prometheus",
+        sessionId: "session-123",
+        writerId: "w2",
+        recordType: "observation",
+        kind: "review_observed",
+        reviewScope: "scope-1",
+        items: [
+          {
+            itemKey: "item-1",
+            severity: "major",
+            status: "open",
+            message: "Need style fix",
+            location: "file.ts"
+          }
+        ]
+      }
+    ];
+
+    const a = project(events, "2026-06-28T12:05:00Z");
+    const b = project(events, "2026-06-28T12:05:00Z");
+    
+    // 決定論の検証
     expect(a).toEqual(b);
+
+    // 判定状態・複数 shard の検証
+    const taskInfo = a.tasks.get("task-1");
+    expect(taskInfo).toBeDefined();
+    expect(taskInfo?.status).toBe("PASS");
+    expect(taskInfo?.evidence.length).toBe(1);
+    
+    // Review Item の検証
+    const reviewData = a.reviewSummary.byScope.get("scope-1");
+    expect(reviewData).toBeDefined();
+    expect(reviewData?.open.some(x => x.itemKey === "item-1")).toBe(true);
   });
 });
 ```
@@ -2786,7 +2868,6 @@ export function buildTaskSummaryRecord(
 ```
 
 （※実際の `skill_invoked` 観測と append 処理の配線コードは、後述の **Step 3b** にて `handlePostToolUse` の実装内に統合して記述します。）
-```
 
 - [ ] **Step 3b: `handlePostToolUse` での task summary declared claims 同居と配線（D59/D70/指摘4）**
 
@@ -3238,7 +3319,6 @@ export function parseGateYaml(content: string): readonly GateRule[] {
 }
 ```
 // (注: 設計通り Zod スキーマ `GateConfigSchema.parse(parsed)` によって一貫してバリデーションと型キャストを行うため、上記のような手動の normalize / validate 関数群は実装不要です。Zod に検証と型解決を委ねるように実装してください。)
-```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -3791,7 +3871,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/observation-hand
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/hooks/observation-handler.ts src/core/justice-notifier.ts src/core/v2/gate-decision-builder.ts src/core/v2/rule-evaluation-engine.ts tests/hooks/observation-handler-gate.test.ts tests/core/v2/gate-decision-builder.test.ts
+git add src/hooks/observation-handler.ts src/core/justice-notifier.ts src/core/v2/rule-evaluation-engine.ts tests/hooks/observation-handler-gate.test.ts
 git commit -m "feat(v2): gate trigger and decision record append"
 ```
 
@@ -3951,23 +4031,31 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     if (record.items) {
       for (const item of record.items) {
         const itemRef = { ...ref, evidenceId: item.itemKey };
-        const exists = state.open.some(x => x.itemKey === item.itemKey) || state.resolved.some(x => x.itemKey === item.itemKey);
-        if (!exists) {
-          const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
-          if (item.status === "resolved") {
-            state = {
-              ...state,
-              resolved: [...state.resolved, entry]
-            };
-          } else {
-            state = {
-              ...state,
-              open: [...state.open, entry],
-              critical: item.severity === "critical" ? [...state.critical, entry] : state.critical,
-              major: item.severity === "major" ? [...state.major, entry] : state.major,
-              minor: item.severity === "minor" ? [...state.minor, entry] : state.minor
-            };
-          }
+        const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
+
+        // 一旦、既存の open, resolved, critical, major, minor リストから同一 itemKey のエントリを除外する (latest-review-wins)
+        state = {
+          ...state,
+          open: state.open.filter(x => x.itemKey !== item.itemKey),
+          resolved: state.resolved.filter(x => x.itemKey !== item.itemKey),
+          critical: state.critical.filter(x => x.itemKey !== item.itemKey),
+          major: state.major.filter(x => x.itemKey !== item.itemKey),
+          minor: state.minor.filter(x => x.itemKey !== item.itemKey),
+        };
+
+        if (item.status === "resolved") {
+          state = {
+            ...state,
+            resolved: [...state.resolved, entry]
+          };
+        } else {
+          state = {
+            ...state,
+            open: [...state.open, entry],
+            critical: item.severity === "critical" ? [...state.critical, entry] : state.critical,
+            major: item.severity === "major" ? [...state.major, entry] : state.major,
+            minor: item.severity === "minor" ? [...state.minor, entry] : state.minor
+          };
         }
       }
 
@@ -4630,14 +4718,12 @@ gt submit
 **Files:**
 
 - Create: `tests/arch/no-planmd-write.test.ts`
-- Create: `tests/core/observation-log-replay.test.ts`
 
 **Interfaces:**
 
 - Consumes: `FileWriter` mock, `src/hooks/` file list, historical `ObservationRecord` log structures.
 - Produces:
   - Allowlist-based plan.md write check.
-  - Replay tests verifying state projection equivalence across logged events.
 
 - [ ] **Step 1: FF-005 allowlist test を実装（D7/FF-005）**
 
@@ -4682,65 +4768,17 @@ describe("FF-005", () => {
 });
 ```
 
-- [ ] **Step 1.5: `observation-log-replay.test.ts` の作成（S-5）**
-  - 保存された Observation Log（JSONL履歴）をメモリ上に読み込ませて `project` を実行した際、中間および最終の状態投影（Projection）が一貫して決定論的に再現され、同一の状態（PASS/FAILなどの判定状態）が再現されることを検証する。
-
-```typescript
-// tests/core/observation-log-replay.test.ts
-import { describe, expect, it } from "vitest";
-import { project } from "../../src/core/v2/state-projection.ts";
-import { type ObservationRecord } from "../../src/core/v2/observation-model.ts";
-
-describe("FF-004 - Observation Log Replay Validation", () => {
-  it("reproduces identical projected state when replaying a sequence of logged events", () => {
-    const historicalLogs: ObservationRecord[] = [
-      {
-        schemaVersion: 1,
-        sequence: 1,
-        timestamp: "2026-06-28T12:00:00Z",
-        agentId: "atlas",
-        sessionId: "session-123",
-        writerId: "w1",
-        recordType: "observation",
-        kind: "tool_executed",
-        toolName: "task",
-        callId: "c1",
-        evidence: [
-          {
-            evidenceId: "ev-1",
-            kind: "test",
-            sourceClass: "tool_output",
-            toolOutputClass: "command_exec",
-            interpretation: {
-              outcome: "pass",
-              provenance: "derived",
-              basis: "parsed_output",
-              derivedFrom: []
-            }
-          }
-        ]
-      }
-    ];
-
-    const state1 = project(historicalLogs, "2026-06-28T12:05:00Z");
-    const state2 = project(historicalLogs, "2026-06-28T12:05:00Z");
-    expect(state1).toEqual(state2);
-    expect(state1.tasks.get("task-1")?.evidence).toBeUndefined(); // as taskId wasn't set or matched
-  });
-});
-```
-
 - [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/arch/no-planmd-write.test.ts tests/core/observation-log-replay.test.ts
+devcontainer exec --workspace-folder . bun run test tests/arch/no-planmd-write.test.ts
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/arch/no-planmd-write.test.ts tests/core/observation-log-replay.test.ts
-git commit -m "test(v2): FF-004 replay and FF-005 no plan.md write"
+git add tests/arch/no-planmd-write.test.ts
+git commit -m "test(v2): FF-005 no plan.md write"
 ```
 
 - [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
@@ -5008,8 +5046,11 @@ Expected: 563 + 新規テスト数が全 pass。
 - [ ] **Step 4: Commit**
 
 ```bash
-git add .github/workflows/ci.yml
-git commit -m "ci: finalize v2.0 CI with devcontainer and full regression"
+# 変更がある場合のみ commit
+git diff --quiet .github/workflows/ci.yml || {
+  git add .github/workflows/ci.yml
+  git commit -m "ci: finalize v2.0 CI with devcontainer and full regression"
+}
 ```
 
 - [ ] **Step 5: Phase 8 Base に向けた Draft PR を作成する**
