@@ -3044,11 +3044,67 @@ export type ReflectionRecord = {
 };
 ```
 
-- [ ] **Step 3: task-feedback / loop-handler に ReflectionEvent 発行を追加（§8.2/D7）**
+- [ ] **Step 3: task-feedback / loop-handler のコンストラクタ DI の追加と ReflectionEvent 発行の実装（§8.2/D7）**
+  - テストのモック容易性を高めるため、`TaskFeedbackHandler` および `LoopDetectionHandler` はコンストラクタで `ObservationHandler` （またはその省略可能なインターフェース）の依存関係注入を受けるように実装する。
+  - 注入されなかった場合のフォールバック（または NoOp 実装など）を用意し、テストコード等ではモックを容易に差し込めるようにする。
 
 ```typescript
-// src/hooks/task-feedback.ts（既存 checkbox 更新後に追加。注：TaskFeedbackHandler はコンストラクタで ObservationHandler もしくは emitter インタフェースの注入を受けるタスクを Task 4.4 / 4.1 等で追加する）
-await this.observationHandler.emitReflectionEvent({ trigger: "task_succeeded", planRef, intent: "check_complete", sessionId });
+// src/hooks/task-feedback.ts のコンストラクタおよびメンバ追加
+export class TaskFeedbackHandler {
+  private readonly observationHandler?: ObservationHandler;
+  // ...
+  constructor(
+    fileReader: FileReader,
+    fileWriter: FileWriter,
+    wisdomStore?: WisdomStoreInterface,
+    observationHandler?: ObservationHandler
+  ) {
+    this.fileReader = fileReader;
+    this.fileWriter = fileWriter;
+    this.wisdomStore = wisdomStore ?? new WisdomStore();
+    this.observationHandler = observationHandler; // DI 経由での注入
+    // ...
+  }
+}
+
+// 既存 checkbox 更新後の箇所でReflectionEventを発行
+if (this.observationHandler) {
+  await this.observationHandler.emitReflectionEvent({
+    trigger: "task_succeeded",
+    planRef,
+    intent: "check_complete",
+    sessionId,
+  });
+}
+```
+
+```typescript
+// src/hooks/loop-handler.ts のコンストラクタおよびメンバ追加
+export class LoopDetectionHandler {
+  private readonly observationHandler?: ObservationHandler;
+  // ...
+  constructor(
+    fileReader: FileReader,
+    fileWriter: FileWriter,
+    observationHandler?: ObservationHandler
+  ) {
+    this.fileReader = fileReader;
+    this.fileWriter = fileWriter;
+    this.observationHandler = observationHandler; // DI 経由での注入
+    // ...
+  }
+}
+
+// 既存のループエラー判定やエスカレーションのタイミングでReflectionEventを発行
+if (this.observationHandler) {
+  await this.observationHandler.emitReflectionEvent({
+    trigger: "task_error",
+    planRef,
+    intent: "append_error_note",
+    note: `Loop detected or max retries exceeded. Escalating/pivoting.`,
+    sessionId,
+  });
+}
 ```
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
@@ -3204,7 +3260,7 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/gate-definitio
 - [ ] **Step 4: Commit**
 
 ```bash
-git add package.json bun.lockb src/core/v2/gate-definition.ts src/core/v2/gate-yaml-parser.ts tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
+git add package.json bun.lock src/core/v2/gate-definition.ts src/core/v2/gate-yaml-parser.ts tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
 git commit -m "feat(v2): gate definition schema and yaml parser"
 ```
 
@@ -3735,6 +3791,7 @@ function formatGateAdvisoryMessage(verdict: Verdict): string {
   ```
 
 > **Banner contract:** AGENTS.md §2 requires `> <icon> **JUSTICE NOTIFICATION** [<title>]`, `> <message>`, and a trailing empty line. The optional checklist follows the message line and preserves the 3-line quote layout when no checklist items are present.
+> **Emoji Avoidance Rule:** `AGENTS.md` の「チャット上の絵文字重複の禁止」ルールに基づき、`formatGateAdvisoryMessage` の出力および `DEFAULT_GATES` の定義・ルール評価など、通知メッセージのテキスト本体には装飾用絵文字（✅/❌/🎯など）を含めず、`PASS` / `FAIL` / `WARN` などのプレーンテキスト表記のみを使用するように徹底すること。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -4299,7 +4356,7 @@ devcontainer exec --workspace-folder . bun run test tests/runtime/justice-status
 - [ ] **Step 4: Commit**
 
 ```bash
-git add package.json bun.lockb src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
+git add package.json bun.lock src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
 git commit -m "feat(v2): justice_status read-only custom tool"
 ```
 
@@ -4511,7 +4568,7 @@ devcontainer exec --workspace-folder . bun run test tests/arch/core-no-opencode-
 - [ ] **Step 3: Commit**
 
 ```bash
-git add package.json bun.lockb tests/arch/core-no-opencode-imports.test.ts
+git add package.json bun.lock tests/arch/core-no-opencode-imports.test.ts
 git commit -m "test(v2): FF-001 core no opencode imports"
 ```
 
