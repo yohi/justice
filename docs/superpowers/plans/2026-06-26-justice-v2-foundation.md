@@ -609,7 +609,7 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `ObservationMessagePayload` union (Task 3.1), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
+- Consumes: `ObservationRecord` envelope, `ToolOutput` from adapter (`{ title, output, metadata }`), `ObservationMessagePayload` union (Task 1.1), `ReviewRejectionSignal` from existing `review-rejection-detector.ts`.
 - Produces:
   - `Evidence` discriminated union with `sourceClass: "tool_output" | "declared_claim"`.
   - `extractEvidenceFromTool(toolName, args, output, metadata, callId): Evidence` (returns observed + derived interpretation).
@@ -1063,8 +1063,95 @@ git commit -m "feat(v2): implement per-shard write queue with atomic temporary a
 **Files:**
 
 - Create: `src/runtime/observation-log-store.ts`
+- Create: `src/runtime/validation.ts`
 
-- [ ] **Step 1: `ObservationLogStore` クラスを実装**
+- [ ] **Step 1: `validation.ts` を実装**
+
+```typescript
+// src/runtime/validation.ts
+import type { ObservationRecord, DecisionRecord } from "../core/types.ts";
+
+export function validateRecordSchema(r: any): void {
+  if (!r || typeof r !== "object") {
+    throw new Error("Invalid record: not an object");
+  }
+  if (r.schemaVersion !== 1) {
+    throw new Error(`Invalid record: unsupported schemaVersion ${r.schemaVersion}`);
+  }
+  if (typeof r.sequence !== "number" || r.sequence < 0) {
+    throw new Error("Invalid record: sequence must be a non-negative number");
+  }
+  if (!r.timestamp || typeof r.timestamp !== "string") {
+    throw new Error("Invalid record: timestamp must be a string");
+  }
+  if (!r.agentId || !r.sessionId || !r.writerId) {
+    throw new Error("Invalid record: missing shard identifier fields");
+  }
+
+  if (r.recordType === "observation") {
+    const kind = r.kind;
+    if (kind === "tool_executed") {
+      if (typeof r.toolName !== "string" || typeof r.callId !== "string" || !r.evidence) {
+        throw new Error("Invalid tool_executed record");
+      }
+    } else if (kind === "message") {
+      if (typeof r.role !== "string" || typeof r.textHash !== "string" || !Array.isArray(r.declaredClaims)) {
+        throw new Error("Invalid message record");
+      }
+    } else if (kind === "skill_invoked") {
+      if (typeof r.skillName !== "string" || typeof r.source !== "string") {
+        throw new Error("Invalid skill_invoked record");
+      }
+    } else if (kind === "review_observed") {
+      if (typeof r.reviewScope !== "string" || (!Array.isArray(r.items) && !Array.isArray(r.resolutionMarker))) {
+        throw new Error("Invalid review_observed record");
+      }
+    } else if (kind === "session_error") {
+      if (!r.sessionError) {
+        throw new Error("Invalid session_error record");
+      }
+    } else if (kind === "reflection") {
+      if (!r.planRef) {
+        throw new Error("Invalid reflection record");
+      }
+    } else {
+      throw new Error(`Invalid record: unknown observation kind: ${kind}`);
+    }
+  } else if (r.recordType === "decision") {
+    if (r.gateType !== "task" || !Array.isArray(r.ruleResults)) {
+      throw new Error("Invalid decision record");
+    }
+  } else {
+    throw new Error(`Invalid record: unknown recordType: ${r.recordType}`);
+  }
+}
+
+export function validateShardSequences(records: readonly (ObservationRecord | DecisionRecord)[]): void {
+  const shardGroups = new Map<string, number[]>();
+  for (const r of records) {
+    const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
+    if (!shardGroups.has(shardKey)) {
+      shardGroups.set(shardKey, []);
+    }
+    shardGroups.get(shardKey)!.push(r.sequence);
+  }
+  for (const [shardKey, seqs] of shardGroups.entries()) {
+    // 1. Check for duplicate sequence numbers using a Set (independent of traversal order)
+    const uniqueSeqs = new Set(seqs);
+    if (uniqueSeqs.size !== seqs.length) {
+      throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
+    }
+    // 2. Check for physical order monotonicity (D72/§9.4)
+    for (let i = 1; i < seqs.length; i++) {
+      if (seqs[i] < seqs[i - 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (non-monotonic)`);
+      }
+    }
+  }
+}
+```
+
+- [ ] **Step 2: `ObservationLogStore` クラスを実装**
 
 ```typescript
 // src/runtime/observation-log-store.ts
@@ -1147,43 +1234,13 @@ export class ObservationLogStore {
     return records;
   }
 }
-      }
-    } else {
-      throw new Error(`Invalid record: unknown observation kind: ${kind}`);
-    }
-  } else if (r.recordType === "decision") {
-    if (r.gateType !== "task" || !Array.isArray(r.ruleResults)) {
-      throw new Error("Invalid decision record");
-    }
-  } else {
-    throw new Error(`Invalid record: unknown recordType: ${r.recordType}`);
-  }
-}
+```
 
+- [ ] **Step 3: Commit**
 
-export function validateShardSequences(records: readonly (ObservationRecord | DecisionRecord)[]): void {
-  const shardGroups = new Map<string, number[]>();
-  for (const r of records) {
-    const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
-    if (!shardGroups.has(shardKey)) {
-      shardGroups.set(shardKey, []);
-    }
-    shardGroups.get(shardKey)!.push(r.sequence);
-  }
-  for (const [shardKey, seqs] of shardGroups.entries()) {
-    // 1. Check for duplicate sequence numbers using a Set (independent of traversal order)
-    const uniqueSeqs = new Set(seqs);
-    if (uniqueSeqs.size !== seqs.length) {
-      throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
-    }
-    // 2. Check for physical order monotonicity (D72/§9.4)
-    for (let i = 1; i < seqs.length; i++) {
-      if (seqs[i] < seqs[i - 1]) {
-        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (non-monotonic)`);
-      }
-    }
-  }
-}
+```bash
+git add src/runtime/observation-log-store.ts src/runtime/validation.ts
+git commit -m "feat(v2): implement observation log store with strict record schema and shard sequence validation"
 ```
 
 
@@ -1489,9 +1546,13 @@ export function validateProjectionCacheAgainstEvents(
     if (e.sequence > cur) currentMaxSeq.set(shardKey, e.sequence);
   }
 
-  for (const [shardKey, seq] of currentMaxSeq.entries()) {
-    const cachedSeq = cacheState.integrity.maxSequenceByShard.get(shardKey);
-    if (cachedSeq === undefined || cachedSeq < seq) {
+  const cachedMap = cacheState.integrity.maxSequenceByShard;
+  if (cachedMap.size !== currentMaxSeq.size) {
+    return { valid: false, reason: "mismatch_seq" };
+  }
+  for (const [shardKey, cachedSeq] of cachedMap.entries()) {
+    const currentSeq = currentMaxSeq.get(shardKey);
+    if (currentSeq === undefined || cachedSeq !== currentSeq) {
       return { valid: false, reason: "mismatch_seq" };
     }
   }
@@ -2603,14 +2664,12 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
       
       if (fullText !== undefined) {
         const claims = this.messageRoleBuffer.extractAssistantClaims(payload.sessionId, payload.messageID, partID);
-        if (claims.length > 0) { // Only log if claims exist, avoiding storing snippets for plain assistant messages (finding 6)
-          const agentId = await this.resolveAgentId(payload.sessionId);
-          const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
-          const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
+        const agentId = await this.resolveAgentId(payload.sessionId);
+        const shardId = { agentId, sessionId: payload.sessionId, writerId: this.writerId };
+        const envelope = this.buildEnvelope({ agentId, sessionId: payload.sessionId, recordType: "observation" });
 
-          const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
-          await this.logStore.append(shardId, record);
-        }
+        const record = buildMessageRecord(envelope, payload.messageID, partID, fullText, claims);
+        await this.logStore.append(shardId, record);
       }
     }
     return { action: "proceed" };
@@ -2817,21 +2876,21 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
 
     // 3. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
+    const responses: HookResponse[] = [];
     if (payload.toolName === "task" && taskId) {
       this.activeTaskWindows.delete(callId);
       if (taskId) {
         this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
       }
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
-      if (taskGateResponse.action === "inject") {
-        return taskGateResponse;
-      }
+      responses.push(taskGateResponse);
     }
     if (taskId) {
       const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
-      if (gateResponse.action === "inject") {
-        return gateResponse;
-      }
+      responses.push(gateResponse);
+    }
+    if (responses.length > 0) {
+      return mergePostToolUseResponses(responses);
     }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
@@ -4120,8 +4179,9 @@ gt submit
 - [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
   - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
 
-- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output)` を実装し、複数指摘の分解に対応する**
+- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output)` および `isCompleteSnapshot(output)` を実装する**
   - 単一のシグナル抽出から、レビュー出力内に含まれる複数の指摘事項（severity, summary, location 含む）を正規表現や構造解析により分解し、`ReviewItem[]` にパースするメソッドを `ReviewRejectionDetector`（`src/core/review-rejection-detector.ts`）に追加し、そのテストを `tests/core/review-rejection-detector.test.ts` に追加する。
+  - 同時に、そのレビュー出力が完全なスナップショットレビュー（差分検出レビューではなく全体の網羅的評価）であるかどうかを判定し `boolean` を返す `isCompleteSnapshot(output): boolean` メソッドも `ReviewRejectionDetector` に追加する。
 
 - [ ] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
 
@@ -4172,7 +4232,8 @@ export function buildReviewResolutionRecord(
 private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
   try {
     const items = ReviewRejectionDetector.detectMultiple(toolResult ?? "");
-    if (items.length > 0) {
+    const isCompleteSnapshot = ReviewRejectionDetector.isCompleteSnapshot(toolResult ?? "");
+    if (items.length > 0 || isCompleteSnapshot) {
       const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
       const envelope = this.buildEnvelope({
         taskId,
@@ -4180,7 +4241,7 @@ private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: strin
         sessionId,
         recordType: "observation",
       });
-      const record = buildReviewObservedRecord(envelope, reviewScope, items);
+      const record = buildReviewObservedRecord(envelope, reviewScope, items, isCompleteSnapshot);
       await this.logStore.append(shardId, record);
     }
   } catch (err) {
