@@ -714,9 +714,10 @@ export function extractEvidenceFromTool(
   const rawOutput = output.output ?? "";
   const toolOutputClass = classifyToolOutputClass(toolName, args, rawOutput.length);
   const observedId = callId; // Deterministic evidenceId from tool callId (FF-002/FF-003)
+  const kind = toolName === "task" ? "generic" : mapToolNameToKind(toolName, args);
   return {
     evidenceId: observedId,
-    kind: mapToolNameToKind(toolName, args),
+    kind,
     sourceClass: "tool_output",
     provenance: "observed",
     toolOutputClass,
@@ -725,7 +726,7 @@ export function extractEvidenceFromTool(
       ? { rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)) }
       : { rawOutputHash: hashString(rawOutput), rawOutputSnippet: "" }),
     interpretation: {
-      outcome: deriveOutcome(output),
+      outcome: toolName === "task" ? "unknown" : deriveOutcome(output),
       basis: output.metadata?.error ? "metadata_error" : "parsed_output",
       provenance: "derived",
       derivedFrom: [{ evidenceId: observedId }], // self-reference within the same record uses SelfEvidenceRef (evidenceId only)
@@ -1232,8 +1233,12 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     if (uniqueSeqs.size !== seqs.length) {
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
-    // Note: Do NOT require strictly monotonic physical order during read list traversal.
-    // Causality sorting is done via 2-stage merge sort in state-projection.ts.
+    // 2. Check for physical order monotonicity (D72/§9.4)
+    for (let i = 1; i < seqs.length; i++) {
+      if (seqs[i] < seqs[i - 1]) {
+        throw new Error(`Sequence integrity violation on ${shardKey}: sequence inversion detected (non-monotonic)`);
+      }
+    }
   }
 }
 ```
@@ -1500,7 +1505,7 @@ export function project(
     minor: [],
     resolved: [],
     open: [],
-    byScope: {},
+    byScope: new Map(),
   };
 
   return {
@@ -1791,18 +1796,44 @@ export type MessageRecord = {
 
 - [ ] **Step 2: MessageRoleBuffer を実装（D53/D65/D67）**
 
+MessageRoleBuffer の動作仕様：
+- 内部構造：
+  `key` は `${sessionId}:${messageId}` の形式の文字列。
+  各エントリは `{ role?: "assistant" | "user", parts: Map<string, { text: string, finalized: boolean }>, lastUpdatedAt: number, finalized: boolean }`。
+- `update(sessionId, payload)`:
+  - `key` が存在しない場合は新規作成。
+  - `payload.role` が提供された場合はバッファの `role` に反映。
+  - `payload.partId` ごとに `parts` の `{ text: payload.text, finalized: payload.finalized }` を上書き。
+  - `lastUpdatedAt` を現在のタイムスタンプ（ミリ秒）に更新。
+- `finalize(sessionId, messageId, partId?)`:
+  - `partId` が指定された場合は、該当する `part` の `finalized` を `true` に設定。全 part が finalized かつ `message` 自体が finalized と判定された場合、または `partId` 未指定で呼び出された場合は、メッセージ全体を `finalized = true` とする。
+- `extractAssistantClaims(sessionId, messageId, partId?)`:
+  - バッファから該当メッセージを取得。`role !== "assistant"` の場合は空配列 `[]` を返す。
+  - `partId` が指定されている場合はその part のテキストから、未指定の場合は全 part のテキストを partID 順に結合したテキストから、`tests pass` などの申告パターン（D70）を検出。
+  - 戻り値：`DeclaredClaim[]` のリスト。各 claim は `{ evidenceId: string, claimKind: "test" | "build", outcome: "pass" | "fail", provenance: "declared" }` の形状。
+  - 重複排除 (D67): 同一 `partId` が更新された場合、前回の抽出結果を破棄して最新のテキスト状態から再判定。確定 (finalized) 時に初めて永続化対象となる。
+- `getFinalizedText(sessionId, messageId, partId?)` / `getFinalizedAssistantText(...)`:
+  - メッセージ全体、または指定された part が `finalized === true` である場合のみ、テキストを結合して返す。role が assistant でない場合は `undefined`。
+- `gc(maxAgeMs, maxEntries)`:
+  - `Date.now() - lastUpdatedAt > maxAgeMs` となる古いエントリを削除。
+  - エントリ数が `maxEntries` を超える場合、`lastUpdatedAt` が古い順にエントリを削除。
+
 ```typescript
 // src/core/v2/message-role-buffer.ts
 export class MessageRoleBuffer {
-  // key: {sessionId}:{messageID}
-  private readonly buffer = new Map<string, { readonly role?: "assistant" | "user"; readonly parts: Map<string, { readonly text: string; readonly finalized: boolean }>; readonly lastUpdatedAt: number; readonly finalized: boolean }>();
+  private readonly buffer = new Map<string, {
+    role?: "assistant" | "user";
+    readonly parts: Map<string, { text: string; finalized: boolean }>;
+    lastUpdatedAt: number;
+    finalized: boolean;
+  }>();
 
-  update(sessionId: string, payload: ObservationMessagePayload): void { /* ... */ }
-  finalize(sessionId: string, messageID: string, partID?: string): void { /* ... */ }
-  extractAssistantClaims(sessionId: string, messageID: string, partID?: string): DeclaredClaim[] { /* ... */ }
-  getFinalizedText(sessionId: string, messageID: string, partID?: string): string | undefined { /* ... */ }
-  getFinalizedAssistantText(sessionId: string, messageID: string, partID?: string): string | undefined { /* ... */ }
-  gc(maxAgeMs: number, maxEntries: number): void { /* ... */ }
+  update(sessionId: string, payload: ObservationMessagePayload): void;
+  finalize(sessionId: string, messageId: string, partId?: string): void;
+  extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[];
+  getFinalizedText(sessionId: string, messageId: string, partId?: string): string | undefined;
+  getFinalizedAssistantText(sessionId: string, messageId: string, partId?: string): string | undefined;
+  gc(maxAgeMs: number, maxEntries: number): void;
 }
 ```
 
@@ -2439,17 +2470,21 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
     return { action: "proceed" };
   }
+  let taskId: string | undefined;
   try {
     // D74/ISS-005: If it is the task tool itself, get taskId by its callId.
     // Otherwise (e.g. bash executed inside a task), fall back to the active taskId of the session.
-    const taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
+    // D74/ISS-005: If it is the task tool itself or has an explicit callId-to-taskId mapping, get taskId from activeTaskWindows.
+    // Non-task tools (e.g. bash executed inside a task) MUST NOT fallback to the last active task to prevent window confusion.
+    // Instead, they use activeTaskWindows.get(callId), which will be undefined if no deterministic correlation exists.
+    taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
     const envelope = this.buildEnvelope({ taskId, agentId, sessionId: event.sessionId, recordType: "observation" });
 
     // 1. Tool execution observed append (業務ロジックは record-builder へ完全に委譲)
-    // D59: task ツールの場合は、後続の Task 4.3 で task summary から declared claims も抽出して同居させる
+    // D59: task ツールの場合は、後続 of Task 4.3 で task summary から declared claims も抽出して同居させる
     const record = buildToolExecutedRecord(
       envelope,
       payload.toolName,
@@ -2463,15 +2498,18 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
 
     // 4. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
-    if (payload.toolName === "task") {
+    // D74: taskId is undefined for non-task tools unless explicitly correlated. If taskId is undefined, evaluation is skipped early.
+    if (payload.toolName === "task" && taskId) {
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
         return taskGateResponse;
       }
     }
-    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
-    if (gateResponse.action === "inject") {
-      return gateResponse;
+    if (taskId) {
+      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
+      if (gateResponse.action === "inject") {
+        return gateResponse;
+      }
     }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
@@ -2753,8 +2791,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
     return { action: "proceed" };
   }
+  let taskId: string | undefined;
   try {
-    const taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
+    taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -2785,7 +2824,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
 
     // 3. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
-    if (payload.toolName === "task") {
+    if (payload.toolName === "task" && taskId) {
       this.activeTaskWindows.delete(callId);
       if (taskId) {
         this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
@@ -2795,9 +2834,11 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
         return taskGateResponse;
       }
     }
-    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
-    if (gateResponse.action === "inject") {
-      return gateResponse;
+    if (taskId) {
+      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
+      if (gateResponse.action === "inject") {
+        return gateResponse;
+      }
     }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
@@ -2931,7 +2972,12 @@ async emitReflectionEvent(params: {
 }
 ```
 
-- [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51）**
+- [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51/指摘5）**
+
+`buildReflectionEvent` の動作仕様：
+- `planRef.path` が絶対パスであるか（`/` で始まる、あるいは Windows の `C:\` 等のドライブレターで始まる場合）またはディレクトリトラバーサル（`..` を含む場合）をバリデーターにより検証する。
+- 検証に失敗した場合は、エラー（`Error: Invalid plan path: Absolute path or traversal detected`）を投げ、永続化をブロック（リダクション／例外送出）する。
+- ワークスペース相対パス（例: `plan.md`）のみを正常パスとして受け入れる。
 
 ```typescript
 // src/core/v2/reflection-event.ts
@@ -2942,6 +2988,11 @@ export function buildReflectionEvent(
   intent: "check_complete" | "append_error_note",
   note?: string
 ): ObservationRecord {
+  const isAbsolute = planRef.path.startsWith("/") || /^[a-zA-Z]:\\/.test(planRef.path);
+  const hasTraversal = planRef.path.split(/[/\\]/).includes("..");
+  if (isAbsolute || hasTraversal) {
+    throw new Error(`Invalid plan path: Absolute path or traversal detected: ${planRef.path}`);
+  }
   return { ...envelope, recordType: "observation", kind: "reflection", reflection: { trigger, planRef, intent, note } };
 }
 ```
@@ -3044,7 +3095,7 @@ export const GateCheckSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("review_open_items"),
-    minimumSeverity: z.enum(["critical", "major", "minor"]),
+    minimumSeverity: z.enum(["critical", "major", "minor"]).default("major"),
   }),
 ]);
 
@@ -3207,27 +3258,119 @@ export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sess
 // src/core/v2/rule-evaluation-engine.ts
 export function evaluate(
   gates: readonly GateRule[],
-  evidence: readonly ProjectedEvidence[], // caller must pass task-scoped evidence (state.tasks.get(taskId)?.evidence ?? [])
+  evidence: readonly ProjectedEvidence[],
   ctx: GateContext
 ): (Verdict & { readonly gateType: "task" }) | { readonly verdict: "SKIP"; readonly reason: string } {
   if (ctx.taskId === undefined) {
     return { verdict: "SKIP", reason: "no taskId provided" };
   }
-  const ruleResults = gates
-    .filter((g) => g.enabled && g.trigger.on === ctx.trigger)
-    .map((g) => evaluateRule(g, evidence, ctx));
+  const activeGates = gates.filter((g) => g.enabled && g.trigger.on === ctx.trigger);
+  if (activeGates.length === 0) {
+    // 指摘2: 一致する有効なゲートが0件の場合はSKIPとし、DecisionRecordを永続化しない
+    return { verdict: "SKIP", reason: `no matching active gates found for trigger: ${ctx.trigger}` };
+  }
+  const ruleResults = activeGates.map((g) => evaluateRule(g, evidence, ctx));
   const verdict = worstOf(ruleResults.map((r) => r.verdict));
   return { verdict, gateType: "task", reachableEnforcementLevel: "L1", appliedEnforcementLevel: "L0", ruleResults };
 }
 
 function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ctx: GateContext): RuleResult {
-  // Map lowercase configuration verdicts ("pass" | "warn" | "fail") to uppercase VerdictStatus ("PASS" | "WARN" | "FAIL") (ISS-005)
   const mapVerdict = (v: "pass" | "warn" | "fail"): "PASS" | "WARN" | "FAIL" => {
     return v.toUpperCase() as "PASS" | "WARN" | "FAIL";
   };
-  // evidence_outcome / evidence_present: PASS only from observed/derived Evidence; declared yields onMissingEvidence or WARN
-  // review_open_items: scope-aware via ctx.reviewScope and ctx.reviewSummary.byScope
-  // ruleResult.evidenceRefs can be extracted from evidence.map(e => e.ref)
+
+  const worstResult = (v1: "PASS" | "WARN" | "FAIL", v2: "PASS" | "WARN" | "FAIL") => {
+    if (v1 === "FAIL" || v2 === "FAIL") return "FAIL";
+    if (v1 === "WARN" || v2 === "WARN") return "WARN";
+    return "PASS";
+  };
+
+  const check = gate.check;
+
+  if (check.type === "evidence_present") {
+    // observed / derived 起源の証跡のみ PASS 対象とする。declared 単体は onMissingEvidence or WARN (FF-008)
+    const matching = evidence.filter(e => e.kind === check.evidenceKind && e.provenance !== "declared");
+    if (matching.length > 0) {
+      return { ruleId: gate.id, verdict: "PASS", evidenceRefs: matching.map(e => e.ref) };
+    }
+    return {
+      ruleId: gate.id,
+      verdict: mapVerdict(gate.onMissingEvidence),
+      reason: `Required evidence of kind '${check.evidenceKind}' is missing or has declared provenance only.`,
+      evidenceRefs: []
+    };
+  }
+
+  if (check.type === "evidence_outcome") {
+    const matching = evidence.filter(e => e.kind === check.evidenceKind);
+    if (matching.length === 0) {
+      return {
+        ruleId: gate.id,
+        verdict: mapVerdict(gate.onMissingEvidence),
+        reason: `Evidence of kind '${check.evidenceKind}' is missing.`,
+        evidenceRefs: []
+      };
+    }
+    // observed / derived 起源のみ PASS 可能 (FF-008)
+    let ruleVerdict: "PASS" | "WARN" | "FAIL" = "PASS";
+    const invalidRefs: EvidenceRef[] = [];
+    const matchedRefs: EvidenceRef[] = [];
+    for (const ev of matching) {
+      matchedRefs.push(ev.ref);
+      if (ev.provenance === "declared") {
+        ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
+      } else if (ev.outcome !== check.requireOutcome) {
+        ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
+        invalidRefs.push(ev.ref);
+      }
+    }
+    return {
+      ruleId: gate.id,
+      verdict: ruleVerdict,
+      reason: ruleVerdict !== "PASS" ? `Some evidence did not meet required outcome '${check.requireOutcome}' or was declared only.` : undefined,
+      evidenceRefs: ruleVerdict !== "PASS" ? invalidRefs : matchedRefs
+    };
+  }
+
+  if (check.type === "review_open_items") {
+    // 指摘3: review_open_items は scope 依存で、RuleResult.evidenceRefs は open 指摘の ref から直接生成する
+    const openItems: { readonly itemKey: string; readonly ref: FullEvidenceRef }[] = [];
+    for (const scope of ctx.reviewScope) {
+      const scopeData = ctx.reviewSummary.byScope.get(scope);
+      if (scopeData) {
+        for (const item of scopeData.open) {
+          // severity 閾値 (minimumSeverity) に基づくフィルタリング
+          if (isSeverityAtLeast(item.severity, check.minimumSeverity)) {
+            openItems.push(item);
+          }
+        }
+      }
+    }
+
+    if (openItems.length === 0) {
+      return { ruleId: gate.id, verdict: "PASS", evidenceRefs: [] };
+    }
+
+    return {
+      ruleId: gate.id,
+      verdict: mapVerdict(gate.onViolation),
+      reason: `Found ${openItems.length} open review items matching minimum severity '${check.minimumSeverity}'.`,
+      evidenceRefs: openItems.map(i => i.ref)
+    };
+  }
+
+  return { ruleId: gate.id, verdict: "FAIL", reason: `Unknown gate check type: ${(check as any).type}`, evidenceRefs: [] };
+}
+
+function isSeverityAtLeast(itemSeverity: "critical" | "major" | "minor", minSeverity: "critical" | "major" | "minor"): boolean {
+  const levels = { "minor": 0, "major": 1, "critical": 2 };
+  return levels[itemSeverity] >= levels[minSeverity];
+}
+
+function worstOf(verdicts: readonly ("PASS" | "WARN" | "FAIL")[]): "PASS" | "WARN" | "FAIL" {
+  if (verdicts.includes("FAIL")) return "FAIL";
+  if (verdicts.includes("WARN")) return "WARN";
+  return "PASS";
 }
 ```
 
@@ -3488,9 +3631,8 @@ private async evaluateGateIfTriggered(
     await this.logStore.append(shardId, decision);
 
     // Refresh state projection with the new decision and update cache
-    const refreshedEvents = events.length === 0
-      ? await this.logStore.readAll()
-      : [...events, decision];
+    // Always readAll() after append to ensure we get the assigned sequence numbers
+    const refreshedEvents = await this.logStore.readAll();
     const newState = project(refreshedEvents, new Date().toISOString());
     await this.projectionCache.write(newState).catch(() => {});
 
@@ -3664,13 +3806,89 @@ export type ReviewSummary = {
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
-  // 1. Group review_observed records by reviewScope.
-  // 2. Within each scope, aggregate items by itemKey.
-  // 3. Transition to `resolved` ONLY when one of the following is observed:
-  //    (a) explicit resolution marker for the itemKey,
-  //    (b) a complete snapshot (`isCompleteSnapshot: true`) for the scope where the itemKey is absent,
-  //    (c) a human-approved artifact (`resolution: "human_artifact"`) referencing the itemKey.
-  // 4. Mere disappearance (scope change, detector miss, output format change) keeps the item `open`.
+  const byScopeMap = new Map<string, {
+    critical: { itemKey: string; ref: FullEvidenceRef }[];
+    major: { itemKey: string; ref: FullEvidenceRef }[];
+    minor: { itemKey: string; ref: FullEvidenceRef }[];
+    resolved: { itemKey: string; ref: FullEvidenceRef }[];
+    open: { itemKey: string; ref: FullEvidenceRef }[];
+  }>();
+
+  // レコードを順方向に走査して最新の指摘・解決マーク状態を決定論的にマージする
+  for (const record of records) {
+    if (record.kind !== "review_observed") continue;
+    const scope = record.reviewScope;
+    if (!byScopeMap.has(scope)) {
+      byScopeMap.set(scope, { critical: [], major: [], minor: [], resolved: [], open: [] });
+    }
+    const state = byScopeMap.get(scope)!;
+    const ref: FullEvidenceRef = {
+      agentId: record.agentId,
+      sessionId: record.sessionId,
+      writerId: record.writerId,
+      evidenceId: "" // assigned dynamically per item
+    };
+
+    // 1. 新規の指摘アイテム (items) をマージ
+    if (record.items) {
+      for (const item of record.items) {
+        const itemRef = { ...ref, evidenceId: item.itemKey };
+        const exists = state.open.some(x => x.itemKey === item.itemKey) || state.resolved.some(x => x.itemKey === item.itemKey);
+        if (!exists) {
+          const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
+          state.open.push(entry);
+          if (item.severity === "critical") state.critical.push(entry);
+          else if (item.severity === "major") state.major.push(entry);
+          else if (item.severity === "minor") state.minor.push(entry);
+        }
+      }
+
+      // complete snapshot (isCompleteSnapshot: true) の場合、本レコードの items に含まれない open 指摘は resolved へ遷移 (D32)
+      if (record.isCompleteSnapshot) {
+        const currentKeys = new Set(record.items.map(i => i.itemKey));
+        const toResolve = state.open.filter(o => !currentKeys.has(o.itemKey));
+        for (const item of toResolve) {
+          state.open = state.open.filter(o => o.itemKey !== item.itemKey);
+          state.resolved.push(item);
+        }
+      }
+    }
+
+    // 2. 明示的な解決マーカー (resolutionMarker) を処理
+    if (record.resolutionMarker) {
+      const marker = record.resolutionMarker;
+      const target = state.open.find(o => o.itemKey === marker.itemKey);
+      if (target) {
+        state.open = state.open.filter(o => o.itemKey !== marker.itemKey);
+        state.resolved.push(target);
+      }
+    }
+  }
+
+  // グローバルサマリーの集計
+  const critical: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const major: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const minor: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const resolved: { itemKey: string; ref: FullEvidenceRef }[] = [];
+  const open: { itemKey: string; ref: FullEvidenceRef }[] = [];
+
+  for (const [_, scopeData] of byScopeMap) {
+    critical.push(...scopeData.critical);
+    major.push(...scopeData.major);
+    minor.push(...scopeData.minor);
+    resolved.push(...scopeData.resolved);
+    open.push(...scopeData.open);
+  }
+
+  return {
+    authority: "observed_review_output",
+    critical,
+    major,
+    minor,
+    resolved,
+    open,
+    byScope: byScopeMap
+  };
 }
 ```
 
