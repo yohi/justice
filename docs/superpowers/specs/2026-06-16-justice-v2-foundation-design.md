@@ -168,9 +168,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```text
 .justice/
-  events/<agentId>/<sessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId, writerId}・1 物理ファイル=1 writer・D39）
+  events/<agentId>/<safeSessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId, writerId}・1 物理ファイル=1 writer・D39）
   events/system/system/<writerId>.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system", writerId}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
-  archive/events/<agentId>/<sessionId>/<writerId>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
+  archive/events/<agentId>/<safeSessionId>/<writerId>.<timestamp>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
   wisdom.json              # 既存（不変）

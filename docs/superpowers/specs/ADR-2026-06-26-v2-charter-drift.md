@@ -15,7 +15,7 @@ During the spike Phase 0 and detail design of Justice V2, several deviations fro
 ## Decision
 We modify and ratify the Charter with the following adjustments:
 - Ratify the updated hook event matrix.
-- Restructure folder persistence to `/events/<agentId>/<safeSessionId>/<writerId>.jsonl`.
+- Restructure folder persistence to `/events/<agentId>/<safeSessionId>/<writerId>.jsonl` and `/archive/events/<agentId>/<safeSessionId>/<writerId>.<timestamp>.jsonl`.
 - Drop `authorship` tracking from V2.0 state envelopes and projections.
 - Restrict gate evaluation authority strictly to `observed` and `derived` provenance, treating `declared` as non-authoritative (audit-only).
 

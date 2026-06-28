@@ -71,8 +71,8 @@ test("preflight verification: ADR ratification check", () => {
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
   expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
-  // Verify real approvers are documented instead of placeholder names
-  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@alice`,\s*`@bob`/);
+  // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
+  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@[A-Za-z0-9_-]+`,\s*`@[A-Za-z0-9_-]+`/);
   expect(content).not.toContain("@owner-alice");
   expect(content).not.toContain("@owner-bob");
   // Verify essential ADR contents (Finding 3)
@@ -965,7 +965,8 @@ export interface FileWriter {
 
 ```typescript
 // src/runtime/node-file-system.ts
-import { readdir, rename } from "node:fs/promises";
+import { readdir, rename, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 
 async listFiles(prefix: string): Promise<readonly string[]> {
   try {
@@ -975,8 +976,8 @@ async listFiles(prefix: string): Promise<readonly string[]> {
     return entries
       .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
       .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return [];
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return [];
     throw err;
   }
 }
@@ -984,6 +985,9 @@ async listFiles(prefix: string): Promise<readonly string[]> {
 async rename(from: string, to: string): Promise<void> {
   const safeFrom = await this.resolveSafely(from);
   const safeTo = await this.resolveSafely(to);
+  // Ensure the parent directory of the destination file exists before renaming
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  await mkdir(dirname(safeTo), { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   await rename(safeFrom, safeTo);
 }
@@ -1822,6 +1826,11 @@ active+archive の最大 sequence を計算し、次回 append からその値+1
 it("performs rotation inside the serialization queue after append and prevents race conditions", async () => {
   // append 中に rotation が同期的に実行され、同時に発生した他の append がキューで待機し、順序が保証されることを検証するテストケースを実装
 });
+
+it("succeeds rotation even when the archive parent directory does not exist initially", async () => {
+  // 保存先であるアーカイブ用の親ディレクトリ（.justice/archive/events/...）がまだ存在しない場合でも、
+  // rotation処理内で親ディレクトリが自動的かつ再帰的に作成され、移動（rename）が成功することを検証する
+});
 ```
 
 - [ ] **Step 5: テスト実行（Devcontainer 内）**
@@ -2081,7 +2090,7 @@ onToolExecuteAfter: async (input, output) => {
   if (input.tool.startsWith("justice_")) return;
   const response = await this.plugin.handleEvent(toPostToolObservationPayload(input, output));
   // (1) guaranteed channel: notifier banner (fail-open try/catch)
-  if (response.action === "inject" && (response as any).variant === "gate_advisory") {
+  if (response.action === "inject" && (response as unknown as { readonly variant?: string }).variant === "gate_advisory") {
     try {
       await this.notifier.notify({
         level: "warning",
@@ -2091,12 +2100,12 @@ onToolExecuteAfter: async (input, output) => {
         sessionId: input.sessionID,
         taskId: "unknown",
       });
-    } catch (err) {
+    } catch (err: unknown) {
       this.logger.warn("notifier.notify failed", err);
     }
   }
   // (2) best-effort channel: append banner to output.output (gated by C1 spike result)
-  if (this.options.enableAdvisoryOutputAppend && response.action === "inject" && (response as any).variant === "gate_advisory" && response.injectedContext && typeof output.output === "string") {
+  if (this.options.enableAdvisoryOutputAppend && response.action === "inject" && (response as unknown as { readonly variant?: string }).variant === "gate_advisory" && response.injectedContext && typeof output.output === "string") {
     const banner = this.notifier.formatBanner({
       level: "warning",
       variant: "justice_gate",
@@ -2204,8 +2213,11 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
   if (a.action === "inject" && b.action === "inject") {
     const contexts = [a.injectedContext, b.injectedContext].filter((c) => c !== "");
     const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
-    if ((a as any).variant === "gate_advisory" || (b as any).variant === "gate_advisory") {
-      (result as any).variant = "gate_advisory";
+    if (
+      (a as unknown as { readonly variant?: string }).variant === "gate_advisory" ||
+      (b as unknown as { readonly variant?: string }).variant === "gate_advisory"
+    ) {
+      (result as unknown as { variant?: string }).variant = "gate_advisory";
     }
     if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
     if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
@@ -2222,9 +2234,9 @@ export function mergePostToolUseResponses(responses: HookResponse[]): HookRespon
   if (injects.length > 0) {
     const contexts = injects.map((i) => i.injectedContext).filter((c) => c !== "");
     const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
-    const gateAdvisory = injects.find((i) => (i as any).variant === "gate_advisory");
+    const gateAdvisory = injects.find((i) => (i as unknown as { readonly variant?: string }).variant === "gate_advisory");
     if (gateAdvisory) {
-      (result as any).variant = "gate_advisory";
+      (result as unknown as { variant?: string }).variant = "gate_advisory";
     }
     const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
     if (modifieds.length > 0) {
