@@ -74,6 +74,14 @@ test("preflight verification: ADR ratification check", () => {
   // Verify placeholders have been replaced by real approvals
   expect(content).not.toContain("@owner-alice");
   expect(content).not.toContain("@owner-bob");
+  // Verify essential ADR contents (Finding 3)
+  expect(content).toContain("D44");
+  expect(content).toContain("§4.5");
+  expect(content).toContain("D5");
+  expect(content).toContain("D54");
+  expect(content).toContain("D63");
+  expect(content).toContain("INV-004");
+  expect(content).toContain("M4");
 });
 ```
 
@@ -262,9 +270,9 @@ export type SelfEvidenceRef = {
 ```typescript
 // src/core/v2/message-payload.ts
 export type ObservationMessagePayload =
-  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageId: string; readonly partId: string; readonly text: string }
-  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageId: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
-  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageId: string; readonly partId: string; readonly text: string };
+  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
+  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
+  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
 ```
 
 - [ ] **Step 3b: `ObservationRecord` union を実装**
@@ -1473,7 +1481,8 @@ export function project(
         const taskState = tasks.get(taskId)!;
 
         if (event.kind === "tool_executed" || event.kind === "message") {
-          const evidenceList = toEvidenceArray((event as any).evidence || []);
+          const recordWithEvidence = event as ToolExecutedRecord | MessageRecord;
+          const evidenceList = toEvidenceArray(recordWithEvidence.evidence || []);
           for (const ev of evidenceList) {
             taskState.evidence.push({
               evidence: ev,
@@ -2483,10 +2492,9 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   }
   let taskId: string | undefined;
   try {
-    // D74/ISS-005: If it is the task tool itself or has an explicit callId-to-taskId mapping, get taskId from activeTaskWindows.
-    // For non-task tools (e.g. bash executed inside a task), fall back to the activeTaskId tracked for the session
-    // to ensure that command execution (observed evidence) is correlated to the current task window.
-    taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
+    // D74/ISS-005: Resolve taskId strictly from activeTaskWindows to prevent cross-task window pollution.
+    // Fallback is omitted to strictly align with safety design.
+    taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -3870,11 +3878,11 @@ export type ReviewSummary = {
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
   const byScopeMap = new Map<string, {
-    critical: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
-    major: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
-    minor: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
-    resolved: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
-    open: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[];
+    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   }>();
 
   // レコードを順方向に走査して最新 of 指摘・解決マーク状態を決定論的にマージする
@@ -3884,7 +3892,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     if (!byScopeMap.has(scope)) {
       byScopeMap.set(scope, { critical: [], major: [], minor: [], resolved: [], open: [] });
     }
-    const state = byScopeMap.get(scope)!;
+    let state = byScopeMap.get(scope)!;
     const ref: FullEvidenceRef = {
       agentId: record.agentId,
       sessionId: record.sessionId,
@@ -3901,12 +3909,18 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
         if (!exists) {
           const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
           if (item.status === "resolved") {
-            state.resolved.push(entry);
+            state = {
+              ...state,
+              resolved: [...state.resolved, entry]
+            };
           } else {
-            state.open.push(entry);
-            if (item.severity === "critical") state.critical.push(entry);
-            else if (item.severity === "major") state.major.push(entry);
-            else if (item.severity === "minor") state.minor.push(entry);
+            state = {
+              ...state,
+              open: [...state.open, entry],
+              critical: item.severity === "critical" ? [...state.critical, entry] : state.critical,
+              major: item.severity === "major" ? [...state.major, entry] : state.major,
+              minor: item.severity === "minor" ? [...state.minor, entry] : state.minor
+            };
           }
         }
       }
@@ -3915,23 +3929,33 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
       if (record.isCompleteSnapshot) {
         const currentKeys = new Set(record.items.map(i => i.itemKey));
         const toResolve = state.open.filter(o => !currentKeys.has(o.itemKey));
-        for (const item of toResolve) {
-          state.open = state.open.filter(o => o.itemKey !== item.itemKey);
-          state.resolved.push(item);
-        }
+        state = {
+          ...state,
+          open: state.open.filter(o => currentKeys.has(o.itemKey)),
+          resolved: [...state.resolved, ...toResolve],
+          critical: state.critical.filter(o => currentKeys.has(o.itemKey)),
+          major: state.major.filter(o => currentKeys.has(o.itemKey)),
+          minor: state.minor.filter(o => currentKeys.has(o.itemKey))
+        };
       }
     }
 
     // 2. 明示的な解決マーカー (resolutionMarker) を処理
     if (record.resolutionMarker) {
-      for (const marker of record.resolutionMarker) { // FIX: resolutionMarker is an array (finding 4)
-        const target = state.open.find(o => o.itemKey === marker.itemKey);
-        if (target) {
-          state.open = state.open.filter(o => o.itemKey !== marker.itemKey);
-          state.resolved.push(target);
-        }
+      const markerKeys = new Set(record.resolutionMarker.map(m => m.itemKey));
+      const toResolve = state.open.filter(o => markerKeys.has(o.itemKey));
+      if (toResolve.length > 0) {
+        state = {
+          ...state,
+          open: state.open.filter(o => !markerKeys.has(o.itemKey)),
+          resolved: [...state.resolved, ...toResolve],
+          critical: state.critical.filter(o => !markerKeys.has(o.itemKey)),
+          major: state.major.filter(o => !markerKeys.has(o.itemKey)),
+          minor: state.minor.filter(o => !markerKeys.has(o.itemKey))
+        };
       }
     }
+    byScopeMap.set(scope, state);
   }
 
   // グローバルサマリーの集計
@@ -4079,14 +4103,15 @@ gt submit
 export function buildReviewObservedRecord(
   envelope: CommonEnvelope,
   reviewScope: string,
-  items: readonly ReviewItem[]
+  items: readonly ReviewItem[],
+  isCompleteSnapshot: boolean = false
 ): ObservationRecord {
   return {
     ...envelope,
     recordType: "observation",
     kind: "review_observed",
     reviewScope,
-    isCompleteSnapshot: false,
+    isCompleteSnapshot,
     items,
   };
 }
