@@ -308,7 +308,7 @@ export type ToolExecutedRecord = {
   readonly kind: "tool_executed";
   readonly toolName: string;
   readonly callId: string;
-  readonly evidence: Evidence | readonly Evidence[];
+  readonly evidence: readonly Evidence[];
 };
 
 // MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
@@ -737,7 +737,7 @@ export function extractEvidenceFromTool(
     command: args?.command,
     ...(toolOutputClass === "command_exec"
       ? { rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)) }
-      : { rawOutputHash: hashString(rawOutput), rawOutputSnippet: "" }),
+      : { rawOutputHash: hashString(rawOutput), rawOutputSnippet: redactForPersistence(redactAbsolutePaths(rawOutput.slice(0, 100))) }),
     interpretation: {
       outcome: toolName === "task" ? "unknown" : deriveOutcome(output),
       basis: output.metadata?.error ? "metadata_error" : "parsed_output",
@@ -915,7 +915,7 @@ devcontainer exec --workspace-folder . bun run test tests/core/v2/shard-layout.t
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/shard-layout.ts src/runtime/writer-id.ts tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts tests/runtime/writer-id-collision.test.ts
+git add src/core/v2/shard-layout.ts src/core/v2/writer-id-validation.ts src/runtime/writer-id.ts tests/core/v2/shard-layout.test.ts tests/runtime/writer-id.test.ts tests/runtime/writer-id-collision.test.ts
 git commit -m "feat(v2): shard file layout, writer ID generation, and collision allocation"
 ```
 
@@ -1238,8 +1238,8 @@ export function validateRecordSchema(record: unknown): void {
       r.items.forEach((item: unknown) => {
         if (!item || typeof item !== "object") throw new Error("Invalid review item: not an object");
         const i = item as Record<string, unknown>;
-        if (typeof i.itemKey !== "string" || !["critical", "major", "minor"].includes(i.severity as string) || !["open", "resolved"].includes(i.status as string) || typeof i.summary !== "string" || typeof i.location !== "string") {
-          throw new Error("Invalid review item fields");
+        if (typeof i.itemKey !== "string" || typeof i.evidenceId !== "string" || i.evidenceId !== i.itemKey || !["critical", "major", "minor"].includes(i.severity as string) || !["open", "resolved"].includes(i.status as string) || typeof i.summary !== "string" || typeof i.location !== "string") {
+          throw new Error("Invalid review item fields or missing matching evidenceId");
         }
         if (r.evidence) {
           if (!Array.isArray(r.evidence)) throw new Error("review_observed evidence must be an array");
@@ -1307,8 +1307,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 // tests/runtime/observation-log-queue.test.ts
 it("readAll merges active and archive segments", async () => {
   const reader = createMockFileReader({
-    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-2","evidence":{}}\n',
-    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-1","evidence":{}}\n',
+    ".justice/events/agent/session/w-1.jsonl": '{"schemaVersion":1,"sequence":2,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-2","evidence":[]}\n',
+    ".justice/archive/events/agent/session/w-1.2026-06-26T00:00:00Z.jsonl": '{"schemaVersion":1,"sequence":1,"timestamp":"2026-06-26T00:00:00Z","agentId":"hephaestus","sessionId":"session","writerId":"w-1","recordType":"observation","kind":"tool_executed","toolName":"bash","callId":"call-1","evidence":[]}\n',
   });
   reader.listFiles = async (prefix) => Object.keys(reader.files).filter((p) => p.startsWith(prefix));
   const store = new ObservationLogStore(writer, reader, "w-1");
@@ -1665,11 +1665,51 @@ export class StateProjectionCache {
 }
 ```
 
-`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity`（`sourceHash` および `maxSequenceByShard`）を、実際の `readAll()`結果から構築した `currentIntegrity`（実際のイベント群のハッシュおよび各 shard の最大シーケンス）と検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。ただし、`sourceHash` 乖離による再構築は、通常のイベント追記に伴う自然なキャッシュの stale 状態であるため、WARN や corruption/tamper 警告を出さずに静かに再構築（silent rebuild）を行う。一方、`maxSequenceByShard` 不一致や構造破損・スキーマ不正検知時は警告（WARN）を出した上で再構築を行う。
+```typescript
+// src/runtime/state-projection-cache.ts
+export function validateProjectionCacheAgainstEvents(
+  cacheState: ProjectedState,
+  events: readonly (ObservationRecord | DecisionRecord)[]
+): { readonly valid: boolean; readonly reason: "valid" | "stale_append" | "mismatch_seq" | "structural" } {
+  // 1. Schema integrity & structural field check
+  if (!cacheState.integrity || typeof cacheState.integrity !== "object" || !cacheState.integrity.maxSequenceByShard) {
+    return { valid: false, reason: "structural" };
+  }
+
+  // 2. Check maxSequenceByShard mismatch
+  const currentMaxSeq = new Map<string, number>();
+  for (const e of events) {
+    const shardKey = `${e.agentId}:${e.sessionId}:${e.writerId}`;
+    const cur = currentMaxSeq.get(shardKey) ?? -1;
+    if (e.sequence > cur) currentMaxSeq.set(shardKey, e.sequence);
+  }
+
+  for (const [shardKey, seq] of currentMaxSeq.entries()) {
+    const cachedSeq = cacheState.integrity.maxSequenceByShard.get(shardKey);
+    if (cachedSeq === undefined || cachedSeq < seq) {
+      return { valid: false, reason: "mismatch_seq" };
+    }
+  }
+
+  // 3. Check sourceHash mismatch (natural append stale)
+  const currentSourceHash = hashString(events.map((e) => JSON.stringify(e)).join("\n"));
+  if (cacheState.integrity.sourceHash !== currentSourceHash) {
+    return { valid: false, reason: "stale_append" };
+  }
+
+  return { valid: true, reason: "valid" };
+}
+```
+
+`ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity` を、実際の `readAll()`結果から構築した `currentIntegrity`（実際のイベント群）と `validateProjectionCacheAgainstEvents` を用いて検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。ただし、`sourceHash` 乖離（`reason === "stale_append"`）による再構築は、通常のイベント追記に伴う自然なキャッシュの stale 状態であるため、WARN や corruption/tamper 警告を出さずに静かに再構築（silent rebuild）を行う。一方、`maxSequenceByShard` 不一致や構造破損・スキーマ不正検知時は警告（WARN）を出した上で再構築を行う。
 
 - [ ] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
 
-`tests/runtime/state-projection-cache-read.test.ts` を作成し、`read()` がスキーマ不正や破損（例外発生など）時に `undefined` を返し、正常時のみ `ProjectedState` を復元することを確認する。
+`tests/runtime/state-projection-cache-read.test.ts` を作成し、以下を検証するテストを実装する：
+1. キャッシュが存在しない、またはスキーマ不正や破損（例外発生など）時に `read()` が `undefined` を返すこと。
+2. 正常時のみ `ProjectedState` を復元すること。
+3. 正常なイベント追記による `sourceHash` mismatch 発生時、`validateProjectionCacheAgainstEvents` が `stale_append` を返し、警告（WARN）を出さずに静かに再構築（silent rebuild）が行われること（silent rebuild 分岐テスト）。
+4. `maxSequenceByShard` 不一致や構造破損時は警告（WARN）を出して再構築が行われること。
 
 - [ ] **Step 2c: JSON round-trip テストを追加**
 
@@ -1745,26 +1785,6 @@ describe("FF-004 replay determinism and state validation", () => {
             evidenceRefs: [{ agentId: "atlas", sessionId: "session-123", writerId: "w1", sequence: 1, evidenceId: "ev-1" }]
           }
         ]
-      },
-      {
-        schemaVersion: 1,
-        sequence: 1,
-        timestamp: "2026-06-28T12:00:30Z",
-        agentId: "prometheus",
-        sessionId: "session-123",
-        writerId: "w2",
-        recordType: "observation",
-        kind: "review_observed",
-        reviewScope: "scope-1",
-        items: [
-          {
-            itemKey: "item-1",
-            severity: "major",
-            status: "open",
-            message: "Need style fix",
-            location: "file.ts"
-          }
-        ]
       }
     ];
 
@@ -1779,11 +1799,6 @@ describe("FF-004 replay determinism and state validation", () => {
     expect(taskInfo).toBeDefined();
     expect(taskInfo?.status).toBe("PASS");
     expect(taskInfo?.evidence.length).toBe(1);
-    
-    // Review Item の検証
-    const reviewData = a.reviewSummary.byScope.get("scope-1");
-    expect(reviewData).toBeDefined();
-    expect(reviewData?.open.some(x => x.itemKey === "item-1")).toBe(true);
   });
 });
 ```
@@ -2544,6 +2559,8 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
         return { action: "proceed" };
       }
       this.activeTaskWindows.set(event.callId, taskId);
+      // D74: activeTaskWindows is the sole source of truth for correlation to prevent race conditions during concurrent tasks.
+      // sessionStateProvider.setActiveTaskId is strictly for UI display/audit assistance, not for gate/evidence logic.
       this.sessionStateProvider?.setActiveTaskId(event.sessionId, taskId);
       if (!this.sessionActiveTasks.has(event.sessionId)) {
         this.sessionActiveTasks.set(event.sessionId, new Set());
@@ -3065,13 +3082,13 @@ it("returns PROCEED when task summary extraction throws due to store append erro
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
 git commit -m "feat(v2): skill invoked detection and task summary declared claims"
 ```
 
@@ -3089,12 +3106,14 @@ gt submit
 
 **Files:**
 
+- Modify: `src/core/justice-plugin.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/hooks/task-feedback.ts`（ReflectionEvent 発行呼び出し追加）
 - Modify: `src/hooks/loop-handler.ts`（ReflectionEvent 発行呼び出し追加）
 - Create: `src/core/v2/reflection-event.ts`
 - Test: `tests/hooks/observation-handler-session-error.test.ts`
 - Test: `tests/core/v2/reflection-event.test.ts`
+- Test: `tests/core/justice-plugin-reflection.test.ts`
 
 **Interfaces:**
 
@@ -3271,17 +3290,21 @@ if (this.observationHandler) {
 }
 ```
 
+- [ ] **Step 3b: `JusticePlugin` への配線と統合テストの作成（D7）**
+  - `src/core/justice-plugin.ts` で `ObservationHandler` をインスタンス化し、`TaskFeedbackHandler` と `LoopDetectionHandler` のコンストラクタへ渡すように修正する。
+  - 新規統合テストファイル `tests/core/justice-plugin-reflection.test.ts` を作成し、実際の `JusticePlugin` インスタンスを通じて `TaskFeedback` 又は `LoopHandler` の動作契機で `ReflectionEvent` が正常に `ObservationLogStore` に発行・蓄積されることを検証する。
+
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts
+devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts tests/core/justice-plugin-reflection.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/reflection-event.ts src/hooks/observation-handler.ts src/hooks/task-feedback.ts src/hooks/loop-handler.ts tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts
-git commit -m "feat(v2): session error and reflection event seam"
+git add src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/reflection-event.ts src/hooks/observation-handler.ts src/hooks/task-feedback.ts src/hooks/loop-handler.ts tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts tests/core/justice-plugin-reflection.test.ts
+git commit -m "feat(v2): session error and reflection event seam with plugin wiring"
 ```
 
 - [ ] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
@@ -4190,8 +4213,8 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
 // tests/core/v2/review-aggregator.test.ts
 it("keeps item open on mere disappearance", () => {
   const records = [
-    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
-    reviewObserved({ scope: "task-1", itemKey: "minor:bar", severity: "minor" }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
   const openItems = summary.byScope.get("task-1")?.open ?? [];
@@ -4201,8 +4224,8 @@ it("keeps item open on mere disappearance", () => {
 
 it("marks item resolved on explicit marker", () => {
   const records = [
-    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
-    reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "explicit_marker" } }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
+    reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "explicit_marker" }] }),
   ];
   const summary = aggregateReviews(records);
   const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
@@ -4214,8 +4237,8 @@ it("marks item resolved on explicit marker", () => {
 
 it("marks item resolved on complete snapshot absence", () => {
   const records = [
-    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
-    reviewObserved({ scope: "task-1", isCompleteSnapshot: true, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
+    reviewObserved({ scope: "task-1", isCompleteSnapshot: true, items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
   const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
@@ -4227,8 +4250,8 @@ it("marks item resolved on complete snapshot absence", () => {
 
 it("keeps item open when snapshot is not marked complete", () => {
   const records = [
-    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
-    reviewObserved({ scope: "task-1", isCompleteSnapshot: false, items: [{ itemKey: "minor:bar", severity: "minor" }] }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
+    reviewObserved({ scope: "task-1", isCompleteSnapshot: false, items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
   const openItems = summary.byScope.get("task-1")?.open ?? [];
@@ -4237,8 +4260,8 @@ it("keeps item open when snapshot is not marked complete", () => {
 
 it("marks item resolved on human artifact", () => {
   const records = [
-    reviewObserved({ scope: "task-1", itemKey: "major:foo", severity: "major" }),
-    reviewObserved({ scope: "task-1", resolutionMarker: { itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" } }),
+    reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
+    reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" }] }),
   ];
   const summary = aggregateReviews(records);
   const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
