@@ -262,9 +262,9 @@ export type SelfEvidenceRef = {
 ```typescript
 // src/core/v2/message-payload.ts
 export type ObservationMessagePayload =
-  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
-  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
-  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
+  | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageId: string; readonly partId: string; readonly text: string }
+  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageId: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
+  | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageId: string; readonly partId: string; readonly text: string };
 ```
 
 - [ ] **Step 3b: `ObservationRecord` union を実装**
@@ -373,7 +373,7 @@ export function hashString(value: string): string {
 export type RuleResult = {
   readonly ruleId: string;
   readonly verdict: "PASS" | "WARN" | "FAIL";
-  readonly reason: string;
+  readonly reason?: string;
   readonly evidenceRefs: readonly FullEvidenceRef[];
 };
 
@@ -1838,7 +1838,7 @@ export class MessageRoleBuffer {
 ```
 
 - [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）および role フィルタリングのテスト実装**
-  - `tests/hooks/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageID, partID)` でストリーミング中に一度「tests pass」と判定された後、同じ partID の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
+  - `tests/hooks/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageId, partId)` でストリーミング中に一度「tests pass」と判定された後、同じ partId の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
   - さらに、roleが未確定の場合、user roleの場合、あるいはclaimsが空の場合における `extractAssistantClaims` / `getFinalizedAssistantText` の挙動をテストで検証し、これらにおいて空配列または `undefined` が返されることを確認するテストを追加する。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -1943,7 +1943,7 @@ function toPreToolObservationPayload(
 
 function toPostToolObservationPayload(
   input: ToolObservationInput,
-  output: { readonly output: string; readonly metadata?: Record<string, unknown> }
+  output: { output: string; readonly metadata?: Record<string, unknown> }
 ): PostToolUseEvent {
   return {
     type: "PostToolUse",
@@ -1980,7 +1980,7 @@ onToolExecuteAfter: async (input, output) => {
   if (input.tool.startsWith("justice_")) return;
   const response = await this.plugin.handleEvent(toPostToolObservationPayload(input, output));
   // (1) guaranteed channel: notifier banner (fail-open try/catch)
-  if (response.action === "inject") {
+  if (response.action === "inject" && (response as any).variant === "gate_advisory") {
     try {
       await this.notifier.notify({
         level: "warning",
@@ -1995,7 +1995,7 @@ onToolExecuteAfter: async (input, output) => {
     }
   }
   // (2) best-effort channel: append banner to output.output (gated by C1 spike result)
-  if (this.options.enableAdvisoryOutputAppend && response.action === "inject" && response.injectedContext && typeof output.output === "string") {
+  if (this.options.enableAdvisoryOutputAppend && response.action === "inject" && (response as any).variant === "gate_advisory" && response.injectedContext && typeof output.output === "string") {
     const banner = this.notifier.formatBanner({
       level: "warning",
       variant: "justice_gate",
@@ -2103,6 +2103,9 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
   if (a.action === "inject" && b.action === "inject") {
     const contexts = [a.injectedContext, b.injectedContext].filter((c) => c !== "");
     const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
+    if ((a as any).variant === "gate_advisory" || (b as any).variant === "gate_advisory") {
+      (result as any).variant = "gate_advisory";
+    }
     if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
     if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
     return result;
@@ -2118,6 +2121,10 @@ export function mergePostToolUseResponses(responses: HookResponse[]): HookRespon
   if (injects.length > 0) {
     const contexts = injects.map((i) => i.injectedContext).filter((c) => c !== "");
     const result: InjectResponse = { action: "inject", injectedContext: contexts.join("\n\n---\n\n") };
+    const gateAdvisory = injects.find((i) => (i as any).variant === "gate_advisory");
+    if (gateAdvisory) {
+      (result as any).variant = "gate_advisory";
+    }
     const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
     if (modifieds.length > 0) {
       if (modifieds.length > 1) {
@@ -2332,8 +2339,8 @@ private readonly sessionActiveTasks = new Map<string, Set<string>>();
 
 private getActiveTaskIdForSession(sessionId: string): string | undefined {
   const tasks = this.sessionActiveTasks.get(sessionId);
-  if (!tasks || tasks.size === 0) return undefined;
-  return Array.from(tasks).pop();
+  if (!tasks || tasks.size !== 1) return undefined; // FF-005/D74: Do not fallback if there are multiple concurrent active tasks to prevent cross-task contamination.
+  return Array.from(tasks)[0];
 }
 
 private buildEnvelope(extra: { readonly taskId?: string; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly recordType: "observation" | "decision" | "learning" }): CommonEnvelope {
@@ -2824,6 +2831,17 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     );
     await this.logStore.append(shardId, record);
 
+    // 1.5. Skill execution observed and appended (fail-open, FR-002)
+    try {
+      const invokedSkills = detectSkillInvoked(payload.toolName, payload.toolInput);
+      for (const skill of invokedSkills) {
+        const skillRecord = buildSkillInvokedRecord(envelope, skill.skillName, skill.source);
+        await this.logStore.append(shardId, skillRecord);
+      }
+    } catch (err) {
+      this.logger.warn("observation-handler: skill_invoked observation failed", err);
+    }
+
     // 2. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
 
@@ -3292,10 +3310,10 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
   const check = gate.check;
 
   if (check.type === "evidence_present") {
-    // observed / derived 起源の証跡のみ PASS 対象とする。declared 単体は onMissingEvidence or WARN (FF-008)
-    const matching = evidence.filter(e => e.evidence.kind === check.evidenceKind && e.evidence.provenance !== "declared");
+    // observed / derived 起源の証跡のみ PASS 対象とする。declared 単体は onMissingEvidence or WARN (FF-008/FF-007)
+    const matching = evidence.filter(e => e.evidence.kind === check.evidenceKind && (e.evidence.provenance === "observed" || e.evidence.provenance === "derived"));
     if (matching.length > 0) {
-      return { ruleId: gate.id, verdict: "PASS", evidenceRefs: matching.map(e => e.ref) };
+      return { ruleId: gate.id, verdict: "PASS", reason: `Authoritative evidence of kind '${check.evidenceKind}' is present.`, evidenceRefs: matching.map(e => e.ref) };
     }
     return {
       ruleId: gate.id,
@@ -3316,7 +3334,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
       };
     }
     
-    // observed / derived 起源のみ PASS 可能 (FF-008)
+    // observed / derived 起源のみ PASS 可能 (FF-008/FF-007)
     // declared-only は onMissingEvidence、outcome 違反 (fail) は onViolation
     let hasAuthoritativePass = false;
     let ruleVerdict: "PASS" | "WARN" | "FAIL" = "PASS";
@@ -3324,17 +3342,17 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
     const matchedRefs: EvidenceRef[] = [];
     for (const ev of matching) {
       matchedRefs.push(ev.ref);
-      const isDeclared = ev.evidence.provenance === "declared";
+      const isAuthoritative = ev.evidence.provenance === "observed" || ev.evidence.provenance === "derived";
       const outcome = ev.evidence.sourceClass === "tool_output"
         ? ev.evidence.interpretation?.outcome
         : ev.evidence.claim.outcome;
         
       const expectedOutcome = check.type === "evidence_outcome" ? check.requireOutcome : "pass";
-      if (!isDeclared && outcome === expectedOutcome) {
+      if (isAuthoritative && outcome === expectedOutcome) {
         hasAuthoritativePass = true;
       }
       
-      if (outcome !== expectedOutcome) {
+      if (isAuthoritative && outcome !== expectedOutcome) {
         ruleVerdict = worstResult(ruleVerdict, mapVerdict(gate.onViolation));
         invalidRefs.push(ev.ref);
       }
@@ -3371,7 +3389,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
     let anyObserved = false;
     const openItems: { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[] = [];
     for (const scope of ctx.reviewScope) {
-      const scopeData = ctx.reviewSummary.byScope.get(scope);
+      const scopeData = ctx.reviewSummary?.byScope?.get(scope);
       if (scopeData) {
         anyObserved = true;
         for (const item of scopeData.open) {
@@ -3393,7 +3411,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
     }
 
     if (openItems.length === 0) {
-      return { ruleId: gate.id, verdict: "PASS", evidenceRefs: [] };
+      return { ruleId: gate.id, verdict: "PASS", reason: "No open review items matching minimum severity found.", evidenceRefs: [] };
     }
 
     return {
@@ -3684,7 +3702,7 @@ private async evaluateGateIfTriggered(
     if (verdict.verdict === "PASS") {
       return { action: "proceed" };
     }
-    return { action: "inject", injectedContext: formatGateAdvisoryMessage(verdict) };
+    return { action: "inject", injectedContext: formatGateAdvisoryMessage(verdict), variant: "gate_advisory" };
   } catch (err) {
     this.logger.warn("observation-handler: gate evaluation failed, degrading to PROCEED", err);
     return { action: "proceed" };
@@ -3882,10 +3900,14 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
         const exists = state.open.some(x => x.itemKey === item.itemKey) || state.resolved.some(x => x.itemKey === item.itemKey);
         if (!exists) {
           const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
-          state.open.push(entry);
-          if (item.severity === "critical") state.critical.push(entry);
-          else if (item.severity === "major") state.major.push(entry);
-          else if (item.severity === "minor") state.minor.push(entry);
+          if (item.status === "resolved") {
+            state.resolved.push(entry);
+          } else {
+            state.open.push(entry);
+            if (item.severity === "critical") state.critical.push(entry);
+            else if (item.severity === "major") state.major.push(entry);
+            else if (item.severity === "minor") state.minor.push(entry);
+          }
         }
       }
 
