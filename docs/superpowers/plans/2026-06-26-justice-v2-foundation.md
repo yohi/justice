@@ -70,8 +70,9 @@ test("preflight verification: ADR ratification check", () => {
   const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
-  expect(content).toContain("Status: APPROVED");
-  // Verify placeholders have been replaced by real approvals
+  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
+  // Verify real approvers are documented instead of placeholder names
+  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@alice`,\s*`@bob`/);
   expect(content).not.toContain("@owner-alice");
   expect(content).not.toContain("@owner-bob");
   // Verify essential ADR contents (Finding 3)
@@ -617,7 +618,7 @@ export type CommandExecEvidence = {
   readonly evidenceId: string;
   readonly kind: "test" | "build" | "lint" | "command" | "generic";
   readonly sourceClass: "tool_output";
-  readonly provenance: "observed" | "unknown";
+  readonly provenance: "observed" | "derived" | "unknown";
   readonly toolOutputClass: "command_exec";
   readonly command: string;
   readonly rawOutput: string;
@@ -628,7 +629,7 @@ export type FileContentEvidence = {
   readonly evidenceId: string;
   readonly kind: "test" | "build" | "lint" | "command" | "generic";
   readonly sourceClass: "tool_output";
-  readonly provenance: "observed" | "unknown";
+  readonly provenance: "observed" | "derived" | "unknown";
   readonly toolOutputClass: "file_content";
   readonly command?: string;
   readonly rawOutput?: never; // rawOutput must not be stored in file_content
@@ -677,15 +678,19 @@ export function classifyToolOutputClass(
   if (toolName === "read" || toolName === "glob" || toolName === "grep") return "file_content";
   if (toolName === "bash" || toolName === "shell") {
     const command = args?.command ?? "";
-    // Split by common shell delimiters to analyze individual subcommands (&&, ||, ;, |)
-    const subCommands = command.split(/&&|\|\||;|\|/);
+    // Split by shell delimiters that execute sequential commands (&&, ||, ;)
+    // Do NOT split by pipe (|) here to prevent stdin filter utilities (like '| grep')
+    // from misclassifying sequential execution as file content.
+    const subCommands = command.split(/&&|\|\||;/);
     let hasFileContent = false;
     let hasCommandExec = false;
 
     for (const sub of subCommands) {
-      const subTokens = sub.trim().split(/\s+/).filter(Boolean);
+      // Analyze the leading command in the pipeline (before the first '|')
+      const pipelineStart = sub.split("|")[0] ?? "";
+      const subTokens = pipelineStart.trim().split(/\s+/).filter(Boolean);
       const firstToken = subTokens[0] ?? "";
-      if (FILE_CONTENT_COMMANDS.has(firstToken) || subTokens.some(t => FILE_CONTENT_COMMANDS.has(t))) {
+      if (FILE_CONTENT_COMMANDS.has(firstToken)) {
         hasFileContent = true;
       }
       if (COMMAND_EXEC_COMMANDS.has(firstToken)) {
@@ -701,7 +706,7 @@ export function classifyToolOutputClass(
     }
 
     const tokens = command.trim().split(/\s+/).filter(Boolean);
-    // 未知のコマンド実行かつ出力が巨大な場合は file_content にフォールバック
+    // Fallback to file_content only if the command is unrecognized and the output is massive
     if (rawOutputLength > 20000) return "file_content";
   }
   return "command_exec";
@@ -777,6 +782,11 @@ it("classifies file-content compound commands as file_content", () => {
   expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" }, 100)).toBe("file_content");
   expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" }, 100)).toBe("file_content");
   expect(classifyToolOutputClass("bash", { command: "bun run test && cat docs/superpowers/plans/2026-06-26-justice-v2-foundation.md" }, 30000)).toBe("file_content");
+});
+
+it("classifies stdin pipe filters like grep as command_exec", () => {
+  expect(classifyToolOutputClass("bash", { command: "bun run test | grep failed" }, 100)).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "npm run lint | rg 'error'" }, 100)).toBe("command_exec");
 });
 ```
 
@@ -2452,8 +2462,8 @@ private extractTaskIdFromTaskArgs(args: unknown, sessionId: string): string | un
     const value = (args as Record<string, unknown>).taskId;
     if (typeof value === "string" && value.startsWith("task-")) return value;
   }
-  // Fallback: if the session already has an active task (set by PlanBridge), use it.
-  return this.activeTaskIdForSession(sessionId);
+  // D74: No active taskId fallback to prevent parallel task pollution. Must strictly resolve from callId.
+  return undefined;
 }
 
 private activeTaskIdForSession(sessionId: string): string | undefined {
@@ -2883,8 +2893,8 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     return { action: "proceed" };
   }
   try {
-    // D74/ISS-005: Fallback to the active taskId of the session for non-task tools (e.g. bash executed inside a task)
-    taskId = this.activeTaskWindows.get(callId) ?? this.getActiveTaskIdForSession(event.sessionId);
+    // D74: No active taskId fallback to prevent parallel task pollution. Must strictly resolve from activeTaskWindows.
+    taskId = this.activeTaskWindows.get(callId);
 
     const agentId = await this.resolveAgentId(event.sessionId);
     const shardId = { agentId, sessionId: event.sessionId, writerId: this.writerId };
@@ -4043,20 +4053,16 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
           minor: state.minor.filter(x => x.itemKey !== item.itemKey),
         };
 
-        if (item.status === "resolved") {
-          state = {
-            ...state,
-            resolved: [...state.resolved, entry]
-          };
-        } else {
-          state = {
-            ...state,
-            open: [...state.open, entry],
-            critical: item.severity === "critical" ? [...state.critical, entry] : state.critical,
-            major: item.severity === "major" ? [...state.major, entry] : state.major,
-            minor: item.severity === "minor" ? [...state.minor, entry] : state.minor
-          };
-        }
+        // D32: Do NOT resolve review items based on status: "resolved" within the items array.
+        // All review items are added to 'open' by default, and resolution is strictly processed via
+        // isCompleteSnapshot removal or explicit resolutionMarker presence to avoid "disappearance without evidence".
+        state = {
+          ...state,
+          open: [...state.open, entry],
+          critical: item.severity === "critical" ? [...state.critical, entry] : state.critical,
+          major: item.severity === "major" ? [...state.major, entry] : state.major,
+          minor: item.severity === "minor" ? [...state.minor, entry] : state.minor
+        };
       }
 
       // complete snapshot (isCompleteSnapshot: true) の場合、本レコードの items に含まれない open 指摘は resolved へ遷移 (D32)
