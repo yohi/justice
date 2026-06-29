@@ -434,10 +434,10 @@ gt submit
 - Consumes: `toolName === "skill"` payload, `task` PostToolUse output (including `load_skills` argument).
 - Produces:
   - `detectSkillInvoked(toolName, args): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[]` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
-  - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
+  - `extractTaskSummaryClaims(sourceId, output): DeclaredClaim[]` (D29/D62).
   - `appendTaskSummaryDeclaredEvidence(payload, taskId)` in `observation-handler.ts`, wrapped in `try/catch` and degrading to `PROCEED` on failure.
   - `detectSkillInvoked(toolName, args): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[]` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
-  - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
+  - `extractTaskSummaryClaims(sourceId, output): DeclaredClaim[]` (D29/D62).
 
 - [ ] **Step 1: skill 検出器を実装**
 
@@ -483,9 +483,9 @@ export type SkillInvokedRecord = {
 
 ```typescript
 // src/core/v2/task-summary-claim-extractor.ts
-export function extractTaskSummaryClaims(output: string): DeclaredClaim[] {
+export function extractTaskSummaryClaims(sourceId: string, output: string): DeclaredClaim[] {
   // transcript 含有でも declared 扱い（D62）。PASS 非算入。
-  return extractDeclaredClaims(output).map((c) => ({ ...c, claimKind: c.claimKind }));
+  return extractDeclaredClaims(sourceId, output).map((c) => ({ ...c, claimKind: c.claimKind }));
 }
 ```
 
@@ -567,7 +567,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     if (payload.toolName === "task") {
       try {
         const summaryText = payload.toolResult ?? "";
-        summaryClaims = extractTaskSummaryClaims(summaryText);
+        summaryClaims = extractTaskSummaryClaims(callId, summaryText);
       } catch (err) {
         this.logger.warn("observation-handler: task summary declared claim extraction failed", err);
       }

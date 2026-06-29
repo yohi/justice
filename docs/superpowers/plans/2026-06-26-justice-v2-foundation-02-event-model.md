@@ -218,7 +218,6 @@ import { createHash } from "crypto";
 export function hashString(value: string): string {
   const hash = createHash("sha256").update(value).digest("hex");
   return `sha256:${hash}`;
-    .replace(/(?:^|[\s=])((?:\/|~\/)[^\s"']+)/g, " [REDACTED_PATH]");
 }
 ```
 
@@ -648,9 +647,9 @@ it("classifies stdin pipe filters like grep as command_exec", () => {
 });
 
 it("extracts declared claims for build lint and generic summaries", () => {
-  expect(extractDeclaredClaims("build passed ✅").map((c) => c.claimKind)).toContain("build");
-  expect(extractDeclaredClaims("lint failed ❌").map((c) => c.claimKind)).toContain("lint");
-  expect(extractDeclaredClaims("declared summary: all checks green").map((c) => c.claimKind)).toContain("generic");
+  expect(extractDeclaredClaims("test-source-1", "build passed ✅").map((c) => c.claimKind)).toContain("build");
+  expect(extractDeclaredClaims("test-source-2", "lint failed ❌").map((c) => c.claimKind)).toContain("lint");
+  expect(extractDeclaredClaims("test-source-3", "declared summary: all checks green").map((c) => c.claimKind)).toContain("generic");
 });
 ```
 
