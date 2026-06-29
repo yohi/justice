@@ -310,7 +310,7 @@ export function validateRecordSchema(r: any): void {
         throw new Error("Invalid tool_executed record");
       }
     } else if (kind === "message") {
-      if (typeof r.role !== "string" || typeof r.textHash !== "string" || !Array.isArray(r.declaredClaims)) {
+      if (typeof r.role !== "string" || typeof r.textHash !== "string" || (r.declaredClaims !== undefined && !Array.isArray(r.declaredClaims))) {
         throw new Error("Invalid message record");
       }
     } else if (kind === "skill_invoked") {
@@ -922,20 +922,21 @@ describe("FF-004 replay determinism and state validation", () => {
         toolName: "task",
         callId: "c1",
         taskId: "task-1",
-        evidence: [
-          {
-            evidenceId: "ev-1",
-            kind: "test",
-            sourceClass: "tool_output",
-            toolOutputClass: "command_exec",
-            interpretation: {
-              outcome: "pass",
-              provenance: "derived",
-              basis: "parsed_output",
-              derivedFrom: []
-            }
+        evidence: {
+          evidenceId: "ev-1",
+          kind: "test",
+          sourceClass: "tool_output",
+          toolOutputClass: "command_exec",
+          provenance: "observed",
+          command: "bun run test",
+          rawOutput: "1 passed",
+          interpretation: {
+            outcome: "pass",
+            provenance: "derived",
+            basis: "parsed_output",
+            derivedFrom: []
           }
-        ]
+        }
       },
       {
         schemaVersion: 1,
@@ -945,6 +946,9 @@ describe("FF-004 replay determinism and state validation", () => {
         sessionId: "session-123",
         writerId: "w1",
         recordType: "decision",
+        gateType: "task",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
         taskId: "task-1",
         verdict: "PASS",
         ruleResults: [
