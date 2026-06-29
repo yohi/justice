@@ -318,8 +318,20 @@ export function validateRecordSchema(r: any): void {
         throw new Error("Invalid skill_invoked record");
       }
     } else if (kind === "review_observed") {
-      if (typeof r.reviewScope !== "string" || (!Array.isArray(r.items) && !Array.isArray(r.resolutionMarker))) {
+      if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
         throw new Error("Invalid review_observed record");
+      }
+      for (const item of r.items) {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          typeof item.itemKey !== "string" ||
+          typeof item.evidenceId !== "string" ||
+          !["critical", "major", "minor"].includes(item.severity) ||
+          !["open", "resolved"].includes(item.status)
+        ) {
+          throw new Error("Invalid review_observed item");
+        }
       }
     } else if (kind === "session_error") {
       if (!r.sessionError) {
@@ -333,8 +345,39 @@ export function validateRecordSchema(r: any): void {
       throw new Error(`Invalid record: unknown observation kind: ${kind}`);
     }
   } else if (r.recordType === "decision") {
-    if (r.gateType !== "task" || !Array.isArray(r.ruleResults)) {
+    if (
+      r.gateType !== "task" ||
+      !["PASS", "WARN", "FAIL"].includes(r.verdict) ||
+      !["L0", "L1"].includes(r.reachableEnforcementLevel) ||
+      !["L0", "L1"].includes(r.appliedEnforcementLevel) ||
+      !Array.isArray(r.ruleResults)
+    ) {
       throw new Error("Invalid decision record");
+    }
+    for (const ruleResult of r.ruleResults) {
+      if (
+        !ruleResult ||
+        typeof ruleResult !== "object" ||
+        typeof ruleResult.ruleId !== "string" ||
+        !["PASS", "WARN", "FAIL"].includes(ruleResult.verdict) ||
+        typeof ruleResult.reason !== "string" ||
+        !Array.isArray(ruleResult.evidenceRefs)
+      ) {
+        throw new Error("Invalid decision ruleResult");
+      }
+      for (const ref of ruleResult.evidenceRefs) {
+        if (
+          !ref ||
+          typeof ref !== "object" ||
+          typeof ref.agentId !== "string" ||
+          typeof ref.sessionId !== "string" ||
+          typeof ref.writerId !== "string" ||
+          typeof ref.sequence !== "number" ||
+          typeof ref.evidenceId !== "string"
+        ) {
+          throw new Error("Invalid decision evidenceRef");
+        }
+      }
     }
   } else {
     throw new Error(`Invalid record: unknown recordType: ${r.recordType}`);
@@ -635,7 +678,7 @@ export function project(
     }
   }
 
-  // Review aggregator fold (D11/D32/D66/D57) - Stub for Phase 2 to prevent compilation errors. To be implemented in Task 6.2.
+  // Review aggregator fold (D11/D32/D66/D57) - review_observed.items[] を scope 別に集約する。
   const reviewSummary: ReviewSummary = {
     authority: "observed_review_output",
     critical: [],
@@ -645,6 +688,52 @@ export function project(
     open: [],
     byScope: new Map(),
   };
+
+  const ensureScopeSummary = (reviewScope: string) => {
+    const existing = reviewSummary.byScope.get(reviewScope);
+    if (existing) return existing;
+    const created = { critical: [], major: [], minor: [], resolved: [], open: [] };
+    reviewSummary.byScope.set(reviewScope, created);
+    return created;
+  };
+
+  for (const event of sorted) {
+    if (event.recordType !== "observation" || event.kind !== "review_observed") continue;
+    const scopeSummary = ensureScopeSummary(event.reviewScope);
+
+    for (const item of event.items) {
+      const projected = {
+        itemKey: item.itemKey,
+        ref: {
+          agentId: event.agentId,
+          sessionId: event.sessionId,
+          writerId: event.writerId,
+          sequence: event.sequence,
+          evidenceId: item.evidenceId,
+        },
+        severity: item.severity,
+      };
+
+      if (item.severity === "critical") {
+        reviewSummary.critical.push(projected);
+        scopeSummary.critical.push(projected);
+      } else if (item.severity === "major") {
+        reviewSummary.major.push(projected);
+        scopeSummary.major.push(projected);
+      } else {
+        reviewSummary.minor.push(projected);
+        scopeSummary.minor.push(projected);
+      }
+
+      if (item.status === "resolved") {
+        reviewSummary.resolved.push(projected);
+        scopeSummary.resolved.push(projected);
+      } else {
+        reviewSummary.open.push(projected);
+        scopeSummary.open.push(projected);
+      }
+    }
+  }
 
   return {
     schemaVersion: 1,
