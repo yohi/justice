@@ -534,7 +534,12 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     this.options.logger?.warn("PostToolUse callId is missing. Proceeding without task window.", { toolName: payload.toolName, sessionId: event.sessionId });
     return { action: "proceed" };
   }
+  let taskId: string | undefined;
   try {
+    // D50: Skip internal justice plugin tools to prevent polluting observation log
+    if (payload.toolName.startsWith("justice_")) {
+      return { action: "proceed" };
+    }
     // D74: No active taskId fallback to prevent parallel task pollution. Must strictly resolve from activeTaskWindows.
     taskId = this.activeTaskWindows.get(callId);
 
@@ -592,7 +597,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       responses.push(gateResponse);
     }
     if (responses.length > 0) {
-      return mergePostToolUseResponses(responses);
+      return responses.reduce((acc, r) => mergePostToolUseResponses(acc, r));
     }
   } catch (err) {
     this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
@@ -835,6 +840,7 @@ export class LoopDetectionHandler {
   constructor(
     fileReader: FileReader,
     fileWriter: FileWriter,
+    splitter: TaskSplitter,
     observationHandler?: ObservationHandler
   ) {
     this.fileReader = fileReader;
