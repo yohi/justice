@@ -99,8 +99,15 @@ export type ReviewRejectionSignal = {
   readonly matched: boolean;
   readonly excerpts: readonly string[];
   readonly summary: string;
-  readonly severity: "critical" | "major" | "minor";
+};
+
+export type ReviewItem = {
   readonly itemKey: string;
+  readonly severity: "critical" | "major" | "minor";
+  readonly summary: string;
+  readonly status: "open" | "resolved";
+  readonly evidenceId: string;
+  readonly location: string;
 };
 ```
 
@@ -387,7 +394,8 @@ gt submit
 
 - [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output, metadata)` および `isCompleteSnapshot(output, metadata)` を実装する**
   - 単一のシグナル抽出から、レビュー出力内に含まれる複数の指摘事項（severity, summary, location 含む）を正規表現や構造解析により分解し、`ReviewItem[]` にパースするメソッドを `ReviewRejectionDetector`（`src/core/review-rejection-detector.ts`）に追加し、そのテストを `tests/core/review-rejection-detector.test.ts` に追加する。
-  - 同時に、上流から渡される `metadata.isCompleteSnapshot` を優先し、未指定時のみテキストヒューリスティクスで補完する `boolean` を返す `isCompleteSnapshot(output, metadata): boolean` メソッドも `ReviewRejectionDetector` に追加する。
+  - 同時に、上流から渡される `metadata.isCompleteSnapshot` を優先し、未指定時は `false` 固定（または complete を明確に断定できる場合のみ `true`）とする `isCompleteSnapshot(output, metadata): boolean` メソッドも `ReviewRejectionDetector` に追加する。
+  - `tests/core/review-rejection-detector.test.ts` に未指定時 `false` を確認するテストケースを追加する。
 
 - [ ] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
 

@@ -67,7 +67,7 @@
 // src/runtime/justice-tools.ts
 import { z } from "zod";
 import type { ToolDefinition } from "@opencode-ai/plugin";
-import { toSerializableProjectedState } from "../core/v2/state-projection.ts";
+import { toSerializableProjectedState, project } from "../core/v2/state-projection.ts";
 
 export function defineJusticeStatusTool(store: ObservationLogStore, cache: StateProjectionCache): ToolDefinition {
   return {

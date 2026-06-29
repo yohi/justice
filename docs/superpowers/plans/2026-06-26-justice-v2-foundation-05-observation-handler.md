@@ -143,7 +143,7 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
 private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?: string): Promise<void> {
   // Stub: implemented in Task 4.3
 }
-private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
+private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined, metadata?: { readonly isCompleteSnapshot?: boolean }): Promise<void> {
   // Stub: implemented in Task 6.3
 }
 private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId: string | undefined, callId: string | undefined, agentId: string, sessionId: string): Promise<HookResponse> {
@@ -269,17 +269,15 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     await this.projectionCache.write(projectedState).catch(() => {});
 
     // D74: taskId is undefined for non-task tools unless explicitly correlated.
+    let response: HookResponse = { action: "proceed" };
     if (payload.toolName === "task" && taskId) {
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, callId, agentId, event.sessionId);
-      if (taskGateResponse.action === "inject") {
-        return taskGateResponse;
-      }
+      response = mergePostToolUseResponses(response, taskGateResponse);
     }
-    if (taskId) {
-      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, callId, agentId, event.sessionId);
-      if (gateResponse.action === "inject") {
-        return gateResponse;
-      }
+    const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, callId, agentId, event.sessionId);
+    response = mergePostToolUseResponses(response, gateResponse);
+    if (response.action === "inject" || response.action === "skip") {
+      return response;
     }
   } catch (err) {
     this.options.logger?.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
@@ -793,7 +791,15 @@ export function buildReflectionEvent(
   note?: string
 ): ObservationRecord {
   const resolvedPath = path.resolve(workspaceRoot, planRef.path);
-  if (!resolvedPath.startsWith(workspaceRoot)) {
+  const rel = path.relative(workspaceRoot, resolvedPath);
+  if (
+    path.isAbsolute(planRef.path) ||
+    planRef.path.startsWith("/") ||
+    planRef.path.startsWith("\\") ||
+    /^[A-Za-z]:/u.test(planRef.path) ||
+    rel.startsWith("..") ||
+    path.isAbsolute(rel)
+  ) {
     throw new Error("Invalid plan path: Absolute path or traversal detected");
   }
   return {

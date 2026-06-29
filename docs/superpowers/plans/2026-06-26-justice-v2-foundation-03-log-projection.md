@@ -299,8 +299,12 @@ export function validateRecordSchema(r: any): void {
   if (!r.timestamp || typeof r.timestamp !== "string") {
     throw new Error("Invalid record: timestamp must be a string");
   }
-  if (!r.agentId || !r.sessionId || !r.writerId) {
-    throw new Error("Invalid record: missing shard identifier fields");
+  if (
+    typeof r.agentId !== "string" ||
+    typeof r.sessionId !== "string" ||
+    typeof r.writerId !== "string"
+  ) {
+    throw new Error("Invalid record: missing or invalid shard identifier fields");
   }
 
   if (r.recordType === "observation") {
@@ -348,8 +352,8 @@ export function validateRecordSchema(r: any): void {
     if (
       r.gateType !== "task" ||
       !["PASS", "WARN", "FAIL"].includes(r.verdict) ||
-      !["L0", "L1"].includes(r.reachableEnforcementLevel) ||
-      !["L0", "L1"].includes(r.appliedEnforcementLevel) ||
+      r.reachableEnforcementLevel !== "L1" ||
+      r.appliedEnforcementLevel !== "L0" ||
       !Array.isArray(r.ruleResults)
     ) {
       throw new Error("Invalid decision record");
@@ -360,7 +364,7 @@ export function validateRecordSchema(r: any): void {
         typeof ruleResult !== "object" ||
         typeof ruleResult.ruleId !== "string" ||
         !["PASS", "WARN", "FAIL"].includes(ruleResult.verdict) ||
-        typeof ruleResult.reason !== "string" ||
+        (ruleResult.reason !== undefined && typeof ruleResult.reason !== "string") ||
         !Array.isArray(ruleResult.evidenceRefs)
       ) {
         throw new Error("Invalid decision ruleResult");

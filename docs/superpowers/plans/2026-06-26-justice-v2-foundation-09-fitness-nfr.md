@@ -79,7 +79,7 @@ describe("FF-001", () => {
     const files = glob.sync("src/core/**/*.ts");
     for (const file of files) {
       const content = readFileSync(file, "utf-8");
-      expect(content).not.toMatch(/from ['"]@opencode-ai/);
+      expect(content).not.toMatch(/@opencode-ai\//);
     }
   });
 });
@@ -366,7 +366,7 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
   const store = new ObservationLogStore(writer, reader, "w-1");
   const handler = new ObservationHandler({ logStore: store, sessionStateProvider });
 
-  const rawCommand = "echo /home/alice/project/secret /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com";
+  const rawCommand = "echo /home/alice/project/secret ~/secret_tilde \\\\server\\share\\secret_unc \"/home/alice/quoted_path\" /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com";
   const rawOutput = "sk-abc123 HOME=/home/alice";
 
   // Raw payload that hasn't been redacted yet
@@ -384,6 +384,9 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
   const physicalPath = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-1" });
   const written = writer.getFile(physicalPath);
   expect(written).not.toContain("/home/alice/project");
+  expect(written).not.toContain("~/secret_tilde");
+  expect(written).not.toContain("\\\\server\\share\\secret_unc");
+  expect(written).not.toContain("quoted_path");
   expect(written).not.toContain("/tmp/foo");
   expect(written).not.toContain("/workspace/src");
   expect(written).not.toContain("/Users/bob/project");

@@ -518,11 +518,19 @@ export function mergeWithDefaults(customGates: readonly GateRule[]): readonly Ga
 }
 
 export async function loadGates(fileReader: FileReader, path = ".justice/gate.yaml"): Promise<readonly GateRule[]> {
-  const content = await fileReader.readFile(path).catch(() => null);
+  let content: string | null = null;
+  try {
+    content = await fileReader.readFile(path);
+  } catch (err: any) {
+    if (err && err.code !== "ENOENT") {
+      console.warn(`Failed to read gates configuration from ${path}:`, err);
+    }
+  }
   if (!content) return DEFAULT_GATES.filter(g => g.enabled !== false);
   try {
     return mergeWithDefaults(parseGateYaml(content));
-  } catch {
+  } catch (err) {
+    console.warn(`Failed to parse gates configuration from ${path}, falling back to defaults:`, err);
     return DEFAULT_GATES.filter(g => g.enabled !== false);
   }
 }

@@ -163,6 +163,12 @@ export class NoOpPersistence extends WisdomPersistence {
       async fileExists(): Promise<boolean> {
         return false;
       },
+      async listFiles(): Promise<readonly string[]> {
+        return [];
+      },
+      async readFileStats(): Promise<null> {
+        return null;
+      },
     };
     const noopWriter: FileWriter = {
       async writeFile(): Promise<void> {
