@@ -76,7 +76,7 @@ export function defineJusticeStatusTool(store: ObservationLogStore, cache: State
     execute: async () => {
       try {
         const events = await store.readAll();
-        const state = project(events, new Date().toISOString());
+        const state = project(events);
         await cache.write(state).catch(() => {});
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
       } catch (err: any) {
@@ -115,10 +115,6 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
   // 2. Call justice_status execute() and verify it returns JSON with status: "ERROR" and reason.
 });
 
-it("uses current ISO timestamp for rebuilding state during production runs", async () => {
-  // 1. Mock global Date.prototype.toISOString to return a fixed mock clock.
-  // 2. Verify that project is called with the mock date.
-});
 ```
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
@@ -170,10 +166,10 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
       }
       try {
         const events = await store.readAll();
-        const state = project(events, new Date().toISOString());
+        const state = project(events);
         const gates = await gateLoader.load();
-        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId), reviewSummary: state.reviewSummary };
-        const evidence = state.tasks.get(taskId)?.evidence ?? [];
+        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
+        const evidence = collectTaskEvidence(state, taskId);
         const verdict = evaluate(gates, evidence, ctx);
         return JSON.stringify(verdict, null, 2);
       } catch (err: any) {
@@ -240,7 +236,7 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
     execute: async ({ scope }) => {
       try {
         const events = await store.readAll();
-        const state = project(events, new Date().toISOString());
+        const state = project(events);
         const summary = scope
           ? state.reviewSummary.byScope.get(scope)
           : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };

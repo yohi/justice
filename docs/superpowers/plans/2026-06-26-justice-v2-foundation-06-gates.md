@@ -185,13 +185,13 @@ export type GateContext = {
   readonly sessionId: string;
   readonly reviewScope: readonly string[];
   readonly reviewSummary?: {
-    readonly byScope: ReadonlyMap<string, {
+    readonly byScope: Readonly<Record<string, {
       readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef }[];
       readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    }>;
+    }>>;
   };
 };
 ```
@@ -335,7 +335,7 @@ function evaluateRule(gate: GateRule, evidence: readonly ProjectedEvidence[], ct
     let anyObserved = false;
     const openItems: { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[] = [];
     for (const scope of ctx.reviewScope) {
-      const scopeData = ctx.reviewSummary?.byScope?.get(scope);
+      const scopeData = ctx.reviewSummary?.byScope?.[scope];
       if (scopeData) {
         anyObserved = true;
         for (const item of scopeData.open) {
@@ -648,7 +648,15 @@ private async evaluateGateIfTriggered(
     if (verdict.verdict === "PASS") {
       return { action: "proceed" };
     }
-    return { action: "inject", injectedContext: formatGateAdvisoryMessage(verdict), variant: "gate_advisory" };
+
+    const advisoryMessage = formatGateAdvisoryMessage(verdict);
+    try {
+      this.justiceNotifier.notify(formatBanner("gate_advisory", advisoryMessage));
+    } catch {
+      // Fail open: notifier is best-effort, injectedContext remains the fallback surface.
+    }
+
+    return { action: "inject", injectedContext: advisoryMessage, variant: "gate_advisory" };
   } catch (err) {
     this.logger.warn("observation-handler: gate evaluation failed, degrading to PROCEED", err);
     return { action: "proceed" };
@@ -656,7 +664,7 @@ private async evaluateGateIfTriggered(
 }
 ```
 
-- [ ] **Step 2: L0 advisory advisory message フォーマットを実装**
+- [ ] **Step 2: L0 advisory message と banner/notifier 送出を実装**
 
 ```typescript
 function formatGateAdvisoryMessage(verdict: Verdict): string {
@@ -671,6 +679,8 @@ function formatGateAdvisoryMessage(verdict: Verdict): string {
   return lines.join("\n");
 }
   ```
+
+  `formatGateAdvisoryMessage()` は injectedContext 用の本文を組み立てる責務に限定し、`formatBanner()` でバナー化した上で `JusticeNotifier` に送出する。`injectedContext` は PostToolUse 側の best-effort surface として残しつつ、保証チャネルは notifier に置く。
 
 > **Banner contract:** AGENTS.md §2 requires `> <icon> **JUSTICE NOTIFICATION** [<title>]`, `> <message>`, and a trailing empty line. The optional checklist follows the message line and preserves the 3-line quote layout when no checklist items are present.
 > **Emoji Avoidance Rule:** `AGENTS.md` の「チャット上の絵文字重複の禁止」ルールに基づき、`formatGateAdvisoryMessage` の出力および `DEFAULT_GATES` の定義・ルール評価など、通知メッセージのテキスト本体には装飾用絵文字（✅/❌/🎯など）を含めず、`PASS` / `FAIL` / `WARN` などのプレーンテキスト表記のみを使用するように徹底すること。

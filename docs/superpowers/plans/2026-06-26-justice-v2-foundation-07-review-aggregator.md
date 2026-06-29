@@ -146,13 +146,13 @@ export type ReviewSummary = {
   readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  readonly byScope: ReadonlyMap<string, {
+  readonly byScope: Readonly<Record<string, {
     readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
     readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  }>;
+  }>>;
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
@@ -263,7 +263,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     minor,
     resolved,
     open,
-    byScope: byScopeMap
+    byScope: Object.fromEntries(byScopeMap)
   };
 }
 ```
@@ -278,7 +278,7 @@ it("keeps item open on mere disappearance", () => {
     reviewObserved({ scope: "task-1", items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
-  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  const openItems = summary.byScope["task-1"]?.open ?? [];
   expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
   expect(openItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
 });
@@ -289,8 +289,8 @@ it("marks item resolved on explicit marker", () => {
     reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "explicit_marker" }] }),
   ];
   const summary = aggregateReviews(records);
-  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
-  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  const resolvedItems = summary.byScope["task-1"]?.resolved ?? [];
+  const openItems = summary.byScope["task-1"]?.open ?? [];
   expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
   expect(resolvedItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
   expect(openItems.find(i => i.itemKey === "major:foo")).toBeUndefined();
@@ -302,8 +302,8 @@ it("marks item resolved on complete snapshot absence", () => {
     reviewObserved({ scope: "task-1", isCompleteSnapshot: true, items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
-  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
-  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  const resolvedItems = summary.byScope["task-1"]?.resolved ?? [];
+  const openItems = summary.byScope["task-1"]?.open ?? [];
   expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
   expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "minor:bar" }));
   expect(openItems.find(i => i.itemKey === "minor:bar")?.ref.evidenceId).toBe("minor:bar");
@@ -315,7 +315,7 @@ it("keeps item open when snapshot is not marked complete", () => {
     reviewObserved({ scope: "task-1", isCompleteSnapshot: false, items: [{ itemKey: "minor:bar", severity: "minor", evidenceId: "minor:bar", summary: "bar", location: "file.ts", status: "open" }] }),
   ];
   const summary = aggregateReviews(records);
-  const openItems = summary.byScope.get("task-1")?.open ?? [];
+  const openItems = summary.byScope["task-1"]?.open ?? [];
   expect(openItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
 });
 
@@ -325,7 +325,7 @@ it("marks item resolved on human artifact", () => {
     reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" }] }),
   ];
   const summary = aggregateReviews(records);
-  const resolvedItems = summary.byScope.get("task-1")?.resolved ?? [];
+  const resolvedItems = summary.byScope["task-1"]?.resolved ?? [];
   expect(resolvedItems).toContainEqual(expect.objectContaining({ itemKey: "major:foo" }));
   expect(resolvedItems.find(i => i.itemKey === "major:foo")?.ref.evidenceId).toBe("major:foo");
 });

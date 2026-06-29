@@ -181,6 +181,14 @@ export function buildToolExecutedRecord(
         command: redactForPersistence(redactAbsolutePaths(observed.command ?? "")),
         rawOutput: redactForPersistence(redactAbsolutePaths(observed.rawOutput ?? "")),
       };
+    } else if (observed.toolOutputClass === "file_content") {
+      redactedEvidence = {
+        ...observed,
+        command: observed.command ? redactForPersistence(redactAbsolutePaths(observed.command)) : undefined,
+        rawOutputSnippet: observed.rawOutputSnippet
+          ? redactForPersistence(redactAbsolutePaths(observed.rawOutputSnippet))
+          : undefined,
+      };
     } else {
       redactedEvidence = {
         ...observed,
@@ -679,6 +687,7 @@ gt submit
 
 - Modify: `src/core/justice-plugin.ts`
 - Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/task-feedback.ts`（ReflectionEvent 発行呼び出し追加）
 - Modify: `src/hooks/loop-handler.ts`（ReflectionEvent 発行呼び出し追加）
 - Create: `src/core/v2/reflection-event.ts`
@@ -732,7 +741,11 @@ export type SessionErrorRecord = {
 };
 ```
 
-- [ ] **Step 1c: `observation-handler.ts` に `emitReflectionEvent` を実装**
+- [ ] **Step 1c: `session.error` を observation-handler に配線する**
+  - `src/core/justice-plugin.ts` / `src/runtime/opencode-adapter.ts` で `session.error` event を `observationHandler.handleSessionError(...)` へ routing する。
+  - 実イベント経由で `session_error` が Observation Log に append されることを統合テストで検証する。
+
+- [ ] **Step 1d: `observation-handler.ts` に `emitReflectionEvent` を実装**
 
 ```typescript
 // src/hooks/observation-handler.ts
