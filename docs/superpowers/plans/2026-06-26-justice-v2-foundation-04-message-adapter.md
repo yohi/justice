@@ -143,7 +143,7 @@ devcontainer exec --workspace-folder . bun run test tests/hooks/message-role-buf
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/message-role-buffer.ts tests/hooks/message-role-buffer.test.ts
+git add src/runtime/message-role-buffer.ts src/core/v2/declared-claim-extractor.ts src/core/v2/observation-model.ts tests/hooks/message-role-buffer.test.ts
 git commit -m "feat(v2): message role buffer and finalized declared extraction"
 ```
 
@@ -305,7 +305,7 @@ onToolExecuteAfter: async (input, output) => {
 
 ```typescript
 onMessagePartUpdated: async (event) => {
-  await this.plugin.handleEvent({ type: "Message", payload: { kind: "message_part_updated", sessionId: event.sessionId, messageID: event.messageID, partID: event.partID, text: event.text } });
+  await this.plugin.handleEvent({ type: "Message", sessionId: event.sessionId, payload: { kind: "message_part_updated", messageID: event.messageID, partID: event.partID, text: event.text } });
 },
 onMessageUpdated: async (event) => {
   // Translate and forward AgentMapped event if agent property is present (D48, FIND-001)
@@ -322,9 +322,9 @@ onMessageUpdated: async (event) => {
   const isFinalized = !!(event.message.finish || event.time?.completed || event.message.finalized);
   await this.plugin.handleEvent({
     type: "Message",
+    sessionId: event.sessionId,
     payload: {
       kind: "message_updated",
-      sessionId: event.sessionId,
       messageID: event.messageID,
       role: event.message.role,
       finalized: isFinalized
@@ -384,7 +384,7 @@ gt submit
 - `handleEvent` routes:
   - `PreToolUse`: observation-handler + (if toolName === "task") plan-bridge, merged via `mergePreToolUseResponses`.
   - `PostToolUse`: observation-handler + (if toolName === "task") plan-bridge + task-feedback, merged via `mergePostToolUseResponses`.
-  - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(payload)` (declared claim extraction).
+  - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(event.sessionId, payload)` (declared claim extraction).
   - `Event`: existing handlers unchanged.
 
 - [ ] **Step 0: Add `mergePreToolUseResponses` and `mergePostToolUseResponses` helpers**
@@ -447,7 +447,7 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
       if (isUserMessage) {
         return await this.planBridge.handleMessage(event);
       }
-      const obs = await this.observationHandler.handleMessage(payload as ObservationMessagePayload).catch((err) => {
+      const obs = await this.observationHandler.handleMessage(event.sessionId, payload as ObservationMessagePayload).catch((err) => {
         this.options.logger?.warn("observation-handler message failed", err);
         return PROCEED;
       });
@@ -490,7 +490,7 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
 export class ObservationHandler {
   async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> { return { action: "proceed" }; }
   async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> { return { action: "proceed" }; }
-  async handleMessage(event: MessageEvent): Promise<HookResponse> { return { action: "proceed" }; }
+  async handleMessage(sessionId: string, payload: ObservationMessagePayload): Promise<HookResponse> { return { action: "proceed" }; }
 }
 ```
 
@@ -572,12 +572,14 @@ gt submit
 - Consumes: Normalized agent mapped event (`{ type: "AgentMapped", payload: { sessionId: string; agentName: string } }`) produced by the adapter (complying with FF-001).
 - Produces:
   - `sessionStateProvider.getAgentId(sessionId): Promise<ObservationAgentId>`
-  - `sessionStateProvider.getActiveTaskId(sessionId): string | undefined`
+  - `sessionStateProvider.getActiveTaskId(callId): string | undefined`
+  - `sessionStateProvider.setActiveTaskWindow(callId: string, taskId: string): void`
+  - `sessionStateProvider.closeActiveTaskWindow(callId: string): void`
 
 - [ ] **Step 1: SessionStateProvider の実装（D48/D74）**
   - アダプター側で検知・抽出された `AgentMapped` ペイロードを受け取り、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
   - OpenCode agent 名（自由文字列）から Justice `AgentId`（`atlas` / `hephaestus` / `sisyphus` / `prometheus`）への写像ロジックを実装し、マッピングできない場合は `unknown` とする。
-  - セッションごとのアクティブな `taskId` の保存と取得（`setActiveTaskId(sessionId, taskId)` / `getActiveTaskId(sessionId)`）を実装する。
+  - **spec §5.8/D74 準拠**: task 窓を `callId` キーで管理する。`activeTaskWindows: Map<string, string>`（キー=callId、値=taskId）を内部に持ち、`setActiveTaskWindow(callId, taskId)` で PreToolUse 時に窓を開き、`closeActiveTaskWindow(callId)` で対応する callId の PostToolUse 時に窓を閉じる。`getActiveTaskId(callId)` で callId に紐づく taskId を返す。セッション単位の単一 active taskId による上書き方式（`setActiveTaskId(sessionId, taskId)` / `getActiveTaskId(sessionId)`）は採用しない。
 
 - [ ] **Step 2: routing イベントハンドラに AgentMapped イベント処理を追加**
   - `JusticePlugin.handleEvent` で `AgentMapped` イベント（ペイロード: `{ sessionId, agentName }`）を受信し、`SessionStateProvider` のマップを更新する。
