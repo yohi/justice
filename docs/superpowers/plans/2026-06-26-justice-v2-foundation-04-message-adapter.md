@@ -170,7 +170,7 @@ gt submit
 
 - Consumes: `ObservationMessagePayload` from Task 1.1, `ObservationLogStore` from Phase 2, existing `HookEvent` types from `src/core/types.ts`, `allocateWriterId` from Task 2.1.
 - Produces:
-  - `ToolObservationPayload` type: `{ toolName: string; callId: string; args?: Record<string, unknown>; output?: { output?: string; metadata?: Record<string, unknown> }; error?: boolean }`.
+  - `ToolObservationPayload` type: `{ toolName: string; callId: string; toolInput?: Record<string, unknown>; toolResult?: string; metadata?: { readonly error?: boolean; readonly output?: string; readonly metadata?: Record<string, unknown> }; error?: boolean }`.
   - `onToolExecuteBefore/After` no longer filters `tool !== "task"` but explicitly excludes query tools matching `justice_*`; all other tools are converted to `ToolObservationPayload` and forwarded to `JusticePlugin.handleEvent` as `PreToolUse` / `PostToolUse` events to prevent query commands from altering the canonical Observation Log (D50).
   - `onMessage` / `onMessagePartUpdated` / `onTextComplete` hooks produce `ObservationMessagePayload` and forward to `JusticePlugin.handleEvent({ type: "Message" })` alongside the existing user-message path (handled in Task 3.3).
   - Triggers `AgentMapped` event forwarding when observing `agent` property in message parameters (`chat.params` / `chat.message`) (D48, FIND-001).
@@ -210,8 +210,9 @@ const justice = new JusticePlugin(localFs, localFs, {
 type ToolObservationPayload = {
   readonly toolName: string;
   readonly callId: string;
-  readonly args?: Record<string, unknown>;
-  readonly output?: { readonly output?: string; readonly metadata?: Record<string, unknown> };
+  readonly toolInput?: Record<string, unknown>;
+  readonly toolResult?: string;
+  readonly metadata?: { readonly error?: boolean; readonly output?: string; readonly metadata?: Record<string, unknown> };
   readonly error?: boolean;
 };
 
@@ -247,7 +248,7 @@ function toPostToolObservationPayload(
       callId: input.callID,
       toolInput: input.args,
       toolResult: output.output,
-      metadata: { error: output.metadata?.error === true },
+      metadata: { error: output.metadata?.error === true, output: output.output, metadata: output.metadata },
     },
   };
 }
@@ -402,6 +403,10 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
     ) {
       (result as unknown as { variant?: string }).variant = "gate_advisory";
     }
+    if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
+      console.warn("Conflict detected in pre-tool-use modifiedPayload. Using the observation-handler payload.");
+      return { ...result, modifiedPayload: a.modifiedPayload };
+    }
     if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
     if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
     return result;
@@ -424,8 +429,7 @@ export function mergePostToolUseResponses(responses: HookResponse[]): HookRespon
     const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
     if (modifieds.length > 0) {
       if (modifieds.length > 1) {
-        // D64: modifiedPayload 衝突時はログを出して最初のものを使用
-        console.warn("Conflict detected in post-tool-use modifiedPayload. Using the first one.");
+        console.warn("Conflict detected in post-tool-use modifiedPayload. Using the first injected payload.");
       }
       return { ...result, modifiedPayload: modifieds[0].modifiedPayload };
     }

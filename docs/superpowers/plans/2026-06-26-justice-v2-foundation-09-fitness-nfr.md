@@ -70,7 +70,7 @@ bun add -d glob
 
 ```typescript
 // tests/arch/core-no-opencode-imports.test.ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { glob } from "glob";
 import { readFileSync } from "fs";
 

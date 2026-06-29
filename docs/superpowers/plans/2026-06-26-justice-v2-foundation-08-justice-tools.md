@@ -156,7 +156,11 @@ gt submit
 - [ ] **Step 1: `justice_gate` 実装（D50）**
 
 ```typescript
-export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: GateLoader): ToolDefinition {
+export function defineJusticeGateTool(
+  store: ObservationLogStore,
+  gateLoader: GateLoader,
+  context: { readonly agentId: string; readonly sessionId: string }
+): ToolDefinition {
   return {
     description: "現 event log から gate を dry-run 評価します",
     args: { taskId: z.string() },
@@ -168,7 +172,7 @@ export function defineJusticeGateTool(store: ObservationLogStore, gateLoader: Ga
         const events = await store.readAll();
         const state = project(events);
         const gates = await gateLoader.load();
-        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: "unknown", sessionId: "unknown", reviewScope: collectReviewScopes(state, taskId) };
+        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: context.agentId, sessionId: context.sessionId, reviewScope: collectReviewScopes(state, taskId) };
         const evidence = collectTaskEvidence(state, taskId);
         const verdict = evaluate(gates, evidence, ctx);
         return JSON.stringify(verdict, null, 2);
@@ -237,8 +241,11 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
       try {
         const events = await store.readAll();
         const state = project(events);
+        if (scope && !state.reviewSummary.byScope.has(scope)) {
+          return JSON.stringify({ status: "ERROR", reason: `Unknown scope: ${scope}` }, null, 2);
+        }
         const summary = scope
-          ? state.reviewSummary.byScope.get(scope)
+          ? { ...state.reviewSummary, byScope: Object.fromEntries([[scope, state.reviewSummary.byScope.get(scope)]]) }
           : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
         return JSON.stringify(summary, null, 2);
       } catch (err: any) {

@@ -17,7 +17,7 @@ We modify and ratify the Charter with the following adjustments:
 - Ratify the updated hook event matrix.
 - Restructure folder persistence to `/events/<agentId>/<safeSessionId>/<writerId>.jsonl` and `/archive/events/<agentId>/<safeSessionId>/<writerId>.<timestamp>.jsonl`.
 - Drop `authorship` tracking from V2.0 state envelopes and projections.
-- Restrict gate evaluation authority strictly to `observed` and `derived` provenance, treating `declared` as non-authoritative (audit-only).
+- Restrict gate evaluation authority strictly to `observed` and `derived` provenance. Treat `declared` as non-authoritative for gate evaluation, but still allow it for L0 advisory outputs and other non-gating display surfaces.
 
 ## Evidence of Ratification
 * **PR:** #104

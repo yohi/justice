@@ -76,9 +76,8 @@ export function classifySeverity(summary: string): "critical" | "major" | "minor
   return "minor";
 }
 
-export function deriveItemKey(severity: string, summary: string, location?: string): string {
-  const normalized = summary.toLowerCase().replace(/\s+/g, " ").slice(0, 80);
-  return `${severity}:${normalized}:${location ?? ""}`;
+export function deriveItemKey(severity: string, ruleId: string, location: string, evidenceHash: string): string {
+  return `${severity}:${ruleId}:${location}:${evidenceHash}`;
 }
 ```
 
@@ -141,27 +140,27 @@ import type { ReviewItem } from "./observation-model.ts";
 export type ReviewSummary = {
   readonly authority: "observed_review_output";
   readonly authorship?: null;
-  readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-  readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly critical: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly major: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly minor: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly resolved: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+  readonly open: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   readonly byScope: Readonly<Record<string, {
-    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly critical: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly major: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly minor: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly resolved: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly open: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   }>>;
 };
 
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
   const byScopeMap = new Map<string, {
-    readonly critical: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly major: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly minor: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly resolved: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
-    readonly open: readonly { readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly critical: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly major: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly minor: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly resolved: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
+    readonly open: readonly { readonly reviewScope: string; readonly itemKey: string; readonly ref: FullEvidenceRef; readonly severity: "critical" | "major" | "minor" }[];
   }>();
 
   // レコードを順方向に走査して最新 of 指摘・解決マーク状態を決定論的にマージする
@@ -184,7 +183,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     if (record.items) {
       for (const item of record.items) {
         const itemRef = { ...ref, evidenceId: item.itemKey };
-        const entry = { itemKey: item.itemKey, ref: itemRef, severity: item.severity };
+        const entry = { reviewScope: scope, itemKey: item.itemKey, ref: itemRef, severity: item.severity };
 
         // 一旦、既存の open, resolved, critical, major, minor リストから同一 itemKey のエントリを除外する (latest-review-wins)
         state = {
@@ -242,11 +241,11 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
   }
 
   // グローバルサマリーの集計
-  const critical: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
-  const major: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
-  const minor: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
-  const resolved: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
-  const open: { itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const critical: { reviewScope: string; itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const major: { reviewScope: string; itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const minor: { reviewScope: string; itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const resolved: { reviewScope: string; itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
+  const open: { reviewScope: string; itemKey: string; ref: FullEvidenceRef; severity: "critical" | "major" | "minor" }[] = [];
 
   for (const [_, scopeData] of byScopeMap) {
     critical.push(...scopeData.critical);
@@ -331,7 +330,7 @@ it("marks item resolved on human artifact", () => {
 });
 ```
 
-- [ ] **Step 2: state-projection に byScope マージを追加し、Phase 2 の最小 stub を aggregateReviews(reviewObservedEvents) 連携へ差し替える**
+- [ ] **Step 2: state-projection に byScope マージを追加し、ProjectedState の schema version 更新と migration を定義したうえで aggregateReviews(reviewObservedEvents) 連携へ差し替える**
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 

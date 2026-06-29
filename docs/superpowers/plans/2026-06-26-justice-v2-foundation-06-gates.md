@@ -94,7 +94,7 @@ export const GateCheckSchema = z.discriminatedUnion("type", [
 ]);
 
 export const GateRuleSchema = z.object({
-  id: z.string(),
+  id: z.string().trim().min(1),
   description: z.string().optional(),
   gateType: z.literal("task"),
   trigger: z.object({
@@ -388,9 +388,9 @@ function worstOf(verdicts: readonly ("PASS" | "WARN" | "FAIL")[]): "PASS" | "WAR
 ```typescript
 // tests/core/v2/rule-evaluation-engine.test.ts
 it("skips task gate evaluation when taskId is undefined (no active task window)", () => {
-  // 1. Setup a GateContext with trigger: "tool_observed" and taskId: undefined
+  // 1. Setup a GateContext with trigger: "task_complete" and taskId: undefined
   // 2. Call evaluate() and verify that it returns { verdict: "SKIP", reason: "no taskId provided" }
-  // 3. Ensure no DecisionRecord is generated or appended for this evaluation
+  // 3. Add a second case where trigger: "tool_observed" resolves the active task before evaluate()
 });
 ```
 
@@ -520,7 +520,11 @@ export function mergeWithDefaults(customGates: readonly GateRule[]): readonly Ga
 export async function loadGates(fileReader: FileReader, path = ".justice/gate.yaml"): Promise<readonly GateRule[]> {
   const content = await fileReader.readFile(path).catch(() => null);
   if (!content) return DEFAULT_GATES.filter(g => g.enabled !== false);
-  return mergeWithDefaults(parseGateYaml(content));
+  try {
+    return mergeWithDefaults(parseGateYaml(content));
+  } catch {
+    return DEFAULT_GATES.filter(g => g.enabled !== false);
+  }
 }
 ```
 
@@ -611,10 +615,14 @@ private async evaluateGateIfTriggered(
   sessionId: string = "unknown"
 ): Promise<HookResponse> {
   try {
-    if (taskId === undefined) {
+    if (trigger === "task_complete" && taskId === undefined) {
       return { action: "proceed" };
     }
     const shardId = { agentId, sessionId, writerId: this.writerId };
+    const effectiveTaskId = taskId ?? this.activeTaskWindows.get(sessionId)?.[0];
+    if (effectiveTaskId === undefined) {
+      return { action: "proceed" };
+    }
     
     // To ensure strict D60-76 evaluation sequence, we must load all events including the newly appended record
     const events = await this.logStore.readAll();
@@ -625,18 +633,18 @@ private async evaluateGateIfTriggered(
     const gates = await this.gateLoader.load();
     const ctx: GateContext = {
       trigger,
-      taskId,
+      taskId: effectiveTaskId,
       agentId,
       sessionId,
-      reviewScope: collectReviewScopes(state, taskId),
+      reviewScope: collectReviewScopes(state, effectiveTaskId),
       reviewSummary: state.reviewSummary,
     };
-    const evidence = state.tasks.get(taskId)?.evidence ?? [];
+    const evidence = state.tasks.get(effectiveTaskId)?.evidence ?? [];
     const verdict = evaluate(gates, evidence, ctx);
     if (verdict.verdict === "SKIP") {
       return { action: "proceed" };
     }
-    const decision: DecisionRecord = { ...this.buildEnvelope({ taskId, agentId, sessionId, recordType: "decision" }), ...verdict };
+    const decision: DecisionRecord = { ...this.buildEnvelope({ taskId: effectiveTaskId, agentId, sessionId, recordType: "decision" }), ...verdict };
     await this.logStore.append(shardId, decision);
 
     // Refresh state projection with the new decision and update cache

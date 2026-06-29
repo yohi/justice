@@ -150,14 +150,14 @@ export type ToolExecutedRecord = {
   readonly kind: "tool_executed";
   readonly toolName: string;
   readonly callId: string;
-  readonly evidence: readonly Evidence;
+  readonly evidence: Evidence;
 };
 
 // MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
 export type MessageRecord = {
   readonly kind: "message";
   readonly messageID: string;
-  readonly role: "assistant";
+  readonly role: "assistant" | "user";
   readonly textHash: string;
   readonly textSnippet?: string;
   readonly finalized: boolean;
@@ -553,10 +553,10 @@ export function classifyToolOutputClass(
     if (hasCommandExec) {
       return "command_exec";
     }
-
-    const tokens = command.trim().split(/\s+/).filter(Boolean);
-    // Fallback to file_content only if the command is unrecognized and the output is massive
-    if (rawOutputLength > 20000) return "file_content";
+    // Unknown shell commands are classified conservatively so raw output is not persisted
+    // unless the command is clearly an execution-only command.
+    void rawOutputLength;
+    return "file_content";
   }
   return "command_exec";
 }
@@ -609,11 +609,20 @@ export type DeclaredClaim = {
 
 const PASS_PATTERNS = /tests? pass|passing|✅\s*tests?/i;
 const FAIL_PATTERNS = /tests? fail|failing|❌\s*tests?/i;
+const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp]> = [
+  ["test", /tests? pass|passing|✅\s*tests?/i],
+  ["build", /build(?:\s+pass(?:ed)?)?|✅\s*build/i],
+  ["lint", /lint(?:\s+pass(?:ed)?)?|✅\s*lint/i],
+  ["generic", /declared|summary|status/i],
+];
 
 export function extractDeclaredClaims(text: string): DeclaredClaim[] {
   const claims: DeclaredClaim[] = [];
-  if (PASS_PATTERNS.test(text)) claims.push({ evidenceId: `claim-${claims.length}`, claimKind: "test", outcome: "pass" });
-  if (FAIL_PATTERNS.test(text)) claims.push({ evidenceId: `claim-${claims.length}`, claimKind: "test", outcome: "fail" });
+  for (const [claimKind, pattern] of CLAIM_PATTERNS) {
+    if (!pattern.test(text)) continue;
+    const outcome = PASS_PATTERNS.test(text) ? "pass" : FAIL_PATTERNS.test(text) ? "fail" : "unknown";
+    claims.push({ evidenceId: `claim-${claims.length}`, claimKind, outcome });
+  }
   return claims;
 }
 ```
@@ -631,11 +640,19 @@ it("classifies file-content compound commands as file_content", () => {
   expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" }, 100)).toBe("file_content");
   expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" }, 100)).toBe("file_content");
   expect(classifyToolOutputClass("bash", { command: "bun run test && cat docs/superpowers/plans/2026-06-26-justice-v2-foundation.md" }, 30000)).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "python -c \"print(open('file.txt').read())\"" }, 100)).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "node -e \"console.log(require('fs').readFileSync('file.txt','utf8'))\"" }, 100)).toBe("file_content");
 });
 
 it("classifies stdin pipe filters like grep as command_exec", () => {
   expect(classifyToolOutputClass("bash", { command: "bun run test | grep failed" }, 100)).toBe("command_exec");
   expect(classifyToolOutputClass("bash", { command: "npm run lint | rg 'error'" }, 100)).toBe("command_exec");
+});
+
+it("extracts declared claims for build lint and generic summaries", () => {
+  expect(extractDeclaredClaims("build passed ✅").map((c) => c.claimKind)).toContain("build");
+  expect(extractDeclaredClaims("lint failed ❌").map((c) => c.claimKind)).toContain("lint");
+  expect(extractDeclaredClaims("declared summary: all checks green").map((c) => c.claimKind)).toContain("generic");
 });
 ```
 

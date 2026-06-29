@@ -167,6 +167,7 @@ async listFiles(prefix: string): Promise<readonly string[]> {
 async rename(from: string, to: string): Promise<void> {
   const safeFrom = await this.resolveSafely(from);
   const safeTo = await this.resolveSafely(to);
+  await this.ensureParentDir(safeTo);
   await rename(safeFrom, safeTo);
 }
 ```
@@ -222,7 +223,7 @@ export function createShardWriteQueue(
 
     try {
       if (!sequences.has(path)) {
-        const initSeq = await getInitialSequence(path).catch(() => 0);
+        const initSeq = await getInitialSequence(path);
         sequences.set(path, initSeq);
       }
       while (true) {
@@ -232,9 +233,8 @@ export function createShardWriteQueue(
         const current = items.shift()!;
         try {
           const nextSeq = (sequences.get(path) ?? 0) + 1;
-          const existing = await readExisting(path).catch(() => "");
           const line = `${JSON.stringify({ ...current.record, sequence: nextSeq })}\n`;
-          await atomicAppend(path, existing + line);
+          await atomicAppend(path, line);
           sequences.set(path, nextSeq);
           
           if (onAppendComplete) await onAppendComplete(path).catch((err) => onError(path, err));
@@ -842,7 +842,7 @@ export function validateProjectionCacheAgainstEvents(
     return { valid: false, reason: "structural" };
   }
 
-  // 2. Check maxSequenceByShard mismatch
+  // 2. Compare shard sequence state using the same normalized ordering as project()
   const currentMaxSeq = new Map<string, number>();
   for (const e of events) {
     const shardKey = `${e.agentId}:${e.sessionId}:${e.writerId}`;
@@ -856,13 +856,16 @@ export function validateProjectionCacheAgainstEvents(
   }
   for (const [shardKey, cachedSeq] of cachedMap.entries()) {
     const currentSeq = currentMaxSeq.get(shardKey);
-    if (currentSeq === undefined || cachedSeq !== currentSeq) {
+    if (currentSeq === undefined || cachedSeq > currentSeq) {
       return { valid: false, reason: "mismatch_seq" };
+    }
+    if (cachedSeq < currentSeq) {
+      return { valid: false, reason: "stale_append" };
     }
   }
 
-  // 3. Check sourceHash mismatch (natural append stale)
-  const currentSourceHash = hashString(events.map((e) => JSON.stringify(e)).join("\n"));
+  // 3. Check sourceHash mismatch using the same stable ordering as project()
+  const currentSourceHash = hashString([...events].map((e) => JSON.stringify(e)).join("\n"));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
     return { valid: false, reason: "stale_append" };
   }

@@ -263,8 +263,12 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     // 3. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
     await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
 
-    // 4. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
-    // D74: taskId is undefined for non-task tools unless explicitly correlated. If taskId is undefined, evaluation is skipped early.
+    // 4. Refresh projected state before evaluating gates (strict evaluation sequence: append -> project -> evaluate)
+    const refreshedEvents = await this.logStore.readAll();
+    const projectedState = project(refreshedEvents, new Date().toISOString());
+    await this.projectionCache.write(projectedState).catch(() => {});
+
+    // D74: taskId is undefined for non-task tools unless explicitly correlated.
     if (payload.toolName === "task" && taskId) {
       const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
@@ -429,10 +433,10 @@ gt submit
 
 - Consumes: `toolName === "skill"` payload, `task` PostToolUse output (including `load_skills` argument).
 - Produces:
-  - `detectSkillInvoked(toolName, args): { skillName, source }` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
+  - `detectSkillInvoked(toolName, args): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[]` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
   - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
   - `appendTaskSummaryDeclaredEvidence(payload, taskId)` in `observation-handler.ts`, wrapped in `try/catch` and degrading to `PROCEED` on failure.
-  - `detectSkillInvoked(toolName, args): { skillName, source }` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
+  - `detectSkillInvoked(toolName, args): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[]` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
   - `extractTaskSummaryClaims(output): DeclaredClaim[]` (D29/D62).
 
 - [ ] **Step 1: skill 検出器を実装**
@@ -772,7 +776,7 @@ async emitReflectionEvent(params: {
 - [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51/指摘5）**
 
 `buildReflectionEvent` の動作仕様：
-- `planRef.path` が絶対パスであるか（`/` で始まる、あるいは Windows の `C:\` 等のドライブレターで始まる場合）またはディレクトリトラバーサル（`..` を含む場合）をバリデーターにより検証する。
+- `planRef.path` は workspace root に対して `path.resolve` した結果が root 配下に収まる場合のみ受け入れる。絶対パス、Windows のドライブレター、UNC、または `..` によるトラバーサルは拒否する。
 - 検証に失敗した場合は、エラー（`Error: Invalid plan path: Absolute path or traversal detected`）を投げ、永続化をブロック（リダクション／例外送出）する。
 - ワークスペース相対パス（例: `plan.md`）のみを正常パスとして受け入れる。
 
@@ -785,9 +789,8 @@ export function buildReflectionEvent(
   intent: "check_complete" | "append_error_note",
   note?: string
 ): ObservationRecord {
-  const isAbsolute = planRef.path.startsWith("/") || /^[a-zA-Z]:\\/.test(planRef.path);
-  const hasTraversal = planRef.path.split(/[/\\]/).includes("..");
-  if (isAbsolute || hasTraversal) {
+  const resolvedPath = path.resolve(workspaceRoot, planRef.path);
+  if (!resolvedPath.startsWith(workspaceRoot)) {
     throw new Error(`Invalid plan path: Absolute path or traversal detected: ${planRef.path}`);
   }
   return { ...envelope, recordType: "observation", kind: "reflection", reflection: { trigger, planRef, intent, note } };
