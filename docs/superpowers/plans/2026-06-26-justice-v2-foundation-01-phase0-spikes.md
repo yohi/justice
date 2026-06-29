@@ -190,8 +190,8 @@ OpenCode 実行時に以下を観測: `message.part.updated`, `message.updated`,
 - [ ] **Step 3: スパイク結果を docs に集約し設計書を更新**
 
 ```bash
-git add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md
-git commit -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録および設計書更新"
+gt add docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md docs/superpowers/specs/2026-06-16-justice-v2-foundation-design.md
+gt commit create -m "docs: v2.0 Phase 0 de-risk spikes 結果を記録および設計書更新"
 ```
 
 - [ ] **Step 4: Task 0.2 に向けた PR を作成する**

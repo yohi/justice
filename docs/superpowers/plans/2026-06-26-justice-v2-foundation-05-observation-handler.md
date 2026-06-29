@@ -282,7 +282,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       }
     }
   } catch (err) {
-    this.logger.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
+    this.options.logger?.warn("observation-handler: tool observation failed, degrading to PROCEED", err);
   } finally {
     if (payload.toolName === "task") {
       this.activeTaskWindows.delete(callId);
@@ -446,7 +446,10 @@ gt submit
 export function detectSkillInvoked(toolName: string, args: unknown, callId?: string): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[] {
   const result: { skillName: string; source: "skill_tool" | "task_load_skills"; callId?: string }[] = [];
   if (toolName === "skill" && args && typeof args === "object" && "name" in args) {
-    result.push({ skillName: args.name as string, source: "skill_tool", callId });
+    const name = (args as Record<string, unknown>).name;
+    if (typeof name === "string" && name.length > 0) {
+      result.push({ skillName: name, source: "skill_tool", callId });
+    }
   }
   if (toolName === "task" && args && typeof args === "object" && "load_skills" in args) {
     const loadSkills = (args as Record<string, unknown>).load_skills;
@@ -791,9 +794,19 @@ export function buildReflectionEvent(
 ): ObservationRecord {
   const resolvedPath = path.resolve(workspaceRoot, planRef.path);
   if (!resolvedPath.startsWith(workspaceRoot)) {
-    throw new Error(`Invalid plan path: Absolute path or traversal detected: ${planRef.path}`);
+    throw new Error("Invalid plan path: Absolute path or traversal detected");
   }
-  return { ...envelope, recordType: "observation", kind: "reflection", reflection: { trigger, planRef, intent, note } };
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "reflection",
+    reflection: {
+      trigger,
+      planRef,
+      intent,
+      note: note ? redactForPersistence(redactAbsolutePaths(note)) : undefined,
+    },
+  };
 }
 ```
 

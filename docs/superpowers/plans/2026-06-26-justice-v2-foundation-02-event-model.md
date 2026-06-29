@@ -218,6 +218,7 @@ import { createHash } from "crypto";
 export function hashString(value: string): string {
   const hash = createHash("sha256").update(value).digest("hex");
   return `sha256:${hash}`;
+    .replace(/(?:^|[\s=])((?:\/|~\/)[^\s"']+)/g, " [REDACTED_PATH]");
 }
 ```
 
@@ -364,8 +365,8 @@ export function redactMessageSnippet(snippet: string): string {
 
 export function redactAbsolutePaths(text: string): string {
   return text
-    .replace(/(?:^|\s)(\/(?:home|tmp|workspace|Users|var|opt|etc)\/[^\s"']+)/g, " [REDACTED_PATH]")
-    .replace(/(?:^|\s)([A-Za-z]:\\[^\\\s"']+)/g, " [REDACTED_PATH]");
+    .replace(/(^|[\s=])((?:\/|~\/|[A-Za-z]:\\|\\\\)[^\s"']+)/g, "$1[REDACTED_PATH]")
+    .replace(/(["'])(?:(?:\/|~\/|[A-Za-z]:\\|\\\\)[^"']+)\1/g, "$1[REDACTED_PATH]$1");
 }
 
 export function redactEnvironmentValues(text: string): string {
@@ -521,8 +522,7 @@ const FILE_CONTENT_COMMANDS = new Set([
 
 export function classifyToolOutputClass(
   toolName: string,
-  args: { readonly command?: string } | undefined,
-  rawOutputLength: number
+  args: { readonly command?: string } | undefined
 ): "command_exec" | "file_content" {
   if (toolName === "read" || toolName === "glob" || toolName === "grep") return "file_content";
   if (toolName === "bash" || toolName === "shell") {
@@ -553,9 +553,7 @@ export function classifyToolOutputClass(
     if (hasCommandExec) {
       return "command_exec";
     }
-    // Unknown shell commands are classified conservatively so raw output is not persisted
-    // unless the command is clearly an execution-only command.
-    void rawOutputLength;
+    // Unknown shell commands are classified conservatively from the command text alone.
     return "file_content";
   }
   return "command_exec";
@@ -574,7 +572,7 @@ export function extractEvidenceFromTool(
   callId: string // determinism: use callId as evidenceId (FIND-003)
 ): Evidence {
   const rawOutput = output.output ?? "";
-  const toolOutputClass = classifyToolOutputClass(toolName, args, rawOutput.length);
+  const toolOutputClass = classifyToolOutputClass(toolName, args);
   const observedId = callId; // Deterministic evidenceId from tool callId (FF-002/FF-003)
   const kind = toolName === "task" ? "generic" : mapToolNameToKind(toolName, args);
   return {
@@ -616,7 +614,7 @@ const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp
   ["generic", /declared|summary|status/i],
 ];
 
-export function extractDeclaredClaims(text: string): DeclaredClaim[] {
+export function extractDeclaredClaims(sourceId: string, text: string): DeclaredClaim[] {
   const claims: DeclaredClaim[] = [];
   for (const [claimKind, pattern] of CLAIM_PATTERNS) {
     if (!pattern.test(text)) continue;

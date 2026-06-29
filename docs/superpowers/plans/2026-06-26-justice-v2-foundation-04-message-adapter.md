@@ -131,19 +131,19 @@ export class MessageRoleBuffer {
 ```
 
 - [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）および role フィルタリングのテスト実装**
-  - `tests/hooks/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageId, partId)` でストリーミング中に一度「tests pass」と判定された後、同じ partId の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
-  - さらに、roleが未確定の場合、user roleの場合、あるいはclaimsが空の場合における `extractAssistantClaims` / `getFinalizedAssistantText` の挙動をテストで検証し、これらにおいて空配列または `undefined` が返されることを確認するテストを追加する。
+- `tests/runtime/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageId, partId)` でストリーミング中に一度「tests pass」と判定された後、同じ partId の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
+- さらに、role が未確定 / user の場合、または claims が空の場合における `extractAssistantClaims` は空配列を返し、assistant かつ finalized の場合の `getFinalizedAssistantText` は claims が空でも本文を返すことを明示的に検証する。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/hooks/message-role-buffer.test.ts tests/core/v2/message-payload.test.ts
+devcontainer exec --workspace-folder . bun run test tests/runtime/message-role-buffer.test.ts
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/runtime/message-role-buffer.ts src/core/v2/declared-claim-extractor.ts src/core/v2/observation-model.ts tests/hooks/message-role-buffer.test.ts
+git add src/runtime/message-role-buffer.ts src/core/v2/declared-claim-extractor.ts src/core/v2/observation-model.ts tests/runtime/message-role-buffer.test.ts
 git commit -m "feat(v2): message role buffer and finalized declared extraction"
 ```
 
@@ -178,7 +178,7 @@ gt submit
   - Captures `HookResponse` from `handleEvent` and applies `injectedContext` / notifier banner / best-effort `output.output` append in deterministic handler order (D47/D64).
   - Sets the default value of `options.enableAdvisoryOutputAppend` based on C1 spike results (Task 0.2 Step 1b). If C1 shows banner is not visible in user-facing context, it defaults to false; otherwise true (D47).
   - Step 1 implementation includes tests asserting that when `options.enableAdvisoryOutputAppend` is false, `notifier.notify()` executes normally while `output.output` remains unmodified (D47).
-  - Bootstraps global unique `writerId` dynamically resolved during initialization and injects it into both `ObservationLogStore` and `ObservationHandler` via `JusticePluginOptions` to satisfy structural invariants (D55/D39/指摘3).
+  - Bootstraps global unique `writerId` dynamically resolved during initialization and threads it through `JusticePluginOptions` into both `ObservationLogStore` and `ObservationHandler` to satisfy structural invariants (D55/D39/指摘3).
 
 - [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts` & `src/core/justice-plugin.ts` (ISS-002)**
 
@@ -200,7 +200,7 @@ const justice = new JusticePlugin(localFs, localFs, {
   onError: (err) => { ... },
   globalFileSystem: globalFs ?? undefined,
   notifier,
-  writerId, // Inject the dynamically allocated writerId
+  writerId, // Shared writerId for both ObservationLogStore and ObservationHandler
 });
 ```
 これにより、`ObservationLogStore` と `ObservationHandler` で同一の `writerId` が配線されることを保証する。テスト `tests/runtime/opencode-adapter-v2.test.ts` で起動時に同一の `writerId` が配線されることを確認する。
@@ -231,7 +231,7 @@ function toPreToolObservationPayload(
     type: "PreToolUse",
     sessionId: input.sessionID,
     callId: input.callID,
-    payload: { toolName: input.tool, toolInput: output.args },
+    payload: { toolName: input.tool, callId: input.callID, toolInput: output.args },
   };
 }
 
@@ -248,7 +248,7 @@ function toPostToolObservationPayload(
       callId: input.callID,
       toolInput: input.args,
       toolResult: output.output,
-      metadata: { error: output.metadata?.error === true, output: output.output, metadata: output.metadata },
+      metadata: output.metadata,
     },
   };
 }
@@ -404,8 +404,7 @@ function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookRespons
       (result as unknown as { variant?: string }).variant = "gate_advisory";
     }
     if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
-      console.warn("Conflict detected in pre-tool-use modifiedPayload. Using the observation-handler payload.");
-      return { ...result, modifiedPayload: a.modifiedPayload };
+      throw new Error("Conflict detected in pre-tool-use modifiedPayload");
     }
     if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
     if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
@@ -503,7 +502,7 @@ export class ObservationHandler {
 ```typescript
 // tests/core/v2/post-tool-use-merge.test.ts
 import { describe, expect, it, vi } from "vitest";
-import { mergePostToolUseResponses } from "../../../src/core/justice-plugin";
+import { mergePostToolUseResponses, mergePreToolUseResponses } from "../../../src/core/justice-plugin";
 
 describe("D64 - PostToolUse merge rules", () => {
   it("should prioritize skip action over inject and proceed", () => {
@@ -527,17 +526,12 @@ describe("D64 - PostToolUse merge rules", () => {
     });
   });
 
-  it("should use the first modifiedPayload when conflicts occur and log warning", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("should throw when modifiedPayload conflicts occur", () => {
     const responses = [
       { action: "inject" as const, injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
       { action: "inject" as const, injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } }
     ];
-    const result = mergePostToolUseResponses(responses);
-    expect(result.action).toBe("inject");
-    expect((result as unknown as { modifiedPayload: unknown }).modifiedPayload).toEqual({ toolName: "task", modified: 1 });
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Conflict detected"));
-    warnSpy.mockRestore();
+    expect(() => mergePreToolUseResponses(responses[0], responses[1])).toThrow(/modifiedPayload/);
   });
 });
 ```

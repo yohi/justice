@@ -597,6 +597,7 @@ gt submit
 
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/rule-evaluation-engine.ts`（trigger dispatch）
+- Modify: `src/core/justice-notifier.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 
 **Interfaces:**
@@ -610,9 +611,9 @@ gt submit
 // src/hooks/observation-handler.ts 内
 private async evaluateGateIfTriggered(
   trigger: "task_complete" | "tool_observed",
-  taskId?: string,
-  agentId: ObservationAgentId = "unknown",
-  sessionId: string = "unknown"
+  taskId: string | undefined,
+  agentId: ObservationAgentId,
+  sessionId: string
 ): Promise<HookResponse> {
   try {
     if (trigger === "task_complete" && taskId === undefined) {

@@ -168,9 +168,10 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```text
 .justice/
-  events/<agentId>/<safeSessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId, writerId}・1 物理ファイル=1 writer・D39）
+  events/<agentId>/<sessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（論理キー={agentId, sessionId, writerId}・物理セグメントは sessionId に正規化・1 物理ファイル=1 writer・D39）
   events/system/system/<writerId>.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system", writerId}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
-  archive/events/<agentId>/<safeSessionId>/<writerId>.<timestamp>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
+  archive/events/<agentId>/<sessionId>/<writerId>.<timestamp>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
+  session-aliases.json         # sessionId→safeSessionId/collisionIndex の永続 alias map（衝突初回に atomic write、起動時に replay 前ロード・D69/D73）
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
   wisdom.json              # 既存（不変）
@@ -178,7 +179,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 > **憲章保存先パスとの関係（互換的詳細化＋D58 追認）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol 自体は変更しない。ただし FR-001 保存先パスの詳細化は Requirement レベルの実質的詳細化を含むため、**「§16.3 凍結ガバナンスの対象外」とは自己認定せず、D58 のとおり 1 本の ADR にまとめ CODEOWNERS 追認を得る**（軽量追認・§13 次工程 I3/D58）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
 
-> **パスセグメントの安全性（D69・本レビュー Finding 4）**: 物理パス `events/<agentId>/<safeSessionId>/<writerId>.jsonl` の各セグメントは、`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）が安全な一方、**外部由来の `sessionId` は Runtime が FileWriter 直前に safe-segment へエンコード**する。具体的なアルゴリズム: (1) 許容文字は `[A-Za-z0-9_-]`、それ以外を `_` に置換、(2) 予約語 `.` / `..` / 空文字はそれぞれ `_dot_` / `_dotdot_` / `_empty_` に置換、(3) 単一セグメントは **先に 64 文字へ truncation** し、(4) その後 **`sha256(sessionId)` の先頭 8 文字を hash suffix として付与**するため、最終 safeSessionId は「64 文字の本体 + 8 文字の hash suffix」で固定される（例: `ses_abc___a1b2c3d4`）。(5) もし異なる raw `sessionId` が同一 safeSessionId に衝突した場合は、後続 shard を `archive/events/<agentId>/<safeSessionId>/<writerId>.<collisionIndex>.jsonl` に退避させ、読取側は alias map を通じて元の `events/<agentId>/<safeSessionId>/<writerId>.jsonl` と同等に解決する。(6) 論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には**生 `sessionId`** を保持し、エンコードは物理ファイル名生成にのみ適用。§9.4 NFR security と整合。
+> **パスセグメントの安全性（D69・本レビュー Finding 4）**: 物理パス `events/<agentId>/<sessionId>/<writerId>.jsonl` の各セグメントは、`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）が安全な一方、**外部由来の `sessionId` は Runtime が FileWriter 直前に safe-segment へエンコード**する。具体的なアルゴリズム: (1) 許容文字は `[A-Za-z0-9_-]`、それ以外を `_` に置換、(2) 予約語 `.` / `..` / 空文字はそれぞれ `_dot_` / `_dotdot_` / `_empty_` に置換、(3) 単一セグメントは **先に 64 文字へ truncation** し、(4) その後 **`sha256(sessionId)` の先頭 8 文字を hash suffix として付与**するため、最終 sessionId は「64 文字の本体 + 8 文字の hash suffix」で固定される（例: `ses_abc___a1b2c3d4`）。(5) もし異なる raw `sessionId` が同一 sessionId に衝突した場合は、後続 shard を `archive/events/<agentId>/<sessionId>/<writerId>.<collisionIndex>.jsonl` に退避させ、読取側は alias map を通じて元の `events/<agentId>/<sessionId>/<writerId>.jsonl` と同等に解決する。(6) 論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には**生 `sessionId`** を保持し、エンコードは物理ファイル名生成にのみ適用。§9.4 NFR security と整合。
 
 ---
 
@@ -192,7 +193,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
   "agentId": "hephaestus",            // 値域 ObservationAgentId=AgentId("atlas"|"hephaestus"|"sisyphus"|"prometheus")|"system"|"unknown"（D56）。取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）。persona isolation/wisdom routing には AgentId(4 persona) のみ流す（system/unknown 非流入・D56）
-  "sessionId": "ses_...",       // 物理パスセグメント化時は safe-segment エンコード（[A-Za-z0-9_-] 以外を `_` 置換・`.`/`..`/空を予約語へ・長さ上限 64 文字・**常に sha256(sessionId) 先頭8文字のハッシュ接尾辞を付与**・パストラバーサル防止・D69）。論理鍵 shardId/参照には生値を保持
+  "sessionId": "ses_...",       // 物理パスセグメント化時は safe-segment エンコード（[A-Za-z0-9_-] 以外を `_` 置換・`.`/`..`/空を予約語へ・**最大 64 文字**・**常に sha256(sessionId) 先頭8文字のハッシュ接尾辞を付与**・パストラバーサル防止・D69）。論理鍵 shardId/参照には生値を保持
   "writerId": "w-3f2a9c4e",     // 必須: writer segment 識別子（Runtime が "w-"+crypto.randomUUID() で採番・文字種 [A-Za-z0-9-]・予約語 system と区別・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39/D55）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
   "recordType": "observation" | "decision" | "learning"

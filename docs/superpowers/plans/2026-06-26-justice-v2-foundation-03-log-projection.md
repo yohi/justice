@@ -141,7 +141,7 @@ export interface FileReader {
 
 export interface FileWriter {
   writeFile(path: string, content: string): Promise<void>;
-  rename(from: string, to: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>; // implementations must create parent directories for `to` before renaming
 }
 ```
 
@@ -1036,8 +1036,8 @@ export interface FileReader {
 const MAX_SHARD_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_SHARD_AGE_DAYS = 14;
 
-async function shouldRotate(path: string, now: Date): Promise<boolean> {
-  const stats = await this.fileReader.readFileStats(path);
+async function shouldRotate(fileReader: FileReader, path: string, now: Date): Promise<boolean> {
+  const stats = await fileReader.readFileStats(path);
   if (!stats) return false;
   return stats.size >= MAX_SHARD_SIZE || ageDays(stats.mtimeMs, now) >= MAX_SHARD_AGE_DAYS;
 }

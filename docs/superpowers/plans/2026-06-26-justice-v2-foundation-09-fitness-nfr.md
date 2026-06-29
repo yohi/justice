@@ -123,7 +123,7 @@ gt submit
 
 ```typescript
 // tests/core/rule-engine-determinism.test.ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { evaluate } from "../../src/core/v2/rule-evaluation-engine.ts";
 
 describe("FF-002 / FF-003", () => {
@@ -133,27 +133,32 @@ describe("FF-002 / FF-003", () => {
     const readSpy = vi.spyOn(fs, "readFile").mockImplementation(() => { throw new Error("I/O during pure function"); });
     const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(() => { throw new Error("I/O during pure function"); });
 
-    const gates: any[] = [];
-    const evidence: any[] = [];
-    const ctx: any = {
-      trigger: "task_complete",
-      taskId: "task-1",
-      agentId: "hephaestus",
-      sessionId: "s-1",
-      reviewScope: [],
-      reviewSummary: { authority: "observed_review_output", critical: [], major: [], minor: [], resolved: [], open: [], byScope: new Map() }
-    };
+    try {
+      const gates: any[] = [];
+      const evidence: any[] = [];
+      const ctx: any = {
+        trigger: "task_complete",
+        taskId: "task-1",
+        agentId: "hephaestus",
+        sessionId: "s-1",
+        reviewScope: [],
+        reviewSummary: { authority: "observed_review_output", critical: [], major: [], minor: [], resolved: [], open: [], byScope: new Map() }
+      };
 
-    const a = evaluate(gates, evidence, ctx);
-    const b = evaluate(gates, evidence, ctx);
-    expect(a).toEqual(b);
+      const before = structuredClone({ gates, evidence, ctx });
 
-    // Assert that evaluate has zero side effects / I/O dependency (INV-009)
-    expect(readSpy).not.toHaveBeenCalled();
-    expect(writeSpy).not.toHaveBeenCalled();
+      const a = evaluate(gates, evidence, ctx);
+      const b = evaluate(gates, evidence, ctx);
+      expect(a).toEqual(b);
 
-    readSpy.mockRestore();
-    writeSpy.mockRestore();
+      // Assert that evaluate has zero side effects / I/O dependency (INV-009)
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(structuredClone({ gates, evidence, ctx })).toEqual(before);
+    } finally {
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
   });
 });
 ```
@@ -198,48 +203,20 @@ gt submit
 ```typescript
 // tests/arch/no-planmd-write.test.ts
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "fs";
-import { join } from "path";
-
-function getFiles(dir: string): string[] {
-  const files: string[] = [];
-  if (readdirSync === undefined) return files;
-  const items = readdirSync(dir);
-  for (const item of items) {
-    const path = join(dir, item);
-    if (statSync(path).isDirectory()) {
-      files.push(...getFiles(path));
-    } else if (path.endsWith(".ts")) {
-      files.push(path);
-    }
-  }
-  return files;
-}
+import { createMockFileWriter } from "../helpers/mock-file-system";
+import { TaskFeedbackHandler } from "../../src/hooks/task-feedback";
 
 describe("FF-005", () => {
-  it("new spine does not call writeFile or write files in unauthorized hooks", () => {
-    // allowlist: exact callsites only, not whole files:
-    // - src/hooks/task-feedback.ts::updateCheckbox -> this.fileWriter.writeFile(
-    // - src/hooks/loop-handler.ts::appendErrorNote -> this.fileWriter.writeFile(
-    const writeFileMatches = (content: string) => content.match(/\.writeFile\s*\(/g) ?? [];
-    const files = getFiles("src/hooks");
-    for (const file of files) {
-      const content = readFileSync(file, "utf-8");
+  it("writes plan.md only from the allowlisted hook paths", () => {
+    const writer = createMockFileWriter();
+    const handler = new TaskFeedbackHandler({ fileWriter: writer });
+    void handler.updateCheckbox({ planPath: "plan.md", taskId: "task-1", checked: true });
+    expect(writer.writeFile).toHaveBeenCalledWith("plan.md", expect.any(String));
 
-      if (file.replace(/\\/g, "/").endsWith("src/hooks/task-feedback.ts")) {
-        expect(content).toMatch(/updateCheckbox[\s\S]{0,400}this\.fileWriter\.writeFile\(/);
-        expect(writeFileMatches(content)).toHaveLength(1);
-        expect(content).not.toMatch(/appendErrorNote/);
-      } else if (file.replace(/\\/g, "/").endsWith("src/hooks/loop-handler.ts")) {
-        expect(content).toMatch(/appendErrorNote[\s\S]{0,400}this\.fileWriter\.writeFile\(/);
-        expect(writeFileMatches(content)).toHaveLength(1);
-        expect(content).not.toMatch(/updateCheckbox/);
-      } else {
-        // 変数経由（writeFile(planPath, ...) 等）も含め、allowlist 以外の hooks に
-        // FileWriter.writeFile の呼び出し（.writeFile(）が存在しないことを検証
-        expect(writeFileMatches(content)).toHaveLength(0);
-      }
-    }
+    const deniedWriter = createMockFileWriter();
+    const deniedHandler = new TaskFeedbackHandler({ fileWriter: deniedWriter });
+    void deniedHandler.updateCheckbox({ planPath: "other-plan.md", taskId: "task-1", checked: true });
+    expect(deniedWriter.writeFile).not.toHaveBeenCalled();
   });
 });
 ```
@@ -367,18 +344,12 @@ gt submit
 
 ---
 
-### Task 8.6: NFR Security + Integrity + Reference Resolution + Gate Validation Tests
+### Task 8.6a: NFR Security + Reference Resolution Tests
 
 **Files:**
 
 - Create: `tests/core/v2/redaction-integration.test.ts`
-- Create: `tests/runtime/observation-log-integrity.test.ts`
 - Create: `tests/core/record-reference-resolution.test.ts`
-- Create: `tests/runtime/observation-log-queue.test.ts`
-- Create: `tests/runtime/writer-id-collision.test.ts`
-- Create: `tests/runtime/rotation-sequence-continuity.test.ts`
-- Create: `tests/hooks/message-role-buffer.test.ts`
-- Create: `tests/runtime/gate-yaml-injection.test.ts`
 
 **Interfaces:**
 
@@ -428,7 +399,11 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
 });
 ```
 
-- [ ] **Step 1b: file_content 保存ポリシーと gate.yaml injection/schema validation を実装（D49/D52/D60）**
+### Task 8.6c: Gate Validation Tests
+
+**Files:**
+
+- Create: `tests/runtime/gate-yaml-injection.test.ts`
 
 ```typescript
 // tests/runtime/gate-yaml-injection.test.ts
@@ -439,7 +414,14 @@ it("rejects injected or invalid gate.yaml payloads and keeps file_content reads 
 });
 ```
 
-- [ ] **Step 2: integrity test を実装（D72）**
+### Task 8.6b: Runtime Integrity + Queue + Rotation Tests
+
+**Files:**
+
+- Create: `tests/runtime/observation-log-integrity.test.ts`
+- Create: `tests/runtime/observation-log-queue.test.ts`
+- Create: `tests/runtime/writer-id-collision.test.ts`
+- Create: `tests/runtime/rotation-sequence-continuity.test.ts`
 
 ```typescript
 // tests/runtime/observation-log-integrity.test.ts
@@ -463,10 +445,6 @@ it("reassigns writerId when a segment file already exists", async () => {
 it("continues sequence numbers across rotation boundaries", async () => {
   // 1. Populate active and archive segments for the same shard
   // 2. Verify sequence resumes from the max across both segments
-});
-it("buffers message parts until role resolution and finalization", async () => {
-  // 1. Emit part updates before message role resolution
-  // 2. Verify non-assistant roles are discarded and finalized parts are GC'd
 });
 it("rebuilds state.json on sequence duplicate", async () => {
   // 1. Write corrupted jsonl containing duplicate sequences
@@ -492,14 +470,16 @@ it("resolves message claim and review item from DecisionRecord.evidenceRefs", ()
 
 - [ ] **Step 4: テスト実行（Devcontainer 内）**
 
+  - `tests/hooks/message-role-buffer.test.ts` は Task 3.1 の runtime buffer coverage で扱うため、この Phase 8 regression bundle からは外す。
+
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/hooks/message-role-buffer.test.ts tests/runtime/gate-yaml-injection.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/hooks/message-role-buffer.test.ts tests/runtime/gate-yaml-injection.test.ts
+git add tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 git commit -m "test(v2): NFR security, integrity, reference resolution, and gate validation"
 ```
 

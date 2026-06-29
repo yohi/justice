@@ -76,8 +76,10 @@ export function classifySeverity(summary: string): "critical" | "major" | "minor
   return "minor";
 }
 
-export function deriveItemKey(severity: string, ruleId: string, location: string, evidenceHash: string): string {
-  return `${severity}:${ruleId}:${location}:${evidenceHash}`;
+export function deriveItemKey(severity: ReviewRejectionSignal["severity"], ruleId: string, location: string, evidenceHash: string): string {
+  const normalizedLocation = location.trim();
+  const locationHash = hashString(normalizedLocation).slice(0, 12);
+  return `${severity}:${ruleId}:${locationHash}:${evidenceHash}`;
 }
 ```
 
@@ -367,7 +369,7 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `ReviewRejectionDetector.detectMultiple(output)`, `aggregateReviews`, `deriveReviewScope`.
+- Consumes: `ReviewRejectionDetector.detectMultiple(output, metadata)`, `aggregateReviews`, `deriveReviewScope`.
 - Produces:
   - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs (now supporting multiple review items parsed from output).
   - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarker[]}` append when a human-approved resolution artifact is received.
@@ -375,9 +377,9 @@ gt submit
 - [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
   - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
 
-- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output)` および `isCompleteSnapshot(output)` を実装する**
+- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output, metadata)` および `isCompleteSnapshot(output, metadata)` を実装する**
   - 単一のシグナル抽出から、レビュー出力内に含まれる複数の指摘事項（severity, summary, location 含む）を正規表現や構造解析により分解し、`ReviewItem[]` にパースするメソッドを `ReviewRejectionDetector`（`src/core/review-rejection-detector.ts`）に追加し、そのテストを `tests/core/review-rejection-detector.test.ts` に追加する。
-  - 同時に、そのレビュー出力が完全なスナップショットレビュー（差分検出レビューではなく全体の網羅的評価）であるかどうかを判定し `boolean` を返す `isCompleteSnapshot(output): boolean` メソッドも `ReviewRejectionDetector` に追加する。
+  - 同時に、上流から渡される `metadata.isCompleteSnapshot` を優先し、未指定時のみテキストヒューリスティクスで補完する `boolean` を返す `isCompleteSnapshot(output, metadata): boolean` メソッドも `ReviewRejectionDetector` に追加する。
 
 - [ ] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
 
@@ -425,10 +427,10 @@ export function buildReviewResolutionRecord(
 
 ```typescript
 // src/hooks/observation-handler.ts 内に `appendReviewObservationsIfDetected` メソッドを実装
-private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
+private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined, metadata?: { readonly isCompleteSnapshot?: boolean }): Promise<void> {
   try {
-    const items = ReviewRejectionDetector.detectMultiple(toolResult ?? "");
-    const isCompleteSnapshot = ReviewRejectionDetector.isCompleteSnapshot(toolResult ?? "");
+    const items = ReviewRejectionDetector.detectMultiple(toolResult ?? "", metadata);
+    const isCompleteSnapshot = ReviewRejectionDetector.isCompleteSnapshot(toolResult ?? "", metadata);
     if (items.length > 0 || isCompleteSnapshot) {
       const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
       const envelope = this.buildEnvelope({
