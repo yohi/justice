@@ -399,21 +399,6 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
 });
 ```
 
-### Task 8.6c: Gate Validation Tests
-
-**Files:**
-
-- Create: `tests/runtime/gate-yaml-injection.test.ts`
-
-```typescript
-// tests/runtime/gate-yaml-injection.test.ts
-it("rejects injected or invalid gate.yaml payloads and keeps file_content reads hash-only", async () => {
-  // 1. Load gates from templates/gate.yaml and .justice/gate.yaml through the gate loader
-  // 2. Verify malformed or injected YAML is rejected by schema validation
-  // 3. Verify read/grep/glob/bash file-content output is stored as rawOutputHash + minimal snippet only
-});
-```
-
 ### Task 8.6b: Runtime Integrity + Queue + Rotation Tests
 
 **Files:**
@@ -455,7 +440,21 @@ it("rebuilds state.json on maxSequenceByShard discrepancy", async () => {
   // 2. Write actual event log containing sequence 5 for that shard (discrepancy)
   // 3. Trigger projection read/rebuild and verify rebuild and WARN logged
 });
+```
 
+### Task 8.6c: Gate Validation Tests
+
+**Files:**
+
+- Create: `tests/runtime/gate-yaml-injection.test.ts`
+
+```typescript
+// tests/runtime/gate-yaml-injection.test.ts
+it("rejects injected or invalid gate.yaml payloads and keeps file_content reads hash-only", async () => {
+  // 1. Load gates from templates/gate.yaml and .justice/gate.yaml through the gate loader
+  // 2. Verify malformed or injected YAML is rejected by schema validation
+  // 3. Verify read/grep/glob/bash file-content output is stored as rawOutputHash + minimal snippet only
+});
 ```
 
 - [ ] **Step 3: record sub-entity reference resolution test を実装（D70）**
