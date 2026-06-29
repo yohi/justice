@@ -111,7 +111,7 @@ export type SelfEvidenceRef = {
 // src/core/v2/message-payload.ts
 export type ObservationMessagePayload =
   | { readonly kind: "message_part_updated"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string }
-  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant" | "user"; readonly finalized: boolean }
+  | { readonly kind: "message_updated"; readonly sessionId: string; readonly messageID: string; readonly role: "assistant"; readonly finalized: boolean }
   | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
 ```
 
@@ -618,7 +618,7 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
   for (const [claimKind, pattern] of CLAIM_PATTERNS) {
     if (!pattern.test(text)) continue;
     const outcome = PASS_PATTERNS.test(text) ? "pass" : FAIL_PATTERNS.test(text) ? "fail" : "unknown";
-    claims.push({ evidenceId: `claim-${claims.length}`, claimKind, outcome });
+    claims.push({ evidenceId: `${sourceId}-${claimKind}`, claimKind, outcome });
   }
   return claims;
 }
@@ -629,21 +629,21 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
 ```typescript
 // tests/core/v2/tool-output-classifier.test.ts
 it("classifies quality-verification compound commands as command_exec", () => {
-  expect(classifyToolOutputClass("bash", { command: "bun run lint && bun run test" }, 100)).toBe("command_exec");
-  expect(classifyToolOutputClass("bash", { command: "bun run build; bun run typecheck" }, 100)).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "bun run lint && bun run test" })).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "bun run build; bun run typecheck" })).toBe("command_exec");
 });
 
 it("classifies file-content compound commands as file_content", () => {
-  expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" }, 100)).toBe("file_content");
-  expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" }, 100)).toBe("file_content");
-  expect(classifyToolOutputClass("bash", { command: "bun run test && cat docs/superpowers/plans/2026-06-26-justice-v2-foundation.md" }, 30000)).toBe("file_content");
-  expect(classifyToolOutputClass("bash", { command: "python -c \"print(open('file.txt').read())\"" }, 100)).toBe("file_content");
-  expect(classifyToolOutputClass("bash", { command: "node -e \"console.log(require('fs').readFileSync('file.txt','utf8'))\"" }, 100)).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "cat file.txt | grep foo" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "head -20 file.ts && tail -5 file.ts" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "bun run test && cat docs/superpowers/plans/2026-06-26-justice-v2-foundation.md" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "python -c \"print(open('file.txt').read())\"" })).toBe("file_content");
+  expect(classifyToolOutputClass("bash", { command: "node -e \"console.log(require('fs').readFileSync('file.txt','utf8'))\"" })).toBe("file_content");
 });
 
 it("classifies stdin pipe filters like grep as command_exec", () => {
-  expect(classifyToolOutputClass("bash", { command: "bun run test | grep failed" }, 100)).toBe("command_exec");
-  expect(classifyToolOutputClass("bash", { command: "npm run lint | rg 'error'" }, 100)).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "bun run test | grep failed" })).toBe("command_exec");
+  expect(classifyToolOutputClass("bash", { command: "npm run lint | rg 'error'" })).toBe("command_exec");
 });
 
 it("extracts declared claims for build lint and generic summaries", () => {

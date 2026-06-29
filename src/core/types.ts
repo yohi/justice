@@ -195,6 +195,8 @@ export interface InjectResponse {
 export interface FileReader {
   readFile(path: string): Promise<string>;
   fileExists(path: string): Promise<boolean>;
+  listFiles?(prefix: string): Promise<readonly string[]>;
+  readFileStats?(path: string): Promise<{ readonly size: number; readonly mtimeMs: number } | null>;
 }
 
 /** PostToolUse イベントのペイロード */

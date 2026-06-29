@@ -77,8 +77,16 @@ export function classifySeverity(summary: string): "critical" | "major" | "minor
 }
 
 export function deriveItemKey(severity: ReviewRejectionSignal["severity"], ruleId: string, location: string, evidenceHash: string): string {
-  const normalizedLocation = location.trim();
-  const locationHash = hashString(normalizedLocation).slice(0, 12);
+  const cwd = typeof process !== "undefined" ? process.cwd().replace(/\\/g, "/") : "";
+  let canonicalLocation = location.replace(/\\/g, "/").trim();
+  if (cwd && canonicalLocation.startsWith(cwd)) {
+    canonicalLocation = canonicalLocation.slice(cwd.length);
+  }
+  canonicalLocation = canonicalLocation.replace(/^\/+/, "");
+  if (canonicalLocation.startsWith("./")) {
+    canonicalLocation = canonicalLocation.slice(2);
+  }
+  const locationHash = hashString(canonicalLocation).slice(0, 12);
   return `${severity}:${ruleId}:${locationHash}:${evidenceHash}`;
 }
 ```

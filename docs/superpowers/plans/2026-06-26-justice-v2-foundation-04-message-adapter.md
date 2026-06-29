@@ -321,16 +321,18 @@ onMessageUpdated: async (event) => {
   // Translate to ObservationMessagePayload with kind "message_updated" to propagate role & finalized metadata (ISS-002)
   // Map finalized=true if finish indicator is present (e.g. AssistantMessage.finish / time.completed based on Phase 0 spike)
   const isFinalized = !!(event.message.finish || event.time?.completed || event.message.finalized);
-  await this.plugin.handleEvent({
-    type: "Message",
-    sessionId: event.sessionId,
-    payload: {
-      kind: "message_updated",
-      messageID: event.messageID,
-      role: event.message.role,
-      finalized: isFinalized
-    }
-  });
+  if (event.message.role === "assistant") {
+    await this.plugin.handleEvent({
+      type: "Message",
+      sessionId: event.sessionId,
+      payload: {
+        kind: "message_updated",
+        messageID: event.messageID,
+        role: "assistant",
+        finalized: isFinalized
+      }
+    });
+  }
 },
 // ...
 ```
@@ -428,7 +430,7 @@ export function mergePostToolUseResponses(responses: HookResponse[]): HookRespon
     const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
     if (modifieds.length > 0) {
       if (modifieds.length > 1) {
-        console.warn("Conflict detected in post-tool-use modifiedPayload. Using the first injected payload.");
+        throw new Error("Conflict detected in post-tool-use modifiedPayload");
       }
       return { ...result, modifiedPayload: modifieds[0].modifiedPayload };
     }

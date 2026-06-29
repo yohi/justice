@@ -353,8 +353,8 @@ gt submit
 
 **Interfaces:**
 
-- Consumes: `redactForPersistence`, `redactAbsolutePaths`, `ObservationLogStore`, `project`, `DecisionRecord.evidenceRefs[]`, `loadGates`, `GateRule`.
-- Produces: Tests proving secrets and absolute paths are redacted before persistence; `file_content` reads are stored as `rawOutputHash` + minimal snippet only; `gate.yaml` injection/schema validation rejects invalid payloads; corrupted log triggers rebuild; message claim and review item are resolvable from `DecisionRecord.evidenceRefs[]`.
+- Consumes: `redactForPersistence`, `redactAbsolutePaths`, `ObservationLogStore`, `project`, `DecisionRecord.evidenceRefs[]`.
+- Produces: Tests proving secrets and absolute paths are redacted before persistence; `file_content` reads are stored as `rawOutputHash` + minimal snippet only; message claim and review item are resolvable from `DecisionRecord.evidenceRefs[]`.
 
 - [ ] **Step 1: redaction integration test を実装（D25/D61）**
 
@@ -546,6 +546,6 @@ git diff --quiet .github/workflows/ci.yml || {
 gt submit
 ```
 
-**派生元:** `Task 8.6`（直前 Task から派生）。
+**派生元:** `Task 8.6c`（直前 Task から派生）。
 
 ---

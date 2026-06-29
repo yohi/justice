@@ -146,7 +146,7 @@ private async appendTaskSummaryDeclaredEvidence(event: PostToolUseEvent, taskId?
 private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: string | undefined, sessionId: string, callId: string, toolName: string, toolResult: string | undefined): Promise<void> {
   // Stub: implemented in Task 6.3
 }
-private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId: string | undefined, agentId: string, sessionId: string): Promise<HookResponse> {
+private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed", taskId: string | undefined, callId: string | undefined, agentId: string, sessionId: string): Promise<HookResponse> {
   // Stub: implemented in Task 5.4
   return { action: "proceed" };
 }
@@ -261,7 +261,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     await this.logStore.append(shardId, record);
 
     // 3. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
-    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
+    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult, payload.metadata);
 
     // 4. Refresh projected state before evaluating gates (strict evaluation sequence: append -> project -> evaluate)
     const refreshedEvents = await this.logStore.readAll();
@@ -270,13 +270,13 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
 
     // D74: taskId is undefined for non-task tools unless explicitly correlated.
     if (payload.toolName === "task" && taskId) {
-      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, callId, agentId, event.sessionId);
       if (taskGateResponse.action === "inject") {
         return taskGateResponse;
       }
     }
     if (taskId) {
-      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
+      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, callId, agentId, event.sessionId);
       if (gateResponse.action === "inject") {
         return gateResponse;
       }
@@ -595,7 +595,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     }
 
     // 2. Review observed append (if review rejection detected, implemented/activated in Task 6.3)
-    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult);
+    await this.appendReviewObservationsIfDetected(shardId, taskId, event.sessionId, callId, payload.toolName, payload.toolResult, payload.metadata);
 
     // 3. Update projected state and evaluate gates (strict evaluation sequence: append -> project -> evaluate)
     const responses: HookResponse[] = [];
@@ -604,11 +604,11 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
       if (taskId) {
         this.sessionActiveTasks.get(event.sessionId)?.delete(taskId);
       }
-      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, agentId, event.sessionId);
+      const taskGateResponse = await this.evaluateGateIfTriggered("task_complete", taskId, callId, agentId, event.sessionId);
       responses.push(taskGateResponse);
     }
     if (taskId) {
-      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, agentId, event.sessionId);
+      const gateResponse = await this.evaluateGateIfTriggered("tool_observed", taskId, callId, agentId, event.sessionId);
       responses.push(gateResponse);
     }
     if (responses.length > 0) {

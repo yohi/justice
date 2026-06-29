@@ -526,6 +526,17 @@ export async function loadGates(fileReader: FileReader, path = ".justice/gate.ya
     return DEFAULT_GATES.filter(g => g.enabled !== false);
   }
 }
+
+export interface GateLoader {
+  load(): Promise<readonly GateRule[]>;
+}
+
+export class FileGateLoader implements GateLoader {
+  constructor(private readonly fileReader: FileReader, private readonly path = ".justice/gate.yaml") {}
+  async load(): Promise<readonly GateRule[]> {
+    return loadGates(this.fileReader, this.path);
+  }
+}
 ```
 
 - [ ] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加（ISS-007）**
@@ -612,6 +623,7 @@ gt submit
 private async evaluateGateIfTriggered(
   trigger: "task_complete" | "tool_observed",
   taskId: string | undefined,
+  callId: string | undefined,
   agentId: ObservationAgentId,
   sessionId: string
 ): Promise<HookResponse> {
@@ -620,7 +632,7 @@ private async evaluateGateIfTriggered(
       return { action: "proceed" };
     }
     const shardId = { agentId, sessionId, writerId: this.writerId };
-    const effectiveTaskId = taskId ?? this.activeTaskWindows.get(sessionId)?.[0];
+    const effectiveTaskId = taskId ?? (callId ? this.activeTaskWindows.get(callId) : undefined);
     if (effectiveTaskId === undefined) {
       return { action: "proceed" };
     }

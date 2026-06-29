@@ -77,7 +77,7 @@ test("preflight verification: ADR ratification check", () => {
   const content = readFileSync(adrPath, "utf-8");
   expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
   // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
-  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\*\s*`@[A-Za-z0-9_-]+`/);
+  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@[A-Za-z0-9_-]+`/);
   const blockedPlaceholders = ["@owner-alice", "@owner-bob", "@alice", "@bob", "@example", "@codeowner"];
   for (const handle of blockedPlaceholders) {
     expect(content).not.toContain(handle);

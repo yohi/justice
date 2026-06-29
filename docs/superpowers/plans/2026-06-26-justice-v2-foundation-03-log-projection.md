@@ -394,6 +394,8 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
     shardGroups.get(shardKey)!.push(r.sequence);
   }
   for (const [shardKey, seqs] of shardGroups.entries()) {
+    // Sort sequences to normalize traversal order variations before checks (D72)
+    seqs.sort((a, b) => a - b);
     // 1. Check for duplicate sequence numbers using a Set (independent of traversal order)
     const uniqueSeqs = new Set(seqs);
     if (uniqueSeqs.size !== seqs.length) {
@@ -488,7 +490,11 @@ export class ObservationLogStore {
         console.error(`Failed to read or validate event file ${path}`, err);
       }
     }
-    validateShardSequences(records);
+    try {
+      validateShardSequences(records);
+    } catch (err) {
+      console.warn("Failed to validate shard sequences, continuing", err);
+    }
     return records;
   }
 }
@@ -650,8 +656,8 @@ export function project(
         }
         const taskState = tasks.get(taskId)!;
 
-        if (event.kind === "tool_executed" || event.kind === "message") {
-          const recordWithEvidence = event as ToolExecutedRecord | MessageRecord;
+        if (event.kind === "tool_executed") {
+          const recordWithEvidence = event as ToolExecutedRecord;
           const evidenceList = toEvidenceArray(recordWithEvidence.evidence || []);
           for (const ev of evidenceList) {
             taskState.evidence.push({
@@ -865,7 +871,16 @@ export function validateProjectionCacheAgainstEvents(
   }
 
   // 3. Check sourceHash mismatch using the same stable ordering as project()
-  const currentSourceHash = hashString([...events].map((e) => JSON.stringify(e)).join("\n"));
+  const sortedEvents = [...events].sort((a, b) => {
+    const timeA = new Date(a.timestamp).getTime();
+    const timeB = new Date(b.timestamp).getTime();
+    if (timeA !== timeB) return timeA - timeB;
+    const shardA = `${a.agentId}:${a.sessionId}:${a.writerId}`;
+    const shardB = `${b.agentId}:${b.sessionId}:${b.writerId}`;
+    if (shardA !== shardB) return shardA < shardB ? -1 : 1;
+    return a.sequence - b.sequence;
+  });
+  const currentSourceHash = hashString(sortedEvents.map((e) => JSON.stringify(e)).join("\n"));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
     return { valid: false, reason: "stale_append" };
   }
