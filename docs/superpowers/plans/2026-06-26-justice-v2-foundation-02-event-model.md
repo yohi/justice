@@ -150,7 +150,7 @@ export type ToolExecutedRecord = {
   readonly kind: "tool_executed";
   readonly toolName: string;
   readonly callId: string;
-  readonly evidence: readonly Evidence[];
+  readonly evidence: readonly Evidence;
 };
 
 // MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
@@ -266,17 +266,15 @@ describe("ObservationRecord type", () => {
       kind: "tool_executed",
       toolName: "bash",
       callId: "call_1",
-      evidence: [
-        {
-          evidenceId: "ev-1",
-          kind: "test",
-          sourceClass: "tool_output",
-          provenance: "observed",
-          toolOutputClass: "command_exec",
-          command: "bun run test",
-          rawOutput: "PASS",
-        },
-      ],
+      evidence: {
+        evidenceId: "ev-1",
+        kind: "test",
+        sourceClass: "tool_output",
+        provenance: "observed",
+        toolOutputClass: "command_exec",
+        command: "bun run test",
+        rawOutput: "PASS",
+      },
     };
     expect(r.recordType).toBe("observation");
   });
@@ -585,7 +583,7 @@ export function extractEvidenceFromTool(
     sourceClass: "tool_output",
     provenance: "observed",
     toolOutputClass,
-    command: args?.command,
+    command: args?.command ? redactEvidenceCommand(args.command) : undefined,
     ...(toolOutputClass === "command_exec"
       ? { rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)) }
       : { rawOutputHash: hashString(rawOutput), rawOutputSnippet: redactForPersistence(redactAbsolutePaths(rawOutput.slice(0, 100))) }),
