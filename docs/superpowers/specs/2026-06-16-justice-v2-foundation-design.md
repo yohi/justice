@@ -168,17 +168,18 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 ```text
 .justice/
-  events/<agentId>/<sessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（shard 鍵={agentId, sessionId, writerId}・1 物理ファイル=1 writer・D39）
+  events/<agentId>/<sessionId>/<writerId>.jsonl   # 追記専用 Observation+Decision ログ（論理キー={agentId, sessionId, writerId}・物理セグメントは sessionId に正規化・1 物理ファイル=1 writer・D39）
   events/system/system/<writerId>.jsonl          # 予約 shard: shardId={agentId:"system", sessionId:"system", writerId}（他 shard と同一のパス導出規則・特例排除・D38。順序キーは timestamp→shardId→sequence）
-  archive/events/<agentId>/<sessionId>/<writerId>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
+  archive/events/<agentId>/<sessionId>/<writerId>.<timestamp>.jsonl   # retention rotation 退避先（live shard 名前空間と物理分離・readAll は active(events/**)＋archive(archive/events/**) を列挙・D40）
+  session-aliases.json         # sessionId→safeSessionId/collisionIndex の永続 alias map（衝突初回に atomic write、起動時に replay 前ロード・D69/D73）
   gate.yaml                # 人間が承認した静的ルール（+ 組込デフォルト）
   state.json               # projection キャッシュ（再構築可能・SoT ではない）
   wisdom.json              # 既存（不変）
 ```
 
 > **憲章保存先パスとの関係（互換的詳細化＋D58 追認）**: 憲章 FR-001/§8.1 の保存先 `.justice/events/<agentId>.jsonl` を上位概念とし、本設計はその互換的詳細化として agentId 配下に sessionId/writerId の階層を置く（`events/<agentId>/<sessionId>/<writerId>.jsonl`・shard 鍵=`{agentId, sessionId, writerId}`・D39）。これは並行 append 競合・イベント消失の構造的回避（D30/D39・INV-008・§9.4 並行性）のための実装詳細であり、憲章の INV / ADR / Quality Protocol 自体は変更しない。ただし FR-001 保存先パスの詳細化は Requirement レベルの実質的詳細化を含むため、**「§16.3 凍結ガバナンスの対象外」とは自己認定せず、D58 のとおり 1 本の ADR にまとめ CODEOWNERS 追認を得る**（軽量追認・§13 次工程 I3/D58）。読取時は active＋archive の全 segment をマージするため projection 再構築可能性（FF-004）は保たれる。
-
-> **パスセグメントの安全性（D69・本レビュー Finding 4）**: 物理パス `events/<agentId>/<sessionId>/<writerId>.jsonl` の各セグメントは、`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）が安全な一方、**外部由来の `sessionId` は Runtime が FileWriter 直前に safe-segment へエンコード**する。具体的なアルゴリズム: (1) 許容文字は `[A-Za-z0-9_-]`、それ以外を `_` に置換、(2) 予約語 `.` / `..` / 空文字はそれぞれ `_dot_` / `_dotdot_` / `_empty_` に置換、(3) 単一セグメント長は 64 文字に truncation（接尾辞を残す）、(4) **エンコード後に常に `sha256(sessionId)` の先頭 8 文字をハッシュ接尾辞として追加**（例: `ses_abc___a1b2c3d4`）。これにより異なる raw `sessionId` が同じ safe-segment に衝突することを構造的に排除し、「既存の異なる sessionId との衝突判定」を不要にする。(5) 論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には**生 `sessionId`** を保持し、エンコードは物理ファイル名生成にのみ適用。§9.4 NFR security と整合。
+>
+> **パスセグメントの安全性（D69・本レビュー Finding 4）**: 物理パス `events/<agentId>/<sessionId>/<writerId>.jsonl` の各セグメントは、`agentId`（enum・D56）/`writerId`（`[A-Za-z0-9-]`・D55）/`sessionId`（後述）が安全である。具体的なアルゴリズム: (1) 許容文字は `[A-Za-z0-9_-]`、それ以外を `_` に置換、(2) 予約語 `.` / `..` / 空文字はそれぞれ `_dot_` / `_dotdot_` / `_empty_` に置換、(3) 単一セグメントは **先に 64 文字へ truncation** し、(4) その後 **`sha256(sessionId)` の先頭 8 文字を hash suffix として付与**するため、最終 sessionId は「64 文字の本体 + 8 文字 of hash suffix」で固定される（例: `ses_abc___a1b2c3d4`）。(5) もし異なる raw `sessionId` が同一 sessionId に衝突した場合は、後続 shard を `archive/events/<agentId>/<sessionId>/<writerId>.<timestamp>.jsonl` に退避させ、読取側は alias map を通じて元の `events/<agentId>/<sessionId>/<writerId>.jsonl` と同等に解決する。(6) 論理鍵 `shardId={agentId,sessionId,writerId}` と参照鍵には**生 `sessionId`** を保持し、エンコードは物理ファイル名生成にのみ適用。§9.4 NFR security と整合。
 
 ---
 
@@ -192,7 +193,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "sequence": 42,               // shard 内 単調増加（shard 鍵=shardId={agentId, sessionId, writerId}・グローバル一意キーは {shardId, sequence}＝{agentId, sessionId, writerId, sequence}・D39）
   "timestamp": "2026-06-16T07:00:00.000Z",
   "agentId": "hephaestus",            // 値域 ObservationAgentId=AgentId("atlas"|"hephaestus"|"sisyphus"|"prometheus")|"system"|"unknown"（D56）。取得: chat.message(agent?)/chat.params(agent) で sessionID→agentId 解決・未解決は system/unknown・OpenCode agent 名→AgentId 写像（D48）。persona isolation/wisdom routing には AgentId(4 persona) のみ流す（system/unknown 非流入・D56）
-  "sessionId": "ses_...",       // 物理パスセグメント化時は safe-segment エンコード（[A-Za-z0-9_-] 以外を `_` 置換・`.`/`..`/空を予約語へ・長さ上限 64 文字・**常に sha256(sessionId) 先頭8文字のハッシュ接尾辞を付与**・パストラバーサル防止・D69）。論理鍵 shardId/参照には生値を保持
+  "sessionId": "ses_...",       // 物理パスセグメント化時は safe-segment エンコード（[A-Za-z0-9_-] 以外を `_` 置換・`.`/`..`/空を予約語へ・**最大 74 文字（64 文字本体 + `__` + 8 文字ハッシュ接尾辞）**・**常に sha256(sessionId) 先頭8文字のハッシュ接尾辞を付与**・パストラバーサル防止・D69）。論理鍵 shardId/参照には生値を保持
   "writerId": "w-3f2a9c4e",     // 必須: writer segment 識別子（Runtime が "w-"+crypto.randomUUID() で採番・文字種 [A-Za-z0-9-]・予約語 system と区別・shardId={agentId, sessionId, writerId} の3要素目・§9.4/D39/D55）
   "taskId": "task-3",           // task 窓内の観測に刻印（無ければ省略・§5.8）
   "recordType": "observation" | "decision" | "learning"
@@ -521,7 +522,7 @@ gates:
 新チェック型の追加は「AI 提案 → 人間承認 → gate.yaml + engine にコード追加」。Engine は語彙を決定論的に評価するのみ。
 
 > **`review_open_items` の `minimumSeverity`（本レビュー Finding 1 対応）**: `check.minimumSeverity ∈ {critical, major, minor}`（既定 `major`）。`critical>major>minor` の順位で **当該値以上**の open 項目（`reviewSummary.byScope[scope]` の該当 severity バケット・§5.6）が1件でもあれば違反（`onViolation`）、無ければ **PASS**。ただし **PASS となるのは `GateContext.reviewScope[]` が空でない（＝レビュー観測あり）場合のみ**とし、`reviewScope[]` が空（レビュー未観測）の場合は `onMissingEvidence`（既定 `warn`）を適用する。`minor` 指定で全 open、`critical` 指定で critical のみを対象とする。閾値は gate.yaml で人間が承認し §7.4 precedence で上書き可。AI 動的生成はしない（§11 V3-06）。
-
+>
 > **Acceptance Criteria の扱い（D35・ISS-001）**: 上記固定語彙は FR-005 の **Required Tests**（`evidence_outcome` / `evidence_present`）と **Review**（`review_open_items`）に対応する。**Acceptance Criteria を表現するチェック型は v2.0 では定義しない（deferred・§10.1）**。AC は plan.md/design.md 由来の feature 級受入条件で外部 SoT（INV-008）に属し、観測・判定には plan.md AC のパースまたは Feature Gate（v2.5+・憲章 §7.2 到達 level）が必要なため、本スライスの Task Gate では扱わない。
 
 ### 7.3 Engine の契約（純粋・決定論的）
@@ -744,9 +745,9 @@ Phase 1(build):
 
 本設計を `superpowers/writing-plans` で実装計画へ展開する（§10.3 の実装順序を分解し、各ステップに検証チェックポイントを付与）。
 
-> **writing-plans 着手前の必須前提（本レビュー対応）。下記が未解決の場合、実装計画化をブロックする**:
-> 1. **C1**: §3 Phase 0 スパイクに追加した「L0 advisory 表示面の実証」を完了し、`output.output` 反映可否を確定する（反映不可なら notifier を保証チャネルとして D47 を確定）。
-> 2. **I3/D58/D63（ブロッカー）**: Phase 0 由来の憲章訂正（hook リスト=D44・FR-001 保存パス=§4.5・FR-004 exit_code=D5/限界-2）**＋ Artifact authorship の意味値非保持（§8.3 属性縮退・D54/D63）**を D58 のとおり 1 本の ADR にまとめ、**CODEOWNERS 追認を得るまで実装計画化しない**（設計側の「§16.3 対象外」自己認定を撤回）。同 ADR には、INV-004 の「observed/derived しか Evidence にしない」を「gate PASS / L1+ deny に用いる権威 Evidence は observed/derived に限る」と解釈し、`declared` は監査可視性のため記録するが権威 Evidence には算入しない、という §5.3 M4 の解釈も含めて追認を得る。
+> **v2.0 本実装（Phase 1 以降）開始前の必須前提（本レビュー対応）。下記が未解決の場合、本実装フェーズへの移行をブロックする**:
+> 1. **C1**: §3 Phase 0 スパイク（計画書 Phase 0 にて実施）の「L0 advisory 表示面の実証」を完了し、`output.output` 反映可否を確定する（反映不可なら notifier を保証チャネルとして D47 を確定）。
+> 2. **I3/D58/D63（ブロッカー）**: Phase 0 由来の憲章訂正（hook リスト=D44・FR-001 保存パス=§4.5・FR-004 exit_code=D5/限界-2）**＋ Artifact authorship の意味値非保持（§8.3 属性縮退・D54/D63）**を D58 のとおり 1 本の ADR にまとめ、**CODEOWNERS 追認を得るまで本実装を開始しない**（設計側の「§16.3 対象外」自己認定を撤回）。同 ADR には、INV-004 の「observed/derived しか Evidence にしない」を「gate PASS / L1+ deny に用いる権威 Evidence は observed/derived に限る」と解釈し、`declared` は監査可視性のため記録するが権威 Evidence には算入しない、という §5.3 M4 の解釈も含めて追認を得る。
 > 3. **I1/D57**: severity 決定論的分類器（§7.6）と itemKey 安定性テストを計画に含める。
 > 4. **I4**: §9.3.1 の Runtime 統合テスト4点を実装順序（§10.3）と DoD に組み込む。
 > 5. **本レビュー Finding 1〜5／追加4 反映（D60〜D65）**: bash 経由ファイル本文の `file_content` 分類（D60）・Evidence command/args の redaction（D61）・task サマリ transcript の `declared` 据置（D62）・authorship 縮退の CODEOWNERS 追認（D63）・PostToolUse payload マージ規則（D64）・messageRoleBuffer 鍵/TTL 確定（D65）を本設計に反映済み。実装計画では D60 分類器の語彙テスト・D61 redaction テスト・D64 マージ規則テストを §9.3/§9.3.1 と DoD に組み込む。

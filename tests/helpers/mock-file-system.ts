@@ -17,6 +17,14 @@ export function createMockFileReader(files: Record<string, string>): FileReader 
       return content;
     }),
     fileExists: vi.fn(async (_path: string) => _path in files),
+    listFiles: vi.fn(async (prefix: string) => {
+      return Object.keys(files).filter((f) => f.startsWith(prefix));
+    }),
+    readFileStats: vi.fn(async (_path: string) => {
+      const content = files[_path];
+      if (content === undefined) return null;
+      return { size: content.length, mtimeMs: Date.now() };
+    }),
   };
 }
 
@@ -133,6 +141,14 @@ export function createMockFileSystem(initialFiles: Record<string, string> = {}):
       return content;
     }),
     fileExists: vi.fn(async (path: string) => path in writer.writtenFiles),
+    listFiles: vi.fn(async (prefix: string) => {
+      return Object.keys(writer.writtenFiles).filter((f) => f.startsWith(prefix));
+    }),
+    readFileStats: vi.fn(async (path: string) => {
+      const content = writer.writtenFiles[path];
+      if (content === undefined) return null;
+      return { size: content.length, mtimeMs: Date.now() };
+    }),
   };
 
   return mockFs;
