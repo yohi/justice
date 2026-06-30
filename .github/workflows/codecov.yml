@@ -52,8 +52,8 @@ jobs:
           name: coverage-report
           path: .
 
-      - name: Move coverage file to correct location
-        run: mkdir -p coverage && mv lcov.info coverage/ 2>/dev/null || true
+      - name: Save coverage file to temp location
+        run: cp lcov.info /tmp/lcov.info 2>/dev/null || true
 
       - uses: actions/checkout@v4
         with:
@@ -65,6 +65,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Restore coverage file
+        run: mkdir -p coverage && cp /tmp/lcov.info coverage/lcov.info 2>/dev/null || true
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v7
