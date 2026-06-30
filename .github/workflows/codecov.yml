@@ -50,7 +50,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
-          path: coverage/
+          path: .
+
+      - name: Move coverage file to correct location
+        run: mkdir -p coverage && mv lcov.info coverage/ 2>/dev/null || true
 
       - uses: actions/checkout@v4
         with:
