@@ -522,7 +522,7 @@ gates:
 新チェック型の追加は「AI 提案 → 人間承認 → gate.yaml + engine にコード追加」。Engine は語彙を決定論的に評価するのみ。
 
 > **`review_open_items` の `minimumSeverity`（本レビュー Finding 1 対応）**: `check.minimumSeverity ∈ {critical, major, minor}`（既定 `major`）。`critical>major>minor` の順位で **当該値以上**の open 項目（`reviewSummary.byScope[scope]` の該当 severity バケット・§5.6）が1件でもあれば違反（`onViolation`）、無ければ **PASS**。ただし **PASS となるのは `GateContext.reviewScope[]` が空でない（＝レビュー観測あり）場合のみ**とし、`reviewScope[]` が空（レビュー未観測）の場合は `onMissingEvidence`（既定 `warn`）を適用する。`minor` 指定で全 open、`critical` 指定で critical のみを対象とする。閾値は gate.yaml で人間が承認し §7.4 precedence で上書き可。AI 動的生成はしない（§11 V3-06）。
-
+>
 > **Acceptance Criteria の扱い（D35・ISS-001）**: 上記固定語彙は FR-005 の **Required Tests**（`evidence_outcome` / `evidence_present`）と **Review**（`review_open_items`）に対応する。**Acceptance Criteria を表現するチェック型は v2.0 では定義しない（deferred・§10.1）**。AC は plan.md/design.md 由来の feature 級受入条件で外部 SoT（INV-008）に属し、観測・判定には plan.md AC のパースまたは Feature Gate（v2.5+・憲章 §7.2 到達 level）が必要なため、本スライスの Task Gate では扱わない。
 
 ### 7.3 Engine の契約（純粋・決定論的）
