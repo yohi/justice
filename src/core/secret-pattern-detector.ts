@@ -20,4 +20,12 @@ export class SecretPatternDetector {
       name,
     }));
   }
+
+  redact(content: string): string {
+    let redacted = content;
+    for (const { pattern } of SECRET_PATTERNS) {
+      redacted = redacted.replace(pattern, () => "[REDACTED_SECRET]");
+    }
+    return redacted;
+  }
 }
