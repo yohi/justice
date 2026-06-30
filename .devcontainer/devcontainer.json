@@ -6,7 +6,10 @@
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {}
   },
-  "postCreateCommand": "bun install",
+  "mounts": [
+    "source=justice-node-modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+  ],
+  "postCreateCommand": "bun install --frozen-lockfile",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -20,5 +23,5 @@
       }
     }
   },
-  "remoteUser": "bun"
+  "remoteUser": "root"
 }
