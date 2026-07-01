@@ -1,5 +1,5 @@
 // src/core/v2/observation-model.ts
-import type { ObservationAgentId } from "../types";
+import type { ObservationAgentId, EvidenceRef } from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
 
@@ -17,15 +17,50 @@ export type PersistedEnvelope = PendingEnvelope & {
   readonly sequence: number;
 };
 
-// Minimal Evidence stub refined into a discriminated union in Task 1.2.
-export type Evidence = {
+// Evidence discriminated union (Task 1.3). Replaces the Task 1.1 stub.
+export type Evidence = ToolOutputEvidence | DeclaredClaimEvidence;
+
+export type ToolOutputEvidence = CommandExecEvidence | FileContentEvidence;
+
+export type CommandExecEvidence = {
   readonly evidenceId: string;
-  readonly kind: string;
-  readonly sourceClass: string;
-  readonly provenance: string;
-  readonly toolOutputClass?: string;
+  readonly kind: "test" | "build" | "lint" | "command" | "generic";
+  readonly sourceClass: "tool_output";
+  readonly provenance: "observed" | "derived" | "unknown";
+  readonly toolOutputClass: "command_exec";
+  readonly command: string;
+  readonly rawOutput: string;
+  readonly interpretation?: Interpretation;
+};
+
+export type FileContentEvidence = {
+  readonly evidenceId: string;
+  readonly kind: "test" | "build" | "lint" | "command" | "generic";
+  readonly sourceClass: "tool_output";
+  readonly provenance: "observed" | "derived" | "unknown";
+  readonly toolOutputClass: "file_content";
   readonly command?: string;
-  readonly rawOutput?: string;
+  readonly rawOutput?: never; // rawOutput must not be stored in file_content
+  readonly rawOutputHash: string; // required
+  readonly rawOutputSnippet?: string; // optional
+  readonly interpretation?: Interpretation;
+};
+
+export type Interpretation = {
+  readonly outcome: "pass" | "fail" | "unknown";
+  readonly basis: "parsed_output" | "metadata_error";
+  readonly provenance: "derived";
+  readonly derivedFrom: readonly EvidenceRef[]; // cross-record references use FullEvidenceRef; self-reference within the same record uses SelfEvidenceRef (evidenceId only)
+};
+
+export type DeclaredClaimEvidence = {
+  readonly evidenceId: string;
+  readonly kind: "test" | "build" | "lint" | "generic";
+  readonly sourceClass: "declared_claim";
+  readonly provenance: "declared";
+  readonly declaredFrom: "message" | "task_summary";
+  readonly claim: { readonly claimKind: string; readonly outcome: "pass" | "fail" | "unknown" };
+  readonly claimRef?: EvidenceRef & { readonly claimIndex: number };
 };
 
 export type ToolExecutedRecord = {
