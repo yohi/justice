@@ -1,8 +1,10 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- adrPath is a hardcoded ADR spec path resolved relative to __dirname, not user input. */
 import { readFileSync, existsSync } from "fs";
+import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
 test("preflight verification: ADR ratification check", () => {
-  const adrPath = "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md";
+  const adrPath = resolve(__dirname, "..", "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md");
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
   expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
@@ -15,9 +17,9 @@ test("preflight verification: ADR ratification check", () => {
   // Verify essential ADR contents (Finding 3)
   expect(content).toContain("D44");
   expect(content).toContain("§4.5");
-  expect(content).toContain("D5");
+  expect(content).toMatch(/\bD5\b/);
   expect(content).toContain("D54");
   expect(content).toContain("D63");
   expect(content).toContain("INV-004");
-  expect(content).toContain("M4");
+  expect(content).toMatch(/\bM4\b/);
 });
