@@ -11,9 +11,11 @@ test("preflight verification: ADR ratification check", () => {
   // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
   expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@[A-Za-z0-9_-]+`/);
   const blockedPlaceholders = ["@owner-alice", "@owner-bob", "@alice", "@bob", "@example", "@codeowner"];
+  const placeholderPattern = /@(?:[A-Za-z0-9_-]*(?:codeowner|placeholder|example|owner|alice|bob)[A-Za-z0-9_-]*)/i;
   for (const handle of blockedPlaceholders) {
     expect(content).not.toContain(handle);
   }
+  expect(content).not.toMatch(placeholderPattern);
   // Verify essential ADR contents (Finding 3)
   expect(content).toMatch(/\bD44\b/);
   expect(content).toContain("§4.5");
