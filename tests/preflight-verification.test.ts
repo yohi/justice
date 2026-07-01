@@ -15,11 +15,11 @@ test("preflight verification: ADR ratification check", () => {
     expect(content).not.toContain(handle);
   }
   // Verify essential ADR contents (Finding 3)
-  expect(content).toContain("D44");
+  expect(content).toMatch(/\bD44\b/);
   expect(content).toContain("§4.5");
   expect(content).toMatch(/\bD5\b/);
-  expect(content).toContain("D54");
-  expect(content).toContain("D63");
-  expect(content).toContain("INV-004");
+  expect(content).toMatch(/\bD54\b/);
+  expect(content).toMatch(/\bD63\b/);
+  expect(content).toMatch(/\bINV-004\b/);
   expect(content).toMatch(/\bM4\b/);
 });
