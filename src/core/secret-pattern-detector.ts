@@ -20,4 +20,20 @@ export class SecretPatternDetector {
       name,
     }));
   }
+
+  redact(content: string): string {
+    let redacted = content;
+    for (const { pattern } of SECRET_PATTERNS) {
+      // Build a transient global variant so EVERY occurrence is redacted, not just the
+      // first. SECRET_PATTERNS is intentionally kept non-global: scan() calls pattern.test(),
+      // and a shared /g RegExp would carry lastIndex state across calls.
+      // eslint-disable-next-line security/detect-non-literal-regexp -- source derives from a frozen internal pattern, never user input
+      const globalPattern = new RegExp(
+        pattern.source,
+        pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+      );
+      redacted = redacted.replace(globalPattern, () => "[REDACTED_SECRET]");
+    }
+    return redacted;
+  }
 }
