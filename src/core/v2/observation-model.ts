@@ -10,6 +10,9 @@ export type PendingEnvelope = {
   readonly sessionId: string;
   readonly writerId: string;
   readonly taskId?: string;
+  // "learning" is a reserved recordType slot: the 3-record-type charter (design §8.1) keeps the
+  // enum stable, but no PendingLearningRecord variant exists yet — implementation is deferred to
+  // v3 Failure Intelligence (V3-05). Do NOT remove; projection guards reject unknown recordTypes.
   readonly recordType: "observation" | "decision" | "learning";
 };
 
@@ -70,7 +73,7 @@ export type ReviewObservedRecord = {
   readonly reviewScope: string;
   readonly isCompleteSnapshot?: boolean;
   readonly items: readonly ReviewItem[];
-  readonly resolutionMarker?: readonly ResolutionMarker[];
+  readonly resolutionMarkers?: readonly ResolutionMarker[];
 };
 
 export type PendingObservationRecord =
