@@ -21,7 +21,8 @@ describe("extractEvidenceFromTool", () => {
     expect(ev.rawOutput).toBe("PASS");
     // interpretation is derived and self-references the observed evidence via SelfEvidenceRef
     expect(ev.interpretation?.provenance).toBe("derived");
-    expect(ev.interpretation?.derivedFrom).toEqual([{ evidenceId: "call_abc" }]);
+    expect(ev.interpretation?.derivedFrom).toEqual([{ kind: "self", evidenceId: "call_abc" }]);
+    expect(ev.interpretation?.basis).toBe("parsed_output");
   });
 
   it("redacts absolute paths in the captured command", () => {
@@ -65,5 +66,17 @@ describe("extractEvidenceFromTool", () => {
     expect(ev.sourceClass).toBe("tool_output");
     if (ev.sourceClass !== "tool_output") throw new Error("expected tool_output evidence");
     expect(ev.interpretation?.outcome).toBe("unknown");
+    expect(ev.interpretation?.basis).toBe("unparsed");
+  });
+
+  it("uses metadata_error basis and fail outcome when metadata.error is set", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run test" },
+      { output: "boom", metadata: { error: true } },
+      "call_err",
+    );
+    expect(ev.interpretation?.basis).toBe("metadata_error");
+    expect(ev.interpretation?.outcome).toBe("fail");
   });
 });

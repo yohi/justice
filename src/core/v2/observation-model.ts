@@ -51,7 +51,7 @@ export type FileContentEvidence = {
 
 export type Interpretation = {
   readonly outcome: "pass" | "fail" | "unknown";
-  readonly basis: "parsed_output" | "metadata_error";
+  readonly basis: "parsed_output" | "metadata_error" | "unparsed";
   readonly provenance: "derived";
   readonly derivedFrom: readonly EvidenceRef[]; // cross-record references use FullEvidenceRef; self-reference within the same record uses SelfEvidenceRef (evidenceId only)
 };
