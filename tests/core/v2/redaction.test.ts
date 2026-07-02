@@ -125,3 +125,28 @@ describe("redactForPersistence() truncation", () => {
     expect(result.endsWith(marker)).toBe(true);
   });
 });
+
+describe("redactForPersistence() pipeline order", () => {
+  it("redacts the value of a keyword-named env var (name matches a secret pattern)", () => {
+    // GITHUB_TOKEN matches the `token` keyword pattern. redact() must NOT run first and
+    // mask the name before redactEnvironmentValues can capture the NAME=value pair.
+    const result = redactForPersistence("GITHUB_TOKEN=ghp_Abc123def456ghi789jkl012mno345");
+    expect(result).toBe("[REDACTED_ENV]");
+    expect(result).not.toContain("ghp_");
+  });
+
+  it("redacts the values of multiple keyword-named env vars on one line", () => {
+    const result = redactForPersistence(
+      "GITHUB_TOKEN=ghp_aaaaaaaaaaaa ACCESS_TOKEN=xoxb_bbbbbbbbbbbb",
+    );
+    expect(result).toBe("[REDACTED_ENV] [REDACTED_ENV]");
+    expect(result).not.toContain("ghp_");
+    expect(result).not.toContain("xoxb_");
+  });
+
+  it("still redacts a bare secret-shaped value with no NAME= structure", () => {
+    const result = redactForPersistence("leaked key sk-abcdefghijklmnopqrstuvwx here");
+    expect(result).toContain("[REDACTED_SECRET]");
+    expect(result).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+  });
+});

@@ -33,11 +33,13 @@ export function redactTokenUrls(text: string): string {
 }
 
 export function redactForPersistence(text: string, detector = DEFAULT_DETECTOR): string {
-  const redacted = detector.redact(text); // covers API keys / secrets
-  return truncate(
-    redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
-    4096,
-  );
+  // Structural passes run FIRST: they rely on NAME=value / path / URL shapes that
+  // detector.redact() would otherwise destroy by masking keyword-like names (e.g.
+  // GITHUB_TOKEN matches the `token` pattern), which would let the value leak past
+  // redactEnvironmentValues. Applying detector.redact() LAST still catches bare
+  // secret-shaped values (sk-…) that have no NAME= structure.
+  const structured = redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(text)));
+  return truncate(detector.redact(structured), 4096);
 }
 
 function truncate(text: string, maxLength: number): string {
