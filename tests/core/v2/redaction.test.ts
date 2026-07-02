@@ -27,6 +27,18 @@ describe("SecretPatternDetector.redact()", () => {
     const input = "hello world";
     expect(detector.redact(input)).toBe("hello world");
   });
+
+  it("redacts ALL occurrences of the same OpenAI-shaped key in one string", () => {
+    const detector = new SecretPatternDetector();
+    const input = "first sk-abcdefghijklmnopqrstu then sk-zyxwvutsrqponmlkjihg";
+    expect(detector.redact(input)).toBe("first [REDACTED_SECRET] then [REDACTED_SECRET]");
+  });
+
+  it("redacts multiple linux home paths in one string", () => {
+    const detector = new SecretPatternDetector();
+    const input = "paths /home/alice and /home/bob here";
+    expect(detector.redact(input)).toBe("paths [REDACTED_SECRET] and [REDACTED_SECRET] here");
+  });
 });
 
 describe("redactAbsolutePaths()", () => {
@@ -97,5 +109,44 @@ describe("redactForPersistence() truncation", () => {
     const result = redactForPersistence(input);
     expect(result).toBe(input);
     expect(result.includes("[truncated]")).toBe(false);
+  });
+
+  it("does not split a surrogate pair at the truncation boundary", () => {
+    // Emoji "😀" (U+1F600) is a surrogate pair; place it so it straddles index 4096.
+    const input = "a".repeat(4095) + "😀" + "b".repeat(10);
+    const result = redactForPersistence(input);
+    const marker = "\n…[truncated]";
+    const body = result.slice(0, result.length - marker.length);
+    const lastCode = body.charCodeAt(body.length - 1);
+    // The retained text must not end with a lone high surrogate (ill-formed UTF-16).
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+    // Boundary correction drops the half-cut emoji, preserving the code-unit budget.
+    expect(body).toBe("a".repeat(4095));
+    expect(result.endsWith(marker)).toBe(true);
+  });
+});
+
+describe("redactForPersistence() pipeline order", () => {
+  it("redacts the value of a keyword-named env var (name matches a secret pattern)", () => {
+    // GITHUB_TOKEN matches the `token` keyword pattern. redact() must NOT run first and
+    // mask the name before redactEnvironmentValues can capture the NAME=value pair.
+    const result = redactForPersistence("GITHUB_TOKEN=ghp_Abc123def456ghi789jkl012mno345");
+    expect(result).toBe("[REDACTED_ENV]");
+    expect(result).not.toContain("ghp_");
+  });
+
+  it("redacts the values of multiple keyword-named env vars on one line", () => {
+    const result = redactForPersistence(
+      "GITHUB_TOKEN=ghp_aaaaaaaaaaaa ACCESS_TOKEN=xoxb_bbbbbbbbbbbb",
+    );
+    expect(result).toBe("[REDACTED_ENV] [REDACTED_ENV]");
+    expect(result).not.toContain("ghp_");
+    expect(result).not.toContain("xoxb_");
+  });
+
+  it("still redacts a bare secret-shaped value with no NAME= structure", () => {
+    const result = redactForPersistence("leaked key sk-abcdefghijklmnopqrstuvwx here");
+    expect(result).toContain("[REDACTED_SECRET]");
+    expect(result).not.toContain("sk-abcdefghijklmnopqrstuvwx");
   });
 });
