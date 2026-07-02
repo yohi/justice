@@ -5,10 +5,10 @@ export type DeclaredClaim = {
   readonly outcome: "pass" | "fail" | "unknown";
 };
 
-const PASS_PATTERNS = /tests? pass|passing|✅\s*tests?/i;
-const FAIL_PATTERNS = /tests? fail|failing|❌\s*tests?/i;
+const PASS_PATTERNS = /\bpass(?:ed|ing)?\b|✅/i;
+const FAIL_PATTERNS = /\bfail(?:ed|ing)?\b|❌/i;
 const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp]> = [
-  ["test", /tests? pass|passing|✅\s*tests?/i],
+  ["test", /\btests?\b/i],
   ["build", /build(?:\s+pass(?:ed)?)?|✅\s*build/i],
   ["lint", /lint(?:\s+pass(?:ed)?)?|✅\s*lint/i],
   ["generic", /declared|summary|status/i],

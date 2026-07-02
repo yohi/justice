@@ -28,4 +28,25 @@ describe("extractDeclaredClaims", () => {
   it("returns an empty list when no claim patterns match", () => {
     expect(extractDeclaredClaims("source-none", "just some prose with no signals")).toEqual([]);
   });
+
+  it("generates a test claim with fail outcome for test failure messages (Issue 1)", () => {
+    for (const text of ["tests failed", "tests fail", "test failing"]) {
+      const claims = extractDeclaredClaims("src-tf", text);
+      const testClaim = claims.find((c) => c.claimKind === "test");
+      expect(testClaim).toBeDefined();
+      expect(testClaim?.outcome).toBe("fail");
+    }
+  });
+
+  it("derives a pass outcome from past-tense 'passed' claims (Issue 2)", () => {
+    const build = extractDeclaredClaims("src-bp", "build passed").find((c) => c.claimKind === "build");
+    expect(build?.outcome).toBe("pass");
+    const lint = extractDeclaredClaims("src-lp", "lint passed").find((c) => c.claimKind === "lint");
+    expect(lint?.outcome).toBe("pass");
+  });
+
+  it("does not treat substrings like 'latest' as a test claim", () => {
+    const claims = extractDeclaredClaims("src-sub", "the latest greatest release");
+    expect(claims.find((c) => c.claimKind === "test")).toBeUndefined();
+  });
 });
