@@ -27,6 +27,18 @@ describe("SecretPatternDetector.redact()", () => {
     const input = "hello world";
     expect(detector.redact(input)).toBe("hello world");
   });
+
+  it("redacts ALL occurrences of the same OpenAI-shaped key in one string", () => {
+    const detector = new SecretPatternDetector();
+    const input = "first sk-abcdefghijklmnopqrstu then sk-zyxwvutsrqponmlkjihg";
+    expect(detector.redact(input)).toBe("first [REDACTED_SECRET] then [REDACTED_SECRET]");
+  });
+
+  it("redacts multiple linux home paths in one string", () => {
+    const detector = new SecretPatternDetector();
+    const input = "paths /home/alice and /home/bob here";
+    expect(detector.redact(input)).toBe("paths [REDACTED_SECRET] and [REDACTED_SECRET] here");
+  });
 });
 
 describe("redactAbsolutePaths()", () => {
