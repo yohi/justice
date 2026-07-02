@@ -32,7 +32,7 @@ export function redactTokenUrls(text: string): string {
   return text.replace(/https?:\/\/[^@\s]+@[^\s"']+/g, "[REDACTED_TOKEN_URL]");
 }
 
-export function redactForPersistence(text: string, detector = new SecretPatternDetector()): string {
+export function redactForPersistence(text: string, detector = DEFAULT_DETECTOR): string {
   const redacted = detector.redact(text); // covers API keys / secrets
   return truncate(
     redactTokenUrls(redactEnvironmentValues(redactAbsolutePaths(redacted))),
