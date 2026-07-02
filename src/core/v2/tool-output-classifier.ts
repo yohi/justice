@@ -3,17 +3,26 @@ const COMMAND_EXEC_COMMANDS = new Set([
   "bun", "npm", "yarn", "pnpm", "node", "ts-node",
   "vitest", "jest", "mocha", "pytest",
   "tsc", "eslint", "prettier", "biome", "rome", "stylelint", "deno",
+  // General command-exec tools: interpreters, VCS, containers, network clients, build systems.
+  // Their output is process output (not file contents) and is diagnostically valuable, so it must
+  // be captured as command_exec (Issue 4). Interpreters that can read a file inline (python/node)
+  // are still routed to file_content via FILE_INLINE_READ_PATTERN below.
+  "python", "python3",
+  "git", "docker", "docker-compose", "podman", "kubectl",
+  "curl", "wget",
+  "go", "cargo", "rustc", "make", "gradle", "mvn", "dotnet", "java", "gcc", "clang",
 ]);
 
 const FILE_CONTENT_COMMANDS = new Set([
   "cat", "head", "tail", "less", "more", "nl", "tac", "sed", "awk", "grep", "rg", "ag", "xxd", "od", "hexdump", "strings",
 ]);
 
-// Inline file-read patterns embedded in interpreter one-liners (e.g. `node -e "...readFileSync..."`).
-// These read file content despite the leading token being a command-exec interpreter, so they must
-// be classified as file_content (D49/D52/D60). Scoped to Node.js FS API names only, to avoid
-// over-matching generic `open(`/`.read(` calls (e.g. xdg-open(), stream.read()).
-const FILE_INLINE_READ_PATTERN = /\breadFileSync\b|\breadFile\b/;
+// Inline file-read patterns embedded in interpreter one-liners (node -e ...readFileSync...,
+// or python -c open('f').read()). These read file content even though the leading token is a
+// command-exec interpreter, so they must be classified as file_content (D49/D52/D60). The full
+// open(...) then .read chain is required to avoid over-matching bare open( / .read( (e.g.
+// xdg-open(), stream.read()).
+const FILE_INLINE_READ_PATTERN = /\breadFileSync\b|\breadFile\b|\bopen\s*\([^)]*\)\s*\.\s*read/;
 
 export function classifyToolOutputClass(
   toolName: string,

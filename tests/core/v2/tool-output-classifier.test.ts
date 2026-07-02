@@ -30,4 +30,13 @@ describe("classifyToolOutputClass", () => {
     expect(classifyToolOutputClass("bash", { command: "bun run test | grep failed" })).toBe("command_exec");
     expect(classifyToolOutputClass("bash", { command: "npm run lint | rg 'error'" })).toBe("command_exec");
   });
+
+  it("classifies general command-exec tools (network/VCS/containers/interpreters) as command_exec (Issue 4)", () => {
+    expect(classifyToolOutputClass("bash", { command: "curl https://example.com" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "git status" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "docker build -t app ." })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "python script.py" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "go test ./..." })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "make test" })).toBe("command_exec");
+  });
 });
