@@ -978,7 +978,7 @@ describe("FF-004 replay determinism and state validation", () => {
             ruleId: "gate-1",
             verdict: "PASS",
             reason: "All tests passed",
-            evidenceRefs: [{ agentId: "atlas", sessionId: "session-123", writerId: "w1", sequence: 1, evidenceId: "ev-1" }]
+            evidenceRefs: [{ kind: "full", agentId: "atlas", sessionId: "session-123", writerId: "w1", sequence: 1, evidenceId: "ev-1" }]
           }
         ]
       }

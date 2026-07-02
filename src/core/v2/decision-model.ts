@@ -13,6 +13,9 @@ export type DecisionPayload = {
   readonly recordType: "decision";
   readonly gateType: "task";
   readonly verdict: "PASS" | "WARN" | "FAIL";
+  // Intentional single-literal invariant (INV-007, design §7.2): the v2.0 task gate is always
+  // L0-applied / L1-reachable. Deliberately NOT a union — projection validation asserts these
+  // exact values; widen to "L0" | "L1" | "L2" only when L2/L3 enforcement actually lands.
   readonly reachableEnforcementLevel: "L1";
   readonly appliedEnforcementLevel: "L0";
   readonly ruleResults: readonly RuleResult[];

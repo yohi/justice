@@ -58,7 +58,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D28 | read-only のスコープ明記 | §7.5 に「read-only は workspace/code/commands に対するもので `.justice/state.json` 内部キャッシュ書込は許容」と明記 | read-only 表記とキャッシュ書込の表現衝突（誤読）を解消（2026-06-16 レビュー第3R 指摘6・INV-002/§5.6） |
 | D29 | task サマリ由来 Evidence の provenance（D62 で例外撤回） | task PostToolUse 出力（サブエージェント結果サマリ）から抽出した合否主張は **`declared`** として扱い、gate 充足（PASS）には**算入しない**。**transcript を含んでも `declared` 据置とし `derived` 昇格しない**（D62: 親セッションは子の実コマンドを直接観測せず、サマリ内 transcript は自己申告経由で偽装に弱いため）。`derived` は常に **observed 起源**に限定（憲章 derived 定義と整合）。**サブエージェント結果の PASS 算入は v2.5 Handoff 相関後** | declared を `derived` に偽装して PASS 充足を迂回できる穴を解消。§5.8/§10.2 KPI の内部矛盾も解消（2026-06-16 レビュー第4R 指摘1／本レビュー Finding 1・INV-004/AX-002） |
 | D30 | shard 鍵のプロセス境界 | shard 鍵を **`{agentId, sessionId, writerId}` に固定**（physical: `events/<agentId>/<sessionId>/<writerId>.jsonl`・D39）。in-process queue は単一プロセス内直列化にしか効かないため、shard を **writer（=プロセスインスタンス）単位の segment に分離**し、別プロセスは別ファイルを書く。read 側は全 segment を merge（FF-004 不変）。これにより「同一 session を単一プロセスが扱う」前提に依存しない | 単純 `{agentId, sessionId}` 鍵では複数プロセスが同一ファイルへ並行 append しイベント消失する穴を構造的に解消（2026-06-16 レビュー第4R 指摘2 / 本レビュー指摘4・INV-008/NFR 並行性） |
-| D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`**（直列化形 `{agentId, sessionId, writerId, sequence, evidenceId}`・D39）とし、record 内の特定 Evidence/claim/item を一意特定。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
+| D31 | レコード内多根拠の一意参照 | `evidenceRefs` / `derivedFrom` を **`{shardId, sequence, evidenceId}`**（直列化形 `{agentId, sessionId, writerId, sequence, evidenceId}` ＋型判別子 `kind`・D39/§5.1 型の正本）とし、record 内の特定 Evidence/claim/item を一意特定（`kind` は同一性に非算入の判別子）。review items は `itemKey`、message claims は `claimIndex`、tool_executed は単一 evidence の固定 id | `{agentId, sequence}` では review `items[]` / message `declaredClaims[]` のどれが判定根拠か復元できない穴を解消（2026-06-16 レビュー第4R 指摘3・Traceability 前提） |
 | D32 | review 解決規則の厳格化 | `resolved` は (a) 明示的解決マーカー、(b) **同一レビュースコープの完全スナップショット**での不在、(c) 人間承認 artifact のいずれかでのみ成立。単なる item 消失（範囲差・検出漏れ・出力形式変化）では `open` 据置。`review_observed` に `reviewScope` を付与しスコープ一致を判定 | 消失=resolved により未解決 major/critical が誤って解決扱いになる穴を解消。FR-006 は集約のみ要求（2026-06-16 レビュー第4R 指摘4・AX-001/002） |
 | D33 | rotation 後の sequence 採番 | sequence 初回復元を当該 shard（writer segment）の **active + archive 双方の最大 sequence** から行う（writer state の monotonic counter も可）。`{shardId, sequence}` の一意性を rotation 跨ぎで保証 | active のみ参照だと rotation 後に sequence が reset し archive と衝突、参照鍵の一意性と replay 決定性が壊れる穴を解消（2026-06-16 レビュー第4R 指摘5・INV-008/INV-009/FF-004） |
 | D34 | message 本文の非永続化 | `message` レコードは本文全文を保持せず **`textHash`（必須）＋ `textSnippet`（任意・最小）＋ `declaredClaims`** のみ保存。redaction も snippet に適用 | FR-001 非目的「設計内容・実装計画・タスク定義は保持しない」への抵触経路を遮断（レビュー指摘 ISS-002・INV-001/INV-008） |
@@ -204,7 +204,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 
 > **レコード参照の同一性とソート順序**: `sequence` は **shard（=shardId=`{agentId, sessionId, writerId}`）内**単調増加であり shard 横断では一意でない。よってレコード間参照（`evidenceRefs` / `derivedFrom`）は **`{shardId, sequence, evidenceId}` 複合参照**を用い、複数シャードをマージした後も根拠 Evidence を曖昧さなく解決する（`evidenceId` は record 内の特定 Evidence/claim/item を一意化・§5.3 / §5.4 / D31）。**projection マージは「① shard 内＝`sequence` 優先 → ② shard 間＝`timestamp`→`shardId`→`sequence`」の2段階**とし、shard 内の因果順（sequence）を timestamp 逆転から保護しつつ、shard 横断の衝突時も replay を決定論化する（§6.3 / FF-004）。全順序化（決定性）と shard 内因果整合は別目的であり、2段階マージで同時に満たす。
 >
-> **参照のレコード表現（型の正本）**: 上記の複合参照は記録上 **`{agentId, sessionId, writerId, sequence, evidenceId}` の展開形**で直列化する（§5.3 `derivedFrom` / §5.4 `evidenceRefs` の JSON 例と一致・D39）。`shardId` は `{agentId, sessionId, writerId}` の別称であって独立フィールドとしては直列化しない（§5.1 エンベロープの等価関係 `{shardId, sequence}`＝`{agentId, sessionId, writerId, sequence}`）。実装の参照型はこの5要素オブジェクトを単一の正本とし、D14/D31 の `{shardId, …}` 表記はこの展開形を指す。**同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等）は `writerId`/`sequence` を省略し `evidenceId` のみで自レコードを相対参照、**クロスレコード参照**は projection で採番済みの値を解決して埋める（sequence は append queue 採番のため抽出時点では未確定・D42）。
+> **参照のレコード表現（型の正本）**: 上記の複合参照は記録上 **`{agentId, sessionId, writerId, sequence, evidenceId}` の展開形＋型判別子 `kind`** で直列化する（§5.3 `derivedFrom` / §5.4 `evidenceRefs` の JSON 例と一致・D39）。`kind` は同一性には非算入で、安全なナローイング専用の判別子（クロスレコード参照＝`"full"` / self-ref＝`"self"`・実装は `src/core/types.ts` の `FullEvidenceRef`/`SelfEvidenceRef`）。`shardId` は `{agentId, sessionId, writerId}` の別称であって独立フィールドとしては直列化しない（§5.1 エンベロープの等価関係 `{shardId, sequence}`＝`{agentId, sessionId, writerId, sequence}`）。実装の参照型はこの5要素の識別子タプル＋`kind` 判別子を単一の正本とし、D14/D31 の `{shardId, …}` 表記はこの展開形を指す。**同一レコード内 self-ref**（interpretation→自レコードの observed evidence 等・`kind:"self"`）は `writerId`/`sequence` を省略し `evidenceId` のみで自レコードを相対参照、**クロスレコード参照**（`kind:"full"`）は projection で採番済みの値を解決して埋める（sequence は append queue 採番のため抽出時点では未確定・D42）。
 
 ### 5.2 ObservationRecord（観測した事実）
 
@@ -287,14 +287,14 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   // ══ (B) sourceClass:"declared_claim" — message/task サマリ由来の自己申告（provenance は必ず "declared"）。toolOutputClass/rawOutput* は持たない（D59・本レビュー指摘1）══
   "declaredFrom": "message" | "task_summary",  // declared_claim 時のみ必須: 申告の出所（§5.2(b)/§5.8/D29）
   "claim": { "claimKind": "test" | "build" | "lint" | "generic", "outcome": "pass" | "fail" | "unknown" },  // declared_claim 時のみ必須: 抽出した合否主張
-  "claimRef": { "agentId": "...", "sessionId": "...", "writerId": "...", "sequence": 0, "evidenceId": "claim-0", "claimIndex": 0 },  // 任意: 申告元 message.declaredClaims[claimIndex] / task サマリへの複合参照（§5.2(b)/D31/D70・監査用。declared は PASS 非算入）
+  "claimRef": { "kind": "full", "agentId": "...", "sessionId": "...", "writerId": "...", "sequence": 0, "evidenceId": "claim-0", "claimIndex": 0 },  // 任意: 申告元 message.declaredClaims[claimIndex] / task サマリへの複合参照（§5.2(b)/D31/D70・監査用。declared は PASS 非算入）
 
   // ══ interpretation は tool_output(observed) からの派生時のみ。declared_claim は interpretation を持たない（derived 起源は observed 限定・D29）══
   "interpretation": {                          // 省略可。存在時は常に derived（起源は observed の tool_output のみ）
     "outcome": "pass" | "fail" | "unknown",
     "basis": "parsed_output" | "metadata_error",
     "provenance": "derived",
-    "derivedFrom": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-0" }]   // 元 observed Evidence の複合参照（{shardId,sequence,evidenceId}・shardId={agentId,sessionId,writerId}・shard 横断一意・D31/D39。同一レコード内 self-ref は writerId/sequence を省略し evidenceId のみ・D42）
+    "derivedFrom": [{ "kind": "full", "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-0" }]   // 元 observed Evidence の複合参照（{shardId,sequence,evidenceId}＋kind:"full"・shardId={agentId,sessionId,writerId}・shard 横断一意・D31/D39。同一レコード内 self-ref は writerId/sequence を省略し kind:"self"＋evidenceId のみ・D42）
   }
 }
 ```
@@ -307,7 +307,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 - `exit_code` は独立フィールドを持たず `interpretation.outcome` に集約（API に無く derived 確定）。
 - **declared は v2.0 でも記録**するが **gate の充足（PASS）判定には算入しない**。既定 gate（`evidence_outcome` / `evidence_present`）が充足と判定できる Evidence は **`observed` / `derived` のみ**で、declared は「自己申告あり・観測裏付け無し」の **WARN 材料**に限定する（declared な "tests pass" だけで required-tests を PASS させない。観測が無ければ `onMissingEvidence` 経路で WARN・FF-008）。**task サマリ由来の合否主張も declared 扱いで PASS 非算入**（transcript 含有でも `derived` 昇格しない・PASS 算入は v2.5 Handoff 相関後・§5.8/D29/D62）。L1+ deny に使えるのも `observed`/`derived` のみ（FF-007）。KPI provenance 分布は4値を集計。
 - **sourceClass / kind / toolOutputClass 分類**: evidence-engine が決定論的に判定。**sourceClass**: tool 観測（`tool.execute.after`）由来→`tool_output`、message/task サマリ由来の自己申告→`declared_claim`（D59）。**kind**: test/spec→test, build/compile/tsc→build, lint/eslint→lint, 他のコマンド実行→command/generic。**toolOutputClass**（`tool_output` 時のみ）: bash/test/build/lint 等のコマンド実行系→`command_exec`（rawOutput 保存）。**ただし bash 系は args.command を解析し、ファイル本文出力コマンド（cat/head/tail/sed・awk の印字/grep・rg・ag/xxd/od 等）または判定不能かつ過大出力の場合は `file_content` へ分類**（D60）。read/grep/glob 等のファイル本文・検索系→`file_content`（rawOutputHash＋snippet のみ・本文非保存・D49/D52/D60）。`declared_claim` は toolOutputClass/rawOutput* を持たない。いずれも純粋関数（FF-002）。
-- **sub-entity 参照の正本（D70）**: `EvidenceRef` は `{agentId, sessionId, writerId, sequence, evidenceId}` の5要素を共通形とする。`message.declaredClaims[]` は各 claim に `evidenceId` を持ち、対応する `declared_claim` Evidence の `evidenceId` と一致させる（1 claim = 1 Evidence）。`review_observed.items[]` は `evidenceId=itemKey` とし、`review_open_items` の根拠は `{..., evidenceId:itemKey}` で参照する。これにより Evidence / message claim / review item を同一参照型で復元できる。
+- **sub-entity 参照の正本（D70）**: `EvidenceRef` は `{agentId, sessionId, writerId, sequence, evidenceId}` の5要素を識別子タプルとし、加えて型判別子 `kind`（`"full"`/`"self"`・§5.1 型の正本）を加算的に直列化する（`kind` は同一性に非算入・安全なナローイング用）。`message.declaredClaims[]` は各 claim に `evidenceId` を持ち、対応する `declared_claim` Evidence の `evidenceId` と一致させる（1 claim = 1 Evidence）。`review_observed.items[]` は `evidenceId=itemKey` とし、`review_open_items` の根拠は `{..., evidenceId:itemKey}` で参照する。これにより Evidence / message claim / review item を同一参照型で復元できる。
 - **INV-004 の字義整合（M4）**: 憲章 INV-004「observed/derived しか Evidence にしない」と本設計が `provenance:"declared"` を**記録**することの見かけの差は、**「declared の記録 ≠ 権威 Evidence 扱い」**で解消する。declared は監査可視性のため記録するが、gate 充足（PASS）・L1+ deny の**権威 Evidence には算入しない**（観測のみが PASS を生む・D24/D29/FF-007/FF-008）。憲章 §8.2 も declared を provenance 値として定義しており、本設計は用途を制限しているため整合する。
 
 ### 5.4 DecisionRecord（Justice の判定 = Verdict）
@@ -321,9 +321,9 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
   "appliedEnforcementLevel": "L0",          // v2.0 は常に L0
   "ruleResults": [                          // 評価した各 rule の per-rule 結果（複数 gate 同時 WARN/FAIL でも情報を落とさない）
     { "ruleId": "required-tests", "verdict": "FAIL", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-1" }] },   // 根拠 Evidence の複合参照（{shardId,sequence,evidenceId}・shardId={agentId,sessionId,writerId}・shard 横断＋record 内一意・D31/D39）
+      "evidenceRefs": [{ "kind": "full", "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 40, "evidenceId": "ev-1" }] },   // 根拠 Evidence の複合参照（{shardId,sequence,evidenceId}＋kind:"full"・shardId={agentId,sessionId,writerId}・shard 横断＋record 内一意・D31/D39）
     { "ruleId": "build-green", "verdict": "WARN", "reason": "...",
-      "evidenceRefs": [{ "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 41, "evidenceId": "ev-2" }] }
+      "evidenceRefs": [{ "kind": "full", "agentId": "hephaestus", "sessionId": "ses_...", "writerId": "w-...", "sequence": 41, "evidenceId": "ev-2" }] }
   ]
 }
 ```

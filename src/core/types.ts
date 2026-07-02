@@ -49,6 +49,7 @@ export type ShardId = {
 export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 export type FullEvidenceRef = {
+  readonly kind: "full";
   readonly agentId: ObservationAgentId;
   readonly sessionId: string;
   readonly writerId: string;
@@ -57,6 +58,7 @@ export type FullEvidenceRef = {
 };
 
 export type SelfEvidenceRef = {
+  readonly kind: "self";
   readonly evidenceId: string;
 };
 
