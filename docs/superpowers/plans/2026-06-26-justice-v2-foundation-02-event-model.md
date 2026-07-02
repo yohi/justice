@@ -93,6 +93,7 @@ export type ShardId = {
 export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 export type FullEvidenceRef = {
+  readonly kind: "full";
   readonly agentId: ObservationAgentId;
   readonly sessionId: string;
   readonly writerId: string;
@@ -101,6 +102,7 @@ export type FullEvidenceRef = {
 };
 
 export type SelfEvidenceRef = {
+  readonly kind: "self";
   readonly evidenceId: string;
 };
 ```
@@ -188,7 +190,7 @@ export type ReviewObservedRecord = {
   readonly reviewScope: string;
   readonly isCompleteSnapshot?: boolean;
   readonly items: readonly ReviewItem[];
-  readonly resolutionMarker?: readonly ResolutionMarker[];
+  readonly resolutionMarkers?: readonly ResolutionMarker[];
 };
 
 export type PendingObservationRecord =
@@ -491,7 +493,7 @@ export type Interpretation = {
   readonly outcome: "pass" | "fail" | "unknown";
   readonly basis: "parsed_output" | "metadata_error";
   readonly provenance: "derived";
-  readonly derivedFrom: readonly EvidenceRef[]; // cross-record references use FullEvidenceRef; self-reference within the same record uses SelfEvidenceRef (evidenceId only)
+  readonly derivedFrom: readonly EvidenceRef[]; // cross-record references use FullEvidenceRef; self-reference within the same record uses SelfEvidenceRef (kind: "self" + evidenceId)
 };
 
 export type DeclaredClaimEvidence = {
@@ -588,7 +590,7 @@ export function extractEvidenceFromTool(
       outcome: toolName === "task" ? "unknown" : deriveOutcome(output),
       basis: output.metadata?.error ? "metadata_error" : "parsed_output",
       provenance: "derived",
-      derivedFrom: [{ evidenceId: observedId }], // self-reference within the same record uses SelfEvidenceRef (evidenceId only)
+      derivedFrom: [{ kind: "self", evidenceId: observedId }], // self-reference within the same record uses SelfEvidenceRef (kind: "self" + evidenceId)
     },
   };
 }
