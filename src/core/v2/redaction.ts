@@ -42,5 +42,10 @@ export function redactForPersistence(text: string, detector = new SecretPatternD
 
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + "\n…[truncated]";
+  let end = maxLength;
+  // Avoid splitting a surrogate pair at the boundary, which would leave a lone high
+  // surrogate and yield ill-formed UTF-16. Preserves the code-unit budget.
+  const lastCode = text.charCodeAt(end - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+  return text.slice(0, end) + "\n…[truncated]";
 }

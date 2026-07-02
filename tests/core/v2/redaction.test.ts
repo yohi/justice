@@ -110,4 +110,18 @@ describe("redactForPersistence() truncation", () => {
     expect(result).toBe(input);
     expect(result.includes("[truncated]")).toBe(false);
   });
+
+  it("does not split a surrogate pair at the truncation boundary", () => {
+    // Emoji "😀" (U+1F600) is a surrogate pair; place it so it straddles index 4096.
+    const input = "a".repeat(4095) + "😀" + "b".repeat(10);
+    const result = redactForPersistence(input);
+    const marker = "\n…[truncated]";
+    const body = result.slice(0, result.length - marker.length);
+    const lastCode = body.charCodeAt(body.length - 1);
+    // The retained text must not end with a lone high surrogate (ill-formed UTF-16).
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+    // Boundary correction drops the half-cut emoji, preserving the code-unit budget.
+    expect(body).toBe("a".repeat(4095));
+    expect(result.endsWith(marker)).toBe(true);
+  });
 });
