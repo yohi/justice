@@ -5,6 +5,8 @@ import {
   redactAbsolutePaths,
   redactEnvironmentValues,
   redactForPersistence,
+  redactMessageSnippet,
+  redactRawOutput,
   redactTokenUrls,
 } from "../../../src/core/v2/redaction";
 
@@ -148,5 +150,17 @@ describe("redactForPersistence() pipeline order", () => {
     const result = redactForPersistence("leaked key sk-abcdefghijklmnopqrstuvwx here");
     expect(result).toContain("[REDACTED_SECRET]");
     expect(result).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+  });
+});
+
+describe("redactRawOutput() / redactMessageSnippet()", () => {
+  it("redactRawOutput redacts secrets and absolute paths in raw tool output", () => {
+    const result = redactRawOutput("key sk-abcdefghijklmnopqrstuvwx at /home/u/f.ts");
+    expect(result).toContain("[REDACTED_SECRET]");
+    expect(result).toContain("[REDACTED_PATH]");
+  });
+
+  it("redactMessageSnippet redacts secret-shaped values in a snippet", () => {
+    expect(redactMessageSnippet("leaked sk-abcdefghijklmnopqrstuvwx")).toContain("[REDACTED_SECRET]");
   });
 });

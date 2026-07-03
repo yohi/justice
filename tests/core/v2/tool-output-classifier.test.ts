@@ -55,4 +55,14 @@ describe("classifyToolOutputClass", () => {
   it("does not misclassify exec commands that mention open().read in arguments as file_content (Issue 5)", () => {
     expect(classifyToolOutputClass("bash", { command: "git commit -m \"refactor open(cfg).read() call\"" })).toBe("command_exec");
   });
+
+  it("classifies unknown shell commands conservatively as file_content (fallback)", () => {
+    expect(classifyToolOutputClass("bash", { command: "unknowncmd --flag arg" })).toBe("file_content");
+    expect(classifyToolOutputClass("bash", { command: "" })).toBe("file_content");
+  });
+
+  it("unwraps runner run sub-keyword and flags, and handles the shell tool", () => {
+    expect(classifyToolOutputClass("bash", { command: "poetry run --no-root pytest" })).toBe("command_exec");
+    expect(classifyToolOutputClass("shell", { command: "pipx run black ." })).toBe("command_exec");
+  });
 });

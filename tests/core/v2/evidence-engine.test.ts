@@ -110,4 +110,38 @@ describe("extractEvidenceFromTool", () => {
     );
     expect(ev.interpretation?.outcome).not.toBe("fail");
   });
+
+  it("derives fail outcome from failing text output (deriveOutcome fail branch)", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run build" },
+      { output: "build failed: compilation aborted" },
+      "call_build_fail",
+    );
+    expect(ev.interpretation?.outcome).toBe("fail");
+    expect(ev.interpretation?.basis).toBe("parsed_output");
+  });
+
+  it("derives unknown outcome and stores empty rawOutput when output is absent", () => {
+    const ev = extractEvidenceFromTool("bash", { command: "bun run test" }, {}, "call_empty");
+    expect(ev.interpretation?.outcome).toBe("unknown");
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "command_exec") {
+      throw new Error("expected command_exec tool_output evidence");
+    }
+    expect(ev.rawOutput).toBe("");
+  });
+
+  it("derives unknown outcome from neutral (non-pass, non-fail) text", () => {
+    const ev = extractEvidenceFromTool("bash", { command: "echo hi" }, { output: "hello world" }, "call_neutral");
+    expect(ev.interpretation?.outcome).toBe("unknown");
+  });
+
+  it("omits rawOutputSnippet for empty file_content output", () => {
+    const ev = extractEvidenceFromTool("read", undefined, { output: "" }, "call_empty_read");
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
+      throw new Error("expected file_content tool_output evidence");
+    }
+    expect(ev.rawOutputSnippet).toBeUndefined();
+    expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
+  });
 });
