@@ -57,4 +57,11 @@ describe("extractDeclaredClaims", () => {
       expect(c.outcome).toBe("fail");
     }
   });
+
+  it("matches additional pass/fail inflections: passes, failures (Issue 4 review)", () => {
+    const passClaim = extractDeclaredClaims("src-inf-p", "the test suite passes").find((c) => c.claimKind === "test");
+    expect(passClaim?.outcome).toBe("pass");
+    const failClaim = extractDeclaredClaims("src-inf-f", "build has 2 failures").find((c) => c.claimKind === "build");
+    expect(failClaim?.outcome).toBe("fail");
+  });
 });

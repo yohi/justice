@@ -5,9 +5,13 @@ export type DeclaredClaim = {
   readonly outcome: "pass" | "fail" | "unknown";
 };
 
-const PASS_PATTERNS = /\bpass(?:ed|ing)?\b|✅/i;
-const FAIL_PATTERNS = /\bfail(?:ed|ing)?\b|❌/i;
+// Pass/fail vocabulary for declared claims. "error(s)" is intentionally excluded from FAIL to avoid
+// false positives on "no errors"/"0 errors". ✓/✗ mirror evidence-engine's OUTPUT_* marks.
+const PASS_PATTERNS = /\bpass(?:es|ed|ing)?\b|✓|✅/i;
+const FAIL_PATTERNS = /\bfail(?:s|ed|ing|ure|ures)?\b|✗|❌/i;
 const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp]> = [
+  // Claim kinds match the bare keyword (coarse): an incidental mention like "the test file" still
+  // yields a claim, but its outcome is "unknown" (computed below) so it carries no false signal.
   ["test", /\btests?\b/i],
   ["build", /build(?:\s+pass(?:ed)?)?|✅\s*build/i],
   ["lint", /lint(?:\s+pass(?:ed)?)?|✅\s*lint/i],
@@ -18,7 +22,11 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
   const claims: DeclaredClaim[] = [];
   for (const [claimKind, pattern] of CLAIM_PATTERNS) {
     if (!pattern.test(text)) continue;
-    const outcome = FAIL_PATTERNS.test(text) ? "fail" : PASS_PATTERNS.test(text) ? "pass" : "unknown"; // fail dominates a mixed report (aligned with evidence-engine deriveOutcome)
+    // NOTE: outcome is derived from the WHOLE message text and applied to every claim produced from
+    // it. A mixed report (e.g. "tests pass, lint failed") therefore marks ALL claims "fail" (fail
+    // dominates, aligned with evidence-engine deriveOutcome). Intentional coarse signal; per-claim
+    // outcome scoping (a detection window per keyword) is deferred (review #1).
+    const outcome = FAIL_PATTERNS.test(text) ? "fail" : PASS_PATTERNS.test(text) ? "pass" : "unknown";
     claims.push({ evidenceId: `${sourceId}-${claimKind}`, claimKind, outcome });
   }
   return claims;
