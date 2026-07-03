@@ -129,7 +129,7 @@ git commit -m "feat(v2): shard file layout, writer ID generation, and collision 
 - Modify: `src/runtime/node-file-system.ts`
 - Modify: `tests/helpers/mock-file-system.ts`
 
-- [ ] **Step 1: `FileReader` および `FileWriter` インタフェースを拡張（§9.4 / 指摘5）**
+- [x] **Step 1: `FileReader` および `FileWriter` インタフェースを拡張（§9.4 / 指摘5）**
 
 ```typescript
 // src/core/types.ts
@@ -145,7 +145,7 @@ export interface FileWriter {
 }
 ```
 
-- [ ] **Step 2: `node-file-system.ts` での `listFiles` / `rename` 実装**
+- [x] **Step 2: `node-file-system.ts` での `listFiles` / `rename` 実装**
 
 ```typescript
 // src/runtime/node-file-system.ts
@@ -1034,7 +1034,7 @@ gt submit
 - Consumes: `toArchivePath`, `ProjectedState` projection.
 - Produces: `rotateIfNeeded(shardId)` that moves oversized/aged shards to archive and continues sequence numbering across active+archive.
 
-- [ ] **Step 1: FileReader API に file stats メソッドを追加**
+- [x] **Step 1: FileReader API に file stats メソッドを追加**
 
 ```typescript
 // src/core/types.ts
