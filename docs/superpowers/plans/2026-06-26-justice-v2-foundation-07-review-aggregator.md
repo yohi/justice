@@ -189,6 +189,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     }
     let state = byScopeMap.get(scope)!;
     const ref: FullEvidenceRef = {
+      kind: "full",
       agentId: record.agentId,
       sessionId: record.sessionId,
       writerId: record.writerId,
@@ -214,7 +215,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
 
         // D32: Do NOT resolve review items based on status: "resolved" within the items array.
         // All review items are added to 'open' by default, and resolution is strictly processed via
-        // isCompleteSnapshot removal or explicit resolutionMarker presence to avoid "disappearance without evidence".
+    // isCompleteSnapshot removal or explicit resolutionMarkers presence to avoid "disappearance without evidence".
         state = {
           ...state,
           open: [...state.open, entry],
@@ -239,9 +240,9 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
       }
     }
 
-    // 2. 明示的な解決マーカー (resolutionMarker) を処理
-    if (record.resolutionMarker) {
-      const markerKeys = new Set(record.resolutionMarker.map(m => m.itemKey));
+    // 2. 明示的な解決マーカー (resolutionMarkers) を処理
+    if (record.resolutionMarkers) {
+      const markerKeys = new Set(record.resolutionMarkers.map(m => m.itemKey));
       const toResolve = state.open.filter(o => markerKeys.has(o.itemKey));
       if (toResolve.length > 0) {
         state = {
@@ -302,7 +303,7 @@ it("keeps item open on mere disappearance", () => {
 it("marks item resolved on explicit marker", () => {
   const records = [
     reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
-    reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "explicit_marker" }] }),
+    reviewObserved({ scope: "task-1", resolutionMarkers: [{ itemKey: "major:foo", resolution: "explicit_marker" }] }),
   ];
   const summary = aggregateReviews(records);
   const resolvedItems = summary.byScope["task-1"]?.resolved ?? [];
@@ -338,7 +339,7 @@ it("keeps item open when snapshot is not marked complete", () => {
 it("marks item resolved on human artifact", () => {
   const records = [
     reviewObserved({ scope: "task-1", items: [{ itemKey: "major:foo", severity: "major", evidenceId: "major:foo", summary: "foo", location: "file.ts", status: "open" }] }),
-    reviewObserved({ scope: "task-1", resolutionMarker: [{ itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" }] }),
+    reviewObserved({ scope: "task-1", resolutionMarkers: [{ itemKey: "major:foo", resolution: "human_artifact", artifactRef: "docs/reviews/2026-06-26.md" }] }),
   ];
   const summary = aggregateReviews(records);
   const resolvedItems = summary.byScope["task-1"]?.resolved ?? [];
@@ -387,7 +388,7 @@ gt submit
 - Consumes: `ReviewRejectionDetector.detectMultiple(output, metadata)`, `aggregateReviews`, `deriveReviewScope`.
 - Produces:
   - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs (now supporting multiple review items parsed from output).
-  - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarker[]}` append when a human-approved resolution artifact is received.
+  - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarkers[]}` append when a human-approved resolution artifact is received.
 
 - [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
   - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
@@ -428,7 +429,7 @@ export function buildReviewResolutionRecord(
     recordType: "observation",
     kind: "review_observed",
     reviewScope,
-    resolutionMarker: itemKeys.map((itemKey) => ({
+    resolutionMarkers: itemKeys.map((itemKey) => ({
       itemKey,
       resolution: "human_artifact" as const,
       artifactRef,

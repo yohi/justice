@@ -38,6 +38,27 @@ export interface DelegationContext {
 /** Oh My OpenAgent のエージェント識別子 */
 export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
 
+export type ObservationAgentId = AgentId | "system" | "unknown";
+
+export type ShardId = {
+  readonly agentId: ObservationAgentId;
+  readonly sessionId: string;
+  readonly writerId: string; // validated via isSafeWriterId
+};
+
+export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
+
+export type FullEvidenceRef = ShardId & {
+  readonly kind: "full";
+  readonly sequence: number;
+  readonly evidenceId: string;
+};
+
+export type SelfEvidenceRef = {
+  readonly kind: "self";
+  readonly evidenceId: string;
+};
+
 /** task()完了後のフィードバック */
 export interface TaskFeedback {
   readonly taskId: string;
