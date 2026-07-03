@@ -39,12 +39,11 @@ function mapToolNameToKind(
 }
 
 /**
- * Derives a pass/fail/unknown outcome from a tool output deterministically.
- * metadata.error === true → "fail"; otherwise inspect the textual output for fail signals first
- * (fail dominates a mixed report), then pass signals; empty/ambiguous output → "unknown".
+ * Derives a pass/fail/unknown outcome from a tool output's TEXT deterministically. metadata.error is
+ * handled by the caller (deriveInterpretationFields) before this runs, so this inspects only the
+ * textual output: fail signals first (fail dominates a mixed report), then pass; empty/ambiguous → "unknown".
  */
 function deriveOutcome(output: ToolOutput): "pass" | "fail" | "unknown" {
-  if (output.metadata?.error === true) return "fail";
   const text = output.output ?? "";
   if (text.length === 0) return "unknown";
   if (OUTPUT_FAIL_PATTERN.test(text)) return "fail";
