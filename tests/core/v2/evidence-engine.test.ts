@@ -90,4 +90,24 @@ describe("extractEvidenceFromTool", () => {
     expect(ev.interpretation?.outcome).toBe("fail");
     expect(ev.interpretation?.basis).toBe("metadata_error");
   });
+
+  it("does not misclassify passing '0 errors' output as fail (Greptile review: error keyword excluded)", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run lint" },
+      { output: "✓ 0 errors, 0 warnings" },
+      "call_lint_ok",
+    );
+    expect(ev.interpretation?.outcome).toBe("pass");
+  });
+
+  it("does not classify 'Found 0 errors.' as fail (error keyword excluded from fail vocabulary)", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "tsc --noEmit" },
+      { output: "Found 0 errors." },
+      "call_tsc_ok",
+    );
+    expect(ev.interpretation?.outcome).not.toBe("fail");
+  });
 });

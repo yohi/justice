@@ -15,7 +15,10 @@ const TEST_PATTERN = /\b(vitest|jest|mocha|pytest|test)\b/;
 const BUILD_PATTERN = /\b(tsc|typecheck|build|tsup|rollup|webpack|vite)\b/;
 const LINT_PATTERN = /\b(eslint|prettier|biome|rome|stylelint|lint|format)\b/;
 
-const OUTPUT_FAIL_PATTERN = /\b(fail|failed|failing|error|errors)\b|✗|❌/i;
+// "error(s)" is intentionally excluded from the FAIL vocabulary to avoid false positives on passing
+// output like "0 errors" / "no errors" / "Found 0 errors." (mirrors declared-claim-extractor's PASS/
+// FAIL vocab). Genuine tool failures are still caught by metadata.error, checked first in deriveOutcome.
+const OUTPUT_FAIL_PATTERN = /\b(fail|failed|failing)\b|✗|❌/i;
 const OUTPUT_PASS_PATTERN = /\b(pass|passed|passing|ok|success|succeeded)\b|✓|✅/i;
 
 /**
