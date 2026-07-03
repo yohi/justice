@@ -30,7 +30,9 @@ export class SecretPatternDetector {
       // eslint-disable-next-line security/detect-non-literal-regexp -- source derives from a frozen internal pattern, never user input
       const globalPattern = new RegExp(
         pattern.source,
-        pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+        // SECRET_PATTERNS is frozen and non-global; strip any 'g' then append one to guarantee
+        // exactly one global flag without risking a duplicate-flag SyntaxError.
+        pattern.flags.replace("g", "") + "g",
       );
       redacted = redacted.replace(globalPattern, () => "[REDACTED_SECRET]");
     }

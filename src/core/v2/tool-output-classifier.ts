@@ -53,11 +53,11 @@ export function classifyToolOutputClass(
       ): { readonly firstToken: string; readonly sawRunner: boolean } {
   let rest = tokens;
   let sawRunner = false;
-  while (rest.length > 0 && RUNNER_PREFIXES.has(rest[0] ?? "")) {
+  while (rest.length > 0 && RUNNER_PREFIXES.has(rest[0]!)) {
     sawRunner = true;
     rest = rest.slice(1);
     while (rest.length > 0) {
-      const next = rest[0] ?? "";
+      const next = rest[0]!;
       if (next === "run" || next === "dlx" || next === "exec" || next.startsWith("-")) {
         rest = rest.slice(1);
       } else {
@@ -79,7 +79,7 @@ export function classifyToolOutputClass(
 
   for (const sub of subCommands) {
     // Analyze the leading command in the pipeline (before the first '|').
-    const pipelineStart = sub.split("|")[0] ?? "";
+    const pipelineStart = sub.split("|")[0]!;
     const tokens = pipelineStart.trim().split(/\s+/).filter(Boolean);
     const { firstToken, sawRunner } = unwrapRunnerPrefixes(tokens);
 

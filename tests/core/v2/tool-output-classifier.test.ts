@@ -59,6 +59,8 @@ describe("classifyToolOutputClass", () => {
   it("classifies unknown shell commands conservatively as file_content (fallback)", () => {
     expect(classifyToolOutputClass("bash", { command: "unknowncmd --flag arg" })).toBe("file_content");
     expect(classifyToolOutputClass("bash", { command: "" })).toBe("file_content");
+    // args undefined → args?.command ?? "" fallback → empty command → file_content
+    expect(classifyToolOutputClass("bash", undefined)).toBe("file_content");
   });
 
   it("unwraps runner run sub-keyword and flags, and handles the shell tool", () => {
