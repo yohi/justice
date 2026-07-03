@@ -39,4 +39,20 @@ describe("classifyToolOutputClass", () => {
     expect(classifyToolOutputClass("bash", { command: "go test ./..." })).toBe("command_exec");
     expect(classifyToolOutputClass("bash", { command: "make test" })).toBe("command_exec");
   });
+
+  it("unwraps runner prefixes (uv/poetry/npx/bunx) to classify wrapped tool as command_exec (Issue 3)", () => {
+    expect(classifyToolOutputClass("bash", { command: "uv run pytest" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "uv run --frozen pytest -q" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "poetry run ruff check" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "npx vitest run" })).toBe("command_exec");
+    expect(classifyToolOutputClass("bash", { command: "bunx tsc --noEmit" })).toBe("command_exec");
+  });
+
+  it("keeps a wrapped interpreter inline file read as file_content", () => {
+    expect(classifyToolOutputClass("bash", { command: "uv run python -c \"print(open('f.txt').read())\"" })).toBe("file_content");
+  });
+
+  it("does not misclassify exec commands that mention open().read in arguments as file_content (Issue 5)", () => {
+    expect(classifyToolOutputClass("bash", { command: "git commit -m \"refactor open(cfg).read() call\"" })).toBe("command_exec");
+  });
 });
