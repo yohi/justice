@@ -61,8 +61,8 @@ export function extractEvidenceFromTool(
   const kind = toolName === "task" ? "generic" : mapToolNameToKind(toolName, args);
   const command = args?.command ? redactEvidenceCommand(args.command) : undefined;
   const interpretation: Interpretation = {
-    outcome: toolName === "task" ? "unknown" : deriveOutcome(output),
-    basis: toolName === "task" ? "unparsed" : output.metadata?.error ? "metadata_error" : "parsed_output",
+    outcome: output.metadata?.error ? "fail" : toolName === "task" ? "unknown" : deriveOutcome(output),
+    basis: output.metadata?.error ? "metadata_error" : toolName === "task" ? "unparsed" : "parsed_output",
     provenance: "derived",
     derivedFrom: [{ kind: "self", evidenceId: observedId }], // self-reference within the same record uses SelfEvidenceRef (kind: "self" + evidenceId)
   };

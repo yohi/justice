@@ -79,4 +79,15 @@ describe("extractEvidenceFromTool", () => {
     expect(ev.interpretation?.basis).toBe("metadata_error");
     expect(ev.interpretation?.outcome).toBe("fail");
   });
+
+  it("prioritizes metadata.error over the task branch (fail / metadata_error) (Issue 2 review)", () => {
+    const ev = extractEvidenceFromTool(
+      "task",
+      undefined,
+      { output: "delegated subtask failed", metadata: { error: true } },
+      "call_task_err",
+    );
+    expect(ev.interpretation?.outcome).toBe("fail");
+    expect(ev.interpretation?.basis).toBe("metadata_error");
+  });
 });
