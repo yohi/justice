@@ -48,11 +48,8 @@ export type ShardId = {
 
 export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
-export type FullEvidenceRef = {
+export type FullEvidenceRef = ShardId & {
   readonly kind: "full";
-  readonly agentId: ObservationAgentId;
-  readonly sessionId: string;
-  readonly writerId: string;
   readonly sequence: number;
   readonly evidenceId: string;
 };
