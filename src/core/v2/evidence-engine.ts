@@ -1,6 +1,6 @@
 // src/core/v2/evidence-engine.ts
 import { classifyToolOutputClass } from "./tool-output-classifier";
-import { redactEvidenceCommand, redactForPersistence, redactAbsolutePaths } from "./redaction";
+import { redactEvidenceCommand, redactForPersistence, sliceCodeUnitsSafe } from "./redaction";
 import { hashString } from "./hash";
 import type { Evidence, Interpretation } from "./observation-model";
 
@@ -18,8 +18,8 @@ const LINT_PATTERN = /\b(eslint|prettier|biome|rome|stylelint|lint|format)\b/;
 // "error(s)" is intentionally excluded from the FAIL vocabulary to avoid false positives on passing
 // output like "0 errors" / "no errors" / "Found 0 errors." (mirrors declared-claim-extractor's PASS/
 // FAIL vocab). Genuine tool failures are still caught by metadata.error, checked first in deriveOutcome.
-const OUTPUT_FAIL_PATTERN = /\b(fail|failed|failing)\b|✗|❌/i;
-const OUTPUT_PASS_PATTERN = /\b(pass|passed|passing|ok|success|succeeded)\b|✓|✅/i;
+const OUTPUT_FAIL_PATTERN = /\bfail(?:s|ed|ing|ure|ures)?\b|✗|❌/i;
+const OUTPUT_PASS_PATTERN = /\b(?:pass(?:es|ed|ing)?|ok|success|succeeded)\b|✓|✅/i;
 
 /**
  * Maps a tool invocation to its evidence kind. Inspects the tool name and (for shell tools) the
@@ -92,7 +92,7 @@ export function extractEvidenceFromTool(
       provenance: "observed",
       toolOutputClass: "command_exec",
       command: command ?? "",
-      rawOutput: redactForPersistence(redactAbsolutePaths(rawOutput)),
+      rawOutput: redactForPersistence(rawOutput),
       interpretation,
     };
   }
@@ -105,7 +105,7 @@ export function extractEvidenceFromTool(
     toolOutputClass: "file_content",
     command, // rawOutput must not be stored in file_content
     rawOutputHash: hashString(rawOutput),
-    rawOutputSnippet: rawOutput.length > 0 ? redactForPersistence(redactAbsolutePaths(rawOutput.slice(0, 100))) : undefined,
+    rawOutputSnippet: rawOutput.length > 0 ? redactForPersistence(sliceCodeUnitsSafe(rawOutput, 100)) : undefined,
     interpretation,
   };
 }

@@ -42,12 +42,20 @@ export function redactForPersistence(text: string, detector = DEFAULT_DETECTOR):
   return truncate(detector.redact(structured), 4096);
 }
 
-function truncate(text: string, maxLength: number): string {
+/**
+ * Surrogate-safe prefix slice: returns the first `maxLength` UTF-16 code units without
+ * splitting a surrogate pair at the boundary (a lone high surrogate would yield ill-formed
+ * UTF-16). Shared by truncate() and by evidence snippet generation (evidence-engine).
+ */
+export function sliceCodeUnitsSafe(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   let end = maxLength;
-  // Avoid splitting a surrogate pair at the boundary, which would leave a lone high
-  // surrogate and yield ill-formed UTF-16. Preserves the code-unit budget.
   const lastCode = text.charCodeAt(end - 1);
   if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
-  return text.slice(0, end) + "\n…[truncated]";
+  return text.slice(0, end);
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return sliceCodeUnitsSafe(text, maxLength) + "\n…[truncated]";
 }

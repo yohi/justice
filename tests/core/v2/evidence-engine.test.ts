@@ -2,6 +2,21 @@
 import { describe, expect, it } from "vitest";
 import { extractEvidenceFromTool } from "../../../src/core/v2/evidence-engine";
 
+/** True if the string contains a lone (unpaired) UTF-16 surrogate — i.e. ill-formed UTF-16. */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("extractEvidenceFromTool", () => {
   it("classifies a bash `bun run test` call as observed command_exec tool_output", () => {
     const ev = extractEvidenceFromTool(
@@ -143,5 +158,59 @@ describe("extractEvidenceFromTool", () => {
     }
     expect(ev.rawOutputSnippet).toBeUndefined();
     expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
+  });
+
+  it("recognizes 'fails'/'failures' inflections (vocab sync with declared-claim-extractor, Finding #1)", () => {
+    const evFails = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run test" },
+      { output: "the suite fails" },
+      "call_fails",
+    );
+    expect(evFails.interpretation?.outcome).toBe("fail");
+    const evFailures = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run test" },
+      { output: "Failures: 2" },
+      "call_failures",
+    );
+    expect(evFailures.interpretation?.outcome).toBe("fail");
+  });
+
+  it("recognizes the 'passes' inflection in the pass vocabulary (Finding #1)", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "bun run test" },
+      { output: "everything passes" },
+      "call_passes",
+    );
+    expect(ev.interpretation?.outcome).toBe("pass");
+  });
+
+  it("redacts absolute paths in command_exec rawOutput via the single redactForPersistence entry point (Finding #5)", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "git status" },
+      { output: "reading /etc/secret/config.json now" },
+      "call_raw_path",
+    );
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "command_exec") {
+      throw new Error("expected command_exec tool_output evidence");
+    }
+    expect(ev.rawOutput).toContain("[REDACTED_PATH]");
+    expect(ev.rawOutput).not.toContain("/etc/secret");
+  });
+
+  it("does not split a surrogate pair at the 100-code-unit snippet boundary (Finding #2)", () => {
+    // 99 ASCII chars + a non-BMP char (U+1D54F = \uD835\uDD4F) straddling index 99/100.
+    const nonBmp = String.fromCharCode(0xd835, 0xdd4f);
+    const rawOutput = "a".repeat(99) + nonBmp + "trailing content";
+    const ev = extractEvidenceFromTool("read", undefined, { output: rawOutput }, "call_surrogate");
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
+      throw new Error("expected file_content tool_output evidence");
+    }
+    const snippet = ev.rawOutputSnippet;
+    expect(snippet).toBeDefined();
+    expect(hasLoneSurrogate(snippet as string)).toBe(false);
   });
 });
