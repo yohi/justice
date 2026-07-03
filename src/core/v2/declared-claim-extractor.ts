@@ -18,7 +18,7 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
   const claims: DeclaredClaim[] = [];
   for (const [claimKind, pattern] of CLAIM_PATTERNS) {
     if (!pattern.test(text)) continue;
-    const outcome = PASS_PATTERNS.test(text) ? "pass" : FAIL_PATTERNS.test(text) ? "fail" : "unknown";
+    const outcome = FAIL_PATTERNS.test(text) ? "fail" : PASS_PATTERNS.test(text) ? "pass" : "unknown"; // fail dominates a mixed report (aligned with evidence-engine deriveOutcome)
     claims.push({ evidenceId: `${sourceId}-${claimKind}`, claimKind, outcome });
   }
   return claims;

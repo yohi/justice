@@ -49,4 +49,12 @@ describe("extractDeclaredClaims", () => {
     const claims = extractDeclaredClaims("src-sub", "the latest greatest release");
     expect(claims.find((c) => c.claimKind === "test")).toBeUndefined();
   });
+
+  it("resolves mixed pass+fail text to fail (fail dominates, aligned with evidence-engine)", () => {
+    const claims = extractDeclaredClaims("src-mix", "tests pass but build failed");
+    expect(claims.length).toBeGreaterThan(0);
+    for (const c of claims) {
+      expect(c.outcome).toBe("fail");
+    }
+  });
 });
