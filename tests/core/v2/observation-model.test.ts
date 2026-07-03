@@ -62,4 +62,28 @@ describe("ObservationRecord type", () => {
     };
     expect(r.kind).toBe("review_observed");
   });
+
+  it("tool_executed record with declared_claim evidence is assignable", () => {
+    const r: ObservationRecord = {
+      schemaVersion: 1,
+      sequence: 4,
+      timestamp: "2026-06-26T00:00:00.000Z",
+      agentId: "hephaestus",
+      sessionId: "ses_1",
+      writerId: "w-1",
+      recordType: "observation",
+      kind: "tool_executed",
+      toolName: "task",
+      callId: "call_2",
+      evidence: {
+        evidenceId: "ev-2",
+        kind: "test",
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "task_summary",
+        claim: { claimKind: "test", outcome: "pass" },
+      },
+    };
+    expect(r.evidence.sourceClass).toBe("declared_claim");
+  });
 });
