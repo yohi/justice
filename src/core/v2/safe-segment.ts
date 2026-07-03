@@ -1,5 +1,5 @@
 // src/core/v2/safe-segment.ts
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 
 export function encodeSafeSegment(segment: string): string {
   const hash = createHash("sha256").update(segment).digest("hex").slice(0, 8);

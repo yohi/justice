@@ -44,7 +44,7 @@ describe("encodeSafeSegment()", () => {
     const suffix = `__${h(longSeg)}`;
     expect(result.endsWith(suffix)).toBe(true);
     const safePart = result.slice(0, result.length - suffix.length);
-    expect(safePart.length).toBe(64);
+    expect(safePart).toHaveLength(64);
     expect(result).toBe(`${"a".repeat(64)}${suffix}`);
   });
 

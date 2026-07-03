@@ -18,6 +18,14 @@ const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp
   ["generic", /declared|summary|status/i],
 ];
 
+function deriveClaimOutcome(text: string): DeclaredClaim["outcome"] {
+  // FAIL is checked first so a mixed report ("tests pass, lint failed") resolves to "fail"
+  // (fail dominates, aligned with evidence-engine deriveOutcome).
+  if (FAIL_PATTERNS.test(text)) return "fail";
+  if (PASS_PATTERNS.test(text)) return "pass";
+  return "unknown";
+}
+
 export function extractDeclaredClaims(sourceId: string, text: string): DeclaredClaim[] {
   const claims: DeclaredClaim[] = [];
   for (const [claimKind, pattern] of CLAIM_PATTERNS) {
@@ -26,7 +34,7 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
     // it. A mixed report (e.g. "tests pass, lint failed") therefore marks ALL claims "fail" (fail
     // dominates, aligned with evidence-engine deriveOutcome). Intentional coarse signal; per-claim
     // outcome scoping (a detection window per keyword) is deferred (review #1).
-    const outcome = FAIL_PATTERNS.test(text) ? "fail" : PASS_PATTERNS.test(text) ? "pass" : "unknown";
+    const outcome = deriveClaimOutcome(text);
     claims.push({ evidenceId: `${sourceId}-${claimKind}`, claimKind, outcome });
   }
   return claims;

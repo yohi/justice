@@ -1,5 +1,5 @@
 // src/core/v2/hash.ts
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 
 /**
  * 与えられた文字列の SHA-256 ハッシュを計算し、プレフィックス "sha256:" を付与した文字列を返します。

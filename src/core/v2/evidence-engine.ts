@@ -52,6 +52,20 @@ function deriveOutcome(output: ToolOutput): "pass" | "fail" | "unknown" {
   return "unknown";
 }
 
+/**
+ * Derives the interpretation outcome+basis pair from a tool invocation. metadata.error dominates
+ * (fail / metadata_error); the `task` tool is never text-parsed (unknown / unparsed); everything
+ * else is derived from the output text (parsed_output).
+ */
+function deriveInterpretationFields(
+  toolName: string,
+  output: ToolOutput,
+): { readonly outcome: "pass" | "fail" | "unknown"; readonly basis: Interpretation["basis"] } {
+  if (output.metadata?.error) return { outcome: "fail", basis: "metadata_error" };
+  if (toolName === "task") return { outcome: "unknown", basis: "unparsed" };
+  return { outcome: deriveOutcome(output), basis: "parsed_output" };
+}
+
 export function extractEvidenceFromTool(
   toolName: string,
   args: { readonly command?: string } | undefined,
@@ -63,9 +77,10 @@ export function extractEvidenceFromTool(
   const observedId = callId; // Deterministic evidenceId from tool callId (FF-002/FF-003)
   const kind = toolName === "task" ? "generic" : mapToolNameToKind(toolName, args);
   const command = args?.command ? redactEvidenceCommand(args.command) : undefined;
+  const { outcome, basis } = deriveInterpretationFields(toolName, output);
   const interpretation: Interpretation = {
-    outcome: output.metadata?.error ? "fail" : toolName === "task" ? "unknown" : deriveOutcome(output),
-    basis: output.metadata?.error ? "metadata_error" : toolName === "task" ? "unparsed" : "parsed_output",
+    outcome,
+    basis,
     provenance: "derived",
     derivedFrom: [{ kind: "self", evidenceId: observedId }], // self-reference within the same record uses SelfEvidenceRef (kind: "self" + evidenceId)
   };
