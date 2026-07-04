@@ -54,8 +54,10 @@ export function sliceCodeUnitsSafe(text: string, maxLength: number): string {
   if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
   return text.slice(0, end);
 }
+const TRUNCATION_MARKER = "\n…[truncated]";
 
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return sliceCodeUnitsSafe(text, maxLength) + "\n…[truncated]";
+  const budget = Math.max(0, maxLength - TRUNCATION_MARKER.length);
+  return sliceCodeUnitsSafe(text, budget) + TRUNCATION_MARKER;
 }
