@@ -102,8 +102,8 @@ describe("redactForPersistence() truncation", () => {
     const longInput = "x".repeat(5000);
     const result = redactForPersistence(longInput);
     expect(result.endsWith("\n…[truncated]")).toBe(true);
-    // slice(0,4096) of "xxxx…" is 4096 x's, then the marker
-    expect(result.startsWith("x".repeat(4096))).toBe(true);
+    expect(result.startsWith("x".repeat(4083))).toBe(true);
+    expect(result.length).toBe(4096);
   });
 
   it("does not truncate output at or below 4096 chars", () => {
@@ -114,16 +114,17 @@ describe("redactForPersistence() truncation", () => {
   });
 
   it("does not split a surrogate pair at the truncation boundary", () => {
-    // Emoji "😀" (U+1F600) is a surrogate pair; place it so it straddles index 4096.
-    const input = "a".repeat(4095) + "😀" + "b".repeat(10);
+    // Emoji "😀" (U+1F600) is a surrogate pair; place it so the second half
+    // straddles index 4083 (the first code unit after the retained budget).
+    const input = "a".repeat(4082) + "😀" + "b".repeat(500);
     const result = redactForPersistence(input);
     const marker = "\n…[truncated]";
     const body = result.slice(0, result.length - marker.length);
     const lastCode = body.charCodeAt(body.length - 1);
     // The retained text must not end with a lone high surrogate (ill-formed UTF-16).
     expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
-    // Boundary correction drops the half-cut emoji, preserving the code-unit budget.
-    expect(body).toBe("a".repeat(4095));
+    // Boundary correction drops the half-cut emoji so the budget stays safe.
+    expect(body).toBe("a".repeat(4082));
     expect(result.endsWith(marker)).toBe(true);
   });
 });
@@ -161,6 +162,8 @@ describe("redactRawOutput() / redactMessageSnippet()", () => {
   });
 
   it("redactMessageSnippet redacts secret-shaped values in a snippet", () => {
-    expect(redactMessageSnippet("leaked sk-abcdefghijklmnopqrstuvwx")).toContain("[REDACTED_SECRET]");
+    expect(redactMessageSnippet("leaked sk-abcdefghijklmnopqrstuvwx")).toContain(
+      "[REDACTED_SECRET]",
+    );
   });
 });

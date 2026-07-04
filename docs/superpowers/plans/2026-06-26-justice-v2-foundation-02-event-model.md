@@ -72,13 +72,13 @@
   - `EvidenceRef = FullEvidenceRef | SelfEvidenceRef`.
   - `ShardId = { readonly agentId: string; readonly sessionId: string; readonly writerId: string }`.
 
-- [ ] **Step 1: 既存 `AgentId` 型を確認**
+- [x] **Step 1: 既存 `AgentId` 型を確認**
 
 ```bash
 grep -n "export type AgentId" src/core/types.ts
 ```
 
-- [ ] **Step 2: `ObservationAgentId` と `EvidenceRef` / `ShardId` 型を追加**
+- [x] **Step 2: `ObservationAgentId` と `EvidenceRef` / `ShardId` 型を追加**
 
 ```typescript
 // src/core/types.ts（既存 AgentId 近辺に追加）
@@ -107,7 +107,7 @@ export type SelfEvidenceRef = {
 };
 ```
 
-- [ ] **Step 3: `ObservationMessagePayload` を `src/core/v2/message-payload.ts` に実装（前倒し定義・D71）**
+- [x] **Step 3: `ObservationMessagePayload` を `src/core/v2/message-payload.ts` に実装（前倒し定義・D71）**
 
 ```typescript
 // src/core/v2/message-payload.ts
@@ -117,7 +117,7 @@ export type ObservationMessagePayload =
   | { readonly kind: "text_complete"; readonly sessionId: string; readonly messageID: string; readonly partID: string; readonly text: string };
 ```
 
-- [ ] **Step 3b: `ObservationRecord` union を実装**
+- [x] **Step 3b: `ObservationRecord` union を実装**
 
 ```typescript
 // src/core/v2/observation-model.ts
@@ -207,7 +207,7 @@ export type PersistedLogRecord = ObservationRecord | DecisionRecord;
 
 ```
 
-- [ ] **Step 3c: `hashString` 決定論的ユーティリティの実装（ISS-006）**
+- [x] **Step 3c: `hashString` 決定論的ユーティリティの実装（ISS-006）**
 
 ```typescript
 // src/core/v2/hash.ts
@@ -223,7 +223,7 @@ export function hashString(value: string): string {
 }
 ```
 
-- [ ] **Step 4: `DecisionRecord` 型を実装**
+- [x] **Step 4: `DecisionRecord` 型を実装**
 
 ```typescript
 // src/core/v2/decision-model.ts
@@ -247,7 +247,7 @@ export type PendingDecisionRecord = PendingEnvelope & DecisionPayload;
 export type DecisionRecord = PersistedEnvelope & DecisionPayload;
 ```
 
-- [ ] **Step 5: 型の unit test を記述**
+- [x] **Step 5: 型の unit test を記述**
 
 ```typescript
 // tests/core/v2/observation-model.test.ts
@@ -327,7 +327,7 @@ gt submit
   - `redactTokenUrls(text: string): string`
   - `encodeSafeSegment(segment: string): string`（always with sha256 prefix 8 suffix）
 
-- [ ] **Step 1: `SecretPatternDetector` に `redact(text)` を追加**
+- [x] **Step 1: `SecretPatternDetector` に `redact(text)` を追加**
 
 ```typescript
 // src/core/secret-pattern-detector.ts
@@ -344,7 +344,7 @@ export class SecretPatternDetector {
 }
 ```
 
-- [ ] **Step 2: v2 redaction 関数を追加**
+- [x] **Step 2: v2 redaction 関数を追加**
 
 ```typescript
 // src/core/v2/redaction.ts
@@ -393,7 +393,7 @@ function truncate(text: string, maxLength: number): string {
 }
 ```
 
-- [ ] **Step 3: safe-segment エンコーダを実装（D69/D73）**
+- [x] **Step 3: safe-segment エンコーダを実装（D69/D73）**
 
 ```typescript
 // src/core/v2/safe-segment.ts
@@ -455,7 +455,7 @@ gt submit
   - `classifyToolOutputClass(toolName, args): "command_exec" | "file_content"`.
   - `extractDeclaredClaims(text): DeclaredClaim[]` (from message text or task summary).
 
-- [ ] **Step 1: `Evidence` discriminated union を定義（Task 1.1 の stub を置き換え）**
+- [x] **Step 1: `Evidence` discriminated union を定義（Task 1.1 の stub を置き換え）**
 
 Task 1.1 で追加した `Evidence` stub を本 discriminated union に置き換える。
 
@@ -507,7 +507,7 @@ export type DeclaredClaimEvidence = {
 };
 ```
 
-- [ ] **Step 2: `toolOutputClass` 分類器を実装（D49/D52/D60）**
+- [x] **Step 2: `toolOutputClass` 分類器を実装（D49/D52/D60）**
 
 ```typescript
 // src/core/v2/tool-output-classifier.ts
@@ -562,7 +562,7 @@ export function classifyToolOutputClass(
 
 ```
 
-- [ ] **Step 3: Evidence engine を実装**
+- [x] **Step 3: Evidence engine を実装**
 
 ```typescript
 // src/core/v2/evidence-engine.ts
@@ -596,7 +596,7 @@ export function extractEvidenceFromTool(
 }
 ```
 
-- [ ] **Step 4: 自己申告 claim 抽出器を実装（D67）**
+- [x] **Step 4: 自己申告 claim 抽出器を実装（D67）**
 
 ```typescript
 // src/core/v2/declared-claim-extractor.ts
@@ -626,7 +626,7 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
 }
 ```
 
-- [ ] **Step 4b: `tool-output-classifier.test.ts` に品質検証 compound command ケースを追加**
+- [x] **Step 4b: `tool-output-classifier.test.ts` に品質検証 compound command ケースを追加**
 
 ```typescript
 // tests/core/v2/tool-output-classifier.test.ts

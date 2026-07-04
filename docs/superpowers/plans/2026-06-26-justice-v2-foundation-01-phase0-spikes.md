@@ -61,11 +61,11 @@
 - Consumes: ADR ratification status (`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`).
 - Produces: Execution safety verification.
 
-- [ ] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在し、正しい内容であることを確認する**
+- [x] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在し、正しい内容であることを確認する**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
   - 内容: `Status: APPROVED` などの承認証跡が記載されていることをテストで検証する（将来の再実行時に破綻するのを防ぐため、単体テスト内に具体的な PR 番号や個人名をハードコードすることは避ける）。
 
-- [ ] **Step 2: テストコード（tests/preflight-verification.test.ts）の実装**
+- [x] **Step 2: テストコード（tests/preflight-verification.test.ts）の実装**
 
 ```typescript
 import { readFileSync, existsSync } from "fs";
