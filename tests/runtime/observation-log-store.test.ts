@@ -24,7 +24,9 @@ function createMemFs(): { files: Map<string, string>; reader: FileReader; writer
       [...files.keys()].filter((k) => k.startsWith(prefix) && k.endsWith(".jsonl")),
     readFileStats: async (p: string) => {
       const c = files.get(p);
-      return c === undefined ? null : { size: c.length, mtimeMs: 0 };
+      // Recent mtime so shard rotation (age-based) does not spuriously fire here;
+      // these tests exercise append/readAll, not rotation (covered separately).
+      return c === undefined ? null : { size: c.length, mtimeMs: Date.now() };
     },
   };
   const writer: FileWriter = {
