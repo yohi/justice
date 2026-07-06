@@ -22,6 +22,11 @@ describe("isSafeWriterId()", () => {
     expect(isSafeWriterId("w-system")).toBe(false);
   });
 
+  it("rejects case-insensitive variants of the reserved w-system id", () => {
+    expect(isSafeWriterId("w-System")).toBe(false);
+    expect(isSafeWriterId("w-SYSTEM")).toBe(false);
+  });
+
   it("rejects ids without the w- prefix", () => {
     expect(isSafeWriterId("system")).toBe(false);
     expect(isSafeWriterId("x-1234")).toBe(false);
