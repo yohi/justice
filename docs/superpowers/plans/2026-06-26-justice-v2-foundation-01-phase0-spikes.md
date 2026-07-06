@@ -93,32 +93,46 @@ test("preflight verification: ADR ratification check", () => {
 });
 ```
 
-- [ ] **Step 2b: ADR 追認の手動 Preflight の確認**
-  - ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等の静的チェックは CI ジョブ内（`preflight-verification.test.ts` を通じた通常テスト実行）で検証する。
-  - PR がマージされているかどうかの動的ステータス確認は、マージ前の PR CI 自体を壊すのを防ぐため、開発者の手動 preflight または専用の post-merge ワークフローに分離し、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）には追加しない。
+- [x] **Step 2b: ADR 追認の確認（Pre-merge 判定基準と Post-merge 検証の分離）**
+  - **静的チェック（CI内で実施、pre-merge safe）:** ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等は `preflight-verification.test.ts` を通じた通常テスト実行で検証する（Step 1/2 参照）。マージ状態に依存しないため、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）内で安全に実行できる。
+  - **Pre-merge 判定基準（reviewDecision）:** `reviewDecision == "APPROVED"` は、マージ前でも判定可能な「承認済みか」のゲート条件であり、PR がマージされているかどうかとは独立した基準として扱う。
+  - **Post-merge 検証（state=MERGED）:** `state == "MERGED"` は定義上、マージが実際に完了した後でなければ真になり得ない事後確認である。マージ前の PR CI 自体を壊すのを防ぐため、この確認は通常の PR CI ワークフロー（`.github/workflows/ci.yml`）には追加せず、開発者の手動確認、または将来追加する専用の post-merge ワークフロー（現時点では未実装）に分離する。
+  - **[確認済 2026-07-06]** 手動確認結果:
+    - Pre-merge 判定基準: PR #116 (`feature/phase0-task0-preflight`) の `reviewDecision=APPROVED`（作成者 `@yohi` が自己マージ。`reviewDecision=APPROVED` は `coderabbitai` bot の `APPROVED` レビューに基づくものであり、`@yohi` 自身のレビューはすべて `COMMENTED` で、CODEOWNERS による人手承認は記録されていない）を `gh pr view 116 --json reviewDecision,reviews,author,mergedBy` で確認。
+    - Post-merge 検証: 同 PR の `state=MERGED` を確認。
+    - これに伴い ADR の追認証跡を誤記の PR #104（未マージ dependabot PR）から実在の PR #116 へ是正済み（詳細は ADR の「Evidence of Ratification」節を参照）。
   ```bash
-  # 手動 preflight または専用ワークフローでの確認コマンド例
-  gh pr view "$PR_NUMBER" --json reviewDecision,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'
+  # Pre-merge 判定基準の確認コマンド例（マージ前でも実行可能）
+  gh pr view "$PR_NUMBER" --json reviewDecision -q '.reviewDecision == "APPROVED"'
+
+  # Post-merge 検証コマンド例（マージ後にのみ真になる）
+  gh pr view "$PR_NUMBER" --json state -q '.state == "MERGED"'
   ```
 
-- [ ] **Step 3: テストの実行と検証**
+- [x] **Step 3: テストの実行と検証**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/preflight-verification.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+  - **[確認済 2026-07-06]** PR #116 本文に「検証（Devcontainer 内で実施）: `bun run test tests/preflight-verification.test.ts` → 1 passed ✓」と明記されていることを確認。
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/preflight-verification.test.ts
 git commit -m "chore: add preflight verification for ratified ADR"
 ```
 
-- [ ] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
+  - **[確認済 2026-07-06]** PR #116 のコミット履歴で `tests/preflight-verification.test.ts` に対する複数コミット（例: `test(preflight): ADR 追認状態の静的検証テストを追加`）が存在することを確認。コミットメッセージは上記サンプルと異なるが、Step の意図（テストのコミット）は達成済み。
+
+- [x] **Step 5: Phase 0 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
 ```
+
+  - **[確認済 2026-07-06]** PR #116 自体が本 Step の Draft PR に該当し、作成・マージ済みであることを確認。
 
 **派生元:** `feature/phase0-v2-baseline__base`（Base から派生）。
 
