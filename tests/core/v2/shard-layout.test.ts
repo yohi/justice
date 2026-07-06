@@ -55,8 +55,13 @@ describe("toPhysicalPath()", () => {
   });
 
   it("throws when writerId is unsafe", () => {
-    const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "w-system" };
+    const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "../evil" };
     expect(() => toPhysicalPath(bad)).toThrow(/unsafe writerId/);
+  });
+
+  it("throws when agentId is unsafe", () => {
+    const bad = { agentId: "evil", sessionId: "s", writerId: "w-x" } as unknown as ShardId;
+    expect(() => toPhysicalPath(bad)).toThrow(/unsafe agentId/);
   });
 });
 
@@ -70,5 +75,16 @@ describe("toArchivePath()", () => {
   it("throws when writerId is unsafe", () => {
     const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "../evil" };
     expect(() => toArchivePath(bad, "t")).toThrow(/unsafe writerId/);
+  });
+
+  it("throws when timestamp is unsafe (contains non-alphanumeric)", () => {
+    expect(() => toArchivePath(shard, "2026-07-06")).toThrow(/unsafe timestamp/);
+    expect(() => toArchivePath(shard, "../evil")).toThrow(/unsafe timestamp/);
+    expect(() => toArchivePath(shard, "t@t")).toThrow(/unsafe timestamp/);
+  });
+
+  it("throws when agentId is unsafe", () => {
+    const bad = { agentId: "evil", sessionId: "s", writerId: "w-x" } as unknown as ShardId;
+    expect(() => toArchivePath(bad, "20260706T000000Z")).toThrow(/unsafe agentId/);
   });
 });
