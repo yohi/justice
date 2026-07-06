@@ -93,9 +93,10 @@ test("preflight verification: ADR ratification check", () => {
 });
 ```
 
-- [ ] **Step 2b: ADR 追認の手動 Preflight の確認**
+- [x] **Step 2b: ADR 追認の手動 Preflight の確認**
   - ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等の静的チェックは CI ジョブ内（`preflight-verification.test.ts` を通じた通常テスト実行）で検証する。
   - PR がマージされているかどうかの動的ステータス確認は、マージ前の PR CI 自体を壊すのを防ぐため、開発者の手動 preflight または専用の post-merge ワークフローに分離し、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）には追加しない。
+  - **[確認済 2026-07-06]** 手動 preflight 実行結果: PR #116 (`feature/phase0-task0-preflight`) が `state=MERGED` / `reviewDecision=APPROVED`（CODEOWNER `@yohi` がマージ）であることを `gh pr view 116` で確認。これに伴い ADR の追認証跡を誤記の PR #104（未マージ dependabot PR）から実在の PR #116 へ是正済み。
   ```bash
   # 手動 preflight または専用ワークフローでの確認コマンド例
   gh pr view "$PR_NUMBER" --json reviewDecision,state -q '.state == "MERGED" and .reviewDecision == "APPROVED"'

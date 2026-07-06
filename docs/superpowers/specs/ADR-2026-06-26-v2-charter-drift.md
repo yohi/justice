@@ -2,7 +2,7 @@
 
 * **Status:** APPROVED
 * **Date:** 2026-06-26
-* **Decided By:** CODEOWNERS (Ratified via PR #104)
+* **Decided By:** CODEOWNERS (Ratified via PR #116)
 
 ## Context
 During the spike Phase 0 and detail design of Justice V2, several deviations from the original Charter requirements were identified:
@@ -20,6 +20,6 @@ We modify and ratify the Charter with the following adjustments:
 - Restrict gate evaluation authority strictly to `observed` and `derived` provenance. Treat `declared` as non-authoritative for gate evaluation, but still allow it for L0 advisory outputs and other non-gating display surfaces.
 
 ## Evidence of Ratification
-* **PR:** #104
+* **PR:** #116 (`feature/phase0-task0-preflight`, merged 2026-07-02)
 * **Approvers:** `@yohi` (CODEOWNERS)
 * **Status:** APPROVED
