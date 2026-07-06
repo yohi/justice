@@ -58,4 +58,12 @@ describe("allocateWriterId()", () => {
     await allocateWriterId(reader, shard);
     expect(seen[0]).toMatch(/^\.justice\/events\/sisyphus\/.+\/w-.+\.jsonl$/);
   });
+
+  it("throws when max attempts exceeded", async () => {
+    const fileExists = vi.fn(async (_path: string) => true); // always collide
+    const reader = makeReader(fileExists);
+    await expect(allocateWriterId(reader, shard)).rejects.toThrow(
+      /failed to allocate a unique writerId after 100 attempts/,
+    );
+  });
 });

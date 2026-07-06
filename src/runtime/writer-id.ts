@@ -11,10 +11,15 @@ export async function allocateWriterId(
   fileReader: FileReader,
   shardWithoutWriterId: Omit<ShardId, "writerId">,
 ): Promise<string> {
-  const candidate = generateWriterId();
-  const physicalPath = toPhysicalPath({ ...shardWithoutWriterId, writerId: candidate });
-  if (await fileReader.fileExists(physicalPath)) {
-    return await allocateWriterId(fileReader, shardWithoutWriterId);
+  const MAX_ATTEMPTS = 100;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const candidate = generateWriterId();
+    const physicalPath = toPhysicalPath({ ...shardWithoutWriterId, writerId: candidate });
+    if (!(await fileReader.fileExists(physicalPath))) {
+      return candidate;
+    }
   }
-  return candidate;
+  throw new Error(
+    `allocateWriterId: failed to allocate a unique writerId after ${MAX_ATTEMPTS} attempts`,
+  );
 }
