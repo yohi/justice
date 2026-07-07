@@ -149,6 +149,11 @@ export function validateShardSequences(records: readonly PersistedLogRecord[]): 
     if (uniqueSeqs.size !== seqs.length) {
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
+    // NOTE: `seqs` is sorted ascending above, and the duplicate check just passed,
+    // so this array is strictly increasing by construction — the `seq < prev`
+    // branch below can never trigger today. It is kept as a defensive
+    // post-condition in case a future refactor changes how `seqs` is populated
+    // before this point (e.g. removing the sort or reordering the dedup check).
     let prev: number | undefined;
     for (const seq of seqs) {
       if (prev !== undefined && seq < prev) {
