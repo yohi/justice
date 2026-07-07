@@ -24,9 +24,9 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       throw new Error("Invalid message record");
     }
   } else if (kind === "skill_invoked") {
-    if (typeof r.skillName !== "string" || typeof r.source !== "string") {
-      throw new Error("Invalid skill_invoked record");
-    }
+    // SkillInvokedRecord is currently a stub (only `kind`, refined in Task 4.3).
+    // No additional fields exist on the type yet, so none are validated here —
+    // update this branch in lockstep when the type is finalized.
   } else if (kind === "review_observed") {
     if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
       throw new Error("Invalid review_observed record");
@@ -43,13 +43,13 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       }
     }
   } else if (kind === "session_error") {
-    if (!r.sessionError) {
-      throw new Error("Invalid session_error record");
-    }
+    // SessionErrorRecord is currently a stub (only `kind`, refined in Task 4.4).
+    // No additional fields exist on the type yet, so none are validated here —
+    // update this branch in lockstep when the type is finalized.
   } else if (kind === "reflection") {
-    if (!r.planRef) {
-      throw new Error("Invalid reflection record");
-    }
+    // ReflectionRecord is currently a stub (only `kind`, refined in Task 4.4).
+    // No additional fields exist on the type yet, so none are validated here —
+    // update this branch in lockstep when the type is finalized.
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);
   }
