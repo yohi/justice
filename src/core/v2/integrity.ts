@@ -11,6 +11,23 @@ export function shardKeyOf(
   return `${event.agentId}:${event.sessionId}:${event.writerId}`;
 }
 
+/**
+ * Maximum `sequence` per shard key. The maximum is order-independent, so callers
+ * may pass raw or ordered events. Shared by `project()` and the cache validator
+ * so the "max sequence per shard" rule lives in exactly one place.
+ */
+export function computeMaxSequenceByShard(
+  events: readonly PersistedLogRecord[],
+): Map<string, number> {
+  const maxByShard = new Map<string, number>();
+  for (const event of events) {
+    const shardKey = shardKeyOf(event);
+    const current = maxByShard.get(shardKey) ?? -1;
+    if (event.sequence > current) maxByShard.set(shardKey, event.sequence);
+  }
+  return maxByShard;
+}
+
 function compareForMerge(a: PersistedLogRecord, b: PersistedLogRecord): number {
   // Unparseable timestamps yield NaN; NaN comparisons are all false, which would
   // make the k-way merge fall back to stream iteration (input) order and break
@@ -25,6 +42,69 @@ function compareForMerge(a: PersistedLogRecord, b: PersistedLogRecord): number {
   if (shardA !== shardB) return shardA < shardB ? -1 : 1;
   return a.sequence - b.sequence;
 }
+
+type MergeCursor = {
+  readonly record: PersistedLogRecord;
+  readonly stream: readonly PersistedLogRecord[];
+  readonly next: number;
+};
+
+/**
+ * Binary min-heap of shard-stream heads keyed by `compareForMerge`. Distinct
+ * streams carry distinct shardKeys, so `compareForMerge` never ties between two
+ * heap entries: pop order is a total order — deterministic and identical to the
+ * previous linear-scan merge — at O(total × log k) with no Array.shift cost.
+ */
+/* eslint-disable security/detect-object-injection --
+ * indices below are loop-bounded heap positions from integer arithmetic
+ * (parent/child navigation), never external input; the rule is a false positive. */
+class MergeHeap {
+  private readonly items: MergeCursor[] = [];
+
+  push(item: MergeCursor): void {
+    const items = this.items;
+    items.push(item);
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (compareForMerge(items[i]!.record, items[parent]!.record) >= 0) break;
+      [items[i], items[parent]] = [items[parent]!, items[i]!];
+      i = parent;
+    }
+  }
+
+  pop(): MergeCursor | undefined {
+    const items = this.items;
+    const top = items[0];
+    if (top === undefined) return undefined;
+    const last = items.pop()!;
+    if (items.length === 0) return top;
+    items[0] = last;
+    let i = 0;
+    for (;;) {
+      const left = i * 2 + 1;
+      const right = left + 1;
+      let smallest = i;
+      if (
+        left < items.length &&
+        compareForMerge(items[left]!.record, items[smallest]!.record) < 0
+      ) {
+        smallest = left;
+      }
+      if (
+        right < items.length &&
+        compareForMerge(items[right]!.record, items[smallest]!.record) < 0
+      ) {
+        smallest = right;
+      }
+      if (smallest === i) break;
+      [items[i], items[smallest]] = [items[smallest]!, items[i]!];
+      i = smallest;
+    }
+    return top;
+  }
+}
+/* eslint-enable security/detect-object-injection */
 
 /**
  * Deterministic 2-stage ordering (§6.3 / D27 / D18 / D39):
@@ -51,25 +131,19 @@ export function orderEventsForProjection(
     [...stream].sort((a, b) => a.sequence - b.sequence),
   );
 
+  const heap = new MergeHeap();
+  for (const stream of streams) {
+    const head = stream.at(0);
+    if (head !== undefined) heap.push({ record: head, stream, next: 1 });
+  }
+
   const sorted: PersistedLogRecord[] = [];
-  const total = streams.reduce((n, s) => n + s.length, 0);
-
-  while (sorted.length < total) {
-    let bestStream: PersistedLogRecord[] | null = null;
-    let bestVal: PersistedLogRecord | null = null;
-
-    for (const stream of streams) {
-      const head = stream[0];
-      if (head === undefined) continue;
-      if (bestVal === null || compareForMerge(head, bestVal) < 0) {
-        bestStream = stream;
-        bestVal = head;
-      }
+  for (let popped = heap.pop(); popped !== undefined; popped = heap.pop()) {
+    sorted.push(popped.record);
+    const nextHead = popped.stream.at(popped.next);
+    if (nextHead !== undefined) {
+      heap.push({ record: nextHead, stream: popped.stream, next: popped.next + 1 });
     }
-
-    if (bestStream === null || bestVal === null) break;
-    bestStream.shift();
-    sorted.push(bestVal);
   }
 
   return sorted;

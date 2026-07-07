@@ -6,48 +6,14 @@ import {
 } from "../../src/runtime/state-projection-cache";
 import { project } from "../../src/core/v2/state-projection";
 import type { ProjectedState } from "../../src/core/v2/state-projection";
-import type { FileReader, FileWriter } from "../../src/core/types";
+import { createMemFs } from "../helpers/mock-file-system";
 import type { ObservationRecord } from "../../src/core/v2/observation-model";
-
-function createMemFs(): { files: Map<string, string>; reader: FileReader; writer: FileWriter } {
-  const files = new Map<string, string>();
-  const reader: FileReader = {
-    readFile: async (p) => {
-      const c = files.get(p);
-      if (c === undefined) throw new Error(`ENOENT: ${p}`);
-      return c;
-    },
-    fileExists: async (p) => files.has(p),
-    listFiles: async (prefix) => [...files.keys()].filter((k) => k.startsWith(prefix)),
-    readFileStats: async (p) => {
-      const c = files.get(p);
-      return c === undefined ? null : { size: c.length, mtimeMs: 0 };
-    },
-  };
-  const writer: FileWriter = {
-    writeFile: async (p, content) => {
-      files.set(p, content);
-    },
-    rename: async (from, to) => {
-      const c = files.get(from);
-      if (c === undefined) throw new Error(`rename: missing ${from}`);
-      files.set(to, c);
-      files.delete(from);
-    },
-    mkdir: async () => {},
-    rmdir: async () => {},
-    deleteFile: async (p) => {
-      files.delete(p);
-    },
-  };
-  return { files, reader, writer };
-}
 
 function toolEvent(seq: number, taskId: string, writerId = "w1"): ObservationRecord {
   return {
     schemaVersion: 1,
     sequence: seq,
-    timestamp: `2026-07-06T00:00:0${seq}Z`,
+    timestamp: new Date(Date.UTC(2026, 6, 6, 0, 0, seq)).toISOString(),
     agentId: "atlas",
     sessionId: "s1",
     writerId,
@@ -122,11 +88,21 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     });
   });
 
-  it("reports mismatch_seq when the shard set differs", () => {
+  it("reports stale_append when a new writer shard appears in the event log", () => {
     const events = [toolEvent(1, "task-1", "w1")];
     const state = project(events, REBUILT_AT);
     const withExtraShard = [...events, toolEvent(1, "task-1", "w2")];
     expect(validateProjectionCacheAgainstEvents(state, withExtraShard)).toEqual({
+      valid: false,
+      reason: "stale_append",
+    });
+  });
+
+  it("reports mismatch_seq when the cache references more shards than the event log", () => {
+    const cacheEvents = [toolEvent(1, "task-1", "w1"), toolEvent(1, "task-1", "w2")];
+    const state = project(cacheEvents, REBUILT_AT);
+    const fewerShards = [toolEvent(1, "task-1", "w1")];
+    expect(validateProjectionCacheAgainstEvents(state, fewerShards)).toEqual({
       valid: false,
       reason: "mismatch_seq",
     });

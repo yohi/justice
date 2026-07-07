@@ -78,13 +78,42 @@ describe("validateRecordSchema()", () => {
 
   it("accepts valid observation records for each kind", () => {
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "tool_executed", toolName: "bash", callId: "c1", evidence: { evidenceId: "e1" } }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
     ).not.toThrow();
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "message", role: "assistant", textHash: "h" }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+      }),
     ).not.toThrow();
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "skill_invoked", skillName: "git-master", source: "message" }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "skill_invoked",
+        skillName: "git-master",
+        source: "message",
+      }),
     ).not.toThrow();
     expect(() =>
       validateRecordSchema({
@@ -92,9 +121,169 @@ describe("validateRecordSchema()", () => {
         recordType: "observation",
         kind: "review_observed",
         reviewScope: "src/",
-        items: [{ itemKey: "k", evidenceId: "e", severity: "major", status: "open" }],
+        items: [
+          {
+            itemKey: "k",
+            evidenceId: "e",
+            severity: "major",
+            summary: "s",
+            location: "src/foo.ts:1",
+            status: "open",
+          },
+        ],
       }),
     ).not.toThrow();
+  });
+
+  it("accepts tool_executed with CommandExecEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts tool_executed with FileContentEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "read",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "generic",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "file_content",
+          rawOutputHash: "deadbeef",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts tool_executed with DeclaredClaimEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "message",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "test",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "tests", outcome: "pass" },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects tool_executed with missing evidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with non-object evidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: "not-an-object",
+      }),
+    ).toThrow(/tool_executed/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: 42,
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with evidence missing discriminant fields", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: { evidenceId: "e1" },
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with an unknown sourceClass discriminant", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "bogus",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with an unknown toolOutputClass discriminant", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "bogus",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).toThrow(/tool_executed/);
   });
 
   it("accepts a valid decision record", () => {
@@ -111,16 +300,139 @@ describe("validateRecordSchema()", () => {
     ).not.toThrow();
   });
 
+  it("accepts a decision record with valid evidenceRefs", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [
+          {
+            ruleId: "r1",
+            verdict: "PASS",
+            evidenceRefs: [
+              {
+                agentId: "sisyphus",
+                sessionId: "s",
+                writerId: "w-1",
+                sequence: 0,
+                evidenceId: "e1",
+              },
+            ],
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a decision evidenceRef with a non-finite (NaN) sequence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [
+          {
+            ruleId: "r1",
+            verdict: "PASS",
+            evidenceRefs: [
+              {
+                agentId: "sisyphus",
+                sessionId: "s",
+                writerId: "w-1",
+                sequence: NaN,
+                evidenceId: "e1",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/evidenceRef/);
+  });
+
   it("rejects non-objects and bad envelope fields", () => {
     expect(() => validateRecordSchema(null)).toThrow(/not an object/);
-    expect(() => validateRecordSchema({ ...base, schemaVersion: 2, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/schemaVersion/);
-    expect(() => validateRecordSchema({ ...base, sequence: -1, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/sequence/);
-    expect(() => validateRecordSchema({ ...base, writerId: 5, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/shard identifier/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        schemaVersion: 2,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/schemaVersion/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        sequence: -1,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/sequence/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        writerId: 5,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/shard identifier/);
+  });
+
+  it("rejects a non-finite (NaN) sequence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        sequence: NaN,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/sequence/);
+  });
+
+  it("rejects a message record missing messageID or finalized", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+      }),
+    ).toThrow(/message record/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+      }),
+    ).toThrow(/message record/);
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {
-    expect(() => validateRecordSchema({ ...base, recordType: "bogus" })).toThrow(/unknown recordType/);
-    expect(() => validateRecordSchema({ ...base, recordType: "observation", kind: "bogus" })).toThrow(/unknown observation kind/);
+    expect(() => validateRecordSchema({ ...base, recordType: "bogus" })).toThrow(
+      /unknown recordType/,
+    );
+    expect(() =>
+      validateRecordSchema({ ...base, recordType: "observation", kind: "bogus" }),
+    ).toThrow(/unknown observation kind/);
   });
 
   it("rejects review_observed items with invalid severity/status", () => {
@@ -131,6 +443,35 @@ describe("validateRecordSchema()", () => {
         kind: "review_observed",
         reviewScope: "src/",
         items: [{ itemKey: "k", evidenceId: "e", severity: "HIGH", status: "open" }],
+      }),
+    ).toThrow(/review_observed item/);
+  });
+
+  it("rejects review_observed items missing summary or location", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "review_observed",
+        reviewScope: "src/",
+        items: [
+          {
+            itemKey: "k",
+            evidenceId: "e",
+            severity: "major",
+            location: "src/foo.ts:1",
+            status: "open",
+          },
+        ],
+      }),
+    ).toThrow(/review_observed item/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "review_observed",
+        reviewScope: "src/",
+        items: [{ itemKey: "k", evidenceId: "e", severity: "major", summary: "s", status: "open" }],
       }),
     ).toThrow(/review_observed item/);
   });
@@ -159,6 +500,14 @@ describe("validateShardSequences()", () => {
   it("throws on duplicate sequence within a shard", () => {
     expect(() => validateShardSequences([mk(1), mk(2), mk(2)])).toThrow(/duplicate sequence/);
   });
+
+  it("keeps shards distinct when identifier fields contain colons (no false duplicate)", () => {
+    // Two logically distinct shards whose `agentId:sessionId:writerId` colon-join
+    // collides to the same string, but which must remain separate shards.
+    const shardA: PersistedLogRecord = { ...mk(1), sessionId: "a:b", writerId: "c" };
+    const shardB: PersistedLogRecord = { ...mk(1), sessionId: "a", writerId: "b:c" };
+    expect(() => validateShardSequences([shardA, shardB])).not.toThrow();
+  });
 });
 
 describe("ObservationLogStore", () => {
@@ -166,7 +515,11 @@ describe("ObservationLogStore", () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
 
-    const seqs = [await store.append(shard, msgRecord()), await store.append(shard, msgRecord()), await store.append(shard, msgRecord())];
+    const seqs = [
+      await store.append(shard, msgRecord()),
+      await store.append(shard, msgRecord()),
+      await store.append(shard, msgRecord()),
+    ];
     expect(seqs).toEqual([1, 2, 3]);
 
     const all = await store.readAll();
@@ -201,5 +554,12 @@ describe("ObservationLogStore", () => {
     const store = new ObservationLogStore(writer, reader, "w-1");
     const next = await store.append(shard, msgRecord());
     expect(next).toBe(6);
+  });
+
+  it("rejects append when shardId.writerId does not match the store writerId", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const mismatched: ShardId = { agentId: "sisyphus", sessionId: "ses-1", writerId: "w-2" };
+    await expect(store.append(mismatched, msgRecord())).rejects.toThrow(/writerId/);
   });
 });

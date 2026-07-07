@@ -1,7 +1,12 @@
 // src/core/v2/state-projection.ts
 import type { FullEvidenceRef } from "../types";
-import { computeSourceHash, orderEventsForProjection, shardKeyOf } from "./integrity";
+import {
+  computeMaxSequenceByShard,
+  computeSourceHash,
+  orderEventsForProjection,
+} from "./integrity";
 import type { Evidence, PersistedLogRecord } from "./observation-model";
+import type { Verdict } from "./decision-model";
 
 export type ProjectedEvidence = {
   readonly evidence: Evidence;
@@ -27,9 +32,12 @@ export type ReviewSummary = ScopeReviewSummary & {
   readonly byScope: ReadonlyMap<string, ScopeReviewSummary>;
 };
 
+export type TaskStatus = "open" | Verdict;
+export type TaskVerdict = "NONE" | Verdict;
+
 export type ProjectedTask = {
-  readonly status: string;
-  readonly lastVerdict: string;
+  readonly status: TaskStatus;
+  readonly lastVerdict: TaskVerdict;
   readonly evidence: readonly ProjectedEvidence[];
   readonly observedReviewScopes: readonly string[];
 };
@@ -58,8 +66,8 @@ type MutableScopeSummary = {
 };
 
 type MutableTask = {
-  status: string;
-  lastVerdict: string;
+  status: TaskStatus;
+  lastVerdict: TaskVerdict;
   evidence: ProjectedEvidence[];
   observedReviewScopes: string[];
 };
@@ -138,20 +146,13 @@ function foldReviewSummary(sorted: readonly PersistedLogRecord[]): ReviewSummary
  * Pure deterministic fold from an event log to `ProjectedState` (§6.3).
  * Ordering is delegated to `orderEventsForProjection` so replays are stable.
  */
-export function project(
-  events: readonly PersistedLogRecord[],
-  rebuiltAt: string,
-): ProjectedState {
+export function project(events: readonly PersistedLogRecord[], rebuiltAt: string): ProjectedState {
   const sorted = orderEventsForProjection(events);
 
-  const maxSequenceByShard = new Map<string, number>();
+  const maxSequenceByShard = computeMaxSequenceByShard(sorted);
   const tasks = new Map<string, MutableTask>();
 
   for (const event of sorted) {
-    const shardKey = shardKeyOf(event);
-    const currentMax = maxSequenceByShard.get(shardKey) ?? -1;
-    if (event.sequence > currentMax) maxSequenceByShard.set(shardKey, event.sequence);
-
     const baseRef = {
       agentId: event.agentId,
       sessionId: event.sessionId,

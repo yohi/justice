@@ -1,7 +1,7 @@
 // tests/core/v2/shard-layout.test.ts
 import { describe, expect, it } from "vitest";
 import { encodeSafeSegment } from "../../../src/core/v2/safe-segment";
-import { toArchivePath, toPhysicalPath } from "../../../src/core/v2/shard-layout";
+import { fromPhysicalPath, toArchivePath, toPhysicalPath } from "../../../src/core/v2/shard-layout";
 import { isSafeWriterId } from "../../../src/core/v2/writer-id-validation";
 import type { ShardId } from "../../../src/core/types";
 
@@ -20,6 +20,11 @@ describe("isSafeWriterId()", () => {
 
   it("rejects the reserved w-system id", () => {
     expect(isSafeWriterId("w-system")).toBe(false);
+  });
+
+  it("rejects case-insensitive variants of the reserved w-system id", () => {
+    expect(isSafeWriterId("w-System")).toBe(false);
+    expect(isSafeWriterId("w-SYSTEM")).toBe(false);
   });
 
   it("rejects ids without the w- prefix", () => {
@@ -55,8 +60,13 @@ describe("toPhysicalPath()", () => {
   });
 
   it("throws when writerId is unsafe", () => {
-    const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "w-system" };
+    const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "../evil" };
     expect(() => toPhysicalPath(bad)).toThrow(/unsafe writerId/);
+  });
+
+  it("throws when agentId is unsafe", () => {
+    const bad = { agentId: "evil", sessionId: "s", writerId: "w-x" } as unknown as ShardId;
+    expect(() => toPhysicalPath(bad)).toThrow(/unsafe agentId/);
   });
 });
 
@@ -70,5 +80,46 @@ describe("toArchivePath()", () => {
   it("throws when writerId is unsafe", () => {
     const bad: ShardId = { agentId: "sisyphus", sessionId: "s", writerId: "../evil" };
     expect(() => toArchivePath(bad, "t")).toThrow(/unsafe writerId/);
+  });
+
+  it("throws when timestamp is unsafe (contains non-alphanumeric)", () => {
+    expect(() => toArchivePath(shard, "2026-07-06")).toThrow(/unsafe timestamp/);
+    expect(() => toArchivePath(shard, "../evil")).toThrow(/unsafe timestamp/);
+    expect(() => toArchivePath(shard, "t@t")).toThrow(/unsafe timestamp/);
+  });
+
+  it("throws when agentId is unsafe", () => {
+    const bad = { agentId: "evil", sessionId: "s", writerId: "w-x" } as unknown as ShardId;
+    expect(() => toArchivePath(bad, "20260706T000000Z")).toThrow(/unsafe agentId/);
+  });
+});
+
+describe("fromPhysicalPath()", () => {
+  it("round-trips the identity produced by toPhysicalPath", () => {
+    expect(fromPhysicalPath(toPhysicalPath(shard))).toEqual({
+      agentId: "sisyphus",
+      safeSessionId: encodeSafeSegment("ses_abc/123"),
+      writerId: "w-1234-5678",
+    });
+  });
+
+  it("returns null for paths with too few segments", () => {
+    expect(fromPhysicalPath(".justice/events/sisyphus/w-1.jsonl")).toBeNull();
+    expect(fromPhysicalPath("w-1.jsonl")).toBeNull();
+    expect(fromPhysicalPath("")).toBeNull();
+  });
+
+  it("returns null for paths with too many segments", () => {
+    expect(fromPhysicalPath(".justice/events/sisyphus/enc/extra/w-1.jsonl")).toBeNull();
+  });
+
+  it("returns null when the root prefix does not match", () => {
+    expect(fromPhysicalPath(".justice/archive/sisyphus/enc/w-1.jsonl")).toBeNull();
+    expect(fromPhysicalPath("other/events/sisyphus/enc/w-1.jsonl")).toBeNull();
+  });
+
+  it("returns null when the filename is not a .jsonl file", () => {
+    expect(fromPhysicalPath(".justice/events/sisyphus/enc/w-1.txt")).toBeNull();
+    expect(fromPhysicalPath(".justice/events/sisyphus/enc/w-1")).toBeNull();
   });
 });

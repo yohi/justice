@@ -1,6 +1,10 @@
 // src/runtime/state-projection-cache.ts
 import type { FileReader, FileWriter } from "../core/types";
-import { computeSourceHash, orderEventsForProjection, shardKeyOf } from "../core/v2/integrity";
+import {
+  computeMaxSequenceByShard,
+  computeSourceHash,
+  orderEventsForProjection,
+} from "../core/v2/integrity";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
 import type { ProjectedState } from "../core/v2/state-projection";
 import {
@@ -52,11 +56,33 @@ export class StateProjectionCache {
   }
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isValidCacheStructure(parsed: unknown): boolean {
-  if (!parsed || typeof parsed !== "object") return false;
-  const integrity = (parsed as Record<string, unknown>).integrity;
+  if (!isPlainRecord(parsed)) return false;
+  const integrity = parsed.integrity;
   if (!integrity || typeof integrity !== "object") return false;
-  return "maxSequenceByShard" in integrity;
+  if (!("maxSequenceByShard" in integrity)) return false;
+  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
+  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
+  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
+  // both to be plain objects. The `reviewSummary` array fields are copied by
+  // reference, so a partial `reviewSummary` would leave them `undefined` and
+  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
+  // rebuilds instead.
+  if (!isPlainRecord(parsed.tasks)) return false;
+  const reviewSummary = parsed.reviewSummary;
+  if (!isPlainRecord(reviewSummary)) return false;
+  if (!isPlainRecord(reviewSummary.byScope)) return false;
+  return (
+    Array.isArray(reviewSummary.critical) &&
+    Array.isArray(reviewSummary.major) &&
+    Array.isArray(reviewSummary.minor) &&
+    Array.isArray(reviewSummary.resolved) &&
+    Array.isArray(reviewSummary.open)
+  );
 }
 
 export type CacheValidationReason = "valid" | "stale_append" | "mismatch_seq" | "structural";
@@ -84,15 +110,17 @@ export function validateProjectionCacheAgainstEvents(
     return { valid: false, reason: "structural" };
   }
 
-  const currentMaxSeq = new Map<string, number>();
-  for (const e of events) {
-    const shardKey = shardKeyOf(e);
-    const cur = currentMaxSeq.get(shardKey) ?? -1;
-    if (e.sequence > cur) currentMaxSeq.set(shardKey, e.sequence);
-  }
+  const currentMaxSeq = computeMaxSequenceByShard(events);
 
   const cachedMap = cacheState.integrity.maxSequenceByShard;
-  if (cachedMap.size !== currentMaxSeq.size) {
+  if (currentMaxSeq.size > cachedMap.size) {
+    // A new writer (shard) appeared in the event log. Like new records appended
+    // to a known shard, this is a normal append -> silent rebuild, not a warning.
+    return { valid: false, reason: "stale_append" };
+  }
+  if (currentMaxSeq.size < cachedMap.size) {
+    // The cache references more shards than the event log holds: a genuine
+    // mismatch (events do not disappear under normal append-only operation).
     return { valid: false, reason: "mismatch_seq" };
   }
   for (const [shardKey, cachedSeq] of cachedMap.entries()) {
