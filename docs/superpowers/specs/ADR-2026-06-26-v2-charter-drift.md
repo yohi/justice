@@ -2,7 +2,7 @@
 
 * **Status:** APPROVED
 * **Date:** 2026-06-26
-* **Decided By:** CODEOWNERS (Ratified via PR #104)
+* **Decided By:** `@yohi` (Repository Owner; self-merged — see "Evidence of Ratification" below for the approval-trail caveat)
 
 ## Context
 During the spike Phase 0 and detail design of Justice V2, several deviations from the original Charter requirements were identified:
@@ -20,6 +20,7 @@ We modify and ratify the Charter with the following adjustments:
 - Restrict gate evaluation authority strictly to `observed` and `derived` provenance. Treat `declared` as non-authoritative for gate evaluation, but still allow it for L0 advisory outputs and other non-gating display surfaces.
 
 ## Evidence of Ratification
-* **PR:** #104
-* **Approvers:** `@yohi` (CODEOWNERS)
+* **PR:** #116 (`feature/phase0-task0-preflight`, merged 2026-07-02)
+* **Approvers:** `@yohi` (Author, self-merged)
+* **Approval Trail Note:** GitHub's `reviewDecision=APPROVED` on PR #116 was driven solely by an automated bot review (`coderabbitai`, `state=APPROVED`, 2026-07-01). `@yohi`'s own review submissions were all `state=COMMENTED` — no human `APPROVED` review was recorded. No CODEOWNERS branch-protection rule required a human sign-off on this repository at merge time, so the self-merge proceeded without manual CODEOWNERS approval. Verified via `gh pr view 116 --json reviewDecision,reviews,author,mergedBy` (2026-07-06).
 * **Status:** APPROVED
