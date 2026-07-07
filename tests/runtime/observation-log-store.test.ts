@@ -24,8 +24,9 @@ function createMemFs(): { files: Map<string, string>; reader: FileReader; writer
       [...files.keys()].filter((k) => k.startsWith(prefix) && k.endsWith(".jsonl")),
     readFileStats: async (p: string) => {
       const c = files.get(p);
-      // Recent mtime so shard rotation (age-based) does not spuriously fire here;
-      // these tests exercise append/readAll, not rotation (covered separately).
+      // `size` (small here) governs size-based rotation. `mtimeMs` is required by
+      // the FileReader contract but unused by rotation; age is measured from the
+      // oldest record's `timestamp` (msgRecord keeps it recent), so none fires.
       return c === undefined ? null : { size: c.length, mtimeMs: Date.now() };
     },
   };
@@ -53,7 +54,7 @@ const shard: ShardId = { agentId: "sisyphus", sessionId: "ses-1", writerId: "w-1
 function msgRecord(): PendingLogRecord {
   return {
     schemaVersion: 1,
-    timestamp: "2026-07-06T00:00:00.000Z",
+    timestamp: new Date().toISOString(),
     agentId: "sisyphus",
     sessionId: "ses-1",
     writerId: "w-1",
