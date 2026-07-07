@@ -51,15 +51,21 @@ export class ObservationLogStore {
     const records: PersistedLogRecord[] = [];
 
     for (const path of allPaths) {
+      let content: string;
       try {
-        const content = await this.fileReader.readFile(path);
-        for (const line of content.split("\n").filter((l) => l.trim())) {
+        content = await this.fileReader.readFile(path);
+      } catch (err) {
+        console.error(`Failed to read event file ${path}`, err);
+        continue;
+      }
+      for (const line of content.split("\n").filter((l) => l.trim())) {
+        try {
           const parsed: unknown = JSON.parse(line);
           validateRecordSchema(parsed);
           records.push(parsed as PersistedLogRecord);
+        } catch (err) {
+          console.error(`Failed to parse or validate line in ${path}`, err);
         }
-      } catch (err) {
-        console.error(`Failed to read or validate event file ${path}`, err);
       }
     }
 
