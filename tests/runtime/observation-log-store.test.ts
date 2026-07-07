@@ -98,8 +98,10 @@ describe("validateRecordSchema()", () => {
         ...base,
         recordType: "observation",
         kind: "message",
+        messageID: "m1",
         role: "assistant",
         textHash: "h",
+        finalized: true,
       }),
     ).not.toThrow();
     expect(() =>
@@ -397,6 +399,29 @@ describe("validateRecordSchema()", () => {
         textHash: "h",
       }),
     ).toThrow(/sequence/);
+  });
+
+  it("rejects a message record missing messageID or finalized", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+      }),
+    ).toThrow(/message record/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+      }),
+    ).toThrow(/message record/);
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {

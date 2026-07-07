@@ -65,8 +65,10 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
   } else if (kind === "message") {
     if (
+      typeof r.messageID !== "string" ||
       typeof r.role !== "string" ||
       typeof r.textHash !== "string" ||
+      typeof r.finalized !== "boolean" ||
       (r.declaredClaims !== undefined && !Array.isArray(r.declaredClaims))
     ) {
       throw new Error("Invalid message record");
