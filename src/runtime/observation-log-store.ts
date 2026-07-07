@@ -26,6 +26,7 @@ export class ObservationLogStore {
       {
         writeFile: (path, content) => this.fileWriter.writeFile(path, content),
         rename: (from, to) => this.fileWriter.rename(from, to),
+        deleteFile: (path) => this.fileWriter.deleteFile(path),
       },
       (path) => this.readExisting(path),
       (path) => this.computeInitialSequence(path),
@@ -39,6 +40,11 @@ export class ObservationLogStore {
   }
 
   async append(shardId: ShardId, record: PendingLogRecord): Promise<number> {
+    if (shardId.writerId !== this.writerId) {
+      throw new Error(
+        `ObservationLogStore.append: shardId.writerId (${shardId.writerId}) does not match store writerId (${this.writerId})`,
+      );
+    }
     return this.enqueue(toPhysicalPath(shardId), record);
   }
 

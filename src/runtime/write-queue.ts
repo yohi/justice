@@ -20,6 +20,10 @@ type QueueWriter = {
  *
  * Persistence is atomic: the full file content (existing + new line) is written
  * to a temporary file and then renamed over the target path.
+ *
+ * This full read-modify-write per append deliberately favors atomicity over
+ * write throughput; unbounded shard growth is mitigated separately by
+ * rotation/archival (see feature/phase2-task4-rotation-archive).
  */
 export function createShardWriteQueue(
   writer: QueueWriter,
@@ -39,11 +43,15 @@ export function createShardWriteQueue(
     const existing = await readExisting(path);
     const content = existing + line;
     const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-    await writer.writeFile(tempPath, content);
     try {
+      await writer.writeFile(tempPath, content);
       await writer.rename(tempPath, path);
     } catch (err) {
-      await writer.deleteFile(tempPath).catch(() => {});
+      // Best-effort cleanup of the orphaned temp file; swallow any secondary
+      // failure (e.g. the temp was never created) so the original error surfaces.
+      await writer.deleteFile(tempPath).catch(() => {
+        /* best-effort cleanup: ignore secondary failure */
+      });
       throw err;
     }
   }

@@ -76,13 +76,32 @@ describe("validateRecordSchema()", () => {
 
   it("accepts valid observation records for each kind", () => {
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "tool_executed", toolName: "bash", callId: "c1", evidence: { evidenceId: "e1" } }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: { evidenceId: "e1" },
+      }),
     ).not.toThrow();
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "message", role: "assistant", textHash: "h" }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        role: "assistant",
+        textHash: "h",
+      }),
     ).not.toThrow();
     expect(() =>
-      validateRecordSchema({ ...base, recordType: "observation", kind: "skill_invoked", skillName: "git-master", source: "message" }),
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "skill_invoked",
+        skillName: "git-master",
+        source: "message",
+      }),
     ).not.toThrow();
     expect(() =>
       validateRecordSchema({
@@ -90,7 +109,16 @@ describe("validateRecordSchema()", () => {
         recordType: "observation",
         kind: "review_observed",
         reviewScope: "src/",
-        items: [{ itemKey: "k", evidenceId: "e", severity: "major", summary: "s", location: "src/foo.ts:1", status: "open" }],
+        items: [
+          {
+            itemKey: "k",
+            evidenceId: "e",
+            severity: "major",
+            summary: "s",
+            location: "src/foo.ts:1",
+            status: "open",
+          },
+        ],
       }),
     ).not.toThrow();
   });
@@ -111,14 +139,58 @@ describe("validateRecordSchema()", () => {
 
   it("rejects non-objects and bad envelope fields", () => {
     expect(() => validateRecordSchema(null)).toThrow(/not an object/);
-    expect(() => validateRecordSchema({ ...base, schemaVersion: 2, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/schemaVersion/);
-    expect(() => validateRecordSchema({ ...base, sequence: -1, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/sequence/);
-    expect(() => validateRecordSchema({ ...base, writerId: 5, recordType: "observation", kind: "message", role: "a", textHash: "h" })).toThrow(/shard identifier/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        schemaVersion: 2,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/schemaVersion/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        sequence: -1,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/sequence/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        writerId: 5,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/shard identifier/);
+  });
+
+  it("rejects a non-finite (NaN) sequence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        sequence: NaN,
+        recordType: "observation",
+        kind: "message",
+        role: "a",
+        textHash: "h",
+      }),
+    ).toThrow(/sequence/);
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {
-    expect(() => validateRecordSchema({ ...base, recordType: "bogus" })).toThrow(/unknown recordType/);
-    expect(() => validateRecordSchema({ ...base, recordType: "observation", kind: "bogus" })).toThrow(/unknown observation kind/);
+    expect(() => validateRecordSchema({ ...base, recordType: "bogus" })).toThrow(
+      /unknown recordType/,
+    );
+    expect(() =>
+      validateRecordSchema({ ...base, recordType: "observation", kind: "bogus" }),
+    ).toThrow(/unknown observation kind/);
   });
 
   it("rejects review_observed items with invalid severity/status", () => {
@@ -140,7 +212,15 @@ describe("validateRecordSchema()", () => {
         recordType: "observation",
         kind: "review_observed",
         reviewScope: "src/",
-        items: [{ itemKey: "k", evidenceId: "e", severity: "major", location: "src/foo.ts:1", status: "open" }],
+        items: [
+          {
+            itemKey: "k",
+            evidenceId: "e",
+            severity: "major",
+            location: "src/foo.ts:1",
+            status: "open",
+          },
+        ],
       }),
     ).toThrow(/review_observed item/);
     expect(() =>
@@ -178,6 +258,14 @@ describe("validateShardSequences()", () => {
   it("throws on duplicate sequence within a shard", () => {
     expect(() => validateShardSequences([mk(1), mk(2), mk(2)])).toThrow(/duplicate sequence/);
   });
+
+  it("keeps shards distinct when identifier fields contain colons (no false duplicate)", () => {
+    // Two logically distinct shards whose `agentId:sessionId:writerId` colon-join
+    // collides to the same string, but which must remain separate shards.
+    const shardA: PersistedLogRecord = { ...mk(1), sessionId: "a:b", writerId: "c" };
+    const shardB: PersistedLogRecord = { ...mk(1), sessionId: "a", writerId: "b:c" };
+    expect(() => validateShardSequences([shardA, shardB])).not.toThrow();
+  });
 });
 
 describe("ObservationLogStore", () => {
@@ -185,7 +273,11 @@ describe("ObservationLogStore", () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
 
-    const seqs = [await store.append(shard, msgRecord()), await store.append(shard, msgRecord()), await store.append(shard, msgRecord())];
+    const seqs = [
+      await store.append(shard, msgRecord()),
+      await store.append(shard, msgRecord()),
+      await store.append(shard, msgRecord()),
+    ];
     expect(seqs).toEqual([1, 2, 3]);
 
     const all = await store.readAll();
@@ -220,5 +312,12 @@ describe("ObservationLogStore", () => {
     const store = new ObservationLogStore(writer, reader, "w-1");
     const next = await store.append(shard, msgRecord());
     expect(next).toBe(6);
+  });
+
+  it("rejects append when shardId.writerId does not match the store writerId", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const mismatched: ShardId = { agentId: "sisyphus", sessionId: "ses-1", writerId: "w-2" };
+    await expect(store.append(mismatched, msgRecord())).rejects.toThrow(/writerId/);
   });
 });

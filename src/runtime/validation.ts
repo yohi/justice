@@ -105,7 +105,7 @@ export function validateRecordSchema(record: unknown): void {
   if (r.schemaVersion !== 1) {
     throw new Error(`Invalid record: unsupported schemaVersion ${String(r.schemaVersion)}`);
   }
-  if (typeof r.sequence !== "number" || r.sequence < 0) {
+  if (typeof r.sequence !== "number" || !Number.isFinite(r.sequence) || r.sequence < 0) {
     throw new Error("Invalid record: sequence must be a non-negative number");
   }
   if (!r.timestamp || typeof r.timestamp !== "string") {
@@ -137,7 +137,7 @@ export function validateRecordSchema(record: unknown): void {
 export function validateShardSequences(records: readonly PersistedLogRecord[]): void {
   const shardGroups = new Map<string, number[]>();
   for (const r of records) {
-    const shardKey = `${r.agentId}:${r.sessionId}:${r.writerId}`;
+    const shardKey = JSON.stringify([r.agentId, r.sessionId, r.writerId]);
     const group = shardGroups.get(shardKey);
     if (group) {
       group.push(r.sequence);
