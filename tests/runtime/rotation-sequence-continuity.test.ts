@@ -65,7 +65,7 @@ const shard: ShardId = { agentId: "atlas", sessionId: "ses-1", writerId: "w-1" }
 function rec(): PendingLogRecord {
   return {
     schemaVersion: 1,
-    timestamp: "2026-07-06T00:00:00.000Z",
+    timestamp: new Date().toISOString(),
     agentId: "atlas",
     sessionId: "ses-1",
     writerId: "w-1",
