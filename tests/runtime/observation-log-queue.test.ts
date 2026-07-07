@@ -46,10 +46,19 @@ function createMemFs(): {
 describe("createShardWriteQueue()", () => {
   it("appends new lines without overwriting existing records (regression: read-modify-write)", async () => {
     const { files, writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(writer, readExisting, async () => 0, () => {});
+    const enqueue = createShardWriteQueue(
+      writer,
+      readExisting,
+      async () => 0,
+      () => {},
+    );
     const path = ".justice/events/sisyphus/ses-1/w-1.jsonl";
 
-    const seqs = await Promise.all([enqueue(path, rec()), enqueue(path, rec()), enqueue(path, rec())]);
+    const seqs = await Promise.all([
+      enqueue(path, rec()),
+      enqueue(path, rec()),
+      enqueue(path, rec()),
+    ]);
 
     expect(seqs).toEqual([1, 2, 3]);
     const lines = (files.get(path) ?? "").split("\n").filter((l) => l.trim());
@@ -79,7 +88,12 @@ describe("createShardWriteQueue()", () => {
 
   it("serializes concurrent enqueues to the same path (monotonic, no interleaving)", async () => {
     const { files, writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(writer, readExisting, async () => 0, () => {});
+    const enqueue = createShardWriteQueue(
+      writer,
+      readExisting,
+      async () => 0,
+      () => {},
+    );
     const path = ".justice/events/sisyphus/ses-1/w-3.jsonl";
 
     const seqs = await Promise.all(Array.from({ length: 20 }, () => enqueue(path, rec())));
@@ -91,7 +105,12 @@ describe("createShardWriteQueue()", () => {
 
   it("processes different shard paths independently", async () => {
     const { writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(writer, readExisting, async () => 0, () => {});
+    const enqueue = createShardWriteQueue(
+      writer,
+      readExisting,
+      async () => 0,
+      () => {},
+    );
 
     const [a, b] = await Promise.all([
       enqueue(".justice/events/sisyphus/s/w-a.jsonl", rec()),
@@ -181,5 +200,29 @@ describe("createShardWriteQueue()", () => {
     expect([...files.keys()].filter((k) => k.includes(".tmp."))).toHaveLength(0);
     // Verify target path was never written with final content
     expect(files.has(path)).toBe(false);
+  });
+
+  it("removes the temp file when writeFile fails (no orphaned temp)", async () => {
+    const removed: string[] = [];
+    const failing = {
+      writeFile: async (): Promise<void> => {
+        throw new Error("disk full");
+      },
+      rename: async (): Promise<void> => {},
+      deleteFile: async (p: string): Promise<void> => {
+        removed.push(p);
+      },
+    };
+    const enqueue = createShardWriteQueue(
+      failing,
+      async () => "",
+      async () => 0,
+      () => {},
+    );
+    const path = ".justice/events/sisyphus/s/w-y.jsonl";
+
+    await expect(enqueue(path, rec())).rejects.toThrow("disk full");
+    expect(removed).toHaveLength(1);
+    expect(removed[0]!.startsWith(`${path}.tmp.`)).toBe(true);
   });
 });
