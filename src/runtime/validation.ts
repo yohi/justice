@@ -36,6 +36,8 @@ function validateObservationRecord(r: Record<string, unknown>): void {
         !isObject(item) ||
         typeof item.itemKey !== "string" ||
         typeof item.evidenceId !== "string" ||
+        typeof item.summary !== "string" ||
+        typeof item.location !== "string" ||
         !isOneOf(item.severity, ["critical", "major", "minor"]) ||
         !isOneOf(item.status, ["open", "resolved"])
       ) {

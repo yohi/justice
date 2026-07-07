@@ -90,7 +90,7 @@ describe("validateRecordSchema()", () => {
         recordType: "observation",
         kind: "review_observed",
         reviewScope: "src/",
-        items: [{ itemKey: "k", evidenceId: "e", severity: "major", status: "open" }],
+        items: [{ itemKey: "k", evidenceId: "e", severity: "major", summary: "s", location: "src/foo.ts:1", status: "open" }],
       }),
     ).not.toThrow();
   });
@@ -129,6 +129,27 @@ describe("validateRecordSchema()", () => {
         kind: "review_observed",
         reviewScope: "src/",
         items: [{ itemKey: "k", evidenceId: "e", severity: "HIGH", status: "open" }],
+      }),
+    ).toThrow(/review_observed item/);
+  });
+
+  it("rejects review_observed items missing summary or location", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "review_observed",
+        reviewScope: "src/",
+        items: [{ itemKey: "k", evidenceId: "e", severity: "major", location: "src/foo.ts:1", status: "open" }],
+      }),
+    ).toThrow(/review_observed item/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "review_observed",
+        reviewScope: "src/",
+        items: [{ itemKey: "k", evidenceId: "e", severity: "major", summary: "s", status: "open" }],
       }),
     ).toThrow(/review_observed item/);
   });
