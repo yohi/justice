@@ -1,6 +1,10 @@
 // src/runtime/state-projection-cache.ts
 import type { FileReader, FileWriter } from "../core/types";
-import { computeSourceHash, orderEventsForProjection, shardKeyOf } from "../core/v2/integrity";
+import {
+  computeMaxSequenceByShard,
+  computeSourceHash,
+  orderEventsForProjection,
+} from "../core/v2/integrity";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
 import type { ProjectedState } from "../core/v2/state-projection";
 import {
@@ -52,25 +56,32 @@ export class StateProjectionCache {
   }
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isValidCacheStructure(parsed: unknown): boolean {
-  if (!parsed || typeof parsed !== "object") return false;
-  const p = parsed as Record<string, unknown>;
-  const integrity = p.integrity;
+  if (!isPlainRecord(parsed)) return false;
+  const integrity = parsed.integrity;
   if (!integrity || typeof integrity !== "object") return false;
   if (!("maxSequenceByShard" in integrity)) return false;
-  // `fromSerializableProjectedState` copies these array fields by reference
-  // without transformation, so a partial `reviewSummary` (schema drift or a
-  // hand-edited cache) would leave them `undefined` and crash callers doing
-  // `.map()`/`.length`. Reject such caches here so `read()` rebuilds instead.
-  const reviewSummary = p.reviewSummary;
-  if (!reviewSummary || typeof reviewSummary !== "object") return false;
-  const rs = reviewSummary as Record<string, unknown>;
+  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
+  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
+  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
+  // both to be plain objects. The `reviewSummary` array fields are copied by
+  // reference, so a partial `reviewSummary` would leave them `undefined` and
+  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
+  // rebuilds instead.
+  if (!isPlainRecord(parsed.tasks)) return false;
+  const reviewSummary = parsed.reviewSummary;
+  if (!isPlainRecord(reviewSummary)) return false;
+  if (!isPlainRecord(reviewSummary.byScope)) return false;
   return (
-    Array.isArray(rs.critical) &&
-    Array.isArray(rs.major) &&
-    Array.isArray(rs.minor) &&
-    Array.isArray(rs.resolved) &&
-    Array.isArray(rs.open)
+    Array.isArray(reviewSummary.critical) &&
+    Array.isArray(reviewSummary.major) &&
+    Array.isArray(reviewSummary.minor) &&
+    Array.isArray(reviewSummary.resolved) &&
+    Array.isArray(reviewSummary.open)
   );
 }
 
@@ -99,12 +110,7 @@ export function validateProjectionCacheAgainstEvents(
     return { valid: false, reason: "structural" };
   }
 
-  const currentMaxSeq = new Map<string, number>();
-  for (const e of events) {
-    const shardKey = shardKeyOf(e);
-    const cur = currentMaxSeq.get(shardKey) ?? -1;
-    if (e.sequence > cur) currentMaxSeq.set(shardKey, e.sequence);
-  }
+  const currentMaxSeq = computeMaxSequenceByShard(events);
 
   const cachedMap = cacheState.integrity.maxSequenceByShard;
   if (currentMaxSeq.size > cachedMap.size) {
