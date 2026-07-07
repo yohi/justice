@@ -5,9 +5,19 @@ import {
   project,
   toSerializableProjectedState,
 } from "../../../src/core/v2/state-projection";
-import type { ObservationRecord, DecisionRecord, ReviewItem } from "../../../src/core/v2/observation-model";
+import type {
+  ObservationRecord,
+  DecisionRecord,
+  ReviewItem,
+} from "../../../src/core/v2/observation-model";
 
-function toolEvent(seq: number, ts: string, taskId: string, evidenceId: string, writerId = "w1"): ObservationRecord {
+function toolEvent(
+  seq: number,
+  ts: string,
+  taskId: string,
+  evidenceId: string,
+  writerId = "w1",
+): ObservationRecord {
   return {
     schemaVersion: 1,
     sequence: seq,
@@ -32,11 +42,28 @@ function toolEvent(seq: number, ts: string, taskId: string, evidenceId: string, 
   };
 }
 
-function reviewItem(itemKey: string, severity: ReviewItem["severity"], status: ReviewItem["status"]): ReviewItem {
-  return { itemKey, evidenceId: `ev-${itemKey}`, severity, summary: "s", location: "src/x.ts", status };
+function reviewItem(
+  itemKey: string,
+  severity: ReviewItem["severity"],
+  status: ReviewItem["status"],
+): ReviewItem {
+  return {
+    itemKey,
+    evidenceId: `ev-${itemKey}`,
+    severity,
+    summary: "s",
+    location: "src/x.ts",
+    status,
+  };
 }
 
-function reviewEvent(seq: number, ts: string, taskId: string, scope: string, items: readonly ReviewItem[]): ObservationRecord {
+function reviewEvent(
+  seq: number,
+  ts: string,
+  taskId: string,
+  scope: string,
+  items: readonly ReviewItem[],
+): ObservationRecord {
   return {
     schemaVersion: 1,
     sequence: seq,
@@ -52,7 +79,12 @@ function reviewEvent(seq: number, ts: string, taskId: string, scope: string, ite
   };
 }
 
-function decisionEvent(seq: number, ts: string, taskId: string, verdict: DecisionRecord["verdict"]): DecisionRecord {
+function decisionEvent(
+  seq: number,
+  ts: string,
+  taskId: string,
+  verdict: DecisionRecord["verdict"],
+): DecisionRecord {
   return {
     schemaVersion: 1,
     sequence: seq,
@@ -89,7 +121,10 @@ describe("project() task fold", () => {
   });
 
   it("ignores observation records without a taskId", () => {
-    const noTask: ObservationRecord = { ...toolEvent(1, "2026-07-06T00:00:01Z", "x", "ev"), taskId: undefined };
+    const noTask: ObservationRecord = {
+      ...toolEvent(1, "2026-07-06T00:00:01Z", "x", "ev"),
+      taskId: undefined,
+    };
     const state = project([noTask], REBUILT_AT);
     expect(state.tasks.size).toBe(0);
   });
@@ -113,7 +148,9 @@ describe("project() review summary fold", () => {
         reviewItem("a", "critical", "open"),
         reviewItem("b", "major", "resolved"),
       ]),
-      reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/ui", [reviewItem("c", "minor", "open")]),
+      reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/ui", [
+        reviewItem("c", "minor", "open"),
+      ]),
     ];
     const state = project(events, REBUILT_AT);
     const rs = state.reviewSummary;
@@ -128,6 +165,38 @@ describe("project() review summary fold", () => {
     expect(rs.byScope.get("src/api")?.critical.map((i) => i.itemKey)).toEqual(["a"]);
     expect(rs.byScope.get("src/ui")?.minor.map((i) => i.itemKey)).toEqual(["c"]);
     expect(state.tasks.get("task-1")?.observedReviewScopes).toEqual(["src/api", "src/ui"]);
+  });
+
+  it("handles empty-string reviewScope consistently across foldReviewSummary and project()", () => {
+    // reviewScope is a required string, but the empty string is a valid runtime
+    // value. foldReviewSummary creates a byScope bucket unconditionally, while
+    // project()'s task fold skips falsy scopes for observedReviewScopes.
+    const events = [
+      reviewEvent(1, "2026-07-06T00:00:01Z", "task-1", "", [reviewItem("a", "critical", "open")]),
+    ];
+    const state = project(events, REBUILT_AT);
+
+    // Global buckets aggregate the item regardless of scope.
+    expect(state.reviewSummary.critical.map((i) => i.itemKey)).toEqual(["a"]);
+    // foldReviewSummary records an empty-string byScope bucket...
+    expect(state.reviewSummary.byScope.has("")).toBe(true);
+    expect(state.reviewSummary.byScope.get("")?.critical.map((i) => i.itemKey)).toEqual(["a"]);
+    // ...but project() skips falsy scopes, so the task observes none.
+    expect(state.tasks.get("task-1")?.observedReviewScopes).toEqual([]);
+  });
+
+  it("ignores undefined reviewScope for observedReviewScopes (runtime type-drift guard)", () => {
+    // reviewScope is required by the type, so undefined can only arrive via schema
+    // drift / external data. project() must not push it as an observed scope.
+    const base = reviewEvent(1, "2026-07-06T00:00:01Z", "task-1", "x", [
+      reviewItem("a", "major", "open"),
+    ]);
+    const drifted = { ...base, reviewScope: undefined } as unknown as typeof base;
+    const state = project([drifted], REBUILT_AT);
+
+    expect(state.tasks.get("task-1")?.observedReviewScopes).toEqual([]);
+    // The item is still aggregated into the global buckets.
+    expect(state.reviewSummary.major.map((i) => i.itemKey)).toEqual(["a"]);
   });
 });
 
@@ -160,7 +229,9 @@ describe("ProjectedState JSON round-trip", () => {
   it("serializes ReadonlyMap fields to plain objects and restores them", () => {
     const events = [
       toolEvent(1, "2026-07-06T00:00:01Z", "task-1", "ev-1"),
-      reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/api", [reviewItem("a", "critical", "open")]),
+      reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/api", [
+        reviewItem("a", "critical", "open"),
+      ]),
     ];
     const state = project(events, REBUILT_AT);
 
