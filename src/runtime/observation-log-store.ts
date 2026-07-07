@@ -1,7 +1,7 @@
 // src/runtime/observation-log-store.ts
 import type { FileReader, FileWriter, ShardId } from "../core/types";
 import type { PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
-import { toPhysicalPath } from "../core/v2/shard-layout";
+import { fromPhysicalPath, toPhysicalPath } from "../core/v2/shard-layout";
 import { createShardWriteQueue } from "./write-queue";
 import { validateRecordSchema, validateShardSequences } from "./validation";
 
@@ -109,11 +109,9 @@ export class ObservationLogStore {
 
     // Also account for archived segments of the same shard so sequence numbers
     // remain monotonic across rotation boundaries.
-    const parts = path.split("/");
-    if (parts.length >= 5) {
-      const agentId = parts[2]!;
-      const safeSessionId = parts[3]!;
-      const writerId = parts[4]!.replace(".jsonl", "");
+    const shardIdentity = fromPhysicalPath(path);
+    if (shardIdentity) {
+      const { agentId, safeSessionId, writerId } = shardIdentity;
       const archiveDir = `${ARCHIVE_ROOT}/${agentId}/${safeSessionId}`;
       const archives = await this.fileReader.listFiles(archiveDir);
       for (const arch of archives) {

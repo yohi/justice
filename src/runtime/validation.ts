@@ -9,10 +9,58 @@ function isOneOf(value: unknown, options: readonly string[]): boolean {
   return typeof value === "string" && options.includes(value);
 }
 
+function isValidEvidence(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (typeof value.evidenceId !== "string") return false;
+  if (value.sourceClass === "tool_output") {
+    if (
+      !isOneOf(value.kind, ["test", "build", "lint", "command", "generic"]) ||
+      !isOneOf(value.provenance, ["observed", "derived", "unknown"])
+    ) {
+      return false;
+    }
+    if (value.interpretation !== undefined && !isObject(value.interpretation)) {
+      return false;
+    }
+    if (value.toolOutputClass === "command_exec") {
+      return typeof value.command === "string" && typeof value.rawOutput === "string";
+    }
+    if (value.toolOutputClass === "file_content") {
+      return (
+        typeof value.rawOutputHash === "string" &&
+        (value.command === undefined || typeof value.command === "string") &&
+        (value.rawOutputSnippet === undefined || typeof value.rawOutputSnippet === "string")
+      );
+    }
+    return false;
+  }
+  if (value.sourceClass === "declared_claim") {
+    if (
+      !isOneOf(value.kind, ["test", "build", "lint", "generic"]) ||
+      value.provenance !== "declared" ||
+      !isOneOf(value.declaredFrom, ["message", "task_summary"]) ||
+      !isObject(value.claim) ||
+      typeof value.claim.claimKind !== "string" ||
+      !isOneOf(value.claim.outcome, ["pass", "fail", "unknown"])
+    ) {
+      return false;
+    }
+    if (value.claimRef !== undefined && !isObject(value.claimRef)) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 function validateObservationRecord(r: Record<string, unknown>): void {
   const kind = r.kind;
   if (kind === "tool_executed") {
-    if (typeof r.toolName !== "string" || typeof r.callId !== "string" || !r.evidence) {
+    if (
+      typeof r.toolName !== "string" ||
+      typeof r.callId !== "string" ||
+      !isValidEvidence(r.evidence)
+    ) {
       throw new Error("Invalid tool_executed record");
     }
   } else if (kind === "message") {
@@ -84,6 +132,8 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
         typeof ref.sessionId !== "string" ||
         typeof ref.writerId !== "string" ||
         typeof ref.sequence !== "number" ||
+        !Number.isFinite(ref.sequence) ||
+        ref.sequence < 0 ||
         typeof ref.evidenceId !== "string"
       ) {
         throw new Error("Invalid decision evidenceRef");

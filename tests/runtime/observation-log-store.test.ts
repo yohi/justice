@@ -82,7 +82,15 @@ describe("validateRecordSchema()", () => {
         kind: "tool_executed",
         toolName: "bash",
         callId: "c1",
-        evidence: { evidenceId: "e1" },
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
       }),
     ).not.toThrow();
     expect(() =>
@@ -123,6 +131,157 @@ describe("validateRecordSchema()", () => {
     ).not.toThrow();
   });
 
+  it("accepts tool_executed with CommandExecEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts tool_executed with FileContentEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "read",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "generic",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "file_content",
+          rawOutputHash: "deadbeef",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts tool_executed with DeclaredClaimEvidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "message",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "test",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "tests", outcome: "pass" },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects tool_executed with missing evidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with non-object evidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: "not-an-object",
+      }),
+    ).toThrow(/tool_executed/);
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: 42,
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with evidence missing discriminant fields", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: { evidenceId: "e1" },
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with an unknown sourceClass discriminant", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "bogus",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
+  it("rejects tool_executed with an unknown toolOutputClass discriminant", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "c1",
+        evidence: {
+          evidenceId: "e1",
+          kind: "command",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "bogus",
+          command: "ls",
+          rawOutput: "",
+        },
+      }),
+    ).toThrow(/tool_executed/);
+  });
+
   it("accepts a valid decision record", () => {
     expect(() =>
       validateRecordSchema({
@@ -135,6 +294,62 @@ describe("validateRecordSchema()", () => {
         ruleResults: [],
       }),
     ).not.toThrow();
+  });
+
+  it("accepts a decision record with valid evidenceRefs", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [
+          {
+            ruleId: "r1",
+            verdict: "PASS",
+            evidenceRefs: [
+              {
+                agentId: "sisyphus",
+                sessionId: "s",
+                writerId: "w-1",
+                sequence: 0,
+                evidenceId: "e1",
+              },
+            ],
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a decision evidenceRef with a non-finite (NaN) sequence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [
+          {
+            ruleId: "r1",
+            verdict: "PASS",
+            evidenceRefs: [
+              {
+                agentId: "sisyphus",
+                sessionId: "s",
+                writerId: "w-1",
+                sequence: NaN,
+                evidenceId: "e1",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/evidenceRef/);
   });
 
   it("rejects non-objects and bad envelope fields", () => {
