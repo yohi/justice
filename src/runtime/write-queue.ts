@@ -10,6 +10,7 @@ type QueueItem = {
 type QueueWriter = {
   writeFile(path: string, content: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  deleteFile(path: string): Promise<void>;
 };
 
 /**
@@ -39,7 +40,12 @@ export function createShardWriteQueue(
     const content = existing + line;
     const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
     await writer.writeFile(tempPath, content);
-    await writer.rename(tempPath, path);
+    try {
+      await writer.rename(tempPath, path);
+    } catch (err) {
+      await writer.deleteFile(tempPath).catch(() => {});
+      throw err;
+    }
   }
 
   async function process(path: string): Promise<void> {
@@ -81,6 +87,7 @@ export function createShardWriteQueue(
         void process(path);
       } else {
         queues.delete(path);
+        sequences.delete(path);
       }
     }
   }
