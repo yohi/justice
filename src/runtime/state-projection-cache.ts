@@ -54,9 +54,24 @@ export class StateProjectionCache {
 
 function isValidCacheStructure(parsed: unknown): boolean {
   if (!parsed || typeof parsed !== "object") return false;
-  const integrity = (parsed as Record<string, unknown>).integrity;
+  const p = parsed as Record<string, unknown>;
+  const integrity = p.integrity;
   if (!integrity || typeof integrity !== "object") return false;
-  return "maxSequenceByShard" in integrity;
+  if (!("maxSequenceByShard" in integrity)) return false;
+  // `fromSerializableProjectedState` copies these array fields by reference
+  // without transformation, so a partial `reviewSummary` (schema drift or a
+  // hand-edited cache) would leave them `undefined` and crash callers doing
+  // `.map()`/`.length`. Reject such caches here so `read()` rebuilds instead.
+  const reviewSummary = p.reviewSummary;
+  if (!reviewSummary || typeof reviewSummary !== "object") return false;
+  const rs = reviewSummary as Record<string, unknown>;
+  return (
+    Array.isArray(rs.critical) &&
+    Array.isArray(rs.major) &&
+    Array.isArray(rs.minor) &&
+    Array.isArray(rs.resolved) &&
+    Array.isArray(rs.open)
+  );
 }
 
 export type CacheValidationReason = "valid" | "stale_append" | "mismatch_seq" | "structural";
@@ -92,7 +107,14 @@ export function validateProjectionCacheAgainstEvents(
   }
 
   const cachedMap = cacheState.integrity.maxSequenceByShard;
-  if (cachedMap.size !== currentMaxSeq.size) {
+  if (currentMaxSeq.size > cachedMap.size) {
+    // A new writer (shard) appeared in the event log. Like new records appended
+    // to a known shard, this is a normal append -> silent rebuild, not a warning.
+    return { valid: false, reason: "stale_append" };
+  }
+  if (currentMaxSeq.size < cachedMap.size) {
+    // The cache references more shards than the event log holds: a genuine
+    // mismatch (events do not disappear under normal append-only operation).
     return { valid: false, reason: "mismatch_seq" };
   }
   for (const [shardKey, cachedSeq] of cachedMap.entries()) {

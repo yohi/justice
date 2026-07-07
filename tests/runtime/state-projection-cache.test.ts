@@ -2,48 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { StateProjectionCache } from "../../src/runtime/state-projection-cache";
 import { project } from "../../src/core/v2/state-projection";
-import type { FileReader, FileWriter } from "../../src/core/types";
+import { createMemFs } from "../helpers/mock-file-system";
 import type { ObservationRecord } from "../../src/core/v2/observation-model";
-
-function createMemFs(): { files: Map<string, string>; reader: FileReader; writer: FileWriter } {
-  const files = new Map<string, string>();
-  const reader: FileReader = {
-    readFile: async (p) => {
-      const c = files.get(p);
-      if (c === undefined) throw new Error(`ENOENT: ${p}`);
-      return c;
-    },
-    fileExists: async (p) => files.has(p),
-    listFiles: async (prefix) => [...files.keys()].filter((k) => k.startsWith(prefix)),
-    readFileStats: async (p) => {
-      const c = files.get(p);
-      return c === undefined ? null : { size: c.length, mtimeMs: 0 };
-    },
-  };
-  const writer: FileWriter = {
-    writeFile: async (p, content) => {
-      files.set(p, content);
-    },
-    rename: async (from, to) => {
-      const c = files.get(from);
-      if (c === undefined) throw new Error(`rename: missing ${from}`);
-      files.set(to, c);
-      files.delete(from);
-    },
-    mkdir: async () => {},
-    rmdir: async () => {},
-    deleteFile: async (p) => {
-      files.delete(p);
-    },
-  };
-  return { files, reader, writer };
-}
 
 function reviewEvent(seq: number, taskId: string, scope: string): ObservationRecord {
   return {
     schemaVersion: 1,
     sequence: seq,
-    timestamp: `2026-07-06T00:00:0${seq}Z`,
+    timestamp: new Date(Date.UTC(2026, 6, 6, 0, 0, seq)).toISOString(),
     agentId: "atlas",
     sessionId: "s1",
     writerId: "w1",
