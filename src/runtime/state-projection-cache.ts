@@ -29,13 +29,18 @@ export class StateProjectionCache {
   ) {}
 
   async write(state: ProjectedState): Promise<void> {
+    const tempPath = `${this.path}.tmp.${Date.now()}.${randomUUID()}`;
     try {
       const content = JSON.stringify(toSerializableProjectedState(state));
-      const tempPath = `${this.path}.tmp.${Date.now()}.${randomUUID()}`;
       await this.fileWriter.writeFile(tempPath, content);
       await this.fileWriter.rename(tempPath, this.path);
     } catch (err) {
-      // fail-open: log and continue; the cache is an optimization, not a source of truth.
+      // fail-open: log, best-effort cleanup of any orphaned temp file (mirrors
+      // write-queue.ts's atomicAppend), and continue; the cache is an
+      // optimization, not a source of truth.
+      await this.fileWriter.deleteFile(tempPath).catch(() => {
+        /* best-effort cleanup: ignore secondary failure (e.g. temp was never created) */
+      });
       this.logger.warn("state.json cache write failed", err);
     }
   }
@@ -63,6 +68,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidCacheStructure(parsed: unknown): boolean {
   if (!isPlainRecord(parsed)) return false;
+  if (parsed.schemaVersion !== 1) return false;
   const integrity = parsed.integrity;
   if (!integrity || typeof integrity !== "object") return false;
   if (!("maxSequenceByShard" in integrity)) return false;
@@ -77,6 +83,7 @@ function isValidCacheStructure(parsed: unknown): boolean {
   const reviewSummary = parsed.reviewSummary;
   if (!isPlainRecord(reviewSummary)) return false;
   if (!isPlainRecord(reviewSummary.byScope)) return false;
+  if (reviewSummary.authority !== "observed_review_output") return false;
   return (
     Array.isArray(reviewSummary.critical) &&
     Array.isArray(reviewSummary.major) &&
@@ -139,9 +146,17 @@ export function validateProjectionCacheAgainstEvents(
   // above as stale_append). A hash mismatch here therefore implies ordering drift
   // or a mid-stream anomaly. Per plan design (§ silent-rebuild) this is still
   // classified stale_append to favor stability over noise; it is fail-safe (never
-  // reports a corrupt cache as valid). Revisit if anomaly observability is needed.
+  // reports a corrupt cache as valid).
   const currentSourceHash = computeSourceHash(orderEventsForProjection(events));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
+    // Distinct from ordinary stale_append (which is caught by the maxSequence
+    // checks above): every shard's maxSequence already matched here, so this
+    // specific mismatch implies ordering drift or a mid-stream anomaly rather
+    // than a normal append. Logged (not just returned) so this rarer path is
+    // observable without changing the fail-safe stale_append classification.
+    console.warn(
+      "state.json cache: sourceHash mismatch with matching per-shard maxSequence (possible ordering drift), rebuilding",
+    );
     return { valid: false, reason: "stale_append" };
   }
 
