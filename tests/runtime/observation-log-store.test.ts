@@ -595,6 +595,26 @@ describe("ObservationLogStore", () => {
     expect(next).toBe(6);
   });
 
+  it("excludes only the corrupted shard from readAll when one shard has a sequence gap", async () => {
+    const { files, reader, writer } = createMemFs();
+    // Healthy shard: writer w-1 (the default `shard` writerId used elsewhere in this file).
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    await store.append(shard, msgRecord());
+    await store.append(shard, msgRecord());
+    // Corrupted shard: a different writer whose on-disk log has a gap (seq 1 then 3, missing 2).
+    const gappyPath = ".justice/events/sisyphus/other/w-9.jsonl";
+    const gappyLine1 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 1 })}\n`;
+    const gappyLine2 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 3 })}\n`;
+    files.set(gappyPath, gappyLine1 + gappyLine2);
+
+    const all = await store.readAll();
+
+    // The healthy shard's 2 records survive; the gappy shard's 2 records are excluded
+    // entirely (not silently returned as if seq 1/3 were the whole shard).
+    expect(all).toHaveLength(2);
+    expect(all.every((r) => r.writerId === "w-1")).toBe(true);
+  });
+
   it("rejects append when shardId.writerId does not match the store writerId", async () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");

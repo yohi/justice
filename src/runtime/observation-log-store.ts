@@ -47,7 +47,9 @@ function rotationTimestamp(now: Date): string {
  * Append-only observation log store. Writes are serialized per physical shard
  * path via a write queue; each append is persisted atomically (temp file +
  * rename). `readAll` merges active + archive segments and validates schema and
- * per-shard sequence integrity, degrading fail-open on individual bad files.
+ * per-shard sequence integrity, degrading fail-open on individual bad files or
+ * shards (a shard failing its own integrity check is excluded from the result,
+ * never returned as partial/incomplete data).
  */
 export class ObservationLogStore {
   private readonly enqueue: (path: string, record: PendingLogRecord) => Promise<number>;
@@ -159,12 +161,36 @@ export class ObservationLogStore {
       ingest(content, path);
     }
 
-    try {
-      validateShardSequences(records);
-    } catch (err) {
-      console.warn("Failed to validate shard sequences, continuing", err);
+    // Validate per-shard rather than across the whole set: `validateShardSequences`
+    // throws on the FIRST bad shard it finds, so a single corrupted/incomplete
+    // shard must not poison (or silently pass through) unrelated valid shards.
+    // A shard that fails its own integrity check (duplicate or gap) is excluded
+    // from the result entirely — partial/incomplete data for that shard is never
+    // returned as if it were complete, while still keeping the store fail-open
+    // (no exception escapes `readAll`; other shards are unaffected).
+    const byShardKey = new Map<string, PersistedLogRecord[]>();
+    for (const r of records) {
+      const shardKey = JSON.stringify([r.agentId, r.sessionId, r.writerId]);
+      const group = byShardKey.get(shardKey);
+      if (group) {
+        group.push(r);
+      } else {
+        byShardKey.set(shardKey, [r]);
+      }
     }
-    return records;
+    const validRecords: PersistedLogRecord[] = [];
+    for (const [shardKey, group] of byShardKey) {
+      try {
+        validateShardSequences(group);
+        validRecords.push(...group);
+      } catch (err) {
+        console.warn(
+          `Failed to validate shard sequences for ${shardKey}, excluding shard from result`,
+          err,
+        );
+      }
+    }
+    return validRecords;
   }
 
   /**
