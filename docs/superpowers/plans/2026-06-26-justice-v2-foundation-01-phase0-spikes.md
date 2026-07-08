@@ -146,7 +146,7 @@ gt submit
 - [x] **Step 2: `devcontainer exec --workspace-folder . bun install --frozen-lockfile` で依存インストール**
 - [x] **Step 3: `devcontainer exec --workspace-folder . bun run lint` 等で全コマンド検証**
 - [x] **Step 4: 失敗時は `.devcontainer/devcontainer.json` を修正**
-- [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加**
+- [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加** — **[方針決定 2026-07-08]** 対応不要と判断。devcontainer はローカル環境を汚さないためのものであり、GitHub Actions CI はそもそもコンテナ（仮想）環境で実行されるため、devcontainer 経由での二重検証は不要（ユーザー判断）。
 - [x] **Step 6: コンテナ内で再実行して確認**
 - [x] **Step 7: Commit**
 - [x] **Step 8: Task 0.1 に向けた PR を作成する**
@@ -159,6 +159,8 @@ gt submit
 
 
 ### Task 0.2: De-risk Spikes (実証スパイク)
+
+> **[ベストエフォート実施済 2026-07-08]** 本 Task は Phase 1 への着手前に未実施のまま進んでいたことが判明したため、事後的にサンドボックス環境で可能な範囲でベストエフォート実施した。結果は [`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`](../spikes/2026-06-26-v2-phase0-spikes.md) に集約。Step 1（レイテンシ実測）のみ実機ベンチマークによる代替検証を完了。Step 1b（C1/L0 advisory表示面実証）は実機OpenCodeの目視確認が必須のため未実証、Step 2（Message fallback matrix）は型定義の静的解析で代替したが実行時順序/重複/遅延の実測は未実証のまま。いずれも受入基準を完全には満たしていないため、下記各Stepのチェックボックスはあえて未チェックのままにし、残作業として明記する。**実行時の遅延/順序逆転/重複などの実機検証、および CI devcontainer 検証ジョブは、方針上不要として対応しない（devcontainer はローカル環境汚染回避目的であり、CI はそもそもコンテナ仮想環境のため）。**
 
 **Files:**
 
