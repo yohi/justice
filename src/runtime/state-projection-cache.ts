@@ -1,5 +1,6 @@
 // src/runtime/state-projection-cache.ts
 import type { FileReader, FileWriter } from "../core/types";
+import { randomUUID } from "node:crypto";
 import {
   computeMaxSequenceByShard,
   computeSourceHash,
@@ -30,7 +31,7 @@ export class StateProjectionCache {
   async write(state: ProjectedState): Promise<void> {
     try {
       const content = JSON.stringify(toSerializableProjectedState(state));
-      const tempPath = `${this.path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+      const tempPath = `${this.path}.tmp.${Date.now()}.${randomUUID()}`;
       await this.fileWriter.writeFile(tempPath, content);
       await this.fileWriter.rename(tempPath, this.path);
     } catch (err) {

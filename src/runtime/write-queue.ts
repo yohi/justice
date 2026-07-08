@@ -1,5 +1,6 @@
 // src/runtime/write-queue.ts
 import type { PendingLogRecord } from "../core/v2/observation-model";
+import { randomUUID } from "node:crypto";
 
 type QueueItem = {
   readonly record: PendingLogRecord;
@@ -42,7 +43,7 @@ export function createShardWriteQueue(
     // writer touches `path`, so the read cannot race a write on the same shard.
     const existing = await readExisting(path);
     const content = existing + line;
-    const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    const tempPath = `${path}.tmp.${Date.now()}.${randomUUID()}`;
     try {
       await writer.writeFile(tempPath, content);
       await writer.rename(tempPath, path);
