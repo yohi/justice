@@ -39,3 +39,23 @@ export function extractDeclaredClaims(sourceId: string, text: string): DeclaredC
   }
   return claims;
 }
+
+// A minimal, pure view of a buffered message. The stateful MessageRoleBuffer
+// (src/runtime) resolves text/role/finalized then delegates to this gate so the
+// core stays free of @opencode-ai and mutable state (FF-001).
+export type FinalizedAssistantMessageView = {
+  readonly role?: "assistant" | "user";
+  readonly finalized: boolean;
+  readonly text: string;
+};
+
+// Pure finalize-time gate: declared claims are only "finalized" for an ASSISTANT
+// message that has completed. Detection is delegated to extractDeclaredClaims so the
+// pass/fail vocabulary lives in exactly one place.
+export function extractFinalizedAssistantClaims(
+  sourceId: string,
+  view: FinalizedAssistantMessageView,
+): DeclaredClaim[] {
+  if (view.role !== "assistant" || !view.finalized) return [];
+  return extractDeclaredClaims(sourceId, view.text);
+}

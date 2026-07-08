@@ -2,6 +2,7 @@
 import type { ObservationAgentId, EvidenceRef } from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
+import type { DeclaredClaim } from "./declared-claim-extractor";
 
 export type PendingEnvelope = {
   readonly schemaVersion: 1;
@@ -73,13 +74,19 @@ export type ToolExecutedRecord = {
   readonly evidence: Evidence;
 };
 
-// MessageRecord stub. Refined in Task 3.1 to include declaredClaims and finalized field.
+// MessageRecord (refined in Task 3.1): carries lightweight declared claims and their
+// 1:1 evidence for a finalized ASSISTANT message. role is fixed to "assistant" (D22).
+// declaredClaims/evidence are REQUIRED (parse-don't-validate): a MessageRecord always
+// carries its claim/evidence lists; a producer supplies [] when there are none (D59/D70).
 export type MessageRecord = {
   readonly kind: "message";
   readonly messageID: string;
-  readonly role: "assistant" | "user";
-  readonly textHash: string;
+  readonly partID?: string;
+  readonly role: "assistant"; // fixed per D22
+  readonly textHash: string; // required per D34
   readonly textSnippet?: string;
+  readonly declaredClaims: readonly DeclaredClaim[]; // D70: lightweight declared list
+  readonly evidence: readonly DeclaredClaimEvidence[]; // 1 claim = 1 Evidence per D59/D70
   readonly finalized: boolean;
 };
 
