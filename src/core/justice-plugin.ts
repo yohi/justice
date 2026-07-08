@@ -14,6 +14,7 @@ import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
 import { LoopDetectionHandler } from "../hooks/loop-handler";
+import { ObservationHandler } from "../hooks/observation-handler";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
@@ -21,20 +22,28 @@ import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
+import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
+export function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
   if (a.action === "skip" || b.action === "skip") {
     return { action: "skip" };
   }
 
   if (a.action === "inject" && b.action === "inject") {
     const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
-    const result: InjectResponse = {
+    const base: InjectResponse = {
       action: "inject",
       injectedContext: contexts.join("\n\n---\n\n"),
     };
+    const result: InjectResponse =
+      a.variant === "gate_advisory" || b.variant === "gate_advisory"
+        ? { ...base, variant: "gate_advisory" }
+        : base;
+    if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
+      throw new Error("Conflict detected in pre-tool-use modifiedPayload");
+    }
     if (a.modifiedPayload !== undefined) {
       return { ...result, modifiedPayload: a.modifiedPayload };
     }
@@ -53,6 +62,36 @@ export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): Hoo
   }
 
   return { action: "proceed" };
+}
+
+export function mergePostToolUseResponses(responses: readonly HookResponse[]): HookResponse {
+  if (responses.some((r) => r.action === "skip")) {
+    return { action: "skip" };
+  }
+
+  const injects = responses.filter((r): r is InjectResponse => r.action === "inject");
+  if (injects.length === 0) {
+    return { action: "proceed" };
+  }
+
+  const contexts = injects.map((i) => i.injectedContext).filter((ctx) => ctx !== "");
+  const base: InjectResponse = {
+    action: "inject",
+    injectedContext: contexts.join("\n\n---\n\n"),
+  };
+  const result: InjectResponse = injects.some((i) => i.variant === "gate_advisory")
+    ? { ...base, variant: "gate_advisory" }
+    : base;
+
+  const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
+  if (modifieds.length > 1) {
+    throw new Error("Conflict detected in post-tool-use modifiedPayload");
+  }
+  const single = modifieds[0];
+  if (single !== undefined) {
+    return { ...result, modifiedPayload: single.modifiedPayload };
+  }
+  return result;
 }
 
 export interface CreateGlobalFsResult {
@@ -225,6 +264,7 @@ export class JusticePlugin {
   private readonly taskFeedback: TaskFeedbackHandler;
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
+  private readonly observationHandler: ObservationHandler;
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
@@ -274,6 +314,7 @@ export class JusticePlugin {
 
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
+    this.observationHandler = new ObservationHandler();
   }
 
   /**
@@ -308,24 +349,41 @@ export class JusticePlugin {
   async handleEvent(event: HookEvent): Promise<HookResponse> {
     switch (event.type) {
       case "Message": {
-        // Legacy user/assistant payload drives plan-bridge delegation; observation-kind
-        // payloads (Task 3.2 widening) are consumed by the observation pipeline (Task 3.3).
+        // User/assistant payloads drive plan-bridge delegation; observation-kind
+        // payloads (Task 3.2 widening) feed the observation pipeline. The
+        // observation branch is fail-open: any error degrades to PROCEED.
         const { payload } = event;
         if ("role" in payload && "content" in payload) {
           return this.planBridge.handleMessage(event);
         }
-        return PROCEED;
+        return await this.observationHandler
+          .handleMessage(event.sessionId, payload as ObservationMessagePayload)
+          .catch((err) => {
+            this.options.logger?.warn("observation-handler message failed", err);
+            return PROCEED;
+          });
       }
       case "PreToolUse":
-        // The adapter forwards all tools now; only the task tool drives delegation.
-        if (event.payload.toolName !== "task") return PROCEED;
-        return this.planBridge.handlePreToolUse(event);
-      case "PostToolUse":
-        if (event.payload.toolName !== "task") return PROCEED;
-        return mergePostToolUseResponses(
-          await this.planBridge.handlePostToolUse(event),
-          await this.taskFeedback.handlePostToolUse(event),
+        // The observation handler runs for EVERY tool; only the task tool also
+        // drives plan-bridge delegation.
+        return mergePreToolUseResponses(
+          await this.observationHandler.handlePreToolUse(event),
+          event.payload.toolName === "task"
+            ? await this.planBridge.handlePreToolUse(event)
+            : PROCEED,
         );
+      case "PostToolUse": {
+        // The observation handler runs for EVERY tool; the task tool also drives
+        // plan-bridge completion detection and task-feedback processing.
+        const responses: HookResponse[] = [
+          await this.observationHandler.handlePostToolUse(event),
+        ];
+        if (event.payload.toolName === "task") {
+          responses.push(await this.planBridge.handlePostToolUse(event));
+          responses.push(await this.taskFeedback.handlePostToolUse(event));
+        }
+        return mergePostToolUseResponses(responses);
+      }
       case "Event":
         return this.handleEventType(event);
       case "AgentMapped":
@@ -388,6 +446,13 @@ export class JusticePlugin {
    */
   getLoopHandler(): LoopDetectionHandler {
     return this.loopHandler;
+  }
+
+  /**
+   * Get the ObservationHandler instance (routes observation tool/message events).
+   */
+  getObservationHandler(): ObservationHandler {
+    return this.observationHandler;
   }
 
   /**

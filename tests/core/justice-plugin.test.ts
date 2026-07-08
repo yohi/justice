@@ -38,7 +38,7 @@ describe("JusticePlugin", () => {
     });
 
     it("should merge proceed + proceed into proceed", () => {
-      const result = mergePostToolUseResponses(proceed, proceed);
+      const result = mergePostToolUseResponses([proceed, proceed]);
 
       expect(result).toEqual({ action: "proceed" });
       expect(result).not.toBe(proceed);
@@ -46,7 +46,7 @@ describe("JusticePlugin", () => {
 
     it("should merge inject + proceed into inject", () => {
       const a = inject("from-a");
-      const result = mergePostToolUseResponses(a, proceed);
+      const result = mergePostToolUseResponses([a, proceed]);
 
       expect(result).toEqual(a);
       expect(result).not.toBe(a);
@@ -54,14 +54,14 @@ describe("JusticePlugin", () => {
 
     it("should merge proceed + inject into inject", () => {
       const b = inject("from-b");
-      const result = mergePostToolUseResponses(proceed, b);
+      const result = mergePostToolUseResponses([proceed, b]);
 
       expect(result).toEqual(b);
       expect(result).not.toBe(b);
     });
 
     it("should merge inject + inject into concatenated inject", () => {
-      const result = mergePostToolUseResponses(inject("from-a"), inject("from-b"));
+      const result = mergePostToolUseResponses([inject("from-a"), inject("from-b")]);
 
       expect(result).toEqual({
         action: "inject",
@@ -70,19 +70,19 @@ describe("JusticePlugin", () => {
     });
 
     it("should return skip when the left response is skip", () => {
-      const result = mergePostToolUseResponses(skip, inject("from-b"));
+      const result = mergePostToolUseResponses([skip, inject("from-b")]);
 
       expect(result).toEqual({ action: "skip" });
     });
 
     it("should return skip when the right response is skip", () => {
-      const result = mergePostToolUseResponses(inject("from-a"), skip);
+      const result = mergePostToolUseResponses([inject("from-a"), skip]);
 
       expect(result).toEqual({ action: "skip" });
     });
 
     it("should preserve empty injected contexts when concatenating", () => {
-      const result = mergePostToolUseResponses(inject(""), inject("tail"));
+      const result = mergePostToolUseResponses([inject(""), inject("tail")]);
 
       expect(result).toEqual({
         action: "inject",
@@ -96,7 +96,7 @@ describe("JusticePlugin", () => {
         injectedContext: "from-a",
         modifiedPayload: { args: { loadSkills: ["skill-a"] } },
       };
-      const result = mergePostToolUseResponses(a, proceed);
+      const result = mergePostToolUseResponses([a, proceed]);
 
       expect(result).toEqual(a);
       expect(result).not.toBe(a);
@@ -112,7 +112,7 @@ describe("JusticePlugin", () => {
         action: "inject",
         injectedContext: "from-b",
       };
-      const result = mergePostToolUseResponses(a, b);
+      const result = mergePostToolUseResponses([a, b]);
 
       expect(result).toEqual({
         action: "inject",
@@ -131,7 +131,7 @@ describe("JusticePlugin", () => {
         injectedContext: "from-b",
         modifiedPayload: { key: "b" },
       };
-      const result = mergePostToolUseResponses(a, b);
+      const result = mergePostToolUseResponses([a, b]);
 
       expect(result).toEqual({
         action: "inject",
@@ -140,7 +140,7 @@ describe("JusticePlugin", () => {
       });
     });
 
-    it("should prefer left modifiedPayload when both sides have it", () => {
+    it("should throw when both inject responses carry modifiedPayload", () => {
       const a: InjectResponse = {
         action: "inject",
         injectedContext: "from-a",
@@ -151,13 +151,8 @@ describe("JusticePlugin", () => {
         injectedContext: "from-b",
         modifiedPayload: { key: "b" },
       };
-      const result = mergePostToolUseResponses(a, b);
 
-      expect(result).toEqual({
-        action: "inject",
-        injectedContext: "from-a\n\n---\n\nfrom-b",
-        modifiedPayload: { key: "a", extra: true },
-      });
+      expect(() => mergePostToolUseResponses([a, b])).toThrow(/modifiedPayload/);
     });
   });
 

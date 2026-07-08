@@ -5,7 +5,7 @@ import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file
 
 describe("mergePostToolUseResponses", () => {
   it("combines inject responses into a single payload", () => {
-    const merged = mergePostToolUseResponses(
+    const merged = mergePostToolUseResponses([
       {
         action: "inject",
         injectedContext: "PlanBridge context",
@@ -14,7 +14,7 @@ describe("mergePostToolUseResponses", () => {
         action: "inject",
         injectedContext: "TaskFeedback context",
       },
-    );
+    ]);
 
     expect(merged).toEqual(
       expect.objectContaining({
@@ -30,16 +30,16 @@ describe("mergePostToolUseResponses", () => {
       injectedContext: "TaskFeedback context",
     };
 
-    expect(mergePostToolUseResponses({ action: "proceed" }, injected)).toEqual(injected);
-    expect(mergePostToolUseResponses(injected, { action: "proceed" })).toEqual(injected);
+    expect(mergePostToolUseResponses([{ action: "proceed" }, injected])).toEqual(injected);
+    expect(mergePostToolUseResponses([injected, { action: "proceed" }])).toEqual(injected);
   });
 
   it("prioritizes skip over inject", () => {
     const skip: HookResponse = { action: "skip" };
     const inject: HookResponse = { action: "inject", injectedContext: "Some context" };
 
-    expect(mergePostToolUseResponses(skip, inject)).toEqual({ action: "skip" });
-    expect(mergePostToolUseResponses(inject, skip)).toEqual({ action: "skip" });
+    expect(mergePostToolUseResponses([skip, inject])).toEqual({ action: "skip" });
+    expect(mergePostToolUseResponses([inject, skip])).toEqual({ action: "skip" });
   });
 });
 
