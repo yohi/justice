@@ -142,14 +142,14 @@ gt submit
 
 **Files:**
 
-- [ ] **Step 1: `devcontainer up --workspace-folder .` でコンテナを起動**
-- [ ] **Step 2: `devcontainer exec --workspace-folder . bun install --frozen-lockfile` で依存インストール**
-- [ ] **Step 3: `devcontainer exec --workspace-folder . bun run lint` 等で全コマンド検証**
-- [ ] **Step 4: 失敗時は `.devcontainer/devcontainer.json` を修正**
+- [x] **Step 1: `devcontainer up --workspace-folder .` でコンテナを起動**
+- [x] **Step 2: `devcontainer exec --workspace-folder . bun install --frozen-lockfile` で依存インストール**
+- [x] **Step 3: `devcontainer exec --workspace-folder . bun run lint` 等で全コマンド検証**
+- [x] **Step 4: 失敗時は `.devcontainer/devcontainer.json` を修正**
 - [ ] **Step 5: CI workflow に devcontainer 検証ジョブを追加**
-- [ ] **Step 6: コンテナ内で再実行して確認**
-- [ ] **Step 7: Commit**
-- [ ] **Step 8: Task 0.1 に向けた PR を作成する**
+- [x] **Step 6: コンテナ内で再実行して確認**
+- [x] **Step 7: Commit**
+- [x] **Step 8: Task 0.1 に向けた PR を作成する**
 
 ```bash
 gt submit
