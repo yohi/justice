@@ -76,7 +76,7 @@ export class ObservationLogStore {
       },
       (path) => this.readExisting(path),
       (path) => this.computeInitialSequence(path),
-      (path, err) => console.warn(`ObservationLogStore: append failed for ${path}`, err),
+      (path, err) => console.warn("ObservationLogStore: append failed for %s", path, err),
       (path) => this.rotateIfNeeded(path),
     );
   }
@@ -136,7 +136,7 @@ export class ObservationLogStore {
           validateRecordSchema(parsed);
           records.push(parsed as PersistedLogRecord);
         } catch (err) {
-          console.error(`Failed to parse or validate line in ${sourcePath}`, err);
+          console.error("Failed to parse or validate line in %s", sourcePath, err);
         }
       }
     };
@@ -155,7 +155,7 @@ export class ObservationLogStore {
         if (activePathSet.has(path)) {
           await this.recoverRotatedShard(path, seenArchivePaths, ingest);
         }
-        console.error(`Failed to read event file ${path}`, err);
+        console.error("Failed to read event file %s", path, err);
         continue;
       }
       ingest(content, path);
@@ -185,7 +185,8 @@ export class ObservationLogStore {
         validRecords.push(...group);
       } catch (err) {
         console.warn(
-          `Failed to validate shard sequences for ${shardKey}, excluding shard from result`,
+          "Failed to validate shard sequences for %s, excluding shard from result",
+          shardKey,
           err,
         );
       }
@@ -213,7 +214,7 @@ export class ObservationLogStore {
     try {
       archives = await this.fileReader.listFiles(archiveDir);
     } catch (err) {
-      console.error(`Failed to re-scan archive for rotated shard ${activePath}`, err);
+      console.error("Failed to re-scan archive for rotated shard %s", activePath, err);
       return;
     }
     for (const arch of [...archives].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
@@ -223,7 +224,7 @@ export class ObservationLogStore {
         const content = await this.fileReader.readFile(arch);
         ingest(content, arch);
       } catch (err) {
-        console.error(`Failed to read recovered archive segment ${arch}`, err);
+        console.error("Failed to read recovered archive segment %s", arch, err);
       }
     }
   }
@@ -305,7 +306,9 @@ export class ObservationLogStore {
       this.rotationFailuresByPath.set(path, failures);
       this.lastRotationError = err;
       console.error(
-        `ObservationLogStore: shard rotation failed for ${path} (consecutive failures=${failures})`,
+        "ObservationLogStore: shard rotation failed for %s (consecutive failures=%d)",
+        path,
+        failures,
         err,
       );
     }
