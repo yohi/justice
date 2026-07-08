@@ -316,6 +316,7 @@ describe("validateRecordSchema()", () => {
             verdict: "PASS",
             evidenceRefs: [
               {
+                kind: "full",
                 agentId: "sisyphus",
                 sessionId: "s",
                 writerId: "w-1",
@@ -344,10 +345,39 @@ describe("validateRecordSchema()", () => {
             verdict: "PASS",
             evidenceRefs: [
               {
+                kind: "full",
                 agentId: "sisyphus",
                 sessionId: "s",
                 writerId: "w-1",
                 sequence: NaN,
+                evidenceId: "e1",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/evidenceRef/);
+  });
+
+  it("rejects a decision evidenceRef missing kind:\"full\"", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [
+          {
+            ruleId: "r1",
+            verdict: "PASS",
+            evidenceRefs: [
+              {
+                agentId: "sisyphus",
+                sessionId: "s",
+                writerId: "w-1",
+                sequence: 0,
                 evidenceId: "e1",
               },
             ],
@@ -508,6 +538,14 @@ describe("validateShardSequences()", () => {
     const shardA: PersistedLogRecord = { ...mk(1), sessionId: "a:b", writerId: "c" };
     const shardB: PersistedLogRecord = { ...mk(1), sessionId: "a", writerId: "b:c" };
     expect(() => validateShardSequences([shardA, shardB])).not.toThrow();
+  });
+
+  it("throws when a shard's sequence starts above 1 (leading gap)", () => {
+    expect(() => validateShardSequences([mk(2), mk(3)])).toThrow(/gap detected/);
+  });
+
+  it("throws when a shard's sequence skips a number (mid-stream gap)", () => {
+    expect(() => validateShardSequences([mk(1), mk(3)])).toThrow(/gap detected/);
   });
 });
 

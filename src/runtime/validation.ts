@@ -79,7 +79,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     // update this branch in lockstep when the type is finalized.
   } else if (kind === "review_observed") {
     if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
-      throw new Error("Invalid review_observed record");
+      throw new TypeError("Invalid review_observed record");
     }
     for (const item of r.items) {
       if (
@@ -130,6 +130,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
     for (const ref of ruleResult.evidenceRefs) {
       if (
         !isObject(ref) ||
+        ref.kind !== "full" ||
         typeof ref.agentId !== "string" ||
         typeof ref.sessionId !== "string" ||
         typeof ref.writerId !== "string" ||
@@ -168,7 +169,7 @@ export function validateRecordSchema(record: unknown): void {
     typeof r.sessionId !== "string" ||
     typeof r.writerId !== "string"
   ) {
-    throw new Error("Invalid record: missing or invalid shard identifier fields");
+    throw new TypeError("Invalid record: missing or invalid shard identifier fields");
   }
 
   if (r.recordType === "observation") {
@@ -182,9 +183,11 @@ export function validateRecordSchema(record: unknown): void {
 
 /**
  * Validates per-shard sequence integrity across a merged record set. Duplicate
- * sequence numbers within a shard indicate corruption. Sequences are sorted to
- * normalize traversal-order variations from the readAll merge (D72) before the
- * duplicate check; a monotonicity guard remains as a defensive post-condition.
+ * sequence numbers within a shard indicate corruption. A gap (missing sequence)
+ * indicates lost records (e.g. an archive segment that failed to be recovered).
+ * Sequences are sorted to normalize traversal-order variations from the readAll
+ * merge (D72) before the duplicate/gap checks; a monotonicity guard remains as
+ * a defensive post-condition.
  */
 export function validateShardSequences(records: readonly PersistedLogRecord[]): void {
   const shardGroups = new Map<string, number[]>();
@@ -203,11 +206,27 @@ export function validateShardSequences(records: readonly PersistedLogRecord[]): 
     if (uniqueSeqs.size !== seqs.length) {
       throw new Error(`Sequence integrity violation on ${shardKey}: duplicate sequence detected`);
     }
-    // NOTE: `seqs` is sorted ascending above, and the duplicate check just passed,
-    // so this array is strictly increasing by construction — the `seq < prev`
-    // branch below can never trigger today. It is kept as a defensive
-    // post-condition in case a future refactor changes how `seqs` is populated
-    // before this point (e.g. removing the sort or reordering the dedup check).
+    // Gap check: with duplicates already ruled out above, a strictly increasing
+    // sequence whose first element is not 1 or whose consecutive elements differ
+    // by more than 1 has a missing sequence number (lost record). Detected here
+    // rather than recovered — `readAll` logs and continues fail-open.
+    if (seqs.length > 0 && seqs[0] !== 1) {
+      throw new Error(`Sequence integrity violation on ${shardKey}: gap detected (missing sequence before ${seqs[0]})`);
+    }
+    let prevSeq: number | undefined;
+    for (const seq of seqs) {
+      if (prevSeq !== undefined && seq - prevSeq > 1) {
+        throw new Error(
+          `Sequence integrity violation on ${shardKey}: gap detected (missing sequence between ${prevSeq} and ${seq})`,
+        );
+      }
+      prevSeq = seq;
+    }
+    // NOTE: `seqs` is sorted ascending above, and the duplicate/gap checks just
+    // passed, so this array is strictly increasing by construction — the
+    // `seq < prev` branch below can never trigger today. It is kept as a
+    // defensive post-condition in case a future refactor changes how `seqs` is
+    // populated before this point (e.g. removing the sort or reordering the checks).
     let prev: number | undefined;
     for (const seq of seqs) {
       if (prev !== undefined && seq < prev) {
