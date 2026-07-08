@@ -142,9 +142,42 @@ function foldReviewSummary(sorted: readonly PersistedLogRecord[]): ReviewSummary
   return { authority: "observed_review_output", ...global, byScope };
 }
 
+function applyObservationEvent(
+  tasks: Map<string, MutableTask>,
+  event: Extract<PersistedLogRecord, { recordType: "observation" }>,
+  baseRef: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId" | "sequence">,
+): void {
+  const taskId = event.taskId;
+  if (!taskId) return;
+  const taskState = ensureTask(tasks, taskId);
+  if (event.kind === "tool_executed") {
+    for (const ev of toEvidenceArray(event.evidence)) {
+      taskState.evidence.push({
+        evidence: ev,
+        ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
+      });
+    }
+  } else if (event.kind === "review_observed") {
+    if (event.reviewScope) taskState.observedReviewScopes.push(event.reviewScope);
+  }
+}
+
+function applyDecisionEvent(
+  tasks: Map<string, MutableTask>,
+  event: Extract<PersistedLogRecord, { recordType: "decision" }>,
+): void {
+  const taskId = event.taskId;
+  if (!taskId) return;
+  const taskState = ensureTask(tasks, taskId);
+  taskState.lastVerdict = event.verdict;
+  taskState.status = event.verdict;
+}
+
 /**
  * Pure deterministic fold from an event log to `ProjectedState` (§6.3).
  * Ordering is delegated to `orderEventsForProjection` so replays are stable.
+ * Observation and decision handling are delegated to `applyObservationEvent`/
+ * `applyDecisionEvent` to keep this function's branching shallow.
  */
 export function project(events: readonly PersistedLogRecord[], rebuiltAt: string): ProjectedState {
   const sorted = orderEventsForProjection(events);
@@ -161,25 +194,9 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
     };
 
     if (event.recordType === "observation") {
-      const taskId = event.taskId;
-      if (!taskId) continue;
-      const taskState = ensureTask(tasks, taskId);
-      if (event.kind === "tool_executed") {
-        for (const ev of toEvidenceArray(event.evidence)) {
-          taskState.evidence.push({
-            evidence: ev,
-            ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
-          });
-        }
-      } else if (event.kind === "review_observed") {
-        if (event.reviewScope) taskState.observedReviewScopes.push(event.reviewScope);
-      }
+      applyObservationEvent(tasks, event, baseRef);
     } else if (event.recordType === "decision") {
-      const taskId = event.taskId;
-      if (!taskId) continue;
-      const taskState = ensureTask(tasks, taskId);
-      taskState.lastVerdict = event.verdict;
-      taskState.status = event.verdict;
+      applyDecisionEvent(tasks, event);
     }
   }
 
