@@ -124,7 +124,7 @@ export class ObservationLogStore {
     const seenArchivePaths = new Set<string>(archivePaths);
     // Archive segments (older) precede active segments; sort within each group
     // for deterministic traversal. Spread first since listFiles returns readonly.
-    const allPaths = [...[...archivePaths].sort(), ...[...activePaths].sort()];
+    const allPaths = [...[...archivePaths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ...[...activePaths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))];
     const records: PersistedLogRecord[] = [];
 
     const ingest = (content: string, sourcePath: string): void => {
@@ -190,7 +190,7 @@ export class ObservationLogStore {
       console.error(`Failed to re-scan archive for rotated shard ${activePath}`, err);
       return;
     }
-    for (const arch of [...archives].sort()) {
+    for (const arch of [...archives].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (seenArchivePaths.has(arch)) continue;
       if (!arch.split("/").pop()?.startsWith(`${writerId}.`)) continue;
       try {

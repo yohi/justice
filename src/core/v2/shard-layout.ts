@@ -28,7 +28,7 @@ export function fromPhysicalPath(
   if (parts.length !== 5) return null;
   const [root, events, agentId, safeSessionId, fileName] = parts;
   if (root !== ".justice" || events !== "events") return null;
-  if (!agentId || !safeSessionId || !fileName || !fileName.endsWith(".jsonl")) return null;
+  if (!agentId || !safeSessionId || !fileName?.endsWith(".jsonl")) return null;
   const writerId = fileName.slice(0, -".jsonl".length);
   if (!writerId) return null;
   return { agentId, safeSessionId, writerId };
