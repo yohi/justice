@@ -17,6 +17,7 @@ import { LoopDetectionHandler } from "../hooks/loop-handler";
 import { ObservationHandler } from "../hooks/observation-handler";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
+import { SessionStateProvider } from "./session-state-provider";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -265,6 +266,7 @@ export class JusticePlugin {
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
   private readonly observationHandler: ObservationHandler;
+  private readonly sessionStateProvider: SessionStateProvider;
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
@@ -315,6 +317,7 @@ export class JusticePlugin {
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
     this.observationHandler = new ObservationHandler();
+    this.sessionStateProvider = new SessionStateProvider();
   }
 
   /**
@@ -386,9 +389,11 @@ export class JusticePlugin {
       }
       case "Event":
         return this.handleEventType(event);
-      case "AgentMapped":
-        // Full agent-name → persona mapping is implemented in Task 3.4.
+      case "AgentMapped": {
+        const { sessionId, agentName } = event.payload;
+        this.sessionStateProvider.setAgentMapping(sessionId, agentName);
         return PROCEED;
+      }
       default: {
         const _exhaustiveCheck: never = event;
         void _exhaustiveCheck;
@@ -453,6 +458,13 @@ export class JusticePlugin {
    */
   getObservationHandler(): ObservationHandler {
     return this.observationHandler;
+  }
+
+  /**
+   * Get the SessionStateProvider instance (sessionId → AgentId + callId task windows).
+   */
+  getSessionStateProvider(): SessionStateProvider {
+    return this.sessionStateProvider;
   }
 
   /**
