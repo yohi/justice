@@ -20,7 +20,7 @@ Phase 4（observation-handler）が未実装のため、実際の `tool.execute.
 
 計測スクリプト: [`spikes/observation-latency/measure.ts`](../../../spikes/observation-latency/measure.ts)
 
-```
+```bash
 bun run spikes/observation-latency/measure.ts
 ```
 

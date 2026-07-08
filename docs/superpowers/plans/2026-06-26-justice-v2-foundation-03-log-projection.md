@@ -70,17 +70,29 @@ export function isSafeWriterId(id: string): boolean {
 import { encodeSafeSegment } from "./safe-segment.ts";
 import type { ShardId } from "../types.ts";
 import { isSafeWriterId } from "./writer-id-validation.ts";
+import { isSafeObservationAgentId } from "./observation-agent-id-validation.ts";
 
 export function toPhysicalPath(shardId: ShardId): string {
+  if (!isSafeObservationAgentId(shardId.agentId)) {
+    throw new Error(`toPhysicalPath: unsafe agentId: ${shardId.agentId}`);
+  }
   if (!isSafeWriterId(shardId.writerId)) {
     throw new Error(`toPhysicalPath: unsafe writerId: ${shardId.writerId}`);
   }
   return `.justice/events/${shardId.agentId}/${encodeSafeSegment(shardId.sessionId)}/${shardId.writerId}.jsonl`;
 }
 
+const TIMESTAMP_RE = /^[A-Za-z0-9]+$/;
+
 export function toArchivePath(shardId: ShardId, timestamp: string): string {
+  if (!isSafeObservationAgentId(shardId.agentId)) {
+    throw new Error(`toArchivePath: unsafe agentId: ${shardId.agentId}`);
+  }
   if (!isSafeWriterId(shardId.writerId)) {
     throw new Error(`toArchivePath: unsafe writerId: ${shardId.writerId}`);
+  }
+  if (!TIMESTAMP_RE.test(timestamp)) {
+    throw new Error(`toArchivePath: unsafe timestamp: ${timestamp}`);
   }
   return `.justice/archive/events/${shardId.agentId}/${encodeSafeSegment(shardId.sessionId)}/${shardId.writerId}.${timestamp}.jsonl`;
 }
@@ -1088,7 +1100,7 @@ it("succeeds rotation even when the archive parent directory does not exist init
 devcontainer exec --workspace-folder . bun run test tests/runtime/rotation-sequence-continuity.test.ts
 ```
 
-- [x] **Step 5: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts src/runtime/observation-log-store.ts tests/runtime/rotation-sequence-continuity.test.ts
@@ -1096,7 +1108,7 @@ git commit -m "feat(v2): shard rotation and archive sequence continuity"
 
 ```
 
-- [x] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
+- [x] **Step 7: Phase 2 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
