@@ -135,6 +135,10 @@ export class PlanBridge {
   async handleMessage(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "Message") return PROCEED;
 
+    // Observation-kind message payloads (Task 3.2 widening) carry no role/content and are
+    // consumed by the observation pipeline (Task 3.3); ignore them here to stay fail-open.
+    if (!("content" in event.payload)) return PROCEED;
+
     // Track last user message for TriggerDetector guard
     if (event.payload.role === "user") {
       this.lastUserMessages.set(event.sessionId, event.payload.content);

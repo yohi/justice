@@ -216,6 +216,7 @@ export interface JusticePluginOptions {
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  readonly writerId?: string;
 }
 
 export class JusticePlugin {
@@ -306,17 +307,30 @@ export class JusticePlugin {
    */
   async handleEvent(event: HookEvent): Promise<HookResponse> {
     switch (event.type) {
-      case "Message":
-        return this.planBridge.handleMessage(event);
+      case "Message": {
+        // Legacy user/assistant payload drives plan-bridge delegation; observation-kind
+        // payloads (Task 3.2 widening) are consumed by the observation pipeline (Task 3.3).
+        const { payload } = event;
+        if ("role" in payload && "content" in payload) {
+          return this.planBridge.handleMessage(event);
+        }
+        return PROCEED;
+      }
       case "PreToolUse":
+        // The adapter forwards all tools now; only the task tool drives delegation.
+        if (event.payload.toolName !== "task") return PROCEED;
         return this.planBridge.handlePreToolUse(event);
       case "PostToolUse":
+        if (event.payload.toolName !== "task") return PROCEED;
         return mergePostToolUseResponses(
           await this.planBridge.handlePostToolUse(event),
           await this.taskFeedback.handlePostToolUse(event),
         );
       case "Event":
         return this.handleEventType(event);
+      case "AgentMapped":
+        // Full agent-name → persona mapping is implemented in Task 3.4.
+        return PROCEED;
       default: {
         const _exhaustiveCheck: never = event;
         void _exhaustiveCheck;

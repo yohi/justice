@@ -240,15 +240,15 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     });
   });
 
-  it("skips non-task tools", async () => {
+  it("skips justice_* query tools (D50: must not perturb the Observation Log)", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onToolExecuteBefore(
-      { tool: "bash", sessionID: "s", callID: "c1" },
-      { args: { command: "ls" } },
+      { tool: "justice_status", sessionID: "s", callID: "c1" },
+      { args: {} },
     );
 
     expect(spy).not.toHaveBeenCalled();
