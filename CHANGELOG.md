@@ -26,6 +26,77 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.4.0](https://github.com/yohi/justice/compare/v2.3.0...v2.4.0) (2026-07-08)
+
+
+### Features
+
+* CodeRabbitとDependabotを追加 ([28880ee](https://github.com/yohi/justice/commit/28880ee5606243f2c1e8c4d94e56242adb03ea6b))
+* coverageとSonarCloudを統合 ([1f47490](https://github.com/yohi/justice/commit/1f47490e799a1245bed639e151eb5709b6326726))
+* **v2:** Core event model and observation/decision types ([76e546d](https://github.com/yohi/justice/commit/76e546dae4d56382cdda923fb1d61af97af47980))
+* **v2:** Core event model and observation/decision types ([6086d50](https://github.com/yohi/justice/commit/6086d50ce733e497119c1a14658c060ae0a91b4d))
+* **v2:** deterministic state projection, replay, and cache validation tests ([ffe24b8](https://github.com/yohi/justice/commit/ffe24b883eaae52cb6f68f85757827f9dfe5482c))
+* **v2:** Evidence engine with source classification and declared claim extraction ([9469e74](https://github.com/yohi/justice/commit/9469e74ef450cf972618f5f337082d24befa4c92))
+* **v2:** Evidence engine with source classification and declared claim extraction ([eb088bd](https://github.com/yohi/justice/commit/eb088bd0255b3e1f0ed17e92ed9c15ca734d5212))
+* **v2:** implement observation log store with strict record schema and shard sequence validation ([d240a89](https://github.com/yohi/justice/commit/d240a898b64b80ef9df47e3becb51366718e8e1c))
+* **v2:** implement observation log store with strict record schema and shard sequence validation ([60eb366](https://github.com/yohi/justice/commit/60eb36638bd0eacf55758145a655e3970f1afe8b))
+* **v2:** implement per-shard write queue with atomic temporary appends ([f71547b](https://github.com/yohi/justice/commit/f71547bb3bf849583cfdb9f47a7895768d7a5626))
+* **v2:** Phase2 observation log store一式をmasterへ統合 (task2b-4 / PR [#125](https://github.com/yohi/justice/issues/125)-128) ([c03ff83](https://github.com/yohi/justice/commit/c03ff833e808f70824ade5d02ec57dd1db96a9c9))
+* **v2:** redaction, secret redaction, and safe-segment encoding for persistence ([7800261](https://github.com/yohi/justice/commit/7800261d4855ae096050ad36437b645b0004058b))
+* **v2:** redaction, secret redaction, and safe-segment encoding for persistence ([048ff05](https://github.com/yohi/justice/commit/048ff05cf29e0704ce3f6dfc11530ad60e45a502))
+* **v2:** shard file layout, writer ID generation, and collision allocation ([1e2a99d](https://github.com/yohi/justice/commit/1e2a99d1ceecd6929d120999f816075d67d60859))
+* **v2:** shard file layout, writer ID generation, and collision allocation ([2a3ee9b](https://github.com/yohi/justice/commit/2a3ee9bc9b2a87f5c8c7ae7d9794d6938839fe04))
+* **v2:** shard rotation and archive sequence continuity ([3e3a48d](https://github.com/yohi/justice/commit/3e3a48d4cef701750a8c8615c86fcf35ac03ad9a))
+* **v2:** shard rotation and archive sequence continuity ([153a8b0](https://github.com/yohi/justice/commit/153a8b0d0d5e7094a00477cb1857b3b88046ff9e))
+* カバレッジと脆弱性スキャンを追加 ([629e33f](https://github.com/yohi/justice/commit/629e33fededca54cad2b34d11b44afeaa28d192e))
+* 品質分析ワークフローを追加 ([b493a30](https://github.com/yohi/justice/commit/b493a30fd750906242473b7817291d0bc4efc8f2))
+
+
+### Bug Fixes
+
+* CI権限とSonarCloud実行を調整 ([eb197aa](https://github.com/yohi/justice/commit/eb197aac3bd315e81b2614515c1d469ad7ef19a3))
+* Codecov patchカバレッジチェックをinformationalに変更 ([e3d8c07](https://github.com/yohi/justice/commit/e3d8c07b8cb4b158b0062e05a7a44fcb6636ed11))
+* Codecovの除外設定を調整 ([6f9356c](https://github.com/yohi/justice/commit/6f9356c766eec2652a7f958102bd956babad7ed4))
+* CodeQLワークフローを削除しDefault setupとの競合を解消 ([63c6435](https://github.com/yohi/justice/commit/63c6435baae65bc1e0e1d507bb4b3ee2ed013680))
+* CodeRabbitレビュー指摘への対応(NaN検証/シャードキー衝突/一時ファイル残留/writerId不一致) ([529e832](https://github.com/yohi/justice/commit/529e83215f3f83a09a5f82c317331227377c4f95))
+* **core:** isSafeWriterIdの予約語チェックを大文字小文字非依存に修正 ([af71101](https://github.com/yohi/justice/commit/af711013aaeb209cbcd7f9cf97e54a50101d13d9))
+* **core:** ObservationAgentIdのallowlistをコンパイル時網羅性チェック化 ([1f31fd7](https://github.com/yohi/justice/commit/1f31fd762f9dddf43124b25ea4a2b917ab9a8ea6))
+* **core:** shard-layoutのtimestamp/agentId未検証によるパストラバーサル対策 ([10e9262](https://github.com/yohi/justice/commit/10e9262e3801f107d53ce2105a913b21f424a9c4))
+* **devcontainer:** rootless Docker 環境で baseline を確立 ([3e78c51](https://github.com/yohi/justice/commit/3e78c5100d4cfe60f81e2bcff5d8c838159dc5f1))
+* **devcontainer:** rootless Docker 環境で baseline を確立 ([0ccda4e](https://github.com/yohi/justice/commit/0ccda4e10ae3a81c8d81d9e79d450909305723cc))
+* messageレコードのmessageID/finalized未検証を修正 ([b95437a](https://github.com/yohi/justice/commit/b95437ac4746c205fd63b7eab85ba60061ddd8b7))
+* readAll()の行単位パースエラーで同一ファイル内の以降の行が消失する問題を修正 ([6cde49b](https://github.com/yohi/justice/commit/6cde49be7de04ae1e0edf8e16cb95dcd2730c5ee))
+* **redaction:** truncate マーカー長を事前に確保し、永続化文字列が 4096 文字を超えないようにする ([a25209b](https://github.com/yohi/justice/commit/a25209ba822dfd8e864fee964ff8a6e625acd632))
+* review_observed itemのsummary/location未検証を修正 ([258dce2](https://github.com/yohi/justice/commit/258dce270435a1ab72c6c1b9e70a6e2a810bf7f4))
+* **runtime:** allocateWriterIdの無制限再帰をイテレーティブループに変更 ([5a603bb](https://github.com/yohi/justice/commit/5a603bb948b4203832646ffc66db3aa1dc511063))
+* **runtime:** state.jsonキャッシュのwrite失敗時tmpファイルリークと検証漏れを修正 ([21cdcdd](https://github.com/yohi/justice/commit/21cdcdd222607a86b85d33dd5faf3e74db53a2f4))
+* **runtime:** write-queueのrename失敗時の一時ファイルリークとsequencesマップの蓄積を解消 ([370d9d3](https://github.com/yohi/justice/commit/370d9d304d5bcceed0e225bd2803474242ce56f2))
+* **runtime:** 配列sortに比較関数を指定して並び順を決定的にする ([b7a776e](https://github.com/yohi/justice/commit/b7a776ebcb860f5f4ac8dec3501045e2f7e33d1c))
+* **secret-detector:** redact() で同種の秘密情報を全件マスク ([f5e776c](https://github.com/yohi/justice/commit/f5e776c39dfcf139c3c16ae7b8edcc8a2788e87a))
+* **security:** 一時ファイル名の乱数生成をcrypto.randomUUIDに変更 ([75c95d4](https://github.com/yohi/justice/commit/75c95d48c183452261b360de2625a9434b996933))
+* Semgrepをクラウド非依存化 ([db088ea](https://github.com/yohi/justice/commit/db088ea39c38d08cf360275062961da82af7af74))
+* Snykアクションを固定 ([cfab184](https://github.com/yohi/justice/commit/cfab184b8a59bdc16d15d2447bdb06664f2b41a2))
+* SonarCloud artifact パス解決 - LCOV ファイル検出失敗の修正 ([30aa486](https://github.com/yohi/justice/commit/30aa4864a2b77ad5445e21858520301cc598a232))
+* SonarCloud CI permission と artifact 転送の修正 ([a015324](https://github.com/yohi/justice/commit/a015324fdd3ad7076fa94955147621c0ede9b54c))
+* SonarCloud coverage artifact の持続的な保存（git checkout リセット対策） ([a69c593](https://github.com/yohi/justice/commit/a69c59364f4f1098a788bc9b7d4fbe3d641c333e))
+* SonarCloud new code definition を previous_version に設定 ([38c91b9](https://github.com/yohi/justice/commit/38c91b9bbbddab73f78f0e7a53ac00a7b199eb9e))
+* SonarCloud除外設定とパスフォールバックを修正 ([8abd77e](https://github.com/yohi/justice/commit/8abd77ee84cf05eba20bd7fb8934645220adfca5))
+* state projection のコードレビュー指摘4件に対応 ([521b80e](https://github.com/yohi/justice/commit/521b80ec98a23988a458946bbc55cd3ec02c251a))
+* state.jsonキャッシュのコードレビュー指摘4件に対応 ([e4a343f](https://github.com/yohi/justice/commit/e4a343f08bf78415754059d7b972256147dcae9b))
+* **v2:** classifier のラッパー前置対応と inline-read のインタプリタ限定 ([b8acbc1](https://github.com/yohi/justice/commit/b8acbc14c1951e05512fa0fad463a37a70d78955))
+* **v2:** Codecov対応 ([f1bcd38](https://github.com/yohi/justice/commit/f1bcd38b3991871fa3924584e2488d86aaa43604))
+* **v2:** declared-claim の outcome 判定を fail 優先に統一 ([2367822](https://github.com/yohi/justice/commit/2367822a917aaf79bdfc23a992179e548c8df1c5))
+* **v2:** declared-claim の pass/fail 語形を拡張し粗い信号スコープを明記 ([db9edb7](https://github.com/yohi/justice/commit/db9edb740f40bdae53fcef896c22bb38f88bd500))
+* **v2:** declared-claim-extractor でテスト失敗検出と過去形 pass 判定を対称化 ([de6a7e1](https://github.com/yohi/justice/commit/de6a7e14b1c6c2e1138a49dcc1a6a54375b489fe))
+* **v2:** evidence-engine で metadata.error を task 分岐より優先 ([628cc68](https://github.com/yohi/justice/commit/628cc686358befe08d16145bc66a6aa4a724adad))
+* **v2:** OUTPUT_FAIL_PATTERN から error 語を除外し合格出力の誤分類を修正 ([b21fa21](https://github.com/yohi/justice/commit/b21fa217801be95b9012f1ae6a82916c5fa4c2f6))
+* **v2:** task 出力の basis を unparsed 化し SelfEvidenceRef の kind 欠落を修正 ([01a3926](https://github.com/yohi/justice/commit/01a39264703423e53a11cdf5941b74b6bf747aad))
+* **v2:** truncate() でサロゲートペア分割による不正 UTF-16 を防止 ([928bf88](https://github.com/yohi/justice/commit/928bf8876eefa516a12b981149c3062ed18c6144))
+* **v2:** 未知の実行系コマンドを command_exec に分類しファイル読取と両立 ([df67ffa](https://github.com/yohi/justice/commit/df67ffa65f83fd2e393a882144450593b430344d))
+* **v2:** 証拠エンジンの語彙同期・スニペットのサロゲート安全化・redaction 一元化 ([03b1ec9](https://github.com/yohi/justice/commit/03b1ec9f6417c9120f0070faff039cb396699c1a))
+* コードレビュー指摘への対応(evidence型検証/NaNガード/shardパス解析の共通化) ([e427245](https://github.com/yohi/justice/commit/e4272458627c8eda2f7cc5492da689bb46b6930e))
+* シャードローテーションのコードレビュー指摘3件に対応 ([046df39](https://github.com/yohi/justice/commit/046df39c04f7706e2d30d70136b75b31b598685e))
+
 ## [2.3.0](https://github.com/yohi/justice/compare/v2.2.1...v2.3.0) (2026-05-26)
 
 
