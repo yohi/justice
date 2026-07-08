@@ -54,7 +54,7 @@
 - Test: `tests/core/v2/shard-layout.test.ts`
 - Test: `tests/runtime/writer-id.test.ts`
 
-- [ ] **Step 1: shard layout 関数と writer-id バリデーションを実装**
+- [x] **Step 1: shard layout 関数と writer-id バリデーションを実装**
 
 ```typescript
 // src/core/v2/writer-id-validation.ts
@@ -86,7 +86,7 @@ export function toArchivePath(shardId: ShardId, timestamp: string): string {
 }
 ```
 
-- [ ] **Step 2: writer ID 生成を実装（D55）**
+- [x] **Step 2: writer ID 生成を実装（D55）**
 
 ```typescript
 // src/runtime/writer-id.ts
@@ -112,7 +112,7 @@ export async function allocateWriterId(
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/core/v2/shard-layout.ts src/core/v2/writer-id-validation.ts src/runtime/writer-id.ts
@@ -172,7 +172,7 @@ async rename(from: string, to: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts
@@ -188,7 +188,7 @@ git commit -m "feat(v2): extend FileReader with listFiles and FileWriter with re
 - Create: `src/runtime/write-queue.ts`
 - Test: `tests/runtime/observation-log-queue.test.ts`
 
-- [ ] **Step 1: write queue を実装（D23/D30 / 指摘5）**
+- [x] **Step 1: write queue を実装（D23/D30 / 指摘5）**
 
 ```typescript
 // src/runtime/write-queue.ts
@@ -264,7 +264,7 @@ export function createShardWriteQueue(
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/write-queue.ts tests/runtime/observation-log-queue.test.ts
@@ -280,7 +280,7 @@ git commit -m "feat(v2): implement per-shard write queue with atomic temporary a
 - Create: `src/runtime/observation-log-store.ts`
 - Create: `src/runtime/validation.ts`
 
-- [ ] **Step 1: `validation.ts` を実装**
+- [x] **Step 1: `validation.ts` を実装**
 
 ```typescript
 // src/runtime/validation.ts
@@ -415,7 +415,7 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 }
 ```
 
-- [ ] **Step 2: `ObservationLogStore` クラスを実装**
+- [x] **Step 2: `ObservationLogStore` クラスを実装**
 
 ```typescript
 // src/runtime/observation-log-store.ts
@@ -504,7 +504,7 @@ export class ObservationLogStore {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/observation-log-store.ts src/runtime/validation.ts
@@ -532,7 +532,7 @@ git commit -m "feat(v2): implement observation log store with strict record sche
   - Deterministic 2-stage merge: within-shard by `sequence`, across-shards by `timestamp → shardId → sequence`.
   - `ProjectedState` with `tasks`, `reviewSummary` (global + byScope), `integrity.maxSequenceByShard`.
 
-- [ ] **Step 1: projection fold を実装（§6.3/D27/D39）**
+- [x] **Step 1: projection fold を実装（§6.3/D27/D39）**
 
 ```typescript
 // src/core/v2/state-projection.ts
@@ -794,7 +794,7 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
 }
 ```
 
-- [ ] **Step 2: `StateProjectionCache` を実装（§5.6 / §9.4）**
+- [x] **Step 2: `StateProjectionCache` を実装（§5.6 / §9.4）**
 
 ```typescript
 // src/runtime/state-projection-cache.ts
@@ -895,7 +895,7 @@ export function validateProjectionCacheAgainstEvents(
 
 `ObservationLogStore` / `observation-handler` は projection 再構築後に `StateProjectionCache.write(state)` を呼び出す。書込失敗は fail-open で無視する。また、起動時に `StateProjectionCache.read()` を呼び出し、得られたキャッシュの `integrity` を、実際の `readAll()`結果から構築した `currentIntegrity`（実際のイベント群）と `validateProjectionCacheAgainstEvents` を用いて検証・比較する。キャッシュ不一致（欠損、破損、schema 不一致、`sourceHash` の乖離、あるいは `maxSequenceByShard` の不一致検知時）の場合はキャッシュを破棄し（`undefined` として扱い）、event log から再構築（rebuild）を行う。ただし、`sourceHash` 乖離（`reason === "stale_append"`）による再構築は、通常のイベント追記に伴う自然なキャッシュの stale 状態であるため、WARN や corruption/tamper 警告を出さずに静かに再構築（silent rebuild）を行う。一方、`maxSequenceByShard` 不一致や構造破損・スキーマ不正検知時は警告（WARN）を出した上で再構築を行う。
 
-- [ ] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
+- [x] **Step 2b: StateProjectionCache の読込・バリデーションテストを追加（D72）**
 
 `tests/runtime/state-projection-cache-read.test.ts` を作成し、以下を検証するテストを実装する：
 1. キャッシュが存在しない、またはスキーマ不正や破損（例外発生など）時に `read()` が `undefined` を返すこと。
@@ -903,7 +903,7 @@ export function validateProjectionCacheAgainstEvents(
 3. 正常なイベント追記による `sourceHash` mismatch 発生時、`validateProjectionCacheAgainstEvents` が `stale_append` を返し、警告（WARN）を出さずに静かに再構築（silent rebuild）が行われること（silent rebuild 分岐テスト）。
 4. `maxSequenceByShard` 不一致や構造破損時は警告（WARN）を出して再構築が行われること。
 
-- [ ] **Step 2c: JSON round-trip テストを追加**
+- [x] **Step 2c: JSON round-trip テストを追加**
 
 `ProjectedState` 内部は `ReadonlyMap` であっても、`toSerializableProjectedState()` 経由で書き込んだ `state.json` が正しく `maxSequenceByShard` / `tasks` / `reviewSummary.byScope` を含むことを検証する。
 
@@ -922,7 +922,7 @@ it("serializes ReadonlyMap fields to JSON objects", async () => {
 });
 ```
 
-- [ ] **Step 3: FF-004 replay test を実装**
+- [x] **Step 3: FF-004 replay test を実装**
 
 ```typescript
 // tests/core/observation-log-replay.test.ts
@@ -999,20 +999,20 @@ describe("FF-004 replay determinism and state validation", () => {
 });
 ```
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache-read.test.ts tests/runtime/state-projection-cache.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/v2/state-projection.ts src/core/v2/integrity.ts src/runtime/state-projection-cache.ts tests/core/v2/state-projection.test.ts tests/core/observation-log-replay.test.ts tests/runtime/state-projection-cache-read.test.ts tests/runtime/state-projection-cache.test.ts
 git commit -m "feat(v2): deterministic state projection, replay, and cache validation tests"
 ```
 
-- [ ] **Step 6: Phase 2 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 2 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -1048,7 +1048,7 @@ export interface FileReader {
 
 `NodeFileSystem`（`src/runtime/node-file-system.ts`）で `fs.stat` を用いて実装する。`createMockFileReader`（`tests/helpers/mock-file-system.ts`）にも同メソッドを追加する。
 
-- [ ] **Step 2: rotation 判定を実装（§9.4）**
+- [x] **Step 2: rotation 判定を実装（§9.4）**
 
 ```typescript
 // src/runtime/observation-log-store.ts 内
@@ -1062,12 +1062,12 @@ async function shouldRotate(fileReader: FileReader, path: string, now: Date): Pr
 }
 ```
 
-- [ ] **Step 3: rotation 後の sequence 連続性と直列化キューとの結合を実装（D23/D33）**
+- [x] **Step 3: rotation 後の sequence 連続性と直列化キューとの結合を実装（D23/D33）**
 
 active+archive の最大 sequence を計算し、次回 append からその値+1 を使用。
 `ObservationLogStore` は `createShardWriteQueue` の `onAppendComplete` 引数として `rotateIfNeeded` を渡し、書き込み完了直後かつ Promise が resolve される前に、同一直列化キュー内で rotation が判定・実行されることを保証する。
 
-- [ ] **Step 4: rotation 統合テストの実装（tests/runtime/rotation-sequence-continuity.test.ts）**
+- [x] **Step 4: rotation 統合テストの実装（tests/runtime/rotation-sequence-continuity.test.ts）**
 
 以下のテストを追加して、append と rotation が並行せずに直列実行され、かつ rotation 跨ぎで sequence が決定論的に継続することを確認する。
 
@@ -1082,13 +1082,13 @@ it("succeeds rotation even when the archive parent directory does not exist init
 });
 ```
 
-- [ ] **Step 5: テスト実行（Devcontainer 内）**
+- [x] **Step 5: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/rotation-sequence-continuity.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/types.ts src/runtime/node-file-system.ts tests/helpers/mock-file-system.ts src/runtime/observation-log-store.ts tests/runtime/rotation-sequence-continuity.test.ts
@@ -1096,7 +1096,7 @@ git commit -m "feat(v2): shard rotation and archive sequence continuity"
 
 ```
 
-- [ ] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 2 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit

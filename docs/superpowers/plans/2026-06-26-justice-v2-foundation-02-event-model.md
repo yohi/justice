@@ -283,20 +283,20 @@ describe("ObservationRecord type", () => {
 });
 ```
 
-- [ ] **Step 6: Devcontainer 内でテスト実行**
+- [x] **Step 6: Devcontainer 内でテスト実行**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/observation-model.test.ts
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/core/v2/observation-model.ts src/core/v2/decision-model.ts src/core/types.ts tests/core/v2/observation-model.test.ts
 git commit -m "feat(v2): Core event model and observation/decision types"
 ```
 
-- [ ] **Step 8: Phase 1 Base に向けた Draft PR を作成する**
+- [x] **Step 8: Phase 1 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -411,20 +411,20 @@ export function encodeSafeSegment(segment: string): string {
 }
 ```
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/secret-pattern-detector.ts src/core/v2/redaction.ts src/core/v2/safe-segment.ts tests/core/v2/redaction.test.ts tests/core/v2/safe-segment.test.ts
 git commit -m "feat(v2): redaction, secret redaction, and safe-segment encoding for persistence"
 ```
 
-- [ ] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 1 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -655,20 +655,20 @@ it("extracts declared claims for build lint and generic summaries", () => {
 });
 ```
 
-- [ ] **Step 5: テストを実行（Devcontainer 内）**
+- [x] **Step 5: テストを実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/evidence-engine.test.ts tests/core/v2/tool-output-classifier.test.ts tests/core/v2/declared-claim-extractor.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core/v2/evidence-engine.ts src/core/v2/tool-output-classifier.ts src/core/v2/declared-claim-extractor.ts src/core/v2/observation-model.ts tests/core/v2/*.test.ts
 git commit -m "feat(v2): Evidence engine with source classification and declared claim extraction"
 ```
 
-- [ ] **Step 7: Phase 1 Base に向けた Draft PR を作成する**
+- [x] **Step 7: Phase 1 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
