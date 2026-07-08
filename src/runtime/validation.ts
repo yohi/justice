@@ -186,8 +186,7 @@ export function validateRecordSchema(record: unknown): void {
  * sequence numbers within a shard indicate corruption. A gap (missing sequence)
  * indicates lost records (e.g. an archive segment that failed to be recovered).
  * Sequences are sorted to normalize traversal-order variations from the readAll
- * merge (D72) before the duplicate/gap checks; a monotonicity guard remains as
- * a defensive post-condition.
+ * merge (D72) before the duplicate/gap checks.
  */
 export function validateShardSequences(records: readonly PersistedLogRecord[]): void {
   const shardGroups = new Map<string, number[]>();
@@ -221,20 +220,6 @@ export function validateShardSequences(records: readonly PersistedLogRecord[]): 
         );
       }
       prevSeq = seq;
-    }
-    // NOTE: `seqs` is sorted ascending above, and the duplicate/gap checks just
-    // passed, so this array is strictly increasing by construction — the
-    // `seq < prev` branch below can never trigger today. It is kept as a
-    // defensive post-condition in case a future refactor changes how `seqs` is
-    // populated before this point (e.g. removing the sort or reordering the checks).
-    let prev: number | undefined;
-    for (const seq of seqs) {
-      if (prev !== undefined && seq < prev) {
-        throw new Error(
-          `Sequence integrity violation on ${shardKey}: sequence inversion detected (non-monotonic)`,
-        );
-      }
-      prev = seq;
     }
   }
 }
