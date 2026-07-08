@@ -118,6 +118,23 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     });
   });
 
+  it("reports stale_append when per-shard maxSequence matches but sourceHash differs (ordering drift)", () => {
+    const events = [toolEvent(1, "task-1"), toolEvent(2, "task-1")];
+    const state = project(events, REBUILT_AT);
+    // Tamper only the cached sourceHash; maxSequenceByShard still matches the
+    // event log exactly, so this must fall through to the hash-mismatch branch
+    // at the end of validateProjectionCacheAgainstEvents (not the maxSequence
+    // checks earlier in the function).
+    const tampered: ProjectedState = {
+      ...state,
+      integrity: { ...state.integrity, sourceHash: "tampered-hash" },
+    };
+    expect(validateProjectionCacheAgainstEvents(tampered, events)).toEqual({
+      valid: false,
+      reason: "stale_append",
+    });
+  });
+
   it("reports structural when the cache integrity block is missing", () => {
     const state = project([toolEvent(1, "task-1")], REBUILT_AT);
     const broken = { ...state, integrity: undefined } as unknown as ProjectedState;
