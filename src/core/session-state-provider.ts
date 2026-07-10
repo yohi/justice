@@ -35,8 +35,16 @@ export class SessionStateProvider {
    * Returns the mapped `AgentId` for the session, or `"unknown"` if the session
    * has no mapping OR the mapped name was unmappable.
    */
-  async getAgentId(sessionId: string): Promise<ObservationAgentId> {
+  getAgentId(sessionId: string): ObservationAgentId {
     return this.sessionAgentIds.get(sessionId) ?? "unknown";
+  }
+
+  /**
+   * Removes the session mapping for `sessionId`. Call this when a session ends
+   * to prevent unbounded growth of the internal map.
+   */
+  removeSession(sessionId: string): void {
+    this.sessionAgentIds.delete(sessionId);
   }
 
   /**

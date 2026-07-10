@@ -12,7 +12,7 @@ function agentMapped(sessionId: string, agentName: string): AgentMappedEvent {
 
 describe("Task 3.4: agentId resolution & session state mapping", () => {
   describe("name -> AgentId resolution (direct SessionStateProvider)", () => {
-    it("maps each of the 4 personas case-insensitively", async () => {
+    it("maps each of the 4 personas case-insensitively", () => {
       const provider = new SessionStateProvider();
       const cases: ReadonlyArray<readonly [string, AgentId]> = [
         ["hephaestus", "hephaestus"],
@@ -24,19 +24,30 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       for (const [name, expected] of cases) {
         const sessionId = `session-${name}`;
         provider.setAgentMapping(sessionId, name);
-        await expect(provider.getAgentId(sessionId)).resolves.toBe(expected);
+        expect(provider.getAgentId(sessionId)).toBe(expected);
       }
     });
 
-    it("resolves an unrecognized agent name to 'unknown'", async () => {
+    it("resolves an unrecognized agent name to 'unknown'", () => {
       const provider = new SessionStateProvider();
       provider.setAgentMapping("s1", "gemini-cli");
-      await expect(provider.getAgentId("s1")).resolves.toBe("unknown");
+      expect(provider.getAgentId("s1")).toBe("unknown");
     });
 
-    it("resolves an unmapped session to 'unknown'", async () => {
+    it("resolves an unmapped session to 'unknown'", () => {
       const provider = new SessionStateProvider();
-      await expect(provider.getAgentId("never-seen")).resolves.toBe("unknown");
+      expect(provider.getAgentId("never-seen")).toBe("unknown");
+    });
+
+    it("removes a mapped session so the entry no longer leaks", () => {
+      const provider = new SessionStateProvider();
+      provider.setAgentMapping("s-remove", "hephaestus");
+      expect(provider.getAgentId("s-remove")).toBe("hephaestus");
+
+      provider.removeSession("s-remove");
+      expect(provider.getAgentId("s-remove")).toBe("unknown");
+      // Removing a non-existent session must be a no-op.
+      expect(() => provider.removeSession("no-such-session")).not.toThrow();
     });
   });
 
@@ -61,16 +72,29 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
         // Upper-cased name also exercises case-insensitivity through the event path.
         const response = await plugin.handleEvent(agentMapped(sessionId, persona.toUpperCase()));
         expect(response).toEqual({ action: "proceed" });
-        await expect(plugin.getSessionStateProvider().getAgentId(sessionId)).resolves.toBe(persona);
+        expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe(persona);
       }
     });
 
     it("maps an unknown agent name from the event to 'unknown' (still PROCEED)", async () => {
       const response = await plugin.handleEvent(agentMapped("s-unknown", "cursor"));
       expect(response).toEqual({ action: "proceed" });
-      await expect(plugin.getSessionStateProvider().getAgentId("s-unknown")).resolves.toBe(
-        "unknown",
-      );
+      expect(plugin.getSessionStateProvider().getAgentId("s-unknown")).toBe("unknown");
+    });
+
+    it("trims the sessionAgentIds map when the loop handler reports session removal", () => {
+      const sessionId = "session-cleanup";
+      plugin.handleEvent(agentMapped(sessionId, "sisyphus"));
+      expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("sisyphus");
+
+      plugin.getLoopHandler().setSessionRemovedCallback((id) => {
+        plugin.getPlanBridge().destroySession(id);
+        plugin.getSessionStateProvider().removeSession(id);
+      });
+
+      // Simulate the same cleanup path JusticePlugin wires internally.
+      (plugin.getLoopHandler() as unknown as { removeSession(id: string): void }).removeSession(sessionId);
+      expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
     });
   });
 
@@ -134,9 +158,7 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       // Route several unknown/system-ish agent mappings through the observation side.
       for (const name of ["system", "unknown", "gemini", "cursor-agent"]) {
         await plugin.handleEvent(agentMapped(`obs-${name}`, name));
-        await expect(plugin.getSessionStateProvider().getAgentId(`obs-${name}`)).resolves.toBe(
-          "unknown",
-        );
+        expect(plugin.getSessionStateProvider().getAgentId(`obs-${name}`)).toBe("unknown");
       }
 
       // Wisdom store must be untouched: exactly the 4 seeded entries, every persona a real AgentId.

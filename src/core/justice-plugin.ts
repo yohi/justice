@@ -309,9 +309,10 @@ export class JusticePlugin {
       options.notifier,
     );
 
-    // Ensure session cleanup propagates from loopHandler to planBridge
+    // Ensure session cleanup propagates from loopHandler to all stateful handlers
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
       this.planBridge.destroySession(sessionId);
+      this.sessionStateProvider.removeSession(sessionId);
     });
 
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
