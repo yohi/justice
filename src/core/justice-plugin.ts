@@ -370,26 +370,31 @@ export class JusticePlugin {
             return PROCEED;
           });
       }
-      case "PreToolUse":
+      case "PreToolUse": {
         // The observation handler runs for EVERY tool; only the task tool also
-        // drives plan-bridge delegation.
-        return mergePreToolUseResponses(
-          await this.observationHandler.handlePreToolUse(event),
+        // drives plan-bridge delegation. Run independent handlers in parallel.
+        const [observation, planBridge] = await Promise.all([
+          this.observationHandler.handlePreToolUse(event),
           event.payload.toolName === "task"
-            ? await this.planBridge.handlePreToolUse(event)
-            : PROCEED,
-        );
+            ? this.planBridge.handlePreToolUse(event)
+            : Promise.resolve(PROCEED),
+        ]);
+        return mergePreToolUseResponses(observation, planBridge);
+      }
       case "PostToolUse": {
         // The observation handler runs for EVERY tool; the task tool also drives
         // plan-bridge completion detection and task-feedback processing.
-        const responses: HookResponse[] = [
-          await this.observationHandler.handlePostToolUse(event),
-        ];
-        if (event.payload.toolName === "task") {
-          responses.push(await this.planBridge.handlePostToolUse(event));
-          responses.push(await this.taskFeedback.handlePostToolUse(event));
-        }
-        return mergePostToolUseResponses(responses);
+        // Run independent handlers in parallel.
+        const [observation, planBridge, taskFeedback] = await Promise.all([
+          this.observationHandler.handlePostToolUse(event),
+          event.payload.toolName === "task"
+            ? this.planBridge.handlePostToolUse(event)
+            : Promise.resolve(PROCEED),
+          event.payload.toolName === "task"
+            ? this.taskFeedback.handlePostToolUse(event)
+            : Promise.resolve(PROCEED),
+        ]);
+        return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
       }
       case "Event":
         return this.handleEventType(event);
