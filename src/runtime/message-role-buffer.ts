@@ -14,6 +14,11 @@ type BufferPart = {
 };
 
 type BufferEntry = {
+  // "user" is currently unreachable via update(): ObservationMessagePayload's
+  // message_updated variant only ever carries role: "assistant" (message-payload.ts);
+  // user-role messages flow through a separate plan-bridge payload, not this buffer.
+  // The union is kept broad to preserve the general role-correlation discard guard
+  // (D53: role !== "assistant" => drop) in case a future payload variant widens role.
   role?: "assistant" | "user";
   readonly parts: Map<string, BufferPart>;
   lastUpdatedAt: number;
@@ -61,6 +66,7 @@ export class MessageRoleBuffer {
       for (const part of entry.parts.values()) part.finalized = true;
       entry.messageSignaled = true;
       entry.finalized = true;
+      entry.lastUpdatedAt = this.now();
       return;
     }
     const part = entry.parts.get(partId);
@@ -68,11 +74,12 @@ export class MessageRoleBuffer {
     // Two-signal completion (brief Step 2): completing the last part AFTER the message
     // signal has arrived promotes readiness; parts finalizing alone never do.
     this.tryFinalize(entry);
+    entry.lastUpdatedAt = this.now();
   }
 
   extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[] {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (!entry || entry.role !== "assistant") return [];
+    if (entry?.role !== "assistant") return [];
     const text = this.collectText(entry, partId);
     if (text === undefined) return [];
     return extractDeclaredClaims(this.sourceIdOf(messageId, partId), text);
@@ -95,7 +102,7 @@ export class MessageRoleBuffer {
     partId?: string,
   ): string | undefined {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (!entry || entry.role !== "assistant") return undefined;
+    if (entry?.role !== "assistant") return undefined;
     return this.getFinalizedText(sessionId, messageId, partId);
   }
 
@@ -149,19 +156,31 @@ export class MessageRoleBuffer {
     if (partId !== undefined) {
       return entry.parts.get(partId)?.text;
     }
-    const ordered = [...entry.parts.entries()].sort((a, b): number =>
-      a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
-    );
+    // Plain lexicographic comparison is intentionally correct here: OpenCode generates
+    // partIDs via Identifier.ascending("part", ...) as a fixed-width, monotonically
+    // increasing string (prt_<hex timestamp+counter><base62 random>), so string order
+    // equals arrival order by design. Do NOT switch to numeric-aware collation (e.g.
+    // localeCompare with { numeric: true }) — it would reinterpret embedded hex/base62
+    // digit runs as numbers and could misorder parts instead of fixing anything.
+    const ordered = [...entry.parts.entries()].sort((a, b): number => {
+      if (a[0] < b[0]) return -1;
+      if (a[0] > b[0]) return 1;
+      return 0;
+    });
     return ordered.map(([, part]): string => part.text).join("\n");
   }
 
   private keyOf(sessionId: string, messageId: string): string {
-    return `${sessionId}:${messageId}`;
+    // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
+    // (sessionId, messageId) pairs if either ID's format ever changes.
+    return JSON.stringify([sessionId, messageId]);
   }
 
   // Stable per-(message, part) evidence source so a re-updated part keeps the same
   // evidenceId, letting the latest claim replace (not duplicate) the prior one.
   private sourceIdOf(messageId: string, partId: string | undefined): string {
-    return partId !== undefined ? `${messageId}:${partId}` : messageId;
+    // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
+    // (messageId, partId) pairs if either ID's format ever changes.
+    return partId !== undefined ? JSON.stringify([messageId, partId]) : messageId;
   }
 }
