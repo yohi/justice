@@ -79,7 +79,7 @@ export class MessageRoleBuffer {
 
   extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[] {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (!entry || entry.role !== "assistant") return [];
+    if (entry?.role !== "assistant") return [];
     const text = this.collectText(entry, partId);
     if (text === undefined) return [];
     return extractDeclaredClaims(this.sourceIdOf(messageId, partId), text);
@@ -102,7 +102,7 @@ export class MessageRoleBuffer {
     partId?: string,
   ): string | undefined {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (!entry || entry.role !== "assistant") return undefined;
+    if (entry?.role !== "assistant") return undefined;
     return this.getFinalizedText(sessionId, messageId, partId);
   }
 
@@ -162,19 +162,25 @@ export class MessageRoleBuffer {
     // equals arrival order by design. Do NOT switch to numeric-aware collation (e.g.
     // localeCompare with { numeric: true }) — it would reinterpret embedded hex/base62
     // digit runs as numbers and could misorder parts instead of fixing anything.
-    const ordered = [...entry.parts.entries()].sort((a, b): number =>
-      a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
-    );
+    const ordered = [...entry.parts.entries()].sort((a, b): number => {
+      if (a[0] < b[0]) return -1;
+      if (a[0] > b[0]) return 1;
+      return 0;
+    });
     return ordered.map(([, part]): string => part.text).join("\n");
   }
 
   private keyOf(sessionId: string, messageId: string): string {
-    return `${sessionId}:${messageId}`;
+    // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
+    // (sessionId, messageId) pairs if either ID's format ever changes.
+    return JSON.stringify([sessionId, messageId]);
   }
 
   // Stable per-(message, part) evidence source so a re-updated part keeps the same
   // evidenceId, letting the latest claim replace (not duplicate) the prior one.
   private sourceIdOf(messageId: string, partId: string | undefined): string {
-    return partId !== undefined ? `${messageId}:${partId}` : messageId;
+    // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
+    // (messageId, partId) pairs if either ID's format ever changes.
+    return partId !== undefined ? JSON.stringify([messageId, partId]) : messageId;
   }
 }
