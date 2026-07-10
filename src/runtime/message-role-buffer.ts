@@ -14,6 +14,11 @@ type BufferPart = {
 };
 
 type BufferEntry = {
+  // "user" is currently unreachable via update(): ObservationMessagePayload's
+  // message_updated variant only ever carries role: "assistant" (message-payload.ts);
+  // user-role messages flow through a separate plan-bridge payload, not this buffer.
+  // The union is kept broad to preserve the general role-correlation discard guard
+  // (D53: role !== "assistant" => drop) in case a future payload variant widens role.
   role?: "assistant" | "user";
   readonly parts: Map<string, BufferPart>;
   lastUpdatedAt: number;
@@ -149,6 +154,12 @@ export class MessageRoleBuffer {
     if (partId !== undefined) {
       return entry.parts.get(partId)?.text;
     }
+    // Plain lexicographic comparison is intentionally correct here: OpenCode generates
+    // partIDs via Identifier.ascending("part", ...) as a fixed-width, monotonically
+    // increasing string (prt_<hex timestamp+counter><base62 random>), so string order
+    // equals arrival order by design. Do NOT switch to numeric-aware collation (e.g.
+    // localeCompare with { numeric: true }) — it would reinterpret embedded hex/base62
+    // digit runs as numbers and could misorder parts instead of fixing anything.
     const ordered = [...entry.parts.entries()].sort((a, b): number =>
       a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
     );
