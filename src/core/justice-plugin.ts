@@ -2,14 +2,15 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-  FileReader,
-  FileWriter,
-  HookEvent,
-  HookResponse,
-  InjectResponse,
-  EventEvent,
-  CompactionPayload,
+FileReader,
+FileWriter,
+HookEvent,
+HookResponse,
+InjectResponse,
+EventEvent,
+CompactionPayload,
 } from "./types";
+import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -255,6 +256,12 @@ export interface JusticePluginOptions {
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  /**
+   * Bootstrapped writer ID for Observation Log shards (D55/D39). Currently
+   * unused within JusticePlugin — intentional scaffolding ahead of Task 3.3
+   * (Observation Log sharding). Do not remove; wire this into shard
+   * allocation when Task 3.3 lands.
+   */
   readonly writerId?: string;
 }
 
@@ -353,7 +360,7 @@ export class JusticePlugin {
         // payloads (Task 3.2 widening) feed the observation pipeline. The
         // observation branch is fail-open: any error degrades to PROCEED.
         const { payload } = event;
-        if ("role" in payload && "content" in payload) {
+        if (isLegacyMessagePayload(payload)) {
           return this.planBridge.handleMessage(event);
         }
         return await this.observationHandler
@@ -388,6 +395,7 @@ export class JusticePlugin {
         return this.handleEventType(event);
       case "AgentMapped":
         // Full agent-name → persona mapping is implemented in Task 3.4.
+        void event.sessionId;
         return PROCEED;
       default: {
         const _exhaustiveCheck: never = event;

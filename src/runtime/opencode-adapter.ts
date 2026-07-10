@@ -216,24 +216,37 @@ export class OpenCodeAdapter {
     if (!justice) return;
 
     // (1) Agent mapping: propagate the detected agent name so persona state can be
-    // reconstructed later (D48/FIND-001). Full mapping lands in Task 3.4.
+    // reconstructed later (D48/FIND-001). Full mapping lands in Task 3.4. Wrapped in
+    // its own try/catch so an AgentMapped dispatch failure can never block the
+    // plan-bridge delegation path (2) or the observation log (3) below.
     const agentName = this.#resolveAgentName(properties, info);
     if (agentName) {
-      await justice.handleEvent({
-        type: "AgentMapped",
-        payload: { sessionId, agentName },
-      });
+      try {
+await justice.handleEvent({
+          type: "AgentMapped",
+          sessionId,
+payload: { sessionId, agentName },
+});
+      } catch (err) {
+        await this.log("error", "[Justice] AgentMapped dispatch failed", err);
+      }
     }
 
     // (2) Legacy user/assistant content path (plan-bridge delegation). Preserved
     // exactly: only forwarded when content is present so empty streaming updates
-    // do not spuriously trigger delegation.
+    // do not spuriously trigger delegation. Wrapped in its own try/catch (mirrors
+    // (1) above) so a delegation dispatch failure can never block the
+    // observation log (3) below.
     if ((role === "assistant" || role === "user") && content.length > 0) {
-      await justice.handleEvent({
-        type: "Message",
-        sessionId,
-        payload: { role, content },
-      });
+      try {
+        await justice.handleEvent({
+          type: "Message",
+          sessionId,
+          payload: { role, content },
+        });
+      } catch (err) {
+        await this.log("error", "[Justice] plan-bridge delegation dispatch failed", err);
+      }
     }
 
     // (3) Observation message_updated for assistant messages, carrying the
@@ -380,6 +393,13 @@ export class OpenCodeAdapter {
     }
   }
 
+  /**
+   * NOTE: `output.output` is intentionally non-readonly to support in-place
+   * mutation when `enableAdvisoryOutputAppend` is true (see
+   * OpenCodeAdapterOptions). TypeScript does not flag callers passing a
+   * `readonly`-typed object here as a compile error; such callers may observe
+   * their object mutated at runtime when the option is enabled.
+   */
   async onToolExecuteAfter(
     input: {
       readonly tool: string;
@@ -427,7 +447,7 @@ export class OpenCodeAdapter {
             title: "Task Gate",
             message: response.injectedContext,
             sessionId: input.sessionID,
-            taskId: "unknown",
+            taskId: (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
           });
         } catch (err) {
           await this.log("warn", "[Justice] gate advisory notify failed", err);
