@@ -43,6 +43,8 @@ describe("ObservationRecord type", () => {
       role: "assistant",
       textHash: "sha256:abc",
       finalized: true,
+      declaredClaims: [],
+      evidence: [],
     };
     expect(r.kind).toBe("message");
   });
