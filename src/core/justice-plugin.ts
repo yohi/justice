@@ -216,6 +216,12 @@ export interface JusticePluginOptions {
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  /**
+   * Bootstrapped writer ID for Observation Log shards (D55/D39). Currently
+   * unused within JusticePlugin — intentional scaffolding ahead of Task 3.3
+   * (Observation Log sharding). Do not remove; wire this into shard
+   * allocation when Task 3.3 lands.
+   */
   readonly writerId?: string;
 }
 
