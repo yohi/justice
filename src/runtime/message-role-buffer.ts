@@ -66,6 +66,7 @@ export class MessageRoleBuffer {
       for (const part of entry.parts.values()) part.finalized = true;
       entry.messageSignaled = true;
       entry.finalized = true;
+      entry.lastUpdatedAt = this.now();
       return;
     }
     const part = entry.parts.get(partId);
@@ -73,6 +74,7 @@ export class MessageRoleBuffer {
     // Two-signal completion (brief Step 2): completing the last part AFTER the message
     // signal has arrived promotes readiness; parts finalizing alone never do.
     this.tryFinalize(entry);
+    entry.lastUpdatedAt = this.now();
   }
 
   extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[] {
