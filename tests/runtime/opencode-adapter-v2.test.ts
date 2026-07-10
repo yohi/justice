@@ -160,6 +160,48 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     expect(notifySpy).not.toHaveBeenCalled();
     expect(output.output).toBe("raw");
   });
+
+  it("(c) gate_advisory notify falls back to taskId 'unknown' when input.args has no taskId", async () => {
+    const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    notifySpy.mockClear(); // discard the initialization notification
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "GATE: blocked",
+      variant: "gate_advisory",
+    });
+
+    const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+    // input.args intentionally omits taskId.
+    await adapter.onToolExecuteAfter({ tool: "bash", sessionID: "s", callID: "c1", args: {} }, output);
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0][0]).toMatchObject({ taskId: "unknown" });
+  });
+
+  it("(c) gate_advisory notify uses input.args.taskId when present", async () => {
+    const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    notifySpy.mockClear(); // discard the initialization notification
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "GATE: blocked",
+      variant: "gate_advisory",
+    });
+
+    const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: { taskId: "task-42" } },
+      output,
+    );
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0][0]).toMatchObject({ taskId: "task-42" });
+  });
 });
 
 describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => {
@@ -238,6 +280,61 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
   });
 
+  it("(d) still forwards the observation message_updated when the legacy delegation dispatch throws", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+    const spy = vi
+      .spyOn(justice, "handleEvent")
+      .mockImplementation(async (event) => {
+        if (event.type === "Message" && "content" in event.payload) {
+          throw new Error("delegation dispatch boom");
+        }
+        return { action: "proceed" };
+      });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "sess-1",
+          info: { id: "msg-1", role: "assistant", content: "done", time: { completed: 123 } },
+        },
+      },
+    });
+
+    const events = spy.mock.calls.map((c) => c[0]);
+
+    // The failing delegation dispatch was still attempted...
+    const contentMsg = events.find((e) => e.type === "Message" && "content" in e.payload);
+    expect(contentMsg).toBeDefined();
+
+    // ...and its failure was logged rather than crashing the handler.
+    expect(logSpy).toHaveBeenCalledWith(
+      "error",
+      "[Justice] plan-bridge delegation dispatch failed",
+      expect.any(Error),
+    );
+
+    // Critically, the observation message_updated must still be dispatched (3)
+    // even though the legacy delegation dispatch (2) threw.
+    const obsMsg = events.find(
+      (e) => e.type === "Message" && "kind" in e.payload && e.payload.kind === "message_updated",
+    );
+    expect(obsMsg).toMatchObject({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: {
+        kind: "message_updated",
+        sessionId: "sess-1",
+        messageID: "msg-1",
+        role: "assistant",
+        finalized: true,
+      },
+    });
+  });
+
   it("(e) forwards an AgentMapped event when an agent property is present", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -259,6 +356,45 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     expect(agentMapped).toMatchObject({
       type: "AgentMapped",
       payload: { sessionId: "sess-1", agentName: "hephaestus" },
+    });
+  });
+
+  it("(g) still dispatches the plan-bridge Message when AgentMapped dispatch throws", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    // Reject ONLY the AgentMapped dispatch; Message dispatches must still succeed.
+    const spy = vi.spyOn(justice, "handleEvent").mockImplementation(async (event) => {
+      if (event.type === "AgentMapped") {
+        throw new Error("agent mapping boom");
+      }
+      return { action: "proceed" };
+    });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "sess-1",
+          info: {
+            id: "msg-1",
+            role: "assistant",
+            content: "delegate next task",
+            agent: "hephaestus",
+          },
+        },
+      },
+    });
+
+    const events = spy.mock.calls.map((c) => c[0]);
+    // The failing AgentMapped dispatch was attempted...
+    expect(events.some((e) => e.type === "AgentMapped")).toBe(true);
+    // ...but the plan-bridge delegation Message still fired despite it throwing.
+    const contentMsg = events.find((e) => e.type === "Message" && "content" in e.payload);
+    expect(contentMsg).toMatchObject({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: { role: "assistant", content: "delegate next task" },
     });
   });
 

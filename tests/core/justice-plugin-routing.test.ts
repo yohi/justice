@@ -174,4 +174,84 @@ describe("JusticePlugin routing guard", () => {
 
     expect(response).toEqual({ action: "proceed" });
   });
+
+  it("fails open to PROCEED when observation handlePreToolUse rejects", async () => {
+    const plugin = createPlugin();
+    const observation = plugin.getObservationHandler();
+
+    vi.spyOn(observation, "handlePreToolUse").mockRejectedValue(new Error("boom"));
+
+    const response = await plugin.handleEvent({
+      type: "PreToolUse",
+      payload: { toolName: "bash", toolInput: {} },
+      sessionId: "s-1",
+    } as PreToolUseEvent);
+
+    expect(response).toEqual({ action: "proceed" });
+  });
+
+  it("fails open to PROCEED when observation handlePostToolUse rejects", async () => {
+    const plugin = createPlugin();
+    const observation = plugin.getObservationHandler();
+
+    vi.spyOn(observation, "handlePostToolUse").mockRejectedValue(new Error("boom"));
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+      sessionId: "s-1",
+    } as PostToolUseEvent);
+
+    expect(response).toEqual({ action: "proceed" });
+  });
+
+  it("preserves task PreToolUse result when observation fails", async () => {
+    const plugin = createPlugin();
+    const observation = plugin.getObservationHandler();
+    const planBridge = plugin.getPlanBridge();
+
+    vi.spyOn(observation, "handlePreToolUse").mockRejectedValue(new Error("boom"));
+    const planSpy = vi
+      .spyOn(planBridge, "handlePreToolUse")
+      .mockResolvedValue({ action: "inject", injectedContext: "plan pre" });
+
+    const response = await plugin.handleEvent({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: {} },
+      sessionId: "s-1",
+    } as PreToolUseEvent);
+
+    expect(planSpy).toHaveBeenCalledTimes(1);
+    expect(response).toEqual({ action: "inject", injectedContext: "plan pre" });
+  });
+
+  it("preserves task PostToolUse merged result when observation fails", async () => {
+    const plugin = createPlugin();
+    const observation = plugin.getObservationHandler();
+    const planBridge = plugin.getPlanBridge();
+    const taskFeedback = plugin.getTaskFeedback();
+
+    vi.spyOn(observation, "handlePostToolUse").mockRejectedValue(new Error("boom"));
+    const planSpy = vi
+      .spyOn(planBridge, "handlePostToolUse")
+      .mockResolvedValue({ action: "inject", injectedContext: "plan post" });
+    const feedbackSpy = vi
+      .spyOn(taskFeedback, "handlePostToolUse")
+      .mockResolvedValue({ action: "inject", injectedContext: "feedback post" });
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      payload: { toolName: "task", toolResult: "ok", error: false },
+      sessionId: "s-1",
+    } as PostToolUseEvent);
+
+    expect(planSpy).toHaveBeenCalledTimes(1);
+    expect(feedbackSpy).toHaveBeenCalledTimes(1);
+    expect(response).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        injectedContext: "plan post\n\n---\n\nfeedback post",
+      }),
+    );
+  });
 });

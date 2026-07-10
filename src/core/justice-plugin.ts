@@ -2,14 +2,15 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-  FileReader,
-  FileWriter,
-  HookEvent,
-  HookResponse,
-  InjectResponse,
-  EventEvent,
-  CompactionPayload,
+FileReader,
+FileWriter,
+HookEvent,
+HookResponse,
+InjectResponse,
+EventEvent,
+CompactionPayload,
 } from "./types";
+import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -256,6 +257,12 @@ export interface JusticePluginOptions {
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  /**
+   * Bootstrapped writer ID for Observation Log shards (D55/D39). Currently
+   * unused within JusticePlugin — intentional scaffolding ahead of Task 3.3
+   * (Observation Log sharding). Do not remove; wire this into shard
+   * allocation when Task 3.3 lands.
+   */
   readonly writerId?: string;
 }
 
@@ -357,7 +364,7 @@ export class JusticePlugin {
         // payloads (Task 3.2 widening) feed the observation pipeline. The
         // observation branch is fail-open: any error degrades to PROCEED.
         const { payload } = event;
-        if ("role" in payload && "content" in payload) {
+        if (isLegacyMessagePayload(payload)) {
           return this.planBridge.handleMessage(event);
         }
         return await this.observationHandler
@@ -367,30 +374,42 @@ export class JusticePlugin {
             return PROCEED;
           });
       }
-      case "PreToolUse":
+      case "PreToolUse": {
         // The observation handler runs for EVERY tool; only the task tool also
-        // drives plan-bridge delegation.
-        return mergePreToolUseResponses(
-          await this.observationHandler.handlePreToolUse(event),
+        // drives plan-bridge delegation. Run independent handlers in parallel.
+        const [observation, planBridge] = await Promise.all([
+          this.observationHandler.handlePreToolUse(event).catch((err) => {
+            this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+            return PROCEED;
+          }),
           event.payload.toolName === "task"
-            ? await this.planBridge.handlePreToolUse(event)
-            : PROCEED,
-        );
+            ? this.planBridge.handlePreToolUse(event)
+            : Promise.resolve(PROCEED),
+        ]);
+        return mergePreToolUseResponses(observation, planBridge);
+      }
       case "PostToolUse": {
         // The observation handler runs for EVERY tool; the task tool also drives
         // plan-bridge completion detection and task-feedback processing.
-        const responses: HookResponse[] = [
-          await this.observationHandler.handlePostToolUse(event),
-        ];
-        if (event.payload.toolName === "task") {
-          responses.push(await this.planBridge.handlePostToolUse(event));
-          responses.push(await this.taskFeedback.handlePostToolUse(event));
-        }
-        return mergePostToolUseResponses(responses);
+        // Run independent handlers in parallel.
+        const [observation, planBridge, taskFeedback] = await Promise.all([
+          this.observationHandler.handlePostToolUse(event).catch((err) => {
+            this.options.logger?.warn("observation-handler post-tool-use failed", err);
+            return PROCEED;
+          }),
+          event.payload.toolName === "task"
+            ? this.planBridge.handlePostToolUse(event)
+            : Promise.resolve(PROCEED),
+          event.payload.toolName === "task"
+            ? this.taskFeedback.handlePostToolUse(event)
+            : Promise.resolve(PROCEED),
+        ]);
+        return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
       }
       case "Event":
         return this.handleEventType(event);
       case "AgentMapped": {
+        // Full agent-name → persona mapping is implemented in Task 3.4.
         const { sessionId, agentName } = event.payload;
         this.sessionStateProvider.setAgentMapping(sessionId, agentName);
         return PROCEED;
