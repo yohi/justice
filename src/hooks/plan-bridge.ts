@@ -476,10 +476,10 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses(response, {
+          response = mergePostToolUseResponses([response, {
             action: "inject",
             injectedContext: `${banner}\n${atlasGuidance}`,
-          });
+          }]);
 
           this.safeNotify(
             sessionId,
@@ -506,10 +506,10 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses(response, {
+          response = mergePostToolUseResponses([response, {
             action: "inject",
             injectedContext: `${banner}\n${atlasGuidance}`,
-          });
+          }]);
 
           this.safeNotify(
             sessionId,
@@ -570,13 +570,13 @@ export class PlanBridge {
         message: `Sisyphusがsystematic-debuggingを完了しました。${savedCount} 件のWisdomを保存しました。`,
       });
       const breakdownText = breakdown ? ` ${breakdown}` : "";
-      response = mergePostToolUseResponses(response, {
+      response = mergePostToolUseResponses([response, {
         action: "inject",
         injectedContext:
           `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
           `**Confidence**: ${debuggingCompletion.confidence}\n` +
           `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
-      });
+      }]);
       this.safeNotify(
         sessionId,
         undefined,
@@ -631,10 +631,10 @@ export class PlanBridge {
           "---",
         ].join("\n");
 
-        response = mergePostToolUseResponses(response, {
+        response = mergePostToolUseResponses([response, {
           action: "inject",
           injectedContext: `${banner}\n${pivotBody}`,
-        });
+        }]);
         this.safeNotify(
           sessionId,
           taskId,
@@ -660,10 +660,10 @@ export class PlanBridge {
           rawOutput: toolResult,
         });
         if (legacyCompletion) {
-          response = mergePostToolUseResponses(response, {
+          response = mergePostToolUseResponses([response, {
             action: "inject",
             injectedContext: legacyCompletion.guidance,
-          });
+          }]);
         }
       }
     }
