@@ -2,14 +2,15 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-  FileReader,
-  FileWriter,
-  HookEvent,
-  HookResponse,
-  InjectResponse,
-  EventEvent,
-  CompactionPayload,
+FileReader,
+FileWriter,
+HookEvent,
+HookResponse,
+InjectResponse,
+EventEvent,
+CompactionPayload,
 } from "./types";
+import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -317,7 +318,7 @@ export class JusticePlugin {
         // Legacy user/assistant payload drives plan-bridge delegation; observation-kind
         // payloads (Task 3.2 widening) are consumed by the observation pipeline (Task 3.3).
         const { payload } = event;
-        if ("role" in payload && "content" in payload) {
+        if (isLegacyMessagePayload(payload)) {
           return this.planBridge.handleMessage(event);
         }
         return PROCEED;
@@ -336,6 +337,7 @@ export class JusticePlugin {
         return this.handleEventType(event);
       case "AgentMapped":
         // Full agent-name → persona mapping is implemented in Task 3.4.
+        void event.sessionId;
         return PROCEED;
       default: {
         const _exhaustiveCheck: never = event;

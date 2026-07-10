@@ -144,11 +144,20 @@ export interface MessageEvent {
 /** エージェント割当イベント: message properties から検出した agent 名を伝播する (Task 3.4 で状態反映) */
 export interface AgentMappedEvent {
   readonly type: "AgentMapped";
+  readonly sessionId: string;
   readonly payload: {
     readonly sessionId: string;
     readonly agentName: string;
   };
 }
+
+/** MessagePayload 型ガード: legacy user/assistant payload か判定する */
+  export function isLegacyMessagePayload(
+  payload: MessagePayload | ObservationMessagePayload,
+  ): payload is MessagePayload {
+  return "role" in payload && "content" in payload;
+}
+
 
 export interface PreToolUseEvent {
   readonly type: "PreToolUse";

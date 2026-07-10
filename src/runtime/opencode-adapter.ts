@@ -222,10 +222,11 @@ export class OpenCodeAdapter {
     const agentName = this.#resolveAgentName(properties, info);
     if (agentName) {
       try {
-        await justice.handleEvent({
+await justice.handleEvent({
           type: "AgentMapped",
-          payload: { sessionId, agentName },
-        });
+          sessionId,
+payload: { sessionId, agentName },
+});
       } catch (err) {
         await this.log("error", "[Justice] AgentMapped dispatch failed", err);
       }
