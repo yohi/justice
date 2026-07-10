@@ -54,9 +54,7 @@ describe("toPhysicalPath()", () => {
 
   it("does not encode the constrained agentId segment", () => {
     const s: ShardId = { agentId: "system", sessionId: "s", writerId: "w-x" };
-    expect(toPhysicalPath(s)).toBe(
-      `.justice/events/system/${encodeSafeSegment("s")}/w-x.jsonl`,
-    );
+    expect(toPhysicalPath(s)).toBe(`.justice/events/system/${encodeSafeSegment("s")}/w-x.jsonl`);
   });
 
   it("throws when writerId is unsafe", () => {

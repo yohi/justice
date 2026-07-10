@@ -126,7 +126,10 @@ export class ObservationLogStore {
     const seenArchivePaths = new Set<string>(archivePaths);
     // Archive segments (older) precede active segments; sort within each group
     // for deterministic traversal. Spread first since listFiles returns readonly.
-    const allPaths = [...[...archivePaths].sort((a, b) => a.localeCompare(b)), ...[...activePaths].sort((a, b) => a.localeCompare(b))];
+    const allPaths = [
+      ...[...archivePaths].sort((a, b) => a.localeCompare(b)),
+      ...[...activePaths].sort((a, b) => a.localeCompare(b)),
+    ];
     const records: PersistedLogRecord[] = [];
 
     const ingest = (content: string, sourcePath: string): void => {

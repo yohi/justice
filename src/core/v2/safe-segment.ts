@@ -6,8 +6,6 @@ export function encodeSafeSegment(segment: string): string {
   if (segment === ".") return `_dot___${hash}`;
   if (segment === "..") return `_dotdot___${hash}`;
   if (segment === "") return `_empty___${hash}`;
-  const safe = segment
-    .replace(/[^A-Za-z0-9_-]/g, "_")
-    .slice(0, 64);
+  const safe = segment.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
   return `${safe}__${hash}`;
 }

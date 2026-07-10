@@ -359,7 +359,7 @@ describe("validateRecordSchema()", () => {
     ).toThrow(/evidenceRef/);
   });
 
-  it("rejects a decision evidenceRef missing kind:\"full\"", () => {
+  it('rejects a decision evidenceRef missing kind:"full"', () => {
     expect(() =>
       validateRecordSchema({
         ...base,

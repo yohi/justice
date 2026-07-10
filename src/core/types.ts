@@ -152,12 +152,11 @@ export interface AgentMappedEvent {
 }
 
 /** MessagePayload 型ガード: legacy user/assistant payload か判定する */
-  export function isLegacyMessagePayload(
+export function isLegacyMessagePayload(
   payload: MessagePayload | ObservationMessagePayload,
-  ): payload is MessagePayload {
+): payload is MessagePayload {
   return "role" in payload && "content" in payload;
 }
-
 
 export interface PreToolUseEvent {
   readonly type: "PreToolUse";

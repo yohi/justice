@@ -108,9 +108,7 @@ describe("JusticePlugin routing guard", () => {
     const observation = plugin.getObservationHandler();
     const planBridge = plugin.getPlanBridge();
 
-    const planSpy = vi
-      .spyOn(planBridge, "handleMessage")
-      .mockResolvedValue({ action: "proceed" });
+    const planSpy = vi.spyOn(planBridge, "handleMessage").mockResolvedValue({ action: "proceed" });
     const obsSpy = vi.spyOn(observation, "handleMessage");
 
     const response = await plugin.handleEvent({

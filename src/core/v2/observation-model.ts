@@ -90,10 +90,9 @@ export type MessageRecord = {
   readonly finalized: boolean;
 };
 
-export type SkillInvokedRecord = { readonly kind: "skill_invoked"; /* refined in Task 4.3 */ };
-export type SessionErrorRecord = { readonly kind: "session_error"; /* refined in Task 4.4 */ };
-export type ReflectionRecord = { readonly kind: "reflection"; /* refined in Task 4.4 */ };
-
+export type SkillInvokedRecord = { readonly kind: "skill_invoked" /* refined in Task 4.3 */ };
+export type SessionErrorRecord = { readonly kind: "session_error" /* refined in Task 4.4 */ };
+export type ReflectionRecord = { readonly kind: "reflection" /* refined in Task 4.4 */ };
 
 export type ReviewItem = {
   readonly itemKey: string;

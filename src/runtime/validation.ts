@@ -210,7 +210,9 @@ export function validateShardSequences(records: readonly PersistedLogRecord[]): 
     // by more than 1 has a missing sequence number (lost record). Detected here
     // rather than recovered — `readAll` logs and continues fail-open.
     if (seqs.length > 0 && seqs[0] !== 1) {
-      throw new Error(`Sequence integrity violation on ${shardKey}: gap detected (missing sequence before ${seqs[0]})`);
+      throw new Error(
+        `Sequence integrity violation on ${shardKey}: gap detected (missing sequence before ${seqs[0]})`,
+      );
     }
     let prevSeq: number | undefined;
     for (const seq of seqs) {

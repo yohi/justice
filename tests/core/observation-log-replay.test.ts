@@ -53,7 +53,14 @@ describe("FF-004 replay determinism and state validation", () => {
             verdict: "PASS",
             reason: "All tests passed",
             evidenceRefs: [
-              { kind: "full", agentId: "atlas", sessionId: "session-123", writerId: "w1", sequence: 1, evidenceId: "ev-1" },
+              {
+                kind: "full",
+                agentId: "atlas",
+                sessionId: "session-123",
+                writerId: "w1",
+                sequence: 1,
+                evidenceId: "ev-1",
+              },
             ],
           },
         ],

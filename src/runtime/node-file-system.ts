@@ -69,7 +69,9 @@ export class NodeFileSystem implements FileReader, FileWriter {
     }
   }
 
-  async readFileStats(path: string): Promise<{ readonly size: number; readonly mtimeMs: number } | null> {
+  async readFileStats(
+    path: string,
+  ): Promise<{ readonly size: number; readonly mtimeMs: number } | null> {
     try {
       const safePath = await this.resolveSafely(path);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path validated by resolveSafely

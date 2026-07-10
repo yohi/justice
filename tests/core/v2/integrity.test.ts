@@ -84,11 +84,7 @@ describe("orderEventsForProjection() / MergeHeap", () => {
       ev("atlas", "s1", "w2", 1, sameTs),
     ];
     const sorted = orderEventsForProjection(events);
-    expect(sorted.map((e) => shardKeyOf(e))).toEqual([
-      "atlas:s1:w1",
-      "atlas:s1:w2",
-      "atlas:s1:w3",
-    ]);
+    expect(sorted.map((e) => shardKeyOf(e))).toEqual(["atlas:s1:w1", "atlas:s1:w2", "atlas:s1:w3"]);
   });
 
   it("keeps within-shard sequence order intact even if a shard's own timestamps invert", () => {

@@ -4,14 +4,26 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
 test("preflight verification: ADR ratification check", () => {
-  const adrPath = resolve(__dirname, "..", "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md");
+  const adrPath = resolve(
+    __dirname,
+    "..",
+    "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md",
+  );
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
   expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
   // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
   expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@[A-Za-z0-9_-]+`/);
-  const blockedPlaceholders = ["@owner-alice", "@owner-bob", "@alice", "@bob", "@example", "@codeowner"];
-  const placeholderPattern = /@(?:[A-Za-z0-9_-]*(?:codeowner|placeholder|example|owner|alice|bob)[A-Za-z0-9_-]*)/i;
+  const blockedPlaceholders = [
+    "@owner-alice",
+    "@owner-bob",
+    "@alice",
+    "@bob",
+    "@example",
+    "@codeowner",
+  ];
+  const placeholderPattern =
+    /@(?:[A-Za-z0-9_-]*(?:codeowner|placeholder|example|owner|alice|bob)[A-Za-z0-9_-]*)/i;
   for (const handle of blockedPlaceholders) {
     expect(content).not.toContain(handle);
   }

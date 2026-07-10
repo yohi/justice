@@ -75,7 +75,10 @@ describe("validateProjectionCacheAgainstEvents()", () => {
   it("reports valid when the cache matches the event log exactly", () => {
     const events = [toolEvent(1, "task-1"), toolEvent(2, "task-1")];
     const state = project(events, REBUILT_AT);
-    expect(validateProjectionCacheAgainstEvents(state, events)).toEqual({ valid: true, reason: "valid" });
+    expect(validateProjectionCacheAgainstEvents(state, events)).toEqual({
+      valid: true,
+      reason: "valid",
+    });
   });
 
   it("reports stale_append when new records were appended to a known shard", () => {

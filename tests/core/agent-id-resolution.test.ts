@@ -93,7 +93,9 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       });
 
       // Simulate the same cleanup path JusticePlugin wires internally.
-      (plugin.getLoopHandler() as unknown as { removeSession(id: string): void }).removeSession(sessionId);
+      (plugin.getLoopHandler() as unknown as { removeSession(id: string): void }).removeSession(
+        sessionId,
+      );
       expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
     });
   });

@@ -110,7 +110,10 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     const output: { output: string; metadata?: Record<string, unknown> } = {
       output: "raw tool output",
     };
-    await adapter.onToolExecuteAfter({ tool: "bash", sessionID: "s", callID: "c1", args: {} }, output);
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
 
     // Guaranteed channel fired with the justice_gate banner.
     expect(notifySpy).toHaveBeenCalledTimes(1);
@@ -136,7 +139,10 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
-    await adapter.onToolExecuteAfter({ tool: "bash", sessionID: "s", callID: "c1", args: {} }, output);
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
 
     expect(output.output.startsWith("raw\n\n")).toBe(true);
     expect(output.output).toContain("JUSTICE NOTIFICATION");
@@ -155,7 +161,10 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
-    await adapter.onToolExecuteAfter({ tool: "bash", sessionID: "s", callID: "c1", args: {} }, output);
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
 
     expect(notifySpy).not.toHaveBeenCalled();
     expect(output.output).toBe("raw");
@@ -175,7 +184,10 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
     // input.args intentionally omits taskId.
-    await adapter.onToolExecuteAfter({ tool: "bash", sessionID: "s", callID: "c1", args: {} }, output);
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
 
     expect(notifySpy).toHaveBeenCalledTimes(1);
     expect(notifySpy.mock.calls[0][0]).toMatchObject({ taskId: "unknown" });
@@ -285,14 +297,12 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
-    const spy = vi
-      .spyOn(justice, "handleEvent")
-      .mockImplementation(async (event) => {
-        if (event.type === "Message" && "content" in event.payload) {
-          throw new Error("delegation dispatch boom");
-        }
-        return { action: "proceed" };
-      });
+    const spy = vi.spyOn(justice, "handleEvent").mockImplementation(async (event) => {
+      if (event.type === "Message" && "content" in event.payload) {
+        throw new Error("delegation dispatch boom");
+      }
+      return { action: "proceed" };
+    });
 
     await adapter.onEvent({
       event: {

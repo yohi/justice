@@ -2,13 +2,13 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-FileReader,
-FileWriter,
-HookEvent,
-HookResponse,
-InjectResponse,
-EventEvent,
-CompactionPayload,
+  FileReader,
+  FileWriter,
+  HookEvent,
+  HookResponse,
+  InjectResponse,
+  EventEvent,
+  CompactionPayload,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
@@ -294,8 +294,7 @@ export class JusticePlugin {
         )
       : new NoOpPersistence(500);
 
-    const globalDisplayPath =
-      options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
+    const globalDisplayPath = options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
 
     this.tieredWisdomStore = new TieredWisdomStore({
       localStore: this.wisdomStore,
