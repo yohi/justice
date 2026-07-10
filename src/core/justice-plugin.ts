@@ -374,7 +374,10 @@ export class JusticePlugin {
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
-          this.observationHandler.handlePreToolUse(event),
+          this.observationHandler.handlePreToolUse(event).catch((err) => {
+            this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+            return PROCEED;
+          }),
           event.payload.toolName === "task"
             ? this.planBridge.handlePreToolUse(event)
             : Promise.resolve(PROCEED),
@@ -386,7 +389,10 @@ export class JusticePlugin {
         // plan-bridge completion detection and task-feedback processing.
         // Run independent handlers in parallel.
         const [observation, planBridge, taskFeedback] = await Promise.all([
-          this.observationHandler.handlePostToolUse(event),
+          this.observationHandler.handlePostToolUse(event).catch((err) => {
+            this.options.logger?.warn("observation-handler post-tool-use failed", err);
+            return PROCEED;
+          }),
           event.payload.toolName === "task"
             ? this.planBridge.handlePostToolUse(event)
             : Promise.resolve(PROCEED),
