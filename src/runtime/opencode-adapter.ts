@@ -233,13 +233,19 @@ export class OpenCodeAdapter {
 
     // (2) Legacy user/assistant content path (plan-bridge delegation). Preserved
     // exactly: only forwarded when content is present so empty streaming updates
-    // do not spuriously trigger delegation.
+    // do not spuriously trigger delegation. Wrapped in its own try/catch (mirrors
+    // (1) above) so a delegation dispatch failure can never block the
+    // observation log (3) below.
     if ((role === "assistant" || role === "user") && content.length > 0) {
-      await justice.handleEvent({
-        type: "Message",
-        sessionId,
-        payload: { role, content },
-      });
+      try {
+        await justice.handleEvent({
+          type: "Message",
+          sessionId,
+          payload: { role, content },
+        });
+      } catch (err) {
+        await this.log("error", "[Justice] plan-bridge delegation dispatch failed", err);
+      }
     }
 
     // (3) Observation message_updated for assistant messages, carrying the

@@ -280,6 +280,61 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
   });
 
+  it("(d) still forwards the observation message_updated when the legacy delegation dispatch throws", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+    const spy = vi
+      .spyOn(justice, "handleEvent")
+      .mockImplementation(async (event) => {
+        if (event.type === "Message" && "content" in event.payload) {
+          throw new Error("delegation dispatch boom");
+        }
+        return { action: "proceed" };
+      });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "sess-1",
+          info: { id: "msg-1", role: "assistant", content: "done", time: { completed: 123 } },
+        },
+      },
+    });
+
+    const events = spy.mock.calls.map((c) => c[0]);
+
+    // The failing delegation dispatch was still attempted...
+    const contentMsg = events.find((e) => e.type === "Message" && "content" in e.payload);
+    expect(contentMsg).toBeDefined();
+
+    // ...and its failure was logged rather than crashing the handler.
+    expect(logSpy).toHaveBeenCalledWith(
+      "error",
+      "[Justice] plan-bridge delegation dispatch failed",
+      expect.any(Error),
+    );
+
+    // Critically, the observation message_updated must still be dispatched (3)
+    // even though the legacy delegation dispatch (2) threw.
+    const obsMsg = events.find(
+      (e) => e.type === "Message" && "kind" in e.payload && e.payload.kind === "message_updated",
+    );
+    expect(obsMsg).toMatchObject({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: {
+        kind: "message_updated",
+        sessionId: "sess-1",
+        messageID: "msg-1",
+        role: "assistant",
+        finalized: true,
+      },
+    });
+  });
+
   it("(e) forwards an AgentMapped event when an agent property is present", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
