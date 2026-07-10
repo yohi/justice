@@ -2,14 +2,15 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-  FileReader,
-  FileWriter,
-  HookEvent,
-  HookResponse,
-  InjectResponse,
-  EventEvent,
-  CompactionPayload,
+FileReader,
+FileWriter,
+HookEvent,
+HookResponse,
+InjectResponse,
+EventEvent,
+CompactionPayload,
 } from "./types";
+import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -216,6 +217,13 @@ export interface JusticePluginOptions {
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  /**
+   * Bootstrapped writer ID for Observation Log shards (D55/D39). Currently
+   * unused within JusticePlugin — intentional scaffolding ahead of Task 3.3
+   * (Observation Log sharding). Do not remove; wire this into shard
+   * allocation when Task 3.3 lands.
+   */
+  readonly writerId?: string;
 }
 
 export class JusticePlugin {
@@ -306,17 +314,31 @@ export class JusticePlugin {
    */
   async handleEvent(event: HookEvent): Promise<HookResponse> {
     switch (event.type) {
-      case "Message":
-        return this.planBridge.handleMessage(event);
+      case "Message": {
+        // Legacy user/assistant payload drives plan-bridge delegation; observation-kind
+        // payloads (Task 3.2 widening) are consumed by the observation pipeline (Task 3.3).
+        const { payload } = event;
+        if (isLegacyMessagePayload(payload)) {
+          return this.planBridge.handleMessage(event);
+        }
+        return PROCEED;
+      }
       case "PreToolUse":
+        // The adapter forwards all tools now; only the task tool drives delegation.
+        if (event.payload.toolName !== "task") return PROCEED;
         return this.planBridge.handlePreToolUse(event);
       case "PostToolUse":
+        if (event.payload.toolName !== "task") return PROCEED;
         return mergePostToolUseResponses(
           await this.planBridge.handlePostToolUse(event),
           await this.taskFeedback.handlePostToolUse(event),
         );
       case "Event":
         return this.handleEventType(event);
+      case "AgentMapped":
+        // Full agent-name → persona mapping is implemented in Task 3.4.
+        void event.sessionId;
+        return PROCEED;
       default: {
         const _exhaustiveCheck: never = event;
         void _exhaustiveCheck;

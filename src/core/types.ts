@@ -1,3 +1,5 @@
+import type { ObservationMessagePayload } from "./v2/message-payload";
+
 /** plan.mdから抽出されたタスク */
 export interface PlanTask {
   readonly id: string;
@@ -125,14 +127,37 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 };
 
 /** OmO Hook イベントの Discriminated Union */
-export type HookEvent = MessageEvent | PreToolUseEvent | PostToolUseEvent | EventEvent;
+export type HookEvent =
+  | MessageEvent
+  | PreToolUseEvent
+  | PostToolUseEvent
+  | EventEvent
+  | AgentMappedEvent;
 
 export interface MessageEvent {
   readonly type: "Message";
-  readonly payload: MessagePayload;
+  readonly payload: MessagePayload | ObservationMessagePayload;
   readonly sessionId: string;
   readonly callId?: string;
 }
+
+/** エージェント割当イベント: message properties から検出した agent 名を伝播する (Task 3.4 で状態反映) */
+export interface AgentMappedEvent {
+  readonly type: "AgentMapped";
+  readonly sessionId: string;
+  readonly payload: {
+    readonly sessionId: string;
+    readonly agentName: string;
+  };
+}
+
+/** MessagePayload 型ガード: legacy user/assistant payload か判定する */
+  export function isLegacyMessagePayload(
+  payload: MessagePayload | ObservationMessagePayload,
+  ): payload is MessagePayload {
+  return "role" in payload && "content" in payload;
+}
+
 
 export interface PreToolUseEvent {
   readonly type: "PreToolUse";
@@ -191,6 +216,7 @@ export interface MessagePayload {
 export interface PreToolUsePayload {
   readonly toolName: string;
   readonly toolInput: Record<string, unknown>;
+  readonly callId?: string;
 }
 
 /** フックのレスポンスの Discriminated Union */
@@ -210,6 +236,7 @@ export interface InjectResponse {
   readonly action: "inject";
   readonly injectedContext: string;
   readonly modifiedPayload?: unknown;
+  readonly variant?: "gate_advisory";
 }
 
 /** ファイルシステムアクセスの抽象化（テスト可能にするため） */
@@ -225,6 +252,9 @@ export interface PostToolUsePayload {
   readonly toolName: string;
   readonly toolResult: string;
   readonly error: boolean;
+  readonly callId?: string;
+  readonly toolInput?: Record<string, unknown>;
+  readonly metadata?: Record<string, unknown>;
 }
 
 /** ファイル書き込みアクセスの抽象化 */

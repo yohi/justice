@@ -1,12 +1,13 @@
 import type {
-  FileReader,
-  HookEvent,
-  HookResponse,
-  DelegationRequest,
-  WisdomStoreInterface,
-  PlanTask,
-  AgentId,
+FileReader,
+HookEvent,
+HookResponse,
+DelegationRequest,
+WisdomStoreInterface,
+PlanTask,
+AgentId,
 } from "../core/types";
+import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/justice-plugin";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
@@ -134,6 +135,10 @@ export class PlanBridge {
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "Message") return PROCEED;
+
+    // Observation-kind message payloads (Task 3.2 widening) carry no role/content and are
+    // consumed by the observation pipeline (Task 3.3); ignore them here to stay fail-open.
+    if (!isLegacyMessagePayload(event.payload)) return PROCEED;
 
     // Track last user message for TriggerDetector guard
     if (event.payload.role === "user") {
