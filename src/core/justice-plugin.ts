@@ -27,6 +27,8 @@ import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
+import { StateProjectionCache } from "../runtime/state-projection-cache";
+import { resolveTaskIdFromModifiedPayload } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -363,6 +365,7 @@ export class JusticePlugin {
     this.observationHandler = new ObservationHandler({
       logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
       sessionStateProvider: this.sessionStateProvider,
+      projectionCache: new StateProjectionCache(fileWriter, fileReader),
       writerId,
       logger: options.logger,
     });
@@ -429,7 +432,14 @@ export class JusticePlugin {
             ? this.planBridge.handlePreToolUse(event)
             : Promise.resolve(PROCEED),
         ]);
-        return mergePreToolUseResponses(observation, planBridge);
+        const response = mergePreToolUseResponses(observation, planBridge);
+        const taskId = resolveTaskIdFromModifiedPayload(
+          response.action === "inject" ? response.modifiedPayload : undefined,
+        );
+        if (event.callId !== undefined && taskId !== undefined) {
+          this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+        }
+        return response;
       }
       case "PostToolUse": {
         try {

@@ -2,7 +2,7 @@
 import { classifyToolOutputClass } from "./tool-output-classifier";
 import { redactEvidenceCommand, redactForPersistence, sliceCodeUnitsSafe } from "./redaction";
 import { hashString } from "./hash";
-import type { Evidence, Interpretation } from "./observation-model";
+import type { Interpretation, ToolOutputEvidence } from "./observation-model";
 
 type ToolOutputKind = "test" | "build" | "lint" | "command" | "generic";
 
@@ -70,7 +70,7 @@ export function extractEvidenceFromTool(
   args: { readonly command?: string } | undefined,
   output: ToolOutput,
   callId: string, // determinism: use callId as evidenceId (FIND-003)
-): Evidence {
+): ToolOutputEvidence {
   const rawOutput = output.output ?? "";
   const toolOutputClass = classifyToolOutputClass(toolName, args);
   const observedId = callId; // Deterministic evidenceId from tool callId (FF-002/FF-003)

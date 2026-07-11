@@ -71,7 +71,7 @@ export type ToolExecutedRecord = {
   readonly kind: "tool_executed";
   readonly toolName: string;
   readonly callId: string;
-  readonly evidence: Evidence;
+  readonly evidence: Evidence | readonly Evidence[];
 };
 
 // MessageRecord (refined in Task 3.1): carries lightweight declared claims and their

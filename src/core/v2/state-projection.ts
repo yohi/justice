@@ -6,6 +6,7 @@ import {
   orderEventsForProjection,
 } from "./integrity";
 import type { Evidence, PersistedLogRecord } from "./observation-model";
+import { toEvidenceArray } from "./evidence-list";
 import type { Verdict } from "./decision-model";
 
 export type ProjectedEvidence = {
@@ -52,10 +53,6 @@ export type ProjectedState = {
   readonly tasks: ReadonlyMap<string, ProjectedTask>;
   readonly reviewSummary: ReviewSummary;
 };
-
-export function toEvidenceArray(evidence: Evidence | undefined): readonly Evidence[] {
-  return evidence ? [evidence] : [];
-}
 
 type MutableScopeSummary = {
   critical: ReviewSummaryItem[];

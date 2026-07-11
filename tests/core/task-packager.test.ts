@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TaskPackager } from "../../src/core/task-packager";
+import { enrichTaskToolInput, TaskPackager } from "../../src/core/task-packager";
 import type { PlanTask } from "../../src/core/types";
 
 describe("TaskPackager", () => {
@@ -14,6 +14,15 @@ describe("TaskPackager", () => {
     ],
     status: "pending",
     ...overrides,
+  });
+
+  it("preserves an existing taskId while enriching task tool input", () => {
+    const original = { prompt: "run", taskId: "task-existing" };
+
+    const enriched = enrichTaskToolInput(original, "task-generated");
+
+    expect(enriched).toEqual({ prompt: "run", taskId: "task-existing" });
+    expect(original).toEqual({ prompt: "run", taskId: "task-existing" });
   });
 
   describe("package", () => {
