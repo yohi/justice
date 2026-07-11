@@ -22,6 +22,7 @@ describe("OpenCodePlugin (integration)", () => {
         "tool.execute.before",
         "tool.execute.after",
         "experimental.session.compacting",
+        "experimental.text.complete",
       ]),
     );
   });

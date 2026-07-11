@@ -432,25 +432,30 @@ export class JusticePlugin {
         return mergePreToolUseResponses(observation, planBridge);
       }
       case "PostToolUse": {
-        // Close the matching task window unconditionally. This must happen even
-        // if the underlying handlers fail, to prevent window leaks.
-        closeSessionTaskWindow(this.sessionStateProvider, event.callId);
-        // The observation handler runs for EVERY tool; the task tool also drives
-        // plan-bridge completion detection and task-feedback processing.
-        // Run independent handlers in parallel.
-        const [observation, planBridge, taskFeedback] = await Promise.all([
-          this.observationHandler.handlePostToolUse(event).catch((err) => {
-            this.options.logger?.warn("observation-handler post-tool-use failed", err);
-            return PROCEED;
-          }),
-          event.payload.toolName === "task"
-            ? this.planBridge.handlePostToolUse(event)
-            : Promise.resolve(PROCEED),
-          event.payload.toolName === "task"
-            ? this.taskFeedback.handlePostToolUse(event)
-            : Promise.resolve(PROCEED),
-        ]);
-        return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+        try {
+          // Keep the window open while observation associates the tool result with its task.
+          const [observation, planBridge, taskFeedback] = await Promise.all([
+            this.observationHandler.handlePostToolUse(event).catch((err) => {
+              this.options.logger?.warn("observation-handler post-tool-use failed", err);
+              return PROCEED;
+            }),
+            event.payload.toolName === "task"
+              ? this.planBridge.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("plan-bridge post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+            event.payload.toolName === "task"
+              ? this.taskFeedback.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("task-feedback post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+          ]);
+          return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+        } finally {
+          closeSessionTaskWindow(this.sessionStateProvider, event.callId);
+        }
       }
 
       case "Event":

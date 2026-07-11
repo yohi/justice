@@ -48,9 +48,6 @@ export class ObservationHandler {
   ): Promise<HookResponse> {
     try {
       this.messageRoleBuffer.update(sessionId, payload);
-      if (payload.kind === "message_updated" && payload.finalized) {
-        this.messageRoleBuffer.finalize(sessionId, payload.messageID);
-      }
 
       const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
       if (text === undefined || text.length === 0) return PROCEED;

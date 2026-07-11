@@ -45,6 +45,9 @@ export const OpenCodePlugin: Plugin = async (init) => {
         output as { context?: string[]; prompt?: string },
       );
     },
+    "experimental.text.complete": async (input, output): Promise<void> => {
+      await adapter.onTextComplete(input, output);
+    },
   };
 };
 

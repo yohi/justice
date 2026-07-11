@@ -301,6 +301,32 @@ export class OpenCodeAdapter {
     });
   }
 
+  async onTextComplete(
+    input: { readonly sessionID: string; readonly messageID: string; readonly partID: string },
+    output: { readonly text: string },
+  ): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      await this.ensureInitialized();
+      const justice = this.#justice;
+      if (!justice) return;
+      await justice.handleEvent({
+        type: "Message",
+        sessionId: input.sessionID,
+        payload: {
+          kind: "text_complete",
+          sessionId: input.sessionID,
+          messageID: input.messageID,
+          partID: input.partID,
+          text: output.text,
+        },
+      });
+    } catch (err) {
+      await this.log("error", "[Justice] experimental.text.complete failure", err);
+    }
+  }
+
   /**
    * Forward a loop-like `session.error` event to the loop-detector. Unchanged
    * from the original behavior.
@@ -310,21 +336,36 @@ export class OpenCodeAdapter {
     if (!sessionId) return;
 
     const message = this.#extractErrorMessage(this.#readUnknown(properties, "error"));
-    if (!matchesLoopError(message)) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
     if (!justice) return;
 
-    await justice.handleEvent({
-      type: "Event",
-      sessionId,
-      payload: {
-        eventType: "loop-detector",
+    try {
+      await justice.handleEvent({
+        type: "Event",
         sessionId,
-        message,
-      },
-    });
+        payload: { eventType: "session_error", sessionId, message },
+      });
+    } catch (err) {
+      await this.log("error", "[Justice] session-error observation dispatch failed", err);
+    }
+
+    if (!matchesLoopError(message)) return;
+
+    try {
+      await justice.handleEvent({
+        type: "Event",
+        sessionId,
+        payload: {
+          eventType: "loop-detector",
+          sessionId,
+          message,
+        },
+      });
+    } catch (err) {
+      await this.log("error", "[Justice] loop-detector dispatch failed", err);
+    }
   }
 
   /**

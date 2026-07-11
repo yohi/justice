@@ -6,7 +6,7 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMemFs } from "../helpers/mock-file-system";
 
 describe("ObservationHandler message observation", () => {
-  it("persists finalized assistant claims from the adapter message payloads", async () => {
+  it("persists finalized assistant claims only after the text-complete payload", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
     sessionState.setAgentMapping("session-1", "atlas");
@@ -37,6 +37,16 @@ describe("ObservationHandler message observation", () => {
       sessionId: "session-1",
       writerId: "w-handler",
     });
+    expect(files.get(path)).toBeUndefined();
+
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+
     const content = files.get(path);
 
     expect(content).toBeDefined();
