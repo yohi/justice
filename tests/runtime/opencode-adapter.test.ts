@@ -148,7 +148,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     );
   });
 
-  it("routes loop-like session.error events to loop-detector Event", async () => {
+  it("routes loop-like session.error events to observation and loop-detector Events", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -161,9 +161,17 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    const [event] = spy.mock.calls[0];
-    expect(event).toMatchObject({
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      type: "Event",
+      sessionId: "s",
+      payload: {
+        eventType: "session_error",
+        sessionId: "s",
+        message: "loop detected in planning",
+      },
+    });
+    expect(spy.mock.calls[1][0]).toMatchObject({
       type: "Event",
       sessionId: "s",
       payload: {
@@ -174,7 +182,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     });
   });
 
-  it("ignores non-loop session.error events without calling justice or logging", async () => {
+  it("routes non-loop session.error events to observation without logging", async () => {
     const init = fakeInit();
     const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
     const adapter = new OpenCodeAdapter(init);
@@ -190,8 +198,39 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
-    expect(handleSpy).not.toHaveBeenCalled();
+    expect(handleSpy).toHaveBeenCalledWith({
+      type: "Event",
+      sessionId: "s",
+      payload: {
+        eventType: "session_error",
+        sessionId: "s",
+        message: "timeout while calling provider",
+      },
+    });
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("still dispatches loop detection when session-error observation fails", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleSpy = vi
+      .spyOn(justice, "handleEvent")
+      .mockRejectedValueOnce(new Error("observation failure"))
+      .mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "session.error",
+        properties: { sessionID: "s", error: { message: "loop detected in planning" } },
+      },
+    });
+
+    expect(handleSpy).toHaveBeenCalledTimes(2);
+    expect(handleSpy.mock.calls[1][0]).toMatchObject({
+      type: "Event",
+      payload: { eventType: "loop-detector", sessionId: "s" },
+    });
   });
 
   it("fails open when event handling throws", async () => {

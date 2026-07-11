@@ -26,6 +26,7 @@ import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
+import { ObservationLogStore } from "../runtime/observation-log-store";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -292,10 +293,9 @@ export interface JusticePluginOptions {
     readonly absolutePath?: string;
   };
   /**
-   * Bootstrapped writer ID for Observation Log shards (D55/D39). Currently
-   * unused within JusticePlugin — intentional scaffolding ahead of Task 3.3
-   * (Observation Log sharding). Do not remove; wire this into shard
-   * allocation when Task 3.3 lands.
+   * Bootstrapped writer ID for Observation Log shards (D55/D39).
+   * Used by ObservationHandler to identify the writer of observation log shards.
+   * Defaults to "w-local" when not specified.
    */
   readonly writerId?: string;
 }
@@ -353,12 +353,19 @@ export class JusticePlugin {
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
       this.planBridge.destroySession(sessionId);
       this.sessionStateProvider.removeSession(sessionId);
+      this.observationHandler.destroySession(sessionId);
     });
 
+    this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    this.observationHandler = new ObservationHandler();
-    this.sessionStateProvider = new SessionStateProvider();
+    const writerId = options.writerId ?? "w-local";
+    this.observationHandler = new ObservationHandler({
+      logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
+      sessionStateProvider: this.sessionStateProvider,
+      writerId,
+      logger: options.logger,
+    });
   }
 
   /**
@@ -414,7 +421,7 @@ export class JusticePlugin {
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
-          this.observationHandler.handlePreToolUse(event).catch((err) => {
+          this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
             this.options.logger?.warn("observation-handler pre-tool-use failed", err);
             return PROCEED;
           }),
@@ -425,25 +432,30 @@ export class JusticePlugin {
         return mergePreToolUseResponses(observation, planBridge);
       }
       case "PostToolUse": {
-        // Close the matching task window unconditionally. This must happen even
-        // if the underlying handlers fail, to prevent window leaks.
-        closeSessionTaskWindow(this.sessionStateProvider, event.callId);
-        // The observation handler runs for EVERY tool; the task tool also drives
-        // plan-bridge completion detection and task-feedback processing.
-        // Run independent handlers in parallel.
-        const [observation, planBridge, taskFeedback] = await Promise.all([
-          this.observationHandler.handlePostToolUse(event).catch((err) => {
-            this.options.logger?.warn("observation-handler post-tool-use failed", err);
-            return PROCEED;
-          }),
-          event.payload.toolName === "task"
-            ? this.planBridge.handlePostToolUse(event)
-            : Promise.resolve(PROCEED),
-          event.payload.toolName === "task"
-            ? this.taskFeedback.handlePostToolUse(event)
-            : Promise.resolve(PROCEED),
-        ]);
-        return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+        try {
+          // Keep the window open while observation associates the tool result with its task.
+          const [observation, planBridge, taskFeedback] = await Promise.all([
+            this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
+              this.options.logger?.warn("observation-handler post-tool-use failed", err);
+              return PROCEED;
+            }),
+            event.payload.toolName === "task"
+              ? this.planBridge.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("plan-bridge post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+            event.payload.toolName === "task"
+              ? this.taskFeedback.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("task-feedback post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+          ]);
+          return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+        } finally {
+          closeSessionTaskWindow(this.sessionStateProvider, event.callId);
+        }
       }
 
       case "Event":

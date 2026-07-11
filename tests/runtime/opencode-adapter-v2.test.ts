@@ -438,6 +438,54 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
   });
 
+  it("forwards experimental text completion as a text_complete observation payload", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onTextComplete(
+      { sessionID: "sess-1", messageID: "msg-1", partID: "part-1" },
+      { text: "final text" },
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: {
+        kind: "text_complete",
+        sessionId: "sess-1",
+        messageID: "msg-1",
+        partID: "part-1",
+        text: "final text",
+      },
+    });
+  });
+
+  it("forwards every session error to the plugin before loop-specific processing", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "session.error",
+        properties: { sessionID: "sess-1", error: { message: "ordinary provider failure" } },
+      },
+    });
+
+    expect(spy).toHaveBeenCalledWith({
+      type: "Event",
+      sessionId: "sess-1",
+      payload: {
+        eventType: "session_error",
+        sessionId: "sess-1",
+        message: "ordinary provider failure",
+      },
+    });
+  });
+
   it("keeps failing open when message.updated handling throws", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -495,6 +543,7 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
     const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
     const res = await plugin.handleEvent({
       type: "AgentMapped",
+      sessionId: "s",
       payload: { sessionId: "s", agentName: "atlas" },
     });
     expect(res).toEqual({ action: "proceed" });
@@ -540,5 +589,37 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
     expect(preSpy).not.toHaveBeenCalled();
     expect(postPlanSpy).not.toHaveBeenCalled();
     expect(postFeedbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a task window available while its PostToolUse observation is handled", async () => {
+    const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
+    const observedTaskIds: (string | undefined)[] = [];
+    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(
+      async (event) => {
+        observedTaskIds.push(plugin.getSessionStateProvider().getActiveTaskId(event.callId ?? ""));
+        return { action: "proceed" };
+      },
+    );
+
+    await plugin.handleEvent({
+      type: "PreToolUse",
+      sessionId: "s",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+    await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s",
+      callId: "call-1",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1" },
+        toolResult: "done",
+        error: false,
+      },
+    });
+
+    expect(observedTaskIds).toEqual(["task-1"]);
+    expect(plugin.getSessionStateProvider().getActiveTaskId("call-1")).toBeUndefined();
   });
 });

@@ -64,14 +64,56 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       throw new Error("Invalid tool_executed record");
     }
   } else if (kind === "message") {
+    const declaredClaims = r.declaredClaims;
+    const evidence = r.evidence;
+    const hasClaims = declaredClaims !== undefined;
+    const hasEvidence = evidence !== undefined;
+    const neither = !hasClaims && !hasEvidence;
+    const both = hasClaims && hasEvidence;
+    const claimsEmpty = hasClaims && Array.isArray(declaredClaims) && declaredClaims.length === 0;
+    const evidenceEmpty = hasEvidence && Array.isArray(evidence) && evidence.length === 0;
+    const onlyEmpty =
+      (hasClaims && !hasEvidence && claimsEmpty) ||
+      (!hasClaims && hasEvidence && evidenceEmpty);
+    const mismatched =
+      (hasClaims && !Array.isArray(declaredClaims)) ||
+      (hasEvidence && !Array.isArray(evidence)) ||
+      (both && declaredClaims.length !== evidence.length);
     if (
       typeof r.messageID !== "string" ||
-      typeof r.role !== "string" ||
+      r.role !== "assistant" ||
       typeof r.textHash !== "string" ||
       typeof r.finalized !== "boolean" ||
-      (r.declaredClaims !== undefined && !Array.isArray(r.declaredClaims))
+      (!neither && !both && !onlyEmpty) ||
+      mismatched
     ) {
       throw new Error("Invalid message record");
+    }
+    if (neither) {
+      return;
+    }
+    const evidenceArray = (evidence ?? []) as unknown[];
+    const claimsArray = (declaredClaims ?? []) as unknown[];
+    const evidenceIterator = evidenceArray.values();
+    for (const claim of claimsArray) {
+      const nextEvidence = evidenceIterator.next();
+      if (nextEvidence.done) {
+        throw new Error("Invalid message record");
+      }
+      const currentEvidence = nextEvidence.value;
+      if (
+        !isObject(claim) ||
+        typeof claim.evidenceId !== "string" ||
+        !isOneOf(claim.claimKind, ["test", "build", "lint", "generic"]) ||
+        !isOneOf(claim.outcome, ["pass", "fail", "unknown"]) ||
+        !isObject(currentEvidence) ||
+        !isValidEvidence(currentEvidence) ||
+        (currentEvidence as { sourceClass?: unknown }).sourceClass !== "declared_claim" ||
+        (currentEvidence as { declaredFrom?: unknown }).declaredFrom !== "message" ||
+        (currentEvidence as { evidenceId?: unknown }).evidenceId !== claim.evidenceId
+      ) {
+        throw new Error("Invalid message record");
+      }
     }
   } else if (kind === "skill_invoked") {
     // SkillInvokedRecord is currently a stub (only `kind`, refined in Task 4.3).

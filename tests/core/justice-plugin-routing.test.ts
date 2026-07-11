@@ -103,6 +103,48 @@ describe("JusticePlugin routing guard", () => {
     );
   });
 
+  it("keeps the task window open until every PostToolUse handler settles", async () => {
+    const plugin = createPlugin();
+    let releaseObservation: (() => void) | undefined;
+    const observationDone = new Promise<void>((resolve) => {
+      releaseObservation = resolve;
+    });
+    let observedTaskId: string | undefined;
+
+    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(async () => {
+      await observationDone;
+      observedTaskId = plugin.getSessionStateProvider().getActiveTaskId("call-1");
+      return { action: "proceed" };
+    });
+    vi.spyOn(plugin.getPlanBridge(), "handlePostToolUse").mockRejectedValue(
+      new Error("plan failure"),
+    );
+
+    await plugin.handleEvent({
+      type: "PreToolUse",
+      sessionId: "s-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+    const result = plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s-1",
+      callId: "call-1",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1" },
+        toolResult: "ok",
+        error: false,
+      },
+    });
+
+    releaseObservation?.();
+
+    await expect(result).resolves.toEqual({ action: "proceed" });
+    expect(observedTaskId).toBe("task-1");
+    expect(plugin.getSessionStateProvider().getActiveTaskId("call-1")).toBeUndefined();
+  });
+
   it("routes a user Message to plan-bridge.handleMessage", async () => {
     const plugin = createPlugin();
     const observation = plugin.getObservationHandler();

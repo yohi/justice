@@ -63,10 +63,10 @@
   - `MessageRoleBuffer` class (in `src/runtime/`) with `{sessionId, messageID}` key, `parts: Map<partID, {text, finalized}>`.
   - `extractFinalizedAssistantClaims(buffer, messageID, partID): DeclaredClaim[]` (implemented in `src/core/v2/declared-claim-extractor.ts` as a pure function).
 
-- [ ] **Step 1: Message payload union を確認（D71）**
+- [x] **Step 1: Message payload union を確認（D71）**
   - Task 1.1 で前倒し実装した `src/core/v2/message-payload.ts` の `ObservationMessagePayload` をそのままインポートして利用できることを確認します。
 
-- [ ] **Step 1b: `observation-model.ts` の `MessageRecord` を詳細化（D71）**
+- [x] **Step 1b: `observation-model.ts` の `MessageRecord` を詳細化（D71）**
 
 Task 1.1 で stub とした `MessageRecord` を、Phase 0 spike で確定した adapter 契約に基づいて具体的なフィールドに拡張する。
 
@@ -85,7 +85,8 @@ export type MessageRecord = {
 };
 ```
 
-- [ ] **Step 2: MessageRoleBuffer を実装（D53/D65/D67）**
+- [x] **Step 2: MessageRoleBuffer を実装（D53/D65/D67）**
+- [x] **Step 2a: MessageRoleBuffer の GC トリガを ObservationHandler に配線（D65）**
 
 MessageRoleBuffer の動作仕様：
 - 内部構造：
@@ -130,11 +131,11 @@ export class MessageRoleBuffer {
 }
 ```
 
-- [ ] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）および role フィルタリングのテスト実装**
+- [x] **Step 2.5: MessageRoleBuffer の D67 確定・重複排除（dedup）および role フィルタリングのテスト実装**
 - `tests/runtime/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageId, partId)` でストリーミング中に一度「tests pass」と判定された後、同じ partId の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
 - さらに、role が未確定 / user の場合、または claims が空の場合における `extractAssistantClaims` は空配列を返し、assistant かつ finalized の場合の `getFinalizedAssistantText` は claims が空でも本文を返すことを明示的に検証する。
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/message-role-buffer.test.ts
@@ -180,14 +181,14 @@ gt submit
   - Step 1 implementation includes tests asserting that when `options.enableAdvisoryOutputAppend` is false, `notifier.notify()` executes normally while `output.output` remains unmodified (D47).
   - Bootstraps global unique `writerId` dynamically resolved during initialization and threads it through `JusticePluginOptions` into both `ObservationLogStore` and `ObservationHandler` to satisfy structural invariants (D55/D39/指摘3).
 
-- [ ] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts` & `src/core/justice-plugin.ts` (ISS-002)**
+- [x] **Step 0: Define `ToolObservationPayload` and adapter conversion helpers, and update `src/core/types.ts` & `src/core/justice-plugin.ts` (ISS-002)**
 
 Update `PostToolUsePayload` and `PreToolUsePayload` in `src/core/types.ts` to include the fields the adapter now forwards: `callId`, `toolInput` (Pre/Post), `toolResult`, and `metadata` (Post).
 Also add `AgentMappedEvent` type to `src/core/types.ts` and include it in the `HookEvent` union type.
 In `src/core/justice-plugin.ts` (`handleEvent`), add a fallback handling case for `"AgentMapped"` to proceed without error until its state mapping is fully implemented in Task 3.4. This keeps `observation-handler` type-safe and avoids compilation errors.
 In `src/core/justice-plugin.ts` `JusticePluginOptions`, add an optional field `writerId?: string`.
 
-- [ ] **Step 0b: Runtime/bootstrap 初期化配線と `writerId` の割当（D55/D39/指摘3）**
+- [x] **Step 0b: Runtime/bootstrap 初期化配線と `writerId` の割当（D55/D39/指摘3）**
 
 `src/runtime/opencode-adapter.ts` の lazy-initialization フェーズにて以下を実装する：
 ```typescript
@@ -254,7 +255,7 @@ function toPostToolObservationPayload(
 }
 ```
 
-- [ ] **Step 1: 既存 adapter の tool フィルタを撤廃**
+- [x] **Step 1: 既存 adapter の tool フィルタを撤廃**
 
 ```typescript
 // src/runtime/opencode-adapter.ts
@@ -302,7 +303,7 @@ onToolExecuteAfter: async (input, output) => {
 },
 ```
 
-- [ ] **Step 2: message / session.error イベントを追加（既存 user message 経路は維持し、状態確定イベントを分離）**
+- [x] **Step 2: message / session.error イベントを追加（既存 user message 経路は維持し、状態確定イベントを分離）**
 
 ```typescript
 onMessagePartUpdated: async (event) => {
@@ -341,25 +342,25 @@ onMessageUpdated: async (event) => {
 
 **型更新:** `src/core/types.ts` の `MessageEvent` payload を `{ role, content } | ObservationMessagePayload` の union に拡張し、`handleEvent` が型安全に分岐できるようにする。
 
-- [ ] **Step 3: PostToolUse 戻り値を adapter で適用（D47/D64）— Step 1 と統合済み**
+- [x] **Step 3: PostToolUse 戻り値を adapter で適用（D47/D64）— Step 1 と統合済み**
 
 (Step 1 の `onToolExecuteAfter` に統合。重複する独立ステップは削除。)
 
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/opencode-adapter-v2.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/runtime/opencode-adapter.ts tests/runtime/opencode-adapter-v2.test.ts
 git commit -m "feat(v2): adapter forwards all tool and message events"
 ```
 
-- [ ] **Step 6: Phase 3 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 3 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -390,7 +391,7 @@ gt submit
   - `Message`: routed selectively based on payload type: UserMessage is forwarded to `planBridge.handleMessage(event)` (existing delegation triggers), while helper observation payloads are forwarded to `observationHandler.handleMessage(event.sessionId, payload)` (declared claim extraction).
   - `Event`: existing handlers unchanged.
 
-- [ ] **Step 0: Add `mergePreToolUseResponses` and `mergePostToolUseResponses` helpers**
+- [x] **Step 0: Add `mergePreToolUseResponses` and `mergePostToolUseResponses` helpers**
 
 ```typescript
 // src/core/justice-plugin.ts
@@ -440,7 +441,7 @@ export function mergePostToolUseResponses(responses: HookResponse[]): HookRespon
 }
 ```
 
-- [ ] **Step 1: `JusticePlugin.handleEvent` に routing ガードを追加（§4.4/D64）**
+- [x] **Step 1: `JusticePlugin.handleEvent` に routing ガードを追加（§4.4/D64）**
 
 ```typescript
 // src/core/justice-plugin.ts
@@ -488,7 +489,7 @@ async handleEvent(event: HookEvent): Promise<HookResponse> {
 }
 ```
 
-- [ ] **Step 2: observation-handler stub を作成（`ToolUsePayload` 以外も受け取れるよう拡張）**
+- [x] **Step 2: observation-handler stub を作成（`ToolUsePayload` 以外も受け取れるよう拡張）**
 
 ```typescript
 // src/hooks/observation-handler.ts
@@ -499,7 +500,7 @@ export class ObservationHandler {
 }
 ```
 
-- [ ] **Step 2b: PostToolUse マージテスト（tests/core/v2/post-tool-use-merge.test.ts）の実装（D64）**
+- [x] **Step 2b: PostToolUse マージテスト（tests/core/v2/post-tool-use-merge.test.ts）の実装（D64）**
 
 ```typescript
 // tests/core/v2/post-tool-use-merge.test.ts
@@ -538,20 +539,20 @@ describe("D64 - PostToolUse merge rules", () => {
 });
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/justice-plugin-routing.test.ts tests/core/v2/post-tool-use-merge.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/justice-plugin.ts src/hooks/observation-handler.ts tests/core/justice-plugin-routing.test.ts tests/core/v2/post-tool-use-merge.test.ts
 git commit -m "feat(v2): JusticePlugin routing guard for all tools + observation handler + merge tests"
 ```
 
-- [ ] **Step 5: Phase 3 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 3 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -576,19 +577,19 @@ gt submit
   - `sessionStateProvider.setActiveTaskWindow(callId: string, taskId: string): void`
   - `sessionStateProvider.closeActiveTaskWindow(callId: string): void`
 
-- [ ] **Step 1: SessionStateProvider の実装（D48/D74）**
+- [x] **Step 1: SessionStateProvider の実装（D48/D74）**
   - アダプター側で検知・抽出された `AgentMapped` ペイロードを受け取り、`sessionId` から `agentId` (ObservationAgentId) へのマッピングを構築・保持する。
   - OpenCode agent 名（自由文字列）から Justice `AgentId`（`atlas` / `hephaestus` / `sisyphus` / `prometheus`）への写像ロジックを実装し、マッピングできない場合は `unknown` とする。
   - **spec §5.8/D74 準拠**: task 窓を `callId` キーで管理する。`activeTaskWindows: Map<string, string>`（キー=callId、値=taskId）を内部に持ち、`setActiveTaskWindow(callId, taskId)` で PreToolUse 時に窓を開き、`closeActiveTaskWindow(callId)` で対応する callId の PostToolUse 時に窓を閉じる。`getActiveTaskId(callId)` で callId に紐づく taskId を返す。セッション単位の単一 active taskId による上書き方式（`setActiveTaskId(sessionId, taskId)` / `getActiveTaskId(sessionId)`）は採用しない。
 
-- [ ] **Step 2: routing イベントハンドラに AgentMapped イベント処理を追加**
+- [x] **Step 2: routing イベントハンドラに AgentMapped イベント処理を追加**
   - `JusticePlugin.handleEvent` で `AgentMapped` イベント（ペイロード: `{ sessionId, agentName }`）を受信し、`SessionStateProvider` のマップを更新する。
 
-- [ ] **Step 3: テストの実装（tests/core/agent-id-resolution.test.ts）**
+- [x] **Step 3: テストの実装（tests/core/agent-id-resolution.test.ts）**
   - `AgentMapped` イベントから `agentId` が正しく写像され、`SessionStateProvider` を経由して解決できることを検証する。
   - 不明なエージェントが `unknown` shard に落ちることを確認し、同時に wisdom namespace（4つのペルソナ）に `system` や `unknown` のデータが混入（汚染）しないことをテストで担保する。
 
-- [ ] **Step 4: Commit & Submit**
+- [x] **Step 4: Commit & Submit**
 
 ```bash
 git add src/core/justice-plugin.ts src/core/session-state-provider.ts tests/core/agent-id-resolution.test.ts
