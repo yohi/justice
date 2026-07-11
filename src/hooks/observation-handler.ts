@@ -1,4 +1,4 @@
-import { mergePostToolUseResponses } from "../core/justice-plugin";
+import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
   HookResponse,

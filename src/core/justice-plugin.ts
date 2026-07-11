@@ -8,11 +8,11 @@ import type {
   PostToolUseEvent,
   PreToolUseEvent,
   HookResponse,
-  InjectResponse,
   EventEvent,
   CompactionPayload,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
+import { mergePostToolUseResponses, mergePreToolUseResponses } from "./hook-response-merger";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
@@ -32,74 +32,6 @@ import { resolveTaskIdFromModifiedPayload } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
-
-export function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
-  if (a.action === "skip" || b.action === "skip") {
-    return { action: "skip" };
-  }
-
-  if (a.action === "inject" && b.action === "inject") {
-    const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
-    const base: InjectResponse = {
-      action: "inject",
-      injectedContext: contexts.join("\n\n---\n\n"),
-    };
-    const result: InjectResponse =
-      a.variant === "gate_advisory" || b.variant === "gate_advisory"
-        ? { ...base, variant: "gate_advisory" }
-        : base;
-    if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
-      throw new Error("Conflict detected in pre-tool-use modifiedPayload");
-    }
-    if (a.modifiedPayload !== undefined) {
-      return { ...result, modifiedPayload: a.modifiedPayload };
-    }
-    if (b.modifiedPayload !== undefined) {
-      return { ...result, modifiedPayload: b.modifiedPayload };
-    }
-    return result;
-  }
-
-  if (a.action === "inject") {
-    return { ...a };
-  }
-
-  if (b.action === "inject") {
-    return { ...b };
-  }
-
-  return { action: "proceed" };
-}
-
-export function mergePostToolUseResponses(responses: readonly HookResponse[]): HookResponse {
-  if (responses.some((r) => r.action === "skip")) {
-    return { action: "skip" };
-  }
-
-  const injects = responses.filter((r): r is InjectResponse => r.action === "inject");
-  if (injects.length === 0) {
-    return { action: "proceed" };
-  }
-
-  const contexts = injects.map((i) => i.injectedContext).filter((ctx) => ctx !== "");
-  const base: InjectResponse = {
-    action: "inject",
-    injectedContext: contexts.join("\n\n---\n\n"),
-  };
-  const result: InjectResponse = injects.some((i) => i.variant === "gate_advisory")
-    ? { ...base, variant: "gate_advisory" }
-    : base;
-
-  const modifieds = injects.filter((i) => i.modifiedPayload !== undefined);
-  if (modifieds.length > 1) {
-    throw new Error("Conflict detected in post-tool-use modifiedPayload");
-  }
-  const single = modifieds[0];
-  if (single !== undefined) {
-    return { ...result, modifiedPayload: single.modifiedPayload };
-  }
-  return result;
-}
 
 function extractTaskId(toolInput: Record<string, unknown>): string | undefined {
   const raw = toolInput.taskId;

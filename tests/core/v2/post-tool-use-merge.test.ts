@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergePostToolUseResponses,
   mergePreToolUseResponses,
-} from "../../../src/core/justice-plugin";
+} from "../../../src/core/hook-response-merger";
 import type { HookResponse } from "../../../src/core/types";
 
 describe("D64 - PostToolUse merge rules", () => {

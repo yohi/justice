@@ -46,6 +46,29 @@ describe("buildToolExecutedRecord", () => {
     expect(observed.rawOutput).not.toContain("secret-value");
   });
 
+  it("truncates long command evidence without splitting a surrogate pair", () => {
+    const longValue = `${"x".repeat(4078)}😀${"z".repeat(14)}`;
+    const record = buildToolExecutedRecord({
+      envelope,
+      toolName: "bash",
+      toolInput: { command: `bun test ${longValue}` },
+      toolOutput: { output: `PASS ${longValue}` },
+      callId: "call-long",
+    });
+
+    const observed = record.evidence[0];
+    expect(observed?.sourceClass).toBe("tool_output");
+    if (observed?.sourceClass !== "tool_output" || observed.toolOutputClass !== "command_exec") {
+      throw new Error("expected command execution evidence");
+    }
+
+    for (const value of [observed.command, observed.rawOutput]) {
+      expect(value.length).toBeLessThanOrEqual(4096);
+      expect(value).toContain("…[truncated]");
+      expect(value).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
+  });
+
   it("adds task-summary claims as declared evidence after observed evidence", () => {
     const record = buildToolExecutedRecord({
       envelope,

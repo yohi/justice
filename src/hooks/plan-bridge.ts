@@ -8,7 +8,7 @@ import type {
   AgentId,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
-import { mergePostToolUseResponses } from "../core/justice-plugin";
+import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";

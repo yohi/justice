@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { JusticePlugin, mergePostToolUseResponses } from "../../src/core/justice-plugin";
+import { JusticePlugin } from "../../src/core/justice-plugin";
+import { mergePostToolUseResponses } from "../../src/core/hook-response-merger";
 import type {
   FileReader,
   FileWriter,
