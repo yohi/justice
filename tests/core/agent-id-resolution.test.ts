@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
@@ -91,6 +91,15 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       plugin.getLoopHandler().removeSession(sessionId);
 
       expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
+    });
+
+    it("propagates session removal to the observation handler", () => {
+      const observation = plugin.getObservationHandler();
+      const destroySession = vi.spyOn(observation, "destroySession");
+
+      plugin.getLoopHandler().removeSession("session-cleanup");
+
+      expect(destroySession).toHaveBeenCalledWith("session-cleanup");
     });
   });
 

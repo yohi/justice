@@ -27,7 +27,7 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
  */
 export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
-  private readonly persistedMessageIDs = new Set<string>();
+  private readonly persistedMessageIDs = new Map<string, Set<string>>();
 
   constructor(
     private readonly options: {
@@ -44,8 +44,8 @@ export class ObservationHandler {
   ): Promise<HookResponse> {
     this.messageRoleBuffer.update(sessionId, payload);
 
-    const messageKey = `${sessionId}:${payload.messageID}`;
-    if (this.persistedMessageIDs.has(messageKey)) {
+    const persistedIDs = this.persistedMessageIDs.get(sessionId);
+    if (persistedIDs?.has(payload.messageID)) {
       try {
         this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
       } catch (error) {
@@ -79,13 +79,20 @@ export class ObservationHandler {
         { agentId, sessionId, writerId: this.options.writerId },
         record,
       );
-      this.persistedMessageIDs.add(messageKey);
+      const sessionPersistedIDs = this.persistedMessageIDs.get(sessionId) ?? new Set<string>();
+      sessionPersistedIDs.add(payload.messageID);
+      this.persistedMessageIDs.set(sessionId, sessionPersistedIDs);
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
     } finally {
       this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
     }
     return PROCEED;
+  }
+
+  destroySession(sessionId: string): void {
+    this.persistedMessageIDs.delete(sessionId);
+    this.messageRoleBuffer.removeSession(sessionId);
   }
 
   async handlePreToolUse(_event: PreToolUseEvent): Promise<HookResponse> {

@@ -122,6 +122,13 @@ export class MessageRoleBuffer {
     }
   }
 
+  removeSession(sessionId: string): void {
+    const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
+    for (const key of this.buffer.keys()) {
+      if (key.startsWith(sessionKeyPrefix)) this.buffer.delete(key);
+    }
+  }
+
   // Latching derivation of readiness: the message becomes "finalized" (safe to read as a
   // complete body) only when BOTH the message-complete signal has arrived AND every part
   // is finalized. Only ever sets true, preserving monotonicity.

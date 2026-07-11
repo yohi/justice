@@ -353,6 +353,7 @@ export class JusticePlugin {
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
       this.planBridge.destroySession(sessionId);
       this.sessionStateProvider.removeSession(sessionId);
+      this.observationHandler.destroySession(sessionId);
     });
 
     this.sessionStateProvider = new SessionStateProvider();
