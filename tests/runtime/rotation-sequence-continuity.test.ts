@@ -21,7 +21,8 @@ function createMemFs(): {
       return c;
     },
     fileExists: async (p) => files.has(p),
-    listFiles: async (prefix) => [...files.keys()].filter((k) => k.startsWith(prefix) && k.endsWith(".jsonl")),
+    listFiles: async (prefix) =>
+      [...files.keys()].filter((k) => k.startsWith(prefix) && k.endsWith(".jsonl")),
     readFileStats: async (p) => {
       const c = files.get(p);
       if (c === undefined) return null;
@@ -114,7 +115,9 @@ describe("shard rotation + sequence continuity", () => {
     expect([...seqs].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
     const all = await store.readAll();
-    expect(all.map((r) => r.sequence).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(all.map((r) => r.sequence).sort((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    ]);
   });
 
   it("moves the segment into the archive tree even when that subtree did not exist yet", async () => {
@@ -138,7 +141,10 @@ describe("shard rotation + sequence continuity", () => {
 // Review fixes (PR #128).
 // ---------------------------------------------------------------------------
 
-function makeWriter(files: Map<string, string>, opts: { failArchiveRename?: boolean } = {}): FileWriter {
+function makeWriter(
+  files: Map<string, string>,
+  opts: { failArchiveRename?: boolean } = {},
+): FileWriter {
   const writer: FileWriter = {
     writeFile: async (p, content) => {
       files.set(p, content);

@@ -2,13 +2,15 @@ import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:p
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
-FileReader,
-FileWriter,
-HookEvent,
-HookResponse,
-InjectResponse,
-EventEvent,
-CompactionPayload,
+  FileReader,
+  FileWriter,
+  HookEvent,
+  PostToolUseEvent,
+  PreToolUseEvent,
+  HookResponse,
+  InjectResponse,
+  EventEvent,
+  CompactionPayload,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
 import { PlanBridge } from "../hooks/plan-bridge";
@@ -18,6 +20,7 @@ import { LoopDetectionHandler } from "../hooks/loop-handler";
 import { ObservationHandler } from "../hooks/observation-handler";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
+import { SessionStateProvider } from "./session-state-provider";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
@@ -93,6 +96,38 @@ export function mergePostToolUseResponses(responses: readonly HookResponse[]): H
     return { ...result, modifiedPayload: single.modifiedPayload };
   }
   return result;
+}
+
+function extractTaskId(toolInput: Record<string, unknown>): string | undefined {
+  const raw = toolInput.taskId;
+  return typeof raw === "string" ? raw : undefined;
+}
+
+function openSessionTaskWindow(
+  provider: SessionStateProvider,
+  event: PreToolUseEvent | PostToolUseEvent,
+): void {
+  const callId = event.callId;
+  if (!callId) return;
+  const taskId =
+    event.type === "PreToolUse"
+      ? extractTaskId(event.payload.toolInput)
+      : extractTaskId(event.payload.toolInput ?? {});
+  if (!taskId) return;
+  try {
+    provider.setActiveTaskWindow(callId, taskId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
+  }
+}
+
+function closeSessionTaskWindow(provider: SessionStateProvider, callId: string | undefined): void {
+  if (!callId) return;
+  try {
+    provider.closeActiveTaskWindow(callId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
+  }
 }
 
 export interface CreateGlobalFsResult {
@@ -272,6 +307,7 @@ export class JusticePlugin {
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
   private readonly observationHandler: ObservationHandler;
+  private readonly sessionStateProvider: SessionStateProvider;
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
@@ -292,8 +328,7 @@ export class JusticePlugin {
         )
       : new NoOpPersistence(500);
 
-    const globalDisplayPath =
-      options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
+    const globalDisplayPath = options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
 
     this.tieredWisdomStore = new TieredWisdomStore({
       localStore: this.wisdomStore,
@@ -314,14 +349,16 @@ export class JusticePlugin {
       options.notifier,
     );
 
-    // Ensure session cleanup propagates from loopHandler to planBridge
+    // Ensure session cleanup propagates from loopHandler to all stateful handlers
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
       this.planBridge.destroySession(sessionId);
+      this.sessionStateProvider.removeSession(sessionId);
     });
 
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
     this.observationHandler = new ObservationHandler();
+    this.sessionStateProvider = new SessionStateProvider();
   }
 
   /**
@@ -371,6 +408,9 @@ export class JusticePlugin {
           });
       }
       case "PreToolUse": {
+        // Open the callId-keyed task window before delegation logic runs. The
+        // window is closed in the matching PostToolUse case regardless of success.
+        openSessionTaskWindow(this.sessionStateProvider, event);
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
@@ -385,6 +425,9 @@ export class JusticePlugin {
         return mergePreToolUseResponses(observation, planBridge);
       }
       case "PostToolUse": {
+        // Close the matching task window unconditionally. This must happen even
+        // if the underlying handlers fail, to prevent window leaks.
+        closeSessionTaskWindow(this.sessionStateProvider, event.callId);
         // The observation handler runs for EVERY tool; the task tool also drives
         // plan-bridge completion detection and task-feedback processing.
         // Run independent handlers in parallel.
@@ -402,12 +445,15 @@ export class JusticePlugin {
         ]);
         return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
       }
+
       case "Event":
         return this.handleEventType(event);
-      case "AgentMapped":
+      case "AgentMapped": {
         // Full agent-name → persona mapping is implemented in Task 3.4.
-        void event.sessionId;
+        const { sessionId, agentName } = event.payload;
+        this.sessionStateProvider.setAgentMapping(sessionId, agentName);
         return PROCEED;
+      }
       default: {
         const _exhaustiveCheck: never = event;
         void _exhaustiveCheck;
@@ -472,6 +518,13 @@ export class JusticePlugin {
    */
   getObservationHandler(): ObservationHandler {
     return this.observationHandler;
+  }
+
+  /**
+   * Get the SessionStateProvider instance (sessionId → AgentId + callId task windows).
+   */
+  getSessionStateProvider(): SessionStateProvider {
+    return this.sessionStateProvider;
   }
 
   /**

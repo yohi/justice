@@ -222,11 +222,11 @@ export class OpenCodeAdapter {
     const agentName = this.#resolveAgentName(properties, info);
     if (agentName) {
       try {
-await justice.handleEvent({
+        await justice.handleEvent({
           type: "AgentMapped",
           sessionId,
-payload: { sessionId, agentName },
-});
+          payload: { sessionId, agentName },
+        });
       } catch (err) {
         await this.log("error", "[Justice] AgentMapped dispatch failed", err);
       }
@@ -447,7 +447,8 @@ payload: { sessionId, agentName },
             title: "Task Gate",
             message: response.injectedContext,
             sessionId: input.sessionID,
-            taskId: (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
+            taskId:
+              (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
           });
         } catch (err) {
           await this.log("warn", "[Justice] gate advisory notify failed", err);

@@ -1,11 +1,11 @@
 import type {
-FileReader,
-HookEvent,
-HookResponse,
-DelegationRequest,
-WisdomStoreInterface,
-PlanTask,
-AgentId,
+  FileReader,
+  HookEvent,
+  HookResponse,
+  DelegationRequest,
+  WisdomStoreInterface,
+  PlanTask,
+  AgentId,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/justice-plugin";
@@ -442,7 +442,9 @@ export class PlanBridge {
 
       if (!hasError) {
         if (nextTask) {
-          const planPathPart = writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : "";
+          const planPathPart = writingCompletion.planFilePath
+            ? ` (${writingCompletion.planFilePath})`
+            : "";
           const source = `Detection source: ${writingCompletion.source}${planPathPart}`;
           const mediumNote =
             writingCompletion.confidence === "medium"
@@ -476,10 +478,13 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses([response, {
-            action: "inject",
-            injectedContext: `${banner}\n${atlasGuidance}`,
-          }]);
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: `${banner}\n${atlasGuidance}`,
+            },
+          ]);
 
           this.safeNotify(
             sessionId,
@@ -506,10 +511,13 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses([response, {
-            action: "inject",
-            injectedContext: `${banner}\n${atlasGuidance}`,
-          }]);
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: `${banner}\n${atlasGuidance}`,
+            },
+          ]);
 
           this.safeNotify(
             sessionId,
@@ -570,13 +578,16 @@ export class PlanBridge {
         message: `Sisyphusがsystematic-debuggingを完了しました。${savedCount} 件のWisdomを保存しました。`,
       });
       const breakdownText = breakdown ? ` ${breakdown}` : "";
-      response = mergePostToolUseResponses([response, {
-        action: "inject",
-        injectedContext:
-          `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
-          `**Confidence**: ${debuggingCompletion.confidence}\n` +
-          `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
-      }]);
+      response = mergePostToolUseResponses([
+        response,
+        {
+          action: "inject",
+          injectedContext:
+            `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
+            `**Confidence**: ${debuggingCompletion.confidence}\n` +
+            `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
+        },
+      ]);
       this.safeNotify(
         sessionId,
         undefined,
@@ -631,10 +642,13 @@ export class PlanBridge {
           "---",
         ].join("\n");
 
-        response = mergePostToolUseResponses([response, {
-          action: "inject",
-          injectedContext: `${banner}\n${pivotBody}`,
-        }]);
+        response = mergePostToolUseResponses([
+          response,
+          {
+            action: "inject",
+            injectedContext: `${banner}\n${pivotBody}`,
+          },
+        ]);
         this.safeNotify(
           sessionId,
           taskId,
@@ -660,10 +674,13 @@ export class PlanBridge {
           rawOutput: toolResult,
         });
         if (legacyCompletion) {
-          response = mergePostToolUseResponses([response, {
-            action: "inject",
-            injectedContext: legacyCompletion.guidance,
-          }]);
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: legacyCompletion.guidance,
+            },
+          ]);
         }
       }
     }

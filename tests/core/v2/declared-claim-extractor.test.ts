@@ -4,9 +4,17 @@ import { extractDeclaredClaims } from "../../../src/core/v2/declared-claim-extra
 
 describe("extractDeclaredClaims", () => {
   it("extracts declared claims for build lint and generic summaries", () => {
-    expect(extractDeclaredClaims("test-source-1", "build passed ✅").map((c) => c.claimKind)).toContain("build");
-    expect(extractDeclaredClaims("test-source-2", "lint failed ❌").map((c) => c.claimKind)).toContain("lint");
-    expect(extractDeclaredClaims("test-source-3", "declared summary: all checks green").map((c) => c.claimKind)).toContain("generic");
+    expect(
+      extractDeclaredClaims("test-source-1", "build passed ✅").map((c) => c.claimKind),
+    ).toContain("build");
+    expect(
+      extractDeclaredClaims("test-source-2", "lint failed ❌").map((c) => c.claimKind),
+    ).toContain("lint");
+    expect(
+      extractDeclaredClaims("test-source-3", "declared summary: all checks green").map(
+        (c) => c.claimKind,
+      ),
+    ).toContain("generic");
   });
 
   it("derives a pass outcome from a passing test claim", () => {
@@ -39,7 +47,9 @@ describe("extractDeclaredClaims", () => {
   });
 
   it("derives a pass outcome from past-tense 'passed' claims (Issue 2)", () => {
-    const build = extractDeclaredClaims("src-bp", "build passed").find((c) => c.claimKind === "build");
+    const build = extractDeclaredClaims("src-bp", "build passed").find(
+      (c) => c.claimKind === "build",
+    );
     expect(build?.outcome).toBe("pass");
     const lint = extractDeclaredClaims("src-lp", "lint passed").find((c) => c.claimKind === "lint");
     expect(lint?.outcome).toBe("pass");
@@ -59,9 +69,13 @@ describe("extractDeclaredClaims", () => {
   });
 
   it("matches additional pass/fail inflections: passes, failures (Issue 4 review)", () => {
-    const passClaim = extractDeclaredClaims("src-inf-p", "the test suite passes").find((c) => c.claimKind === "test");
+    const passClaim = extractDeclaredClaims("src-inf-p", "the test suite passes").find(
+      (c) => c.claimKind === "test",
+    );
     expect(passClaim?.outcome).toBe("pass");
-    const failClaim = extractDeclaredClaims("src-inf-f", "build has 2 failures").find((c) => c.claimKind === "build");
+    const failClaim = extractDeclaredClaims("src-inf-f", "build has 2 failures").find(
+      (c) => c.claimKind === "build",
+    );
     expect(failClaim?.outcome).toBe("fail");
   });
 });

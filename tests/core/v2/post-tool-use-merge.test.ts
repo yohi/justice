@@ -61,8 +61,16 @@ describe("D64 - PostToolUse merge rules", () => {
 
   it("should throw when more than one inject response carries modifiedPayload", () => {
     const responses: HookResponse[] = [
-      { action: "inject", injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
-      { action: "inject", injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } },
+      {
+        action: "inject",
+        injectedContext: "A",
+        modifiedPayload: { toolName: "task", modified: 1 },
+      },
+      {
+        action: "inject",
+        injectedContext: "B",
+        modifiedPayload: { toolName: "task", modified: 2 },
+      },
     ];
     expect(() => mergePostToolUseResponses(responses)).toThrow(/modifiedPayload/);
   });
@@ -128,8 +136,16 @@ describe("D64 - PreToolUse merge rules", () => {
 
   it("should throw when modifiedPayload conflicts occur", () => {
     const responses: HookResponse[] = [
-      { action: "inject", injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
-      { action: "inject", injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } },
+      {
+        action: "inject",
+        injectedContext: "A",
+        modifiedPayload: { toolName: "task", modified: 1 },
+      },
+      {
+        action: "inject",
+        injectedContext: "B",
+        modifiedPayload: { toolName: "task", modified: 2 },
+      },
     ];
     expect(() => mergePreToolUseResponses(responses[0], responses[1])).toThrow(/modifiedPayload/);
   });

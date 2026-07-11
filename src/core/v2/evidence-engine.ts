@@ -105,7 +105,8 @@ export function extractEvidenceFromTool(
     toolOutputClass: "file_content",
     command, // rawOutput must not be stored in file_content
     rawOutputHash: hashString(rawOutput),
-    rawOutputSnippet: rawOutput.length > 0 ? redactForPersistence(sliceCodeUnitsSafe(rawOutput, 100)) : undefined,
+    rawOutputSnippet:
+      rawOutput.length > 0 ? redactForPersistence(sliceCodeUnitsSafe(rawOutput, 100)) : undefined,
     interpretation,
   };
 }

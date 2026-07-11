@@ -239,9 +239,9 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
   });
 
   it("returns [] when role is undefined", () => {
-    expect(extractFinalizedAssistantClaims("src1", { finalized: true, text: "tests pass" })).toEqual(
-      [],
-    );
+    expect(
+      extractFinalizedAssistantClaims("src1", { finalized: true, text: "tests pass" }),
+    ).toEqual([]);
   });
 
   it("returns [] for a finalized assistant message with no claim keywords", () => {

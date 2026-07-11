@@ -49,9 +49,7 @@ describe("Review rejection pivot integration flow", () => {
     if (third?.action !== "inject") throw new Error("expected pivot injection");
     expect(third.injectedContext).toContain("🚧");
     expect(third.injectedContext).toContain("Hephaestus");
-    expect(third.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(
-      true,
-    );
+    expect(third.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(true);
 
     const history = loopHandler.getTrialHistory("s-pivot", "task-1");
     expect(history).toHaveLength(3);

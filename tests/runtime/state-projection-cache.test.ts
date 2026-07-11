@@ -17,7 +17,16 @@ function reviewEvent(seq: number, taskId: string, scope: string): ObservationRec
     taskId,
     kind: "review_observed",
     reviewScope: scope,
-    items: [{ itemKey: "a", evidenceId: "ev-a", severity: "critical", summary: "s", location: "l", status: "open" }],
+    items: [
+      {
+        itemKey: "a",
+        evidenceId: "ev-a",
+        severity: "critical",
+        summary: "s",
+        location: "l",
+        status: "open",
+      },
+    ],
   };
 }
 

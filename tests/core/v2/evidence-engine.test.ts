@@ -147,7 +147,12 @@ describe("extractEvidenceFromTool", () => {
   });
 
   it("derives unknown outcome from neutral (non-pass, non-fail) text", () => {
-    const ev = extractEvidenceFromTool("bash", { command: "echo hi" }, { output: "hello world" }, "call_neutral");
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "echo hi" },
+      { output: "hello world" },
+      "call_neutral",
+    );
     expect(ev.interpretation?.outcome).toBe("unknown");
   });
 
