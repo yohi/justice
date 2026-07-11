@@ -5,6 +5,7 @@ import type {
   ToolOutputEvidence,
 } from "./observation-model";
 import type { DeclaredClaim } from "./declared-claim-extractor";
+import type { DetectedSkillInvocation } from "./skill-invoked-detector";
 import { hashString } from "./hash";
 import { extractEvidenceFromTool } from "./evidence-engine";
 import {
@@ -73,6 +74,22 @@ export type BuiltToolExecutedRecord = PendingEnvelope & {
   readonly callId: string;
   readonly evidence: readonly Evidence[];
 };
+
+export type SkillInvokedRecordInput = {
+  readonly envelope: PendingEnvelope;
+  readonly invocation: DetectedSkillInvocation;
+};
+
+export function buildSkillInvokedRecord(input: SkillInvokedRecordInput): PendingObservationRecord {
+  return {
+    ...input.envelope,
+    recordType: "observation",
+    kind: "skill_invoked",
+    skillName: input.invocation.skillName,
+    source: input.invocation.source,
+    ...(input.invocation.callId === undefined ? {} : { callId: input.invocation.callId }),
+  };
+}
 
 function extractCommandArgs(toolInput: unknown): { readonly command?: string } | undefined {
   if (typeof toolInput !== "object" || toolInput === null || !("command" in toolInput)) {

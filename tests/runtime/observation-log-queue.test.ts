@@ -12,6 +12,8 @@ function rec(): PendingLogRecord {
     writerId: "w-1",
     recordType: "observation",
     kind: "skill_invoked",
+    skillName: "fixture-skill",
+    source: "skill_tool",
   };
 }
 

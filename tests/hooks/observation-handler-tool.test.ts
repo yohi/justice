@@ -198,7 +198,7 @@ describe("ObservationHandler tool observation", () => {
     expect(response).toEqual({ action: "proceed" });
     expect(sessionState.getActiveTaskId("call-1")).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: tool observation failed, degrading to PROCEED",
+      "observation-handler: task summary declared evidence failed",
       expect.any(Error),
     );
   });

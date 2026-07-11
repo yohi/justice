@@ -1,5 +1,6 @@
 // src/runtime/validation.ts
 import type { PersistedLogRecord } from "../core/v2/observation-model";
+import { isValidSkillInvokedRecord } from "./skill-invoked-record-validator";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -117,9 +118,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       }
     }
   } else if (kind === "skill_invoked") {
-    // SkillInvokedRecord is currently a stub (only `kind`, refined in Task 4.3).
-    // No additional fields exist on the type yet, so none are validated here —
-    // update this branch in lockstep when the type is finalized.
+    if (!isValidSkillInvokedRecord(r)) throw new Error("Invalid skill_invoked record");
   } else if (kind === "review_observed") {
     if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
       throw new TypeError("Invalid review_observed record");
