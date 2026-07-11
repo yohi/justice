@@ -3,7 +3,9 @@ import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-ada
 import { debugLog } from "./runtime/debug";
 
 export const OpenCodePlugin: Plugin = async (init) => {
-  const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
+  const adapter =
+    (init as unknown as { __justiceTestAdapter?: OpenCodeAdapter }).__justiceTestAdapter ??
+    new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
 
   debugLog("Plugin factory invoked, adapter created.");
 

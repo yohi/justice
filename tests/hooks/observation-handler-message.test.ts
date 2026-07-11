@@ -216,4 +216,50 @@ describe("ObservationHandler message observation", () => {
       }),
     ).toEqual({ action: "proceed" });
   });
+
+  it("skips re-persisting an already-persisted finalized message (D65)", async () => {
+    const { files, reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const store = new ObservationLogStore(writer, reader, "w-handler");
+    const handler = new ObservationHandler({
+      logStore: store,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
+    const firstContent = files.get(path);
+    expect(firstContent).toBeDefined();
+
+    // Re-running the same finalized message should not append a duplicate.
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+
+    expect(files.get(path)).toBe(firstContent);
+  });
 });
