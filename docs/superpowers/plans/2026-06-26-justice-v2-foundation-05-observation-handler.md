@@ -328,7 +328,7 @@ gt submit
 - Consumes: `MessageRoleBuffer`, `extractFinalizedAssistantClaims`, `redactForPersistence`.
 - Produces: `handleMessage(payload)` → `ObservationRecord{kind:"message"}` with `declaredClaims` + `declared_claim` Evidence.
 
-- [ ] **Step 1: `handleMessage` を実装（D53/D67）**
+- [x] **Step 1: `handleMessage` を実装（D53/D67）**
   - レコード構築およびスニペットの redaction 処理（ドメインロジック）は `src/core/v2/record-builder.ts` の純粋関数へ委譲します。
 
 ```typescript
@@ -392,21 +392,21 @@ async handleMessage(payload: ObservationMessagePayload): Promise<HookResponse> {
 }
 ```
 
-- [ ] **Step 2: テストコードの実装と実行（Devcontainer 内）**
+- [x] **Step 2: テストコードの実装と実行（Devcontainer 内）**
   - `tests/hooks/observation-handler-message.test.ts` に、`logStore.append` の書き込み失敗（例外発生）時に、エラーログが記録されつつ全体がクラッシュせずに `{ action: "proceed" }` を返すという縮退動作（Fail-Open）を検証するテストを追加します。
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-message.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/hooks/observation-handler.ts tests/hooks/observation-handler-message.test.ts
 git commit -m "feat(v2): message observation handler with declared claims and fail-open verification"
 ```
 
-- [ ] **Step 4: Phase 4 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
