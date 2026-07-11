@@ -360,7 +360,11 @@ export class LoopDetectionHandler {
     }
   }
 
-  private removeSession(sessionId: string): void {
+  /**
+   * Removes the session and its associated state. Public so that tests and
+   * orchestrators can explicitly trigger the session-removed callback path.
+   */
+  removeSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);

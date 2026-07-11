@@ -86,16 +86,10 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       const sessionId = "session-cleanup";
       plugin.handleEvent(agentMapped(sessionId, "sisyphus"));
       expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("sisyphus");
+      // Invoke the public removal API; the constructor-registered callback must
+      // propagate cleanup to planBridge and sessionStateProvider.
+      plugin.getLoopHandler().removeSession(sessionId);
 
-      plugin.getLoopHandler().setSessionRemovedCallback((id) => {
-        plugin.getPlanBridge().destroySession(id);
-        plugin.getSessionStateProvider().removeSession(id);
-      });
-
-      // Simulate the same cleanup path JusticePlugin wires internally.
-      (plugin.getLoopHandler() as unknown as { removeSession(id: string): void }).removeSession(
-        sessionId,
-      );
       expect(plugin.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
     });
   });
