@@ -9,13 +9,19 @@ export type DeclaredClaim = {
 // false positives on "no errors"/"0 errors". ✓/✗ mirror evidence-engine's OUTPUT_* marks.
 const PASS_PATTERNS = /\bpass(?:es|ed|ing)?\b|✓|✅/i;
 const FAIL_PATTERNS = /\bfail(?:s|ed|ing|ure|ures)?\b|✗|❌/i;
-const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], RegExp]> = [
+type ClaimMatcher = (text: string) => boolean;
+
+function includesCaseInsensitive(text: string, keyword: string): boolean {
+  return text.toLowerCase().includes(keyword);
+}
+
+const CLAIM_PATTERNS: ReadonlyArray<readonly [DeclaredClaim["claimKind"], ClaimMatcher]> = [
   // Claim kinds match the bare keyword (coarse): an incidental mention like "the test file" still
   // yields a claim, but its outcome is "unknown" (computed below) so it carries no false signal.
-  ["test", /\btests?\b/i],
-  ["build", /build(?:\s+pass(?:ed)?)?|✅\s*build/i],
-  ["lint", /lint(?:\s+pass(?:ed)?)?|✅\s*lint/i],
-  ["generic", /declared|summary|status/i],
+  ["test", (text): boolean => /\btests?\b/i.test(text)],
+  ["build", (text): boolean => includesCaseInsensitive(text, "build")],
+  ["lint", (text): boolean => includesCaseInsensitive(text, "lint")],
+  ["generic", (text): boolean => /declared|summary|status/i.test(text)],
 ];
 
 function deriveClaimOutcome(text: string): DeclaredClaim["outcome"] {
@@ -28,8 +34,8 @@ function deriveClaimOutcome(text: string): DeclaredClaim["outcome"] {
 
 export function extractDeclaredClaims(sourceId: string, text: string): DeclaredClaim[] {
   const claims: DeclaredClaim[] = [];
-  for (const [claimKind, pattern] of CLAIM_PATTERNS) {
-    if (!pattern.test(text)) continue;
+  for (const [claimKind, matches] of CLAIM_PATTERNS) {
+    if (!matches(text)) continue;
     // NOTE: outcome is derived from the WHOLE message text and applied to every claim produced from
     // it. A mixed report (e.g. "tests pass, lint failed") therefore marks ALL claims "fail" (fail
     // dominates, aligned with evidence-engine deriveOutcome). Intentional coarse signal; per-claim

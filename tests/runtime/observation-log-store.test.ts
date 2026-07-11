@@ -63,6 +63,8 @@ function msgRecord(): PendingLogRecord {
     messageID: "m1",
     role: "assistant",
     textHash: "abc",
+    declaredClaims: [],
+    evidence: [],
     finalized: true,
   };
 }
@@ -104,6 +106,8 @@ describe("validateRecordSchema()", () => {
         messageID: "m1",
         role: "assistant",
         textHash: "h",
+        declaredClaims: [],
+        evidence: [],
         finalized: true,
       }),
     ).not.toThrow();
@@ -453,6 +457,20 @@ describe("validateRecordSchema()", () => {
         messageID: "m1",
         role: "assistant",
         textHash: "h",
+      }),
+    ).toThrow(/message record/);
+  });
+
+  it("rejects a message record without its required declared claim and evidence arrays", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
       }),
     ).toThrow(/message record/);
   });

@@ -66,12 +66,34 @@ function validateObservationRecord(r: Record<string, unknown>): void {
   } else if (kind === "message") {
     if (
       typeof r.messageID !== "string" ||
-      typeof r.role !== "string" ||
+      r.role !== "assistant" ||
       typeof r.textHash !== "string" ||
       typeof r.finalized !== "boolean" ||
-      (r.declaredClaims !== undefined && !Array.isArray(r.declaredClaims))
+      !Array.isArray(r.declaredClaims) ||
+      !Array.isArray(r.evidence) ||
+      r.declaredClaims.length !== r.evidence.length
     ) {
       throw new Error("Invalid message record");
+    }
+    const evidenceIterator = r.evidence.values();
+    for (const claim of r.declaredClaims) {
+      const nextEvidence = evidenceIterator.next();
+      if (nextEvidence.done) {
+        throw new Error("Invalid message record");
+      }
+      const evidence = nextEvidence.value;
+      if (
+        !isObject(claim) ||
+        typeof claim.evidenceId !== "string" ||
+        !isOneOf(claim.claimKind, ["test", "build", "lint", "generic"]) ||
+        !isOneOf(claim.outcome, ["pass", "fail", "unknown"]) ||
+        !isValidEvidence(evidence) ||
+        evidence.sourceClass !== "declared_claim" ||
+        evidence.declaredFrom !== "message" ||
+        evidence.evidenceId !== claim.evidenceId
+      ) {
+        throw new Error("Invalid message record");
+      }
     }
   } else if (kind === "skill_invoked") {
     // SkillInvokedRecord is currently a stub (only `kind`, refined in Task 4.3).

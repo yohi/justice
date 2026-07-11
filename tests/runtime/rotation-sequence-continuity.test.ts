@@ -75,6 +75,8 @@ function rec(): PendingLogRecord {
     messageID: "m1",
     role: "assistant",
     textHash: "abc",
+    declaredClaims: [],
+    evidence: [],
     finalized: true,
   };
 }

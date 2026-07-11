@@ -1,5 +1,13 @@
-import type { HookResponse, PostToolUseEvent, PreToolUseEvent } from "../core/types";
+import type {
+  HookResponse,
+  PostToolUseEvent,
+  PreToolUseEvent,
+} from "../core/types";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
+import { buildMessageRecord } from "../core/v2/record-builder";
+import type { SessionStateProvider } from "../core/session-state-provider";
+import { MessageRoleBuffer } from "../runtime/message-role-buffer";
+import type { ObservationLogStore } from "../runtime/observation-log-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -15,6 +23,17 @@ const PROCEED: HookResponse = { action: "proceed" };
  * dependency-free for now.
  */
 export class ObservationHandler {
+  private readonly messageRoleBuffer = new MessageRoleBuffer();
+
+  constructor(
+    private readonly options: {
+      readonly logStore: ObservationLogStore;
+      readonly sessionStateProvider: SessionStateProvider;
+      readonly writerId: string;
+      readonly logger?: { warn(message: string, error: unknown): void };
+    },
+  ) {}
+
   async handlePreToolUse(_event: PreToolUseEvent): Promise<HookResponse> {
     return PROCEED;
   }
@@ -24,9 +43,37 @@ export class ObservationHandler {
   }
 
   async handleMessage(
-    _sessionId: string,
-    _payload: ObservationMessagePayload,
+    sessionId: string,
+    payload: ObservationMessagePayload,
   ): Promise<HookResponse> {
+    try {
+      this.messageRoleBuffer.update(sessionId, payload);
+      if (payload.kind === "message_updated" && payload.finalized) {
+        this.messageRoleBuffer.finalize(sessionId, payload.messageID);
+      }
+
+      const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
+      if (text === undefined || text.length === 0) return PROCEED;
+
+      const claims = this.messageRoleBuffer.extractAssistantClaims(sessionId, payload.messageID);
+      const agentId = this.options.sessionStateProvider.getAgentId(sessionId);
+      const record = buildMessageRecord({
+        envelope: {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId,
+          writerId: this.options.writerId,
+          recordType: "observation",
+        },
+        messageID: payload.messageID,
+        text,
+        claims,
+      });
+      await this.options.logStore.append({ agentId, sessionId, writerId: this.options.writerId }, record);
+    } catch (error) {
+      this.options.logger?.warn("observation-handler message failed", error);
+    }
     return PROCEED;
   }
 }

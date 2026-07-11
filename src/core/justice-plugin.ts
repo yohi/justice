@@ -26,6 +26,7 @@ import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
+import { ObservationLogStore } from "../runtime/observation-log-store";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -355,10 +356,16 @@ export class JusticePlugin {
       this.sessionStateProvider.removeSession(sessionId);
     });
 
+    this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    this.observationHandler = new ObservationHandler();
-    this.sessionStateProvider = new SessionStateProvider();
+    const writerId = options.writerId ?? "w-local";
+    this.observationHandler = new ObservationHandler({
+      logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
+      sessionStateProvider: this.sessionStateProvider,
+      writerId,
+      logger: options.logger,
+    });
   }
 
   /**
