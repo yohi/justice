@@ -101,6 +101,26 @@ describe("PlanBridge", () => {
     });
   });
 
+  it("returns PROCEED for observation-kind message payloads", async () => {
+    const reader = createMockFileReader({ "plan.md": samplePlanContent });
+    const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+    const event: HookEvent = {
+      type: "Message",
+      payload: {
+        kind: "message_part_updated",
+        sessionId: "s-obs",
+        messageID: "m1",
+        partID: "p1",
+        text: "hello",
+      },
+      sessionId: "s-obs",
+    };
+
+    const response = await bridge.handleMessage(event);
+    expect(response.action).toBe("proceed");
+  });
+
   describe("handlePreToolUse", () => {
     it("should inject plan context when task() is about to be called", async () => {
       const reader = createMockFileReader({

@@ -622,3 +622,21 @@ describe("ObservationLogStore", () => {
     await expect(store.append(mismatched, msgRecord())).rejects.toThrow(/writerId/);
   });
 });
+
+it("readAll merges archived segments before active segments", async () => {
+  const { files, reader, writer } = createMemFs();
+  const enc = encodeSafeSegment("ses-1");
+  const archivePath = `.justice/archive/events/sisyphus/${enc}/w-1.20260101T000000Z.jsonl`;
+  files.set(
+    archivePath,
+    `${JSON.stringify({ ...msgRecord(), sequence: 1 })}
+`,
+  );
+
+  const store = new ObservationLogStore(writer, reader, "w-1");
+  await store.append(shard, msgRecord());
+
+  const all = await store.readAll();
+  expect(all).toHaveLength(2);
+  expect(all.map((r) => r.sequence)).toEqual([1, 2]);
+});

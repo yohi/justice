@@ -242,6 +242,21 @@ describe("JusticePlugin", () => {
     });
   });
 
+  describe("session cleanup propagation", () => {
+    it("propagates session removal from LoopDetectionHandler to SessionStateProvider", () => {
+      const loopHandler = plugin.getLoopHandler();
+      const sessionProvider = plugin.getSessionStateProvider();
+      const removeSpy = vi.spyOn(sessionProvider, "removeSession");
+
+      // MAX_SESSIONS is 50; adding 51 sessions forces cleanup of the oldest one.
+      for (let i = 0; i < 51; i++) {
+        loopHandler.setActivePlan(`s-${i}`, "plan.md", "task-1", "hephaestus");
+      }
+
+      expect(removeSpy).toHaveBeenCalledWith("s-0");
+    });
+  });
+
   describe("wisdom store integration", () => {
     it("getWisdomStore() should return the local store (backwards compatible)", () => {
       const tiered = plugin.getTieredWisdomStore();
