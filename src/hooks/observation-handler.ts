@@ -27,6 +27,7 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
  */
 export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
+  private readonly persistedMessageIDs = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -37,24 +38,28 @@ export class ObservationHandler {
     },
   ) {}
 
-  async handlePreToolUse(_event: PreToolUseEvent): Promise<HookResponse> {
-    return PROCEED;
-  }
-
-  async handlePostToolUse(_event: PostToolUseEvent): Promise<HookResponse> {
-    return PROCEED;
-  }
-
   async handleMessage(
     sessionId: string,
     payload: ObservationMessagePayload,
   ): Promise<HookResponse> {
     this.messageRoleBuffer.update(sessionId, payload);
 
-    const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
-    if (text === undefined || text.length === 0) return PROCEED;
+    const messageKey = `${sessionId}:${payload.messageID}`;
+    if (this.persistedMessageIDs.has(messageKey)) {
+      try {
+        this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
+      } catch (error) {
+        this.options.logger?.warn("observation-handler gc failed", error);
+      }
+      return PROCEED;
+    }
 
     try {
+      const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
+      if (text === undefined || text.length === 0) {
+        return PROCEED;
+      }
+
       const claims = this.messageRoleBuffer.extractAssistantClaims(sessionId, payload.messageID);
       const agentId = this.options.sessionStateProvider.getAgentId(sessionId);
       const record = buildMessageRecord({
@@ -74,11 +79,20 @@ export class ObservationHandler {
         { agentId, sessionId, writerId: this.options.writerId },
         record,
       );
+      this.persistedMessageIDs.add(messageKey);
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
     } finally {
       this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
     }
+    return PROCEED;
+  }
+
+  async handlePreToolUse(_event: PreToolUseEvent): Promise<HookResponse> {
+    return PROCEED;
+  }
+
+  async handlePostToolUse(_event: PostToolUseEvent): Promise<HookResponse> {
     return PROCEED;
   }
 }

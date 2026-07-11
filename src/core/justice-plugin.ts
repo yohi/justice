@@ -420,7 +420,7 @@ export class JusticePlugin {
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
-          this.observationHandler.handlePreToolUse(event).catch((err) => {
+          this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
             this.options.logger?.warn("observation-handler pre-tool-use failed", err);
             return PROCEED;
           }),
@@ -434,7 +434,7 @@ export class JusticePlugin {
         try {
           // Keep the window open while observation associates the tool result with its task.
           const [observation, planBridge, taskFeedback] = await Promise.all([
-            this.observationHandler.handlePostToolUse(event).catch((err) => {
+            this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
               this.options.logger?.warn("observation-handler post-tool-use failed", err);
               return PROCEED;
             }),
