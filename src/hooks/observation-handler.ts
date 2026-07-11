@@ -11,6 +11,11 @@ import type { ObservationLogStore } from "../runtime/observation-log-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
+// D65: messageRoleBuffer memory bounds. A finalized message is short-lived;
+// parts that never finalize (e.g. streaming truncation) must not grow forever.
+const MESSAGE_ROLE_BUFFER_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes idle
+const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
+
 /**
  * ObservationHandler observes EVERY tool call and message part for the v2
  * observation pipeline (declared-claim extraction, evidence recording).
@@ -68,6 +73,7 @@ export class ObservationHandler {
         claims,
       });
       await this.options.logStore.append({ agentId, sessionId, writerId: this.options.writerId }, record);
+      this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
     }
