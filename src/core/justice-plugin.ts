@@ -5,6 +5,8 @@ import type {
   FileReader,
   FileWriter,
   HookEvent,
+  PostToolUseEvent,
+  PreToolUseEvent,
   HookResponse,
   InjectResponse,
   EventEvent,
@@ -94,6 +96,38 @@ export function mergePostToolUseResponses(responses: readonly HookResponse[]): H
     return { ...result, modifiedPayload: single.modifiedPayload };
   }
   return result;
+}
+
+function extractTaskId(toolInput: Record<string, unknown>): string | undefined {
+  const raw = toolInput.taskId;
+  return typeof raw === "string" ? raw : undefined;
+}
+
+function openSessionTaskWindow(
+  provider: SessionStateProvider,
+  event: PreToolUseEvent | PostToolUseEvent,
+): void {
+  const callId = event.callId;
+  if (!callId) return;
+  const taskId =
+    event.type === "PreToolUse"
+      ? extractTaskId(event.payload.toolInput)
+      : extractTaskId(event.payload.toolInput ?? {});
+  if (!taskId) return;
+  try {
+    provider.setActiveTaskWindow(callId, taskId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
+  }
+}
+
+function closeSessionTaskWindow(provider: SessionStateProvider, callId: string | undefined): void {
+  if (!callId) return;
+  try {
+    provider.closeActiveTaskWindow(callId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
+  }
 }
 
 export interface CreateGlobalFsResult {
@@ -374,6 +408,9 @@ export class JusticePlugin {
           });
       }
       case "PreToolUse": {
+        // Open the callId-keyed task window before delegation logic runs. The
+        // window is closed in the matching PostToolUse case regardless of success.
+        openSessionTaskWindow(this.sessionStateProvider, event);
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
@@ -388,6 +425,9 @@ export class JusticePlugin {
         return mergePreToolUseResponses(observation, planBridge);
       }
       case "PostToolUse": {
+        // Close the matching task window unconditionally. This must happen even
+        // if the underlying handlers fail, to prevent window leaks.
+        closeSessionTaskWindow(this.sessionStateProvider, event.callId);
         // The observation handler runs for EVERY tool; the task tool also drives
         // plan-bridge completion detection and task-feedback processing.
         // Run independent handlers in parallel.
@@ -405,6 +445,7 @@ export class JusticePlugin {
         ]);
         return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
       }
+
       case "Event":
         return this.handleEventType(event);
       case "AgentMapped": {
