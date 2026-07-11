@@ -116,7 +116,9 @@ describe("JusticePlugin routing guard", () => {
       observedTaskId = plugin.getSessionStateProvider().getActiveTaskId("call-1");
       return { action: "proceed" };
     });
-    vi.spyOn(plugin.getPlanBridge(), "handlePostToolUse").mockRejectedValue(new Error("plan failure"));
+    vi.spyOn(plugin.getPlanBridge(), "handlePostToolUse").mockRejectedValue(
+      new Error("plan failure"),
+    );
 
     await plugin.handleEvent({
       type: "PreToolUse",
@@ -128,7 +130,12 @@ describe("JusticePlugin routing guard", () => {
       type: "PostToolUse",
       sessionId: "s-1",
       callId: "call-1",
-      payload: { toolName: "task", toolInput: { taskId: "task-1" }, toolResult: "ok", error: false },
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1" },
+        toolResult: "ok",
+        error: false,
+      },
     });
 
     releaseObservation?.();

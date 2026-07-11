@@ -478,7 +478,11 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     expect(spy).toHaveBeenCalledWith({
       type: "Event",
       sessionId: "sess-1",
-      payload: { eventType: "session_error", sessionId: "sess-1", message: "ordinary provider failure" },
+      payload: {
+        eventType: "session_error",
+        sessionId: "sess-1",
+        message: "ordinary provider failure",
+      },
     });
   });
 
@@ -590,10 +594,12 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
   it("keeps a task window available while its PostToolUse observation is handled", async () => {
     const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
     const observedTaskIds: (string | undefined)[] = [];
-    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(async (event) => {
-      observedTaskIds.push(plugin.getSessionStateProvider().getActiveTaskId(event.callId ?? ""));
-      return { action: "proceed" };
-    });
+    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(
+      async (event) => {
+        observedTaskIds.push(plugin.getSessionStateProvider().getActiveTaskId(event.callId ?? ""));
+        return { action: "proceed" };
+      },
+    );
 
     await plugin.handleEvent({
       type: "PreToolUse",
@@ -605,7 +611,12 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
       type: "PostToolUse",
       sessionId: "s",
       callId: "call-1",
-      payload: { toolName: "task", toolInput: { taskId: "task-1" }, toolResult: "done", error: false },
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1" },
+        toolResult: "done",
+        error: false,
+      },
     });
 
     expect(observedTaskIds).toEqual(["task-1"]);

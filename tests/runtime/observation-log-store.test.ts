@@ -461,7 +461,7 @@ describe("validateRecordSchema()", () => {
     ).toThrow(/message record/);
   });
 
-  it("rejects a message record without its required declared claim and evidence arrays", () => {
+  it("accepts a message record without declaredClaims/evidence for backward compatibility", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -472,7 +472,101 @@ describe("validateRecordSchema()", () => {
         textHash: "h",
         finalized: true,
       }),
+    ).not.toThrow();
+  });
+
+  it("rejects a message record with mismatched declaredClaims/evidence arrays", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        declaredClaims: [{ evidenceId: "e1", claimKind: "generic", outcome: "unknown" }],
+        evidence: [],
+      }),
     ).toThrow(/message record/);
+  });
+
+  it("rejects a message record with non-array declaredClaims", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        declaredClaims: "not-an-array",
+        evidence: [],
+      }),
+    ).toThrow(/message record/);
+  });
+
+  it("rejects a message record with non-array evidence", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        declaredClaims: [],
+        evidence: "not-an-array",
+      }),
+    ).toThrow(/message record/);
+  });
+
+  it("accepts a message record with empty declaredClaims and evidence arrays", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        declaredClaims: [],
+        evidence: [],
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts a message record with only evidence array undefined", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        declaredClaims: [],
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts a message record with only declaredClaims array undefined", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...base,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m1",
+        role: "assistant",
+        textHash: "h",
+        finalized: true,
+        evidence: [],
+      }),
+    ).not.toThrow();
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {

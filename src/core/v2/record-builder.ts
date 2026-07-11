@@ -4,7 +4,17 @@ import { hashString } from "./hash";
 import { redactMessageSnippet, sliceCodeUnitsSafe } from "./redaction";
 
 export type MessageRecordInput = {
-  readonly envelope: Omit<PendingObservationRecord, "kind" | "messageID" | "role" | "textHash" | "textSnippet" | "declaredClaims" | "evidence" | "finalized">;
+  readonly envelope: Omit<
+    PendingObservationRecord,
+    | "kind"
+    | "messageID"
+    | "role"
+    | "textHash"
+    | "textSnippet"
+    | "declaredClaims"
+    | "evidence"
+    | "finalized"
+  >;
   readonly messageID: string;
   readonly text: string;
   readonly claims: readonly DeclaredClaim[];

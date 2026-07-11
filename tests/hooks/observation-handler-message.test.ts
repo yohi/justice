@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import { toPhysicalPath } from "../../src/core/v2/shard-layout";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
@@ -56,7 +56,9 @@ describe("ObservationHandler message observation", () => {
       readonly evidence: readonly { readonly provenance: string; readonly declaredFrom: string }[];
     };
     expect(record.kind).toBe("message");
-    expect(record.declaredClaims).toEqual([{ evidenceId: "message-1-test", claimKind: "test", outcome: "pass" }]);
+    expect(record.declaredClaims).toEqual([
+      { evidenceId: "message-1-test", claimKind: "test", outcome: "pass" },
+    ]);
     expect(record.evidence).toEqual([
       expect.objectContaining({ provenance: "declared", declaredFrom: "message" }),
     ]);
@@ -111,7 +113,11 @@ describe("ObservationHandler message observation", () => {
     });
 
     // Access the internal buffer and swap the clock for deterministic aging.
-    const buffer = (handler as unknown as { messageRoleBuffer: { now: () => number; gc: (ms: number, n: number) => void } }).messageRoleBuffer;
+    const buffer = (
+      handler as unknown as {
+        messageRoleBuffer: { now: () => number; gc: (ms: number, n: number) => void };
+      }
+    ).messageRoleBuffer;
     const originalNow = buffer.now;
     buffer.now = (): number => clock;
 
@@ -150,17 +156,64 @@ describe("ObservationHandler message observation", () => {
 
       // The internal buffer should have dropped stale-message and kept fresh-message.
       expect(
-        (handler as unknown as { messageRoleBuffer: { buffer: Map<string, unknown> } }).messageRoleBuffer.buffer.has(
-          JSON.stringify(["session-1", "stale-message"]),
-        ),
+        (
+          handler as unknown as { messageRoleBuffer: { buffer: Map<string, unknown> } }
+        ).messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "stale-message"])),
       ).toBe(false);
       expect(
-        (handler as unknown as { messageRoleBuffer: { buffer: Map<string, unknown> } }).messageRoleBuffer.buffer.has(
-          JSON.stringify(["session-1", "fresh-message"]),
-        ),
+        (
+          handler as unknown as { messageRoleBuffer: { buffer: Map<string, unknown> } }
+        ).messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "fresh-message"])),
       ).toBe(true);
     } finally {
       buffer.now = originalNow;
     }
+  });
+
+  it("runs buffer GC even when logStore append fails (D65 fail-open)", async () => {
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore: {
+        append: async (): Promise<number> => {
+          throw new Error("append failed");
+        },
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler message failed",
+      expect.any(Error),
+    );
+
+    // The handler must still PROCEED despite the append failure.
+    expect(
+      await handler.handleMessage("session-1", {
+        kind: "message_part_updated",
+        sessionId: "session-1",
+        messageID: "other",
+        partID: "part-1",
+        text: "ok",
+      }),
+    ).toEqual({ action: "proceed" });
   });
 });

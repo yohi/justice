@@ -64,19 +64,26 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       throw new Error("Invalid tool_executed record");
     }
   } else if (kind === "message") {
+    const declaredClaims = r.declaredClaims;
+    const evidence = r.evidence;
+    const hasClaims = declaredClaims !== undefined;
+    const hasEvidence = evidence !== undefined;
     if (
       typeof r.messageID !== "string" ||
       r.role !== "assistant" ||
       typeof r.textHash !== "string" ||
       typeof r.finalized !== "boolean" ||
-      !Array.isArray(r.declaredClaims) ||
-      !Array.isArray(r.evidence) ||
-      r.declaredClaims.length !== r.evidence.length
+      (hasClaims && !Array.isArray(declaredClaims)) ||
+      (hasEvidence && !Array.isArray(evidence)) ||
+      (hasClaims && hasEvidence && declaredClaims.length !== evidence.length)
     ) {
       throw new Error("Invalid message record");
     }
-    const evidenceIterator = r.evidence.values();
-    for (const claim of r.declaredClaims) {
+    if (!hasClaims || !hasEvidence) {
+      return;
+    }
+    const evidenceIterator = evidence.values();
+    for (const claim of declaredClaims) {
       const nextEvidence = evidenceIterator.next();
       if (nextEvidence.done) {
         throw new Error("Invalid message record");

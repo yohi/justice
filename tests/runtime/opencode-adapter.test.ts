@@ -201,7 +201,11 @@ describe("OpenCodeAdapter.onEvent", () => {
     expect(handleSpy).toHaveBeenCalledWith({
       type: "Event",
       sessionId: "s",
-      payload: { eventType: "session_error", sessionId: "s", message: "timeout while calling provider" },
+      payload: {
+        eventType: "session_error",
+        sessionId: "s",
+        message: "timeout while calling provider",
+      },
     });
     expect(logSpy).not.toHaveBeenCalled();
   });

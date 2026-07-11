@@ -1,8 +1,4 @@
-import type {
-  HookResponse,
-  PostToolUseEvent,
-  PreToolUseEvent,
-} from "../core/types";
+import type { HookResponse, PostToolUseEvent, PreToolUseEvent } from "../core/types";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import { buildMessageRecord } from "../core/v2/record-builder";
 import type { SessionStateProvider } from "../core/session-state-provider";
@@ -20,12 +16,14 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
  * ObservationHandler observes EVERY tool call and message part for the v2
  * observation pipeline (declared-claim extraction, evidence recording).
  *
- * This is a minimal stub introduced in Task 3.3: it always PROCEEDs so that the
- * JusticePlugin routing guard can run it unconditionally without changing
- * behaviour. Real observation logic and its dependencies are wired in Task 4.x.
+ * It finalizes assistant messages, extracts declared claims, builds
+ * observation records, and appends them to the configured ObservationLogStore.
+ * A bounded in-memory MessageRoleBuffer is used to collect streaming parts and
+ * is garbage-collected on every message event to enforce the D65 memory bound.
  *
- * Located in `src/hooks/` so it MAY depend on `src/core/` types; it is kept
- * dependency-free for now.
+ * Dependencies (`logStore`, `sessionStateProvider`, `writerId`, and an optional
+ * `logger`) are injected via the constructor for testability and fail-open
+ * operation.
  */
 export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
@@ -51,12 +49,12 @@ export class ObservationHandler {
     sessionId: string,
     payload: ObservationMessagePayload,
   ): Promise<HookResponse> {
+    this.messageRoleBuffer.update(sessionId, payload);
+
+    const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
+    if (text === undefined || text.length === 0) return PROCEED;
+
     try {
-      this.messageRoleBuffer.update(sessionId, payload);
-
-      const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
-      if (text === undefined || text.length === 0) return PROCEED;
-
       const claims = this.messageRoleBuffer.extractAssistantClaims(sessionId, payload.messageID);
       const agentId = this.options.sessionStateProvider.getAgentId(sessionId);
       const record = buildMessageRecord({
@@ -72,10 +70,14 @@ export class ObservationHandler {
         text,
         claims,
       });
-      await this.options.logStore.append({ agentId, sessionId, writerId: this.options.writerId }, record);
-      this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
+      await this.options.logStore.append(
+        { agentId, sessionId, writerId: this.options.writerId },
+        record,
+      );
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
+    } finally {
+      this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
     }
     return PROCEED;
   }
