@@ -65,7 +65,9 @@ describe("buildToolExecutedRecord", () => {
     for (const value of [observed.command, observed.rawOutput]) {
       expect(value.length).toBeLessThanOrEqual(4096);
       expect(value).toContain("…[truncated]");
-      expect(value).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+      expect(value).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
     }
   });
 
@@ -111,6 +113,44 @@ describe("buildToolExecutedRecord", () => {
     }
     expect(observed.rawOutputHash).toMatch(/^sha256:/);
     expect(observed.rawOutputSnippet).not.toContain("/home/example");
+    expect("rawOutput" in observed).toBe(false);
+  });
+
+  it("treats a non-string command property as absent", () => {
+    const record = buildToolExecutedRecord({
+      envelope,
+      toolName: "bash",
+      toolInput: { command: 123 },
+      toolOutput: { output: "PASS" },
+      callId: "call-non-string-command",
+    });
+
+    const observed = record.evidence[0];
+    expect(observed?.sourceClass).toBe("tool_output");
+    if (observed?.sourceClass !== "tool_output") {
+      throw new Error("expected tool output evidence");
+    }
+    expect(observed.toolOutputClass).toBe("file_content");
+    expect(observed.command).toBeUndefined();
+    expect(observed.rawOutputHash).toMatch(/^sha256:/);
+  });
+
+  it("redacts a command when file_content evidence carries one", () => {
+    const record = buildToolExecutedRecord({
+      envelope,
+      toolName: "read",
+      toolInput: { command: "cat /home/example/private.txt" },
+      toolOutput: { output: "contents from /home/example/private.txt" },
+      callId: "call-file-with-command",
+    });
+
+    const observed = record.evidence[0];
+    expect(observed?.sourceClass).toBe("tool_output");
+    if (observed?.sourceClass !== "tool_output" || observed.toolOutputClass !== "file_content") {
+      throw new Error("expected file content evidence");
+    }
+    expect(observed.command).not.toContain("/home/example");
+    expect(observed.rawOutputHash).toMatch(/^sha256:/);
     expect("rawOutput" in observed).toBe(false);
   });
 });
