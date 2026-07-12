@@ -28,7 +28,7 @@ export function detectSkillInvoked(
 
   if (toolName === "task" && "load_skills" in args && Array.isArray(args.load_skills)) {
     return args.load_skills
-      .filter((skill): skill is string => typeof skill === "string")
+      .filter((skill): skill is string => typeof skill === "string" && skill.length > 0)
       .map((skill) => withCallId(skill, "task_load_skills", callId));
   }
 

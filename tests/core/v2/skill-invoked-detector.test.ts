@@ -14,10 +14,10 @@ describe("detectSkillInvoked", () => {
     ]);
   });
 
-  it("detects every string in a task load_skills argument", () => {
+  it("detects every non-empty string in a task load_skills argument", () => {
     const result = detectSkillInvoked(
       "task",
-      { load_skills: ["programming", 42, "verification-before-completion"] },
+      { load_skills: ["programming", 42, "verification-before-completion", ""] },
       "call-2",
     );
 

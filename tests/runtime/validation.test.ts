@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  validateRecordSchema,
-  validateShardSequences,
-} from "../../src/runtime/validation";
+import { validateRecordSchema, validateShardSequences } from "../../src/runtime/validation";
 import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
 
 function validBase(recordType: "observation" | "decision"): Record<string, unknown> {
@@ -62,7 +59,6 @@ function validReviewObserved(): Record<string, unknown> {
   };
 }
 
-
 function validToolExecuted(): Record<string, unknown> {
   return {
     ...validBase("observation"),
@@ -108,21 +104,19 @@ describe("validateRecordSchema", () => {
   });
 
   it("rejects a non-object record", () => {
-    expect(() => validateRecordSchema("not-object")).toThrow(
-      "Invalid record: not an object",
-    );
+    expect(() => validateRecordSchema("not-object")).toThrow("Invalid record: not an object");
   });
 
   it("rejects unsupported schemaVersion", () => {
-    expect(() =>
-      validateRecordSchema({ ...validToolExecuted(), schemaVersion: 2 }),
-    ).toThrow("Invalid record: unsupported schemaVersion 2");
+    expect(() => validateRecordSchema({ ...validToolExecuted(), schemaVersion: 2 })).toThrow(
+      "Invalid record: unsupported schemaVersion 2",
+    );
   });
 
   it("rejects a negative sequence", () => {
-    expect(() =>
-      validateRecordSchema({ ...validToolExecuted(), sequence: -1 }),
-    ).toThrow("Invalid record: sequence must be a non-negative number");
+    expect(() => validateRecordSchema({ ...validToolExecuted(), sequence: -1 })).toThrow(
+      "Invalid record: sequence must be a non-negative number",
+    );
   });
 
   it("rejects a missing timestamp", () => {
@@ -135,17 +129,16 @@ describe("validateRecordSchema", () => {
     );
   });
 
-
   it("rejects invalid shard identifier fields", () => {
-    expect(() =>
-      validateRecordSchema({ ...validToolExecuted(), agentId: undefined }),
-    ).toThrow("Invalid record: missing or invalid shard identifier fields");
+    expect(() => validateRecordSchema({ ...validToolExecuted(), agentId: undefined })).toThrow(
+      "Invalid record: missing or invalid shard identifier fields",
+    );
   });
 
   it("rejects unknown recordType", () => {
-    expect(() =>
-      validateRecordSchema({ ...validToolExecuted(), recordType: "learning" }),
-    ).toThrow("Invalid record: unknown recordType: learning");
+    expect(() => validateRecordSchema({ ...validToolExecuted(), recordType: "learning" })).toThrow(
+      "Invalid record: unknown recordType: learning",
+    );
   });
 
   it("rejects invalid tool_executed evidence structure", () => {
@@ -274,9 +267,9 @@ describe("validateRecordSchema", () => {
   });
 
   it("rejects a decision record with non-array ruleResults", () => {
-    expect(() =>
-      validateRecordSchema({ ...validDecision(), ruleResults: "not-array" }),
-    ).toThrow("Invalid decision record");
+    expect(() => validateRecordSchema({ ...validDecision(), ruleResults: "not-array" })).toThrow(
+      "Invalid decision record",
+    );
   });
 
   it("rejects a decision ruleResult with non-array evidenceRefs", () => {
@@ -326,8 +319,6 @@ describe("validateRecordSchema", () => {
       }),
     ).not.toThrow();
   });
-
-
 
   it("rejects a decision evidenceRef with negative sequence", () => {
     expect(() =>
@@ -718,7 +709,6 @@ describe("validateRecordSchema", () => {
       }),
     ).toThrow("Invalid record: unknown observation kind: unknown_kind");
   });
-
 });
 
 describe("validateShardSequences", () => {
@@ -734,18 +724,14 @@ describe("validateShardSequences", () => {
       { ...validBase("observation"), kind: "skill_invoked", sequence: 1 },
       { ...validBase("observation"), kind: "skill_invoked", sequence: 1 },
     ] as unknown as readonly PersistedLogRecord[];
-    expect(() => validateShardSequences(records)).toThrow(
-      "duplicate sequence detected",
-    );
+    expect(() => validateShardSequences(records)).toThrow("duplicate sequence detected");
   });
 
   it("detects a missing sequence at the start of a shard", () => {
     const records = [
       { ...validBase("observation"), kind: "skill_invoked", sequence: 2 },
     ] as unknown as readonly PersistedLogRecord[];
-    expect(() => validateShardSequences(records)).toThrow(
-      "missing sequence before 2",
-    );
+    expect(() => validateShardSequences(records)).toThrow("missing sequence before 2");
   });
 
   it("detects a gap between sequences in a shard", () => {
@@ -753,9 +739,7 @@ describe("validateShardSequences", () => {
       { ...validBase("observation"), kind: "skill_invoked", sequence: 1 },
       { ...validBase("observation"), kind: "skill_invoked", sequence: 3 },
     ] as unknown as readonly PersistedLogRecord[];
-    expect(() => validateShardSequences(records)).toThrow(
-      "missing sequence between 1 and 3",
-    );
+    expect(() => validateShardSequences(records)).toThrow("missing sequence between 1 and 3");
   });
 
   it("handles empty records", () => {

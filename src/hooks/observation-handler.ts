@@ -19,6 +19,7 @@ import { buildReflectionEvent } from "../core/v2/reflection-event";
 import { redactAbsolutePaths, redactForPersistence } from "../core/v2/redaction";
 import { project, type ProjectedState } from "../core/v2/state-projection";
 import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
+import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore } from "../runtime/observation-log-store";
@@ -224,20 +225,25 @@ export class ObservationHandler {
         await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
       }
 
-      try {
-        const invokedSkills = detectSkillInvoked(
-          event.payload.toolName,
-          event.payload.toolInput,
-          callId,
-        );
-        for (const invocation of invokedSkills) {
+      const invokedSkills = detectSkillInvoked(
+        event.payload.toolName,
+        event.payload.toolInput,
+        callId,
+      );
+      for (const invocation of invokedSkills) {
+        const skillName = invocation.skillName.trim();
+        if (skillName.length === 0) continue;
+        try {
           await this.options.logStore.append(
             shardId,
-            buildSkillInvokedRecord({ envelope: toolRecordInput.envelope, invocation }),
+            buildSkillInvokedRecord({
+              envelope: toolRecordInput.envelope,
+              invocation: { ...invocation, skillName },
+            }),
           );
+        } catch (error) {
+          this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
         }
-      } catch (error) {
-        this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
       }
       await this.appendReviewObservationsIfDetected(
         shardId,
@@ -249,9 +255,9 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
-      const events = await this.options.logStore.readAll();
-      const projectedState = project(events, new Date().toISOString());
       if (this.options.projectionCache !== undefined) {
+        const events = await this.options.logStore.readAll();
+        const projectedState = project(events, new Date().toISOString());
         try {
           await this.options.projectionCache.write(projectedState);
         } catch (error) {
@@ -300,8 +306,13 @@ export class ObservationHandler {
     shardId: ShardId,
     input: ToolExecutedRecordInput,
   ): Promise<void> {
+    let summaryClaims: readonly DeclaredClaim[] = [];
     try {
-      const summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
+      summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
+    } catch (error) {
+      this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+    }
+    try {
       await this.options.logStore.append(
         shardId,
         buildToolExecutedRecord({ ...input, summaryClaims }),

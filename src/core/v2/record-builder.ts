@@ -103,7 +103,7 @@ function redactToolEvidence(evidence: ToolOutputEvidence): ToolOutputEvidence {
     return {
       ...evidence,
       command: redactForPersistence(redactAbsolutePaths(evidence.command)),
-      rawOutput: redactForPersistence(redactAbsolutePaths(evidence.rawOutput)),
+      // rawOutput is already redacted by extractEvidenceFromTool
     };
   }
   return {
@@ -111,11 +111,7 @@ function redactToolEvidence(evidence: ToolOutputEvidence): ToolOutputEvidence {
     ...(evidence.command === undefined
       ? {}
       : { command: redactForPersistence(redactAbsolutePaths(evidence.command)) }),
-    ...(evidence.rawOutputSnippet === undefined
-      ? {}
-      : {
-          rawOutputSnippet: redactForPersistence(redactAbsolutePaths(evidence.rawOutputSnippet)),
-        }),
+    // rawOutputSnippet is already redacted by extractEvidenceFromTool
   };
 }
 
