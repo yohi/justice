@@ -82,6 +82,7 @@ export class LoopDetectionHandler {
   private readonly maxRetries: number;
   private readonly maxRejections: number;
   private onSessionRemoved?: (sessionId: string) => void;
+  private observationHandler?: import("./observation-handler").ObservationHandler;
 
   constructor(
     private readonly fileReader: FileReader,
@@ -92,6 +93,13 @@ export class LoopDetectionHandler {
     this.detector = new ReviewRejectionDetector();
     this.maxRetries = resolveMaxRetries();
     this.maxRejections = resolveMaxRejections();
+  }
+
+  /**
+   * Inject the ObservationHandler so loop/pivot outcomes can emit reflection events.
+   */
+  setObservationHandler(handler: import("./observation-handler").ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -298,6 +306,16 @@ export class LoopDetectionHandler {
         // Generate split suggestion
         const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
+
+        if (this.observationHandler) {
+          await this.observationHandler.emitReflectionEvent({
+            trigger: "task_error",
+            planRef: { path: session.planPath, taskId: session.activeTaskId },
+            intent: "append_error_note",
+            note: `loop_detected: ${reason}`,
+            sessionId: event.sessionId,
+          });
+        }
 
         // エスカレーション判定
         const escalation = this.evaluateEscalation(

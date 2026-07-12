@@ -15,6 +15,7 @@ import { SmartRetryPolicy } from "../core/smart-retry-policy";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "../core/wisdom-store";
 import { LearningExtractor } from "../core/learning-extractor";
+import type { ObservationHandler } from "./observation-handler";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -42,6 +43,7 @@ export class TaskFeedbackHandler {
   private readonly wisdomStore: WisdomStoreInterface;
   private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
+  private observationHandler?: ObservationHandler;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
@@ -53,6 +55,13 @@ export class TaskFeedbackHandler {
     this.splitter = new TaskSplitter();
     this.wisdomStore = wisdomStore ?? new WisdomStore();
     this.learningExtractor = new LearningExtractor();
+  }
+
+  /**
+   * Inject the ObservationHandler so task outcomes can emit reflection events.
+   */
+  setObservationHandler(handler: ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -111,7 +120,7 @@ export class TaskFeedbackHandler {
     const action = this.determineAction(feedback, session, payload.toolResult);
 
     // Execute the action
-    return this.executeAction(action, feedback, session, payload.toolResult);
+    return this.executeAction(action, feedback, session, payload.toolResult, event.sessionId);
   }
 
   private determineAction(
@@ -179,10 +188,11 @@ export class TaskFeedbackHandler {
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     switch (action.type) {
       case "success":
-        return this.handleSuccess(session, feedback, rawResult);
+        return this.handleSuccess(session, feedback, rawResult, sessionId);
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
@@ -209,7 +219,7 @@ export class TaskFeedbackHandler {
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
-        return this.handleEscalation(action, feedback, session, rawResult);
+        return this.handleEscalation(action, feedback, session, rawResult, sessionId);
       default: {
         const _exhaustiveCheck: never = action;
         void _exhaustiveCheck;
@@ -222,6 +232,7 @@ export class TaskFeedbackHandler {
     session: SessionState,
     feedback: TaskFeedback,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
@@ -240,6 +251,15 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
+
+        if (this.observationHandler) {
+          await this.observationHandler.emitReflectionEvent({
+            trigger: "task_succeeded",
+            planRef: { path: session.planPath, taskId: session.activeTaskId },
+            intent: "check_complete",
+            sessionId,
+          });
+        }
       }
     } catch (err) {
       console.warn(
@@ -269,6 +289,7 @@ export class TaskFeedbackHandler {
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     let splitSuggestionContext = "";
     try {
@@ -307,6 +328,16 @@ export class TaskFeedbackHandler {
     );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
+    }
+
+    if (this.observationHandler) {
+      await this.observationHandler.emitReflectionEvent({
+        trigger: "task_error",
+        planRef: { path: session.planPath, taskId: action.taskId },
+        intent: "append_error_note",
+        note: `${action.errorClass}: ${action.message}`,
+        sessionId,
+      });
     }
 
     return {

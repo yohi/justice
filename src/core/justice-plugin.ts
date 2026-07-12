@@ -221,6 +221,7 @@ export interface JusticePluginOptions {
   };
   readonly onError?: (error: unknown) => void;
   readonly notifier?: JusticeNotifier;
+  readonly workspaceRoot?: string;
   readonly globalFileSystem?: {
     readonly fs: FileReader & FileWriter;
     readonly relativePath: string;
@@ -283,13 +284,6 @@ export class JusticePlugin {
       options.notifier,
     );
 
-    // Ensure session cleanup propagates from loopHandler to all stateful handlers
-    this.loopHandler.setSessionRemovedCallback((sessionId) => {
-      this.planBridge.destroySession(sessionId);
-      this.sessionStateProvider.removeSession(sessionId);
-      this.observationHandler.destroySession(sessionId);
-    });
-
     this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
@@ -299,8 +293,19 @@ export class JusticePlugin {
       sessionStateProvider: this.sessionStateProvider,
       projectionCache: new StateProjectionCache(fileWriter, fileReader, ".justice/state.json", options.logger ?? console),
       writerId,
+      workspaceRoot: options.workspaceRoot,
       logger: options.logger,
     });
+
+    // Ensure session cleanup propagates from loopHandler to all stateful handlers
+    this.loopHandler.setSessionRemovedCallback((sessionId) => {
+      this.planBridge.destroySession(sessionId);
+      this.sessionStateProvider.removeSession(sessionId);
+      this.observationHandler.destroySession(sessionId);
+    });
+
+    this.taskFeedback.setObservationHandler(this.observationHandler);
+    this.loopHandler.setObservationHandler(this.observationHandler);
   }
 
   /**
@@ -490,6 +495,19 @@ export class JusticePlugin {
    */
   private async handleEventType(event: EventEvent): Promise<HookResponse> {
     switch (event.payload.eventType) {
+      case "session_error": {
+        await this.observationHandler.handleSessionError({
+          message: typeof event.payload.message === "string" ? event.payload.message : "",
+          kind: typeof event.payload.kind === "string" ? event.payload.kind : undefined,
+          agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+          sessionId: event.sessionId,
+        }).catch(() => {
+          // Fail-open: the adapter already logs dispatch failures; swallow here
+          // so a degraded observation store never floods the log channel.
+        });
+        return PROCEED;
+      }
+
       case "loop-detector":
         return this.loopHandler.handleEvent(event);
       case "compaction": {

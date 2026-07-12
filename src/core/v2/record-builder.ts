@@ -55,6 +55,22 @@ export function buildMessageRecord(input: MessageRecordInput): PendingObservatio
   };
 }
 
+export type SessionErrorRecordInput = {
+  readonly envelope: PendingEnvelope;
+  readonly errorKind?: string;
+  readonly message: string;
+};
+
+export function buildSessionErrorRecord(input: SessionErrorRecordInput): PendingObservationRecord {
+  return {
+    ...input.envelope,
+    recordType: "observation",
+    kind: "session_error",
+    errorKind: input.errorKind ?? "unknown",
+    message: redactForPersistence(redactAbsolutePaths(input.message)),
+  };
+}
+
 export type ToolExecutedRecordInput = {
   readonly envelope: PendingEnvelope;
   readonly toolName: string;

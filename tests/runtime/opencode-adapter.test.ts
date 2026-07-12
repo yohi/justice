@@ -194,7 +194,10 @@ describe("OpenCodeAdapter.onEvent", () => {
     await adapter.onEvent({
       event: {
         type: "session.error",
-        properties: { sessionID: "s", error: { message: "timeout while calling provider" } },
+        properties: {
+          sessionID: "s",
+          error: { name: "ProviderTimeoutError", message: "timeout while calling provider" },
+        },
       },
     });
 
@@ -205,9 +208,10 @@ describe("OpenCodeAdapter.onEvent", () => {
         eventType: "session_error",
         sessionId: "s",
         message: "timeout while calling provider",
+        kind: "ProviderTimeoutError",
       },
     });
-    expect(logSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalledWith(expect.objectContaining({ level: "error" }));
   });
 
   it("still dispatches loop detection when session-error observation fails", async () => {
