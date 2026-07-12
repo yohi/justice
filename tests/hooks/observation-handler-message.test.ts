@@ -293,13 +293,66 @@ describe("ObservationHandler message observation", () => {
       readonly persistedMessageIDs: ReadonlyMap<string, ReadonlySet<string>>;
     };
     expect(internal.persistedMessageIDs.get("session-1")?.has("message-1")).toBe(true);
-    expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(true);
+    expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(
+      true,
+    );
 
     // When: the session is removed.
     handler.destroySession("session-1");
 
     // Then: no session-scoped observation state remains.
     expect(internal.persistedMessageIDs.has("session-1")).toBe(false);
-    expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(false);
+    expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(
+      false,
+    );
+  });
+
+  it("logs a warning when buffer GC throws during a repeated finalized message (fail-open D65)", async () => {
+    const { reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const store = new ObservationLogStore(writer, reader, "w-handler");
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore: store,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+      logger,
+    });
+
+    // First observation persists the message.
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-gc-fail",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-gc-fail",
+      role: "assistant",
+      finalized: true,
+    });
+
+    // Force the internal GC to throw on the repeated observation path.
+    const buffer = (handler as unknown as { messageRoleBuffer: { gc: () => void } })
+      .messageRoleBuffer;
+    const gcError = new Error("gc exploded");
+    vi.spyOn(buffer, "gc").mockImplementation(() => {
+      throw gcError;
+    });
+
+    const response = await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-gc-fail",
+      partID: "part-1",
+      text: "tests pass",
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(logger.warn).toHaveBeenCalledWith("observation-handler gc failed", gcError);
   });
 });

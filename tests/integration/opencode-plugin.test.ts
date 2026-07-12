@@ -122,12 +122,9 @@ describe("OpenCodePlugin (integration)", () => {
     process.env.DEBUG = "justice:*";
 
     try {
-      await (
-        handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>
-      )["tool.execute.before"]?.(
-        { tool: "task", sessionID: "s", callID: "c1" },
-        { args: { prompt: "p" } },
-      );
+      await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+        "tool.execute.before"
+      ]?.({ tool: "task", sessionID: "s", callID: "c1" }, { args: { prompt: "p" } });
 
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Justice: Prompt ignored by TriggerDetector"),
@@ -142,12 +139,9 @@ describe("OpenCodePlugin (integration)", () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
 
-    await (
-      handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>
-    )["experimental.text.complete"]?.(
-      { sessionID: "s", messageID: "m", partID: "p", text: "hello" },
-      {},
-    );
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "experimental.text.complete"
+    ]?.({ sessionID: "s", messageID: "m", partID: "p", text: "hello" }, {});
 
     expect(true).toBe(true);
   });

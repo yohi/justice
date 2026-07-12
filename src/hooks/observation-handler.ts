@@ -160,9 +160,9 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
-      const events = await this.options.logStore.readAll();
-      const projectedState = project(events, new Date().toISOString());
       if (this.options.projectionCache !== undefined) {
+        const events = await this.options.logStore.readAll();
+        const projectedState = project(events, new Date().toISOString());
         try {
           await this.options.projectionCache.write(projectedState);
         } catch (error) {
