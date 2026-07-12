@@ -96,8 +96,20 @@ export type SkillInvokedRecord = {
   readonly source: "skill_tool" | "task_load_skills";
   readonly callId?: string;
 };
-export type SessionErrorRecord = { readonly kind: "session_error" /* refined in Task 4.4 */ };
-export type ReflectionRecord = { readonly kind: "reflection" /* refined in Task 4.4 */ };
+export type SessionErrorRecord = {
+  readonly kind: "session_error";
+  readonly errorKind: string;
+  readonly message: string;
+};
+export type ReflectionRecord = {
+  readonly kind: "reflection";
+  readonly reflection: {
+    readonly trigger: "task_succeeded" | "task_error";
+    readonly planRef: { readonly path: string; readonly taskId: string };
+    readonly intent: "check_complete" | "append_error_note";
+    readonly note?: string;
+  };
+};
 
 export type ReviewItem = {
   readonly itemKey: string;
