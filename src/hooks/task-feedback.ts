@@ -15,6 +15,7 @@ import { SmartRetryPolicy } from "../core/smart-retry-policy";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "../core/wisdom-store";
 import { LearningExtractor } from "../core/learning-extractor";
+import type { ObservationHandler } from "./observation-handler";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -42,6 +43,8 @@ export class TaskFeedbackHandler {
   private readonly wisdomStore: WisdomStoreInterface;
   private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
+  private observationHandler?: ObservationHandler;
+  private currentSessionId?: string;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
@@ -53,6 +56,13 @@ export class TaskFeedbackHandler {
     this.splitter = new TaskSplitter();
     this.wisdomStore = wisdomStore ?? new WisdomStore();
     this.learningExtractor = new LearningExtractor();
+  }
+
+  /**
+   * Inject the ObservationHandler so task outcomes can emit reflection events.
+   */
+  setObservationHandler(handler: ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -103,6 +113,7 @@ export class TaskFeedbackHandler {
     if (!session) return PROCEED;
 
     session.lastAccess = Date.now();
+    this.currentSessionId = event.sessionId;
 
     // Format the raw output into structured feedback
     const feedback = this.formatter.format(session.activeTaskId, payload.toolResult, payload.error);
@@ -240,6 +251,15 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
+
+if (this.observationHandler) {
+await this.observationHandler.emitReflectionEvent({
+trigger: "task_succeeded",
+planRef: { path: session.planPath, taskId: session.activeTaskId },
+intent: "check_complete",
+sessionId: this.currentSessionId ?? "unknown",
+});
+        }
       }
     } catch (err) {
       console.warn(
@@ -307,6 +327,16 @@ export class TaskFeedbackHandler {
     );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
+    }
+
+    if (this.observationHandler) {
+      await this.observationHandler.emitReflectionEvent({
+        trigger: "task_error",
+        planRef: { path: session.planPath, taskId: action.taskId },
+        intent: "append_error_note",
+        note: `${action.errorClass}: ${action.message}`,
+        sessionId: this.currentSessionId ?? "unknown",
+      });
     }
 
     return {

@@ -15,6 +15,8 @@ import {
   type ToolExecutedRecordInput,
 } from "../core/v2/record-builder";
 import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
+import { buildReflectionEvent } from "../core/v2/reflection-event";
+import { redactAbsolutePaths, redactForPersistence } from "../core/v2/redaction";
 import { project, type ProjectedState } from "../core/v2/state-projection";
 import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
@@ -51,9 +53,72 @@ export class ObservationHandler {
       readonly sessionStateProvider: SessionStateProvider;
       readonly projectionCache?: { readonly write: (state: ProjectedState) => Promise<void> };
       readonly writerId: string;
+      readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
     },
   ) {}
+
+  async handleSessionError(error: {
+    readonly message: string;
+    readonly kind?: string;
+    readonly agentId: ObservationAgentId;
+    readonly sessionId: string;
+  }): Promise<HookResponse> {
+    try {
+      const record = {
+        schemaVersion: 1 as const,
+        timestamp: new Date().toISOString(),
+        agentId: error.agentId,
+        sessionId: error.sessionId,
+        writerId: this.options.writerId,
+        recordType: "observation" as const,
+        kind: "session_error" as const,
+        errorKind: error.kind ?? "unknown",
+        message: redactForPersistence(redactAbsolutePaths(error.message)),
+      };
+
+      await this.options.logStore.append(
+        { agentId: error.agentId, sessionId: error.sessionId, writerId: this.options.writerId },
+        record,
+      );
+    } catch (err) {
+      this.options.logger?.warn("observation-handler: session error observation failed, degrading to PROCEED", err);
+    }
+
+    return PROCEED;
+  }
+
+  async emitReflectionEvent(input: {
+    readonly trigger: "task_succeeded" | "task_error";
+    readonly planRef: { readonly path: string; readonly taskId: string };
+    readonly intent: "check_complete" | "append_error_note";
+    readonly note?: string;
+    readonly sessionId: string;
+  }): Promise<void> {
+    try {
+      const agentId = this.options.sessionStateProvider.getAgentId(input.sessionId);
+      const record = buildReflectionEvent(
+        {
+          schemaVersion: 1 as const,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId: input.sessionId,
+          writerId: this.options.writerId,
+          taskId: input.planRef.taskId,
+          recordType: "observation" as const,
+        },
+        input,
+        this.options.workspaceRoot,
+      );
+
+      await this.options.logStore.append(
+        { agentId, sessionId: input.sessionId, writerId: this.options.writerId },
+        record,
+      );
+    } catch (err) {
+      this.options.logger?.warn("observation-handler: emitReflectionEvent failed, degrading gracefully", err);
+    }
+  }
 
   async handleMessage(
     sessionId: string,

@@ -160,6 +160,7 @@ export class OpenCodeAdapter {
         globalFileSystem: globalFs ?? undefined,
         notifier,
         writerId,
+        workspaceRoot: root,
       });
 
       await justice.initialize();
