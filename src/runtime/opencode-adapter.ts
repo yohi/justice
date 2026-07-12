@@ -336,7 +336,9 @@ export class OpenCodeAdapter {
     const sessionId = this.#readString(properties, "sessionID");
     if (!sessionId) return;
 
-    const message = this.#extractErrorMessage(this.#readUnknown(properties, "error"));
+    const error = this.#readUnknown(properties, "error");
+    const message = this.#extractErrorMessage(error);
+    const kind = this.#extractErrorName(error);
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -346,7 +348,12 @@ export class OpenCodeAdapter {
       await justice.handleEvent({
         type: "Event",
         sessionId,
-        payload: { eventType: "session_error", sessionId, message },
+        payload: {
+          eventType: "session_error",
+          sessionId,
+          message,
+          ...(kind.length === 0 ? {} : { kind }),
+        },
       });
     } catch (err) {
       await this.log("error", "[Justice] session-error observation dispatch failed", err);
@@ -564,6 +571,14 @@ export class OpenCodeAdapter {
     if (error && typeof error === "object" && "message" in error) {
       const message = (error as { message?: unknown }).message;
       return typeof message === "string" ? message : "";
+    }
+    return "";
+  }
+
+  #extractErrorName(error: unknown): string {
+    if (error && typeof error === "object" && "name" in error) {
+      const name = (error as { name?: unknown }).name;
+      return typeof name === "string" ? name : "";
     }
     return "";
   }

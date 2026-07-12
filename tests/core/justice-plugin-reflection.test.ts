@@ -56,6 +56,42 @@ describe("JusticePlugin reflection event integration", () => {
     });
   });
 
+  it("does not emit a reflection event when the active task is absent from the plan", async () => {
+    const { files, reader, writer } = createMemFs();
+    files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
+
+    const plugin = new JusticePlugin(reader, writer, {
+      writerId: "w-missing-task",
+      workspaceRoot: "/workspace",
+    });
+    plugin.getPlanBridge().setActivePlan("session-missing", "plan.md");
+    plugin.getTaskFeedback().setActivePlan("session-missing", "plan.md", "task-missing");
+
+    await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "session-missing",
+      callId: "call-missing",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-missing", prompt: "run" },
+        toolResult: "Task completed successfully",
+        error: false,
+      },
+    });
+
+    const path = toPhysicalPath({
+      agentId: "unknown",
+      sessionId: "session-missing",
+      writerId: "w-missing-task",
+    });
+    const events = parseJsonl(files.get(path));
+    const reflection = events.find(
+      (event): event is { readonly kind: string } =>
+        typeof event === "object" && event !== null && "kind" in event && event.kind === "reflection",
+    );
+    expect(reflection).toBeUndefined();
+  });
+
   it("emits a reflection event when LoopDetectionHandler detects a loop", async () => {
     const { files, reader, writer } = createMemFs();
     const plan = ["## Task 2: Loop", "- [ ] Fix loop", ""].join("\n");

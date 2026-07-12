@@ -10,13 +10,13 @@ import type {
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import {
   buildMessageRecord,
+  buildSessionErrorRecord,
   buildSkillInvokedRecord,
   buildToolExecutedRecord,
   type ToolExecutedRecordInput,
 } from "../core/v2/record-builder";
 import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
 import { buildReflectionEvent } from "../core/v2/reflection-event";
-import { redactAbsolutePaths, redactForPersistence } from "../core/v2/redaction";
 import { project, type ProjectedState } from "../core/v2/state-projection";
 import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
 import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
@@ -66,17 +66,18 @@ export class ObservationHandler {
     readonly sessionId: string;
   }): Promise<HookResponse> {
     try {
-      const record = {
-        schemaVersion: 1 as const,
-        timestamp: new Date().toISOString(),
-        agentId: error.agentId,
-        sessionId: error.sessionId,
-        writerId: this.options.writerId,
-        recordType: "observation" as const,
-        kind: "session_error" as const,
-        errorKind: error.kind ?? "unknown",
-        message: redactForPersistence(redactAbsolutePaths(error.message)),
-      };
+      const record = buildSessionErrorRecord({
+        envelope: {
+          schemaVersion: 1 as const,
+          timestamp: new Date().toISOString(),
+          agentId: error.agentId,
+          sessionId: error.sessionId,
+          writerId: this.options.writerId,
+          recordType: "observation" as const,
+        },
+        errorKind: error.kind,
+        message: error.message,
+      });
 
       await this.options.logStore.append(
         { agentId: error.agentId, sessionId: error.sessionId, writerId: this.options.writerId },

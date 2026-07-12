@@ -251,15 +251,15 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
-      }
 
-      if (this.observationHandler) {
-        await this.observationHandler.emitReflectionEvent({
-          trigger: "task_succeeded",
-          planRef: { path: session.planPath, taskId: session.activeTaskId },
-          intent: "check_complete",
-          sessionId,
-        });
+        if (this.observationHandler) {
+          await this.observationHandler.emitReflectionEvent({
+            trigger: "task_succeeded",
+            planRef: { path: session.planPath, taskId: session.activeTaskId },
+            intent: "check_complete",
+            sessionId,
+          });
+        }
       }
     } catch (err) {
       console.warn(

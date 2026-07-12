@@ -20,7 +20,7 @@ export type ReflectionEventInput = {
 };
 
 function validatePlanPath(workspaceRoot: string | undefined, planPath: string): void {
-  if (workspaceRoot === undefined) {
+  if (workspaceRoot === undefined || workspaceRoot.length === 0) {
     throw new Error("Invalid plan path: workspace root is not configured");
   }
 

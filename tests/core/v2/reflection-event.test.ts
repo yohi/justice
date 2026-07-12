@@ -91,6 +91,20 @@ describe("buildReflectionEvent", () => {
     ).toThrow("Invalid plan path: workspace root is not configured");
   });
 
+  it("throws when workspace root is empty", () => {
+    expect(() =>
+      buildReflectionEvent(
+        createEnvelope(),
+        {
+          trigger: "task_succeeded",
+          planRef: { path: "plan.md", taskId: "task-1" },
+          intent: "check_complete",
+        },
+        "",
+      ),
+    ).toThrow("Invalid plan path: workspace root is not configured");
+  });
+
   it("redacts absolute paths and secrets in note", () => {
     const record = buildReflectionEvent(
       createEnvelope(),
