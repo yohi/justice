@@ -8,8 +8,16 @@ import type {
   ShardId,
 } from "../core/types";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
-import { buildMessageRecord, buildToolExecutedRecord } from "../core/v2/record-builder";
+import {
+  buildMessageRecord,
+  buildSkillInvokedRecord,
+  buildToolExecutedRecord,
+  type ToolExecutedRecordInput,
+} from "../core/v2/record-builder";
+import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
 import { project, type ProjectedState } from "../core/v2/state-projection";
+import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
+import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore } from "../runtime/observation-log-store";
@@ -127,14 +135,14 @@ export class ObservationHandler {
         sessionId: event.sessionId,
         writerId: this.options.writerId,
       };
-      const record = buildToolExecutedRecord({
+      const toolRecordInput: ToolExecutedRecordInput = {
         envelope: {
           schemaVersion: 1,
           timestamp: new Date().toISOString(),
           agentId,
           sessionId: event.sessionId,
           writerId: this.options.writerId,
-          taskId,
+          ...(taskId === undefined ? {} : { taskId }),
           recordType: "observation",
         },
         toolName: event.payload.toolName,
@@ -144,11 +152,33 @@ export class ObservationHandler {
           metadata: { error: event.payload.error || event.payload.metadata?.error === true },
         },
         callId,
-      });
-      await this.options.logStore.append(shardId, record);
+      };
 
       if (event.payload.toolName === "task") {
-        await this.appendTaskSummaryDeclaredEvidence(event, taskId);
+        await this.appendTaskSummaryDeclaredEvidence(shardId, toolRecordInput);
+      } else {
+        await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
+      }
+
+      const invokedSkills = detectSkillInvoked(
+        event.payload.toolName,
+        event.payload.toolInput,
+        callId,
+      );
+      for (const invocation of invokedSkills) {
+        const skillName = invocation.skillName.trim();
+        if (skillName.length === 0) continue;
+        try {
+          await this.options.logStore.append(
+            shardId,
+            buildSkillInvokedRecord({
+              envelope: toolRecordInput.envelope,
+              invocation: { ...invocation, skillName },
+            }),
+          );
+        } catch (error) {
+          this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
+        }
       }
       await this.appendReviewObservationsIfDetected(
         shardId,
@@ -208,9 +238,27 @@ export class ObservationHandler {
   }
 
   private async appendTaskSummaryDeclaredEvidence(
-    _event: PostToolUseEvent,
-    _taskId?: string,
-  ): Promise<void> {}
+    shardId: ShardId,
+    input: ToolExecutedRecordInput,
+  ): Promise<void> {
+    let summaryClaims: readonly DeclaredClaim[] = [];
+    try {
+      summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
+    } catch (error) {
+      this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+    }
+    try {
+      await this.options.logStore.append(
+        shardId,
+        buildToolExecutedRecord({ ...input, summaryClaims }),
+      );
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: task summary declared evidence failed",
+        error,
+      );
+    }
+  }
 
   private async appendReviewObservationsIfDetected(
     _shardId: ShardId,

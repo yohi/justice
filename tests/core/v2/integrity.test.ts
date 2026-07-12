@@ -9,8 +9,7 @@ import type { ObservationRecord } from "../../../src/core/v2/observation-model";
 import type { ObservationAgentId } from "../../../src/core/types";
 
 /**
- * Minimal `ObservationRecord` fixture. Uses the `skill_invoked` stub kind
- * (no fields beyond `kind`) so tests can focus purely on shard identity
+ * Minimal `ObservationRecord` fixture. Uses the `skill_invoked` kind so tests can focus purely on shard identity
  * (agentId/sessionId/writerId), `sequence`, and `timestamp` — the only
  * fields `orderEventsForProjection`/`compareForMerge`/`computeSourceHash`
  * inspect.
@@ -31,6 +30,8 @@ function ev(
     recordType: "observation",
     sequence,
     kind: "skill_invoked",
+    skillName: "fixture-skill",
+    source: "skill_tool",
   };
 }
 

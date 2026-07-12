@@ -662,13 +662,25 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid review_observed item");
   });
 
-  it("accepts skill_invoked record stub", () => {
+  it("accepts a complete skill_invoked record", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validBase("observation"),
+        kind: "skill_invoked",
+        skillName: "programming",
+        source: "skill_tool",
+        callId: "call-1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a skill_invoked record without invocation details", () => {
     expect(() =>
       validateRecordSchema({
         ...validBase("observation"),
         kind: "skill_invoked",
       }),
-    ).not.toThrow();
+    ).toThrow("Invalid skill_invoked record");
   });
 
   it("accepts session_error record stub", () => {

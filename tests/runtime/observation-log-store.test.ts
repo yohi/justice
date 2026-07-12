@@ -117,7 +117,7 @@ describe("validateRecordSchema()", () => {
         recordType: "observation",
         kind: "skill_invoked",
         skillName: "git-master",
-        source: "message",
+        source: "skill_tool",
       }),
     ).not.toThrow();
     expect(() =>
@@ -629,6 +629,8 @@ describe("validateShardSequences()", () => {
     writerId,
     recordType: "observation",
     kind: "skill_invoked",
+    skillName: "fixture-skill",
+    source: "skill_tool",
     sequence: seq,
   });
 
