@@ -159,20 +159,20 @@ export class ObservationHandler {
         await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
       }
 
-      try {
-        const invokedSkills = detectSkillInvoked(
-          event.payload.toolName,
-          event.payload.toolInput,
-          callId,
-        );
-        for (const invocation of invokedSkills) {
+      const invokedSkills = detectSkillInvoked(
+        event.payload.toolName,
+        event.payload.toolInput,
+        callId,
+      );
+      for (const invocation of invokedSkills) {
+        try {
           await this.options.logStore.append(
             shardId,
             buildSkillInvokedRecord({ envelope: toolRecordInput.envelope, invocation }),
           );
+        } catch (error) {
+          this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
         }
-      } catch (error) {
-        this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
       }
       await this.appendReviewObservationsIfDetected(
         shardId,
