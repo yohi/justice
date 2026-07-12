@@ -235,4 +235,68 @@ describe("ObservationHandler tool observation", () => {
       expect.any(Error),
     );
   });
+
+  it("logs a warning when projection cache write fails (fail-open)", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const cacheError = new Error("cache write failed");
+    const projectionCache = { write: vi.fn(async () => Promise.reject(cacheError)) };
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-cache",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-cache",
+      payload: { toolName: "task", toolResult: "done", error: false },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache write failed",
+      cacheError,
+    );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
+  it("avoids readAll/project when projectionCache is not configured", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const readAllSpy = vi.spyOn(logStore, "readAll");
+    const sessionState = new SessionStateProvider();
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-nocache",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-nocache",
+      payload: { toolName: "task", toolResult: "done", error: false },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(readAllSpy).not.toHaveBeenCalled();
+  });
 });

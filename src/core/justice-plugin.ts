@@ -297,7 +297,7 @@ export class JusticePlugin {
     this.observationHandler = new ObservationHandler({
       logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
       sessionStateProvider: this.sessionStateProvider,
-      projectionCache: new StateProjectionCache(fileWriter, fileReader),
+      projectionCache: new StateProjectionCache(fileWriter, fileReader, ".justice/state.json", options.logger ?? console),
       writerId,
       logger: options.logger,
     });
@@ -369,7 +369,11 @@ export class JusticePlugin {
           response.action === "inject" ? response.modifiedPayload : undefined,
         );
         if (event.callId !== undefined && taskId !== undefined) {
-          this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+          try {
+            this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+          } catch (err) {
+            this.options.logger?.warn("failed to set active task window", err);
+          }
         }
         return response;
       }

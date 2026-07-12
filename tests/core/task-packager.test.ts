@@ -119,4 +119,25 @@ describe("TaskPackager", () => {
       expect(prompt).toContain("CONTEXT");
     });
   });
+
+  it("should warn and respect dominant override when explicit agentId conflicts", () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const task = makeTask();
+      const request = packager.package(task, {
+        planFilePath: "plan.md",
+        referenceFiles: [],
+        agentId: "atlas",
+        routingCategory: "deep",
+        loadSkills: ["implementer-prompt", "code-quality-reviewer"],
+      });
+
+      expect(request.context.agentId).toBe("prometheus");
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Dominant override (skill: code-quality-reviewer)"),
+      );
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
 });

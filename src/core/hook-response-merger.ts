@@ -50,7 +50,9 @@ export function mergePostToolUseResponses(responses: readonly HookResponse[]): H
     return { action: "proceed" };
   }
 
-  const contexts = injects.map((inject) => inject.injectedContext).filter((context) => context !== "");
+  const contexts = injects
+    .map((inject) => inject.injectedContext)
+    .filter((context) => context !== "");
   const base: InjectResponse = {
     action: "inject",
     injectedContext: contexts.join("\n\n---\n\n"),
