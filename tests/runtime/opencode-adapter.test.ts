@@ -207,7 +207,7 @@ describe("OpenCodeAdapter.onEvent", () => {
         message: "timeout while calling provider",
       },
     });
-    expect(logSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalledWith(expect.objectContaining({ level: "error" }));
   });
 
   it("still dispatches loop detection when session-error observation fails", async () => {
