@@ -44,7 +44,6 @@ export class TaskFeedbackHandler {
   private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
   private observationHandler?: ObservationHandler;
-  private currentSessionId?: string;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
@@ -113,7 +112,6 @@ export class TaskFeedbackHandler {
     if (!session) return PROCEED;
 
     session.lastAccess = Date.now();
-    this.currentSessionId = event.sessionId;
 
     // Format the raw output into structured feedback
     const feedback = this.formatter.format(session.activeTaskId, payload.toolResult, payload.error);
@@ -122,7 +120,7 @@ export class TaskFeedbackHandler {
     const action = this.determineAction(feedback, session, payload.toolResult);
 
     // Execute the action
-    return this.executeAction(action, feedback, session, payload.toolResult);
+    return this.executeAction(action, feedback, session, payload.toolResult, event.sessionId);
   }
 
   private determineAction(
@@ -190,10 +188,11 @@ export class TaskFeedbackHandler {
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     switch (action.type) {
       case "success":
-        return this.handleSuccess(session, feedback, rawResult);
+        return this.handleSuccess(session, feedback, rawResult, sessionId);
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
@@ -220,7 +219,7 @@ export class TaskFeedbackHandler {
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
-        return this.handleEscalation(action, feedback, session, rawResult);
+        return this.handleEscalation(action, feedback, session, rawResult, sessionId);
       default: {
         const _exhaustiveCheck: never = action;
         void _exhaustiveCheck;
@@ -233,6 +232,7 @@ export class TaskFeedbackHandler {
     session: SessionState,
     feedback: TaskFeedback,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
@@ -251,15 +251,15 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
+      }
 
-if (this.observationHandler) {
-await this.observationHandler.emitReflectionEvent({
-trigger: "task_succeeded",
-planRef: { path: session.planPath, taskId: session.activeTaskId },
-intent: "check_complete",
-sessionId: this.currentSessionId ?? "unknown",
-});
-        }
+      if (this.observationHandler) {
+        await this.observationHandler.emitReflectionEvent({
+          trigger: "task_succeeded",
+          planRef: { path: session.planPath, taskId: session.activeTaskId },
+          intent: "check_complete",
+          sessionId,
+        });
       }
     } catch (err) {
       console.warn(
@@ -289,6 +289,7 @@ sessionId: this.currentSessionId ?? "unknown",
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     let splitSuggestionContext = "";
     try {
@@ -335,7 +336,7 @@ sessionId: this.currentSessionId ?? "unknown",
         planRef: { path: session.planPath, taskId: action.taskId },
         intent: "append_error_note",
         note: `${action.errorClass}: ${action.message}`,
-        sessionId: this.currentSessionId ?? "unknown",
+        sessionId,
       });
     }
 
