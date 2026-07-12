@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { JusticePlugin, mergePostToolUseResponses } from "../../src/core/justice-plugin";
+import { JusticePlugin } from "../../src/core/justice-plugin";
+import { mergePostToolUseResponses } from "../../src/core/hook-response-merger";
 import type { HookResponse, PostToolUseEvent } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 

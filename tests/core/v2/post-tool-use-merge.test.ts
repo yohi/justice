@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergePostToolUseResponses,
   mergePreToolUseResponses,
-} from "../../../src/core/justice-plugin";
+} from "../../../src/core/hook-response-merger";
 import type { HookResponse } from "../../../src/core/types";
 
 describe("D64 - PostToolUse merge rules", () => {
@@ -148,5 +148,32 @@ describe("D64 - PreToolUse merge rules", () => {
       },
     ];
     expect(() => mergePreToolUseResponses(responses[0], responses[1])).toThrow(/modifiedPayload/);
+  });
+  it("should attach modifiedPayload from the first inject when only the first side carries one", () => {
+    const a: HookResponse = {
+      action: "inject",
+      injectedContext: "A",
+      modifiedPayload: { key: "a" },
+    };
+    const b: HookResponse = { action: "inject", injectedContext: "B" };
+    expect(mergePreToolUseResponses(a, b)).toEqual({
+      action: "inject",
+      injectedContext: "A\n\n---\n\nB",
+      modifiedPayload: { key: "a" },
+    });
+  });
+
+  it("should attach modifiedPayload from the second inject when only the second side carries one", () => {
+    const a: HookResponse = { action: "inject", injectedContext: "A" };
+    const b: HookResponse = {
+      action: "inject",
+      injectedContext: "B",
+      modifiedPayload: { key: "b" },
+    };
+    expect(mergePreToolUseResponses(a, b)).toEqual({
+      action: "inject",
+      injectedContext: "A\n\n---\n\nB",
+      modifiedPayload: { key: "b" },
+    });
   });
 });

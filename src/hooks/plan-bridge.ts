@@ -8,7 +8,7 @@ import type {
   AgentId,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
-import { mergePostToolUseResponses } from "../core/justice-plugin";
+import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
@@ -21,6 +21,7 @@ import type { JusticeNotifier } from "../core/justice-notifier";
 import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
+import { enrichTaskToolInput } from "../core/task-packager";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -339,6 +340,9 @@ export class PlanBridge {
     return {
       action: "inject",
       injectedContext: this.buildInjectedContext(planContent, delegation),
+      modifiedPayload: {
+        args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId),
+      },
     };
   }
 

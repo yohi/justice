@@ -56,10 +56,12 @@ function isValidEvidence(value: unknown): boolean {
 function validateObservationRecord(r: Record<string, unknown>): void {
   const kind = r.kind;
   if (kind === "tool_executed") {
+    const evidence = Array.isArray(r.evidence) ? r.evidence : [r.evidence];
     if (
       typeof r.toolName !== "string" ||
       typeof r.callId !== "string" ||
-      !isValidEvidence(r.evidence)
+      evidence.length === 0 ||
+      evidence.some((item) => !isValidEvidence(item))
     ) {
       throw new Error("Invalid tool_executed record");
     }
@@ -73,8 +75,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     const claimsEmpty = hasClaims && Array.isArray(declaredClaims) && declaredClaims.length === 0;
     const evidenceEmpty = hasEvidence && Array.isArray(evidence) && evidence.length === 0;
     const onlyEmpty =
-      (hasClaims && !hasEvidence && claimsEmpty) ||
-      (!hasClaims && hasEvidence && evidenceEmpty);
+      (hasClaims && !hasEvidence && claimsEmpty) || (!hasClaims && hasEvidence && evidenceEmpty);
     const mismatched =
       (hasClaims && !Array.isArray(declaredClaims)) ||
       (hasEvidence && !Array.isArray(evidence)) ||
