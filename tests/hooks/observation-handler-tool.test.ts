@@ -265,10 +265,38 @@ describe("ObservationHandler tool observation", () => {
     });
 
     expect(response).toEqual({ action: "proceed" });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler projection cache write failed",
-      cacheError,
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        "observation-handler projection cache write failed",
+        cacheError,
+      ),
     );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
+  it("validates the existing projection cache before rebuilding it after an observation", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-cache-read",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    await vi.waitFor(() => expect(projectionCache.read).toHaveBeenCalledOnce());
     expect(projectionCache.write).toHaveBeenCalledOnce();
   });
 

@@ -18,11 +18,13 @@ import {
 import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
 import { buildReflectionEvent } from "../core/v2/reflection-event";
 import { project, type ProjectedState } from "../core/v2/state-projection";
+import { hashString } from "../core/v2/hash";
 import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
 import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore } from "../runtime/observation-log-store";
+import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -46,13 +48,17 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
  */
 export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
-  private readonly persistedMessageIDs = new Map<string, Set<string>>();
+  private readonly persistedMessageHashes = new Map<string, Map<string, string>>();
+  private projectionRefresh: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly options: {
       readonly logStore: ObservationLogStore;
       readonly sessionStateProvider: SessionStateProvider;
-      readonly projectionCache?: { readonly write: (state: ProjectedState) => Promise<void> };
+      readonly projectionCache?: {
+        readonly read?: () => Promise<ProjectedState | undefined>;
+        readonly write: (state: ProjectedState) => Promise<void>;
+      };
       readonly writerId: string;
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
@@ -83,6 +89,7 @@ export class ObservationHandler {
         { agentId: error.agentId, sessionId: error.sessionId, writerId: this.options.writerId },
         record,
       );
+      this.scheduleProjectionRefresh();
     } catch (err) {
       this.options.logger?.warn("observation-handler: session error observation failed, degrading to PROCEED", err);
     }
@@ -117,6 +124,7 @@ export class ObservationHandler {
         { agentId, sessionId: input.sessionId, writerId: this.options.writerId },
         record,
       );
+      this.scheduleProjectionRefresh();
     } catch (err) {
       this.options.logger?.warn("observation-handler: emitReflectionEvent failed, degrading gracefully", err);
     }
@@ -128,19 +136,13 @@ export class ObservationHandler {
   ): Promise<HookResponse> {
     this.messageRoleBuffer.update(sessionId, payload);
 
-    const persistedIDs = this.persistedMessageIDs.get(sessionId);
-    if (persistedIDs?.has(payload.messageID)) {
-      try {
-        this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
-      } catch (error) {
-        this.options.logger?.warn("observation-handler gc failed", error);
-      }
-      return PROCEED;
-    }
-
     try {
       const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
       if (text === undefined || text.length === 0) {
+        return PROCEED;
+      }
+      const textHash = hashString(text);
+      if (this.persistedMessageHashes.get(sessionId)?.get(payload.messageID) === textHash) {
         return PROCEED;
       }
 
@@ -163,19 +165,20 @@ export class ObservationHandler {
         { agentId, sessionId, writerId: this.options.writerId },
         record,
       );
-      const sessionPersistedIDs = this.persistedMessageIDs.get(sessionId) ?? new Set<string>();
-      sessionPersistedIDs.add(payload.messageID);
-      this.persistedMessageIDs.set(sessionId, sessionPersistedIDs);
+      const sessionHashes = this.persistedMessageHashes.get(sessionId) ?? new Map<string, string>();
+      sessionHashes.set(payload.messageID, textHash);
+      this.persistedMessageHashes.set(sessionId, sessionHashes);
+      this.scheduleProjectionRefresh();
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
     } finally {
-      this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
+      this.cleanupMessageBuffer();
     }
     return PROCEED;
   }
 
   destroySession(sessionId: string): void {
-    this.persistedMessageIDs.delete(sessionId);
+    this.persistedMessageHashes.delete(sessionId);
     this.messageRoleBuffer.removeSession(sessionId);
   }
 
@@ -256,15 +259,7 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
-      if (this.options.projectionCache !== undefined) {
-        const events = await this.options.logStore.readAll();
-        const projectedState = project(events, new Date().toISOString());
-        try {
-          await this.options.projectionCache.write(projectedState);
-        } catch (error) {
-          this.options.logger?.warn("observation-handler projection cache write failed", error);
-        }
-      }
+      await this.refreshProjectionCache();
 
       let response = PROCEED;
       if (event.payload.toolName === "task" && taskId !== undefined) {
@@ -323,6 +318,36 @@ export class ObservationHandler {
         "observation-handler: task summary declared evidence failed",
         error,
       );
+    }
+  }
+
+  private scheduleProjectionRefresh(): void {
+    if (this.options.projectionCache === undefined) return;
+    this.projectionRefresh = this.projectionRefresh
+      .catch(() => {})
+      .then(() => this.refreshProjectionCache())
+      .catch((error) => {
+        this.options.logger?.warn("observation-handler projection cache refresh failed", error);
+      });
+  }
+
+  private async refreshProjectionCache(): Promise<void> {
+    if (this.options.projectionCache === undefined) return;
+    const events = await this.options.logStore.readAll();
+    const cached = await this.options.projectionCache.read?.();
+    if (cached !== undefined && validateProjectionCacheAgainstEvents(cached, events).valid) return;
+    try {
+      await this.options.projectionCache.write(project(events, new Date().toISOString()));
+    } catch (error) {
+      this.options.logger?.warn("observation-handler projection cache write failed", error);
+    }
+  }
+
+  private cleanupMessageBuffer(): void {
+    try {
+      this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
+    } catch (error) {
+      this.options.logger?.warn("observation-handler gc failed", error);
     }
   }
 

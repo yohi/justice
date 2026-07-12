@@ -31,22 +31,24 @@ export function createShardWriteQueue(
   readExisting: (path: string) => Promise<string>,
   getInitialSequence: (path: string) => Promise<number>,
   onError: (path: string, err: unknown) => void,
-  onAppendComplete?: (path: string) => Promise<void>,
+  onAppendComplete?: (path: string) => Promise<boolean | void>,
 ): (path: string, record: PendingLogRecord) => Promise<number> {
   const queues = new Map<string, QueueItem[]>();
   const sequences = new Map<string, number>();
+  const contents = new Map<string, string>();
   const runningPaths = new Set<string>();
 
   async function atomicAppend(path: string, line: string): Promise<void> {
     // Read-modify-write: preserve prior records, append the new line, then swap
     // atomically via a temp file + rename. Serialization guarantees no concurrent
     // writer touches `path`, so the read cannot race a write on the same shard.
-    const existing = await readExisting(path);
+    const existing = contents.get(path) ?? (await readExisting(path));
     const content = existing + line;
     const tempPath = `${path}.tmp.${Date.now()}.${randomUUID()}`;
     try {
       await writer.writeFile(tempPath, content);
       await writer.rename(tempPath, path);
+      contents.set(path, content);
     } catch (err) {
       // Best-effort cleanup of the orphaned temp file; swallow any secondary
       // failure (e.g. the temp was never created) so the original error surfaces.
@@ -76,7 +78,11 @@ export function createShardWriteQueue(
           sequences.set(path, nextSeq);
 
           if (onAppendComplete) {
-            await onAppendComplete(path).catch((err) => onError(path, err));
+            const rotated = await onAppendComplete(path).catch((err) => {
+              onError(path, err);
+              return false;
+            });
+            if (rotated) contents.delete(path);
           }
           current.resolve(nextSeq);
         } catch (err) {
@@ -96,7 +102,6 @@ export function createShardWriteQueue(
         void process(path);
       } else {
         queues.delete(path);
-        sequences.delete(path);
       }
     }
   }

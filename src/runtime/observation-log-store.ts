@@ -280,12 +280,12 @@ export class ObservationLogStore {
    * preserved and `computeInitialSequence` re-reads archives on a cold start, so
    * sequence numbering stays continuous across rotation boundaries (D23/D33).
    */
-  private async rotateIfNeeded(path: string): Promise<void> {
+  private async rotateIfNeeded(path: string): Promise<boolean> {
     const shardId = this.shardsByPath.get(path);
-    if (!shardId) return;
+    if (!shardId) return false;
     const now = new Date();
     const createdMs = await this.ensureShardCreatedAtMs(path);
-    if (!(await shouldRotate(this.fileReader, path, createdMs, now))) return;
+    if (!(await shouldRotate(this.fileReader, path, createdMs, now))) return false;
 
     // FileWriter.rename creates the archive parent directory recursively (its
     // contract, also relied on by the write queue), so no explicit mkdir is needed.
@@ -299,6 +299,7 @@ export class ObservationLogStore {
       this.shardCreatedAtMs.delete(path);
       this.rotationFailuresByPath.delete(path);
       if (this.rotationFailuresByPath.size === 0) this.lastRotationError = undefined;
+      return true;
     } catch (err) {
       // The append already durably persisted the record, so stay fail-open (never
       // rethrow into the write queue). But do not swallow the failure: the
@@ -314,6 +315,7 @@ export class ObservationLogStore {
         failures,
         err,
       );
+      return false;
     }
   }
 

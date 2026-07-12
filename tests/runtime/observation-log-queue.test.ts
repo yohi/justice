@@ -88,6 +88,26 @@ describe("createShardWriteQueue()", () => {
     expect(await enqueue(path, rec())).toBe(12);
   });
 
+  it("reads the existing shard content only once while the queue remains active", async () => {
+    const { writer, readExisting } = createMemFs();
+    let readCount = 0;
+    const enqueue = createShardWriteQueue(
+      writer,
+      async (path: string): Promise<string> => {
+        readCount += 1;
+        return readExisting(path);
+      },
+      async () => 0,
+      () => {},
+    );
+    const path = ".justice/events/sisyphus/ses-1/w-cached.jsonl";
+
+    await enqueue(path, rec());
+    await enqueue(path, rec());
+
+    expect(readCount).toBe(1);
+  });
+
   it("serializes concurrent enqueues to the same path (monotonic, no interleaving)", async () => {
     const { files, writer, readExisting } = createMemFs();
     const enqueue = createShardWriteQueue(
