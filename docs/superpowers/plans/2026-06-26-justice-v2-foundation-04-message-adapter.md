@@ -141,14 +141,14 @@ export class MessageRoleBuffer {
 devcontainer exec --workspace-folder . bun run test tests/runtime/message-role-buffer.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/runtime/message-role-buffer.ts src/core/v2/declared-claim-extractor.ts src/core/v2/observation-model.ts tests/runtime/message-role-buffer.test.ts
 git commit -m "feat(v2): message role buffer and finalized declared extraction"
 ```
 
-- [ ] **Step 5: Phase 3 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 3 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
