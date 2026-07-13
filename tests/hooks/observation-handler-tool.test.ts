@@ -469,4 +469,72 @@ describe("ObservationHandler tool observation", () => {
     await vi.waitFor(() => expect(projectionCache.write).toHaveBeenCalledOnce());
     expect(logger.warn).not.toHaveBeenCalled();
   });
+
+  it("continues gate evaluation even when projection cache refresh fails during PostToolUse", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
+    const cacheRefreshError = new Error("cache refresh failed");
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => Promise.reject(cacheRefreshError)),
+    };
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+    const gateTarget = handler as unknown as {
+      evaluateGateIfTriggered(
+        trigger: "task_complete" | "tool_observed",
+        taskId: string | undefined,
+        callId: string | undefined,
+        agentId: string,
+        sessionId: string,
+      ): Promise<HookResponse>;
+    };
+    const gateSpy = vi.spyOn(gateTarget, "evaluateGateIfTriggered");
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-gate-test",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-gate-test",
+      payload: { toolName: "task", toolResult: "done", error: false },
+    });
+
+    // Verify that gate evaluation was still called despite cache refresh failure
+    expect(gateSpy).toHaveBeenCalledWith(
+      "task_complete",
+      "task-1",
+      "call-gate-test",
+      "hephaestus",
+      "session-1",
+    );
+    expect(gateSpy).toHaveBeenCalledWith(
+      "tool_observed",
+      "task-1",
+      "call-gate-test",
+      "hephaestus",
+      "session-1",
+    );
+    // Verify that the cache refresh failure was logged
+    // Note: refreshProjectionCache() internally catches write failures and logs them.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache write failed",
+      cacheRefreshError,
+    );
+    // Response should be PROCEED (not degraded to outer catch)
+    expect(response).toEqual({ action: "proceed" });
+  });
 });

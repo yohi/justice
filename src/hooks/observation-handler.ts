@@ -272,7 +272,11 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
-      await this.refreshProjectionCache();
+      try {
+        await this.refreshProjectionCache();
+      } catch (error) {
+        this.options.logger?.warn("observation-handler: projection cache refresh failed during PostToolUse, continuing gate evaluation", error);
+      }
 
       let response = PROCEED;
       if (event.payload.toolName === "task" && taskId !== undefined) {
