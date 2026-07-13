@@ -22,7 +22,7 @@ type BufferEntry = {
   role?: "assistant" | "user";
   readonly parts: Map<string, BufferPart>;
   lastUpdatedAt: number;
-  messageSignaled: boolean; // raw: a message_updated(finalized=true) has been observed
+  messageSignaled: boolean; // raw: a message_updated(finalized=true) or text_complete has been observed
   finalized: boolean; // DERIVED readiness: messageSignaled && all parts finalized
 };
 

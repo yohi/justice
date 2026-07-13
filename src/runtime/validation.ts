@@ -150,6 +150,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       r.reflection.planRef.path.startsWith("/") ||
       r.reflection.planRef.path.startsWith("\\") ||
       /^[A-Za-z]:/u.test(r.reflection.planRef.path) ||
+      r.reflection.planRef.path.split(/[\\/]/u).some((seg) => seg === "..") ||
       typeof r.reflection.planRef.taskId !== "string" ||
       !isOneOf(r.reflection.intent, ["check_complete", "append_error_note"]) ||
       (r.reflection.note !== undefined && typeof r.reflection.note !== "string")
