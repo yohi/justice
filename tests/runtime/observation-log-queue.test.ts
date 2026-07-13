@@ -48,7 +48,7 @@ function createMemFs(): {
 describe("createShardWriteQueue()", () => {
   it("appends new lines without overwriting existing records (regression: read-modify-write)", async () => {
     const { files, writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       readExisting,
       async () => 0,
@@ -81,7 +81,7 @@ describe("createShardWriteQueue()", () => {
       const lastLine = JSON.parse(lines[lines.length - 1]) as { sequence: number };
       return lastLine.sequence;
     };
-    const enqueue = createShardWriteQueue(writer, readExisting, getInitialSequence, () => {});
+    const { enqueue } = createShardWriteQueue(writer, readExisting, getInitialSequence, () => {});
     const path = ".justice/events/sisyphus/ses-1/w-2.jsonl";
 
     expect(await enqueue(path, rec())).toBe(11);
@@ -91,7 +91,7 @@ describe("createShardWriteQueue()", () => {
   it("reads the existing shard content only once while the queue remains active", async () => {
     const { writer, readExisting } = createMemFs();
     let readCount = 0;
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       async (path: string): Promise<string> => {
         readCount += 1;
@@ -110,7 +110,7 @@ describe("createShardWriteQueue()", () => {
 
   it("serializes concurrent enqueues to the same path (monotonic, no interleaving)", async () => {
     const { files, writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       readExisting,
       async () => 0,
@@ -127,7 +127,7 @@ describe("createShardWriteQueue()", () => {
 
   it("processes different shard paths independently", async () => {
     const { writer, readExisting } = createMemFs();
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       readExisting,
       async () => 0,
@@ -152,7 +152,7 @@ describe("createShardWriteQueue()", () => {
       deleteFile: async (): Promise<void> => {},
     };
     const errors: unknown[] = [];
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       failing,
       async () => "",
       async () => 0,
@@ -173,7 +173,7 @@ describe("createShardWriteQueue()", () => {
   it("invokes onAppendComplete after each successful append", async () => {
     const { writer, readExisting } = createMemFs();
     const completed: string[] = [];
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       readExisting,
       async () => 0,
@@ -194,7 +194,7 @@ describe("createShardWriteQueue()", () => {
     const { writer, readExisting } = createMemFs();
     const errors: unknown[] = [];
     const onAppendCompleteError = new Error("rotation check failed");
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       readExisting,
       async () => 0,
@@ -229,7 +229,7 @@ describe("createShardWriteQueue()", () => {
       },
     };
     const errors: unknown[] = [];
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       writer,
       async () => "",
       async () => 0,
@@ -260,7 +260,7 @@ describe("createShardWriteQueue()", () => {
         removed.push(p);
       },
     };
-    const enqueue = createShardWriteQueue(
+    const { enqueue } = createShardWriteQueue(
       failing,
       async () => "",
       async () => 0,

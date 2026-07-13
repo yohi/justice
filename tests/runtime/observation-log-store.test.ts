@@ -737,6 +737,62 @@ describe("ObservationLogStore", () => {
   });
 });
 
+describe("ObservationLogStore.destroySession()", () => {
+  it("releases the write queue's cache for the session's shard so a later append re-reads from disk", async () => {
+    const { reader, writer } = createMemFs();
+    let readCount = 0;
+    const countingReader: FileReader = {
+      ...reader,
+      readFile: async (p: string) => {
+        readCount += 1;
+        return reader.readFile(p);
+      },
+    };
+    const store = new ObservationLogStore(writer, countingReader, "w-1");
+
+    await store.append(shard, msgRecord());
+    await store.append(shard, msgRecord());
+    const readsBeforeDestroy = readCount;
+
+    store.destroySession(shard.sessionId);
+
+    await store.append(shard, msgRecord());
+    // The contents/shardCreatedAtMs caches were released, so the post-destroy append must
+    // re-derive existing state from disk, causing at least one additional readFile call.
+    expect(readCount).toBeGreaterThan(readsBeforeDestroy);
+
+    const all = await store.readAll();
+    expect(all.map((r) => r.sequence)).toEqual([1, 2, 3]);
+  });
+
+  it("only releases shards belonging to the destroyed session, leaving other sessions' correctness intact", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const shardA: ShardId = { agentId: "sisyphus", sessionId: "ses-a", writerId: "w-1" };
+    const shardB: ShardId = { agentId: "sisyphus", sessionId: "ses-b", writerId: "w-1" };
+    const recordFor = (sessionId: string): PendingLogRecord => ({ ...msgRecord(), sessionId });
+
+    await store.append(shardA, recordFor("ses-a"));
+    await store.append(shardB, recordFor("ses-b"));
+
+    store.destroySession("ses-a");
+
+    // ses-b's shard cache was never touched; its sequence continues normally.
+    expect(await store.append(shardB, recordFor("ses-b"))).toBe(2);
+    // ses-a's shard cache was released but still re-derives the correct next sequence.
+    expect(await store.append(shardA, recordFor("ses-a"))).toBe(2);
+
+    const all = await store.readAll();
+    expect(all).toHaveLength(4);
+  });
+
+  it("is a safe no-op for a sessionId with no known shards", () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    expect(() => store.destroySession("unknown-session")).not.toThrow();
+  });
+});
+
 it("readAll merges archived segments before active segments", async () => {
   const { files, reader, writer } = createMemFs();
   const enc = encodeSafeSegment("ses-1");

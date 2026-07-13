@@ -188,6 +188,11 @@ export class ObservationHandler {
   destroySession(sessionId: string): void {
     this.persistedMessageHashes.delete(sessionId);
     this.messageRoleBuffer.removeSession(sessionId);
+    // Propagate cleanup to the log store so this session's per-shard write-queue
+    // caches are released, bounding memory across sessions. Optional chaining keeps
+    // this fail-open: incomplete test mocks (and any logStore lacking the method)
+    // simply skip it rather than throwing.
+    this.options.logStore.destroySession?.(sessionId);
   }
 
   async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
