@@ -754,3 +754,21 @@ it("readAll merges archived segments before active segments", async () => {
   expect(all).toHaveLength(2);
   expect(all.map((r) => r.sequence)).toEqual([1, 2]);
 });
+
+describe("rotateIfNeeded() defensive guard", () => {
+  it("returns false without rotating when the path has no registered shard", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+
+    // `rotateIfNeeded` runs as the write queue's `onAppendComplete`, keyed by a
+    // `shardsByPath` entry that `append()` registers before enqueueing. A path
+    // that never went through `append()` has no such entry; this exercises
+    // that defensive early-return branch directly (never reachable through the
+    // public `append()` API, which always registers the shard first).
+    const internal = store as unknown as {
+      rotateIfNeeded(path: string): Promise<boolean>;
+    };
+
+    await expect(internal.rotateIfNeeded("unregistered/path.jsonl")).resolves.toBe(false);
+  });
+});

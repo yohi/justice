@@ -365,4 +365,108 @@ describe("ObservationHandler tool observation", () => {
     expect(response).toEqual({ action: "proceed" });
     expect(readAllSpy).not.toHaveBeenCalled();
   });
+
+  it("logs a warning when initializeProjectionCache's underlying refresh fails", async () => {
+    const logger = { warn: vi.fn() };
+    const refreshError = new Error("readAll failed");
+    const handler = new ObservationHandler({
+      logStore: {
+        append: async () => 1,
+        readAll: async () => {
+          throw refreshError;
+        },
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      projectionCache: { write: vi.fn(async () => undefined) },
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.initializeProjectionCache();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache initialization failed",
+      refreshError,
+    );
+  });
+
+  it("logs a warning when a scheduled projection refresh fails outside the write path", async () => {
+    const logger = { warn: vi.fn() };
+    const refreshError = new Error("readAll failed");
+    const handler = new ObservationHandler({
+      logStore: {
+        append: async () => 1,
+        readAll: async () => {
+          throw refreshError;
+        },
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      projectionCache: { write: vi.fn(async () => undefined) },
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handleSessionError({
+      message: "boom",
+      agentId: "unknown",
+      sessionId: "session-1",
+    });
+
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        "observation-handler projection cache refresh failed",
+        refreshError,
+      ),
+    );
+  });
+
+  it("silently rebuilds a stale projection cache without warning on a normal append", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const logger = { warn: vi.fn() };
+    const shardId = { agentId: "unknown" as const, sessionId: "session-1", writerId: "w-handler" };
+
+    // Seed one record so the cached state's maxSequence reflects the state
+    // "before" the observation that handlePostToolUse is about to append. A
+    // normal append that merely raises a known shard's sequence must be
+    // classified `stale_append` (silent rebuild), never a warning.
+    await logStore.append(shardId, {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      agentId: "unknown",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      kind: "message",
+      messageID: "seed",
+      role: "assistant",
+      textHash: "seed-hash",
+      declaredClaims: [],
+      evidence: [],
+      finalized: true,
+    });
+    const staleState = project(await logStore.readAll(), "2026-01-01T00:00:00.000Z");
+    const projectionCache = {
+      read: vi.fn(async () => staleState),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-stale",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    await vi.waitFor(() => expect(projectionCache.write).toHaveBeenCalledOnce());
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
 });

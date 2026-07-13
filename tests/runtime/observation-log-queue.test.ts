@@ -190,6 +190,31 @@ describe("createShardWriteQueue()", () => {
     expect(completed).toEqual([path, path]);
   });
 
+  it("reports onAppendComplete rejections via onError without failing the append itself", async () => {
+    const { writer, readExisting } = createMemFs();
+    const errors: unknown[] = [];
+    const onAppendCompleteError = new Error("rotation check failed");
+    const enqueue = createShardWriteQueue(
+      writer,
+      readExisting,
+      async () => 0,
+      (_path, err) => {
+        errors.push(err);
+      },
+      async () => {
+        throw onAppendCompleteError;
+      },
+    );
+    const path = ".justice/events/sisyphus/s/w-oncomplete-fail.jsonl";
+
+    // onAppendComplete failing is reported via onError but must not fail the
+    // append itself: the record was already durably persisted by atomicAppend.
+    const seq = await enqueue(path, rec());
+
+    expect(seq).toBe(1);
+    expect(errors).toEqual([onAppendCompleteError]);
+  });
+
   it("cleans up temp file on rename failure", async () => {
     const files = new Map<string, string>();
     const writer = {
