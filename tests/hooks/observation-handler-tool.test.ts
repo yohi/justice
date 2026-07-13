@@ -265,9 +265,75 @@ describe("ObservationHandler tool observation", () => {
     });
 
     expect(response).toEqual({ action: "proceed" });
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        "observation-handler projection cache write failed",
+        cacheError,
+      ),
+    );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
+  it("validates the existing projection cache before rebuilding it after an observation", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-cache-read",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    await vi.waitFor(() => expect(projectionCache.read).toHaveBeenCalledOnce());
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
+  it("warns before rebuilding a projection cache with mismatched shard sequences", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const emptyState = project([], "2026-01-01T00:00:00.000Z");
+    const projectionCache = {
+      read: vi.fn(async () => ({
+        ...emptyState,
+        integrity: {
+          ...emptyState.integrity,
+          maxSequenceByShard: new Map([["missing-shard", 1]]),
+        },
+      })),
+      write: vi.fn(async () => undefined),
+    };
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-cache-mismatch",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler projection cache write failed",
-      cacheError,
+      "observation-handler projection cache mismatch_seq, rebuilding",
+      expect.any(Error),
     );
     expect(projectionCache.write).toHaveBeenCalledOnce();
   });
@@ -298,5 +364,177 @@ describe("ObservationHandler tool observation", () => {
 
     expect(response).toEqual({ action: "proceed" });
     expect(readAllSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning when initializeProjectionCache's underlying refresh fails", async () => {
+    const logger = { warn: vi.fn() };
+    const refreshError = new Error("readAll failed");
+    const handler = new ObservationHandler({
+      logStore: {
+        append: async () => 1,
+        readAll: async () => {
+          throw refreshError;
+        },
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      projectionCache: { write: vi.fn(async () => undefined) },
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.initializeProjectionCache();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache initialization failed",
+      refreshError,
+    );
+  });
+
+  it("logs a warning when a scheduled projection refresh fails outside the write path", async () => {
+    const logger = { warn: vi.fn() };
+    const refreshError = new Error("readAll failed");
+    const handler = new ObservationHandler({
+      logStore: {
+        append: async () => 1,
+        readAll: async () => {
+          throw refreshError;
+        },
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      projectionCache: { write: vi.fn(async () => undefined) },
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handleSessionError({
+      message: "boom",
+      agentId: "unknown",
+      sessionId: "session-1",
+    });
+
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        "observation-handler projection cache refresh failed",
+        refreshError,
+      ),
+    );
+  });
+
+  it("silently rebuilds a stale projection cache without warning on a normal append", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const logger = { warn: vi.fn() };
+    const shardId = { agentId: "unknown" as const, sessionId: "session-1", writerId: "w-handler" };
+
+    // Seed one record so the cached state's maxSequence reflects the state
+    // "before" the observation that handlePostToolUse is about to append. A
+    // normal append that merely raises a known shard's sequence must be
+    // classified `stale_append` (silent rebuild), never a warning.
+    await logStore.append(shardId, {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      agentId: "unknown",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      kind: "message",
+      messageID: "seed",
+      role: "assistant",
+      textHash: "seed-hash",
+      declaredClaims: [],
+      evidence: [],
+      finalized: true,
+    });
+    const staleState = project(await logStore.readAll(), "2026-01-01T00:00:00.000Z");
+    const projectionCache = {
+      read: vi.fn(async () => staleState),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-stale",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    await vi.waitFor(() => expect(projectionCache.write).toHaveBeenCalledOnce());
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("continues gate evaluation even when projection cache refresh fails during PostToolUse", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
+    const cacheRefreshError = new Error("cache refresh failed");
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => Promise.reject(cacheRefreshError)),
+    };
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+    const gateTarget = handler as unknown as {
+      evaluateGateIfTriggered(
+        trigger: "task_complete" | "tool_observed",
+        taskId: string | undefined,
+        callId: string | undefined,
+        agentId: string,
+        sessionId: string,
+      ): Promise<HookResponse>;
+    };
+    const gateSpy = vi.spyOn(gateTarget, "evaluateGateIfTriggered");
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-gate-test",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-gate-test",
+      payload: { toolName: "task", toolResult: "done", error: false },
+    });
+
+    // Verify that gate evaluation was still called despite cache refresh failure
+    expect(gateSpy).toHaveBeenCalledWith(
+      "task_complete",
+      "task-1",
+      "call-gate-test",
+      "hephaestus",
+      "session-1",
+    );
+    expect(gateSpy).toHaveBeenCalledWith(
+      "tool_observed",
+      "task-1",
+      "call-gate-test",
+      "hephaestus",
+      "session-1",
+    );
+    // Verify that the cache refresh failure was logged
+    // Note: refreshProjectionCache() internally catches write failures and logs them.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache write failed",
+      cacheRefreshError,
+    );
+    // Response should be PROCEED (not degraded to outer catch)
+    expect(response).toEqual({ action: "proceed" });
   });
 });

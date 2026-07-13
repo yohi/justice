@@ -6,6 +6,39 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMemFs } from "../helpers/mock-file-system";
 
 describe("ObservationHandler message observation", () => {
+  it("persists text_complete after the assistant role is known without a message finalization signal", async () => {
+    const { files, reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const handler = new ObservationHandler({
+      logStore: new ObservationLogStore(writer, reader, "w-handler"),
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: false,
+    });
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
+    expect(files.get(path)).toContain('"kind":"message"');
+  });
+
   it("persists finalized assistant claims only after the text-complete payload", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
@@ -263,6 +296,47 @@ describe("ObservationHandler message observation", () => {
     expect(files.get(path)).toBe(firstContent);
   });
 
+  it("records a revised finalized message when its text changes after completion", async () => {
+    const { files, reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const handler = new ObservationHandler({
+      logStore: new ObservationLogStore(writer, reader, "w-handler"),
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests fail",
+    });
+
+    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const records = (files.get(path) ?? "")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { declaredClaims: readonly { outcome: string }[] });
+    expect(records).toHaveLength(2);
+    expect(records[1]?.declaredClaims[0]?.outcome).toBe("fail");
+  });
+
   it("clears persisted IDs and buffered parts when a session ends", async () => {
     const { reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
@@ -290,9 +364,9 @@ describe("ObservationHandler message observation", () => {
     });
     const internal = handler as unknown as {
       readonly messageRoleBuffer: { readonly buffer: ReadonlyMap<string, unknown> };
-      readonly persistedMessageIDs: ReadonlyMap<string, ReadonlySet<string>>;
+      readonly persistedMessageHashes: ReadonlyMap<string, ReadonlyMap<string, string>>;
     };
-    expect(internal.persistedMessageIDs.get("session-1")?.has("message-1")).toBe(true);
+    expect(internal.persistedMessageHashes.get("session-1")?.has("message-1")).toBe(true);
     expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(
       true,
     );
@@ -301,7 +375,7 @@ describe("ObservationHandler message observation", () => {
     handler.destroySession("session-1");
 
     // Then: no session-scoped observation state remains.
-    expect(internal.persistedMessageIDs.has("session-1")).toBe(false);
+    expect(internal.persistedMessageHashes.has("session-1")).toBe(false);
     expect(internal.messageRoleBuffer.buffer.has(JSON.stringify(["session-1", "message-1"]))).toBe(
       false,
     );

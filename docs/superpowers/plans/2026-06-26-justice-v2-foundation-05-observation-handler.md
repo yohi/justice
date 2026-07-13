@@ -70,10 +70,10 @@
   - **Correlation Contract:** `PlanBridge`/`TaskPackager` (またはツール実行前インターセプタ) が `task` ツール実行前に args 内へ決定論的かつ安定した `taskId` を確実に注入する実装。
   - **Regression Test:** `tests/hooks/observation-handler-tool.test.ts` にて、実際に `taskId` が含まれる実ペイロードを用いて、correlation 解決とそれに基づくゲート判定が正確に行われることを担保するテストケースを追加。
 
-- [ ] **Step 0: PlanBridge および TaskPackager にて taskId 注入処理を実装（D74）**
+- [x] **Step 0: PlanBridge および TaskPackager にて taskId 注入処理を実装（D74）**
   - `src/hooks/plan-bridge.ts` または `src/core/task-packager.ts` を修正し、`task` ツールの実行前 (`PreToolUse` ハンドラやタスク構築処理) に、タスク引数 (`args`) に対し一意かつ決定論的に決定された `taskId` (例: `task-1` など) を自動注入するロジックを実装する。これにより、実行される `task` ツールの引数から安定して `taskId` が解決できる状態を作る。
 
-- [ ] **Step 1: PreToolUse で task window を追跡（D74）**
+- [x] **Step 1: PreToolUse で task window を追跡（D74）**
 
 ```typescript
 // src/hooks/observation-handler.ts
@@ -152,7 +152,7 @@ private async evaluateGateIfTriggered(trigger: "task_complete" | "tool_observed"
 }
 ```
 
-- [ ] **Step 2: Core 純粋レコードビルダーを実装（src/core/v2/record-builder.ts）**
+- [x] **Step 2: Core 純粋レコードビルダーを実装（src/core/v2/record-builder.ts）**
   - Hook 側に業務ロジックを残さない制約に従い、`ObservationRecord` や `Evidence` の構築、および redaction 処理を行う純粋関数を実装します。
 
 ```typescript
@@ -223,7 +223,7 @@ export function buildToolExecutedRecord(
 }
 ```
 
-- [ ] **Step 3: Hook からビルダーを呼び出して LogStore に append するように実装**
+- [x] **Step 3: Hook からビルダーを呼び出して LogStore に append するように実装**
 
 ```typescript
 // src/hooks/observation-handler.ts
@@ -293,20 +293,20 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
 }
 ```
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-tool.test.ts tests/core/v2/record-builder.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/v2/record-builder.ts src/hooks/observation-handler.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/record-builder.test.ts
 git commit -m "feat(v2): extract record building logic from Hook to pure Core record-builder"
 ```
 
-- [ ] **Step 5: Phase 4 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -437,7 +437,7 @@ gt submit
   - `detectSkillInvoked(toolName, args): readonly { readonly skillName: string; readonly source: "skill_tool" | "task_load_skills"; readonly callId?: string }[]` (D10). Detects skills invoked via the `skill` tool and via `task` tool's `load_skills` argument.
   - `extractTaskSummaryClaims(sourceId, output): DeclaredClaim[]` (D29/D62).
 
-- [ ] **Step 1: skill 検出器を実装**
+- [x] **Step 1: skill 検出器を実装**
 
 ```typescript
 // src/core/v2/skill-invoked-detector.ts
@@ -463,7 +463,7 @@ export function detectSkillInvoked(toolName: string, args: unknown, callId?: str
 }
 ```
 
-- [ ] **Step 1b: `observation-model.ts` の `SkillInvokedRecord` を詳細化（D10）**
+- [x] **Step 1b: `observation-model.ts` の `SkillInvokedRecord` を詳細化（D10）**
 
 Task 1.1 で stub とした `SkillInvokedRecord` を、skill 検出器の戻り値に合わせて拡張する。
 
@@ -477,7 +477,7 @@ export type SkillInvokedRecord = {
 };
 ```
 
-- [ ] **Step 2: task summary 抽出器を実装**
+- [x] **Step 2: task summary 抽出器を実装**
 
 ```typescript
 // src/core/v2/task-summary-claim-extractor.ts
@@ -487,7 +487,7 @@ export function extractTaskSummaryClaims(sourceId: string, output: string): Decl
 }
 ```
 
-- [ ] **Step 3: observation-handler に skill_invoked 記録処理を追加**
+- [x] **Step 3: observation-handler に skill_invoked 記録処理を追加**
   - `ObservationRecord` の構築処理は `src/core/v2/record-builder.ts` へ委譲し、Hook 側は純粋関数を呼び出すだけに抑えます。
 
 ```typescript
@@ -534,7 +534,7 @@ export function buildTaskSummaryRecord(
 
 （※実際の `skill_invoked` 観測と append 処理の配線コードは、後述の **Step 3b** にて `handlePostToolUse` の実装内に統合して記述します。）
 
-- [ ] **Step 3b: `handlePostToolUse` での task summary declared claims 同居と配線（D59/D70/指摘4）**
+- [x] **Step 3b: `handlePostToolUse` での task summary declared claims 同居と配線（D59/D70/指摘4）**
 
 `src/hooks/observation-handler.ts` の `handlePostToolUse` 内で `toolName === "task"` の場合に `extractTaskSummaryClaims` を使ってサマリーから declared claims を抽出し、`buildToolExecutedRecord` に渡して同居させるように修正・拡張する。
 
@@ -625,11 +625,11 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
   return { action: "proceed" };
 }
 ```
-- [ ] **Step 3d: 順序保証検証用回帰テストの作成**
-  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` (declared claims 同居) append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
+- [x] **Step 3d: 順序保証検証用回帰テストの作成**
+  - `tests/hooks/observation-handler-tool.test.ts` の `"correlates the PlanBridge-injected taskId and evaluates task gates after projection"` にて、`tool_executed` レコードの append → `project()` によるプロジェクション適用（`projectionCache.write` 呼び出し） → `evaluateGateIfTriggered("task_complete")` → `evaluateGateIfTriggered("tool_observed")` の順で実行されることを検証済み。
 
 
-- [ ] **Step 4b: task summary declared claim extraction fail-open テストを追加（S-1）**
+- [x] **Step 4b: task summary declared claim extraction fail-open テストを追加（S-1）**
 
 ```typescript
 // tests/hooks/observation-handler-skill-task.test.ts
@@ -663,20 +663,20 @@ it("returns PROCEED when task summary extraction throws due to store append erro
 });
 ```
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
 git commit -m "feat(v2): skill invoked detection and task summary declared claims"
 ```
 
-- [ ] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -709,7 +709,7 @@ gt submit
   - `buildReflectionEvent(trigger, planRef, intent, note)`.
   - ReflectionEvent append on task success/error and loop error-note.
 
-- [ ] **Step 1: session_error ハンドラを実装**
+- [x] **Step 1: session_error ハンドラを実装**
 
 ```typescript
 async handleSessionError(error: { readonly message: string; readonly kind?: string; readonly agentId: ObservationAgentId; readonly sessionId: string }): Promise<HookResponse> {
@@ -733,7 +733,7 @@ async handleSessionError(error: { readonly message: string; readonly kind?: stri
 }
 ```
 
-- [ ] **Step 1b: `observation-model.ts` の `SessionErrorRecord` を詳細化**
+- [x] **Step 1b: `observation-model.ts` の `SessionErrorRecord` を詳細化**
 
 Task 1.1 で stub とした `SessionErrorRecord` を、session_error ハンドラのフィールドに合わせて拡張する。
 
@@ -746,11 +746,11 @@ export type SessionErrorRecord = {
 };
 ```
 
-- [ ] **Step 1c: `session.error` を observation-handler に配線する**
+- [x] **Step 1c: `session.error` を observation-handler に配線する**
   - `src/core/justice-plugin.ts` / `src/runtime/opencode-adapter.ts` で `session.error` event を `observationHandler.handleSessionError(...)` へ routing する。
   - 実イベント経由で `session_error` が Observation Log に append されることを統合テストで検証する。
 
-- [ ] **Step 1d: `observation-handler.ts` に `emitReflectionEvent` を実装**
+- [x] **Step 1d: `observation-handler.ts` に `emitReflectionEvent` を実装**
 
 ```typescript
 // src/hooks/observation-handler.ts
@@ -774,7 +774,7 @@ async emitReflectionEvent(params: {
 }
 ```
 
-- [ ] **Step 2: ReflectionEvent ビルダーを実装（D15/D51/指摘5）**
+- [x] **Step 2: ReflectionEvent ビルダーを実装（D15/D51/指摘5）**
 
 `buildReflectionEvent` の動作仕様：
 - `planRef.path` は workspace root に対して `path.resolve` した結果が root 配下に収まる場合のみ受け入れる。絶対パス、Windows のドライブレター、UNC、または `..` によるトラバーサルは拒否する。
@@ -816,7 +816,7 @@ export function buildReflectionEvent(
 }
 ```
 
-- [ ] **Step 2b: `observation-model.ts` の `ReflectionRecord` を詳細化（D15/D51）**
+- [x] **Step 2b: `observation-model.ts` の `ReflectionRecord` を詳細化（D15/D51）**
 
 Task 1.1 で stub とした `ReflectionRecord` を、ReflectionEvent ビルダーの戻り値に合わせて拡張する。
 
@@ -833,7 +833,7 @@ export type ReflectionRecord = {
 };
 ```
 
-- [ ] **Step 3: task-feedback / loop-handler のコンストラクタ DI の追加と ReflectionEvent 発行の実装（§8.2/D7）**
+- [x] **Step 3: task-feedback / loop-handler のコンストラクタ DI の追加と ReflectionEvent 発行の実装（§8.2/D7）**
   - テストのモック容易性を高めるため、`TaskFeedbackHandler` および `LoopDetectionHandler` はコンストラクタで `ObservationHandler` （またはその省略可能なインターフェース）の依存関係注入を受けるように実装する。
   - 注入されなかった場合のフォールバック（または NoOp 実装など）を用意し、テストコード等ではモックを容易に差し込めるようにする。
 
@@ -897,24 +897,24 @@ if (this.observationHandler) {
 }
 ```
 
-- [ ] **Step 3b: `JusticePlugin` への配線と統合テストの作成（D7）**
+- [x] **Step 3b: `JusticePlugin` への配線と統合テストの作成（D7）**
   - `src/core/justice-plugin.ts` で `ObservationHandler` をインスタンス化し、`TaskFeedbackHandler` と `LoopDetectionHandler` のコンストラクタへ渡すように修正する。
   - 新規統合テストファイル `tests/core/justice-plugin-reflection.test.ts` を作成し、実際の `JusticePlugin` インスタンスを通じて `TaskFeedback` 又は `LoopHandler` の動作契機で `ReflectionEvent` が正常に `ObservationLogStore` に発行・蓄積されることを検証する。
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts tests/core/justice-plugin-reflection.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/reflection-event.ts src/hooks/observation-handler.ts src/hooks/task-feedback.ts src/hooks/loop-handler.ts tests/hooks/observation-handler-session-error.test.ts tests/core/v2/reflection-event.test.ts tests/core/justice-plugin-reflection.test.ts
 git commit -m "feat(v2): session error and reflection event seam with plugin wiring"
 ```
 
-- [ ] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit

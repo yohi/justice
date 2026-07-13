@@ -2,7 +2,7 @@
 import type { FileReader, FileWriter, ShardId } from "../core/types";
 import type { PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
 import { fromPhysicalPath, toArchivePath, toPhysicalPath } from "../core/v2/shard-layout";
-import { createShardWriteQueue } from "./write-queue";
+import { createShardWriteQueue, type ShardWriteQueue } from "./write-queue";
 import { validateRecordSchema, validateShardSequences } from "./validation";
 
 const EVENTS_ROOT = ".justice/events";
@@ -52,7 +52,7 @@ function rotationTimestamp(now: Date): string {
  * never returned as partial/incomplete data).
  */
 export class ObservationLogStore {
-  private readonly enqueue: (path: string, record: PendingLogRecord) => Promise<number>;
+  private readonly writeQueue: ShardWriteQueue;
   private readonly shardsByPath = new Map<string, ShardId>();
   private rotationCounter = 0;
   // Per-shard creation time (oldest on-disk record timestamp), cached so the age
@@ -68,7 +68,7 @@ export class ObservationLogStore {
     private readonly fileReader: FileReader,
     private readonly writerId: string,
   ) {
-    this.enqueue = createShardWriteQueue(
+    this.writeQueue = createShardWriteQueue(
       {
         writeFile: (path, content) => this.fileWriter.writeFile(path, content),
         rename: (from, to) => this.fileWriter.rename(from, to),
@@ -116,7 +116,30 @@ export class ObservationLogStore {
     }
     const path = toPhysicalPath(shardId);
     this.shardsByPath.set(path, shardId);
-    return this.enqueue(path, record);
+    return this.writeQueue.enqueue(path, record);
+  }
+
+  /**
+   * Releases all in-memory state tied to a finished session so it cannot leak
+   * across sessions. For every cached shard path belonging to `sessionId`, the
+   * write queue's per-shard caches (`contents`/`sequences`) are dropped and this
+   * store's own per-shard metadata (`shardsByPath`, `shardCreatedAtMs`,
+   * `rotationFailuresByPath`) is cleared. Synchronous and scoped by session:
+   * paths for other sessions and normal append behavior are unaffected, and a
+   * later append to a released path re-derives correct state via
+   * `readExisting`/`computeInitialSequence`.
+   */
+  destroySession(sessionId: string): void {
+    const paths: string[] = [];
+    for (const [path, shardId] of this.shardsByPath) {
+      if (shardId.sessionId === sessionId) paths.push(path);
+    }
+    for (const path of paths) {
+      this.writeQueue.release(path);
+      this.shardsByPath.delete(path);
+      this.shardCreatedAtMs.delete(path);
+      this.rotationFailuresByPath.delete(path);
+    }
   }
 
   async readAll(): Promise<readonly PersistedLogRecord[]> {
@@ -280,12 +303,12 @@ export class ObservationLogStore {
    * preserved and `computeInitialSequence` re-reads archives on a cold start, so
    * sequence numbering stays continuous across rotation boundaries (D23/D33).
    */
-  private async rotateIfNeeded(path: string): Promise<void> {
+  private async rotateIfNeeded(path: string): Promise<boolean> {
     const shardId = this.shardsByPath.get(path);
-    if (!shardId) return;
+    if (!shardId) return false;
     const now = new Date();
     const createdMs = await this.ensureShardCreatedAtMs(path);
-    if (!(await shouldRotate(this.fileReader, path, createdMs, now))) return;
+    if (!(await shouldRotate(this.fileReader, path, createdMs, now))) return false;
 
     // FileWriter.rename creates the archive parent directory recursively (its
     // contract, also relied on by the write queue), so no explicit mkdir is needed.
@@ -299,6 +322,7 @@ export class ObservationLogStore {
       this.shardCreatedAtMs.delete(path);
       this.rotationFailuresByPath.delete(path);
       if (this.rotationFailuresByPath.size === 0) this.lastRotationError = undefined;
+      return true;
     } catch (err) {
       // The append already durably persisted the record, so stay fail-open (never
       // rethrow into the write queue). But do not swallow the failure: the
@@ -314,6 +338,7 @@ export class ObservationLogStore {
         failures,
         err,
       );
+      return false;
     }
   }
 
