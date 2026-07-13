@@ -252,4 +252,28 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
       }),
     ).toEqual([]);
   });
+
+  describe("regression: finalized monotonic latch bug (D53 fix)", () => {
+    it("text_complete(p1) finalizes -> new unfinalizedpart p2 arrives -> getFinalizedText returns undefined until p2 completes", () => {
+      const buffer = new MessageRoleBuffer();
+      // Step 1: p1 completes via text_complete -> message becomes finalized
+      buffer.update("s", textComplete("s", "m", "p1", "part one"));
+      expect(buffer.getFinalizedText("s", "m")).toBe("part one");
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined(); // role not set yet
+      
+      // Step 2: new unfinalizedpart p2 arrives via message_part_updated
+      buffer.update("s", messageUpdated("s", "m", false)); // set role to assistant
+      buffer.update("s", partUpdated("s", "m", "p2", "part two (draft)"));
+      // BUG: old code would still return "part one" because finalized was latched to true
+      // FIXED: now returns undefined because isFinalized() re-evaluates and finds p2 unfinalized
+      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
+      
+      // Step 3: p2 completes via text_complete
+      buffer.update("s", textComplete("s", "m", "p2", "part two (final)"));
+      // Now both parts are finalized and message signal is set -> full text available
+      expect(buffer.getFinalizedText("s", "m")).toBe("part one\npart two (final)");
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("part one\npart two (final)");
+    });
+  });
 });
