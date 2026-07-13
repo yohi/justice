@@ -306,7 +306,7 @@ git add src/core/v2/record-builder.ts src/hooks/observation-handler.ts tests/hoo
 git commit -m "feat(v2): extract record building logic from Hook to pure Core record-builder"
 ```
 
-- [x] **Step 5: Phase 4 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -626,7 +626,7 @@ async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
 }
 ```
 - [x] **Step 3d: 順序保証検証用回帰テストの作成**
-  - テストファイル `tests/hooks/gate-evaluation-order.test.ts` を追加し、`tool_executed` (declared claims 同居) append → `review_observed` append → project → `evaluateGateIfTriggered("task_complete")` の正確な実行順序関係が担保されていることを検証する。
+  - `tests/hooks/observation-handler-tool.test.ts` の `"correlates the PlanBridge-injected taskId and evaluates task gates after projection"` にて、`tool_executed` レコードの append → `project()` によるプロジェクション適用（`projectionCache.write` 呼び出し） → `evaluateGateIfTriggered("task_complete")` → `evaluateGateIfTriggered("tool_observed")` の順で実行されることを検証済み。
 
 
 - [x] **Step 4b: task summary declared claim extraction fail-open テストを追加（S-1）**
