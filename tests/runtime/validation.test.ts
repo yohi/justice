@@ -690,6 +690,14 @@ describe("validateRecordSchema", () => {
         kind: "session_error",
       }),
     ).toThrow("Invalid session_error record");
+    
+    // Verify it's specifically a TypeError
+    expect(() =>
+      validateRecordSchema({
+        ...validBase("observation"),
+        kind: "session_error",
+      }),
+    ).toThrow(TypeError);
   });
 
   it("rejects a reflection record without reflection details", () => {

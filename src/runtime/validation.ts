@@ -138,7 +138,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
   } else if (kind === "session_error") {
     if (typeof r.errorKind !== "string" || typeof r.message !== "string") {
-      throw new Error("Invalid session_error record");
+      throw new TypeError("Invalid session_error record");
     }
   } else if (kind === "reflection") {
     if (
