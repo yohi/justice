@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml";
 import * as z from "zod";
 import { GateRuleSchema, type GateRule } from "./gate-definition";
 
-const GateConfigSchema = z.object({
+const GateConfigSchema = z.strictObject({
   schemaVersion: z.literal(1),
   authority: z.literal("human_approved"),
   // authorship は現時点では常に null 固定（authority: "human_approved" と対をなす placeholder）。
