@@ -683,20 +683,42 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid skill_invoked record");
   });
 
-  it("accepts session_error record stub", () => {
+  it("rejects a session_error record without error details", () => {
     expect(() =>
       validateRecordSchema({
         ...validBase("observation"),
         kind: "session_error",
       }),
-    ).not.toThrow();
+    ).toThrow("Invalid session_error record");
   });
 
-  it("accepts reflection record stub", () => {
+  it("rejects a reflection record without reflection details", () => {
     expect(() =>
       validateRecordSchema({
         ...validBase("observation"),
         kind: "reflection",
+      }),
+    ).toThrow("Invalid reflection record");
+  });
+
+  it("accepts complete session_error and workspace-relative reflection records", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validBase("observation"),
+        kind: "session_error",
+        errorKind: "provider",
+        message: "request failed",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateRecordSchema({
+        ...validBase("observation"),
+        kind: "reflection",
+        reflection: {
+          trigger: "task_succeeded",
+          planRef: { path: "docs/plan.md", taskId: "task-1" },
+          intent: "check_complete",
+        },
       }),
     ).not.toThrow();
   });

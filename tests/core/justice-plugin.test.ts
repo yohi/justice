@@ -30,6 +30,17 @@ describe("JusticePlugin", () => {
     plugin = new JusticePlugin(reader, writer);
   });
 
+  it("refreshes the projection cache during initialization", async () => {
+    const observationHandler = plugin.getObservationHandler() as unknown as {
+      initializeProjectionCache: () => Promise<void>;
+    };
+    const refresh = vi.spyOn(observationHandler, "initializeProjectionCache").mockResolvedValue();
+
+    await plugin.initialize();
+
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };

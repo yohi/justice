@@ -137,13 +137,25 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       }
     }
   } else if (kind === "session_error") {
-    // SessionErrorRecord is currently a stub (only `kind`, refined in Task 4.4).
-    // No additional fields exist on the type yet, so none are validated here —
-    // update this branch in lockstep when the type is finalized.
+    if (typeof r.errorKind !== "string" || typeof r.message !== "string") {
+      throw new Error("Invalid session_error record");
+    }
   } else if (kind === "reflection") {
-    // ReflectionRecord is currently a stub (only `kind`, refined in Task 4.4).
-    // No additional fields exist on the type yet, so none are validated here —
-    // update this branch in lockstep when the type is finalized.
+    if (
+      !isObject(r.reflection) ||
+      !isOneOf(r.reflection.trigger, ["task_succeeded", "task_error"]) ||
+      !isObject(r.reflection.planRef) ||
+      typeof r.reflection.planRef.path !== "string" ||
+      r.reflection.planRef.path.length === 0 ||
+      r.reflection.planRef.path.startsWith("/") ||
+      r.reflection.planRef.path.startsWith("\\") ||
+      /^[A-Za-z]:/u.test(r.reflection.planRef.path) ||
+      typeof r.reflection.planRef.taskId !== "string" ||
+      !isOneOf(r.reflection.intent, ["check_complete", "append_error_note"]) ||
+      (r.reflection.note !== undefined && typeof r.reflection.note !== "string")
+    ) {
+      throw new Error("Invalid reflection record");
+    }
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);
   }

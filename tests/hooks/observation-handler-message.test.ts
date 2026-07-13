@@ -6,6 +6,39 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMemFs } from "../helpers/mock-file-system";
 
 describe("ObservationHandler message observation", () => {
+  it("persists text_complete after the assistant role is known without a message finalization signal", async () => {
+    const { files, reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const handler = new ObservationHandler({
+      logStore: new ObservationLogStore(writer, reader, "w-handler"),
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: false,
+    });
+    await handler.handleMessage("session-1", {
+      kind: "text_complete",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
+    expect(files.get(path)).toContain('"kind":"message"');
+  });
+
   it("persists finalized assistant claims only after the text-complete payload", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();

@@ -315,6 +315,7 @@ export class JusticePlugin {
   async initialize(): Promise<void> {
     try {
       await this.tieredWisdomStore.loadAll();
+      await this.observationHandler.initializeProjectionCache();
       try {
         await this.options.notifier?.notify({
           level: "info",

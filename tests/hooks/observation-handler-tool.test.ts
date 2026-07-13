@@ -300,6 +300,44 @@ describe("ObservationHandler tool observation", () => {
     expect(projectionCache.write).toHaveBeenCalledOnce();
   });
 
+  it("warns before rebuilding a projection cache with mismatched shard sequences", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const emptyState = project([], "2026-01-01T00:00:00.000Z");
+    const projectionCache = {
+      read: vi.fn(async () => ({
+        ...emptyState,
+        integrity: {
+          ...emptyState.integrity,
+          maxSequenceByShard: new Map([["missing-shard", 1]]),
+        },
+      })),
+      write: vi.fn(async () => undefined),
+    };
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-cache-mismatch",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache mismatch_seq, rebuilding",
+      expect.any(Error),
+    );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
   it("avoids readAll/project when projectionCache is not configured", async () => {
     const { reader, writer } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-handler");

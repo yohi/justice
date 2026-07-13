@@ -103,12 +103,11 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
     });
 
-    it("getFinalizedText(partId) returns that part's text once completed via text_complete", () => {
+    it("text_complete finalizes a complete message", () => {
       const buffer = new MessageRoleBuffer();
       buffer.update("s", textComplete("s", "m", "p1", "chunk"));
       expect(buffer.getFinalizedText("s", "m", "p1")).toBe("chunk");
-      // whole-message text still unavailable: the message itself is not finalized
-      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
+      expect(buffer.getFinalizedText("s", "m")).toBe("chunk");
     });
 
     it("getFinalizedAssistantText returns undefined when role is not assistant", () => {

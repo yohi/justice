@@ -45,6 +45,7 @@ export class MessageRoleBuffer {
         break;
       case "text_complete":
         entry.parts.set(payload.partID, { text: payload.text, finalized: true });
+        entry.messageSignaled = true;
         break;
       case "message_updated":
         entry.role = payload.role;
@@ -71,8 +72,7 @@ export class MessageRoleBuffer {
     }
     const part = entry.parts.get(partId);
     if (part) part.finalized = true;
-    // Two-signal completion (brief Step 2): completing the last part AFTER the message
-    // signal has arrived promotes readiness; parts finalizing alone never do.
+    // Completing the last part after either completion signal promotes readiness.
     this.tryFinalize(entry);
     entry.lastUpdatedAt = this.now();
   }

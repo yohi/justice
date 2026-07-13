@@ -97,6 +97,14 @@ export class ObservationHandler {
     return PROCEED;
   }
 
+  async initializeProjectionCache(): Promise<void> {
+    try {
+      await this.refreshProjectionCache();
+    } catch (error) {
+      this.options.logger?.warn("observation-handler projection cache initialization failed", error);
+    }
+  }
+
   async emitReflectionEvent(input: {
     readonly trigger: "task_succeeded" | "task_error";
     readonly planRef: { readonly path: string; readonly taskId: string };
@@ -335,7 +343,16 @@ export class ObservationHandler {
     if (this.options.projectionCache === undefined) return;
     const events = await this.options.logStore.readAll();
     const cached = await this.options.projectionCache.read?.();
-    if (cached !== undefined && validateProjectionCacheAgainstEvents(cached, events).valid) return;
+    if (cached !== undefined) {
+      const validation = validateProjectionCacheAgainstEvents(cached, events);
+      if (validation.valid) return;
+      if (validation.reason !== "stale_append") {
+        this.options.logger?.warn(
+          `observation-handler projection cache ${validation.reason}, rebuilding`,
+          new Error(validation.reason),
+        );
+      }
+    }
     try {
       await this.options.projectionCache.write(project(events, new Date().toISOString()));
     } catch (error) {
