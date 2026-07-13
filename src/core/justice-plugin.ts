@@ -27,6 +27,7 @@ import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
+import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
@@ -295,6 +296,7 @@ export class JusticePlugin {
       writerId,
       workspaceRoot: options.workspaceRoot,
       logger: options.logger,
+      gateLoader: new FileGateLoader(fileReader),
     });
 
     // Ensure session cleanup propagates from loopHandler to all stateful handlers

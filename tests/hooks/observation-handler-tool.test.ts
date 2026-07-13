@@ -42,7 +42,11 @@ describe("ObservationHandler tool observation", () => {
     });
     const persisted = files.get(path);
     expect(persisted).toBeDefined();
-    expect(JSON.parse(persisted ?? "")).toMatchObject({
+    // The live plugin now also appends a gate DecisionRecord after the task
+    // completes (DEFAULT_GATES warn on missing evidence), so the shard file is
+    // multi-line JSONL. The tool_executed observation is the first record.
+    const firstRecord = (persisted ?? "").split("\n")[0] ?? "";
+    expect(JSON.parse(firstRecord)).toMatchObject({
       kind: "tool_executed",
       taskId: "task-1",
       callId: "call-plugin",

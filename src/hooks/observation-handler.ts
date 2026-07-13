@@ -25,6 +25,11 @@ import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore } from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
+import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
+import type { GateContext } from "../core/v2/gate-context";
+import { collectReviewScopes } from "../core/v2/review-scope";
+import type { PendingDecisionRecord } from "../core/v2/decision-model";
+import type { GateLoader } from "../runtime/gate-loader";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -62,6 +67,7 @@ export class ObservationHandler {
       readonly writerId: string;
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
+      readonly gateLoader?: GateLoader;
     },
   ) {}
 
@@ -388,12 +394,65 @@ export class ObservationHandler {
   ): Promise<void> {}
 
   private async evaluateGateIfTriggered(
-    _trigger: "task_complete" | "tool_observed",
-    _taskId: string | undefined,
+    trigger: "task_complete" | "tool_observed",
+    taskId: string | undefined,
     _callId: string | undefined,
-    _agentId: ObservationAgentId,
-    _sessionId: string,
+    agentId: ObservationAgentId,
+    sessionId: string,
   ): Promise<HookResponse> {
-    return PROCEED;
+    try {
+      const gateLoader = this.options.gateLoader;
+      // Fail-open: gate evaluation is an optional dependency.
+      if (gateLoader === undefined) return PROCEED;
+      // No active task to gate on. Return before any I/O so tool calls that are
+      // not part of a task stay cheap (mirrors evaluate()'s own SKIP-on-no-taskId).
+      if (taskId === undefined) return PROCEED;
+
+      const events = await this.options.logStore.readAll();
+      const state = project(events, new Date().toISOString());
+      const gates = await gateLoader.load();
+      const ctx: GateContext = {
+        trigger,
+        taskId,
+        agentId,
+        sessionId,
+        reviewScope: collectReviewScopes(state, taskId),
+        reviewSummary: state.reviewSummary,
+      };
+      const evidence = state.tasks.get(taskId)?.evidence ?? [];
+      const verdict = evaluate(gates, evidence, ctx);
+      if (verdict.verdict === "SKIP") return PROCEED;
+
+      const shardId: ShardId = { agentId, sessionId, writerId: this.options.writerId };
+      const decision: PendingDecisionRecord = {
+        schemaVersion: 1 as const,
+        timestamp: new Date().toISOString(),
+        agentId,
+        sessionId,
+        writerId: this.options.writerId,
+        taskId,
+        recordType: "decision" as const,
+        ...verdict,
+      };
+      await this.options.logStore.append(shardId, decision);
+      // A DecisionRecord never feeds back into gate evidence, so an async cache
+      // refresh (same as handleSessionError/emitReflectionEvent) is sufficient;
+      // no synchronous re-projection is required for correctness here.
+      this.scheduleProjectionRefresh();
+
+      if (verdict.verdict === "PASS") return PROCEED;
+
+      return {
+        action: "inject",
+        injectedContext: formatGateAdvisoryMessage(verdict),
+        variant: "gate_advisory",
+      };
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: gate evaluation failed, degrading to PROCEED",
+        error,
+      );
+      return PROCEED;
+    }
   }
 }
