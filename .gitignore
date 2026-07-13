@@ -16,3 +16,8 @@ Thumbs.db
 .worktrees/
 .omo/
 .claude/
+
+# .justice/ 配下の runtime 生成物（wisdom.json、観測ログ等）は追跡しない。
+# ただし人間承認済みの正本 gate 設定 .justice/gate.yaml は追跡可能にする（ISS-007）。
+.justice/*
+!.justice/gate.yaml
