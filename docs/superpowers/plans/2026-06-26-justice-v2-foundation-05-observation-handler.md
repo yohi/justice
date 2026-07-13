@@ -666,13 +666,13 @@ it("returns PROCEED when task summary extraction throws due to store append erro
 - [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
 ```
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts tests/hooks/gate-evaluation-order.test.ts
+git add src/core/v2/observation-model.ts src/core/v2/skill-invoked-detector.ts src/core/v2/task-summary-claim-extractor.ts src/hooks/observation-handler.ts tests/core/v2/skill-invoked-detector.test.ts tests/core/v2/task-summary-claim-extractor.test.ts tests/hooks/observation-handler-skill-task.test.ts
 git commit -m "feat(v2): skill invoked detection and task summary declared claims"
 ```
 
