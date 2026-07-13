@@ -5,6 +5,8 @@ import { GateRuleSchema, type GateRule } from "./gate-definition";
 const GateConfigSchema = z.object({
   schemaVersion: z.literal(1),
   authority: z.literal("human_approved"),
+  // authorship は現時点では常に null 固定（authority: "human_approved" と対をなす placeholder）。
+  // 将来的に gate 定義の作成者を文字列で記録する要件が生じた場合に string を許容する拡張を想定している。
   authorship: z.null().optional(),
   gates: z.array(GateRuleSchema),
 });
