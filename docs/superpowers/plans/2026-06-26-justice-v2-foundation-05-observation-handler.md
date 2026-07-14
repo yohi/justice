@@ -914,6 +914,11 @@ git add src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/
 git commit -m "feat(v2): session error and reflection event seam with plugin wiring"
 ```
 
+- [x] **Step 5b（2026-07-15 追加・実装後の訂正）: `session.error` 発生時に `MessageRoleBuffer` を即時GCする経路を追加配線（D65）**
+  - D65 は「`session.error`/セッション終了で即時GC」を要求するが、`handleSessionError()` は `session_error` レコードの記録のみを行い `MessageRoleBuffer` のエントリを破棄していなかったため、エラー発生セッションのバッファが TTL/LRU 失効まで残存する欠落があった。
+  - `handleSessionError()` の記録処理完了後に、当該 `sessionId` の `MessageRoleBuffer` エントリのみを破棄するよう修正（`ObservationLogStore.destroySession()` は session.error がセッション終了を意味するとは限らないため呼び出さない）。
+  - 参照コミット: `48210b1`（`fix(observation-handler): session.error発生時にMessageRoleBufferを即時GCする`）。`tests/hooks/observation-handler-session-error.test.ts` にテスト追加。
+
 - [x] **Step 6: Phase 4 Base に向けた Draft PR を作成する**
 
 ```bash

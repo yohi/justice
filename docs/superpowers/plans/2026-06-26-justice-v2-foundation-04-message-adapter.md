@@ -135,6 +135,11 @@ export class MessageRoleBuffer {
 - `tests/runtime/message-role-buffer.test.ts` にテストケースを追加し、同一 `(sessionId, messageId, partId)` でストリーミング中に一度「tests pass」と判定された後、同じ partId の更新テキストにより「tests fail」へと修正された場合、あるいはその逆において、最終確定（finalize/finish）時に古い claim が残らず最新の確定状態に基づく claim に正しく置換されること（重複排除）を担保する。
 - さらに、role が未確定 / user の場合、または claims が空の場合における `extractAssistantClaims` は空配列を返し、assistant かつ finalized の場合の `getFinalizedAssistantText` は claims が空でも本文を返すことを明示的に検証する。
 
+- [x] **Step 2.6（2026-07-15 追加・実装後の訂正）: `message.updated`（finish確定）単独でのpart finalize化を修正（D67）**
+  - 従来は `text_complete` でのみ part が finalized 化されるため、`message_part_updated` のみでストリーミングされ最後に `message.updated(finalized:true)` だけが届くケースでは `isFinalized()` が永久に `false` となり declared claim 抽出が発火しない欠落があった。
+  - `MessageRoleBuffer.update()` の `message_updated` ケースで `finalized===true` の場合に現在バッファ済みの全 part をソフトに finalize 化するよう修正（`forcedFinalized` は使用せず、後続の part 更新での再確定=dedup 挙動は維持）。
+  - 参照コミット: `eb7345d`（`fix(message-role-buffer): message.updatedのfinish確定でpartをfinalizeする`）。`tests/runtime/message-role-buffer.test.ts` / `tests/hooks/observation-handler-message.test.ts` を更新。
+
 - [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
@@ -529,15 +534,22 @@ describe("D64 - PostToolUse merge rules", () => {
     });
   });
 
-  it("should throw when modifiedPayload conflicts occur", () => {
+  it("logs a warning and keeps the first response when modifiedPayload conflicts occur (2026-07-15訂正: throwしない)", () => {
+    const warnings: string[] = [];
     const responses = [
       { action: "inject" as const, injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
       { action: "inject" as const, injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } }
     ];
-    expect(() => mergePreToolUseResponses(responses[0], responses[1])).toThrow(/modifiedPayload/);
+    const result = mergePreToolUseResponses(responses[0], responses[1], (message) => warnings.push(message));
+    expect(result.modifiedPayload).toEqual({ toolName: "task", modified: 1 });
+    expect(warnings).toEqual(["Conflict detected in pre-tool-use modifiedPayload; using the first response"]);
   });
 });
 ```
+
+- [x] **Step 2c（2026-07-15 追加・実装後の訂正）: `modifiedPayload` 衝突時の振る舞いを「先頭優先＋警告ログ」に変更（throwしない）**
+  - 上記 Step 2b 当初案は衝突時に例外 throw する想定だったが、INV-006（Fail-Open境界）の原則上、mergeユーティリティ自体が例外を投げると呼び出し元の hook flow を止めてしまうおそれがあるため、`onConflict` コールバックで警告ログを出し先頭のレスポンスを優先して処理を続行する実装に変更した。
+  - 参照コミット: `5dce061`（`fix(hook-response-merger): modifiedPayload競合時にthrowせず先頭優先+警告にする`）。上記テスト例を実装済みの振る舞いに合わせて修正済み。
 
 - [x] **Step 3: テスト実行（Devcontainer 内）**
 
