@@ -23,7 +23,7 @@ export const GateRuleSchema = z.strictObject({
   id: z.string().trim().min(1),
   description: z.string().optional(),
   gateType: z.literal("task"),
-  trigger: z.object({
+  trigger: z.strictObject({
     on: z.enum(["task_complete", "tool_observed"]),
   }),
   check: GateCheckSchema,
