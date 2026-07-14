@@ -20,7 +20,7 @@ jobs:
           release-type: node
           target-branch: master
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
