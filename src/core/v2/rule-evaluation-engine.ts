@@ -91,7 +91,12 @@ function evaluateRule(
         if (authoritative && outcome === check.requireOutcome) {
           hasAuthoritativePass = true;
         }
-        if (authoritative && outcome !== check.requireOutcome) {
+        if (
+          authoritative &&
+          outcome !== undefined &&
+          outcome !== "unknown" &&
+          outcome !== check.requireOutcome
+        ) {
           violationDetected = true;
           ruleVerdict = worstOf([ruleVerdict, mapVerdict(gate.onViolation)]);
           invalidRefs.push(item.ref);
@@ -113,7 +118,7 @@ function evaluateRule(
       return {
         ruleId: gate.id,
         verdict: ruleVerdict,
-        reason: `Some evidence did not meet required outcome '${check.requireOutcome}' or was declared only.`,
+        reason: `Some authoritative evidence did not meet required outcome '${check.requireOutcome}'.`,
         evidenceRefs: invalidRefs,
       };
     }
@@ -122,7 +127,7 @@ function evaluateRule(
       if (ctx.reviewScope.length === 0) {
         return {
           ruleId: gate.id,
-          verdict: mapVerdict(gate.onMissingEvidence),
+          verdict: mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence),
           reason: "Review scope is empty. No review observed yet.",
           evidenceRefs: [],
         };
@@ -145,7 +150,7 @@ function evaluateRule(
       if (!observed) {
         return {
           ruleId: gate.id,
-          verdict: mapVerdict(gate.onMissingEvidence),
+          verdict: mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence),
           reason: `No review observations found for scopes: ${ctx.reviewScope.join(", ")}.`,
           evidenceRefs: [],
         };
