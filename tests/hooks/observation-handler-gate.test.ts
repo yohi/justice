@@ -109,8 +109,27 @@ describe("ObservationHandler gate evaluation", () => {
   });
 
   it("appends a PASS DecisionRecord and returns PROCEED when all gates pass", async () => {
-    const { store, appended } = makeLogStore();
-    const gateLoader = makeGateLoader([reviewGate("all-clear", "pass", "tool_observed")]);
+    // Exercises a genuine PASS: the review scope for "task-1" has actually
+    // been observed (a review_observed record with zero open items), so the
+    // gate passes on its own merits. Deliberately uses onMissingEvidence:
+    // "fail" to prove this isn't the missing-evidence fallback path, which
+    // caps at WARN even for "pass" (see rule-evaluation-engine.test.ts:
+    // "caps passing onMissingEvidence at WARN when reviewScope is empty").
+    const reviewObserved: PersistedLogRecord = {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      agentId: "atlas",
+      sessionId: "s-1",
+      writerId: "w-test",
+      taskId: "task-1",
+      recordType: "observation",
+      sequence: 1,
+      kind: "review_observed",
+      reviewScope: "task-1",
+      items: [],
+    };
+    const { store, appended } = makeLogStore([reviewObserved]);
+    const gateLoader = makeGateLoader([reviewGate("all-clear", "fail", "tool_observed")]);
     const handler = new ObservationHandler({
       logStore: store,
       sessionStateProvider,
