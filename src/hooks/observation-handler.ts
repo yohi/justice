@@ -278,22 +278,26 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
+      let cachedState: ProjectedState | undefined;
       try {
-        await this.refreshProjectionCache();
+        cachedState = await this.refreshProjectionCache();
       } catch (error) {
         this.options.logger?.warn("observation-handler: projection cache refresh failed during PostToolUse, continuing gate evaluation", error);
       }
 
       let response = PROCEED;
       // Both gate evaluations below fold the same not-yet-decision-appended
-      // event log into a ProjectedState. Memoize the projection here so a
-      // `task` tool completion (which triggers both task_complete and
-      // tool_observed) performs a single readAll()+project() pass instead of
-      // one per evaluation. Sharing the pre-decision snapshot across both
-      // calls is safe because a DecisionRecord never feeds back into gate
-      // evidence/reviewScope (see the DecisionRecord note inside
-      // evaluateGateIfTriggered).
-      let gateStatePromise: Promise<ProjectedState> | undefined;
+      // event log into a ProjectedState. When a projectionCache is configured,
+      // refreshProjectionCache() above already performed the readAll()+project()
+      // pass (or validated the existing cache), so its result seeds
+      // gateStatePromise directly. getGateState() only falls back to a fresh
+      // readProjectedState() (a second readAll()+project() pass) when no cache
+      // is configured or the refresh above failed. Sharing the pre-decision
+      // snapshot across both calls is safe because a DecisionRecord never
+      // feeds back into gate evidence/reviewScope (see the DecisionRecord note
+      // inside evaluateGateIfTriggered).
+      let gateStatePromise: Promise<ProjectedState> | undefined =
+        cachedState === undefined ? undefined : Promise.resolve(cachedState);
       const getGateState = (): Promise<ProjectedState> => {
         gateStatePromise ??= this.readProjectedState();
         return gateStatePromise;
@@ -363,19 +367,19 @@ export class ObservationHandler {
     if (this.options.projectionCache === undefined) return;
     this.projectionRefresh = this.projectionRefresh
       .catch(() => {})
-      .then(() => this.refreshProjectionCache())
+      .then(async () => { await this.refreshProjectionCache(); })
       .catch((error) => {
         this.options.logger?.warn("observation-handler projection cache refresh failed", error);
       });
   }
 
-  private async refreshProjectionCache(): Promise<void> {
-    if (this.options.projectionCache === undefined) return;
+  private async refreshProjectionCache(): Promise<ProjectedState | undefined> {
+    if (this.options.projectionCache === undefined) return undefined;
     const events = await this.options.logStore.readAll();
     const cached = await this.options.projectionCache.read?.();
     if (cached !== undefined) {
       const validation = validateProjectionCacheAgainstEvents(cached, events);
-      if (validation.valid) return;
+      if (validation.valid) return cached;
       if (validation.reason !== "stale_append") {
         this.options.logger?.warn(
           `observation-handler projection cache ${validation.reason}, rebuilding`,
@@ -383,11 +387,13 @@ export class ObservationHandler {
         );
       }
     }
+    const freshState = project(events, new Date().toISOString());
     try {
-      await this.options.projectionCache.write(project(events, new Date().toISOString()));
+      await this.options.projectionCache.write(freshState);
     } catch (error) {
       this.options.logger?.warn("observation-handler projection cache write failed", error);
     }
+    return freshState;
   }
 
   /** Folds the full event log into a fresh `ProjectedState` (no caching). */

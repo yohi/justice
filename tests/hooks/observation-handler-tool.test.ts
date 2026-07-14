@@ -545,4 +545,46 @@ describe("ObservationHandler tool observation", () => {
     // Response should be PROCEED (not degraded to outer catch)
     expect(response).toEqual({ action: "proceed" });
   });
+
+  it("performs a single readAll() when refreshing the projection cache and evaluating both task_complete and tool_observed gates", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const readAllSpy = vi.spyOn(logStore, "readAll");
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
+      writerId: "w-handler",
+    });
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-single-readall",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-single-readall",
+      payload: { toolName: "task", toolResult: "done", error: false },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    // A `task` completion triggers both task_complete and tool_observed gate
+    // evaluations. refreshProjectionCache() folds the event log once and its
+    // ProjectedState seeds gateStatePromise for both, so readAll() must be
+    // called exactly once for the whole append-and-gate path (regression
+    // guard for the refreshProjectionCache()/getGateState() double read).
+    expect(readAllSpy).toHaveBeenCalledTimes(1);
+  });
 });
