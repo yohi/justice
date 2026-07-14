@@ -3,6 +3,15 @@ import { DEFAULT_GATES } from "../core/v2/default-gates";
 import { parseGateYaml } from "../core/v2/gate-yaml-parser";
 import type { GateRule } from "../core/v2/gate-definition";
 
+/**
+ * `loadGates`/`FileGateLoader` 用のロガー抽象。未指定時は `console` にフォールバックする
+ * （`state-projection-cache.ts` の `CacheLogger` の先例に倣う）。これにより、呼び出し側が
+ * `JusticePluginOptions.logger` 等の集約ロガーを注入できるようになる。
+ */
+export interface GateLoaderLogger {
+  warn(message: string, ...args: unknown[]): void;
+}
+
 /** Node の `ENOENT`（ファイル不存在）エラーかどうかを判定する。 */
 function isEnoentError(err: unknown): boolean {
   return (
@@ -58,13 +67,14 @@ export function mergeWithDefaults(customGates: readonly GateRule[]): readonly Ga
 export async function loadGates(
   fileReader: FileReader,
   path = ".justice/gate.yaml",
+  logger: GateLoaderLogger = console,
 ): Promise<readonly GateRule[]> {
   let content: string | null = null;
   try {
     content = await fileReader.readFile(path);
   } catch (err: unknown) {
     if (!isEnoentError(err)) {
-      console.warn("Failed to read gates configuration from %s:", path, err);
+      logger.warn("Failed to read gates configuration from %s:", path, err);
     }
   }
   if (content === null) {
@@ -73,7 +83,7 @@ export async function loadGates(
   try {
     return mergeWithDefaults(parseGateYaml(content));
   } catch (err: unknown) {
-    console.warn(
+    logger.warn(
       "Failed to parse gates configuration from %s, falling back to defaults:",
       path,
       err,
@@ -96,9 +106,10 @@ export class FileGateLoader implements GateLoader {
   constructor(
     private readonly fileReader: FileReader,
     private readonly path = ".justice/gate.yaml",
+    private readonly logger: GateLoaderLogger = console,
   ) {}
 
   async load(): Promise<readonly GateRule[]> {
-    return loadGates(this.fileReader, this.path);
+    return loadGates(this.fileReader, this.path, this.logger);
   }
 }

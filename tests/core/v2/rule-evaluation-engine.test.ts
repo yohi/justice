@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { FullEvidenceRef } from "../../../src/core/types";
 import type { GateContext } from "../../../src/core/v2/gate-context";
 import type { GateCheck, GateRule } from "../../../src/core/v2/gate-definition";
-import { evaluate } from "../../../src/core/v2/rule-evaluation-engine";
+import { evaluate, formatGateAdvisoryMessage } from "../../../src/core/v2/rule-evaluation-engine";
+import type { RuleResult, Verdict } from "../../../src/core/v2/decision-model";
 import type {
   ProjectedEvidence,
   ReviewSummaryItem,
@@ -276,5 +277,67 @@ describe("review_open_items", () => {
     expect(result.verdict).toBe("FAIL");
     if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
     expect(result.ruleResults[0]?.evidenceRefs).toEqual([evidenceRef("review-scope-a-major")]);
+  });
+});
+
+describe("formatGateAdvisoryMessage", () => {
+  function rr(ruleId: string, verdict: Verdict, reason?: string): RuleResult {
+    return { ruleId, verdict, ...(reason === undefined ? {} : { reason }), evidenceRefs: [] };
+  }
+
+  it("summarizes every rule on the header line and lists only non-PASS rules as checklist items", () => {
+    const message = formatGateAdvisoryMessage({
+      verdict: "WARN",
+      ruleResults: [
+        rr("tests-pass", "PASS"),
+        rr("review-clear", "WARN", "Found 2 open review items matching minimum severity 'major'."),
+      ],
+    });
+
+    expect(message).toBe(
+      [
+        "WARN: tests-pass=PASS, review-clear=WARN",
+        "- [ ] review-clear: WARN — Found 2 open review items matching minimum severity 'major'.",
+      ].join("\n"),
+    );
+  });
+
+  it("lists a checklist line for each non-PASS rule across a mix of WARN and FAIL", () => {
+    const message = formatGateAdvisoryMessage({
+      verdict: "FAIL",
+      ruleResults: [
+        rr("tests-pass", "PASS"),
+        rr("build-missing", "WARN", "build evidence missing"),
+        rr("review-open", "FAIL", "1 critical review item open"),
+      ],
+    });
+
+    expect(message).toBe(
+      [
+        "FAIL: tests-pass=PASS, build-missing=WARN, review-open=FAIL",
+        "- [ ] build-missing: WARN — build evidence missing",
+        "- [ ] review-open: FAIL — 1 critical review item open",
+      ].join("\n"),
+    );
+  });
+
+  it("omits the reason suffix when a non-PASS rule has no reason", () => {
+    const message = formatGateAdvisoryMessage({
+      verdict: "FAIL",
+      ruleResults: [rr("no-reason", "FAIL")],
+    });
+
+    expect(message).toBe(["FAIL: no-reason=FAIL", "- [ ] no-reason: FAIL"].join("\n"));
+  });
+
+  it("emits plain PASS/WARN/FAIL text without decorative emoji (banner-layer isolation)", () => {
+    const message = formatGateAdvisoryMessage({
+      verdict: "FAIL",
+      ruleResults: [rr("gate", "FAIL", "blocked")],
+    });
+
+    expect(message).not.toMatch(
+      /[\u{2705}\u{274C}\u{1F3AF}\u{1F6A6}\u{1F6A7}\u{1F52C}\u{1F6A8}\u{1F4A1}\u{1F501}]/u,
+    );
   });
 });

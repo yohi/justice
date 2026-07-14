@@ -65,13 +65,13 @@
   - `check.type ∈ { "evidence_outcome", "evidence_present", "review_open_items" }`.
   - `parseGateYaml(yaml: string): GateRule[]`.
 
-- [ ] **Step 0: 依存パッケージ `yaml` および `zod` を追加**
+- [x] **Step 0: 依存パッケージ `yaml` および `zod` を追加**
 
 ```bash
 bun add yaml zod
 ```
 
-- [ ] **Step 1: `GateRule` 型と zod スキーマを定義**
+- [x] **Step 1: `GateRule` 型と zod スキーマを定義**
 
 ```typescript
 // src/core/v2/gate-definition.ts
@@ -110,7 +110,7 @@ export type GateCheck = z.infer<typeof GateCheckSchema>;
 export type GateRule = z.infer<typeof GateRuleSchema>;
 ```
 
-- [ ] **Step 2: YAML parser / validator を実装**
+- [x] **Step 2: YAML parser / validator を実装**
 
 ```typescript
 // src/core/v2/gate-yaml-parser.ts
@@ -133,20 +133,20 @@ export function parseGateYaml(content: string): readonly GateRule[] {
 ```
 // (注: 設計通り Zod スキーマ `GateConfigSchema.parse(parsed)` によって一貫してバリデーションと型キャストを行うため、上記のような手動の normalize / validate 関数群は実装不要です。Zod に検証と型解決を委ねるように実装してください。)
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add package.json bun.lock src/core/v2/gate-definition.ts src/core/v2/gate-yaml-parser.ts tests/core/v2/gate-definition.test.ts tests/core/v2/gate-yaml-parser.test.ts
 git commit -m "feat(v2): gate definition schema and yaml parser"
 ```
 
-- [ ] **Step 5: Phase 5 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 5 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -174,7 +174,7 @@ gt submit
   - `Verdict` with per-rule results and worst-value aggregation (FAIL > WARN > PASS).
   - `collectReviewScopes(state, taskId): readonly string[]` and `deriveReviewScope(ctx): string`.
 
-- [ ] **Step 1: `GateContext` 型を定義**
+- [x] **Step 1: `GateContext` 型を定義**
 
 ```typescript
 // src/core/v2/gate-context.ts
@@ -196,7 +196,7 @@ export type GateContext = {
 };
 ```
 
-- [ ] **Step 1b: `review-scope.ts` を作成し `collectReviewScopes` / `deriveReviewScope` を実装（§7.6）**
+- [x] **Step 1b: `review-scope.ts` を作成し `collectReviewScopes` / `deriveReviewScope` を実装（§7.6）**
 
 ```typescript
 // src/core/v2/review-scope.ts
@@ -220,7 +220,7 @@ export function deriveReviewScope(ctx: { readonly taskId?: string; readonly sess
 }
 ```
 
-- [ ] **Step 2: rule engine を実装（§7.3/D24/D68/D75/D76）**
+- [x] **Step 2: rule engine を実装（§7.3/D24/D68/D75/D76）**
 
 ```typescript
 // src/core/v2/rule-evaluation-engine.ts
@@ -383,7 +383,7 @@ function worstOf(verdicts: readonly ("PASS" | "WARN" | "FAIL")[]): "PASS" | "WAR
 }
 ```
 
-- [ ] **Step 2b: rule evaluation engine skip test（D68）を実装**
+- [x] **Step 2b: rule evaluation engine skip test（D68）を実装**
 
 ```typescript
 // tests/core/v2/rule-evaluation-engine.test.ts
@@ -394,7 +394,7 @@ it("skips task gate evaluation when taskId is undefined (no active task window)"
 });
 ```
 
-- [ ] **Step 3: provenance gating test（FF-008）を実装**
+- [x] **Step 3: provenance gating test（FF-008）を実装**
 
 
 ```typescript
@@ -404,7 +404,7 @@ it("declared evidence does not satisfy evidence_outcome", () => {
 });
 ```
 
-- [ ] **Step 3b: review_open_items gate semantics test（D76）を実装**
+- [x] **Step 3b: review_open_items gate semantics test（D76）を実装**
 
 ```typescript
 // tests/core/v2/rule-evaluation-engine.test.ts
@@ -417,20 +417,20 @@ it("evaluates review_open_items correctly with scopes and severity thresholds", 
 });
 ```
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-provenance-gating.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/v2/rule-evaluation-engine.ts src/core/v2/gate-context.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-provenance-gating.test.ts
 git commit -m "feat(v2): rule evaluation engine with provenance gating"
 ```
 
-- [ ] **Step 6: Phase 5 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 5 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -457,7 +457,7 @@ gt submit
   - `loadGates(fileReader, path): GateRule[]` with default fallback.
   - Default gates: `required-tests`, `build-green`, `review-clean` (all `onViolation: warn`, `onMissingEvidence: warn`).
 
-- [ ] **Step 1: 既定 gate を定義**
+- [x] **Step 1: 既定 gate を定義**
 
 ```typescript
 // src/core/v2/default-gates.ts
@@ -495,7 +495,7 @@ export const DEFAULT_GATES: readonly GateRule[] = [
 ];
 ```
 
-- [ ] **Step 2: gate loader を実装**
+- [x] **Step 2: gate loader を実装**
 
 ```typescript
 // src/runtime/gate-loader.ts
@@ -547,7 +547,7 @@ export class FileGateLoader implements GateLoader {
 }
 ```
 
-- [ ] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加（ISS-007）**
+- [x] **Step 3: `.gitignore` を更新し、テンプレート `templates/gate.yaml` を追加（ISS-007）**
 
 `.gitignore` に `.justice/*` を追加して配下の自動生成ファイルやログを無視しつつ、正本としての `.justice/gate.yaml` が追跡対象に含まれるよう例外設定（`!.justice/gate.yaml` および `!.justice/`）を追加。テンプレート内容：
 
@@ -581,26 +581,26 @@ gates:
     enabled: true
 ```
 
-- [ ] **Step 3b: `tests/runtime/gate-loader.test.ts` に同一 id override / 新規追加 / enabled:false 無効化のテストを追加（ISS-007）**
+- [x] **Step 3b: `tests/runtime/gate-loader.test.ts` に同一 id override / 新規追加 / enabled:false 無効化のテストを追加（ISS-007）**
   - 次のケースをカバーする Vitest テストケースを作成する：
     1. デフォルト gate のプロパティ（例: `onViolation`）が custom gate で override されること。
     2. 新規の `id` を持つ gate が追加され、`DEFAULT_GATES` にないルールとして認識されること。
     3. `enabled: false` に設定された gate が `mergeWithDefaults` の結果から排除（無効化）されること。
 
-- [ ] **Step 4: テスト実行（Devcontainer 内）**
+- [x] **Step 4: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/gate-loader.test.ts tests/core/v2/default-gates.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .gitignore templates/gate.yaml src/runtime/gate-loader.ts src/core/v2/default-gates.ts tests/runtime/gate-loader.test.ts tests/core/v2/default-gates.test.ts
 git commit -m "feat(v2): default gates and gate loader"
 ```
 
-- [ ] **Step 6: Phase 5 Base に向けた Draft PR を作成する**
+- [x] **Step 6: Phase 5 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -624,7 +624,7 @@ gt submit
 - Consumes: `ObservationLogStore`, `project`, `loadGates`, `evaluate`, `GateContext`.
 - Produces: On `task_complete` / `tool_observed`, evaluate gates and append `DecisionRecord`.
 
-- [ ] **Step 1: gate 評価トリガーを実装（§6.2）**
+- [x] **Step 1: gate 評価トリガーを実装（§6.2）**
 
 ```typescript
 // src/hooks/observation-handler.ts 内
@@ -693,7 +693,7 @@ private async evaluateGateIfTriggered(
 }
 ```
 
-- [ ] **Step 2: L0 advisory message と banner/notifier 送出を実装**
+- [x] **Step 2: L0 advisory message と banner/notifier 送出を実装**
 
 ```typescript
 function formatGateAdvisoryMessage(verdict: Verdict): string {
@@ -714,20 +714,20 @@ function formatGateAdvisoryMessage(verdict: Verdict): string {
 > **Banner contract:** AGENTS.md §2 requires `> <icon> **JUSTICE NOTIFICATION** [<title>]`, `> <message>`, and a trailing empty line. The optional checklist follows the message line and preserves the 3-line quote layout when no checklist items are present.
 > **Emoji Avoidance Rule:** `AGENTS.md` の「チャット上の絵文字重複の禁止」ルールに基づき、`formatGateAdvisoryMessage` の出力および `DEFAULT_GATES` の定義・ルール評価など、通知メッセージのテキスト本体には装飾用絵文字（✅/❌/🎯など）を含めず、`PASS` / `FAIL` / `WARN` などのプレーンテキスト表記のみを使用するように徹底すること。
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-gate.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/hooks/observation-handler.ts src/core/justice-notifier.ts src/core/v2/rule-evaluation-engine.ts tests/hooks/observation-handler-gate.test.ts
 git commit -m "feat(v2): gate trigger and decision record append"
 ```
 
-- [ ] **Step 5: Phase 5 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 5 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit

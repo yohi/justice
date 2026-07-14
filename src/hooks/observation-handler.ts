@@ -25,6 +25,11 @@ import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore } from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
+import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
+import type { GateContext } from "../core/v2/gate-context";
+import { collectReviewScopes } from "../core/v2/review-scope";
+import type { PendingDecisionRecord } from "../core/v2/decision-model";
+import type { GateLoader } from "../runtime/gate-loader";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -62,6 +67,7 @@ export class ObservationHandler {
       readonly writerId: string;
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
+      readonly gateLoader?: GateLoader;
     },
   ) {}
 
@@ -272,13 +278,30 @@ export class ObservationHandler {
         event.payload.metadata,
       );
 
+      let cachedState: ProjectedState | undefined;
       try {
-        await this.refreshProjectionCache();
+        cachedState = await this.refreshProjectionCache();
       } catch (error) {
         this.options.logger?.warn("observation-handler: projection cache refresh failed during PostToolUse, continuing gate evaluation", error);
       }
 
       let response = PROCEED;
+      // Both gate evaluations below fold the same not-yet-decision-appended
+      // event log into a ProjectedState. When a projectionCache is configured,
+      // refreshProjectionCache() above already performed the readAll()+project()
+      // pass (or validated the existing cache), so its result seeds
+      // gateStatePromise directly. getGateState() only falls back to a fresh
+      // readProjectedState() (a second readAll()+project() pass) when no cache
+      // is configured or the refresh above failed. Sharing the pre-decision
+      // snapshot across both calls is safe because a DecisionRecord never
+      // feeds back into gate evidence/reviewScope (see the DecisionRecord note
+      // inside evaluateGateIfTriggered).
+      let gateStatePromise: Promise<ProjectedState> | undefined =
+        cachedState === undefined ? undefined : Promise.resolve(cachedState);
+      const getGateState = (): Promise<ProjectedState> => {
+        gateStatePromise ??= this.readProjectedState();
+        return gateStatePromise;
+      };
       if (event.payload.toolName === "task" && taskId !== undefined) {
         response = mergePostToolUseResponses([
           response,
@@ -288,6 +311,7 @@ export class ObservationHandler {
             callId,
             agentId,
             event.sessionId,
+            getGateState,
           ),
         ]);
       }
@@ -299,6 +323,7 @@ export class ObservationHandler {
           callId,
           agentId,
           event.sessionId,
+          getGateState,
         ),
       ]);
       return response;
@@ -342,19 +367,19 @@ export class ObservationHandler {
     if (this.options.projectionCache === undefined) return;
     this.projectionRefresh = this.projectionRefresh
       .catch(() => {})
-      .then(() => this.refreshProjectionCache())
+      .then(async () => { await this.refreshProjectionCache(); })
       .catch((error) => {
         this.options.logger?.warn("observation-handler projection cache refresh failed", error);
       });
   }
 
-  private async refreshProjectionCache(): Promise<void> {
-    if (this.options.projectionCache === undefined) return;
+  private async refreshProjectionCache(): Promise<ProjectedState | undefined> {
+    if (this.options.projectionCache === undefined) return undefined;
     const events = await this.options.logStore.readAll();
     const cached = await this.options.projectionCache.read?.();
     if (cached !== undefined) {
       const validation = validateProjectionCacheAgainstEvents(cached, events);
-      if (validation.valid) return;
+      if (validation.valid) return cached;
       if (validation.reason !== "stale_append") {
         this.options.logger?.warn(
           `observation-handler projection cache ${validation.reason}, rebuilding`,
@@ -362,11 +387,19 @@ export class ObservationHandler {
         );
       }
     }
+    const freshState = project(events, new Date().toISOString());
     try {
-      await this.options.projectionCache.write(project(events, new Date().toISOString()));
+      await this.options.projectionCache.write(freshState);
     } catch (error) {
       this.options.logger?.warn("observation-handler projection cache write failed", error);
     }
+    return freshState;
+  }
+
+  /** Folds the full event log into a fresh `ProjectedState` (no caching). */
+  private async readProjectedState(): Promise<ProjectedState> {
+    const events = await this.options.logStore.readAll();
+    return project(events, new Date().toISOString());
   }
 
   private cleanupMessageBuffer(): void {
@@ -388,12 +421,65 @@ export class ObservationHandler {
   ): Promise<void> {}
 
   private async evaluateGateIfTriggered(
-    _trigger: "task_complete" | "tool_observed",
-    _taskId: string | undefined,
+    trigger: "task_complete" | "tool_observed",
+    taskId: string | undefined,
     _callId: string | undefined,
-    _agentId: ObservationAgentId,
-    _sessionId: string,
+    agentId: ObservationAgentId,
+    sessionId: string,
+    getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
   ): Promise<HookResponse> {
-    return PROCEED;
+    try {
+      const gateLoader = this.options.gateLoader;
+      // Fail-open: gate evaluation is an optional dependency.
+      if (gateLoader === undefined) return PROCEED;
+      // No active task to gate on. Return before any I/O so tool calls that are
+      // not part of a task stay cheap (mirrors evaluate()'s own SKIP-on-no-taskId).
+      if (taskId === undefined) return PROCEED;
+
+      const state = await getState();
+      const gates = await gateLoader.load();
+      const ctx: GateContext = {
+        trigger,
+        taskId,
+        agentId,
+        sessionId,
+        reviewScope: collectReviewScopes(state, taskId),
+        reviewSummary: state.reviewSummary,
+      };
+      const evidence = state.tasks.get(taskId)?.evidence ?? [];
+      const verdict = evaluate(gates, evidence, ctx);
+      if (verdict.verdict === "SKIP") return PROCEED;
+
+      const shardId: ShardId = { agentId, sessionId, writerId: this.options.writerId };
+      const decision: PendingDecisionRecord = {
+        schemaVersion: 1 as const,
+        timestamp: new Date().toISOString(),
+        agentId,
+        sessionId,
+        writerId: this.options.writerId,
+        taskId,
+        recordType: "decision" as const,
+        ...verdict,
+      };
+      await this.options.logStore.append(shardId, decision);
+      // A DecisionRecord never feeds back into gate evidence, so an async cache
+      // refresh (same as handleSessionError/emitReflectionEvent) is sufficient;
+      // no synchronous re-projection is required for correctness here.
+      this.scheduleProjectionRefresh();
+
+      if (verdict.verdict === "PASS") return PROCEED;
+
+      return {
+        action: "inject",
+        injectedContext: formatGateAdvisoryMessage(verdict),
+        variant: "gate_advisory",
+      };
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: gate evaluation failed, degrading to PROCEED",
+        error,
+      );
+      return PROCEED;
+    }
   }
 }

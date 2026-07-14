@@ -254,3 +254,28 @@ function unknownCheckResult(ruleId: string, _check: never): RuleResult {
 function assertNever(value: never): never {
   throw new TypeError(`Unexpected discriminant: ${String(value)}`);
 }
+
+/**
+ * Builds the L0 advisory body for a non-PASS gate verdict (§6.2 Step 2).
+ *
+ * Pure and I/O-free: the first line summarizes every rule (`ruleId=verdict`),
+ * then each non-PASS rule becomes a checklist item. Emits plain PASS/WARN/FAIL
+ * text only — decorative emoji live exclusively in the banner layer
+ * (`formatBanner`/`iconFor`) per AGENTS.md, so they are never duplicated here.
+ */
+export function formatGateAdvisoryMessage(
+  verdict: Pick<DecisionPayload, "verdict" | "ruleResults">,
+): string {
+  const lines: string[] = [
+    `${verdict.verdict}: ${verdict.ruleResults
+      .map((result) => `${result.ruleId}=${result.verdict}`)
+      .join(", ")}`,
+  ];
+  for (const result of verdict.ruleResults) {
+    if (result.verdict !== "PASS") {
+      const reasonSuffix = result.reason ? ` — ${result.reason}` : "";
+      lines.push(`- [ ] ${result.ruleId}: ${result.verdict}${reasonSuffix}`);
+    }
+  }
+  return lines.join("\n");
+}
