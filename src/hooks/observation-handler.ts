@@ -285,6 +285,19 @@ export class ObservationHandler {
       }
 
       let response = PROCEED;
+      // Both gate evaluations below fold the same not-yet-decision-appended
+      // event log into a ProjectedState. Memoize the projection here so a
+      // `task` tool completion (which triggers both task_complete and
+      // tool_observed) performs a single readAll()+project() pass instead of
+      // one per evaluation. Sharing the pre-decision snapshot across both
+      // calls is safe because a DecisionRecord never feeds back into gate
+      // evidence/reviewScope (see the DecisionRecord note inside
+      // evaluateGateIfTriggered).
+      let gateStatePromise: Promise<ProjectedState> | undefined;
+      const getGateState = (): Promise<ProjectedState> => {
+        gateStatePromise ??= this.readProjectedState();
+        return gateStatePromise;
+      };
       if (event.payload.toolName === "task" && taskId !== undefined) {
         response = mergePostToolUseResponses([
           response,
@@ -294,6 +307,7 @@ export class ObservationHandler {
             callId,
             agentId,
             event.sessionId,
+            getGateState,
           ),
         ]);
       }
@@ -305,6 +319,7 @@ export class ObservationHandler {
           callId,
           agentId,
           event.sessionId,
+          getGateState,
         ),
       ]);
       return response;
@@ -375,6 +390,12 @@ export class ObservationHandler {
     }
   }
 
+  /** Folds the full event log into a fresh `ProjectedState` (no caching). */
+  private async readProjectedState(): Promise<ProjectedState> {
+    const events = await this.options.logStore.readAll();
+    return project(events, new Date().toISOString());
+  }
+
   private cleanupMessageBuffer(): void {
     try {
       this.messageRoleBuffer.gc(MESSAGE_ROLE_BUFFER_MAX_AGE_MS, MESSAGE_ROLE_BUFFER_MAX_ENTRIES);
@@ -399,6 +420,7 @@ export class ObservationHandler {
     _callId: string | undefined,
     agentId: ObservationAgentId,
     sessionId: string,
+    getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
   ): Promise<HookResponse> {
     try {
       const gateLoader = this.options.gateLoader;
@@ -408,8 +430,7 @@ export class ObservationHandler {
       // not part of a task stay cheap (mirrors evaluate()'s own SKIP-on-no-taskId).
       if (taskId === undefined) return PROCEED;
 
-      const events = await this.options.logStore.readAll();
-      const state = project(events, new Date().toISOString());
+      const state = await getState();
       const gates = await gateLoader.load();
       const ctx: GateContext = {
         trigger,

@@ -124,6 +124,7 @@ describe("ObservationHandler tool observation", () => {
       "call-task",
       "hephaestus",
       "session-1",
+      expect.any(Function),
     );
     expect(gateSpy).toHaveBeenNthCalledWith(
       2,
@@ -132,6 +133,7 @@ describe("ObservationHandler tool observation", () => {
       "call-task",
       "hephaestus",
       "session-1",
+      expect.any(Function),
     );
     expect(sessionState.getActiveTaskId("call-task")).toBeUndefined();
   });
@@ -524,6 +526,7 @@ describe("ObservationHandler tool observation", () => {
       "call-gate-test",
       "hephaestus",
       "session-1",
+      expect.any(Function),
     );
     expect(gateSpy).toHaveBeenCalledWith(
       "tool_observed",
@@ -531,6 +534,7 @@ describe("ObservationHandler tool observation", () => {
       "call-gate-test",
       "hephaestus",
       "session-1",
+      expect.any(Function),
     );
     // Verify that the cache refresh failure was logged
     // Note: refreshProjectionCache() internally catches write failures and logs them.

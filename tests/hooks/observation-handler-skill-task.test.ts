@@ -231,6 +231,7 @@ describe("ObservationHandler skill and task summary observation", () => {
       "call-1",
       "unknown",
       "session-1",
+      expect.any(Function),
     );
     expect(evaluateGateIfTriggered).toHaveBeenNthCalledWith(
       2,
@@ -239,6 +240,7 @@ describe("ObservationHandler skill and task summary observation", () => {
       "call-1",
       "unknown",
       "session-1",
+      expect.any(Function),
     );
   });
 });
