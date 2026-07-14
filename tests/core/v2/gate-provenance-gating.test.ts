@@ -39,7 +39,7 @@ function declaredEvidence(outcome: "pass" | "fail"): ProjectedEvidence {
   };
 }
 
-function observedEvidence(outcome: "pass" | "fail"): ProjectedEvidence {
+function observedEvidence(outcome: "pass" | "fail" | "unknown"): ProjectedEvidence {
   const evidenceId = `observed-${outcome}`;
   return {
     evidence: {
@@ -160,6 +160,25 @@ describe("evaluate provenance gating", () => {
     expect(result.verdict).toBe("WARN");
   });
 
+  it("uses onMissingEvidence for authoritative evidence with an unknown outcome", () => {
+    const evidence = observedEvidence("unknown");
+    const result = evaluate(
+      [
+        gate(
+          "authoritative-unknown-outcome",
+          { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
+          { onViolation: "fail", onMissingEvidence: "pass" },
+        ),
+      ],
+      [evidence],
+      CONTEXT,
+    );
+
+    expect(result.verdict).toBe("WARN");
+    if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
+    expect(result.ruleResults[0]?.evidenceRefs).toEqual([evidence.ref]);
+  });
+
   it("uses onViolation PASS for an authoritative mismatch instead of onMissingEvidence FAIL", () => {
     const result = evaluate(
       [
@@ -206,5 +225,9 @@ describe("evaluate provenance gating", () => {
     );
 
     expect(result.verdict).toBe("FAIL");
+    if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
+    expect(result.ruleResults[0]?.reason).toBe(
+      "Some authoritative evidence did not meet required outcome 'pass'.",
+    );
   });
 });

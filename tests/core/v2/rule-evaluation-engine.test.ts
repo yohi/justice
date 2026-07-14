@@ -98,6 +98,7 @@ function evaluateReview(input: {
   readonly reviewScope: readonly string[];
   readonly byScope?: ReadonlyMap<string, ScopeReviewSummary>;
   readonly minimumSeverity?: "critical" | "major" | "minor";
+  readonly onMissingEvidence?: GateRule["onMissingEvidence"];
 }): ReturnType<typeof evaluate> {
   return evaluate(
     [
@@ -107,6 +108,7 @@ function evaluateReview(input: {
           type: "review_open_items",
           minimumSeverity: input.minimumSeverity ?? "major",
         },
+        onMissingEvidence: input.onMissingEvidence,
       }),
     ],
     [],
@@ -219,13 +221,21 @@ describe("evaluate", () => {
 });
 
 describe("review_open_items", () => {
-  it("uses onMissingEvidence when reviewScope is empty", () => {
-    expect(evaluateReview({ reviewScope: [] }).verdict).toBe("WARN");
+  it("caps passing onMissingEvidence at WARN when reviewScope is empty", () => {
+    expect(evaluateReview({ reviewScope: [], onMissingEvidence: "pass" }).verdict).toBe("WARN");
   });
 
-  it("passes when the matching observed scope has no open items", () => {
+  it("caps passing onMissingEvidence at WARN when reviewScope is unobserved", () => {
+    expect(
+      evaluateReview({ reviewScope: ["target"], onMissingEvidence: "pass" }).verdict,
+    ).toBe("WARN");
+  });
+
+  it("passes when the matching observed scope has no open items regardless of onMissingEvidence", () => {
     const byScope = new Map([["target", scopeSummary([])]]);
-    expect(evaluateReview({ reviewScope: ["target"], byScope }).verdict).toBe("PASS");
+    expect(
+      evaluateReview({ reviewScope: ["target"], byScope, onMissingEvidence: "fail" }).verdict,
+    ).toBe("PASS");
   });
 
   it("does not leak open items from scopes outside reviewScope", () => {
@@ -245,5 +255,26 @@ describe("review_open_items", () => {
     });
 
     expect(result.verdict).toBe("PASS");
+  });
+
+  it("does not pass when one of multiple scopes is unobserved, even if observed scopes have no open items", () => {
+    const byScope = new Map([["scope-a", scopeSummary([])]]);
+
+    const result = evaluateReview({ reviewScope: ["scope-a", "scope-b"], byScope });
+
+    expect(result.verdict).not.toBe("PASS");
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("aggregates the worst verdict across multiple scopes: unobserved scope plus a violating scope", () => {
+    const byScope = new Map([
+      ["scope-a", scopeSummary([reviewItem("scope-a-major", "major")])],
+    ]);
+
+    const result = evaluateReview({ reviewScope: ["scope-a", "scope-b"], byScope });
+
+    expect(result.verdict).toBe("FAIL");
+    if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
+    expect(result.ruleResults[0]?.evidenceRefs).toEqual([evidenceRef("review-scope-a-major")]);
   });
 });
