@@ -129,6 +129,18 @@ describe("loadGates", () => {
     expect(result).toEqual(DEFAULT_GATES);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("warns and falls back to defaults when gate.yaml exists but is empty", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reader = createMockFileReader({ ".justice/gate.yaml": "" });
+
+    const result = await loadGates(reader);
+
+    expect(result).toEqual(DEFAULT_GATES);
+    // An empty (but present) file must not be treated as a missing file:
+    // it should reach YAML/Zod validation and warn before falling back.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("mergeWithDefaults", () => {

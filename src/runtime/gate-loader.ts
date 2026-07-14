@@ -64,17 +64,18 @@ export async function loadGates(
     content = await fileReader.readFile(path);
   } catch (err: unknown) {
     if (!isEnoentError(err)) {
-      console.warn(`Failed to read gates configuration from ${path}:`, err);
+      console.warn("Failed to read gates configuration from %s:", path, err);
     }
   }
-  if (!content) {
+  if (content === null) {
     return keepEnabled(DEFAULT_GATES);
   }
   try {
     return mergeWithDefaults(parseGateYaml(content));
   } catch (err: unknown) {
     console.warn(
-      `Failed to parse gates configuration from ${path}, falling back to defaults:`,
+      "Failed to parse gates configuration from %s, falling back to defaults:",
+      path,
       err,
     );
     return keepEnabled(DEFAULT_GATES);
