@@ -1067,10 +1067,20 @@ export interface FileReader {
 const MAX_SHARD_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_SHARD_AGE_DAYS = 14;
 
-async function shouldRotate(fileReader: FileReader, path: string, now: Date): Promise<boolean> {
+// 実装ノート（Phase0-5 実装後の訂正）: age は `mtimeMs` ではなく、当該 shard の
+// 最古オンディスクレコードの timestamp（`createdMs`）を基準に判定する。
+// `atomicAppend` は毎回 append 時に temp file を rename して shard を
+// 全置換するため、mtime/birthtime は append ごとに "now" へリセットされ、
+// shard の実age を測定できない（`observation-log-store.ts` 内 `shouldRotate`）。
+async function shouldRotate(
+  fileReader: FileReader,
+  path: string,
+  createdMs: number,
+  now: Date,
+): Promise<boolean> {
   const stats = await fileReader.readFileStats(path);
   if (!stats) return false;
-  return stats.size >= MAX_SHARD_SIZE || ageDays(stats.mtimeMs, now) >= MAX_SHARD_AGE_DAYS;
+  return stats.size >= MAX_SHARD_SIZE || ageInDays(createdMs, now) >= MAX_SHARD_AGE_DAYS;
 }
 ```
 
