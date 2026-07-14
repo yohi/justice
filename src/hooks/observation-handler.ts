@@ -100,6 +100,9 @@ export class ObservationHandler {
       this.options.logger?.warn("observation-handler: session error observation failed, degrading to PROCEED", err);
     }
 
+    // A session error can be recoverable, so discard only transient message parts;
+    // full session teardown remains reserved for confirmed session termination.
+    this.messageRoleBuffer.removeSession(error.sessionId);
     return PROCEED;
   }
 

@@ -41,6 +41,35 @@ describe("ObservationHandler.handleSessionError", () => {
     });
   });
 
+  it("removes the session message buffer after recording the error", async () => {
+    const { handler, logStore } = createHandler();
+    const destroyLogStore = vi.spyOn(logStore, "destroySession");
+    await handler.handleMessage("session-1", {
+      kind: "message_part_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    const internal = handler as unknown as {
+      readonly messageRoleBuffer: { readonly buffer: ReadonlyMap<string, unknown> };
+    };
+    const bufferKey = JSON.stringify(["session-1", "message-1"]);
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
+
+    await handler.handleSessionError({
+      message: "Connection reset",
+      kind: "network",
+      agentId: "hephaestus",
+      sessionId: "session-1",
+    });
+
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(false);
+    expect(destroyLogStore).not.toHaveBeenCalled();
+    const events = await logStore.readAll();
+    expect(events.some((event) => event.kind === "session_error")).toBe(true);
+  });
+
   it("defaults errorKind to unknown when kind is omitted", async () => {
     const { handler, logStore } = createHandler();
     await handler.handleSessionError({
