@@ -296,7 +296,7 @@ export class JusticePlugin {
       writerId,
       workspaceRoot: options.workspaceRoot,
       logger: options.logger,
-      gateLoader: new FileGateLoader(fileReader),
+      gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
     });
 
     // Ensure session cleanup propagates from loopHandler to all stateful handlers
