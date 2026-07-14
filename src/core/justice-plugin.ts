@@ -372,7 +372,11 @@ export class JusticePlugin {
             ? this.planBridge.handlePreToolUse(event)
             : Promise.resolve(PROCEED),
         ]);
-        const response = mergePreToolUseResponses(observation, planBridge);
+        const response = mergePreToolUseResponses(
+          observation,
+          planBridge,
+          (message) => this.warnMergeConflict(message),
+        );
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
         );
@@ -406,7 +410,10 @@ export class JusticePlugin {
                 })
               : Promise.resolve(PROCEED),
           ]);
-          return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+          return mergePostToolUseResponses(
+            [observation, planBridge, taskFeedback],
+            (message) => this.warnMergeConflict(message),
+          );
         } finally {
           closeSessionTaskWindow(this.sessionStateProvider, event.callId);
         }
@@ -563,6 +570,14 @@ export class JusticePlugin {
       }
       default:
         return PROCEED;
+    }
+  }
+
+  private warnMergeConflict(message: string): void {
+    try {
+      this.options.logger?.warn(message);
+    } catch {
+      return;
     }
   }
 }

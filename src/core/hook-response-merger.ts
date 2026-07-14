@@ -1,6 +1,12 @@
 import type { HookResponse, InjectResponse } from "./types";
 
-export function mergePreToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
+export type HookResponseConflictLogger = (message: string) => void;
+
+export function mergePreToolUseResponses(
+  a: HookResponse,
+  b: HookResponse,
+  onConflict?: HookResponseConflictLogger,
+): HookResponse {
   if (a.action === "skip" || b.action === "skip") {
     return { action: "skip" };
   }
@@ -16,7 +22,7 @@ export function mergePreToolUseResponses(a: HookResponse, b: HookResponse): Hook
         ? { ...base, variant: "gate_advisory" }
         : base;
     if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
-      throw new Error("Conflict detected in pre-tool-use modifiedPayload");
+      onConflict?.("Conflict detected in pre-tool-use modifiedPayload; using the first response");
     }
     if (a.modifiedPayload !== undefined) {
       return { ...result, modifiedPayload: a.modifiedPayload };
@@ -38,7 +44,10 @@ export function mergePreToolUseResponses(a: HookResponse, b: HookResponse): Hook
   return { action: "proceed" };
 }
 
-export function mergePostToolUseResponses(responses: readonly HookResponse[]): HookResponse {
+export function mergePostToolUseResponses(
+  responses: readonly HookResponse[],
+  onConflict?: HookResponseConflictLogger,
+): HookResponse {
   if (responses.some((response) => response.action === "skip")) {
     return { action: "skip" };
   }
@@ -63,7 +72,7 @@ export function mergePostToolUseResponses(responses: readonly HookResponse[]): H
 
   const modifieds = injects.filter((inject) => inject.modifiedPayload !== undefined);
   if (modifieds.length > 1) {
-    throw new Error("Conflict detected in post-tool-use modifiedPayload");
+    onConflict?.("Conflict detected in post-tool-use modifiedPayload; using the first response");
   }
   const single = modifieds[0];
   if (single !== undefined) {

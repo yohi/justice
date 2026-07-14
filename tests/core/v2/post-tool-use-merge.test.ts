@@ -59,7 +59,7 @@ describe("D64 - PostToolUse merge rules", () => {
     });
   });
 
-  it("should throw when more than one inject response carries modifiedPayload", () => {
+  it("should keep the first modifiedPayload and report a conflict", () => {
     const responses: HookResponse[] = [
       {
         action: "inject",
@@ -72,7 +72,16 @@ describe("D64 - PostToolUse merge rules", () => {
         modifiedPayload: { toolName: "task", modified: 2 },
       },
     ];
-    expect(() => mergePostToolUseResponses(responses)).toThrow(/modifiedPayload/);
+    const warnings: string[] = [];
+
+    const result = mergePostToolUseResponses(responses, (message) => warnings.push(message));
+
+    expect(result).toEqual({
+      action: "inject",
+      injectedContext: "A\n\n---\n\nB",
+      modifiedPayload: { toolName: "task", modified: 1 },
+    });
+    expect(warnings).toEqual(["Conflict detected in post-tool-use modifiedPayload; using the first response"]);
   });
 
   it("should propagate the gate_advisory variant across merged inject responses", () => {
@@ -134,20 +143,27 @@ describe("D64 - PreToolUse merge rules", () => {
     });
   });
 
-  it("should throw when modifiedPayload conflicts occur", () => {
-    const responses: HookResponse[] = [
-      {
-        action: "inject",
-        injectedContext: "A",
-        modifiedPayload: { toolName: "task", modified: 1 },
-      },
-      {
-        action: "inject",
-        injectedContext: "B",
-        modifiedPayload: { toolName: "task", modified: 2 },
-      },
-    ];
-    expect(() => mergePreToolUseResponses(responses[0], responses[1])).toThrow(/modifiedPayload/);
+  it("should keep a modifiedPayload and report a conflict with a-priority", () => {
+    const a: HookResponse = {
+      action: "inject",
+      injectedContext: "A",
+      modifiedPayload: { toolName: "task", modified: 1 },
+    };
+    const b: HookResponse = {
+      action: "inject",
+      injectedContext: "B",
+      modifiedPayload: { toolName: "task", modified: 2 },
+    };
+    const warnings: string[] = [];
+
+    const result = mergePreToolUseResponses(a, b, (message) => warnings.push(message));
+
+    expect(result).toEqual({
+      action: "inject",
+      injectedContext: "A\n\n---\n\nB",
+      modifiedPayload: { toolName: "task", modified: 1 },
+    });
+    expect(warnings).toEqual(["Conflict detected in pre-tool-use modifiedPayload; using the first response"]);
   });
   it("should attach modifiedPayload from the first inject when only the first side carries one", () => {
     const a: HookResponse = {
