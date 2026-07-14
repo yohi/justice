@@ -729,6 +729,24 @@ describe("ObservationLogStore", () => {
     expect(all.every((r) => r.writerId === "w-1")).toBe(true);
   });
 
+  it("excludes a shard when one physical file stores its sequences out of order", async () => {
+    // Given: one healthy shard and one physical JSONL file whose line order is sequence 2 then 1.
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    await store.append(shard, msgRecord());
+    const reorderedPath = ".justice/events/sisyphus/other/w-9.jsonl";
+    const sequence2 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 2 })}\n`;
+    const sequence1 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 1 })}\n`;
+    files.set(reorderedPath, sequence2 + sequence1);
+
+    // When: all physical files are read and validated.
+    const all = await store.readAll();
+
+    // Then: the tampered shard is excluded while the healthy shard remains available.
+    expect(all).toHaveLength(1);
+    expect(all.every((record) => record.writerId === "w-1")).toBe(true);
+  });
+
   it("rejects append when shardId.writerId does not match the store writerId", async () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
@@ -809,6 +827,23 @@ it("readAll merges archived segments before active segments", async () => {
   const all = await store.readAll();
   expect(all).toHaveLength(2);
   expect(all.map((r) => r.sequence)).toEqual([1, 2]);
+});
+
+it("validates physical sequence order independently for each file", async () => {
+  // Given: traversal encounters sequence 2 in archive before sequence 1 in active,
+  // while each physical file is internally ordered.
+  const { files, reader, writer } = createMemFs();
+  const enc = encodeSafeSegment("ses-1");
+  const archivePath = `.justice/archive/events/sisyphus/${enc}/w-1.20260101T000000Z.jsonl`;
+  files.set(archivePath, `${JSON.stringify({ ...msgRecord(), sequence: 2 })}\n`);
+  files.set(toPhysicalPath(shard), `${JSON.stringify({ ...msgRecord(), sequence: 1 })}\n`);
+  const store = new ObservationLogStore(writer, reader, "w-1");
+
+  // When: archive and active files are merged.
+  const all = await store.readAll();
+
+  // Then: cross-file traversal order is not treated as physical-file corruption.
+  expect(all.map((record) => record.sequence)).toEqual([2, 1]);
 });
 
 describe("rotateIfNeeded() defensive guard", () => {

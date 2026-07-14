@@ -3,7 +3,11 @@ import type { FileReader, FileWriter, ShardId } from "../core/types";
 import type { PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
 import { fromPhysicalPath, toArchivePath, toPhysicalPath } from "../core/v2/shard-layout";
 import { createShardWriteQueue, type ShardWriteQueue } from "./write-queue";
-import { validateRecordSchema, validateShardSequences } from "./validation";
+import {
+  validatePhysicalFileSequenceOrder,
+  validateRecordSchema,
+  validateShardSequences,
+} from "./validation";
 
 const EVENTS_ROOT = ".justice/events";
 const ARCHIVE_ROOT = ".justice/archive/events";
@@ -154,16 +158,33 @@ export class ObservationLogStore {
       ...[...activePaths].sort((a, b) => a.localeCompare(b)),
     ];
     const records: PersistedLogRecord[] = [];
+    const invalidPhysicalOrderShardKeys = new Set<string>();
 
     const ingest = (content: string, sourcePath: string): void => {
+      const fileRecords: PersistedLogRecord[] = [];
       for (const line of content.split("\n").filter((l) => l.trim())) {
         try {
           const parsed: unknown = JSON.parse(line);
           validateRecordSchema(parsed);
-          records.push(parsed as PersistedLogRecord);
+          fileRecords.push(parsed as PersistedLogRecord);
         } catch (err) {
           console.error("Failed to parse or validate line in %s", sourcePath, err);
         }
+      }
+      try {
+        validatePhysicalFileSequenceOrder(fileRecords);
+        records.push(...fileRecords);
+      } catch (err) {
+        for (const record of fileRecords) {
+          invalidPhysicalOrderShardKeys.add(
+            JSON.stringify([record.agentId, record.sessionId, record.writerId]),
+          );
+        }
+        console.warn(
+          "Failed to validate physical sequence order in %s, excluding affected shard from result",
+          sourcePath,
+          err,
+        );
       }
     };
 
@@ -206,6 +227,7 @@ export class ObservationLogStore {
     }
     const validRecords: PersistedLogRecord[] = [];
     for (const [shardKey, group] of byShardKey) {
+      if (invalidPhysicalOrderShardKeys.has(shardKey)) continue;
       try {
         validateShardSequences(group);
         validRecords.push(...group);
