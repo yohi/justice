@@ -133,29 +133,28 @@ function evaluateRule(
         };
       }
 
-      let observed = false;
+      const scopeVerdicts: Verdict[] = [];
+      const unobservedScopes: string[] = [];
       const openItems: ReviewSummaryItem[] = [];
       for (const scope of ctx.reviewScope) {
         const scopeData = ctx.reviewSummary?.byScope.get(scope);
-        if (scopeData) {
-          observed = true;
-          for (const item of scopeData.open) {
-            if (isSeverityAtLeast(item.severity, check.minimumSeverity)) {
-              openItems.push(item);
-            }
-          }
+        if (!scopeData) {
+          unobservedScopes.push(scope);
+          scopeVerdicts.push(mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence));
+          continue;
         }
+        const scopeOpenItems = scopeData.open.filter((item) =>
+          isSeverityAtLeast(item.severity, check.minimumSeverity),
+        );
+        if (scopeOpenItems.length === 0) {
+          scopeVerdicts.push("PASS");
+          continue;
+        }
+        openItems.push(...scopeOpenItems);
+        scopeVerdicts.push(mapVerdict(gate.onViolation));
       }
 
-      if (!observed) {
-        return {
-          ruleId: gate.id,
-          verdict: mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence),
-          reason: `No review observations found for scopes: ${ctx.reviewScope.join(", ")}.`,
-          evidenceRefs: [],
-        };
-      }
-      if (openItems.length === 0) {
+      if (unobservedScopes.length === 0 && openItems.length === 0) {
         return {
           ruleId: gate.id,
           verdict: "PASS",
@@ -163,10 +162,21 @@ function evaluateRule(
           evidenceRefs: [],
         };
       }
+      const scopeMessages: string[] = [];
+      if (unobservedScopes.length > 0) {
+        scopeMessages.push(
+          `No review observations found for scopes: ${unobservedScopes.join(", ")}.`,
+        );
+      }
+      if (openItems.length > 0) {
+        scopeMessages.push(
+          `Found ${openItems.length} open review items matching minimum severity '${check.minimumSeverity}'.`,
+        );
+      }
       return {
         ruleId: gate.id,
-        verdict: mapVerdict(gate.onViolation),
-        reason: `Found ${openItems.length} open review items matching minimum severity '${check.minimumSeverity}'.`,
+        verdict: worstOf(scopeVerdicts),
+        reason: scopeMessages.join(" "),
         evidenceRefs: openItems.map((item) => item.ref),
       };
     }

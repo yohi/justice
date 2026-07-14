@@ -256,4 +256,25 @@ describe("review_open_items", () => {
 
     expect(result.verdict).toBe("PASS");
   });
+
+  it("does not pass when one of multiple scopes is unobserved, even if observed scopes have no open items", () => {
+    const byScope = new Map([["scope-a", scopeSummary([])]]);
+
+    const result = evaluateReview({ reviewScope: ["scope-a", "scope-b"], byScope });
+
+    expect(result.verdict).not.toBe("PASS");
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("aggregates the worst verdict across multiple scopes: unobserved scope plus a violating scope", () => {
+    const byScope = new Map([
+      ["scope-a", scopeSummary([reviewItem("scope-a-major", "major")])],
+    ]);
+
+    const result = evaluateReview({ reviewScope: ["scope-a", "scope-b"], byScope });
+
+    expect(result.verdict).toBe("FAIL");
+    if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
+    expect(result.ruleResults[0]?.evidenceRefs).toEqual([evidenceRef("review-scope-a-major")]);
+  });
 });
