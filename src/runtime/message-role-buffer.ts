@@ -49,8 +49,10 @@ export class MessageRoleBuffer {
         break;
       case "message_updated":
         entry.role = payload.role;
-        // Raw completion signal only. Readiness is DERIVED at read-time via isFinalized()
-        if (payload.finalized) entry.messageSignaled = true;
+        if (payload.finalized) {
+          for (const part of entry.parts.values()) part.finalized = true;
+          entry.messageSignaled = true;
+        }
         break;
     }
     entry.lastUpdatedAt = this.now();

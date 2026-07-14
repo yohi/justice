@@ -139,36 +139,39 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
     });
 
-    it("per-partId finalize completes the message once all parts finalized AND message_updated finalized arrived", () => {
+    it("message_updated finalized=true soft-finalizes all buffered parts", () => {
       const buffer = new MessageRoleBuffer();
       buffer.update("s", partUpdated("s", "m", "p1", "a"));
       buffer.update("s", partUpdated("s", "m", "p2", "b"));
-      buffer.update("s", messageUpdated("s", "m", true)); // message-level finalized signal
-      buffer.finalize("s", "m", "p1");
-      buffer.finalize("s", "m", "p2");
-      // both signals present -> message finalized, combined body in partID order
+
+      buffer.update("s", messageUpdated("s", "m", true));
+
       expect(buffer.getFinalizedText("s", "m")).toBe("a\nb");
     });
   });
 
-  describe("two-signal readiness ordering (signal vs part completion)", () => {
-    it("message_updated finalized=true does NOT finalize while a part is still unfinalized (signal-first)", () => {
+  describe("message finish soft finalization", () => {
+    it("exposes buffered assistant text when message_updated finalized=true arrives", () => {
       const buffer = new MessageRoleBuffer();
-      buffer.update("s", partUpdated("s", "m", "p1", "partial body")); // p1 NOT finalized
-      buffer.update("s", messageUpdated("s", "m", true)); // complete signal arrives first
-      // signal alone must not expose a partial body
-      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
-      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
-    });
+      buffer.update("s", partUpdated("s", "m", "p1", "final body"));
 
-    it("finalizes once the lagging part completes AFTER the message signal (signal-first, then text_complete)", () => {
-      const buffer = new MessageRoleBuffer();
-      buffer.update("s", partUpdated("s", "m", "p1", "draft")); // p1 NOT finalized
-      buffer.update("s", messageUpdated("s", "m", true)); // complete signal first -> still not ready
-      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
-      buffer.update("s", textComplete("s", "m", "p1", "final body")); // lagging part completes -> ready
+      buffer.update("s", messageUpdated("s", "m", true));
+
       expect(buffer.getFinalizedText("s", "m")).toBe("final body");
       expect(buffer.getFinalizedAssistantText("s", "m")).toBe("final body");
+    });
+
+    it("returns to pending after a part update and finalizes the revision on the next finish", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests pass");
+
+      buffer.update("s", partUpdated("s", "m", "p1", "tests fail"));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
+
+      buffer.update("s", messageUpdated("s", "m", true));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests fail");
     });
   });
 
