@@ -29,15 +29,10 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
 import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
-import { resolveTaskIdFromModifiedPayload } from "./task-packager";
+import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
-
-function extractTaskId(toolInput: Record<string, unknown>): string | undefined {
-  const raw = toolInput.taskId;
-  return typeof raw === "string" ? raw : undefined;
-}
 
 function openSessionTaskWindow(
   provider: SessionStateProvider,
@@ -45,10 +40,13 @@ function openSessionTaskWindow(
 ): void {
   const callId = event.callId;
   if (!callId) return;
+  // Reuse the same strict "task-" prefixed extraction PlanBridge/TaskPackager
+  // rely on (D74) so this earliest window-set can never admit a value the
+  // stricter downstream checks would reject.
   const taskId =
     event.type === "PreToolUse"
-      ? extractTaskId(event.payload.toolInput)
-      : extractTaskId(event.payload.toolInput ?? {});
+      ? resolveTaskIdFromToolInput(event.payload.toolInput)
+      : resolveTaskIdFromToolInput(event.payload.toolInput ?? {});
   if (!taskId) return;
   try {
     provider.setActiveTaskWindow(callId, taskId);
