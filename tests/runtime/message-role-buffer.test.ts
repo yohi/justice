@@ -219,11 +219,11 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.getPendingAssistantText("s")).toBe("draft response");
     });
 
-    it("ignores buffered entries whose role is not assistant", () => {
+    it("includes buffered text even when role has not yet resolved (part arrived before message_updated)", () => {
       const buffer = new MessageRoleBuffer();
-      buffer.update("s", partUpdated("s", "m", "p1", "role unknown"));
+      buffer.update("s", partUpdated("s", "m", "p1", "role not yet resolved"));
 
-      expect(buffer.getPendingAssistantText("s")).toBeUndefined();
+      expect(buffer.getPendingAssistantText("s")).toBe("role not yet resolved");
     });
 
     it("joins text across multiple message IDs in the same session", () => {

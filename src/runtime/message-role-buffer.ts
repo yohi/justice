@@ -135,18 +135,27 @@ export class MessageRoleBuffer {
   /**
    * Best-effort, non-mutating snapshot of all text currently buffered for
    * `sessionId`, across every messageID and regardless of per-part finalized
-   * state. Used by session-error handling (D65: buffer is GC'd immediately
-   * on session.error) to preserve an audit trail of in-flight assistant text
-   * that would otherwise be silently dropped when the buffer entry is
-   * removed before a later message_updated(finalized:true)/text_complete
-   * could finalize it. Returns undefined when nothing assistant-authored is
-   * buffered for the session.
+   * state. Role-unresolved entries (a `message_part_updated`/`text_complete`
+   * arrived before its correlating `message_updated` -- an expected
+   * out-of-order case per D53) are included too: this buffer never assigns
+   * `role: "user"` via `update()` (see the `role` field comment on
+   * `BufferEntry`), so an unresolved entry can only ever resolve to
+   * "assistant" and is treated as presumptive assistant text here. This is
+   * safe because the result feeds only a non-authoritative audit snippet
+   * (never `extractDeclaredClaims`), so it does not reintroduce the
+   * role-misattribution risk D53 guards against in `extractAssistantClaims`/
+   * `getFinalizedText`. Used by session-error handling (D65: buffer is
+   * GC'd immediately on session.error) to preserve an audit trail of
+   * in-flight assistant text that would otherwise be silently dropped when
+   * the buffer entry is removed before a later
+   * message_updated(finalized:true)/text_complete could finalize it.
+   * Returns undefined when nothing is buffered for the session.
    */
   getPendingAssistantText(sessionId: string): string | undefined {
     const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
     const chunks: string[] = [];
     for (const [key, entry] of this.buffer) {
-      if (!key.startsWith(sessionKeyPrefix) || entry.role !== "assistant") continue;
+      if (!key.startsWith(sessionKeyPrefix) || entry.role === "user") continue;
       const text = this.collectText(entry, undefined);
       if (text !== undefined && text.length > 0) chunks.push(text);
     }
