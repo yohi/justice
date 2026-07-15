@@ -10,6 +10,7 @@ export const OpenCodePlugin: Plugin = async (init) => {
   debugLog("Plugin factory invoked, adapter created.");
 
   return {
+    tool: adapter.getTools(),
     event: async (input): Promise<void> => {
       await adapter.onEvent(
         input as {

@@ -14,6 +14,7 @@ function createMockAdapter(): OpenCodeAdapter {
     getJustice: vi.fn().mockReturnValue(null),
     isNoOp: vi.fn().mockReturnValue(false),
     getWorkspaceRoot: vi.fn().mockReturnValue(null),
+    getTools: vi.fn().mockReturnValue({}),
     log: vi.fn().mockResolvedValue(undefined),
     ensureInitialized: vi.fn().mockResolvedValue(undefined),
   } as unknown as OpenCodeAdapter;

@@ -41,6 +41,11 @@ const PROCEED: HookResponse = { action: "proceed" };
 const MESSAGE_ROLE_BUFFER_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes idle
 const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
 
+type ProjectionCacheAccess = {
+  readonly read?: () => Promise<ProjectedState | undefined>;
+  readonly write: (state: ProjectedState) => Promise<void>;
+};
+
 /**
  * ObservationHandler observes EVERY tool call and message part for the v2
  * observation pipeline (declared-claim extraction, evidence recording).
@@ -64,16 +69,21 @@ export class ObservationHandler {
     private readonly options: {
       readonly logStore: ObservationLogStore;
       readonly sessionStateProvider: SessionStateProvider;
-      readonly projectionCache?: {
-        readonly read?: () => Promise<ProjectedState | undefined>;
-        readonly write: (state: ProjectedState) => Promise<void>;
-      };
+      readonly projectionCache?: ProjectionCacheAccess;
       readonly writerId: string;
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
     },
   ) {}
+
+  getLogStore(): ObservationLogStore {
+    return this.options.logStore;
+  }
+
+  getProjectionCache(): ProjectionCacheAccess | undefined {
+    return this.options.projectionCache;
+  }
 
   async handleSessionError(error: {
     readonly message: string;

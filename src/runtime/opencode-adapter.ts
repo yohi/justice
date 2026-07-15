@@ -1,5 +1,7 @@
+import type { ToolDefinition } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
+import { defineJusticeStatusTool } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -91,6 +93,12 @@ export class OpenCodeAdapter {
 
   getJustice(): JusticePlugin | null {
     return this.#justice;
+  }
+
+  getTools(): Record<string, ToolDefinition> {
+    return {
+      justice_status: defineJusticeStatusTool(this),
+    };
   }
 
   async log(level: "info" | "warn" | "error", message: string, ...args: unknown[]): Promise<void> {
