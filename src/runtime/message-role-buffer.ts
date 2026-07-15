@@ -49,8 +49,22 @@ export class MessageRoleBuffer {
         break;
       case "message_updated":
         entry.role = payload.role;
-        // Raw completion signal only. Readiness is DERIVED at read-time via isFinalized()
-        if (payload.finalized) entry.messageSignaled = true;
+        if (payload.finalized) {
+          // Soft fallback, not proof that every part's text is terminal:
+          // `message.updated` and `experimental.text.complete` are dispatched
+          // from unsynchronized SDK event sources (see opencode-adapter.ts), so
+          // a currently-buffered part may still be mid-stream. A later
+          // text_complete for the same partID can overwrite its text, causing
+          // ObservationHandler to append a corrected audit revision under the
+          // same (stable) evidenceId. Waiting for a real text_complete before
+          // exposing text here would silently drop the message entirely when
+          // text_complete never fires for some part (a documented Phase-0
+          // uncertainty) -- and message-declared claims are non-authoritative
+          // (audit visibility only, never gate evidence; see design spec §13/
+          // INV-004), so this tradeoff is accepted rather than "fixed".
+          for (const part of entry.parts.values()) part.finalized = true;
+          entry.messageSignaled = true;
+        }
         break;
     }
     entry.lastUpdatedAt = this.now();
@@ -118,6 +132,36 @@ export class MessageRoleBuffer {
     }
   }
 
+  /**
+   * Best-effort, non-mutating snapshot of all text currently buffered for
+   * `sessionId`, across every messageID and regardless of per-part finalized
+   * state. Role-unresolved entries (a `message_part_updated`/`text_complete`
+   * arrived before its correlating `message_updated` -- an expected
+   * out-of-order case per D53) are included too: this buffer never assigns
+   * `role: "user"` via `update()` (see the `role` field comment on
+   * `BufferEntry`), so an unresolved entry can only ever resolve to
+   * "assistant" and is treated as presumptive assistant text here. This is
+   * safe because the result feeds only a non-authoritative audit snippet
+   * (never `extractDeclaredClaims`), so it does not reintroduce the
+   * role-misattribution risk D53 guards against in `extractAssistantClaims`/
+   * `getFinalizedText`. Used by session-error handling (D65: buffer is
+   * GC'd immediately on session.error) to preserve an audit trail of
+   * in-flight assistant text that would otherwise be silently dropped when
+   * the buffer entry is removed before a later
+   * message_updated(finalized:true)/text_complete could finalize it.
+   * Returns undefined when nothing is buffered for the session.
+   */
+  getPendingAssistantText(sessionId: string): string | undefined {
+    const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
+    const chunks: string[] = [];
+    for (const [key, entry] of this.buffer) {
+      if (!key.startsWith(sessionKeyPrefix) || entry.role === "user") continue;
+      const text = this.collectText(entry, undefined);
+      if (text !== undefined && text.length > 0) chunks.push(text);
+    }
+    return chunks.length === 0 ? undefined : chunks.join("\n");
+  }
+
   removeSession(sessionId: string): void {
     const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
     for (const key of this.buffer.keys()) {
@@ -180,8 +224,13 @@ export class MessageRoleBuffer {
     return JSON.stringify([sessionId, messageId]);
   }
 
-  // Stable per-(message, part) evidence source so a re-updated part keeps the same
-  // evidenceId, letting the latest claim replace (not duplicate) the prior one.
+  // Stable per-(message, part) identity across revisions: a re-updated part
+  // keeps the same evidenceId so the buffer's CURRENT view never accumulates
+  // stale claims for that identity. This is append-only-log-agnostic: the
+  // observation log itself may still contain multiple historical revisions
+  // under this evidenceId (see the message_updated soft-finalize comment in
+  // update()); a consumer that needs a single current-view claim must
+  // collapse revisions latest-by-evidenceId itself.
   private sourceIdOf(messageId: string, partId: string | undefined): string {
     // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
     // (messageId, partId) pairs if either ID's format ever changes.

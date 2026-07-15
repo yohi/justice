@@ -1,5 +1,6 @@
 // src/runtime/validation.ts
 import type { PersistedLogRecord } from "../core/v2/observation-model";
+import { shardKeyOf } from "../core/v2/shard-layout";
 import { isValidSkillInvokedRecord } from "./skill-invoked-record-validator";
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -237,6 +238,23 @@ export function validateRecordSchema(record: unknown): void {
 }
 
 /**
+ * Validates sequence order as records physically appear in one JSONL file.
+ * Equal values remain the responsibility of the merged duplicate check; this
+ * axis detects only a descending transition before traversal order is lost.
+ */
+export function validatePhysicalFileSequenceOrder(records: readonly PersistedLogRecord[]): void {
+  let previousSequence: number | undefined;
+  for (const record of records) {
+    if (previousSequence !== undefined && record.sequence < previousSequence) {
+      throw new Error(
+        `Physical sequence order violation: sequence ${record.sequence} follows ${previousSequence}`,
+      );
+    }
+    previousSequence = record.sequence;
+  }
+}
+
+/**
  * Validates per-shard sequence integrity across a merged record set. Duplicate
  * sequence numbers within a shard indicate corruption. A gap (missing sequence)
  * indicates lost records (e.g. an archive segment that failed to be recovered).
@@ -246,7 +264,7 @@ export function validateRecordSchema(record: unknown): void {
 export function validateShardSequences(records: readonly PersistedLogRecord[]): void {
   const shardGroups = new Map<string, number[]>();
   for (const r of records) {
-    const shardKey = JSON.stringify([r.agentId, r.sessionId, r.writerId]);
+    const shardKey = shardKeyOf(r);
     const group = shardGroups.get(shardKey);
     if (group) {
       group.push(r.sequence);

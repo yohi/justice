@@ -41,6 +41,67 @@ describe("ObservationHandler.handleSessionError", () => {
     });
   });
 
+  it("removes the session message buffer after recording the error", async () => {
+    const { handler, logStore } = createHandler();
+    const destroyLogStore = vi.spyOn(logStore, "destroySession");
+    await handler.handleMessage("session-1", {
+      kind: "message_part_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    const internal = handler as unknown as {
+      readonly messageRoleBuffer: { readonly buffer: ReadonlyMap<string, unknown> };
+    };
+    const bufferKey = JSON.stringify(["session-1", "message-1"]);
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
+
+    await handler.handleSessionError({
+      message: "Connection reset",
+      kind: "network",
+      agentId: "hephaestus",
+      sessionId: "session-1",
+    });
+
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(false);
+    expect(destroyLogStore).not.toHaveBeenCalled();
+    const events = await logStore.readAll();
+    expect(events.some((event) => event.kind === "session_error")).toBe(true);
+  });
+
+  it("captures pending assistant text in the session error record before discarding the buffer", async () => {
+    const { handler, logStore } = createHandler();
+    await handler.handleMessage("session-pending", {
+      kind: "message_updated",
+      sessionId: "session-pending",
+      messageID: "message-pending",
+      role: "assistant",
+      finalized: false,
+    });
+    await handler.handleMessage("session-pending", {
+      kind: "message_part_updated",
+      sessionId: "session-pending",
+      messageID: "message-pending",
+      partID: "part-pending",
+      text: "unfinished assistant response",
+    });
+
+    await handler.handleSessionError({
+      message: "Connection reset",
+      kind: "network",
+      agentId: "hephaestus",
+      sessionId: "session-pending",
+    });
+
+    const events = await logStore.readAll();
+    const sessionError = events.find((event) => event.kind === "session_error");
+    expect(sessionError).toMatchObject({
+      kind: "session_error",
+      pendingAssistantSnippet: "unfinished assistant response",
+    });
+  });
+
   it("defaults errorKind to unknown when kind is omitted", async () => {
     const { handler, logStore } = createHandler();
     await handler.handleSessionError({
@@ -88,6 +149,39 @@ describe("ObservationHandler.handleSessionError", () => {
       "observation-handler: session error observation failed, degrading to PROCEED",
       expect.anything(),
     );
+  });
+
+  it("keeps the session message buffer when the log store append fails, so a later finalize can still recover it", async () => {
+    const { handler } = createHandler();
+    await handler.handleMessage("session-5", {
+      kind: "message_part_updated",
+      sessionId: "session-5",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    const internal = handler as unknown as {
+      readonly messageRoleBuffer: { readonly buffer: ReadonlyMap<string, unknown> };
+    };
+    const bufferKey = JSON.stringify(["session-5", "message-1"]);
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
+
+    handler["options"].logStore = {
+      append: vi.fn().mockRejectedValue(new Error("disk full")),
+    } as unknown as ObservationLogStore;
+
+    const response = await handler.handleSessionError({
+      message: "boom",
+      agentId: "hephaestus",
+      sessionId: "session-5",
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    // Only discard the buffer once the session_error record is durably
+    // persisted; on append failure the buffered (unfinalized) parts must
+    // survive so a subsequent message_updated(finalized:true) can still
+    // reconstruct them.
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
   });
 });
 

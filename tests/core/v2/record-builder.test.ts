@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildToolExecutedRecord } from "../../../src/core/v2/record-builder";
+import {
+  buildSessionErrorRecord,
+  buildToolExecutedRecord,
+} from "../../../src/core/v2/record-builder";
 import type { PendingEnvelope } from "../../../src/core/v2/observation-model";
 
 const envelope: PendingEnvelope = {
@@ -11,6 +14,36 @@ const envelope: PendingEnvelope = {
   taskId: "task-1",
   recordType: "observation",
 };
+
+describe("buildSessionErrorRecord", () => {
+  it("omits pendingAssistantSnippet when pending assistant text is absent or empty", () => {
+    const withoutPendingText = buildSessionErrorRecord({
+      envelope,
+      message: "Connection reset",
+    });
+    const withEmptyPendingText = buildSessionErrorRecord({
+      envelope,
+      message: "Connection reset",
+      pendingAssistantText: "",
+    });
+
+    expect("pendingAssistantSnippet" in withoutPendingText).toBe(false);
+    expect("pendingAssistantSnippet" in withEmptyPendingText).toBe(false);
+  });
+
+  it("includes a redacted pending assistant snippet", () => {
+    const record = buildSessionErrorRecord({
+      envelope,
+      message: "Connection reset",
+      pendingAssistantText: "draft at /home/user/secret",
+    });
+
+    expect(record).toMatchObject({
+      kind: "session_error",
+      pendingAssistantSnippet: "draft at [REDACTED_PATH]",
+    });
+  });
+});
 
 describe("buildToolExecutedRecord", () => {
   it("builds redacted command evidence from a tool execution", () => {

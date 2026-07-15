@@ -427,6 +427,11 @@ export function validateShardSequences(records: readonly (ObservationRecord | De
 }
 ```
 
+- [x] **Step 1b（2026-07-15 追加・実装後の訂正）: shard内 sequence の物理行順改竄検知を追加実装（D72）**
+  - `validateShardSequences` はマージ後に `sequence` でソートしてから duplicate/gap を検査するため、同一物理ファイル内でレコードの出現順序（物理行順）が `sequence` 昇順と入れ替わっていても値集合自体は変化せず検知できない穴があった。
+  - `src/runtime/validation.ts` に `validatePhysicalFileSequenceOrder()` を追加し、`ObservationLogStore.readAll()` 内で物理ファイル単位に検証し、改竄を検知した shard は fail-open で結果から除外するように修正（`src/runtime/observation-log-store.ts`）。既存のソートベース duplicate/gap 検査はそのまま維持し、archive/active 間の順序チェックは対象外（設計要件通り）。
+  - 参照コミット: `be6c546`（`fix(observation-log-store): shard内sequenceの物理行順改竄を検知する`）。テストは `tests/runtime/observation-log-store.test.ts` に追加。
+
 - [x] **Step 2: `ObservationLogStore` クラスを実装**
 
 ```typescript
@@ -1067,10 +1072,20 @@ export interface FileReader {
 const MAX_SHARD_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_SHARD_AGE_DAYS = 14;
 
-async function shouldRotate(fileReader: FileReader, path: string, now: Date): Promise<boolean> {
+// 実装ノート（Phase0-5 実装後の訂正）: age は `mtimeMs` ではなく、当該 shard の
+// 最古オンディスクレコードの timestamp（`createdMs`）を基準に判定する。
+// `atomicAppend` は毎回 append 時に temp file を rename して shard を
+// 全置換するため、mtime/birthtime は append ごとに "now" へリセットされ、
+// shard の実age を測定できない（`observation-log-store.ts` 内 `shouldRotate`）。
+async function shouldRotate(
+  fileReader: FileReader,
+  path: string,
+  createdMs: number,
+  now: Date,
+): Promise<boolean> {
   const stats = await fileReader.readFileStats(path);
   if (!stats) return false;
-  return stats.size >= MAX_SHARD_SIZE || ageDays(stats.mtimeMs, now) >= MAX_SHARD_AGE_DAYS;
+  return stats.size >= MAX_SHARD_SIZE || ageInDays(createdMs, now) >= MAX_SHARD_AGE_DAYS;
 }
 ```
 

@@ -5,7 +5,6 @@ import type {
   FileReader,
   FileWriter,
   HookEvent,
-  PostToolUseEvent,
   PreToolUseEvent,
   HookResponse,
   EventEvent,
@@ -29,26 +28,21 @@ import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
 import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
-import { resolveTaskIdFromModifiedPayload } from "./task-packager";
+import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-function extractTaskId(toolInput: Record<string, unknown>): string | undefined {
-  const raw = toolInput.taskId;
-  return typeof raw === "string" ? raw : undefined;
-}
-
 function openSessionTaskWindow(
   provider: SessionStateProvider,
-  event: PreToolUseEvent | PostToolUseEvent,
+  event: PreToolUseEvent,
 ): void {
   const callId = event.callId;
   if (!callId) return;
-  const taskId =
-    event.type === "PreToolUse"
-      ? extractTaskId(event.payload.toolInput)
-      : extractTaskId(event.payload.toolInput ?? {});
+  // Reuse the same strict "task-" prefixed extraction PlanBridge/TaskPackager
+  // rely on (D74) so this earliest window-set can never admit a value the
+  // stricter downstream checks would reject.
+  const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
     provider.setActiveTaskWindow(callId, taskId);
@@ -372,7 +366,11 @@ export class JusticePlugin {
             ? this.planBridge.handlePreToolUse(event)
             : Promise.resolve(PROCEED),
         ]);
-        const response = mergePreToolUseResponses(observation, planBridge);
+        const response = mergePreToolUseResponses(
+          observation,
+          planBridge,
+          (message) => this.warnMergeConflict(message),
+        );
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
         );
@@ -406,7 +404,10 @@ export class JusticePlugin {
                 })
               : Promise.resolve(PROCEED),
           ]);
-          return mergePostToolUseResponses([observation, planBridge, taskFeedback]);
+          return mergePostToolUseResponses(
+            [observation, planBridge, taskFeedback],
+            (message) => this.warnMergeConflict(message),
+          );
         } finally {
           closeSessionTaskWindow(this.sessionStateProvider, event.callId);
         }
@@ -563,6 +564,14 @@ export class JusticePlugin {
       }
       default:
         return PROCEED;
+    }
+  }
+
+  private warnMergeConflict(message: string): void {
+    try {
+      this.options.logger?.warn(message);
+    } catch {
+      return;
     }
   }
 }

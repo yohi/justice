@@ -139,36 +139,110 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
     });
 
-    it("per-partId finalize completes the message once all parts finalized AND message_updated finalized arrived", () => {
+    it("message_updated finalized=true soft-finalizes all buffered parts", () => {
       const buffer = new MessageRoleBuffer();
       buffer.update("s", partUpdated("s", "m", "p1", "a"));
       buffer.update("s", partUpdated("s", "m", "p2", "b"));
-      buffer.update("s", messageUpdated("s", "m", true)); // message-level finalized signal
-      buffer.finalize("s", "m", "p1");
-      buffer.finalize("s", "m", "p2");
-      // both signals present -> message finalized, combined body in partID order
+
+      buffer.update("s", messageUpdated("s", "m", true));
+
       expect(buffer.getFinalizedText("s", "m")).toBe("a\nb");
     });
   });
 
-  describe("two-signal readiness ordering (signal vs part completion)", () => {
-    it("message_updated finalized=true does NOT finalize while a part is still unfinalized (signal-first)", () => {
+  describe("message finish soft finalization", () => {
+    it("exposes buffered assistant text when message_updated finalized=true arrives", () => {
       const buffer = new MessageRoleBuffer();
-      buffer.update("s", partUpdated("s", "m", "p1", "partial body")); // p1 NOT finalized
-      buffer.update("s", messageUpdated("s", "m", true)); // complete signal arrives first
-      // signal alone must not expose a partial body
-      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
-      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
-    });
+      buffer.update("s", partUpdated("s", "m", "p1", "final body"));
 
-    it("finalizes once the lagging part completes AFTER the message signal (signal-first, then text_complete)", () => {
-      const buffer = new MessageRoleBuffer();
-      buffer.update("s", partUpdated("s", "m", "p1", "draft")); // p1 NOT finalized
-      buffer.update("s", messageUpdated("s", "m", true)); // complete signal first -> still not ready
-      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
-      buffer.update("s", textComplete("s", "m", "p1", "final body")); // lagging part completes -> ready
+      buffer.update("s", messageUpdated("s", "m", true));
+
       expect(buffer.getFinalizedText("s", "m")).toBe("final body");
       expect(buffer.getFinalizedAssistantText("s", "m")).toBe("final body");
+    });
+
+    it("returns to pending after a part update and finalizes the revision on the next finish", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests pass");
+
+      buffer.update("s", partUpdated("s", "m", "p1", "tests fail"));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
+
+      buffer.update("s", messageUpdated("s", "m", true));
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests fail");
+    });
+
+    it("accepts a later text_complete correction after soft finalization with a stable evidenceId", () => {
+      const buffer = new MessageRoleBuffer();
+
+      // Given: streaming text is exposed by the message-finish fallback.
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests pass");
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([
+        { evidenceId: "m-test", claimKind: "test", outcome: "pass" },
+      ]);
+
+      // When: the independent text_complete hook later supplies corrected text.
+      buffer.update("s", textComplete("s", "m", "p1", "tests fail"));
+
+      // Then: the current view is corrected, stale claims are not accumulated in
+      // the buffer, and the logical evidence identity remains stable. (The
+      // append-only ObservationLogStore may separately retain the earlier
+      // soft-finalized revision as a historical audit record under the same
+      // evidenceId -- that is expected, not a bug: see the message_updated
+      // comment in message-role-buffer.ts and observation-handler.ts.)
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests fail");
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([
+        { evidenceId: "m-test", claimKind: "test", outcome: "fail" },
+      ]);
+    });
+  });
+
+  describe("getPendingAssistantText()", () => {
+    it("returns undefined for an unknown or empty session", () => {
+      const buffer = new MessageRoleBuffer();
+
+      expect(buffer.getPendingAssistantText("unknown")).toBeUndefined();
+      buffer.update("empty", messageUpdated("empty", "m", false));
+      expect(buffer.getPendingAssistantText("empty")).toBeUndefined();
+    });
+
+    it("returns buffered text for an unfinalized assistant part", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", partUpdated("s", "m", "p1", "draft response"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("draft response");
+    });
+
+    it("includes buffered text even when role has not yet resolved (part arrived before message_updated)", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "role not yet resolved"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("role not yet resolved");
+    });
+
+    it("joins text across multiple message IDs in the same session", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m1", false));
+      buffer.update("s", partUpdated("s", "m1", "p1", "first message"));
+      buffer.update("s", messageUpdated("s", "m2", false));
+      buffer.update("s", partUpdated("s", "m2", "p1", "second message"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("first message\nsecond message");
+    });
+
+    it("does not mutate buffered state", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", partUpdated("s", "m", "p1", "still buffered"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("still buffered");
+      expect(buffer.getPendingAssistantText("s")).toBe("still buffered");
     });
   });
 
@@ -260,7 +334,7 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
       buffer.update("s", textComplete("s", "m", "p1", "part one"));
       expect(buffer.getFinalizedText("s", "m")).toBe("part one");
       expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined(); // role not set yet
-      
+
       // Step 2: new unfinalizedpart p2 arrives via message_part_updated
       buffer.update("s", messageUpdated("s", "m", false)); // set role to assistant
       buffer.update("s", partUpdated("s", "m", "p2", "part two (draft)"));
@@ -268,7 +342,7 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
       // FIXED: now returns undefined because isFinalized() re-evaluates and finds p2 unfinalized
       expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
       expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
-      
+
       // Step 3: p2 completes via text_complete
       buffer.update("s", textComplete("s", "m", "p2", "part two (final)"));
       // Now both parts are finalized and message signal is set -> full text available

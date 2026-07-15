@@ -152,7 +152,7 @@ describe("JusticePlugin", () => {
       });
     });
 
-    it("should throw when both inject responses carry modifiedPayload", () => {
+    it("should keep the first modifiedPayload when both inject responses carry one", () => {
       const a: InjectResponse = {
         action: "inject",
         injectedContext: "from-a",
@@ -164,7 +164,11 @@ describe("JusticePlugin", () => {
         modifiedPayload: { key: "b" },
       };
 
-      expect(() => mergePostToolUseResponses([a, b])).toThrow(/modifiedPayload/);
+      expect(mergePostToolUseResponses([a, b])).toEqual({
+        action: "inject",
+        injectedContext: "from-a\n\n---\n\nfrom-b",
+        modifiedPayload: { key: "a", extra: true },
+      });
     });
   });
 

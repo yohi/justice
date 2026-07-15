@@ -39,7 +39,7 @@ describe("ObservationHandler message observation", () => {
     expect(files.get(path)).toContain('"kind":"message"');
   });
 
-  it("persists finalized assistant claims only after the text-complete payload", async () => {
+  it("persists finalized assistant claims when message_updated carries the finish signal", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
     sessionState.setAgentMapping("session-1", "atlas");
@@ -70,16 +70,6 @@ describe("ObservationHandler message observation", () => {
       sessionId: "session-1",
       writerId: "w-handler",
     });
-    expect(files.get(path)).toBeUndefined();
-
-    await handler.handleMessage("session-1", {
-      kind: "text_complete",
-      sessionId: "session-1",
-      messageID: "message-1",
-      partID: "part-1",
-      text: "tests pass",
-    });
-
     const content = files.get(path);
 
     expect(content).toBeDefined();
@@ -296,7 +286,7 @@ describe("ObservationHandler message observation", () => {
     expect(files.get(path)).toBe(firstContent);
   });
 
-  it("records a revised finalized message when its text changes after completion", async () => {
+  it("re-pends a revised part and replaces its claim after the next finish signal", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
     sessionState.setAgentMapping("session-1", "atlas");
@@ -307,7 +297,7 @@ describe("ObservationHandler message observation", () => {
     });
 
     await handler.handleMessage("session-1", {
-      kind: "text_complete",
+      kind: "message_part_updated",
       sessionId: "session-1",
       messageID: "message-1",
       partID: "part-1",
@@ -320,21 +310,47 @@ describe("ObservationHandler message observation", () => {
       role: "assistant",
       finalized: true,
     });
+
+    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const firstContent = files.get(path);
     await handler.handleMessage("session-1", {
-      kind: "text_complete",
+      kind: "message_part_updated",
       sessionId: "session-1",
       messageID: "message-1",
       partID: "part-1",
       text: "tests fail",
     });
+    expect(files.get(path)).toBe(firstContent);
 
-    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+
     const records = (files.get(path) ?? "")
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as { declaredClaims: readonly { outcome: string }[] });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            readonly declaredClaims: readonly {
+              readonly evidenceId: string;
+              readonly outcome: string;
+            }[];
+          },
+      );
     expect(records).toHaveLength(2);
-    expect(records[1]?.declaredClaims[0]?.outcome).toBe("fail");
+    expect(records[0]?.declaredClaims[0]).toMatchObject({
+      evidenceId: "message-1-test",
+      outcome: "pass",
+    });
+    expect(records[1]?.declaredClaims[0]).toMatchObject({
+      evidenceId: "message-1-test",
+      outcome: "fail",
+    });
   });
 
   it("clears persisted IDs and buffered parts when a session ends", async () => {
