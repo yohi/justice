@@ -4,7 +4,7 @@ import type { ProjectedState } from "../../../src/core/v2/state-projection";
 
 function projectedState(): ProjectedState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     rebuiltAt: "2026-07-13T00:00:00.000Z",
     integrity: { sourceHash: "sha256:test", maxSequenceByShard: new Map() },
     tasks: new Map([
