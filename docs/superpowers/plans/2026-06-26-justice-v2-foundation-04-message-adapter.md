@@ -510,7 +510,7 @@ export class ObservationHandler {
 ```typescript
 // tests/core/v2/post-tool-use-merge.test.ts
 import { describe, expect, it, vi } from "vitest";
-import { mergePostToolUseResponses, mergePreToolUseResponses } from "../../../src/core/justice-plugin";
+import { mergePostToolUseResponses } from "../../../src/core/hook-response-merger";
 
 describe("D64 - PostToolUse merge rules", () => {
   it("should prioritize skip action over inject and proceed", () => {
@@ -540,9 +540,9 @@ describe("D64 - PostToolUse merge rules", () => {
       { action: "inject" as const, injectedContext: "A", modifiedPayload: { toolName: "task", modified: 1 } },
       { action: "inject" as const, injectedContext: "B", modifiedPayload: { toolName: "task", modified: 2 } }
     ];
-    const result = mergePreToolUseResponses(responses[0], responses[1], (message) => warnings.push(message));
+    const result = mergePostToolUseResponses(responses, (message) => warnings.push(message));
     expect(result.modifiedPayload).toEqual({ toolName: "task", modified: 1 });
-    expect(warnings).toEqual(["Conflict detected in pre-tool-use modifiedPayload; using the first response"]);
+    expect(warnings).toEqual(["Conflict detected in post-tool-use modifiedPayload; using the first response"]);
   });
 });
 ```
