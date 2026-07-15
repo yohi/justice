@@ -5,7 +5,6 @@ import type {
   FileReader,
   FileWriter,
   HookEvent,
-  PostToolUseEvent,
   PreToolUseEvent,
   HookResponse,
   EventEvent,
@@ -36,17 +35,14 @@ const PROCEED: HookResponse = { action: "proceed" };
 
 function openSessionTaskWindow(
   provider: SessionStateProvider,
-  event: PreToolUseEvent | PostToolUseEvent,
+  event: PreToolUseEvent,
 ): void {
   const callId = event.callId;
   if (!callId) return;
   // Reuse the same strict "task-" prefixed extraction PlanBridge/TaskPackager
   // rely on (D74) so this earliest window-set can never admit a value the
   // stricter downstream checks would reject.
-  const taskId =
-    event.type === "PreToolUse"
-      ? resolveTaskIdFromToolInput(event.payload.toolInput)
-      : resolveTaskIdFromToolInput(event.payload.toolInput ?? {});
+  const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
     provider.setActiveTaskWindow(callId, taskId);
