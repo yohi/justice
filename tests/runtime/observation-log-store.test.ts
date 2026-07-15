@@ -747,6 +747,30 @@ describe("ObservationLogStore", () => {
     expect(all.every((record) => record.writerId === "w-1")).toBe(true);
   });
 
+  it("excludes a shard entirely when only one of several physical files for that shard has out-of-order sequences", async () => {
+    // Given: shard w-1 has TWO physical files sharing the same shard identity -
+    // a healthy archived segment (in-order) and an active file whose physical
+    // line order is reversed (seq 3 recorded before seq 2).
+    const { files, reader, writer } = createMemFs();
+    const enc = encodeSafeSegment("ses-1");
+    const archivePath = `.justice/archive/events/sisyphus/${enc}/w-1.20260101T000000Z.jsonl`;
+    files.set(archivePath, `${JSON.stringify({ ...msgRecord(), sequence: 1 })}\n`);
+    files.set(
+      toPhysicalPath(shard),
+      `${JSON.stringify({ ...msgRecord(), sequence: 3 })}\n${JSON.stringify({ ...msgRecord(), sequence: 2 })}\n`,
+    );
+
+    const store = new ObservationLogStore(writer, reader, "w-1");
+
+    // When: all physical files are read and validated.
+    const all = await store.readAll();
+
+    // Then: the healthy archive segment's record shares shard identity with the
+    // tainted active file, so the whole shard is excluded rather than partially
+    // returned.
+    expect(all).toHaveLength(0);
+  });
+
   it("rejects append when shardId.writerId does not match the store writerId", async () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
