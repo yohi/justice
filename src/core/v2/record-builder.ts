@@ -2,6 +2,8 @@ import type {
   Evidence,
   PendingEnvelope,
   PendingObservationRecord,
+  ResolutionMarker,
+  ReviewItem,
   ToolOutputEvidence,
 } from "./observation-model";
 import type { DeclaredClaim } from "./declared-claim-extractor";
@@ -110,6 +112,49 @@ export function buildSkillInvokedRecord(input: SkillInvokedRecordInput): Pending
     skillName: input.invocation.skillName,
     source: input.invocation.source,
     ...(input.invocation.callId === undefined ? {} : { callId: input.invocation.callId }),
+  };
+}
+
+export function buildReviewObservedRecord(
+  envelope: PendingEnvelope,
+  reviewScope: string,
+  items: readonly ReviewItem[],
+  isCompleteSnapshot = false,
+): PendingObservationRecord {
+  const redactedItems = items.map((item) => ({
+    ...item,
+    summary: redactForPersistence(redactAbsolutePaths(item.summary)),
+    location: redactForPersistence(redactAbsolutePaths(item.location)),
+  }));
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "review_observed",
+    reviewScope,
+    isCompleteSnapshot,
+    items: redactedItems,
+  };
+}
+
+export function buildReviewResolutionRecord(
+  envelope: PendingEnvelope,
+  reviewScope: string,
+  itemKeys: readonly string[],
+  artifactRef: string,
+): PendingObservationRecord {
+  const redactedArtifactRef = redactForPersistence(redactAbsolutePaths(artifactRef));
+  const resolutionMarkers: readonly ResolutionMarker[] = itemKeys.map((itemKey) => ({
+    itemKey,
+    resolution: "human_artifact",
+    artifactRef: redactedArtifactRef,
+  }));
+  return {
+    ...envelope,
+    recordType: "observation",
+    kind: "review_observed",
+    reviewScope,
+    items: [],
+    resolutionMarkers,
   };
 }
 

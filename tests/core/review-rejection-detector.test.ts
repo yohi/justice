@@ -103,6 +103,60 @@ describe("ReviewRejectionDetector", () => {
     expect(signal.excerpts).toEqual(["approval denied due to security"]);
   });
 
+  it("parses every rejection line into a deterministic review item", () => {
+    // Given
+    const output = [
+      "BLOCKER: security vulnerability at src/auth.ts:42",
+      "MUST FIX: parser regression at src/parser.ts:10",
+    ].join("\n");
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toHaveLength(2);
+    expect(items).toMatchObject([
+      {
+        severity: "critical",
+        summary: "BLOCKER: security vulnerability at src/auth.ts:42",
+        location: "src/auth.ts:42",
+        status: "open",
+      },
+      {
+        severity: "major",
+        summary: "MUST FIX: parser regression at src/parser.ts:10",
+        location: "src/parser.ts:10",
+        status: "open",
+      },
+    ]);
+    expect(items.every((item) => item.evidenceId === item.itemKey)).toBe(true);
+  });
+
+  it("deduplicates repeated review findings by item key", () => {
+    // Given
+    const finding = "MUST FIX: parser regression at src/parser.ts:10";
+
+    // When
+    const items = detector.detectMultiple(`${finding}\n${finding}`);
+
+    // Then
+    expect(items).toHaveLength(1);
+  });
+
+  it("uses metadata to identify a complete review snapshot", () => {
+    // Given
+    const output = "review finished";
+
+    // When / Then
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(true);
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: false })).toBe(false);
+  });
+
+  it("does not infer a complete review snapshot without metadata", () => {
+    // Given / When / Then
+    expect(detector.isCompleteSnapshot("complete review with no findings")).toBe(false);
+  });
+
   it("detects uppercase do not merge wording", () => {
     const signal = detector.detect("DO NOT MERGE");
 

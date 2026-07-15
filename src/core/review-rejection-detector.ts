@@ -1,4 +1,9 @@
 import { REVIEW_REJECTION_PATTERNS } from "./review-rejection-patterns";
+import type { ReviewItem } from "./v2/observation-model";
+import { hashString } from "./v2/hash";
+import { classifySeverity, deriveItemKey } from "./v2/review-severity";
+
+export type { ReviewItem } from "./v2/observation-model";
 
 const MAX_EXCERPTS = 3;
 const MAX_EXCERPT_LENGTH = 200;
@@ -9,15 +14,6 @@ export interface ReviewRejectionSignal {
   readonly excerpts: readonly string[];
   readonly summary: string;
 }
-
-export type ReviewItem = {
-  readonly itemKey: string;
-  readonly severity: "critical" | "major" | "minor";
-  readonly summary: string;
-  readonly status: "open" | "resolved";
-  readonly evidenceId: string;
-  readonly location: string;
-};
 
 export class ReviewRejectionDetector {
   detect(text: string): ReviewRejectionSignal {
@@ -41,6 +37,41 @@ export class ReviewRejectionDetector {
     };
   }
 
+  detectMultiple(
+    text: string,
+    _metadata?: Readonly<Record<string, unknown>>,
+  ): readonly ReviewItem[] {
+    const items = new Map<string, ReviewItem>();
+    for (const line of text.split(/\r?\n/u)) {
+      const summary = line.trim().slice(0, MAX_EXCERPT_LENGTH);
+      const patternIndex = REVIEW_REJECTION_PATTERNS.findIndex((pattern) => pattern.test(summary));
+      if (summary.length === 0 || patternIndex < 0) continue;
+
+      const severity = classifySeverity(summary);
+      const location = extractReviewLocation(summary);
+      const normalizedSummary = summary.toLowerCase().replace(/\s+/gu, " ");
+      const itemKey = deriveItemKey(
+        severity,
+        `review-rejection-${patternIndex + 1}`,
+        location,
+        hashString(normalizedSummary),
+      );
+      items.set(itemKey, {
+        itemKey,
+        evidenceId: itemKey,
+        severity,
+        summary,
+        location,
+        status: "open",
+      });
+    }
+    return [...items.values()];
+  }
+
+  isCompleteSnapshot(_text: string, metadata?: Readonly<Record<string, unknown>>): boolean {
+    return metadata?.isCompleteSnapshot === true;
+  }
+
   private extractExcerpts(text: string): readonly string[] {
     const excerpts: string[] = [];
 
@@ -56,4 +87,15 @@ export class ReviewRejectionDetector {
 
     return excerpts;
   }
+}
+
+function extractReviewLocation(summary: string): string {
+  for (const token of summary.split(/\s+/u)) {
+    const candidate = token.replace(/^[([{'"`]+/u, "").replace(/[\])},;'"`]+$/u, "");
+    const separatorIndex = Math.max(candidate.lastIndexOf("/"), candidate.lastIndexOf("\\"));
+    if (separatorIndex < 0) continue;
+    const filePart = candidate.slice(separatorIndex + 1).split(":")[0] ?? "";
+    if (filePart.lastIndexOf(".") > 0) return candidate;
+  }
+  return "unknown";
 }
