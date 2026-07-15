@@ -91,7 +91,9 @@ function applyObservationEvent(
       });
     }
   } else if (event.kind === "review_observed") {
-    if (event.reviewScope) taskState.observedReviewScopes.push(event.reviewScope);
+    if (event.reviewScope && !taskState.observedReviewScopes.includes(event.reviewScope)) {
+      taskState.observedReviewScopes.push(event.reviewScope);
+    }
   }
 }
 

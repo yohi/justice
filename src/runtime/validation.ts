@@ -121,7 +121,11 @@ function validateObservationRecord(r: Record<string, unknown>): void {
   } else if (kind === "skill_invoked") {
     if (!isValidSkillInvokedRecord(r)) throw new Error("Invalid skill_invoked record");
   } else if (kind === "review_observed") {
-    if (typeof r.reviewScope !== "string" || !Array.isArray(r.items)) {
+    if (
+      typeof r.reviewScope !== "string" ||
+      !Array.isArray(r.items) ||
+      (r.isCompleteSnapshot !== undefined && typeof r.isCompleteSnapshot !== "boolean")
+    ) {
       throw new TypeError("Invalid review_observed record");
     }
     for (const item of r.items) {
@@ -135,6 +139,21 @@ function validateObservationRecord(r: Record<string, unknown>): void {
         !isOneOf(item.status, ["open", "resolved"])
       ) {
         throw new Error("Invalid review_observed item");
+      }
+    }
+    if (r.resolutionMarkers !== undefined) {
+      if (!Array.isArray(r.resolutionMarkers)) {
+        throw new Error("Invalid review_observed resolution marker");
+      }
+      for (const marker of r.resolutionMarkers) {
+        if (
+          !isObject(marker) ||
+          typeof marker.itemKey !== "string" ||
+          !isOneOf(marker.resolution, ["explicit_marker", "snapshot_absence", "human_artifact"]) ||
+          (marker.artifactRef !== undefined && typeof marker.artifactRef !== "string")
+        ) {
+          throw new Error("Invalid review_observed resolution marker");
+        }
       }
     }
   } else if (kind === "session_error") {

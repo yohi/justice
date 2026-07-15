@@ -455,7 +455,11 @@ export class ObservationHandler {
     metadata?: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     try {
-      const items = this.reviewRejectionDetector.detectMultiple(toolResult, metadata);
+      const items = this.reviewRejectionDetector.detectMultiple(
+        toolResult,
+        metadata,
+        process.cwd(),
+      );
       const isCompleteSnapshot = this.reviewRejectionDetector.isCompleteSnapshot(
         toolResult,
         metadata,

@@ -18,17 +18,23 @@ export function deriveItemKey(
   ruleId: string,
   location: string,
   evidenceHash: string,
+  workspaceRoot?: string,
 ): string {
-  const cwd =
-    typeof process !== "undefined" ? process.cwd().replace(/\\/g, "/") : "";
   let canonicalLocation = location.replace(/\\/g, "/").trim();
-  if (cwd && canonicalLocation.startsWith(cwd)) {
-    canonicalLocation = canonicalLocation.slice(cwd.length);
+  const canonicalWorkspaceRoot = workspaceRoot?.replace(/\\/g, "/").trim().replace(/\/+$/u, "");
+  if (
+    canonicalWorkspaceRoot &&
+    (canonicalLocation === canonicalWorkspaceRoot ||
+      canonicalLocation.startsWith(`${canonicalWorkspaceRoot}/`))
+  ) {
+    canonicalLocation = canonicalLocation.slice(canonicalWorkspaceRoot.length);
   }
   canonicalLocation = canonicalLocation.replace(/^\/+/, "");
   if (canonicalLocation.startsWith("./")) {
     canonicalLocation = canonicalLocation.slice(2);
   }
-  const locationHash = hashString(canonicalLocation).slice(0, 12);
+  const locationHash = hashString(canonicalLocation)
+    .replace(/^sha256:/u, "")
+    .slice(0, 12);
   return `${severity}:${ruleId}:${locationHash}:${evidenceHash}`;
 }

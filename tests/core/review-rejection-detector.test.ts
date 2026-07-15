@@ -132,6 +132,45 @@ describe("ReviewRejectionDetector", () => {
     expect(items.every((item) => item.evidenceId === item.itemKey)).toBe(true);
   });
 
+  it("classifies a rejection from its immediately following detail line", () => {
+    // Given
+    const output = "BLOCKER:\nsecurity vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([
+      {
+        severity: "critical",
+        summary: "BLOCKER:\nsecurity vulnerability at src/auth.ts:42",
+        location: "src/auth.ts:42",
+      },
+    ]);
+  });
+
+  it("stops rejection continuation at a blank line", () => {
+    // Given
+    const output = "BLOCKER:\n\nsecurity vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+  });
+
+  it("stops rejection continuation at a Markdown heading", () => {
+    // Given
+    const output = "BLOCKER:\n## Security vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+  });
+
   it("deduplicates repeated review findings by item key", () => {
     // Given
     const finding = "MUST FIX: parser regression at src/parser.ts:10";

@@ -210,4 +210,35 @@ describe("ObservationHandler review observations", () => {
       ],
     });
   });
+
+  it("redacts absolute paths and secret-like values in human artifact references", async () => {
+    // Given
+    const { handler, logStore } = createHandler();
+    const resolutionHandler = handler as unknown as {
+      handleReviewResolutionArtifact(payload: {
+        readonly agentId: ObservationAgentId;
+        readonly sessionId: string;
+        readonly reviewScope: string;
+        readonly itemKeys: readonly string[];
+        readonly artifactRef: string;
+      }): Promise<HookResponse>;
+    };
+
+    // When
+    await resolutionHandler.handleReviewResolutionArtifact({
+      agentId: "atlas",
+      sessionId: "session-review",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser"],
+      artifactRef: "/home/alice/project/docs/review.md GITHUB_TOKEN=ghp_exampleSecret1234567890",
+    });
+
+    // Then
+    const events = await logStore.readAll();
+    const serialized = JSON.stringify(events[0]);
+    expect(serialized).toContain("[REDACTED_PATH]");
+    expect(serialized).toContain("[REDACTED_ENV]");
+    expect(serialized).not.toContain("/home/alice");
+    expect(serialized).not.toContain("ghp_exampleSecret1234567890");
+  });
 });

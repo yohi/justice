@@ -142,7 +142,7 @@ describe("project() task fold", () => {
 });
 
 describe("project() review summary fold", () => {
-  it("aggregates review items into global and byScope buckets by severity and status", () => {
+  it("aggregates review items into global and byScope buckets with observed items open", () => {
     const events = [
       reviewEvent(1, "2026-07-06T00:00:01Z", "task-1", "src/api", [
         reviewItem("a", "critical", "open"),
@@ -159,11 +159,23 @@ describe("project() review summary fold", () => {
     expect(rs.critical.map((i) => i.itemKey)).toEqual(["a"]);
     expect(rs.major.map((i) => i.itemKey)).toEqual(["b"]);
     expect(rs.minor.map((i) => i.itemKey)).toEqual(["c"]);
-    expect(rs.open.map((i) => i.itemKey).sort()).toEqual(["a", "c"]);
-    expect(rs.resolved.map((i) => i.itemKey)).toEqual(["b"]);
+    expect(rs.open.map((i) => i.itemKey).sort()).toEqual(["a", "b", "c"]);
+    expect(rs.resolved).toEqual([]);
 
     expect(rs.byScope.get("src/api")?.critical.map((i) => i.itemKey)).toEqual(["a"]);
     expect(rs.byScope.get("src/ui")?.minor.map((i) => i.itemKey)).toEqual(["c"]);
+    expect(state.tasks.get("task-1")?.observedReviewScopes).toEqual(["src/api", "src/ui"]);
+  });
+
+  it("records each observed review scope once in first-seen order", () => {
+    const events = [
+      reviewEvent(1, "2026-07-06T00:00:01Z", "task-1", "src/api", []),
+      reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/ui", []),
+      reviewEvent(3, "2026-07-06T00:00:03Z", "task-1", "src/api", []),
+    ];
+
+    const state = project(events, REBUILT_AT);
+
     expect(state.tasks.get("task-1")?.observedReviewScopes).toEqual(["src/api", "src/ui"]);
   });
 

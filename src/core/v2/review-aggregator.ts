@@ -88,7 +88,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     if (!existingScope) scopeStates.set(record.reviewScope, scope);
 
     for (const item of record.items) {
-      scope.items.set(item.itemKey, { item: projectItem(record, item), status: item.status });
+      scope.items.set(item.itemKey, { item: projectItem(record, item), status: "open" });
     }
 
     if (record.isCompleteSnapshot === true) {

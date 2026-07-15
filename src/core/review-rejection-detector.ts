@@ -8,6 +8,7 @@ export type { ReviewItem } from "./v2/observation-model";
 const MAX_EXCERPTS = 3;
 const MAX_EXCERPT_LENGTH = 200;
 const MAX_SUMMARY_LENGTH = 300;
+const MARKDOWN_HEADING = /^#{1,6}(?:\s|$)/u;
 
 export interface ReviewRejectionSignal {
   readonly matched: boolean;
@@ -40,12 +41,31 @@ export class ReviewRejectionDetector {
   detectMultiple(
     text: string,
     _metadata?: Readonly<Record<string, unknown>>,
+    workspaceRoot?: string,
   ): readonly ReviewItem[] {
     const items = new Map<string, ReviewItem>();
-    for (const line of text.split(/\r?\n/u)) {
-      const summary = line.trim().slice(0, MAX_EXCERPT_LENGTH);
-      const patternIndex = REVIEW_REJECTION_PATTERNS.findIndex((pattern) => pattern.test(summary));
-      if (summary.length === 0 || patternIndex < 0) continue;
+    const lines = text.split(/\r?\n/u);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const heading = lines.at(lineIndex)?.trim() ?? "";
+      const patternIndex = REVIEW_REJECTION_PATTERNS.findIndex((pattern) => pattern.test(heading));
+      if (heading.length === 0 || patternIndex < 0) continue;
+
+      const findingLines = [heading];
+      let continuationIndex = lineIndex + 1;
+      while (continuationIndex < lines.length) {
+        const continuation = lines.at(continuationIndex)?.trim() ?? "";
+        if (
+          continuation.length === 0 ||
+          MARKDOWN_HEADING.test(continuation) ||
+          REVIEW_REJECTION_PATTERNS.some((pattern) => pattern.test(continuation))
+        ) {
+          break;
+        }
+        findingLines.push(continuation);
+        continuationIndex += 1;
+      }
+      lineIndex = continuationIndex - 1;
+      const summary = findingLines.join("\n").slice(0, MAX_EXCERPT_LENGTH);
 
       const severity = classifySeverity(summary);
       const location = extractReviewLocation(summary);
@@ -55,6 +75,7 @@ export class ReviewRejectionDetector {
         `review-rejection-${patternIndex + 1}`,
         location,
         hashString(normalizedSummary),
+        workspaceRoot,
       );
       items.set(itemKey, {
         itemKey,
