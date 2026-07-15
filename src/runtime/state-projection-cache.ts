@@ -68,7 +68,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidCacheStructure(parsed: unknown): boolean {
   if (!isPlainRecord(parsed)) return false;
-  if (parsed.schemaVersion !== 1) return false;
+  if (parsed.schemaVersion !== 2) return false;
   const integrity = parsed.integrity;
   if (!integrity || typeof integrity !== "object") return false;
   if (!("maxSequenceByShard" in integrity)) return false;

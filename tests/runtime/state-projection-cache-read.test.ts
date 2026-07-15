@@ -4,7 +4,7 @@ import {
   StateProjectionCache,
   validateProjectionCacheAgainstEvents,
 } from "../../src/runtime/state-projection-cache";
-import { project } from "../../src/core/v2/state-projection";
+import { project, toSerializableProjectedState } from "../../src/core/v2/state-projection";
 import type { ProjectedState } from "../../src/core/v2/state-projection";
 import { createMemFs } from "../helpers/mock-file-system";
 import type { ObservationRecord } from "../../src/core/v2/observation-model";
@@ -68,6 +68,20 @@ describe("StateProjectionCache.read() fail-open", () => {
     await cache.write(project([toolEvent(1, "task-1")], REBUILT_AT));
     const restored = await cache.read();
     expect(restored?.tasks.get("task-1")?.evidence).toHaveLength(1);
+  });
+
+  it("rejects a schema version 1 cache after the D32 projection semantics change", async () => {
+    const { files, reader, writer } = createMemFs();
+    const staleState = {
+      ...toSerializableProjectedState(project([toolEvent(1, "task-1")], REBUILT_AT)),
+      schemaVersion: 1,
+    };
+    files.set(PATH, JSON.stringify(staleState));
+    const warn = vi.fn();
+    const cache = new StateProjectionCache(writer, reader, PATH, { warn });
+
+    expect(await cache.read()).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
   });
 });
 

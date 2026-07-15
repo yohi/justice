@@ -5,9 +5,10 @@ import {
   computeSourceHash,
   orderEventsForProjection,
 } from "./integrity";
-import type { Evidence, PersistedLogRecord } from "./observation-model";
+import type { Evidence, ObservationRecord, PersistedLogRecord } from "./observation-model";
 import { toEvidenceArray } from "./evidence-list";
 import type { Verdict } from "./decision-model";
+import { aggregateReviews } from "./review-aggregator";
 
 export type ProjectedEvidence = {
   readonly evidence: Evidence;
@@ -44,7 +45,7 @@ export type ProjectedTask = {
 };
 
 export type ProjectedState = {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly rebuiltAt: string;
   readonly integrity: {
     readonly sourceHash: string;
@@ -52,14 +53,6 @@ export type ProjectedState = {
   };
   readonly tasks: ReadonlyMap<string, ProjectedTask>;
   readonly reviewSummary: ReviewSummary;
-};
-
-type MutableScopeSummary = {
-  critical: ReviewSummaryItem[];
-  major: ReviewSummaryItem[];
-  minor: ReviewSummaryItem[];
-  resolved: ReviewSummaryItem[];
-  open: ReviewSummaryItem[];
 };
 
 type MutableTask = {
@@ -80,63 +73,6 @@ function ensureTask(tasks: Map<string, MutableTask>, taskId: string): MutableTas
   };
   tasks.set(taskId, created);
   return created;
-}
-
-function emptyScopeSummary(): MutableScopeSummary {
-  return { critical: [], major: [], minor: [], resolved: [], open: [] };
-}
-
-function foldReviewSummary(sorted: readonly PersistedLogRecord[]): ReviewSummary {
-  const global = emptyScopeSummary();
-  const byScope = new Map<string, MutableScopeSummary>();
-
-  const ensureScope = (scope: string): MutableScopeSummary => {
-    const existing = byScope.get(scope);
-    if (existing) return existing;
-    const created = emptyScopeSummary();
-    byScope.set(scope, created);
-    return created;
-  };
-
-  for (const event of sorted) {
-    if (event.recordType !== "observation" || event.kind !== "review_observed") continue;
-    const scopeSummary = ensureScope(event.reviewScope);
-    for (const item of event.items) {
-      const projected: ReviewSummaryItem = {
-        itemKey: item.itemKey,
-        ref: {
-          agentId: event.agentId,
-          sessionId: event.sessionId,
-          writerId: event.writerId,
-          sequence: event.sequence,
-          kind: "full",
-          evidenceId: item.evidenceId,
-        },
-        severity: item.severity,
-      };
-
-      if (item.severity === "critical") {
-        global.critical.push(projected);
-        scopeSummary.critical.push(projected);
-      } else if (item.severity === "major") {
-        global.major.push(projected);
-        scopeSummary.major.push(projected);
-      } else {
-        global.minor.push(projected);
-        scopeSummary.minor.push(projected);
-      }
-
-      if (item.status === "resolved") {
-        global.resolved.push(projected);
-        scopeSummary.resolved.push(projected);
-      } else {
-        global.open.push(projected);
-        scopeSummary.open.push(projected);
-      }
-    }
-  }
-
-  return { authority: "observed_review_output", ...global, byScope };
 }
 
 function applyObservationEvent(
@@ -198,19 +134,21 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     rebuiltAt,
     integrity: {
       sourceHash: computeSourceHash(sorted),
       maxSequenceByShard,
     },
     tasks,
-    reviewSummary: foldReviewSummary(sorted),
+    reviewSummary: aggregateReviews(
+      sorted.filter((event): event is ObservationRecord => event.recordType === "observation"),
+    ),
   };
 }
 
 type SerializedProjectedState = {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly rebuiltAt: string;
   readonly integrity: {
     readonly sourceHash: string;
