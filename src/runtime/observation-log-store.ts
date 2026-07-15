@@ -1,7 +1,12 @@
 // src/runtime/observation-log-store.ts
 import type { FileReader, FileWriter, ShardId } from "../core/types";
 import type { PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
-import { fromPhysicalPath, toArchivePath, toPhysicalPath } from "../core/v2/shard-layout";
+import {
+  fromPhysicalPath,
+  shardKeyOf,
+  toArchivePath,
+  toPhysicalPath,
+} from "../core/v2/shard-layout";
 import { createShardWriteQueue, type ShardWriteQueue } from "./write-queue";
 import {
   validatePhysicalFileSequenceOrder,
@@ -176,9 +181,7 @@ export class ObservationLogStore {
         records.push(...fileRecords);
       } catch (err) {
         for (const record of fileRecords) {
-          invalidPhysicalOrderShardKeys.add(
-            JSON.stringify([record.agentId, record.sessionId, record.writerId]),
-          );
+          invalidPhysicalOrderShardKeys.add(shardKeyOf(record));
         }
         console.warn(
           "Failed to validate physical sequence order in %s, excluding affected shard from result",
@@ -217,7 +220,7 @@ export class ObservationLogStore {
     // (no exception escapes `readAll`; other shards are unaffected).
     const byShardKey = new Map<string, PersistedLogRecord[]>();
     for (const r of records) {
-      const shardKey = JSON.stringify([r.agentId, r.sessionId, r.writerId]);
+      const shardKey = shardKeyOf(r);
       const group = byShardKey.get(shardKey);
       if (group) {
         group.push(r);

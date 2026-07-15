@@ -15,6 +15,18 @@ export function toPhysicalPath(shardId: ShardId): string {
 }
 
 /**
+ * Deterministic logical shard key for grouping/lookup by `{agentId, sessionId,
+ * writerId}` identity (e.g. readAll()'s per-shard sequence validation and
+ * physical-order-violation tracking). Distinct from `toPhysicalPath`/
+ * `toArchivePath`, which additionally safe-encode the segments for on-disk
+ * paths -- this key uses the raw logical values and is only ever compared to
+ * itself, so no encoding/safety validation is needed here.
+ */
+export function shardKeyOf(shard: Pick<ShardId, "agentId" | "sessionId" | "writerId">): string {
+  return JSON.stringify([shard.agentId, shard.sessionId, shard.writerId]);
+}
+
+/**
  * Inverse of {@link toPhysicalPath}: parses a physical shard path back into its
  * identity components. Returns `null` (never throws) when `path` does not match
  * the `.justice/events/<agentId>/<encodedSessionId>/<writerId>.jsonl` layout so
