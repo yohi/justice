@@ -138,4 +138,42 @@ describe("JusticePlugin PostToolUse merge", () => {
       }),
     );
   });
+
+  it("swallows logger errors raised while warning about a post-tool-use merge conflict", async () => {
+    const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter(), {
+      logger: {
+        warn: (): never => {
+          throw new Error("logger boom");
+        },
+        error: vi.fn(),
+      },
+    });
+    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "Observation context",
+      modifiedPayload: { source: "observation" },
+    });
+    vi.spyOn(plugin.getPlanBridge(), "handlePostToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "PlanBridge context",
+      modifiedPayload: { source: "plan-bridge" },
+    });
+    vi.spyOn(plugin.getTaskFeedback(), "handlePostToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "TaskFeedback context",
+    });
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      payload: { toolName: "task", toolResult: "ok", error: false },
+      sessionId: "s-1",
+    } as PostToolUseEvent);
+
+    // The logger.warn throw must be swallowed (fail-open); the merge result
+    // itself is unaffected.
+    expect(response).toEqual(expect.objectContaining({
+      action: "inject",
+      modifiedPayload: { source: "observation" },
+    }));
+  });
 });
