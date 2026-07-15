@@ -132,6 +132,27 @@ export class MessageRoleBuffer {
     }
   }
 
+  /**
+   * Best-effort, non-mutating snapshot of all text currently buffered for
+   * `sessionId`, across every messageID and regardless of per-part finalized
+   * state. Used by session-error handling (D65: buffer is GC'd immediately
+   * on session.error) to preserve an audit trail of in-flight assistant text
+   * that would otherwise be silently dropped when the buffer entry is
+   * removed before a later message_updated(finalized:true)/text_complete
+   * could finalize it. Returns undefined when nothing assistant-authored is
+   * buffered for the session.
+   */
+  getPendingAssistantText(sessionId: string): string | undefined {
+    const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
+    const chunks: string[] = [];
+    for (const [key, entry] of this.buffer) {
+      if (!key.startsWith(sessionKeyPrefix) || entry.role !== "assistant") continue;
+      const text = this.collectText(entry, undefined);
+      if (text !== undefined && text.length > 0) chunks.push(text);
+    }
+    return chunks.length === 0 ? undefined : chunks.join("\n");
+  }
+
   removeSession(sessionId: string): void {
     const sessionKeyPrefix = `[${JSON.stringify(sessionId)},`;
     for (const key of this.buffer.keys()) {

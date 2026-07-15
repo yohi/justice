@@ -202,6 +202,50 @@ describe("MessageRoleBuffer", () => {
     });
   });
 
+  describe("getPendingAssistantText()", () => {
+    it("returns undefined for an unknown or empty session", () => {
+      const buffer = new MessageRoleBuffer();
+
+      expect(buffer.getPendingAssistantText("unknown")).toBeUndefined();
+      buffer.update("empty", messageUpdated("empty", "m", false));
+      expect(buffer.getPendingAssistantText("empty")).toBeUndefined();
+    });
+
+    it("returns buffered text for an unfinalized assistant part", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", partUpdated("s", "m", "p1", "draft response"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("draft response");
+    });
+
+    it("ignores buffered entries whose role is not assistant", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "role unknown"));
+
+      expect(buffer.getPendingAssistantText("s")).toBeUndefined();
+    });
+
+    it("joins text across multiple message IDs in the same session", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m1", false));
+      buffer.update("s", partUpdated("s", "m1", "p1", "first message"));
+      buffer.update("s", messageUpdated("s", "m2", false));
+      buffer.update("s", partUpdated("s", "m2", "p1", "second message"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("first message\nsecond message");
+    });
+
+    it("does not mutate buffered state", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", partUpdated("s", "m", "p1", "still buffered"));
+
+      expect(buffer.getPendingAssistantText("s")).toBe("still buffered");
+      expect(buffer.getPendingAssistantText("s")).toBe("still buffered");
+    });
+  });
+
   describe("gc()", () => {
     it("evicts entries older than maxAgeMs", () => {
       const clock = makeClock(0);

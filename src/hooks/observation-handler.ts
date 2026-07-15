@@ -78,6 +78,7 @@ export class ObservationHandler {
     readonly sessionId: string;
   }): Promise<HookResponse> {
     try {
+      const pendingAssistantText = this.messageRoleBuffer.getPendingAssistantText(error.sessionId);
       const record = buildSessionErrorRecord({
         envelope: {
           schemaVersion: 1 as const,
@@ -89,6 +90,7 @@ export class ObservationHandler {
         },
         errorKind: error.kind,
         message: error.message,
+        pendingAssistantText,
       });
 
       await this.options.logStore.append(
@@ -96,13 +98,15 @@ export class ObservationHandler {
         record,
       );
       this.scheduleProjectionRefresh();
-      // A session error can be recoverable, so discard only transient message parts;
-      // full session teardown remains reserved for confirmed session termination.
-      // Only discard the buffer once the session_error record has been durably
-      // persisted here: if append() above failed, the buffered (unfinalized)
-      // assistant parts are kept so a later recovery + finalize can still
-      // reconstruct them from a subsequent message_updated(finalized:true).
-      // MESSAGE_ROLE_BUFFER_MAX_AGE_MS/MAX_ENTRIES still bound memory either way.
+      // D65: session.error GC's the messageRoleBuffer immediately -- this is
+      // intentional (not deferred to confirmed session teardown). Any pending,
+      // possibly-unfinalized assistant text was already captured above into
+      // pendingAssistantSnippet before this discard, so a recoverable session
+      // that later resumes no longer silently loses that text from the audit
+      // trail. The buffer is discarded only once the session_error append
+      // above has durably succeeded: if append() failed, the buffered parts
+      // are kept so a later message_updated(finalized:true)/text_complete can
+      // still reconstruct them via the normal message path.
       this.messageRoleBuffer.removeSession(error.sessionId);
     } catch (err) {
       this.options.logger?.warn(
