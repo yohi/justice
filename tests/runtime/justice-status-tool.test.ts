@@ -103,6 +103,29 @@ describe("justice_status tool", () => {
     expect(cacheWrite).toHaveBeenCalledTimes(1);
   });
 
+  it("returns the projected state when the projection cache write fails", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    const projectionCache = observationHandler.getProjectionCache();
+    if (projectionCache === undefined) throw new Error("Projection cache fixture is missing");
+    vi.spyOn(projectionCache, "write").mockRejectedValue(new Error("cache unavailable"));
+    const definition = adapter.getTools().justice_status;
+    if (definition === undefined) throw new Error("justice_status definition is missing");
+
+    // When
+    const output = requireStringResult(await definition.execute({}, createToolContext()));
+
+    // Then
+    const parsed = serializedStateSchema.parse(JSON.parse(output));
+    expect(parsed.tasks).toEqual({});
+    expect(parsed.reviewSummary.open).toEqual([]);
+  });
+
   it("fails open with JSON ERROR when the observation log cannot be read", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());

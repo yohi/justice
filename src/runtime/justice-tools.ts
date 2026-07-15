@@ -20,7 +20,7 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
         const observationHandler = justice.getObservationHandler();
         const events = await observationHandler.getLogStore().readAll();
         const state = project(events, new Date().toISOString());
-        await observationHandler.getProjectionCache()?.write(state);
+        await observationHandler.getProjectionCache()?.write(state).catch(() => {});
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
       } catch (error: unknown) {
         return formatError(error instanceof Error ? error.message : String(error));
