@@ -96,16 +96,20 @@ export class ObservationHandler {
         record,
       );
       this.scheduleProjectionRefresh();
+      // A session error can be recoverable, so discard only transient message parts;
+      // full session teardown remains reserved for confirmed session termination.
+      // Only discard the buffer once the session_error record has been durably
+      // persisted here: if append() above failed, the buffered (unfinalized)
+      // assistant parts are kept so a later recovery + finalize can still
+      // reconstruct them from a subsequent message_updated(finalized:true).
+      // MESSAGE_ROLE_BUFFER_MAX_AGE_MS/MAX_ENTRIES still bound memory either way.
+      this.messageRoleBuffer.removeSession(error.sessionId);
     } catch (err) {
       this.options.logger?.warn(
         "observation-handler: session error observation failed, degrading to PROCEED",
         err,
       );
     }
-
-    // A session error can be recoverable, so discard only transient message parts;
-    // full session teardown remains reserved for confirmed session termination.
-    this.messageRoleBuffer.removeSession(error.sessionId);
     return PROCEED;
   }
 

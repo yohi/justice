@@ -118,6 +118,39 @@ describe("ObservationHandler.handleSessionError", () => {
       expect.anything(),
     );
   });
+
+  it("keeps the session message buffer when the log store append fails, so a later finalize can still recover it", async () => {
+    const { handler } = createHandler();
+    await handler.handleMessage("session-5", {
+      kind: "message_part_updated",
+      sessionId: "session-5",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    const internal = handler as unknown as {
+      readonly messageRoleBuffer: { readonly buffer: ReadonlyMap<string, unknown> };
+    };
+    const bufferKey = JSON.stringify(["session-5", "message-1"]);
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
+
+    handler["options"].logStore = {
+      append: vi.fn().mockRejectedValue(new Error("disk full")),
+    } as unknown as ObservationLogStore;
+
+    const response = await handler.handleSessionError({
+      message: "boom",
+      agentId: "hephaestus",
+      sessionId: "session-5",
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    // Only discard the buffer once the session_error record is durably
+    // persisted; on append failure the buffered (unfinalized) parts must
+    // survive so a subsequent message_updated(finalized:true) can still
+    // reconstruct them.
+    expect(internal.messageRoleBuffer.buffer.has(bufferKey)).toBe(true);
+  });
 });
 
 describe("ObservationHandler.emitReflectionEvent", () => {
