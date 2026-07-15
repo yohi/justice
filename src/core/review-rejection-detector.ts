@@ -10,6 +10,15 @@ export interface ReviewRejectionSignal {
   readonly summary: string;
 }
 
+export type ReviewItem = {
+  readonly itemKey: string;
+  readonly severity: "critical" | "major" | "minor";
+  readonly summary: string;
+  readonly status: "open" | "resolved";
+  readonly evidenceId: string;
+  readonly location: string;
+};
+
 export class ReviewRejectionDetector {
   detect(text: string): ReviewRejectionSignal {
     if (text.length === 0) {
