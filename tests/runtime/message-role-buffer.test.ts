@@ -173,6 +173,33 @@ describe("MessageRoleBuffer", () => {
       buffer.update("s", messageUpdated("s", "m", true));
       expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests fail");
     });
+
+    it("accepts a later text_complete correction after soft finalization with a stable evidenceId", () => {
+      const buffer = new MessageRoleBuffer();
+
+      // Given: streaming text is exposed by the message-finish fallback.
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests pass");
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([
+        { evidenceId: "m-test", claimKind: "test", outcome: "pass" },
+      ]);
+
+      // When: the independent text_complete hook later supplies corrected text.
+      buffer.update("s", textComplete("s", "m", "p1", "tests fail"));
+
+      // Then: the current view is corrected, stale claims are not accumulated in
+      // the buffer, and the logical evidence identity remains stable. (The
+      // append-only ObservationLogStore may separately retain the earlier
+      // soft-finalized revision as a historical audit record under the same
+      // evidenceId -- that is expected, not a bug: see the message_updated
+      // comment in message-role-buffer.ts and observation-handler.ts.)
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("tests fail");
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([
+        { evidenceId: "m-test", claimKind: "test", outcome: "fail" },
+      ]);
+    });
   });
 
   describe("gc()", () => {
@@ -263,7 +290,7 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
       buffer.update("s", textComplete("s", "m", "p1", "part one"));
       expect(buffer.getFinalizedText("s", "m")).toBe("part one");
       expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined(); // role not set yet
-      
+
       // Step 2: new unfinalizedpart p2 arrives via message_part_updated
       buffer.update("s", messageUpdated("s", "m", false)); // set role to assistant
       buffer.update("s", partUpdated("s", "m", "p2", "part two (draft)"));
@@ -271,7 +298,7 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
       // FIXED: now returns undefined because isFinalized() re-evaluates and finds p2 unfinalized
       expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
       expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined();
-      
+
       // Step 3: p2 completes via text_complete
       buffer.update("s", textComplete("s", "m", "p2", "part two (final)"));
       // Now both parts are finalized and message signal is set -> full text available

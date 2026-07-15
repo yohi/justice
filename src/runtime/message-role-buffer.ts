@@ -50,6 +50,18 @@ export class MessageRoleBuffer {
       case "message_updated":
         entry.role = payload.role;
         if (payload.finalized) {
+          // Soft fallback, not proof that every part's text is terminal:
+          // `message.updated` and `experimental.text.complete` are dispatched
+          // from unsynchronized SDK event sources (see opencode-adapter.ts), so
+          // a currently-buffered part may still be mid-stream. A later
+          // text_complete for the same partID can overwrite its text, causing
+          // ObservationHandler to append a corrected audit revision under the
+          // same (stable) evidenceId. Waiting for a real text_complete before
+          // exposing text here would silently drop the message entirely when
+          // text_complete never fires for some part (a documented Phase-0
+          // uncertainty) -- and message-declared claims are non-authoritative
+          // (audit visibility only, never gate evidence; see design spec §13/
+          // INV-004), so this tradeoff is accepted rather than "fixed".
           for (const part of entry.parts.values()) part.finalized = true;
           entry.messageSignaled = true;
         }
@@ -182,8 +194,13 @@ export class MessageRoleBuffer {
     return JSON.stringify([sessionId, messageId]);
   }
 
-  // Stable per-(message, part) evidence source so a re-updated part keeps the same
-  // evidenceId, letting the latest claim replace (not duplicate) the prior one.
+  // Stable per-(message, part) identity across revisions: a re-updated part
+  // keeps the same evidenceId so the buffer's CURRENT view never accumulates
+  // stale claims for that identity. This is append-only-log-agnostic: the
+  // observation log itself may still contain multiple historical revisions
+  // under this evidenceId (see the message_updated soft-finalize comment in
+  // update()); a consumer that needs a single current-view claim must
+  // collapse revisions latest-by-evidenceId itself.
   private sourceIdOf(messageId: string, partId: string | undefined): string {
     // JSON-encoded tuple avoids delimiter collisions (e.g. ":") between differing
     // (messageId, partId) pairs if either ID's format ever changes.

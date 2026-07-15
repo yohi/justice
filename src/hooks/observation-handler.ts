@@ -97,7 +97,10 @@ export class ObservationHandler {
       );
       this.scheduleProjectionRefresh();
     } catch (err) {
-      this.options.logger?.warn("observation-handler: session error observation failed, degrading to PROCEED", err);
+      this.options.logger?.warn(
+        "observation-handler: session error observation failed, degrading to PROCEED",
+        err,
+      );
     }
 
     // A session error can be recoverable, so discard only transient message parts;
@@ -110,7 +113,10 @@ export class ObservationHandler {
     try {
       await this.refreshProjectionCache();
     } catch (error) {
-      this.options.logger?.warn("observation-handler projection cache initialization failed", error);
+      this.options.logger?.warn(
+        "observation-handler projection cache initialization failed",
+        error,
+      );
     }
   }
 
@@ -143,7 +149,10 @@ export class ObservationHandler {
       );
       this.scheduleProjectionRefresh();
     } catch (err) {
-      this.options.logger?.warn("observation-handler: emitReflectionEvent failed, degrading gracefully", err);
+      this.options.logger?.warn(
+        "observation-handler: emitReflectionEvent failed, degrading gracefully",
+        err,
+      );
     }
   }
 
@@ -159,6 +168,12 @@ export class ObservationHandler {
         return PROCEED;
       }
       const textHash = hashString(text);
+      // Only an exact repeat is suppressed. A hash change from a legitimate
+      // correction (e.g. a delayed text_complete overwriting a part that was
+      // soft-finalized by message_updated -- see message-role-buffer.ts) is
+      // intentionally appended as a NEW immutable audit revision rather than
+      // replacing the prior record; declared claims here are non-authoritative
+      // (audit visibility only, never gate evidence).
       if (this.persistedMessageHashes.get(sessionId)?.get(payload.messageID) === textHash) {
         return PROCEED;
       }
@@ -285,7 +300,10 @@ export class ObservationHandler {
       try {
         cachedState = await this.refreshProjectionCache();
       } catch (error) {
-        this.options.logger?.warn("observation-handler: projection cache refresh failed during PostToolUse, continuing gate evaluation", error);
+        this.options.logger?.warn(
+          "observation-handler: projection cache refresh failed during PostToolUse, continuing gate evaluation",
+          error,
+        );
       }
 
       let response = PROCEED;
@@ -370,7 +388,9 @@ export class ObservationHandler {
     if (this.options.projectionCache === undefined) return;
     this.projectionRefresh = this.projectionRefresh
       .catch(() => {})
-      .then(async () => { await this.refreshProjectionCache(); })
+      .then(async () => {
+        await this.refreshProjectionCache();
+      })
       .catch((error) => {
         this.options.logger?.warn("observation-handler projection cache refresh failed", error);
       });
