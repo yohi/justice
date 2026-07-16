@@ -23,9 +23,8 @@ export function deriveItemKey(
     typeof process !== "undefined" ? process.cwd().replace(/\\/g, "/") : "";
   let canonicalLocation = location.replace(/\\/g, "/").trim();
   if (cwd && (canonicalLocation.startsWith(`${cwd}/`) || canonicalLocation === cwd)) {
-    canonicalLocation = canonicalLocation.slice(cwd.length);
+    canonicalLocation = canonicalLocation.slice(cwd.length).replace(/^\/+/, "");
   }
-  canonicalLocation = canonicalLocation.replace(/^\/+/, "");
   if (canonicalLocation.startsWith("./")) {
     canonicalLocation = canonicalLocation.slice(2);
   }
