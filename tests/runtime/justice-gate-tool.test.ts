@@ -132,7 +132,7 @@ const TEST_AND_REVIEW_GATES: readonly GateRule[] = [
     trigger: { on: "task_complete" },
     check: { type: "review_open_items", minimumSeverity: "major" },
     onViolation: "fail",
-    onMissingEvidence: "fail",
+    onMissingEvidence: "warn",
     enabled: true,
   },
 ];
@@ -217,6 +217,13 @@ describe("justice_gate tool", () => {
     expect(result.ruleResults).toEqual([
       expect.objectContaining({ ruleId: "tests-pass", verdict: "PASS" }),
       expect.objectContaining({ ruleId: "review-blocked", verdict: "FAIL" }),
+    ]);
+    const reviewRule = result.ruleResults.find((rule) => rule.ruleId === "review-blocked");
+    expect(reviewRule?.reason).toContain(
+      "Found 1 open review items matching minimum severity 'major'.",
+    );
+    expect(reviewRule?.evidenceRefs).toEqual([
+      expect.objectContaining({ evidenceId: "review-evidence-1", sequence: 3 }),
     ]);
     expect(append).not.toHaveBeenCalled();
   });
