@@ -22,13 +22,15 @@ export function deriveItemKey(
   const cwd =
     typeof process !== "undefined" ? process.cwd().replace(/\\/g, "/") : "";
   let canonicalLocation = location.replace(/\\/g, "/").trim();
-  if (cwd && canonicalLocation.startsWith(cwd)) {
-    canonicalLocation = canonicalLocation.slice(cwd.length);
+  if (cwd && (canonicalLocation.startsWith(`${cwd}/`) || canonicalLocation === cwd)) {
+    canonicalLocation = canonicalLocation.slice(cwd.length).replace(/^\/+/, "");
   }
-  canonicalLocation = canonicalLocation.replace(/^\/+/, "");
   if (canonicalLocation.startsWith("./")) {
     canonicalLocation = canonicalLocation.slice(2);
   }
-  const locationHash = hashString(canonicalLocation).slice(0, 12);
+  const locationHash = hashString(canonicalLocation).slice(
+    "sha256:".length,
+    "sha256:".length + 12,
+  );
   return `${severity}:${ruleId}:${locationHash}:${evidenceHash}`;
 }
