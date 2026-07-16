@@ -62,6 +62,18 @@ describe("deriveItemKey", () => {
     );
   });
 
+  it("normalizes a location that exactly equals cwd", () => {
+    const cwdLocation = process.cwd();
+    const locationHash = hashString("").slice(
+      "sha256:".length,
+      "sha256:".length + 12,
+    );
+
+    expect(
+      deriveItemKey("minor", "rule-1", cwdLocation, "evidence-hash"),
+    ).toBe(`minor:rule-1:${locationHash}:evidence-hash`);
+  });
+
   it("normalizes Windows separators before hashing a location", () => {
     const location = "src\\core\\review-rejection-detector.ts";
     const locationHash = hashString(
@@ -71,6 +83,26 @@ describe("deriveItemKey", () => {
     expect(deriveItemKey("minor", "rule-1", location, "evidence-hash")).toBe(
       `minor:rule-1:${locationHash}:evidence-hash`,
     );
+  });
+
+  it("falls back to an empty cwd when process is unavailable", () => {
+    const globalWithProcess = globalThis as { process?: typeof process };
+    const originalProcess = globalWithProcess.process;
+    globalWithProcess.process = undefined;
+
+    try {
+      const location = "src/core/review-rejection-detector.ts";
+      const locationHash = hashString(location).slice(
+        "sha256:".length,
+        "sha256:".length + 12,
+      );
+
+      expect(
+        deriveItemKey("minor", "rule-1", location, "evidence-hash"),
+      ).toBe(`minor:rule-1:${locationHash}:evidence-hash`);
+    } finally {
+      globalWithProcess.process = originalProcess;
+    }
   });
 });
 
