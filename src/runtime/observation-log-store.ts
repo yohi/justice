@@ -52,6 +52,11 @@ function rotationTimestamp(now: Date): string {
   return now.toISOString().replace(/[^A-Za-z0-9]/g, "");
 }
 
+/** Read-only capability exposed to query tools that must not mutate the log. */
+export interface ReadOnlyObservationLog {
+  readAll(): Promise<readonly PersistedLogRecord[]>;
+}
+
 /**
  * Append-only observation log store. Writes are serialized per physical shard
  * path via a write queue; each append is persisted atomically (temp file +

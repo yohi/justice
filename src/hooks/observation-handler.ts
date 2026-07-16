@@ -26,7 +26,10 @@ import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extracto
 import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
-import type { ObservationLogStore } from "../runtime/observation-log-store";
+import type {
+  ObservationLogStore,
+  ReadOnlyObservationLog,
+} from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
 import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
 import type { GateContext } from "../core/v2/gate-context";
@@ -77,7 +80,7 @@ export class ObservationHandler {
     },
   ) {}
 
-  getLogStore(): ObservationLogStore {
+  getLogStore(): ReadOnlyObservationLog {
     return this.options.logStore;
   }
 

@@ -46,6 +46,21 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         const justice = adapter.getJustice();
         if (justice === null) return formatError("Justice not initialized");
 
+        const scopedTaskId = taskId?.length ? taskId : undefined;
+        if (scopedTaskId === undefined) {
+          return JSON.stringify(
+            evaluate([], [], {
+              trigger: "task_complete",
+              taskId: scopedTaskId,
+              agentId: SessionStateProvider.resolveAgentId(context.agent),
+              sessionId: context.sessionID,
+              reviewScope: [],
+            }),
+            null,
+            2,
+          );
+        }
+
         const observationHandler = justice.getObservationHandler();
         const gateLoader = observationHandler.getGateLoader();
         if (gateLoader === undefined) return formatError("Gate loader not configured");
@@ -53,7 +68,6 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         const events = await observationHandler.getLogStore().readAll();
         const state = project(events, new Date().toISOString());
         const gates = await gateLoader.load();
-        const scopedTaskId = taskId?.length ? taskId : undefined;
         const gateContext: GateContext = {
           trigger: "task_complete",
           taskId: scopedTaskId,
@@ -89,7 +103,7 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
         if (scope !== undefined) {
           const scopedSummary = state.reviewSummary.byScope.get(scope);
           if (scopedSummary === undefined) {
-            return JSON.stringify({ status: "ERROR", reason: `Unknown scope: ${scope}` }, null, 2);
+            return formatError(`Unknown scope: ${scope}`);
           }
           return JSON.stringify(scopedSummary, null, 2);
         }
