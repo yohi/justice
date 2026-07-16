@@ -71,3 +71,45 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
     },
   });
 }
+
+export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "Review Summary Artifact を表示します",
+    args: { scope: tool.schema.string().optional() },
+    execute: async ({ scope }, _context) => {
+      try {
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return formatError("Justice not initialized");
+
+        const observationHandler = justice.getObservationHandler();
+        const events = await observationHandler.getLogStore().readAll();
+        const state = project(events, new Date().toISOString());
+
+        if (scope !== undefined) {
+          const scopedSummary = state.reviewSummary.byScope.get(scope);
+          if (scopedSummary === undefined) {
+            return JSON.stringify({ status: "ERROR", reason: `Unknown scope: ${scope}` }, null, 2);
+          }
+          return JSON.stringify(scopedSummary, null, 2);
+        }
+
+        return JSON.stringify(
+          {
+            authority: state.reviewSummary.authority,
+            critical: state.reviewSummary.critical,
+            major: state.reviewSummary.major,
+            minor: state.reviewSummary.minor,
+            resolved: state.reviewSummary.resolved,
+            open: state.reviewSummary.open,
+            byScope: Object.fromEntries(state.reviewSummary.byScope),
+          },
+          null,
+          2,
+        );
+      } catch (error: unknown) {
+        return formatError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+}
