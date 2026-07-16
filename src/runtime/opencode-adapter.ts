@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
-import { defineJusticeStatusTool } from "./justice-tools";
+import { defineJusticeGateTool, defineJusticeStatusTool } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -97,6 +97,7 @@ export class OpenCodeAdapter {
 
   getTools(): Record<string, ToolDefinition> {
     return {
+      justice_gate: defineJusticeGateTool(this),
       justice_status: defineJusticeStatusTool(this),
     };
   }
