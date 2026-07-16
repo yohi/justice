@@ -1,5 +1,5 @@
 import type { ObservationRecord, ReviewItem } from "./observation-model";
-import type { ReviewSummary, ReviewSummaryItem, ScopeReviewSummary } from "./state-projection";
+import type { ReviewSummary, ReviewSummaryItem, ScopeReviewSummary } from "./review-types";
 
 type ReviewObservedRecord = Extract<ObservationRecord, { readonly kind: "review_observed" }>;
 
@@ -93,7 +93,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
 
     if (record.isCompleteSnapshot === true) {
       const observedKeys = new Set(record.items.map((item) => item.itemKey));
-      for (const itemKey of scope.items.keys()) {
+      for (const itemKey of [...scope.items.keys()]) {
         if (!observedKeys.has(itemKey)) resolveItem(scope, itemKey);
       }
     }
