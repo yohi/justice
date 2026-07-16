@@ -1,4 +1,5 @@
 import { REVIEW_REJECTION_PATTERNS } from "./review-rejection-patterns";
+import type { ReviewSeverity } from "./v2/review-severity";
 
 const MAX_EXCERPTS = 3;
 const MAX_EXCERPT_LENGTH = 200;
@@ -12,7 +13,7 @@ export interface ReviewRejectionSignal {
 
 export type ReviewItem = {
   readonly itemKey: string;
-  readonly severity: "critical" | "major" | "minor";
+  readonly severity: ReviewSeverity;
   readonly summary: string;
   readonly status: "open" | "resolved";
   readonly evidenceId: string;

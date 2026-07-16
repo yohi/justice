@@ -44,7 +44,7 @@ describe("deriveItemKey", () => {
     const location = "./src/core/review-rejection-detector.ts";
     const locationHash = hashString(
       "src/core/review-rejection-detector.ts",
-    ).slice(0, 12);
+    ).slice("sha256:".length, "sha256:".length + 12);
 
     expect(deriveItemKey("major", "rule-1", location, "sha256:evidence")).toBe(
       `major:rule-1:${locationHash}:sha256:evidence`,
@@ -66,7 +66,7 @@ describe("deriveItemKey", () => {
     const location = "src\\core\\review-rejection-detector.ts";
     const locationHash = hashString(
       "src/core/review-rejection-detector.ts",
-    ).slice(0, 12);
+    ).slice("sha256:".length, "sha256:".length + 12);
 
     expect(deriveItemKey("minor", "rule-1", location, "evidence-hash")).toBe(
       `minor:rule-1:${locationHash}:evidence-hash`,
