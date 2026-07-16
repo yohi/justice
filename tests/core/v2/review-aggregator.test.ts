@@ -182,4 +182,46 @@ describe("aggregateReviews() D32 resolution", () => {
     expect(summary.byScope.get("scope-a")?.open.map((item) => item.itemKey)).toEqual(["finding-a"]);
     expect(summary.byScope.get("scope-b")?.open).toEqual([]);
   });
+
+  it("ignores a resolution marker referencing an item that was never observed", () => {
+    const records = [
+      reviewObserved({
+        sequence: 1,
+        scope: "task-1",
+        resolutionMarkers: [{ itemKey: "ghost", resolution: "explicit_marker" }],
+      }),
+    ];
+
+    const summary = aggregateReviews(records);
+    const scope = summary.byScope.get("task-1");
+
+    expect(scope?.open).toEqual([]);
+    expect(scope?.resolved).toEqual([]);
+  });
+
+  it("throws when a review item carries an unrecognized severity", () => {
+    const badSeverity = "unknown" as unknown as ReviewItem["severity"];
+    const records = [
+      reviewObserved({
+        sequence: 1,
+        scope: "task-1",
+        items: [reviewItem("bad-severity", badSeverity)],
+      }),
+    ];
+
+    expect(() => aggregateReviews(records)).toThrow(TypeError);
+  });
+
+  it("throws when a review item carries an unrecognized status", () => {
+    const badStatus = "unknown" as unknown as ReviewItem["status"];
+    const records = [
+      reviewObserved({
+        sequence: 1,
+        scope: "task-1",
+        items: [reviewItem("bad-status", "major", badStatus)],
+      }),
+    ];
+
+    expect(() => aggregateReviews(records)).toThrow(TypeError);
+  });
 });
