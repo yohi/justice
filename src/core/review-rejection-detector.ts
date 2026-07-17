@@ -118,14 +118,38 @@ export class ReviewRejectionDetector {
   ): string {
     const canonicalLocation = normalizeLocationForKey(location, workspaceRoot);
     const normalized = summary.toLowerCase().replace(/\s+/gu, " ");
+
     if (canonicalLocation.length === 0 || canonicalLocation === "unknown") {
       return normalized;
     }
-    const locationVariants = [canonicalLocation, location.replace(/:\d+$/, "").trim()].filter(
-      (variant, index, self) => variant.length > 0 && self.indexOf(variant) === index,
-    );
+
+    const canonicalLocationWithoutLine = canonicalLocation.replace(/:\d+$/, "").trim();
+    const rawLocation = location.replace(/\\/g, "/").trim();
+    const rawLocationWithoutLine = rawLocation.replace(/:\d+$/, "").trim();
+
+    const locationVariants = [
+      canonicalLocation,
+      canonicalLocationWithoutLine,
+      rawLocation,
+      rawLocationWithoutLine,
+    ];
+
+    if (workspaceRoot) {
+      const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+      locationVariants.push(
+        `${root}/${canonicalLocation}`,
+        `${root}/${canonicalLocationWithoutLine}`,
+      );
+    }
+
+    const deduped = locationVariants
+      .map((variant) => variant.toLowerCase())
+      .filter((variant) => variant.length > 0)
+      .filter((variant, index, self) => self.indexOf(variant) === index)
+      .sort((a, b) => b.length - a.length);
+
     let result = normalized;
-    for (const variant of locationVariants) {
+    for (const variant of deduped) {
       result = result.split(variant).join(" ").replace(/\s+/gu, " ").trim();
     }
     return result;

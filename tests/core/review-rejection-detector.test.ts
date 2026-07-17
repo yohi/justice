@@ -186,6 +186,36 @@ describe("ReviewRejectionDetector", () => {
     expect(items).toHaveLength(1);
   });
 
+  it("produces the same item key for absolute and relative location summaries", () => {
+    // Given
+    const relativeFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const absoluteFinding = "MUST FIX: parser regression at /workspace/src/parser.ts:10";
+
+    // When
+    const relativeItems = detector.detectMultiple(relativeFinding, {}, "/workspace");
+    const absoluteItems = detector.detectMultiple(absoluteFinding, {}, "/workspace");
+
+    // Then
+    expect(relativeItems).toHaveLength(1);
+    expect(absoluteItems).toHaveLength(1);
+    expect(relativeItems[0]?.itemKey).toBe(absoluteItems[0]?.itemKey);
+  });
+
+  it("produces the same item key for dotted and plain relative locations", () => {
+    // Given
+    const plainFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const dottedFinding = "MUST FIX: parser regression at ./src/parser.ts:10";
+
+    // When
+    const plainItems = detector.detectMultiple(plainFinding);
+    const dottedItems = detector.detectMultiple(dottedFinding);
+
+    // Then
+    expect(plainItems).toHaveLength(1);
+    expect(dottedItems).toHaveLength(1);
+    expect(plainItems[0]?.itemKey).toBe(dottedItems[0]?.itemKey);
+  });
+
   it("uses metadata to identify a complete review snapshot", () => {
     // Given
     const output = "review finished";
