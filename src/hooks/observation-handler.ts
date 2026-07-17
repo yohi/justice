@@ -458,7 +458,7 @@ export class ObservationHandler {
       const items = this.reviewRejectionDetector.detectMultiple(
         toolResult,
         metadata,
-        process.cwd(),
+        this.options.workspaceRoot ?? process.cwd(),
       );
       const isCompleteSnapshot = this.reviewRejectionDetector.isCompleteSnapshot(
         toolResult,
