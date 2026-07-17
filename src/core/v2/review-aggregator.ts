@@ -78,27 +78,45 @@ function materializeScope(scope: MutableScopeState): ScopeReviewSummary {
   return summary;
 }
 
+function getOrCreateScope(
+  scopeStates: Map<string, MutableScopeState>,
+  scopeName: string,
+): MutableScopeState {
+  const existing = scopeStates.get(scopeName);
+  if (existing) return existing;
+  const created: MutableScopeState = { items: new Map<string, AggregatedItem>() };
+  scopeStates.set(scopeName, created);
+  return created;
+}
+
+function applyItemUpdates(scope: MutableScopeState, record: ReviewObservedRecord): void {
+  for (const item of record.items) {
+    scope.items.set(item.itemKey, { item: projectItem(record, item), status: item.status });
+  }
+}
+
+function reconcileCompleteSnapshot(scope: MutableScopeState, record: ReviewObservedRecord): void {
+  if (record.isCompleteSnapshot !== true) return;
+  const observedKeys = new Set(record.items.map((item) => item.itemKey));
+  for (const itemKey of [...scope.items.keys()]) {
+    if (!observedKeys.has(itemKey)) resolveItem(scope, itemKey);
+  }
+}
+
+function applyResolutionMarkers(scope: MutableScopeState, record: ReviewObservedRecord): void {
+  for (const marker of record.resolutionMarkers ?? []) resolveItem(scope, marker.itemKey);
+}
+
 export function aggregateReviews(records: readonly ObservationRecord[]): ReviewSummary {
   const scopeStates = new Map<string, MutableScopeState>();
 
   for (const record of records) {
     if (record.kind !== "review_observed") continue;
-    const existingScope = scopeStates.get(record.reviewScope);
-    const scope = existingScope ?? { items: new Map<string, AggregatedItem>() };
-    if (!existingScope) scopeStates.set(record.reviewScope, scope);
+    const scope = getOrCreateScope(scopeStates, record.reviewScope);
 
-    for (const item of record.items) {
-      scope.items.set(item.itemKey, { item: projectItem(record, item), status: item.status });
-    }
-
-    if (record.isCompleteSnapshot === true) {
-      const observedKeys = new Set(record.items.map((item) => item.itemKey));
-      for (const itemKey of [...scope.items.keys()]) {
-        if (!observedKeys.has(itemKey)) resolveItem(scope, itemKey);
-      }
-    }
-
-    for (const marker of record.resolutionMarkers ?? []) resolveItem(scope, marker.itemKey);
+    applyItemUpdates(scope, record);
+    reconcileCompleteSnapshot(scope, record);
+    applyResolutionMarkers(scope, record);
   }
 
   const global = createMutableSummary();
