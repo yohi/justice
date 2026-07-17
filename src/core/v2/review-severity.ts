@@ -20,24 +20,25 @@ export function deriveItemKey(
   evidenceHash: string,
   workspaceRoot?: string,
 ): string {
-  const canonicalLocation = location.replace(/\\/g, "/").trim();
-  const strippedRoot = stripTrailingSlashes(
-    workspaceRoot?.replace(/\\/g, "/").trim(),
-  );
-  const rootStrippedLocation =
-    strippedRoot &&
-    (canonicalLocation === strippedRoot ||
-      canonicalLocation.startsWith(`${strippedRoot}/`))
-      ? canonicalLocation.slice(strippedRoot.length)
-      : canonicalLocation;
-  const leadingSlashStrippedLocation = rootStrippedLocation.replace(/^\/+/, "");
-  const finalLocation = leadingSlashStrippedLocation.startsWith("./")
-    ? leadingSlashStrippedLocation.slice(2)
-    : leadingSlashStrippedLocation;
+  const finalLocation = normalizeLocationForKey(location, workspaceRoot);
   const locationHash = hashString(finalLocation)
     .replace(/^sha256:/u, "")
     .slice(0, 12);
   return `${severity}:${ruleId}:${locationHash}:${evidenceHash}`;
+}
+
+export function normalizeLocationForKey(location: string, workspaceRoot?: string): string {
+  const canonicalLocation = location.replace(/\\/g, "/").trim();
+  const strippedRoot = stripTrailingSlashes(workspaceRoot?.replace(/\\/g, "/").trim());
+  const rootStrippedLocation =
+    strippedRoot &&
+    (canonicalLocation === strippedRoot || canonicalLocation.startsWith(`${strippedRoot}/`))
+      ? canonicalLocation.slice(strippedRoot.length)
+      : canonicalLocation;
+  const leadingSlashStrippedLocation = rootStrippedLocation.replace(/^\/+/, "");
+  return leadingSlashStrippedLocation.startsWith("./")
+    ? leadingSlashStrippedLocation.slice(2)
+    : leadingSlashStrippedLocation;
 }
 
 function stripTrailingSlashes(value: string | undefined): string | undefined {

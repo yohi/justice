@@ -157,7 +157,9 @@ describe("ReviewRejectionDetector", () => {
     const items = detector.detectMultiple(output);
 
     // Then
-    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
   });
 
   it("stops rejection continuation at a Markdown heading", () => {
@@ -168,7 +170,9 @@ describe("ReviewRejectionDetector", () => {
     const items = detector.detectMultiple(output);
 
     // Then
-    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
   });
 
   it("deduplicates repeated review findings by item key", () => {
