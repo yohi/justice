@@ -73,12 +73,16 @@ export async function executeJusticeReviewTool(
 ): Promise<JusticeReviewToolResult> {
   try {
     const state = project(await input.logReader.readAll(), new Date().toISOString());
+    const normalizedScope = input.args.scope?.trim() || undefined;
     if (input.args.resolve === undefined) {
-      return serializeReviewSummary(state.reviewSummary, input.args.scope);
+      return serializeReviewSummary(state.reviewSummary, normalizedScope);
+    }
+    if (normalizedScope === undefined) {
+      return errorResult("Review resolution requires a non-empty scope. Provide scope when using resolve.");
     }
 
     const artifact = normalizeReviewResolutionArtifact({
-      reviewScope: input.args.scope ?? "",
+      reviewScope: normalizedScope,
       itemKeys: input.args.resolve.itemKeys,
       artifactRef: input.args.resolve.artifactRef,
     });
