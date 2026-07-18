@@ -144,7 +144,7 @@ describe("aggregateReviews() D32 resolution", () => {
     ]);
   });
 
-  it("uses the latest item observation for status and severity", () => {
+  it("uses the latest item observation for severity but ignores its resolved status", () => {
     const records = [
       reviewObserved({ sequence: 1, scope: "task-1", items: [reviewItem("finding", "major")] }),
       reviewObserved({
@@ -157,14 +157,14 @@ describe("aggregateReviews() D32 resolution", () => {
     const summary = aggregateReviews(records);
     const scope = summary.byScope.get("task-1");
 
-    expect(scope?.open).toEqual([]);
+    expect(scope?.open).toEqual([
+      expect.objectContaining({ itemKey: "finding", severity: "minor" }),
+    ]);
     expect(scope?.major).toEqual([]);
     expect(scope?.minor).toEqual([
       expect.objectContaining({ itemKey: "finding", severity: "minor" }),
     ]);
-    expect(scope?.resolved).toEqual([
-      expect.objectContaining({ itemKey: "finding", severity: "minor" }),
-    ]);
+    expect(scope?.resolved).toEqual([]);
   });
 
   it("applies complete snapshots only within the matching review scope", () => {
@@ -206,19 +206,6 @@ describe("aggregateReviews() D32 resolution", () => {
         sequence: 1,
         scope: "task-1",
         items: [reviewItem("bad-severity", badSeverity)],
-      }),
-    ];
-
-    expect(() => aggregateReviews(records)).toThrow(TypeError);
-  });
-
-  it("throws when a review item carries an unrecognized status", () => {
-    const badStatus = "unknown" as unknown as ReviewItem["status"];
-    const records = [
-      reviewObserved({
-        sequence: 1,
-        scope: "task-1",
-        items: [reviewItem("bad-status", "major", badStatus)],
       }),
     ];
 

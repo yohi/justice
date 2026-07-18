@@ -614,7 +614,19 @@ describe("validateRecordSchema", () => {
   });
 
   it("accepts a valid review_observed record", () => {
-    expect(() => validateRecordSchema(validReviewObserved())).not.toThrow();
+    expect(() =>
+      validateRecordSchema({
+        ...validReviewObserved(),
+        isCompleteSnapshot: true,
+        resolutionMarkers: [
+          {
+            itemKey: "i-1",
+            resolution: "human_artifact",
+            artifactRef: "reviews/i-1.md",
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 
   it("rejects a review_observed record with non-array items", () => {
@@ -662,6 +674,32 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid review_observed item");
   });
 
+  it.each([
+    { resolutionMarkers: "not-array" },
+    { resolutionMarkers: [null] },
+    { resolutionMarkers: [{ itemKey: 1, resolution: "explicit_marker" }] },
+    { resolutionMarkers: [{ itemKey: "i-1", resolution: "bogus" }] },
+    {
+      resolutionMarkers: [{ itemKey: "i-1", resolution: "human_artifact", artifactRef: 42 }],
+    },
+  ])("rejects malformed review_observed resolution markers: %j", (invalidFields) => {
+    expect(() =>
+      validateRecordSchema({
+        ...validReviewObserved(),
+        ...invalidFields,
+      }),
+    ).toThrow("Invalid review_observed resolution marker");
+  });
+
+  it("rejects a non-boolean review_observed complete-snapshot flag", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validReviewObserved(),
+        isCompleteSnapshot: "true",
+      }),
+    ).toThrow("Invalid review_observed record");
+  });
+
   it("accepts a complete skill_invoked record", () => {
     expect(() =>
       validateRecordSchema({
@@ -690,7 +728,7 @@ describe("validateRecordSchema", () => {
         kind: "session_error",
       }),
     ).toThrow("Invalid session_error record");
-    
+
     // Verify it's specifically a TypeError
     expect(() =>
       validateRecordSchema({

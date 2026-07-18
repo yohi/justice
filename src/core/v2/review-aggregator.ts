@@ -91,7 +91,7 @@ function getOrCreateScope(
 
 function applyItemUpdates(scope: MutableScopeState, record: ReviewObservedRecord): void {
   for (const item of record.items) {
-    scope.items.set(item.itemKey, { item: projectItem(record, item), status: item.status });
+    scope.items.set(item.itemKey, { item: projectItem(record, item), status: "open" });
   }
 }
 

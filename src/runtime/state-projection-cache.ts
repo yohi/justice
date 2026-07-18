@@ -84,6 +84,18 @@ function isValidCacheStructure(parsed: unknown): boolean {
   if (!isPlainRecord(reviewSummary)) return false;
   if (!isPlainRecord(reviewSummary.byScope)) return false;
   if (reviewSummary.authority !== "observed_review_output") return false;
+  for (const scopeSummary of Object.values(reviewSummary.byScope)) {
+    if (
+      !isPlainRecord(scopeSummary) ||
+      !Array.isArray(scopeSummary.critical) ||
+      !Array.isArray(scopeSummary.major) ||
+      !Array.isArray(scopeSummary.minor) ||
+      !Array.isArray(scopeSummary.resolved) ||
+      !Array.isArray(scopeSummary.open)
+    ) {
+      return false;
+    }
+  }
   return (
     Array.isArray(reviewSummary.critical) &&
     Array.isArray(reviewSummary.major) &&

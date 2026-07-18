@@ -83,6 +83,28 @@ describe("StateProjectionCache.read() fail-open", () => {
     expect(await cache.read()).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
   });
+
+  it("rejects a cache with a malformed review summary scope", async () => {
+    const { files, reader, writer } = createMemFs();
+    const validState = toSerializableProjectedState(project([toolEvent(1, "task-1")], REBUILT_AT));
+    files.set(
+      PATH,
+      JSON.stringify({
+        ...validState,
+        reviewSummary: {
+          ...validState.reviewSummary,
+          byScope: {
+            "scope-a": { critical: [], major: [], minor: [], resolved: [], open: null },
+          },
+        },
+      }),
+    );
+    const warn = vi.fn();
+    const cache = new StateProjectionCache(writer, reader, PATH, { warn });
+
+    expect(await cache.read()).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
+  });
 });
 
 describe("validateProjectionCacheAgainstEvents()", () => {

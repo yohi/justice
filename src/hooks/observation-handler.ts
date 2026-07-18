@@ -1,4 +1,5 @@
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
+import { ReviewRejectionDetector } from "../core/review-rejection-detector";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
   HookResponse,
@@ -10,6 +11,8 @@ import type {
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import {
   buildMessageRecord,
+  buildReviewObservedRecord,
+  buildReviewResolutionRecord,
   buildSessionErrorRecord,
   buildSkillInvokedRecord,
   buildToolExecutedRecord,
@@ -27,7 +30,7 @@ import type { ObservationLogStore } from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
 import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
 import type { GateContext } from "../core/v2/gate-context";
-import { collectReviewScopes } from "../core/v2/review-scope";
+import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope";
 import type { PendingDecisionRecord } from "../core/v2/decision-model";
 import type { GateLoader } from "../runtime/gate-loader";
 
@@ -53,6 +56,7 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
  */
 export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
+  private readonly reviewRejectionDetector = new ReviewRejectionDetector();
   private readonly persistedMessageHashes = new Map<string, Map<string, string>>();
   private projectionRefresh: Promise<void> = Promise.resolve();
 
@@ -442,14 +446,84 @@ export class ObservationHandler {
   }
 
   private async appendReviewObservationsIfDetected(
-    _shardId: ShardId,
-    _taskId: string | undefined,
-    _sessionId: string,
-    _callId: string,
-    _toolName: string,
-    _toolResult: string,
-    _metadata?: Readonly<Record<string, unknown>>,
-  ): Promise<void> {}
+    shardId: ShardId,
+    taskId: string | undefined,
+    sessionId: string,
+    callId: string,
+    toolName: string,
+    toolResult: string,
+    metadata?: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    try {
+      const items = this.reviewRejectionDetector.detectMultiple(
+        toolResult,
+        metadata,
+        this.options.workspaceRoot ?? process.cwd(),
+      );
+      const isCompleteSnapshot = this.reviewRejectionDetector.isCompleteSnapshot(
+        toolResult,
+        metadata,
+      );
+      if (items.length === 0 && !isCompleteSnapshot) return;
+
+      const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
+      await this.options.logStore.append(
+        shardId,
+        buildReviewObservedRecord(
+          {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId: shardId.agentId,
+            sessionId,
+            writerId: this.options.writerId,
+            ...(taskId === undefined ? {} : { taskId }),
+            recordType: "observation",
+          },
+          reviewScope,
+          items,
+          isCompleteSnapshot,
+        ),
+      );
+    } catch (error) {
+      this.options.logger?.warn("observation-handler: review_observed generation failed", error);
+    }
+  }
+
+  async handleReviewResolutionArtifact(payload: {
+    readonly agentId: ObservationAgentId;
+    readonly sessionId: string;
+    readonly reviewScope: string;
+    readonly itemKeys: readonly string[];
+    readonly artifactRef: string;
+  }): Promise<HookResponse> {
+    try {
+      const shardId: ShardId = {
+        agentId: payload.agentId,
+        sessionId: payload.sessionId,
+        writerId: this.options.writerId,
+      };
+      await this.options.logStore.append(
+        shardId,
+        buildReviewResolutionRecord(
+          {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId: payload.agentId,
+            sessionId: payload.sessionId,
+            writerId: this.options.writerId,
+            recordType: "observation",
+          },
+          payload.reviewScope,
+          payload.itemKeys,
+          payload.artifactRef,
+        ),
+      );
+      this.scheduleProjectionRefresh();
+    } catch (error) {
+      this.options.logger?.warn("observation-handler: review resolution marker failed", error);
+    }
+    return PROCEED;
+  }
 
   private async evaluateGateIfTriggered(
     trigger: "task_complete" | "tool_observed",

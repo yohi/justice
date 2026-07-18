@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type ReviewItem } from "../../src/core/review-rejection-detector";
 import { hashString } from "../../src/core/v2/hash";
-import {
-  classifySeverity,
-  deriveItemKey,
-} from "../../src/core/v2/review-severity";
+import { classifySeverity, deriveItemKey } from "../../src/core/v2/review-severity";
 
 describe("classifySeverity", () => {
   it.each([
@@ -42,9 +39,9 @@ describe("classifySeverity", () => {
 describe("deriveItemKey", () => {
   it("normalizes a repository-relative location before hashing it", () => {
     const location = "./src/core/review-rejection-detector.ts";
-    const locationHash = hashString(
-      "src/core/review-rejection-detector.ts",
-    ).slice("sha256:".length, "sha256:".length + 12);
+    const locationHash = hashString("src/core/review-rejection-detector.ts")
+      .replace(/^sha256:/u, "")
+      .slice(0, 12);
 
     expect(deriveItemKey("major", "rule-1", location, "sha256:evidence")).toBe(
       `major:rule-1:${locationHash}:sha256:evidence`,
@@ -52,57 +49,40 @@ describe("deriveItemKey", () => {
   });
 
   it("uses the same key for equivalent absolute and relative locations", () => {
+    const workspaceRoot = "/workspace/project";
+    const relativeLocation = "src/core/review-rejection-detector.ts";
+    const absoluteLocation = `${workspaceRoot}/${relativeLocation}`;
+
+    expect(
+      deriveItemKey("critical", "rule-1", absoluteLocation, "evidence-hash", workspaceRoot),
+    ).toBe(deriveItemKey("critical", "rule-1", relativeLocation, "evidence-hash", workspaceRoot));
+  });
+
+  it("does not implicitly strip the current working directory", () => {
     const relativeLocation = "src/core/review-rejection-detector.ts";
     const absoluteLocation = `${process.cwd()}/${relativeLocation}`;
 
-    expect(
-      deriveItemKey("critical", "rule-1", absoluteLocation, "evidence-hash"),
-    ).toBe(
+    expect(deriveItemKey("critical", "rule-1", absoluteLocation, "evidence-hash")).not.toBe(
       deriveItemKey("critical", "rule-1", relativeLocation, "evidence-hash"),
     );
   });
 
-  it("normalizes a location that exactly equals cwd", () => {
-    const cwdLocation = process.cwd();
-    const locationHash = hashString("").slice(
-      "sha256:".length,
-      "sha256:".length + 12,
-    );
-
-    expect(
-      deriveItemKey("minor", "rule-1", cwdLocation, "evidence-hash"),
-    ).toBe(`minor:rule-1:${locationHash}:evidence-hash`);
-  });
-
   it("normalizes Windows separators before hashing a location", () => {
     const location = "src\\core\\review-rejection-detector.ts";
-    const locationHash = hashString(
-      "src/core/review-rejection-detector.ts",
-    ).slice("sha256:".length, "sha256:".length + 12);
+    const locationHash = hashString("src/core/review-rejection-detector.ts")
+      .replace(/^sha256:/u, "")
+      .slice(0, 12);
 
     expect(deriveItemKey("minor", "rule-1", location, "evidence-hash")).toBe(
       `minor:rule-1:${locationHash}:evidence-hash`,
     );
   });
 
-  it("falls back to an empty cwd when process is unavailable", () => {
-    const globalWithProcess = globalThis as { process?: typeof process };
-    const originalProcess = globalWithProcess.process;
-    globalWithProcess.process = undefined;
+  it("uses exactly twelve hexadecimal characters for the location hash segment", () => {
+    const itemKey = deriveItemKey("major", "rule-1", "src/example.ts", "evidence-hash");
+    const locationHash = itemKey.split(":")[2];
 
-    try {
-      const location = "src/core/review-rejection-detector.ts";
-      const locationHash = hashString(location).slice(
-        "sha256:".length,
-        "sha256:".length + 12,
-      );
-
-      expect(
-        deriveItemKey("minor", "rule-1", location, "evidence-hash"),
-      ).toBe(`minor:rule-1:${locationHash}:evidence-hash`);
-    } finally {
-      globalWithProcess.process = originalProcess;
-    }
+    expect(locationHash).toMatch(/^[0-9a-f]{12}$/u);
   });
 });
 
