@@ -16,32 +16,12 @@ const envelope: PendingEnvelope = {
 };
 
 describe("buildSessionErrorRecord", () => {
-  it("omits pendingAssistantSnippet when pending assistant text is absent or empty", () => {
+  it("does not persist pending assistant text", () => {
     const withoutPendingText = buildSessionErrorRecord({
       envelope,
       message: "Connection reset",
     });
-    const withEmptyPendingText = buildSessionErrorRecord({
-      envelope,
-      message: "Connection reset",
-      pendingAssistantText: "",
-    });
-
     expect("pendingAssistantSnippet" in withoutPendingText).toBe(false);
-    expect("pendingAssistantSnippet" in withEmptyPendingText).toBe(false);
-  });
-
-  it("includes a redacted pending assistant snippet", () => {
-    const record = buildSessionErrorRecord({
-      envelope,
-      message: "Connection reset",
-      pendingAssistantText: "draft at /home/user/secret",
-    });
-
-    expect(record).toMatchObject({
-      kind: "session_error",
-      pendingAssistantSnippet: "draft at [REDACTED_PATH]",
-    });
   });
 });
 

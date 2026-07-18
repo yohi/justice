@@ -70,7 +70,7 @@ describe("ObservationHandler.handleSessionError", () => {
     expect(events.some((event) => event.kind === "session_error")).toBe(true);
   });
 
-  it("captures pending assistant text in the session error record before discarding the buffer", async () => {
+  it("does not persist pending assistant text before discarding the buffer", async () => {
     const { handler, logStore } = createHandler();
     await handler.handleMessage("session-pending", {
       kind: "message_updated",
@@ -96,10 +96,8 @@ describe("ObservationHandler.handleSessionError", () => {
 
     const events = await logStore.readAll();
     const sessionError = events.find((event) => event.kind === "session_error");
-    expect(sessionError).toMatchObject({
-      kind: "session_error",
-      pendingAssistantSnippet: "unfinished assistant response",
-    });
+    expect(sessionError).toMatchObject({ kind: "session_error" });
+    expect(JSON.stringify(sessionError)).not.toContain("unfinished assistant response");
   });
 
   it("defaults errorKind to unknown when kind is omitted", async () => {

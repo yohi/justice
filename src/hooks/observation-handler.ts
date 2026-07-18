@@ -83,7 +83,6 @@ export class ObservationHandler {
     readonly sessionId: string;
   }): Promise<HookResponse> {
     try {
-      const pendingAssistantText = this.messageRoleBuffer.getPendingAssistantText(error.sessionId);
       const record = buildSessionErrorRecord({
         envelope: {
           schemaVersion: 1 as const,
@@ -95,7 +94,6 @@ export class ObservationHandler {
         },
         errorKind: error.kind,
         message: error.message,
-        pendingAssistantText,
       });
 
       await this.options.logStore.append(
@@ -103,15 +101,8 @@ export class ObservationHandler {
         record,
       );
       this.scheduleProjectionRefresh();
-      // D65: session.error GC's the messageRoleBuffer immediately -- this is
-      // intentional (not deferred to confirmed session teardown). Any pending,
-      // possibly-unfinalized assistant text was already captured above into
-      // pendingAssistantSnippet before this discard, so a recoverable session
-      // that later resumes no longer silently loses that text from the audit
-      // trail. The buffer is discarded only once the session_error append
-      // above has durably succeeded: if append() failed, the buffered parts
-      // are kept so a later message_updated(finalized:true)/text_complete can
-      // still reconstruct them via the normal message path.
+      // D65: discard in-flight text after a durable error record. Message bodies
+      // are deliberately not copied into session_error records (D34).
       this.messageRoleBuffer.removeSession(error.sessionId);
     } catch (err) {
       this.options.logger?.warn(
