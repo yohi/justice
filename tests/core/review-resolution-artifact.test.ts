@@ -16,4 +16,24 @@ describe("normalizeReviewResolutionArtifact", () => {
     // Then
     expect(result).toBeUndefined();
   });
+
+  it("accepts the maximum number of item keys", () => {
+    const result = normalizeReviewResolutionArtifact({
+      reviewScope: "task-6.3",
+      itemKeys: Array.from({ length: 256 }, (_, index) => `major:item-${index}`),
+      artifactRef: "docs/reviews/task-6.3.md",
+    });
+
+    expect(result?.itemKeys).toHaveLength(256);
+  });
+
+  it("rejects more than the maximum number of item keys", () => {
+    const result = normalizeReviewResolutionArtifact({
+      reviewScope: "task-6.3",
+      itemKeys: Array.from({ length: 257 }, (_, index) => `major:item-${index}`),
+      artifactRef: "docs/reviews/task-6.3.md",
+    });
+
+    expect(result).toBeUndefined();
+  });
 });

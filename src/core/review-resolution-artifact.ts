@@ -1,6 +1,7 @@
 import type { ReviewResolutionArtifact } from "./types";
 
 const MAX_REVIEW_RESOLUTION_IDENTIFIER_LENGTH = 256;
+const MAX_REVIEW_RESOLUTION_ITEM_KEYS = 256;
 const SAFE_REVIEW_RESOLUTION_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 type ReviewResolutionArtifactFields = Pick<
@@ -52,7 +53,7 @@ function normalizeIdentifier(value: string): string | undefined {
 }
 
 function normalizeIdentifiers(values: readonly string[]): readonly string[] | undefined {
-  if (values.length === 0) return undefined;
+  if (values.length === 0 || values.length > MAX_REVIEW_RESOLUTION_ITEM_KEYS) return undefined;
 
   const normalized: string[] = [];
   const identifiers = new Set<string>();

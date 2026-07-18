@@ -133,6 +133,18 @@ function unwrapRunnerPrefixes(tokens: readonly string[]): {
   return { firstToken: rest[0] ?? "", sawRunner, unwrappedTokens: rest };
 }
 
+function isInlineGitGlobalOption(argument: string): boolean {
+  return (
+    (argument.startsWith("-C") && argument.length > 2) ||
+    (argument.startsWith("-c") && argument.length > 2) ||
+    (argument.startsWith("--git-dir=") && argument.length > "--git-dir=".length) ||
+    (argument.startsWith("--work-tree=") && argument.length > "--work-tree=".length) ||
+    (argument.startsWith("--namespace=") && argument.length > "--namespace=".length) ||
+    (argument.startsWith("--super-prefix=") && argument.length > "--super-prefix=".length) ||
+    (argument.startsWith("--config-env=") && argument.length > "--config-env=".length)
+  );
+}
+
 function findGitSubcommandIndex(tokens: readonly string[]): number | null {
   let index = 1;
   while (index < tokens.length) {
@@ -146,15 +158,7 @@ function findGitSubcommandIndex(tokens: readonly string[]): number | null {
       index += 2;
       continue;
     }
-    if (
-      (argument.startsWith("-C") && argument.length > 2) ||
-      (argument.startsWith("-c") && argument.length > 2) ||
-      (argument.startsWith("--git-dir=") && argument.length > "--git-dir=".length) ||
-      (argument.startsWith("--work-tree=") && argument.length > "--work-tree=".length) ||
-      (argument.startsWith("--namespace=") && argument.length > "--namespace=".length) ||
-      (argument.startsWith("--super-prefix=") && argument.length > "--super-prefix=".length) ||
-      (argument.startsWith("--config-env=") && argument.length > "--config-env=".length)
-    ) {
+    if (isInlineGitGlobalOption(argument)) {
       index++;
       continue;
     }
