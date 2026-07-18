@@ -50,7 +50,7 @@
 ### Task 0.0: Preflight Verification
 
 **Prerequisites:**
-- **[重要・手動前提作業]** 本実装計画の実行前に、ADRドキュメント `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` の作成および CODEOWNERS による承認取得（APPROVED）が完了している必要があります。これらは本実装計画のスコープ外で事前に実施される手動プロセスであり、Task 0.0 はその完了を静的に検証・追認する役割のみを持ちます。
+- **[重要・手動前提作業]** 本実装計画の実行前に、ADRドキュメント `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` の作成および CODEOWNERS による承認取得（**PENDING HUMAN CODEOWNERS RATIFICATION**）が完了している必要があります。これらは本実装計画のスコープ外で事前に実施される手動プロセスであり、Task 0.0 はその完了を静的に検証・追認する役割のみを持ちます。
 
 **Files:**
 
@@ -63,7 +63,7 @@
 
 - [x] **Step 1: ADR ドキュメント（ADR-2026-06-26-v2-charter-drift.md）がリポジトリ内に存在し、正しい内容であることを確認する**
   - パス: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
-  - 内容: `Status: APPROVED` などの承認証跡が記載されていることをテストで検証する（将来の再実行時に破綻するのを防ぐため、単体テスト内に具体的な PR 番号や個人名をハードコードすることは避ける）。
+  - 内容: `Status: PENDING HUMAN CODEOWNERS RATIFICATION` などの承認証跡が記載されていることをテストで検証する（将来の再実行時に破綻するのを防ぐため、単体テスト内に具体的な PR 番号や個人名をハードコードすることは避ける）。
 
 - [x] **Step 2: テストコード（tests/preflight-verification.test.ts）の実装**
 
@@ -94,7 +94,7 @@ test("preflight verification: ADR ratification check", () => {
 ```
 
 - [x] **Step 2b: ADR 追認の確認（Pre-merge 判定基準と Post-merge 検証の分離）**
-  - **静的チェック（CI内で実施、pre-merge safe）:** ADRファイルの存在、`Status: APPROVED`、およびプレースホルダー置換等は `preflight-verification.test.ts` を通じた通常テスト実行で検証する（Step 1/2 参照）。マージ状態に依存しないため、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）内で安全に実行できる。
+  - **静的チェック（CI内で実施、pre-merge safe）:** ADRファイルの存在、`Status: PENDING HUMAN CODEOWNERS RATIFICATION`、およびプレースホルダー置換等は `preflight-verification.test.ts` を通じた通常テスト実行で検証する（Step 1/2 参照）。マージ状態に依存しないため、通常の PR CI ワークフロー（`.github/workflows/ci.yml`）内で安全に実行できる。
   - **Pre-merge 判定基準（reviewDecision）:** `reviewDecision == "APPROVED"` は、マージ前でも判定可能な「承認済みか」のゲート条件であり、PR がマージされているかどうかとは独立した基準として扱う。
   - **Post-merge 検証（state=MERGED）:** `state == "MERGED"` は定義上、マージが実際に完了した後でなければ真になり得ない事後確認である。マージ前の PR CI 自体を壊すのを防ぐため、この確認は通常の PR CI ワークフロー（`.github/workflows/ci.yml`）には追加せず、開発者の手動確認、または将来追加する専用の post-merge ワークフロー（現時点では未実装）に分離する。
   - **[確認済 2026-07-06]** 手動確認結果:
