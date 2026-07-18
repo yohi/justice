@@ -48,7 +48,7 @@
 
 **判断:** Phase 6 は Phase 5 の `review_open_items` gate と Phase 1/2 の型を使用。Task 6.1 は severity 分類器（独立）で Base から、Task 6.2 は 6.1 + ProjectedState 型で Task 6.1 から、Task 6.3 は 6.2 + observation-handler 経路で Task 6.2 から。
 
-> **実装状態の照合（2026-07-18）:** Task 6.1〜6.3 の実装・テストは現行コードへ反映済みである。歴史的な commit / PR 作成のチェックボックスは、この文書だけでは追認できないため未変更とする。
+> **実装状態の照合（2026-07-18）:** Task 6.1〜6.3 の実装・テストは現行コードへ反映済みである。v2 Phase 6 整合性検証（2026-07-18）にて Phase 6 完了を追認済み。下記チェックボックスを更新する。
 
 ---
 
@@ -121,14 +121,14 @@ export type ReviewItem = {
 devcontainer exec --workspace-folder . bun run test tests/core/review-severity.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-severity.ts src/core/review-rejection-detector.ts tests/core/review-severity.test.ts
 git commit -m "feat(v2): deterministic review severity classifier and itemKey"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -365,14 +365,14 @@ it("marks item resolved on human artifact", () => {
 devcontainer exec --workspace-folder . bun run test tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-aggregator.ts src/core/v2/state-projection.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
 git commit -m "feat(v2): scope-aware review aggregator"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -508,14 +508,14 @@ private async handleReviewResolutionArtifact(payload: { agentId: ObservationAgen
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-scope.ts src/core/v2/record-builder.ts src/hooks/observation-handler.ts src/core/review-rejection-detector.ts tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
 git commit -m "feat(v2): review_observed generation using record-builder and multi-item detection"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
