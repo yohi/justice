@@ -75,6 +75,17 @@ export class SessionStateProvider {
 
   /**
    * Opens (or overwrites) the task window for `callId` (PreToolUse).
+   *
+   * NOTE: When `sessionId` is associated with an active generation (i.e.
+   * `setAgentMapping` was called and `removeSession` has not yet removed it),
+   * the window is tagged with that generation.  If `removeSession` is called
+   * and then `setActiveTaskWindow` is invoked *again* for the same session,
+   * a new generation will be acquired and the window will be treated as valid
+   * by `getActiveTaskId`.  This is intentional: callers that re-register a
+   * session after removal are assumed to have re-mapped it via
+   * `setAgentMapping`.  The common case (Promise.all during a single tool
+   * invocation) never re-creates a window for a removed session because the
+   * PreToolUse call happens before any concurrent removeSession.
    */
   setActiveTaskWindow(callId: string, taskId: string, sessionId?: string): void {
     if (sessionId !== undefined && this.sessionGenerations.has(sessionId)) {
