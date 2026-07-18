@@ -602,6 +602,72 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
   });
 
+  it("silently ignores chat.message with missing sessionID, content, or non-user role", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: { sessionID: "", message: { role: "user", content: "hi" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: { sessionID: "s", message: { role: "user", content: "" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: { sessionID: "s", message: { role: "assistant", content: "hi" } },
+      },
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("silently ignores chat.params with missing sessionID or agent", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: { type: "chat.params", properties: { sessionID: "", agent: "atlas" } },
+    });
+    await adapter.onEvent({
+      event: { type: "chat.params", properties: { sessionID: "s", agent: "" } },
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("silently ignores message.part.updated with empty part id or text", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.part.updated",
+        properties: { sessionID: "s", part: { id: "", messageID: "m", text: "text" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "message.part.updated",
+        properties: { sessionID: "s", part: { id: "p", messageID: "m", text: "" } },
+      },
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("(g) still dispatches the plan-bridge Message when AgentMapped dispatch throws", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
