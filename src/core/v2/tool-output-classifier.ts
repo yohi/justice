@@ -81,6 +81,14 @@ const RUNNER_PREFIXES = new Set([
 // command's arguments (e.g. a git commit message) is not misclassified as file_content.
 const INTERPRETERS = new Set(["python", "python3", "node", "ts-node", "deno", "bun"]);
 
+const GIT_FILE_CONTENT_SUBCOMMAND_PATTERN =
+  /^(?:diff|diff-files|diff-index|diff-tree|show|grep|blame|annotate|cat-file|range-diff)$/;
+const GIT_GLOBAL_OPTION_PATTERN =
+  /^(?:--no-pager|--paginate|-p|--no-replace-objects|--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)$/;
+const GIT_GLOBAL_OPTION_WITH_VALUE_PATTERN =
+  /^(?:-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env)$/;
+const GIT_PATCH_OUTPUT_OPTION_PATTERN = /^(?:-p|-u|--patch|--patch-with-stat)$/;
+
 // Inline file-read one-liners embedded in interpreter invocations (e.g. `node -e "...readFileSync..."`,
 // `python -c "open('f').read()"`, `python -c "Path('f').read_text()"`). These read file content even
 // though the leading token is a command-exec interpreter (D49/D52/D60). Requiring the full
@@ -106,6 +114,7 @@ export function classifyToolOutputClass(
 function unwrapRunnerPrefixes(tokens: readonly string[]): {
   readonly firstToken: string;
   readonly sawRunner: boolean;
+  readonly unwrappedTokens: readonly string[];
 } {
   let rest = tokens;
   let sawRunner = false;
@@ -121,7 +130,60 @@ function unwrapRunnerPrefixes(tokens: readonly string[]): {
       }
     }
   }
-  return { firstToken: rest[0] ?? "", sawRunner };
+  return { firstToken: rest[0] ?? "", sawRunner, unwrappedTokens: rest };
+}
+
+function findGitSubcommandIndex(tokens: readonly string[]): number | null {
+  let index = 1;
+  while (index < tokens.length) {
+    const argument = tokens.at(index);
+    if (argument === undefined) return null;
+    if (GIT_GLOBAL_OPTION_PATTERN.test(argument)) {
+      index++;
+      continue;
+    }
+    if (GIT_GLOBAL_OPTION_WITH_VALUE_PATTERN.test(argument)) {
+      index += 2;
+      continue;
+    }
+    if (
+      (argument.startsWith("-C") && argument.length > 2) ||
+      (argument.startsWith("-c") && argument.length > 2) ||
+      (argument.startsWith("--git-dir=") && argument.length > "--git-dir=".length) ||
+      (argument.startsWith("--work-tree=") && argument.length > "--work-tree=".length) ||
+      (argument.startsWith("--namespace=") && argument.length > "--namespace=".length) ||
+      (argument.startsWith("--super-prefix=") && argument.length > "--super-prefix=".length) ||
+      (argument.startsWith("--config-env=") && argument.length > "--config-env=".length)
+    ) {
+      index++;
+      continue;
+    }
+    return index;
+  }
+  return null;
+}
+
+function hasGitPatchOutputOption(tokens: readonly string[]): boolean {
+  return tokens.some(
+    (argument) =>
+      GIT_PATCH_OUTPUT_OPTION_PATTERN.test(argument) ||
+      argument.startsWith("--patch=") ||
+      argument.startsWith("-U") ||
+      argument.startsWith("--unified="),
+  );
+}
+
+function isGitFileContentCommand(tokens: readonly string[]): boolean {
+  const subcommandIndex = findGitSubcommandIndex(tokens);
+  if (subcommandIndex === null) return false;
+
+  const subcommand = tokens.at(subcommandIndex);
+  if (subcommand === undefined) return false;
+  if (GIT_FILE_CONTENT_SUBCOMMAND_PATTERN.test(subcommand)) return true;
+
+  const subcommandArguments = tokens.slice(subcommandIndex + 1);
+  if (subcommand === "log") return hasGitPatchOutputOption(subcommandArguments);
+  return subcommand === "format-patch" && subcommandArguments.includes("--stdout");
 }
 
 // Classifies a full shell command string. Splits by sequential delimiters (&&, ||, ;) — NOT by pipe
@@ -137,9 +199,10 @@ function classifyShellCommand(command: string): "command_exec" | "file_content" 
     // Analyze the leading command in the pipeline (before the first '|').
     const pipelineStart = sub.split("|")[0]!;
     const tokens = pipelineStart.trim().split(/\s+/).filter(Boolean);
-    const { firstToken, sawRunner } = unwrapRunnerPrefixes(tokens);
+    const { firstToken, sawRunner, unwrappedTokens } = unwrapRunnerPrefixes(tokens);
 
     if (FILE_CONTENT_COMMANDS.has(firstToken)) hasFileContent = true;
+    if (firstToken === "git" && isGitFileContentCommand(unwrappedTokens)) hasFileContent = true;
     // A runner-wrapped invocation executes a process; treat as command_exec.
     if (sawRunner || COMMAND_EXEC_COMMANDS.has(firstToken)) hasCommandExec = true;
     // Interpreter one-liners that read a file (e.g. `node -e "...readFileSync..."`,

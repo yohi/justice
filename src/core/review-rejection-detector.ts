@@ -95,7 +95,10 @@ export class ReviewRejectionDetector {
   }
 
   isCompleteSnapshot(_text: string, metadata?: Readonly<Record<string, unknown>>): boolean {
-    return metadata?.isCompleteSnapshot === true;
+    // No trusted typed producer currently exists for complete review snapshots.
+    // Generic tool metadata must never resolve previously observed review items.
+    void metadata;
+    return false;
   }
 
   private resolveSeverity(heading: string, summary: string): ReviewSeverity {

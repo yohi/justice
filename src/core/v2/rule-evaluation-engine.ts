@@ -48,7 +48,7 @@ function evaluateRule(
     case "evidence_present": {
       const matching = evidence.filter(
         (item) =>
-          item.evidence.kind === check.evidenceKind && isAuthoritative(item.evidence.provenance),
+          item.evidence.kind === check.evidenceKind && isAuthoritativeExecutionEvidence(item.evidence),
       );
       if (matching.length > 0) {
         return {
@@ -67,7 +67,10 @@ function evaluateRule(
     }
 
     case "evidence_outcome": {
-      const matching = evidence.filter((item) => item.evidence.kind === check.evidenceKind);
+      const matching = evidence.filter(
+        (item) =>
+          item.evidence.kind === check.evidenceKind && isAuthoritativeExecutionEvidence(item.evidence),
+      );
       if (matching.length === 0) {
         return {
           ruleId: gate.id,
@@ -85,14 +88,12 @@ function evaluateRule(
 
       for (const item of matching) {
         matchedRefs.push(item.ref);
-        const authoritative = isAuthoritative(item.evidence.provenance);
         const outcome = evidenceOutcome(item.evidence);
 
-        if (authoritative && outcome === check.requireOutcome) {
+        if (outcome === check.requireOutcome) {
           hasAuthoritativePass = true;
         }
         if (
-          authoritative &&
           outcome !== undefined &&
           outcome !== "unknown" &&
           outcome !== check.requireOutcome
@@ -219,6 +220,17 @@ function evidenceOutcome(evidence: Evidence): "pass" | "fail" | "unknown" | unde
 
 function isAuthoritative(provenance: Evidence["provenance"]): boolean {
   return provenance === "observed" || provenance === "derived";
+}
+
+function isAuthoritativeExecutionEvidence(evidence: Evidence): boolean {
+  switch (evidence.sourceClass) {
+    case "tool_output":
+      return evidence.toolOutputClass === "command_exec" && isAuthoritative(evidence.provenance);
+    case "declared_claim":
+      return false;
+    default:
+      return assertNever(evidence);
+  }
 }
 
 function isSeverityAtLeast(

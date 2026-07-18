@@ -2,6 +2,32 @@
 import { describe, expect, it } from "vitest";
 import { classifyToolOutputClass } from "../../../src/core/v2/tool-output-classifier";
 
+const GIT_COMMAND_CLASSIFICATION_CASES = [
+  { command: "git diff", expected: "file_content" },
+  { command: "git diff-files --name-only", expected: "file_content" },
+  { command: "git diff-index --cached HEAD", expected: "file_content" },
+  { command: "git diff-tree --no-commit-id -r HEAD", expected: "file_content" },
+  { command: "git annotate src/index.ts", expected: "file_content" },
+  { command: "git show HEAD", expected: "file_content" },
+  { command: "git grep TODO", expected: "file_content" },
+  { command: "git blame src/index.ts", expected: "file_content" },
+  { command: "git cat-file -p HEAD:README.md", expected: "file_content" },
+  { command: "git range-diff main...HEAD", expected: "file_content" },
+  { command: "git log -p --oneline", expected: "file_content" },
+  { command: "git log --patch-with-stat", expected: "file_content" },
+  { command: "git format-patch --stdout HEAD~1", expected: "file_content" },
+  {
+    command: "git --no-pager -C worktree -c color.ui=false diff --cached",
+    expected: "file_content",
+  },
+  { command: "git status --short", expected: "command_exec" },
+  { command: "git commit -m message", expected: "command_exec" },
+  { command: "git log --oneline", expected: "command_exec" },
+  { command: "git rev-parse HEAD", expected: "command_exec" },
+  { command: "git format-patch -1", expected: "command_exec" },
+  { command: "git status && git diff --cached", expected: "file_content" },
+] as const;
+
 describe("classifyToolOutputClass", () => {
   it("classifies file-reading tools as file_content", () => {
     expect(classifyToolOutputClass("read", undefined)).toBe("file_content");
@@ -64,6 +90,12 @@ describe("classifyToolOutputClass", () => {
     expect(classifyToolOutputClass("bash", { command: "python script.py" })).toBe("command_exec");
     expect(classifyToolOutputClass("bash", { command: "go test ./..." })).toBe("command_exec");
     expect(classifyToolOutputClass("bash", { command: "make test" })).toBe("command_exec");
+  });
+
+  it("classifies Git output by content-producing subcommand", () => {
+    for (const { command, expected } of GIT_COMMAND_CLASSIFICATION_CASES) {
+      expect(classifyToolOutputClass("bash", { command })).toBe(expected);
+    }
   });
 
   it("unwraps runner prefixes (uv/poetry/npx/bunx) to classify wrapped tool as command_exec (Issue 3)", () => {

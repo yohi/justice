@@ -216,12 +216,12 @@ describe("ReviewRejectionDetector", () => {
     expect(plainItems[0]?.itemKey).toBe(dottedItems[0]?.itemKey);
   });
 
-  it("uses metadata to identify a complete review snapshot", () => {
+  it("does not trust raw metadata to identify a complete review snapshot", () => {
     // Given
     const output = "review finished";
 
     // When / Then
-    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(true);
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(false);
     expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: false })).toBe(false);
   });
 
