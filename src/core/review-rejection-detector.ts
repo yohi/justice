@@ -123,9 +123,9 @@ export class ReviewRejectionDetector {
       return normalized;
     }
 
-    const canonicalLocationWithoutLine = canonicalLocation.replace(/:\d+$/, "").trim();
-    const rawLocation = location.replace(/\\/g, "/").trim();
-    const rawLocationWithoutLine = rawLocation.replace(/:\d+$/, "").trim();
+    const canonicalLocationWithoutLine = stripLineNumber(canonicalLocation);
+    const rawLocation = location.split("\\").join("/").trim();
+    const rawLocationWithoutLine = stripLineNumber(rawLocation);
 
     const locationVariants = [
       canonicalLocation,
@@ -135,7 +135,7 @@ export class ReviewRejectionDetector {
     ];
 
     if (workspaceRoot) {
-      const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+      const root = stripTrailingSlashes(workspaceRoot.replace(/\\/g, "/"));
       locationVariants.push(
         `${root}/${canonicalLocation}`,
         `${root}/${canonicalLocationWithoutLine}`,
@@ -171,16 +171,48 @@ export class ReviewRejectionDetector {
   }
 }
 
+const LEADING_PUNCTUATION = new Set("([{'\"`");
+const TRAILING_PUNCTUATION = new Set("])},;'\"`");
+
+function stripEdgePunctuation(token: string): string {
+  let start = 0;
+  let end = token.length;
+  while (start < end && LEADING_PUNCTUATION.has(token.charAt(start))) {
+    start += 1;
+  }
+  while (end > start && TRAILING_PUNCTUATION.has(token.charAt(end - 1))) {
+    end -= 1;
+  }
+  return token.slice(start, end);
+}
+
+function stripLineNumber(value: string): string {
+  const colonIndex = value.lastIndexOf(":");
+  if (colonIndex < 0) return value;
+  const afterColon = value.slice(colonIndex + 1);
+  if (!/^\d+$/u.test(afterColon)) return value;
+  return value.slice(0, colonIndex).trim();
+}
+
+function stripTrailingSlashes(value: string): string {
+  let result = value;
+  while (result.endsWith("/")) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+
 function extractReviewLocation(summary: string): string {
   for (const token of summary.split(/\s+/u)) {
-    const candidate = token.replace(/^[([{'"`]+/u, "").replace(/[\])},;'"`]+$/u, "");
+    const candidate = stripEdgePunctuation(token);
     const separatorIndex = Math.max(candidate.lastIndexOf("/"), candidate.lastIndexOf("\\"));
     if (separatorIndex < 0) {
-      const filePart = candidate.split(":")[0] ?? "";
+      const [filePart = ""] = candidate.split(":");
       if (filePart.lastIndexOf(".") > 0) return candidate;
       continue;
     }
-    const filePart = candidate.slice(separatorIndex + 1).split(":")[0] ?? "";
+    const [filePart = ""] = candidate.slice(separatorIndex + 1).split(":");
     if (filePart.lastIndexOf(".") > 0) return candidate;
   }
   return "unknown";
