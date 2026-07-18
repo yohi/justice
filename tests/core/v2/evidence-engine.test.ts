@@ -70,6 +70,56 @@ describe("extractEvidenceFromTool", () => {
     expect("rawOutput" in ev).toBe(false);
   });
 
+  it("hashes git diff output without storing rawOutput", () => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command: "git --no-pager -C worktree diff --cached" },
+      { output: "diff --git a/file.ts b/file.ts\n+added content" },
+      "call_git_diff",
+    );
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
+      throw new Error("expected file_content tool_output evidence");
+    }
+    expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
+    expect("rawOutput" in ev).toBe(false);
+  });
+
+  it.each([
+    "git diff-files --name-only",
+    "git diff-index --cached HEAD",
+    "git diff-tree --no-commit-id -r HEAD",
+    "git annotate src/index.ts",
+  ])("does not retain raw output from content-producing %s", (command) => {
+    const ev = extractEvidenceFromTool(
+      "bash",
+      { command },
+      { output: "sensitive repository content" },
+      `call_${command}`,
+    );
+
+    expect(ev.sourceClass).toBe("tool_output");
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
+      throw new Error("expected file_content tool_output evidence");
+    }
+    expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
+    expect("rawOutput" in ev).toBe(false);
+  });
+
+  it("marks file_content evidence as non-authoritative while retaining its audit hash", () => {
+    const ev = extractEvidenceFromTool(
+      "read",
+      undefined,
+      { output: "PASS" },
+      "call_non_authoritative_read",
+    );
+
+    if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
+      throw new Error("expected file_content tool_output evidence");
+    }
+    expect(ev.provenance).toBe("unknown");
+    expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
+  });
+
   it("marks task tool output as generic with unknown outcome", () => {
     const ev = extractEvidenceFromTool(
       "task",

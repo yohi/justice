@@ -254,6 +254,14 @@ export interface PostToolUsePayload {
   readonly callId?: string;
   readonly toolInput?: Record<string, unknown>;
   readonly metadata?: Record<string, unknown>;
+  readonly reviewResolutionArtifact?: ReviewResolutionArtifact;
+}
+
+export interface ReviewResolutionArtifact {
+  readonly authority: "human_approved";
+  readonly reviewScope: string;
+  readonly itemKeys: readonly string[];
+  readonly artifactRef: string;
 }
 
 /** ファイル書き込みアクセスの抽象化 */

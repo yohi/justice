@@ -68,6 +68,205 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     });
   });
 
+  it("promotes a valid human-approved artifact only from exact justice_review while preserving raw metadata", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const reviewResolutionArtifact = {
+      authority: "human_approved",
+      reviewScope: " task-6.3 ",
+      itemKeys: [" major:parser "],
+      artifactRef: " docs/reviews/task-6.3.md ",
+    };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "justice_review", sessionID: "s", callID: "c1", args: {} },
+      { output: "resolved", metadata: { reviewResolutionArtifact, error: false } },
+    );
+
+    // Then
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      type: "PostToolUse",
+      payload: {
+        toolName: "justice_review",
+        metadata: { reviewResolutionArtifact, error: false },
+        reviewResolutionArtifact: {
+          authority: "human_approved",
+          reviewScope: "task-6.3",
+          itemKeys: ["major:parser"],
+          artifactRef: "docs/reviews/task-6.3.md",
+        },
+      },
+    });
+  });
+
+  it.each(["justice_Review", "justice_review_extra", "justice_review "])(
+    "does not forward variant %s as a trusted review-resolution source",
+    async (tool) => {
+      // Given
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+      const reviewResolutionArtifact = {
+        authority: "human_approved",
+        reviewScope: "task-6.3",
+        itemKeys: ["major:parser"],
+        artifactRef: "docs/reviews/task-6.3.md",
+      };
+
+      // When
+      await adapter.onToolExecuteAfter(
+        { tool, sessionID: "s", callID: "c1", args: {} },
+        { output: "resolved", metadata: { reviewResolutionArtifact } },
+      );
+
+      // Then
+      expect(spy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not promote an error-marked exact justice_review artifact", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const reviewResolutionArtifact = {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser"],
+      artifactRef: "docs/reviews/task-6.3.md",
+    };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "justice_review", sessionID: "s", callID: "c1", args: {} },
+      { output: "failed", metadata: { reviewResolutionArtifact, error: true } },
+    );
+
+    // Then
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      type: "PostToolUse",
+      payload: { metadata: { reviewResolutionArtifact, error: true }, error: true },
+    });
+    expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewResolutionArtifact");
+  });
+
+  it("rejects malformed exact justice_review metadata without logging its contents", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const eventSpy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+    const malformedArtifact = {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: [],
+      artifactRef: "docs/reviews/task-6.3.md",
+    };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "justice_review", sessionID: "s", callID: "c1", args: {} },
+      { output: "resolved", metadata: { reviewResolutionArtifact: malformedArtifact } },
+    );
+
+    // Then
+    expect(eventSpy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewResolutionArtifact");
+    expect(logSpy).toHaveBeenCalledWith(
+      "warn",
+      "[Justice] malformed review resolution artifact ignored",
+    );
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain(JSON.stringify(malformedArtifact));
+  });
+
+  it.each(["bash", "task", "code_review"])(
+    "forwards raw review metadata from generic %s tools without a typed artifact",
+    async (tool) => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const reviewResolutionArtifact = {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser"],
+      artifactRef: "docs/reviews/task-6.3.md",
+    };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool, sessionID: "s", callID: "c1", args: { command: "ls" } },
+      { output: "resolved", metadata: { isCompleteSnapshot: true, reviewResolutionArtifact } },
+    );
+
+    // Then
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      type: "PostToolUse",
+      payload: { metadata: { isCompleteSnapshot: true, reviewResolutionArtifact } },
+    });
+    expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewResolutionArtifact");
+    },
+  );
+
+  it.each([
+    {
+      authority: "machine_approved",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser"],
+      artifactRef: "docs/reviews/task-6.3.md",
+    },
+    {
+      authority: "human_approved",
+      reviewScope: " ",
+      itemKeys: ["major:parser"],
+      artifactRef: "docs/reviews/task-6.3.md",
+    },
+    {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: [],
+      artifactRef: "docs/reviews/task-6.3.md",
+    },
+    {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser", ""],
+      artifactRef: "docs/reviews/task-6.3.md",
+    },
+    {
+      authority: "human_approved",
+      reviewScope: "task-6.3",
+      itemKeys: ["major:parser"],
+      artifactRef: " ",
+    },
+  ])("leaves malformed generic tool metadata untyped without logging its contents", async (artifact) => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const eventSpy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: { command: "ls" } },
+      { output: "resolved", metadata: { reviewResolutionArtifact: artifact } },
+    );
+
+    // Then
+    expect(eventSpy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewResolutionArtifact");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain(JSON.stringify(artifact));
+  });
+
   it("(b) excludes justice_* query tools from forwarding (Pre and Post)", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

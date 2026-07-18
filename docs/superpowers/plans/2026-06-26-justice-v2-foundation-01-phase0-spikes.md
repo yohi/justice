@@ -191,9 +191,10 @@ import { Plugin } from "@opencode-ai/plugin";
 
 **Acceptance criteria:**
 
-- 反映可否を boolean で記録し、設計書 §3 Phase 0 スパイク結果と D47 に追記する。
-- 反映結果（可否）に応じて、オプションの既定値 `options.enableAdvisoryOutputAppend = <result>` を決定するタスクを設ける。
-- アダプターテスト (`onToolExecuteAfter` / `OpenCodeNotifier` のテスト) に、`enableAdvisoryOutputAppend` が `false` である場合でも `notifier.notify()` のみが正常に実行され、`output.output` が書き換えられないことを検証するケースを明示的に追加する。
+- **自動化済みの契約検証:** `tool.execute.after` の登録、`notifier.notify()` の実行、既定の `enableAdvisoryOutputAppend=false`、false 時に `output.output` を変更しないこと、true 時のローカル object mutation。対象テストは `tests/runtime/opencode-adapter-v2.test.ts` と `tests/integration/opencode-plugin.test.ts`。
+- **実機で未検証の条件:** 変更された `output.output` が実 OpenCode のユーザー表示と後続モデル推論文脈へ到達するか。この条件は plugin object のローカル mutation だけでは検証できない。
+- `false` は未実証の否定結果ではなく、notifier を保証チャネル、`output.output` append を best-effort とする保守的な暫定既定値である。
+- 実機検証は、UI と後続モデル文脈の両方を観測できる OpenCode host integration が導入された場合にのみ自動化する。それまでは Step 1b を未完了のまま保持する。
 
 - [ ] **Step 2: Message 観測 fallback matrix 実測（D41/D53）**
 

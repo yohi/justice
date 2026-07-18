@@ -1,5 +1,6 @@
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import { ReviewRejectionDetector } from "../core/review-rejection-detector";
+import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
   HookResponse,
@@ -242,6 +243,25 @@ export class ObservationHandler {
 
   async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     const callId = event.callId;
+    const reviewResolutionArtifact = event.payload.reviewResolutionArtifact;
+    if (reviewResolutionArtifact !== undefined) {
+      try {
+        const agentId = this.options.sessionStateProvider.getAgentId(event.sessionId);
+        await this.handleReviewResolutionArtifact({
+          agentId,
+          sessionId: event.sessionId,
+          reviewScope: reviewResolutionArtifact.reviewScope,
+          itemKeys: reviewResolutionArtifact.itemKeys,
+          artifactRef: reviewResolutionArtifact.artifactRef,
+        });
+      } catch (error) {
+        this.options.logger?.warn(
+          "observation-handler: typed review resolution handling failed, degrading to PROCEED",
+          error,
+        );
+      }
+      return PROCEED;
+    }
     if (callId === undefined || event.payload.toolName.startsWith("justice_")) return PROCEED;
 
     let taskId: string | undefined;
@@ -307,7 +327,6 @@ export class ObservationHandler {
         event.payload.toolResult,
         event.payload.metadata,
       );
-
       let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
@@ -497,6 +516,9 @@ export class ObservationHandler {
     readonly artifactRef: string;
   }): Promise<HookResponse> {
     try {
+      const artifact = normalizeReviewResolutionArtifact(payload);
+      if (artifact === undefined) return PROCEED;
+
       const shardId: ShardId = {
         agentId: payload.agentId,
         sessionId: payload.sessionId,
@@ -513,9 +535,9 @@ export class ObservationHandler {
             writerId: this.options.writerId,
             recordType: "observation",
           },
-          payload.reviewScope,
-          payload.itemKeys,
-          payload.artifactRef,
+          artifact.reviewScope,
+          artifact.itemKeys,
+          artifact.artifactRef,
         ),
       );
       this.scheduleProjectionRefresh();

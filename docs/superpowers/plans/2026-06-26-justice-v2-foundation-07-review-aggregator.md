@@ -35,7 +35,7 @@
 ---
 
 > **Split plan:** This file is part 07 of the split Justice v2.0 Foundation implementation plan.
-> **Scope:** Review severity classification, scope-aware review aggregation, and review_observed generation.
+> **Scope:** Review severity classification, scope-aware review aggregation, `review_observed` generation, and trusted human-approved resolution markers.
 > **Index:** See `2026-06-26-justice-v2-foundation.md` for the complete split-plan map and cross-phase dependency summary.
 
 ## Phase 6: Review Aggregator
@@ -43,6 +43,8 @@
 **Base Branch:** `feature/phase6-v2-review-aggregator__base`
 
 **目的:** 既存 `ReviewRejectionDetector` を拡張し、severity 決定論的分類器・itemKey・scope-aware 集約を実装。本 Phase だけで review 集約が完成する。
+
+**承認済み解決の現行契約:** 信頼できる解決 authority は、完全一致する `justice_review` が `ToolContext.ask` による人間承認後に出力する artifact のみである。自由文、tool args、汎用 metadata から承認を推測しない。拒否は metadata と状態変更を伴わず、承認 artifact は選択された open item の `review_observed` resolution marker だけを append するため、`tool_executed` observation と gate の意味論は変化しない。
 
 **判断:** Phase 6 は Phase 5 の `review_open_items` gate と Phase 1/2 の型を使用。Task 6.1 は severity 分類器（独立）で Base から、Task 6.2 は 6.1 + ProjectedState 型で Task 6.1 から、Task 6.3 は 6.2 + observation-handler 経路で Task 6.2 から。
 
@@ -140,8 +142,10 @@ gt submit
 
 - Create: `src/core/v2/review-aggregator.ts`
 - Modify: `src/core/v2/state-projection.ts`（byScope 集約を追加）
+- Modify: `src/runtime/state-projection-cache.ts`（schema 非互換 cache の reject-and-rebuild 方針を適用）
 - Test: `tests/core/v2/review-aggregator.test.ts`
 - Test: `tests/core/v2/state-projection-review.test.ts`
+- Test: `tests/runtime/state-projection-cache-read.test.ts`
 
 **Interfaces:**
 
@@ -348,7 +352,10 @@ it("marks item resolved on human artifact", () => {
 });
 ```
 
-- [ ] **Step 2: state-projection に byScope マージを追加し、ProjectedState の schema version 更新と migration を定義したうえで aggregateReviews(reviewObservedEvents) 連携へ差し替える**
+- [ ] **Step 2: state-projection に byScope マージを追加し、schema 非互換 cache の reject-and-rebuild 方針で aggregateReviews(reviewObservedEvents) 連携へ差し替える**
+  - `ProjectedState.schemaVersion` は `2` とする。event log の schema version は `1` のまま維持する。
+  - 旧 schema の `state.json` は in-place migration しない。cache reader が拒否し、正本である Observation Log を replay して schema v2 の cache を atomic write する。
+  - `stale_append` は警告なしで再構築し、schema/構造/sequence の不整合は警告後に再構築する。
 
 - [ ] **Step 3: テスト実行（Devcontainer 内）**
 
@@ -380,8 +387,11 @@ gt submit
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/review-scope.ts`
 - Modify: `src/core/review-rejection-detector.ts` (add detectMultiple method)
+- Modify: `src/core/types.ts`（承認済み artifact の型付き PostToolUse payload）
+- Modify: `src/runtime/opencode-adapter.ts`（trusted metadata の検証と配送）
 - Test: `tests/hooks/observation-handler-review.test.ts`
 - Test: `tests/core/review-rejection-detector.test.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
 **Interfaces:**
 
@@ -465,8 +475,11 @@ private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: strin
 }
 ```
 
-- [ ] **Step 2c: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
-  - レコード構築は `buildReviewResolutionRecord` に委譲します。
+- [ ] **Step 2c: 人間承認 artifact 解決マーカーを PostToolUse metadata から配送する（D32）**
+  - trusted tool implementation が `output.metadata.reviewResolutionArtifact` に設定した `{ authority: "human_approved", reviewScope, itemKeys, artifactRef }` のみを受け付ける。自由文・tool args・モデル出力から承認を推測しない。
+  - Adapter は authority、空でない `reviewScope` / `artifactRef`、空でない文字列だけからなる `itemKeys` を検証し、成功時のみ型付き `PostToolUsePayload.reviewResolutionArtifact` として配送する。無効な metadata は安全な警告を残して無視する。
+  - `ObservationHandler.handlePostToolUse()` は型付き `reviewResolutionArtifact` を受け取ると、通常の `review_observed` append や同一イベントの gate 評価を行わず、専用の `handleReviewResolutionArtifact()` 分岐へ配送して `PROCEED` を返す。専用分岐は artifact を再検証し、成功時のみ resolution marker を記録して projection refresh を予約する。
+  - レコード構築は `buildReviewResolutionRecord` に委譲する。
 
 ```typescript
 // src/hooks/observation-handler.ts 内（将来の拡張用 seam）
