@@ -68,15 +68,17 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       throw new Error("Invalid tool_executed record");
     }
   } else if (kind === "message") {
-    let declaredClaims = r.declaredClaims;
-    let evidence = r.evidence;
     // Legacy v1 compatibility: records written before the v2 schema may have
     // both fields undefined. Normalizing them to empty arrays prevents silent
     // data loss during readAll() ingestion on upgraded instances.
-    if (declaredClaims === undefined && evidence === undefined) {
-      declaredClaims = [];
-      evidence = [];
-    }
+    const declaredClaims =
+      r.declaredClaims === undefined && r.evidence === undefined
+        ? []
+        : r.declaredClaims;
+    const evidence =
+      r.declaredClaims === undefined && r.evidence === undefined
+        ? []
+        : r.evidence;
     const mismatched =
       !Array.isArray(declaredClaims) ||
       !Array.isArray(evidence) ||
