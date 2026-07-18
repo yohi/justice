@@ -55,9 +55,11 @@ function normalizeIdentifiers(values: readonly string[]): readonly string[] | un
   if (values.length === 0) return undefined;
 
   const normalized: string[] = [];
+  const identifiers = new Set<string>();
   for (const value of values) {
     const identifier = normalizeIdentifier(value);
-    if (identifier === undefined) return undefined;
+    if (identifier === undefined || identifiers.has(identifier)) return undefined;
+    identifiers.add(identifier);
     normalized.push(identifier);
   }
   return Object.freeze(normalized);

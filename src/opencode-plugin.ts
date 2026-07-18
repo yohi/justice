@@ -38,7 +38,8 @@ export const OpenCodePlugin: Plugin = async (init) => {
   return {
     tool: {
       justice_review: tool({
-        description: "Displays the current Justice review summary.",
+        description:
+          "Displays the current Justice review summary, or resolves selected open items after explicit approval.",
         args: {
           scope: tool.schema.string().optional(),
           resolve: tool.schema

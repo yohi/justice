@@ -478,7 +478,7 @@ private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: strin
 - [ ] **Step 2c: 人間承認 artifact 解決マーカーを PostToolUse metadata から配送する（D32）**
   - trusted tool implementation が `output.metadata.reviewResolutionArtifact` に設定した `{ authority: "human_approved", reviewScope, itemKeys, artifactRef }` のみを受け付ける。自由文・tool args・モデル出力から承認を推測しない。
   - Adapter は authority、空でない `reviewScope` / `artifactRef`、空でない文字列だけからなる `itemKeys` を検証し、成功時のみ型付き `PostToolUsePayload.reviewResolutionArtifact` として配送する。無効な metadata は安全な警告を残して無視する。
-  - `ObservationHandler.handlePostToolUse()` は通常の `review_observed` append 後、projection refresh と gate 評価の前に `handleReviewResolutionArtifact()` を呼ぶ。これにより同一 tool 結果の resolution marker が gate 評価に含まれる。
+  - `ObservationHandler.handlePostToolUse()` は型付き `reviewResolutionArtifact` を受け取ると、通常の `review_observed` append や同一イベントの gate 評価を行わず、専用の `handleReviewResolutionArtifact()` 分岐へ配送して `PROCEED` を返す。専用分岐は artifact を再検証し、成功時のみ resolution marker を記録して projection refresh を予約する。
   - レコード構築は `buildReviewResolutionRecord` に委譲する。
 
 ```typescript

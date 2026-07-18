@@ -20,6 +20,7 @@ const GIT_COMMAND_CLASSIFICATION_CASES = [
     command: "git --no-pager -C worktree -c color.ui=false diff --cached",
     expected: "file_content",
   },
+  { command: "git --no-optional-locks diff", expected: "file_content" },
   { command: "git status --short", expected: "command_exec" },
   { command: "git commit -m message", expected: "command_exec" },
   { command: "git log --oneline", expected: "command_exec" },

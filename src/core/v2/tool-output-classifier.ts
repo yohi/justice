@@ -84,7 +84,7 @@ const INTERPRETERS = new Set(["python", "python3", "node", "ts-node", "deno", "b
 const GIT_FILE_CONTENT_SUBCOMMAND_PATTERN =
   /^(?:diff|diff-files|diff-index|diff-tree|show|grep|blame|annotate|cat-file|range-diff)$/;
 const GIT_GLOBAL_OPTION_PATTERN =
-  /^(?:--no-pager|--paginate|-p|--no-replace-objects|--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)$/;
+  /^(?:--no-pager|--paginate|-p|--no-replace-objects|--bare|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)$/;
 const GIT_GLOBAL_OPTION_WITH_VALUE_PATTERN =
   /^(?:-C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--config-env)$/;
 const GIT_PATCH_OUTPUT_OPTION_PATTERN = /^(?:-p|-u|--patch|--patch-with-stat)$/;
