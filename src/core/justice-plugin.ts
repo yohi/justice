@@ -45,7 +45,7 @@ function openSessionTaskWindow(
   const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
-    provider.setActiveTaskWindow(callId, taskId);
+    provider.setActiveTaskWindow(callId, taskId, event.sessionId);
   } catch {
     // Fail-open: a task-window tracking failure must not break the hook flow.
   }
@@ -376,7 +376,7 @@ export class JusticePlugin {
         );
         if (event.callId !== undefined && taskId !== undefined) {
           try {
-            this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+            this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
           } catch (err) {
             this.options.logger?.warn("failed to set active task window", err);
           }

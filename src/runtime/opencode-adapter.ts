@@ -191,6 +191,12 @@ export class OpenCodeAdapter {
         case "message.part.updated":
           await this.#handleMessagePartUpdated(properties);
           return;
+        case "chat.message":
+          await this.#handleChatMessage(properties);
+          return;
+        case "chat.params":
+          await this.#handleChatParams(properties);
+          return;
         case "session.error":
           await this.#handleSessionError(properties);
           return;
@@ -295,6 +301,7 @@ export class OpenCodeAdapter {
 
     const partID = this.#readString(part, "id") || this.#readString(properties, "partID");
     const text = this.#readString(part, "text") || this.#readString(properties, "text");
+    if (partID.length === 0 || text.length === 0) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -304,6 +311,40 @@ export class OpenCodeAdapter {
       type: "Message",
       sessionId,
       payload: { kind: "message_part_updated", sessionId, messageID, partID, text },
+    });
+  }
+
+  async #handleChatMessage(properties: Record<string, unknown>): Promise<void> {
+    const message = this.#readRecord(properties, "message");
+    const sessionId =
+      this.#readString(properties, "sessionID") || this.#readString(message, "sessionID");
+    const content = this.#readString(message, "content");
+    if (
+      sessionId.length === 0 ||
+      content.length === 0 ||
+      this.#readString(message, "role") !== "user"
+    ) {
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    await justice.handleEvent({ type: "Message", sessionId, payload: { role: "user", content } });
+  }
+
+  async #handleChatParams(properties: Record<string, unknown>): Promise<void> {
+    const sessionId = this.#readString(properties, "sessionID");
+    const agentName = this.#readString(properties, "agent");
+    if (sessionId.length === 0 || agentName.length === 0) return;
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    await justice.handleEvent({
+      type: "AgentMapped",
+      sessionId,
+      payload: { sessionId, agentName },
     });
   }
 

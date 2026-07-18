@@ -568,6 +568,40 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
   });
 
+  it("forwards chat.message content and chat.params agent mapping", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "chat.params",
+        properties: { sessionID: "sess-chat", agent: "atlas" },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: {
+          sessionID: "sess-chat",
+          message: { role: "user", content: "delegate next task" },
+        },
+      },
+    });
+
+    expect(spy).toHaveBeenCalledWith({
+      type: "AgentMapped",
+      sessionId: "sess-chat",
+      payload: { sessionId: "sess-chat", agentName: "atlas" },
+    });
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "sess-chat",
+      payload: { role: "user", content: "delegate next task" },
+    });
+  });
+
   it("(g) still dispatches the plan-bridge Message when AgentMapped dispatch throws", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -635,6 +669,22 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
         text: "partial text",
       },
     });
+  });
+
+  it("drops a message part without an identifier or text", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.part.updated",
+        properties: { sessionID: "sess-1", part: { messageID: "msg-1" } },
+      },
+    });
+
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("forwards experimental text completion as a text_complete observation payload", async () => {

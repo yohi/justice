@@ -21,7 +21,7 @@ import type { AgentId, ObservationAgentId } from "./types";
  */
 export class SessionStateProvider {
   private readonly sessionAgentIds = new Map<string, ObservationAgentId>();
-  private readonly activeTaskWindows = new Map<string, string>();
+  private readonly activeTaskWindows = new Map<string, { readonly sessionId?: string; readonly taskId: string }>();
 
   /**
    * Records an `AgentMapped` payload, resolving `agentName` → `AgentId` internally.
@@ -45,6 +45,9 @@ export class SessionStateProvider {
    */
   removeSession(sessionId: string): void {
     this.sessionAgentIds.delete(sessionId);
+    for (const [callId, window] of this.activeTaskWindows) {
+      if (window.sessionId === sessionId) this.activeTaskWindows.delete(callId);
+    }
   }
 
   /**
@@ -52,14 +55,14 @@ export class SessionStateProvider {
    * window is open for that `callId`.
    */
   getActiveTaskId(callId: string): string | undefined {
-    return this.activeTaskWindows.get(callId);
+    return this.activeTaskWindows.get(callId)?.taskId;
   }
 
   /**
    * Opens (or overwrites) the task window for `callId` (PreToolUse).
    */
-  setActiveTaskWindow(callId: string, taskId: string): void {
-    this.activeTaskWindows.set(callId, taskId);
+  setActiveTaskWindow(callId: string, taskId: string, sessionId?: string): void {
+    this.activeTaskWindows.set(callId, { taskId, ...(sessionId === undefined ? {} : { sessionId }) });
   }
 
   /**

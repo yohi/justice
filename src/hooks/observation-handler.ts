@@ -236,7 +236,7 @@ export class ObservationHandler {
     if (event.payload.toolName !== "task" || event.callId === undefined) return PROCEED;
     const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
     if (taskId !== undefined) {
-      this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+      this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
     }
     return PROCEED;
   }
@@ -318,15 +318,17 @@ export class ObservationHandler {
           this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
         }
       }
-      await this.appendReviewObservationsIfDetected(
-        shardId,
-        taskId,
-        event.sessionId,
-        callId,
-        event.payload.toolName,
-        event.payload.toolResult,
-        event.payload.metadata,
-      );
+      if (isReviewObservationTool(event.payload.toolName)) {
+        await this.appendReviewObservationsIfDetected(
+          shardId,
+          taskId,
+          event.sessionId,
+          callId,
+          event.payload.toolName,
+          event.payload.toolResult,
+          event.payload.metadata,
+        );
+      }
       let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
@@ -479,10 +481,7 @@ export class ObservationHandler {
         metadata,
         this.options.workspaceRoot ?? process.cwd(),
       );
-      const isCompleteSnapshot = this.reviewRejectionDetector.isCompleteSnapshot(
-        toolResult,
-        metadata,
-      );
+      const isCompleteSnapshot = isTrustedCompleteReviewSnapshot(toolName, metadata);
       if (items.length === 0 && !isCompleteSnapshot) return;
 
       const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
@@ -609,4 +608,15 @@ export class ObservationHandler {
       return PROCEED;
     }
   }
+}
+
+function isReviewObservationTool(toolName: string): boolean {
+  return toolName === "task" || toolName === "code_review";
+}
+
+function isTrustedCompleteReviewSnapshot(
+  toolName: string,
+  metadata: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  return toolName === "code_review" && metadata?.isCompleteSnapshot === true;
 }
