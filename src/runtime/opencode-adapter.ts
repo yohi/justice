@@ -314,11 +314,18 @@ export class OpenCodeAdapter {
     });
   }
 
+  /**
+   * Handles a `chat.message` event. Only user messages are forwarded into the
+   * Justice observation log; assistant text is already captured via
+   * `#handleMessagePartUpdated` and tool-use hooks, so forwarding it here would
+   * create duplicates. Dropping non-user roles is therefore intentional.
+   */
   async #handleChatMessage(properties: Record<string, unknown>): Promise<void> {
     const message = this.#readRecord(properties, "message");
     const sessionId =
       this.#readString(properties, "sessionID") || this.#readString(message, "sessionID");
     const content = this.#readString(message, "content");
+    // Intentionally drop assistant/system messages — see method JSDoc above.
     if (
       sessionId.length === 0 ||
       content.length === 0 ||

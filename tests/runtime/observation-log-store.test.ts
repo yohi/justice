@@ -461,7 +461,7 @@ describe("validateRecordSchema()", () => {
     ).toThrow(/message record/);
   });
 
-  it("rejects a message record without declaredClaims/evidence", () => {
+  it("accepts a legacy message record without declaredClaims/evidence (normalized)", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -472,7 +472,7 @@ describe("validateRecordSchema()", () => {
         textHash: "h",
         finalized: true,
       }),
-    ).toThrow(/message record/);
+    ).not.toThrow();
   });
 
   it("rejects a message record with mismatched declaredClaims/evidence arrays", () => {
