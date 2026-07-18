@@ -144,6 +144,8 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
 
     it("removes task windows belonging to a removed session", () => {
       const provider = new SessionStateProvider();
+      provider.setAgentMapping("session-removed", "hephaestus");
+      provider.setAgentMapping("session-retained", "sisyphus");
       provider.setActiveTaskWindow("call-removed", "task-removed", "session-removed");
       provider.setActiveTaskWindow("call-retained", "task-retained", "session-retained");
 

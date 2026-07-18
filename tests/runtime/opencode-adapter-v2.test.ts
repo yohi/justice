@@ -908,6 +908,11 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
 
   it("keeps a task window available while its PostToolUse observation is handled", async () => {
     const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
+    await plugin.handleEvent({
+      type: "AgentMapped",
+      sessionId: "s",
+      payload: { sessionId: "s", agentName: "hephaestus" },
+    });
     const observedTaskIds: (string | undefined)[] = [];
     vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(
       async (event) => {
