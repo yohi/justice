@@ -21,7 +21,8 @@ import type { AgentId, ObservationAgentId } from "./types";
  */
 export class SessionStateProvider {
   private readonly sessionAgentIds = new Map<string, ObservationAgentId>();
-  private readonly activeTaskWindows = new Map<string, { readonly sessionId?: string; readonly taskId: string }>();
+  private readonly activeTaskWindows = new Map<string, { readonly sessionId?: string; readonly taskId: string; readonly generation?: number }>();
+  private readonly sessionGenerations = new Map<string, number>();
 
   /**
    * Records an `AgentMapped` payload, resolving `agentName` → `AgentId` internally.
@@ -29,6 +30,9 @@ export class SessionStateProvider {
    */
   setAgentMapping(sessionId: string, agentName: string): void {
     this.sessionAgentIds.set(sessionId, SessionStateProvider.resolveAgentId(agentName));
+    if (!this.sessionGenerations.has(sessionId)) {
+      this.sessionGenerations.set(sessionId, 0);
+    }
   }
 
   /**
@@ -45,6 +49,8 @@ export class SessionStateProvider {
    */
   removeSession(sessionId: string): void {
     this.sessionAgentIds.delete(sessionId);
+    const currentGen = this.sessionGenerations.get(sessionId) ?? 0;
+    this.sessionGenerations.set(sessionId, currentGen + 1);
     for (const [callId, window] of this.activeTaskWindows) {
       if (window.sessionId === sessionId) this.activeTaskWindows.delete(callId);
     }
@@ -55,14 +61,28 @@ export class SessionStateProvider {
    * window is open for that `callId`.
    */
   getActiveTaskId(callId: string): string | undefined {
-    return this.activeTaskWindows.get(callId)?.taskId;
+    const window = this.activeTaskWindows.get(callId);
+    if (!window) return undefined;
+    if (window.generation !== undefined) {
+      const currentGen = this.sessionGenerations.get(window.sessionId ?? "");
+      if (currentGen === undefined || currentGen !== window.generation) {
+        this.activeTaskWindows.delete(callId);
+        return undefined;
+      }
+    }
+    return window.taskId;
   }
 
   /**
    * Opens (or overwrites) the task window for `callId` (PreToolUse).
    */
   setActiveTaskWindow(callId: string, taskId: string, sessionId?: string): void {
-    this.activeTaskWindows.set(callId, { taskId, ...(sessionId === undefined ? {} : { sessionId }) });
+    if (sessionId !== undefined && this.sessionGenerations.has(sessionId)) {
+      const generation = this.sessionGenerations.get(sessionId)!;
+      this.activeTaskWindows.set(callId, { taskId, sessionId, generation });
+    } else {
+      this.activeTaskWindows.set(callId, { taskId, ...(sessionId !== undefined ? { sessionId } : {}) });
+    }
   }
 
   /**
