@@ -1,5 +1,6 @@
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
+import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -32,6 +33,10 @@ export interface OpenCodeAdapterOptions {
    */
   readonly enableAdvisoryOutputAppend?: boolean;
 }
+
+const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
+  "justice_review",
+] as const);
 
 interface GenericEventInput {
   readonly event: {
@@ -461,10 +466,26 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      if (input.tool.startsWith("justice_")) return;
+      const isTrustedReviewResolutionArtifactSource =
+        TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS.includes(input.tool);
+      if (input.tool.startsWith("justice_") && !isTrustedReviewResolutionArtifactSource) return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
+
+      const rawReviewResolutionArtifact = output.metadata?.reviewResolutionArtifact;
+      const canPromoteReviewResolutionArtifact =
+        isTrustedReviewResolutionArtifactSource && output.metadata?.error !== true;
+      const reviewResolutionArtifact = canPromoteReviewResolutionArtifact
+        ? parseReviewResolutionArtifact(rawReviewResolutionArtifact)
+        : undefined;
+      if (
+        canPromoteReviewResolutionArtifact &&
+        rawReviewResolutionArtifact !== undefined &&
+        reviewResolutionArtifact === undefined
+      ) {
+        await this.log("warn", "[Justice] malformed review resolution artifact ignored");
+      }
 
       const response = await justice.handleEvent({
         type: "PostToolUse",
@@ -476,6 +497,7 @@ export class OpenCodeAdapter {
           toolInput: input.args,
           toolResult: output.output,
           metadata: output.metadata,
+          ...(reviewResolutionArtifact === undefined ? {} : { reviewResolutionArtifact }),
           error: output.metadata?.error === true,
         },
       });
