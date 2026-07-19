@@ -217,18 +217,22 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
         .optional(),
     },
     execute: async (args, context) => {
-      await adapter.ensureInitialized();
-      const justice = adapter.getJustice();
-      if (justice === null) return formatError("Justice not initialized");
+      try {
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return formatError("Justice not initialized");
 
-      const observationHandler = justice.getObservationHandler();
-      return executeJusticeReviewTool({
-        logReader: observationHandler.getLogStore(),
-        args,
-        requestApproval: async (approval): Promise<void> => {
-          await Effect.runPromise(context.ask(approval));
-        },
-      });
+        const observationHandler = justice.getObservationHandler();
+        return await executeJusticeReviewTool({
+          logReader: observationHandler.getLogStore(),
+          args,
+          requestApproval: async (approval): Promise<void> => {
+            await Effect.runPromise(context.ask(approval));
+          },
+        });
+      } catch (error: unknown) {
+        return formatError(error instanceof Error ? error.message : String(error));
+      }
     },
   });
 }
