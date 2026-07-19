@@ -435,4 +435,45 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
       reason: "Justice not initialized",
     });
   });
+
+  it("falls through to the outer catch when readAll throws", async () => {
+    // Given
+    const ask = vi.fn(() => Effect.succeed(undefined));
+    const failingReader = {
+      readAll: vi.fn(() => Promise.reject(new Error("disk read failed"))),
+    };
+
+    // When
+    const result = await executeJusticeReviewTool({
+      logReader: failingReader,
+      args: {},
+      requestApproval: async (approval): Promise<void> => {
+        await Effect.runPromise(ask(approval));
+      },
+    });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toEqual({
+      status: "ERROR",
+      reason: "Unable to read the current review state: disk read failed",
+    });
+  });
+
+  it("falls through to the adapter outer catch when ensureInitialized throws", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    vi.spyOn(adapter, "ensureInitialized").mockRejectedValue(new Error("init boom"));
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute({}, createToolContext());
+
+    // Then
+    const output = typeof result === "string" ? result : result.output;
+    expect(JSON.parse(output)).toEqual({
+      status: "ERROR",
+      reason: "init boom",
+    });
+  });
 });
