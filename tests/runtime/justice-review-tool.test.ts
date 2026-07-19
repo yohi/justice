@@ -101,7 +101,7 @@ function metadataOf(result: ToolResult): Record<string, unknown> | undefined {
 }
 
 describe("OpenCodePlugin justice_review tool", () => {
-  it("registers justice_review as the only Justice custom tool", async () => {
+  it("registers the Justice status and review tools", async () => {
     // Given
     const pluginInput = createPluginInput();
 
@@ -109,7 +109,7 @@ describe("OpenCodePlugin justice_review tool", () => {
     const hooks = await OpenCodePlugin(pluginInput);
 
     // Then
-    expect(Object.keys(hooks.tool ?? {})).toEqual(["justice_review"]);
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["justice_review", "justice_status"]);
   });
 });
 

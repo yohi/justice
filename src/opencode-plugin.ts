@@ -7,7 +7,9 @@ import { NodeFileSystem } from "./runtime/node-file-system";
 import { ObservationLogStore } from "./runtime/observation-log-store";
 
 function createReviewLogReader(worktree: string | undefined): {
-  readonly readAll: () => Promise<readonly import("./core/v2/observation-model").PersistedLogRecord[]>;
+  readonly readAll: () => Promise<
+    readonly import("./core/v2/observation-model").PersistedLogRecord[]
+  >;
 } {
   if (worktree === undefined || worktree.length === 0) {
     return {
@@ -37,6 +39,7 @@ export const OpenCodePlugin: Plugin = async (init) => {
 
   return {
     tool: {
+      ...adapter.getTools(),
       justice_review: tool({
         description:
           "Displays the current Justice review summary, or resolves selected open items after explicit approval.",

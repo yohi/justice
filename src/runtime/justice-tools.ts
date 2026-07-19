@@ -1,8 +1,42 @@
+// eslint-disable-next-line no-restricted-imports -- Runtime tool definitions are an approved OpenCode API boundary.
+import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import type { ReviewResolutionArtifact } from "../core/types";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
-import { project } from "../core/v2/state-projection";
+import { project, toSerializableProjectedState } from "../core/v2/state-projection";
 import type { ReviewSummary, ScopeReviewSummary } from "../core/v2/review-types";
+import type { OpenCodeAdapter } from "./opencode-adapter";
+
+function formatError(reason: string): string {
+  return JSON.stringify({ status: "ERROR", reason }, null, 2);
+}
+
+export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "Justice の現在の投影状態を表示します",
+    args: {},
+    execute: async (_args, _context) => {
+      try {
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return formatError("Justice not initialized");
+
+        const observationHandler = justice.getObservationHandler();
+        const events = await observationHandler.getLogStore().readAll();
+        const state = project(events, new Date().toISOString());
+        await observationHandler
+          .getProjectionCache()
+          ?.write(state)
+          .catch((error: unknown) =>
+            adapter.log("warn", "[Justice] justice_status projection cache write failed", error),
+          );
+        return JSON.stringify(toSerializableProjectedState(state), null, 2);
+      } catch (error: unknown) {
+        return formatError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+}
 
 export type JusticeReviewToolArgs = {
   readonly scope?: string;
@@ -36,15 +70,11 @@ export type JusticeReviewToolInput = {
   readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
 };
 
-function errorResult(reason: string): string {
-  return JSON.stringify({ status: "ERROR", reason }, null, 2);
-}
-
 function serializeReviewSummary(summary: ReviewSummary, scope: string | undefined): string {
   if (scope !== undefined) {
     const scopedSummary = summary.byScope.get(scope);
     return scopedSummary === undefined
-      ? errorResult(`Unknown review scope: ${scope}`)
+      ? formatError(`Unknown review scope: ${scope}`)
       : JSON.stringify(scopedSummary, null, 2);
   }
 
@@ -78,7 +108,9 @@ export async function executeJusticeReviewTool(
       return serializeReviewSummary(state.reviewSummary, normalizedScope);
     }
     if (normalizedScope === undefined) {
-      return errorResult("Review resolution requires a non-empty scope. Provide scope when using resolve.");
+      return formatError(
+        "Review resolution requires a non-empty scope. Provide scope when using resolve.",
+      );
     }
 
     const artifact = normalizeReviewResolutionArtifact({
@@ -86,11 +118,11 @@ export async function executeJusticeReviewTool(
       itemKeys: input.args.resolve.itemKeys,
       artifactRef: input.args.resolve.artifactRef,
     });
-    if (artifact === undefined) return errorResult("Invalid review resolution request.");
+    if (artifact === undefined) return formatError("Invalid review resolution request.");
 
     const scopeSummary = state.reviewSummary.byScope.get(artifact.reviewScope);
     if (scopeSummary === undefined || !containsOpenItems(scopeSummary, artifact.itemKeys)) {
-      return errorResult("Requested review items are not currently open in the specified scope.");
+      return formatError("Requested review items are not currently open in the specified scope.");
     }
 
     try {
@@ -105,7 +137,7 @@ export async function executeJusticeReviewTool(
         },
       });
     } catch {
-      return errorResult("Review resolution was not approved.");
+      return formatError("Review resolution was not approved.");
     }
 
     return {
@@ -113,6 +145,6 @@ export async function executeJusticeReviewTool(
       metadata: { reviewResolutionArtifact: artifact },
     };
   } catch {
-    return errorResult("Unable to read the current review state.");
+    return formatError("Unable to read the current review state.");
   }
 }
