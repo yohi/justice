@@ -19,6 +19,7 @@ describe("ObservationHandler tool observation", () => {
     files.set("plan.md", ["### Task 1: Observe tools", "- [ ] Run tests"].join("\n"));
     const plugin = new JusticePlugin(reader, writer, { writerId: "w-handler" });
     plugin.getPlanBridge().setActivePlan("session-plugin", "plan.md");
+    plugin.getSessionStateProvider().setAgentMapping("session-plugin", "hephaestus");
 
     const preResponse = await plugin.handleEvent({
       type: "PreToolUse",
@@ -36,7 +37,7 @@ describe("ObservationHandler tool observation", () => {
     });
 
     const path = toPhysicalPath({
-      agentId: "unknown",
+      agentId: "hephaestus",
       sessionId: "session-plugin",
       writerId: "w-handler",
     });
@@ -142,6 +143,7 @@ describe("ObservationHandler tool observation", () => {
     const { reader, writer } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-handler");
     const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
     const handler = new ObservationHandler({
       logStore,
       sessionStateProvider: sessionState,

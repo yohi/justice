@@ -35,7 +35,7 @@
 ---
 
 > **Split plan:** This file is part 07 of the split Justice v2.0 Foundation implementation plan.
-> **Scope:** Review severity classification, scope-aware review aggregation, and review_observed generation.
+> **Scope:** Review severity classification, scope-aware review aggregation, `review_observed` generation, and trusted human-approved resolution markers.
 > **Index:** See `2026-06-26-justice-v2-foundation.md` for the complete split-plan map and cross-phase dependency summary.
 
 ## Phase 6: Review Aggregator
@@ -44,7 +44,11 @@
 
 **目的:** 既存 `ReviewRejectionDetector` を拡張し、severity 決定論的分類器・itemKey・scope-aware 集約を実装。本 Phase だけで review 集約が完成する。
 
+**承認済み解決の現行契約:** 信頼できる解決 authority は、完全一致する `justice_review` が `ToolContext.ask` による人間承認後に出力する artifact のみである。自由文、tool args、汎用 metadata から承認を推測しない。拒否は metadata と状態変更を伴わず、承認 artifact は選択された open item の `review_observed` resolution marker だけを append するため、`tool_executed` observation と gate の意味論は変化しない。
+
 **判断:** Phase 6 は Phase 5 の `review_open_items` gate と Phase 1/2 の型を使用。Task 6.1 は severity 分類器（独立）で Base から、Task 6.2 は 6.1 + ProjectedState 型で Task 6.1 から、Task 6.3 は 6.2 + observation-handler 経路で Task 6.2 から。
+
+> **実装状態の照合（2026-07-18）:** Task 6.1〜6.3 の実装・テストは現行コードへ反映済みである。v2 Phase 6 整合性検証（2026-07-18）にて Phase 6 完了を追認済み。下記チェックボックスを更新する。
 
 ---
 
@@ -61,7 +65,7 @@
 - Consumes: existing `ReviewRejectionSignal`.
 - Produces: `ReviewRejectionSignal` with `severity: "critical" | "major" | "minor"` and `itemKey`.
 
-- [ ] **Step 1: 凍結語彙に基づく severity 分類器を実装（D57）**
+- [x] **Step 1: 凍結語彙に基づく severity 分類器を実装（D57）**
 
 ```typescript
 // src/core/v2/review-severity.ts
@@ -91,7 +95,7 @@ export function deriveItemKey(severity: ReviewRejectionSignal["severity"], ruleI
 }
 ```
 
-- [ ] **Step 2: 既存 detector の出力に severity/itemKey を追加**
+- [x] **Step 2: 既存 detector の出力に severity/itemKey を追加**
 
 ```typescript
 // src/core/review-rejection-detector.ts
@@ -111,20 +115,20 @@ export type ReviewItem = {
 };
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/review-severity.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-severity.ts src/core/review-rejection-detector.ts tests/core/review-severity.test.ts
 git commit -m "feat(v2): deterministic review severity classifier and itemKey"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -140,15 +144,17 @@ gt submit
 
 - Create: `src/core/v2/review-aggregator.ts`
 - Modify: `src/core/v2/state-projection.ts`（byScope 集約を追加）
+- Modify: `src/runtime/state-projection-cache.ts`（schema 非互換 cache の reject-and-rebuild 方針を適用）
 - Test: `tests/core/v2/review-aggregator.test.ts`
 - Test: `tests/core/v2/state-projection-review.test.ts`
+- Test: `tests/runtime/state-projection-cache-read.test.ts`
 
 **Interfaces:**
 
 - Consumes: `ReviewRejectionSignal`, `ObservationRecord{kind:"review_observed"}`.
 - Produces: `aggregateReviews(records): ReviewSummary` with `byScope` and deterministic resolution rules (D32).
 
-- [ ] **Step 1: review aggregator を実装（D32/D66）**
+- [x] **Step 1: review aggregator を実装（D32/D66）**
 
 ```typescript
 // src/core/v2/review-aggregator.ts
@@ -285,7 +291,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
 }
 ```
 
-- [ ] **Step 1b: review 解決規則テストを追加（D32）**
+- [x] **Step 1b: review 解決規則テストを追加（D32）**
 
 ```typescript
 // tests/core/v2/review-aggregator.test.ts
@@ -348,22 +354,25 @@ it("marks item resolved on human artifact", () => {
 });
 ```
 
-- [ ] **Step 2: state-projection に byScope マージを追加し、ProjectedState の schema version 更新と migration を定義したうえで aggregateReviews(reviewObservedEvents) 連携へ差し替える**
+- [x] **Step 2: state-projection に byScope マージを追加し、schema 非互換 cache の reject-and-rebuild 方針で aggregateReviews(reviewObservedEvents) 連携へ差し替える**
+  - `ProjectedState.schemaVersion` は `2` とする。event log の schema version は `1` のまま維持する。
+  - 旧 schema の `state.json` は in-place migration しない。cache reader が拒否し、正本である Observation Log を replay して schema v2 の cache を atomic write する。
+  - `stale_append` は警告なしで再構築し、schema/構造/sequence の不整合は警告後に再構築する。
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-aggregator.ts src/core/v2/state-projection.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
 git commit -m "feat(v2): scope-aware review aggregator"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -380,8 +389,11 @@ gt submit
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/v2/review-scope.ts`
 - Modify: `src/core/review-rejection-detector.ts` (add detectMultiple method)
+- Modify: `src/core/types.ts`（承認済み artifact の型付き PostToolUse payload）
+- Modify: `src/runtime/opencode-adapter.ts`（trusted metadata の検証と配送）
 - Test: `tests/hooks/observation-handler-review.test.ts`
 - Test: `tests/core/review-rejection-detector.test.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
 **Interfaces:**
 
@@ -390,15 +402,15 @@ gt submit
   - `ObservationRecord{kind:"review_observed", reviewScope, items[], isCompleteSnapshot?}` append on task/PostToolUse outputs (now supporting multiple review items parsed from output).
   - `ObservationRecord{kind:"review_observed", reviewScope, resolutionMarkers[]}` append when a human-approved resolution artifact is received.
 
-- [ ] **Step 1: review scope 導出関数を確認・修正（§7.6）**
+- [x] **Step 1: review scope 導出関数を確認・修正（§7.6）**
   - （※`deriveReviewScope` は Task 5.2 にて作成済みであるため、必要に応じて実装内容を確認し、追加要件があれば修正する）
 
-- [ ] **Step 1b: `ReviewRejectionDetector.detectMultiple(output, metadata)` および `isCompleteSnapshot(output, metadata)` を実装する**
+- [x] **Step 1b: `ReviewRejectionDetector.detectMultiple(output, metadata)` および `isCompleteSnapshot(output, metadata)` を実装する**
   - 単一のシグナル抽出から、レビュー出力内に含まれる複数の指摘事項（severity, summary, location 含む）を正規表現や構造解析により分解し、`ReviewItem[]` にパースするメソッドを `ReviewRejectionDetector`（`src/core/review-rejection-detector.ts`）に追加し、そのテストを `tests/core/review-rejection-detector.test.ts` に追加する。
   - 同時に、上流から渡される `metadata.isCompleteSnapshot` を優先し、未指定時は `false` 固定（または complete を明確に断定できる場合のみ `true`）とする `isCompleteSnapshot(output, metadata): boolean` メソッドも `ReviewRejectionDetector` に追加する。
   - `tests/core/review-rejection-detector.test.ts` に未指定時 `false` を確認するテストケースを追加する。
 
-- [ ] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
+- [x] **Step 2: Core 純粋ビルダーに review_observed / resolution 構築関数を追加（src/core/v2/record-builder.ts）**
 
 ```typescript
 // src/core/v2/record-builder.ts に追加
@@ -439,7 +451,7 @@ export function buildReviewResolutionRecord(
 }
 ```
 
-- [ ] **Step 2b: PostToolUse 時に review_observed を生成・append（通常観測）**
+- [x] **Step 2b: PostToolUse 時に review_observed を生成・append（通常観測）**
   - `ReviewRejectionDetector.detectMultiple` を用いて、見つかったすべての指摘アイテムを `items` に含めて記録します。レコード構築は `buildReviewObservedRecord`（純粋関数）に委譲します。
 
 ```typescript
@@ -465,8 +477,11 @@ private async appendReviewObservationsIfDetected(shardId: ShardId, taskId: strin
 }
 ```
 
-- [ ] **Step 2c: 人間承認 artifact 解決マーカー経路を追加（D32 seam）**
-  - レコード構築は `buildReviewResolutionRecord` に委譲します。
+- [x] **Step 2c: 人間承認 artifact 解決マーカーを PostToolUse metadata から配送する（D32）**
+  - trusted tool implementation が `output.metadata.reviewResolutionArtifact` に設定した `{ authority: "human_approved", reviewScope, itemKeys, artifactRef }` のみを受け付ける。自由文・tool args・モデル出力から承認を推測しない。
+  - Adapter は authority、空でない `reviewScope` / `artifactRef`、空でない文字列だけからなる `itemKeys` を検証し、成功時のみ型付き `PostToolUsePayload.reviewResolutionArtifact` として配送する。無効な metadata は安全な警告を残して無視する。
+  - `ObservationHandler.handlePostToolUse()` は型付き `reviewResolutionArtifact` を受け取ると、通常の `review_observed` append や同一イベントの gate 評価を行わず、専用の `handleReviewResolutionArtifact()` 分岐へ配送して `PROCEED` を返す。専用分岐は artifact を再検証し、成功時のみ resolution marker を記録して projection refresh を予約する。
+  - レコード構築は `buildReviewResolutionRecord` に委譲する。
 
 ```typescript
 // src/hooks/observation-handler.ts 内（将来の拡張用 seam）
@@ -487,20 +502,20 @@ private async handleReviewResolutionArtifact(payload: { agentId: ObservationAgen
 }
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/core/v2/review-scope.ts src/core/v2/record-builder.ts src/hooks/observation-handler.ts src/core/review-rejection-detector.ts tests/hooks/observation-handler-review.test.ts tests/core/review-rejection-detector.test.ts
 git commit -m "feat(v2): review_observed generation using record-builder and multi-item detection"
 ```
 
-- [ ] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 6 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit

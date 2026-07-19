@@ -35,20 +35,22 @@
 ---
 
 > **Split plan:** This file is part 08 of the split Justice v2.0 Foundation implementation plan.
-> **Scope:** Read-only justice_status, justice_gate, and justice_review custom tools.
+> **Scope:** 人間承認を明示的に取得する、唯一の `justice_review` custom tool。`justice_status`、`justice_gate`、または第 4 の Justice custom tool は導入しない。
 > **Index:** See `2026-06-26-justice-v2-foundation.md` for the complete split-plan map and cross-phase dependency summary.
 
-## Phase 7: Justice Tools
+## Phase 7: Approved Review Resolution Tool
 
 **Base Branch:** `feature/phase7-v2-justice-tools__base`
 
-**目的:** `justice_status`, `justice_gate`, `justice_review` の read-only custom tool を実装。本 Phase だけで on-demand な照会機能が完成する。
+**目的:** 唯一の `justice_review` custom tool で review summary を照会し、選択した open item の解決だけを人間承認後に記録する。本 Phase は public custom tool を追加しない。
 
-**判断:** Phase 7 は Phase 2/3/5/6 の log store, projection, rule engine, review aggregator を使用。Task 7.1 は projection 読取（Phase 2）なので Base から、Task 7.2 は 7.1 + Phase 5 engine なので Task 7.1 から、Task 7.3 は 7.1 + Phase 6 aggregator なので Task 7.1 から。実際には Phase 7 Base は Phase 6 Base から派生し、Task 7.1 はその Base から分岐。Phase 7 内では 7.1 → 7.2 → 7.3 と積み上げる。
+**判断:** Phase 7 は Phase 6 の log store、projection、review aggregator を使用する。承認の trust boundary は `justice_review` 内の `ToolContext.ask` のみであり、Adapter は完全一致する `justice_review` の成功 metadata だけを型付き resolution artifact に昇格する。自由文、tool args、汎用 tool metadata から承認を導出しない。
 
 ---
 
-### Task 7.1: justice_status Tool
+### Superseded Task 7.1: No justice_status Tool
+
+> **Current design:** `justice_status` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
 
 **Files:**
 
@@ -140,7 +142,9 @@ gt submit
 
 ---
 
-### Task 7.2: justice_gate Tool (Dry-Run)
+### Superseded Task 7.2: No justice_gate Tool
+
+> **Current design:** `justice_gate` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
 
 **Files:**
 
@@ -217,7 +221,14 @@ gt submit
 
 ---
 
-### Task 7.3: justice_review Tool
+### Task 7.3: Sole justice_review Tool
+
+> **Current approval contract (supersedes the legacy read-only sketch below):**
+>
+> - `justice_review` is the sole public Justice custom tool; no fourth tool is added.
+> - A resolution is emitted only after `ToolContext.ask` succeeds for `justice_review.resolve`. The request carries the selected currently-open `itemKeys`, `reviewScope`, and `artifactRef`.
+> - Denial returns an informational `ERROR` result with no metadata. Approval produces the human-approved artifact, which flows through `tool.execute.after` to resolve only those selected open items.
+> - `OpenCodeAdapter` trusts metadata only when the producing tool name is exactly `justice_review`; generic metadata remains untyped. The resolution path creates no `tool_executed` observation and leaves gate semantics unchanged.
 
 **Files:**
 
@@ -253,7 +264,7 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
 }
 ```
 
-- [ ] **Step 1.5: justice_review resilience tests**
+- [ ] **Step 1.5: justice_review approval-boundary tests**
 
 ```typescript
 // tests/runtime/justice-review-tool.test.ts
@@ -266,7 +277,7 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 - [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/runtime/justice-review-tool.test.ts
+devcontainer exec --workspace-folder . bun run test tests/runtime/justice-review-tool.test.ts tests/integration/approved-review-resolution.test.ts
 ```
 
 - [ ] **Step 3: Commit**

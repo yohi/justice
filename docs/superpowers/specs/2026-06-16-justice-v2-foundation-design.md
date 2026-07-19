@@ -405,7 +405,7 @@ type ObservationMessagePayload =
   | { readonly kind: "text_complete"; readonly messageID: string; readonly partID: string; readonly text: string };
 ```
 
-`message_part_updated` は buffer 更新のみ、`text_complete` または `message_updated.finalized=true` が抽出契機となる。`role/content` 形の user message は `chat.message` 由来であり assistant 自己申告源として使わない（D41）。**`message_updated.finalized` は OpenCode SDK に直接存在しない抽象値であり、adapter が `AssistantMessage.finish` / `time.completed` の有無や同等の finish イベントから `finalized=true` に写像する**。**（※写像のフォールバック動作）**: 万が一 OpenCode 側から `finalized` シグナルが取得できない、あるいは到着順が極端に逆転してマッピングが正常に動作しない場合は、`messageRoleBuffer` の TTL（既定 10 分無更新・D65）によるタイムアウトを finalized の代替として扱う。確定シグナルが得られない間は declared claim の抽出を保留し、安全側に倒す（監査ノイズや不正な PASS を防ぐ）。
+`message_part_updated` は buffer 更新のみ、`text_complete` または `message_updated.finalized=true` が抽出契機となる。`role/content` 形の user message は `chat.message` 由来であり assistant 自己申告源として使わない（D41）。**`message_updated.finalized` は OpenCode SDK に直接存在しない抽象値であり、adapter が `AssistantMessage.finish` / `time.completed` の有無や同等の finish イベントから `finalized=true` に写像する**。確定シグナルが取得できない、または role/text 相関が確定できない場合は declared claim の抽出を保留し、TTL（既定 10 分無更新）で buffer を破棄する。TTL を finalized の代替には使わない。これにより未確定本文を declared Evidence として永続化せず、安全側に倒す（監査ノイズや不正な PASS を防ぐ）。
 
 ```text
 OpenCode: event(message.part.updated=TextPart.text) / plugin hook experimental.text.complete 発火（message.updated は role/finish の lifecycle・chat.message=UserMessage は assistant 申告源ではない・D41）

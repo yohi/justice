@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@opencode-ai/plugin";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
+import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { defineJusticeStatusTool } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
@@ -34,6 +35,10 @@ export interface OpenCodeAdapterOptions {
    */
   readonly enableAdvisoryOutputAppend?: boolean;
 }
+
+const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
+  "justice_review",
+] as const);
 
 interface GenericEventInput {
   readonly event: {
@@ -194,6 +199,12 @@ export class OpenCodeAdapter {
         case "message.part.updated":
           await this.#handleMessagePartUpdated(properties);
           return;
+        case "chat.message":
+          await this.#handleChatMessage(properties);
+          return;
+        case "chat.params":
+          await this.#handleChatParams(properties);
+          return;
         case "session.error":
           await this.#handleSessionError(properties);
           return;
@@ -298,6 +309,7 @@ export class OpenCodeAdapter {
 
     const partID = this.#readString(part, "id") || this.#readString(properties, "partID");
     const text = this.#readString(part, "text") || this.#readString(properties, "text");
+    if (partID.length === 0 || text.length === 0) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -307,6 +319,47 @@ export class OpenCodeAdapter {
       type: "Message",
       sessionId,
       payload: { kind: "message_part_updated", sessionId, messageID, partID, text },
+    });
+  }
+
+  /**
+   * Handles a `chat.message` event. Only user messages are forwarded into the
+   * Justice observation log; assistant text is already captured via
+   * `#handleMessagePartUpdated` and tool-use hooks, so forwarding it here would
+   * create duplicates. Dropping non-user roles is therefore intentional.
+   */
+  async #handleChatMessage(properties: Record<string, unknown>): Promise<void> {
+    const message = this.#readRecord(properties, "message");
+    const sessionId =
+      this.#readString(properties, "sessionID") || this.#readString(message, "sessionID");
+    const content = this.#readString(message, "content");
+    // Intentionally drop assistant/system messages — see method JSDoc above.
+    if (
+      sessionId.length === 0 ||
+      content.length === 0 ||
+      this.#readString(message, "role") !== "user"
+    ) {
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    await justice.handleEvent({ type: "Message", sessionId, payload: { role: "user", content } });
+  }
+
+  async #handleChatParams(properties: Record<string, unknown>): Promise<void> {
+    const sessionId = this.#readString(properties, "sessionID");
+    const agentName = this.#readString(properties, "agent");
+    if (sessionId.length === 0 || agentName.length === 0) return;
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    await justice.handleEvent({
+      type: "AgentMapped",
+      sessionId,
+      payload: { sessionId, agentName },
     });
   }
 
@@ -469,10 +522,26 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      if (input.tool.startsWith("justice_")) return;
+      const isTrustedReviewResolutionArtifactSource =
+        TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS.includes(input.tool);
+      if (input.tool.startsWith("justice_") && !isTrustedReviewResolutionArtifactSource) return;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
+
+      const rawReviewResolutionArtifact = output.metadata?.reviewResolutionArtifact;
+      const canPromoteReviewResolutionArtifact =
+        isTrustedReviewResolutionArtifactSource && output.metadata?.error !== true;
+      const reviewResolutionArtifact = canPromoteReviewResolutionArtifact
+        ? parseReviewResolutionArtifact(rawReviewResolutionArtifact)
+        : undefined;
+      if (
+        canPromoteReviewResolutionArtifact &&
+        rawReviewResolutionArtifact !== undefined &&
+        reviewResolutionArtifact === undefined
+      ) {
+        await this.log("warn", "[Justice] malformed review resolution artifact ignored");
+      }
 
       const response = await justice.handleEvent({
         type: "PostToolUse",
@@ -484,6 +553,7 @@ export class OpenCodeAdapter {
           toolInput: input.args,
           toolResult: output.output,
           metadata: output.metadata,
+          ...(reviewResolutionArtifact === undefined ? {} : { reviewResolutionArtifact }),
           error: output.metadata?.error === true,
         },
       });

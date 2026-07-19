@@ -65,6 +65,26 @@ function toolEvidence(input: ToolEvidenceInput): ProjectedEvidence {
   };
 }
 
+function fileContentEvidence(input: ToolEvidenceInput): ProjectedEvidence {
+  return {
+    evidence: {
+      evidenceId: input.evidenceId,
+      kind: input.kind,
+      sourceClass: "tool_output",
+      provenance: input.provenance ?? "observed",
+      toolOutputClass: "file_content",
+      rawOutputHash: "sha256:file-content",
+      interpretation: {
+        outcome: input.outcome,
+        basis: "parsed_output",
+        provenance: "derived",
+        derivedFrom: [{ kind: "self", evidenceId: input.evidenceId }],
+      },
+    },
+    ref: evidenceRef(input.evidenceId),
+  };
+}
+
 function gate(input: GateInput): GateRule {
   return {
     id: input.id,
@@ -218,6 +238,30 @@ describe("evaluate", () => {
     );
 
     expect(result.verdict).toBe("PASS");
+  });
+
+  it("does not let file_content evidence satisfy execution gates", () => {
+    const evidence = fileContentEvidence({
+      evidenceId: "read-pass",
+      kind: "test",
+      outcome: "pass",
+    });
+    const result = evaluate(
+      [
+        gate({ id: "test-present", check: { type: "evidence_present", evidenceKind: "test" } }),
+        gate({
+          id: "test-pass",
+          check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
+        }),
+      ],
+      [evidence],
+      BASE_CONTEXT,
+    );
+
+    expect(result.verdict).toBe("WARN");
+    if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
+    expect(result.ruleResults.map((rule) => rule.verdict)).toEqual(["WARN", "WARN"]);
+    expect(result.ruleResults.every((rule) => rule.evidenceRefs.length === 0)).toBe(true);
   });
 });
 

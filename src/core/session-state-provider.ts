@@ -21,7 +21,8 @@ import type { AgentId, ObservationAgentId } from "./types";
  */
 export class SessionStateProvider {
   private readonly sessionAgentIds = new Map<string, ObservationAgentId>();
-  private readonly activeTaskWindows = new Map<string, string>();
+  private readonly activeTaskWindows = new Map<string, { readonly sessionId?: string; readonly taskId: string; readonly generation?: number }>();
+  private readonly sessionGenerations = new Map<string, number>();
 
   /**
    * Records an `AgentMapped` payload, resolving `agentName` → `AgentId` internally.
@@ -29,6 +30,9 @@ export class SessionStateProvider {
    */
   setAgentMapping(sessionId: string, agentName: string): void {
     this.sessionAgentIds.set(sessionId, SessionStateProvider.resolveAgentId(agentName));
+    if (!this.sessionGenerations.has(sessionId)) {
+      this.sessionGenerations.set(sessionId, 0);
+    }
   }
 
   /**
@@ -40,26 +44,70 @@ export class SessionStateProvider {
   }
 
   /**
-   * Removes the session mapping for `sessionId`. Call this when a session ends
-   * to prevent unbounded growth of the internal map.
+   * Removes the session mapping and generation for `sessionId`. Call this when a
+   * session ends. Any subsequent `setActiveTaskWindow` with this `sessionId` will
+   * be ignored until `setAgentMapping` re-establishes the session.
    */
   removeSession(sessionId: string): void {
     this.sessionAgentIds.delete(sessionId);
+    this.sessionGenerations.delete(sessionId);
+    for (const [callId, window] of this.activeTaskWindows) {
+      if (window.sessionId === sessionId) this.activeTaskWindows.delete(callId);
+    }
   }
 
   /**
    * Reads the `taskId` bound to the `callId` task window, or `undefined` if no
    * window is open for that `callId`.
+   *
+   * If the window was tagged with a generation (because `setActiveTaskWindow`
+   * was called with a `sessionId` that had an active generation at the time),
+   * the current generation for that session is checked.  If the session has
+   * been removed (generation deleted), the window is considered stale and is
+   * cleaned up.
    */
   getActiveTaskId(callId: string): string | undefined {
-    return this.activeTaskWindows.get(callId);
+    const window = this.activeTaskWindows.get(callId);
+    if (!window) return undefined;
+    if (window.generation !== undefined) {
+      const currentGen = this.sessionGenerations.get(window.sessionId ?? "");
+      if (currentGen === undefined || currentGen !== window.generation) {
+        this.activeTaskWindows.delete(callId);
+        return undefined;
+      }
+    }
+    return window.taskId;
   }
 
   /**
    * Opens (or overwrites) the task window for `callId` (PreToolUse).
+   *
+   * When `sessionId` is provided, the window is only created if the session has
+   * an active generation (i.e. `setAgentMapping` was called and `removeSession`
+   * has not yet been called).  This prevents stale windows from being created
+   * for sessions that have already ended.
+   *
+   * When `sessionId` is omitted, a generation-less window is created for
+   * backwards compatibility with callers that do not track session lifecycles.
    */
-  setActiveTaskWindow(callId: string, taskId: string): void {
-    this.activeTaskWindows.set(callId, taskId);
+  setActiveTaskWindow(callId: string, taskId: string, sessionId?: string): void {
+    if (sessionId !== undefined) {
+      const generation = this.sessionGenerations.get(sessionId);
+      if (generation === undefined) {
+        return; // Session has been removed or never mapped
+      }
+      this.activeTaskWindows.set(callId, { taskId, sessionId, generation });
+    } else {
+      this.activeTaskWindows.set(callId, { taskId });
+    }
+  }
+
+  /**
+   * Returns the current generation for `sessionId`, or `undefined` if the
+   * session has been removed (or was never mapped).
+   */
+  getSessionGeneration(sessionId: string): number | undefined {
+    return this.sessionGenerations.get(sessionId);
   }
 
   /**
