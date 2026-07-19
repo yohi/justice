@@ -126,6 +126,25 @@ describe("justice_status tool", () => {
     expect(parsed.reviewSummary.open).toEqual([]);
   });
 
+  it("returns the projected state when no projection cache is configured", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    vi.spyOn(observationHandler, "getProjectionCache").mockReturnValue(undefined);
+    const definition = adapter.getTools().justice_status;
+    if (definition === undefined) throw new Error("justice_status definition is missing");
+
+    // When
+    const output = requireStringResult(await definition.execute({}, createToolContext()));
+
+    // Then
+    expect(serializedStateSchema.parse(JSON.parse(output)).tasks).toEqual({});
+  });
+
   it("logs a warning when the projection cache write fails", async () => {
     // Given
     const log = vi.fn().mockResolvedValue(undefined);
@@ -162,6 +181,28 @@ describe("justice_status tool", () => {
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
     vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockRejectedValue(
       new Error("corrupted observation log"),
+    );
+    const definition = adapter.getTools().justice_status;
+    if (definition === undefined) throw new Error("justice_status definition is missing");
+
+    // When
+    const output = requireStringResult(await definition.execute({}, createToolContext()));
+
+    // Then
+    expect(errorResultSchema.parse(JSON.parse(output))).toEqual({
+      status: "ERROR",
+      reason: "corrupted observation log",
+    });
+  });
+
+  it("stringifies non-Error observation log failures", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockRejectedValue(
+      "corrupted observation log",
     );
     const definition = adapter.getTools().justice_status;
     if (definition === undefined) throw new Error("justice_status definition is missing");
