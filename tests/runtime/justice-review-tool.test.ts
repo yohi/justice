@@ -1,4 +1,7 @@
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PluginInput, ToolContext, ToolResult } from "@opencode-ai/plugin";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +13,8 @@ import {
   type JusticeReviewToolArgs,
 } from "../../src/runtime/justice-tools";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { fakeInit } from "../helpers/fake-opencode-init";
 import { createMemFs } from "../helpers/mock-file-system";
 
 function createShell(): PluginInput["$"] {
@@ -281,5 +286,194 @@ describe("defineJusticeReviewTool", () => {
     expect(JSON.parse(outputOf(result))).toMatchObject({ status: "ERROR" });
     expect(metadataOf(result)).toBeUndefined();
     expect(await store.readAll()).toEqual(before);
+  });
+});
+
+describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
+  function createToolContext(agent = "sisyphus", sessionID = "session-1"): ToolContext {
+    return {
+      sessionID,
+      messageID: "message-1",
+      agent,
+      directory: ".",
+      worktree: ".",
+      abort: new AbortController().signal,
+      metadata: () => undefined,
+      ask: (): never => {
+        throw new Error("justice_review must not request permission in this test case");
+      },
+    };
+  }
+
+  it("returns a review summary via the adapter tool definition", async () => {
+    // Given
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+
+    const observationHandler = justice.getObservationHandler();
+    const logStore =
+      observationHandler.getLogStore() as import("../../src/runtime/observation-log-store").ObservationLogStore;
+    const shard: import("../../src/core/types").ShardId = {
+      agentId: "atlas",
+      sessionId: "session-review",
+      writerId: logStore.getWriterId(),
+    };
+    await logStore.append(shard, {
+      schemaVersion: 1,
+      timestamp: "2026-07-18T00:00:00.000Z",
+      agentId: shard.agentId,
+      sessionId: shard.sessionId,
+      writerId: shard.writerId,
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "task-6.3",
+      items: [reviewItem("major:adapter")],
+    });
+
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute({}, createToolContext());
+
+    // Then
+    const output = typeof result === "string" ? result : result.output;
+    const parsed = JSON.parse(output);
+    expect(parsed.authority).toBe("observed_review_output");
+    expect(parsed.open.length).toBeGreaterThanOrEqual(1);
+    expect(parsed.open[0]).toMatchObject({ itemKey: "major:adapter" });
+  });
+
+  it("requests approval through context.ask when resolving", async () => {
+    // Given
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+
+    const observationHandler = justice.getObservationHandler();
+    const logStore =
+      observationHandler.getLogStore() as import("../../src/runtime/observation-log-store").ObservationLogStore;
+    const shard: import("../../src/core/types").ShardId = {
+      agentId: "atlas",
+      sessionId: "session-review",
+      writerId: logStore.getWriterId(),
+    };
+    await logStore.append(shard, {
+      schemaVersion: 1,
+      timestamp: "2026-07-18T00:00:00.000Z",
+      agentId: shard.agentId,
+      sessionId: shard.sessionId,
+      writerId: shard.writerId,
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "task-6.3",
+      items: [reviewItem("major:resolve")],
+    });
+
+    const ask = vi.fn(() => Effect.succeed(undefined));
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute(
+      {
+        scope: "task-6.3",
+        resolve: { itemKeys: ["major:resolve"], artifactRef: "refs/reviews/task-6.3" },
+      },
+      { ...createToolContext(), ask },
+    );
+
+    // Then
+    expect(ask).toHaveBeenCalledWith({
+      permission: "justice_review.resolve",
+      patterns: ["task-6.3", "major:resolve"],
+      always: [],
+      metadata: {
+        reviewScope: "task-6.3",
+        itemKeys: ["major:resolve"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
+    });
+
+    const metadata = typeof result === "string" ? undefined : result.metadata;
+    expect(metadata).toEqual({
+      reviewResolutionArtifact: {
+        authority: "human_approved",
+        reviewScope: "task-6.3",
+        itemKeys: ["major:resolve"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
+    });
+  });
+
+  it("fails open with JSON ERROR when Justice cannot initialize", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(
+      fakeInit({
+        project: { root: undefined },
+        directory: undefined,
+        worktree: undefined,
+      }),
+    );
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute({}, createToolContext());
+
+    // Then
+    const output = typeof result === "string" ? result : result.output;
+    expect(JSON.parse(output)).toEqual({
+      status: "ERROR",
+      reason: "Justice not initialized",
+    });
+  });
+
+  it("falls through to the outer catch when readAll throws", async () => {
+    // Given
+    const ask = vi.fn(() => Effect.succeed(undefined));
+    const failingReader = {
+      readAll: vi.fn(() => Promise.reject(new Error("disk read failed"))),
+    };
+
+    // When
+    const result = await executeJusticeReviewTool({
+      logReader: failingReader,
+      args: {},
+      requestApproval: async (approval): Promise<void> => {
+        await Effect.runPromise(ask(approval));
+      },
+    });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toEqual({
+      status: "ERROR",
+      reason: "Unable to read the current review state: disk read failed",
+    });
+  });
+
+  it("falls through to the adapter outer catch when ensureInitialized throws", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    vi.spyOn(adapter, "ensureInitialized").mockRejectedValue(new Error("init boom"));
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute({}, createToolContext());
+
+    // Then
+    const output = typeof result === "string" ? result : result.output;
+    expect(JSON.parse(output)).toEqual({
+      status: "ERROR",
+      reason: "init boom",
+    });
   });
 });

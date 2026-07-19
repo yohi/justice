@@ -1,5 +1,6 @@
 // eslint-disable-next-line no-restricted-imports -- Runtime tool definitions are an approved OpenCode API boundary.
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { Effect } from "effect";
 import { SessionStateProvider } from "../core/session-state-provider";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import type { ReviewResolutionArtifact } from "../core/types";
@@ -52,6 +53,21 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         const justice = adapter.getJustice();
         if (justice === null) return formatError("Justice not initialized");
 
+        const scopedTaskId = taskId?.length ? taskId : undefined;
+        if (scopedTaskId === undefined) {
+          return JSON.stringify(
+            evaluate([], [], {
+              trigger: "task_complete",
+              taskId: scopedTaskId,
+              agentId: SessionStateProvider.resolveAgentId(context.agent),
+              sessionId: context.sessionID,
+              reviewScope: [],
+            }),
+            null,
+            2,
+          );
+        }
+
         const observationHandler = justice.getObservationHandler();
         const gateLoader = observationHandler.getGateLoader();
         if (gateLoader === undefined) return formatError("Gate loader not configured");
@@ -59,7 +75,6 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         const events = await observationHandler.getLogStore().readAll();
         const state = project(events, new Date().toISOString());
         const gates = await gateLoader.load();
-        const scopedTaskId = taskId?.length ? taskId : undefined;
         const gateContext: GateContext = {
           trigger: "task_complete",
           taskId: scopedTaskId,
@@ -184,7 +199,41 @@ export async function executeJusticeReviewTool(
       output: JSON.stringify({ status: "OK", reviewResolutionArtifact: artifact }, null, 2),
       metadata: { reviewResolutionArtifact: artifact },
     };
-  } catch {
-    return formatError("Unable to read the current review state.");
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return formatError(`Unable to read the current review state: ${message}`);
   }
+}
+
+export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "Review Summary Artifact を表示・解決します",
+    args: {
+      scope: tool.schema.string().optional(),
+      resolve: tool.schema
+        .object({
+          itemKeys: tool.schema.array(tool.schema.string()),
+          artifactRef: tool.schema.string(),
+        })
+        .optional(),
+    },
+    execute: async (args, context) => {
+      try {
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return formatError("Justice not initialized");
+
+        const observationHandler = justice.getObservationHandler();
+        return await executeJusticeReviewTool({
+          logReader: observationHandler.getLogStore(),
+          args,
+          requestApproval: async (approval): Promise<void> => {
+            await Effect.runPromise(context.ask(approval));
+          },
+        });
+      } catch (error: unknown) {
+        return formatError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
 }

@@ -887,3 +887,27 @@ describe("rotateIfNeeded() defensive guard", () => {
     await expect(internal.rotateIfNeeded("unregistered/path.jsonl")).resolves.toBe(false);
   });
 });
+
+describe("ReadOnlyObservationLog interface", () => {
+  it("ObservationLogStore satisfies ReadOnlyObservationLog structurally", () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    // Structural typing check: the store should be assignable to ReadOnlyObservationLog
+    const readOnly: import("../../src/runtime/observation-log-store").ReadOnlyObservationLog =
+      store;
+    expect(readOnly).toBeDefined();
+    expect(typeof readOnly.readAll).toBe("function");
+  });
+
+  it("readAll returns readonly records through the ReadOnlyObservationLog interface", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    await store.append(shard, msgRecord());
+
+    const readOnly: import("../../src/runtime/observation-log-store").ReadOnlyObservationLog =
+      store;
+    const records = await readOnly.readAll();
+    expect(records).toHaveLength(1);
+    expect(records[0].sequence).toBe(1);
+  });
+});

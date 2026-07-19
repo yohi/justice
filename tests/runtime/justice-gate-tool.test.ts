@@ -174,6 +174,18 @@ describe("justice_gate tool", () => {
   it("treats an empty taskId as an unscoped dry-run", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    const logRead = vi
+      .spyOn(observationHandler.getLogStore(), "readAll")
+      .mockRejectedValue(new Error("readAll must not be called"));
+    const gateLoader = observationHandler.getGateLoader();
+    if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
+    const gateLoad = vi
+      .spyOn(gateLoader, "load")
+      .mockRejectedValue(new Error("load must not be called"));
     const definition = requireGateTool(adapter);
 
     // When
@@ -186,6 +198,8 @@ describe("justice_gate tool", () => {
       verdict: "SKIP",
       reason: "no taskId provided",
     });
+    expect(logRead).not.toHaveBeenCalled();
+    expect(gateLoad).not.toHaveBeenCalled();
   });
 
   it("fails open with JSON ERROR when the gate loader is not configured", async () => {
@@ -224,7 +238,6 @@ describe("justice_gate tool", () => {
       evidenceEvent(2, "build"),
       reviewEvent(3),
     ]);
-    const append = vi.spyOn(logStore, "append");
     vi.spyOn(gateLoader, "load").mockResolvedValue(TEST_AND_REVIEW_GATES);
     const definition = requireGateTool(adapter);
 
@@ -247,7 +260,6 @@ describe("justice_gate tool", () => {
     expect(reviewRule?.evidenceRefs).toEqual([
       expect.objectContaining({ evidenceId: "review-evidence-1", sequence: 3 }),
     ]);
-    expect(append).not.toHaveBeenCalled();
   });
 
   it("fails open with JSON ERROR when the observation log cannot be read", async () => {
