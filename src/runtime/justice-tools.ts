@@ -27,7 +27,9 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
         await observationHandler
           .getProjectionCache()
           ?.write(state)
-          .catch(() => {});
+          .catch((error: unknown) =>
+            adapter.log("warn", "[Justice] justice_status projection cache write failed", error),
+          );
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
       } catch (error: unknown) {
         return formatError(error instanceof Error ? error.message : String(error));
@@ -68,15 +70,11 @@ export type JusticeReviewToolInput = {
   readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
 };
 
-function errorResult(reason: string): string {
-  return JSON.stringify({ status: "ERROR", reason }, null, 2);
-}
-
 function serializeReviewSummary(summary: ReviewSummary, scope: string | undefined): string {
   if (scope !== undefined) {
     const scopedSummary = summary.byScope.get(scope);
     return scopedSummary === undefined
-      ? errorResult(`Unknown review scope: ${scope}`)
+      ? formatError(`Unknown review scope: ${scope}`)
       : JSON.stringify(scopedSummary, null, 2);
   }
 
@@ -110,7 +108,7 @@ export async function executeJusticeReviewTool(
       return serializeReviewSummary(state.reviewSummary, normalizedScope);
     }
     if (normalizedScope === undefined) {
-      return errorResult(
+      return formatError(
         "Review resolution requires a non-empty scope. Provide scope when using resolve.",
       );
     }
@@ -120,11 +118,11 @@ export async function executeJusticeReviewTool(
       itemKeys: input.args.resolve.itemKeys,
       artifactRef: input.args.resolve.artifactRef,
     });
-    if (artifact === undefined) return errorResult("Invalid review resolution request.");
+    if (artifact === undefined) return formatError("Invalid review resolution request.");
 
     const scopeSummary = state.reviewSummary.byScope.get(artifact.reviewScope);
     if (scopeSummary === undefined || !containsOpenItems(scopeSummary, artifact.itemKeys)) {
-      return errorResult("Requested review items are not currently open in the specified scope.");
+      return formatError("Requested review items are not currently open in the specified scope.");
     }
 
     try {
@@ -139,7 +137,7 @@ export async function executeJusticeReviewTool(
         },
       });
     } catch {
-      return errorResult("Review resolution was not approved.");
+      return formatError("Review resolution was not approved.");
     }
 
     return {
@@ -147,6 +145,6 @@ export async function executeJusticeReviewTool(
       metadata: { reviewResolutionArtifact: artifact },
     };
   } catch {
-    return errorResult("Unable to read the current review state.");
+    return formatError("Unable to read the current review state.");
   }
 }

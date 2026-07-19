@@ -126,6 +126,34 @@ describe("justice_status tool", () => {
     expect(parsed.reviewSummary.open).toEqual([]);
   });
 
+  it("logs a warning when the projection cache write fails", async () => {
+    // Given
+    const log = vi.fn().mockResolvedValue(undefined);
+    const adapter = new OpenCodeAdapter(fakeInit({ client: { app: { log } } }));
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    const projectionCache = observationHandler.getProjectionCache();
+    if (projectionCache === undefined) throw new Error("Projection cache fixture is missing");
+    const cacheError = new Error("cache unavailable");
+    vi.spyOn(projectionCache, "write").mockRejectedValue(cacheError);
+    const definition = adapter.getTools().justice_status;
+    if (definition === undefined) throw new Error("justice_status definition is missing");
+
+    // When
+    await definition.execute({}, createToolContext());
+
+    // Then
+    expect(log).toHaveBeenCalledWith({
+      level: "warn",
+      service: "justice",
+      message: "[Justice] justice_status projection cache write failed",
+      extra: { args: [cacheError] },
+    });
+  });
+
   it("fails open with JSON ERROR when the observation log cannot be read", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());
