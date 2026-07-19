@@ -1,4 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { mkdirSync } from "node:fs";
 import type { PluginInput, ToolContext, ToolResult } from "@opencode-ai/plugin";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -304,6 +305,7 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
 
   it("returns a review summary via the adapter tool definition", async () => {
     // Given
+    mkdirSync("/tmp/test-workspace", { recursive: true });
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
@@ -345,6 +347,7 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
 
   it("requests approval through context.ask when resolving", async () => {
     // Given
+    mkdirSync("/tmp/test-workspace", { recursive: true });
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
