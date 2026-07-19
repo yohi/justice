@@ -109,7 +109,11 @@ describe("OpenCodePlugin justice_review tool", () => {
     const hooks = await OpenCodePlugin(pluginInput);
 
     // Then
-    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["justice_review", "justice_status"]);
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual([
+      "justice_gate",
+      "justice_review",
+      "justice_status",
+    ]);
   });
 });
 

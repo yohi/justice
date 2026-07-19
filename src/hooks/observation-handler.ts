@@ -86,6 +86,10 @@ export class ObservationHandler {
     return this.options.projectionCache;
   }
 
+  getGateLoader(): GateLoader | undefined {
+    return this.options.gateLoader;
+  }
+
   async handleSessionError(error: {
     readonly message: string;
     readonly kind?: string;

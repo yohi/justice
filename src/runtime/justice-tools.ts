@@ -1,8 +1,12 @@
 // eslint-disable-next-line no-restricted-imports -- Runtime tool definitions are an approved OpenCode API boundary.
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { SessionStateProvider } from "../core/session-state-provider";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import type { ReviewResolutionArtifact } from "../core/types";
+import type { GateContext } from "../core/v2/gate-context";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
+import { collectReviewScopes } from "../core/v2/review-scope";
+import { evaluate } from "../core/v2/rule-evaluation-engine";
 import { project, toSerializableProjectedState } from "../core/v2/state-projection";
 import type { ReviewSummary, ScopeReviewSummary } from "../core/v2/review-types";
 import type { OpenCodeAdapter } from "./opencode-adapter";
@@ -31,6 +35,42 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
             adapter.log("warn", "[Justice] justice_status projection cache write failed", error),
           );
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
+      } catch (error: unknown) {
+        return formatError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+}
+
+export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "現 event log から task_complete トリガーの gate を dry-run 評価します",
+    args: { taskId: tool.schema.string().optional() },
+    execute: async ({ taskId }, context) => {
+      try {
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return formatError("Justice not initialized");
+
+        const observationHandler = justice.getObservationHandler();
+        const gateLoader = observationHandler.getGateLoader();
+        if (gateLoader === undefined) return formatError("Gate loader not configured");
+
+        const events = await observationHandler.getLogStore().readAll();
+        const state = project(events, new Date().toISOString());
+        const gates = await gateLoader.load();
+        const scopedTaskId = taskId?.length ? taskId : undefined;
+        const gateContext: GateContext = {
+          trigger: "task_complete",
+          taskId: scopedTaskId,
+          agentId: SessionStateProvider.resolveAgentId(context.agent),
+          sessionId: context.sessionID,
+          reviewScope: scopedTaskId === undefined ? [] : collectReviewScopes(state, scopedTaskId),
+          reviewSummary: state.reviewSummary,
+        };
+        const evidence =
+          scopedTaskId === undefined ? [] : (state.tasks.get(scopedTaskId)?.evidence ?? []);
+        return JSON.stringify(evaluate(gates, evidence, gateContext), null, 2);
       } catch (error: unknown) {
         return formatError(error instanceof Error ? error.message : String(error));
       }

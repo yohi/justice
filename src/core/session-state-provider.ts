@@ -122,7 +122,7 @@ export class SessionStateProvider {
    * name → AgentId mapping: lowercase `agentName`; if it is one of `AGENT_IDS`
    * return that `AgentId`, otherwise `"unknown"`.
    */
-  private static resolveAgentId(agentName: string): ObservationAgentId {
+  static resolveAgentId(agentName: string): ObservationAgentId {
     const lower = agentName.toLowerCase();
     if ((AGENT_IDS as readonly string[]).includes(lower)) {
       return lower as AgentId;
