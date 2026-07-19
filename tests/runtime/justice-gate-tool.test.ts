@@ -147,6 +147,7 @@ describe("justice_gate tool", () => {
 
     // Then
     expect(hooks.tool).toHaveProperty("justice_gate");
+    expect(hooks.tool?.justice_gate?.description).toContain("task_complete");
   });
 
   it("resolves Justice and the invoking agent lazily for an unscoped dry-run", async () => {

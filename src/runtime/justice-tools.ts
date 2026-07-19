@@ -44,7 +44,7 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
 
 export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition {
   return tool({
-    description: "現 event log から gate を dry-run 評価します",
+    description: "現 event log から task_complete トリガーの gate を dry-run 評価します",
     args: { taskId: tool.schema.string().optional() },
     execute: async ({ taskId }, context) => {
       try {
