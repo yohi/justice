@@ -187,6 +187,27 @@ describe("justice_gate tool", () => {
     });
   });
 
+  it("fails open with JSON ERROR when the gate loader is not configured", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    vi.spyOn(justice.getObservationHandler(), "getGateLoader").mockReturnValue(undefined);
+    const definition = requireGateTool(adapter);
+
+    // When
+    const output = requireStringResult(
+      await definition.execute({ taskId: "task-7.2" }, createToolContext()),
+    );
+
+    // Then
+    expect(errorResultSchema.parse(JSON.parse(output))).toEqual({
+      status: "ERROR",
+      reason: "Gate loader not configured",
+    });
+  });
+
   it("evaluates projected evidence and review summary without appending a decision", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());
@@ -262,6 +283,58 @@ describe("justice_gate tool", () => {
     if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
     vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
     vi.spyOn(gateLoader, "load").mockRejectedValue(new Error("gate configuration unavailable"));
+    const definition = requireGateTool(adapter);
+
+    // When
+    const output = requireStringResult(
+      await definition.execute({ taskId: "task-7.2" }, createToolContext()),
+    );
+
+    // Then
+    expect(errorResultSchema.parse(JSON.parse(output))).toEqual({
+      status: "ERROR",
+      reason: "gate configuration unavailable",
+    });
+  });
+
+  it("evaluates a task without evidence as an empty evidence set", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    const gateLoader = observationHandler.getGateLoader();
+    if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    vi.spyOn(gateLoader, "load").mockResolvedValue(TEST_AND_REVIEW_GATES);
+    const definition = requireGateTool(adapter);
+
+    // When
+    const output = requireStringResult(
+      await definition.execute({ taskId: "missing-task" }, createToolContext()),
+    );
+
+    // Then
+    const result = decisionResultSchema.parse(JSON.parse(output));
+    expect(result.verdict).toBe("FAIL");
+    expect(result.ruleResults).toEqual([
+      expect.objectContaining({ ruleId: "tests-pass", verdict: "FAIL" }),
+      expect.objectContaining({ ruleId: "review-blocked", verdict: "WARN" }),
+    ]);
+  });
+
+  it("serializes a non-Error gate loading failure", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+    const observationHandler = justice.getObservationHandler();
+    const gateLoader = observationHandler.getGateLoader();
+    if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    vi.spyOn(gateLoader, "load").mockRejectedValue("gate configuration unavailable");
     const definition = requireGateTool(adapter);
 
     // When
