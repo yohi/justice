@@ -1,5 +1,7 @@
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PluginInput, ToolContext, ToolResult } from "@opencode-ai/plugin";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -305,8 +307,9 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
 
   it("returns a review summary via the adapter tool definition", async () => {
     // Given
-    mkdirSync("/tmp/test-workspace", { recursive: true });
-    const adapter = new OpenCodeAdapter(fakeInit());
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
@@ -347,8 +350,9 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
 
   it("requests approval through context.ask when resolving", async () => {
     // Given
-    mkdirSync("/tmp/test-workspace", { recursive: true });
-    const adapter = new OpenCodeAdapter(fakeInit());
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
