@@ -66,7 +66,7 @@ describe("StateProjectionCache serialization", () => {
 
     expect(restored).toBeDefined();
     expect(restored?.integrity.sourceHash).toBe(state.integrity.sourceHash);
-    expect(restored?.integrity.maxSequenceByShard.get("atlas:s1:w1")).toBe(1);
+    expect(restored?.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(1);
     expect(restored?.reviewSummary.byScope.get("src/api")?.critical).toHaveLength(1);
     expect(restored?.tasks.get("task-1")?.observedReviewScopes).toEqual(["src/api"]);
   });

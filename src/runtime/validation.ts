@@ -68,35 +68,32 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       throw new Error("Invalid tool_executed record");
     }
   } else if (kind === "message") {
-    const declaredClaims = r.declaredClaims;
-    const evidence = r.evidence;
-    const hasClaims = declaredClaims !== undefined;
-    const hasEvidence = evidence !== undefined;
-    const neither = !hasClaims && !hasEvidence;
-    const both = hasClaims && hasEvidence;
-    const claimsEmpty = hasClaims && Array.isArray(declaredClaims) && declaredClaims.length === 0;
-    const evidenceEmpty = hasEvidence && Array.isArray(evidence) && evidence.length === 0;
-    const onlyEmpty =
-      (hasClaims && !hasEvidence && claimsEmpty) || (!hasClaims && hasEvidence && evidenceEmpty);
+    // Legacy v1 compatibility: records written before the v2 schema may have
+    // both fields undefined. Normalizing them to empty arrays prevents silent
+    // data loss during readAll() ingestion on upgraded instances.
+    const declaredClaims =
+      r.declaredClaims === undefined && r.evidence === undefined
+        ? []
+        : r.declaredClaims;
+    const evidence =
+      r.declaredClaims === undefined && r.evidence === undefined
+        ? []
+        : r.evidence;
     const mismatched =
-      (hasClaims && !Array.isArray(declaredClaims)) ||
-      (hasEvidence && !Array.isArray(evidence)) ||
-      (both && declaredClaims.length !== evidence.length);
+      !Array.isArray(declaredClaims) ||
+      !Array.isArray(evidence) ||
+      declaredClaims.length !== evidence.length;
     if (
       typeof r.messageID !== "string" ||
       r.role !== "assistant" ||
       typeof r.textHash !== "string" ||
       typeof r.finalized !== "boolean" ||
-      (!neither && !both && !onlyEmpty) ||
       mismatched
     ) {
       throw new Error("Invalid message record");
     }
-    if (neither) {
-      return;
-    }
-    const evidenceArray = (evidence ?? []) as unknown[];
-    const claimsArray = (declaredClaims ?? []) as unknown[];
+    const evidenceArray = evidence;
+    const claimsArray = declaredClaims;
     const evidenceIterator = evidenceArray.values();
     for (const claim of claimsArray) {
       const nextEvidence = evidenceIterator.next();

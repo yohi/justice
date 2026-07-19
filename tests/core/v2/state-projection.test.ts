@@ -136,8 +136,8 @@ describe("project() task fold", () => {
       toolEvent(2, "2026-07-06T00:00:03Z", "task-1", "ev-3", "w2"),
     ];
     const state = project(events, REBUILT_AT);
-    expect(state.integrity.maxSequenceByShard.get("atlas:s1:w1")).toBe(5);
-    expect(state.integrity.maxSequenceByShard.get("atlas:s1:w2")).toBe(2);
+    expect(state.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(5);
+    expect(state.integrity.maxSequenceByShard.get('["atlas","s1","w2"]')).toBe(2);
   });
 });
 
@@ -254,7 +254,7 @@ describe("ProjectedState JSON round-trip", () => {
     expect(Array.isArray(serialized.reviewSummary.byScope)).toBe(false);
 
     const restored = fromSerializableProjectedState(json);
-    expect(restored.integrity.maxSequenceByShard.get("atlas:s1:w1")).toBe(2);
+    expect(restored.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(2);
     expect(restored.tasks.get("task-1")?.evidence).toHaveLength(1);
     expect(restored.reviewSummary.byScope.get("src/api")?.critical).toHaveLength(1);
     expect(restored.integrity.sourceHash).toBe(state.integrity.sourceHash);

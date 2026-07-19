@@ -157,7 +157,9 @@ describe("ReviewRejectionDetector", () => {
     const items = detector.detectMultiple(output);
 
     // Then
-    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
   });
 
   it("stops rejection continuation at a Markdown heading", () => {
@@ -168,7 +170,9 @@ describe("ReviewRejectionDetector", () => {
     const items = detector.detectMultiple(output);
 
     // Then
-    expect(items).toMatchObject([{ severity: "minor", summary: "BLOCKER:", location: "unknown" }]);
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
   });
 
   it("deduplicates repeated review findings by item key", () => {
@@ -182,12 +186,42 @@ describe("ReviewRejectionDetector", () => {
     expect(items).toHaveLength(1);
   });
 
-  it("uses metadata to identify a complete review snapshot", () => {
+  it("produces the same item key for absolute and relative location summaries", () => {
+    // Given
+    const relativeFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const absoluteFinding = "MUST FIX: parser regression at /workspace/src/parser.ts:10";
+
+    // When
+    const relativeItems = detector.detectMultiple(relativeFinding, {}, "/workspace");
+    const absoluteItems = detector.detectMultiple(absoluteFinding, {}, "/workspace");
+
+    // Then
+    expect(relativeItems).toHaveLength(1);
+    expect(absoluteItems).toHaveLength(1);
+    expect(relativeItems[0]?.itemKey).toBe(absoluteItems[0]?.itemKey);
+  });
+
+  it("produces the same item key for dotted and plain relative locations", () => {
+    // Given
+    const plainFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const dottedFinding = "MUST FIX: parser regression at ./src/parser.ts:10";
+
+    // When
+    const plainItems = detector.detectMultiple(plainFinding);
+    const dottedItems = detector.detectMultiple(dottedFinding);
+
+    // Then
+    expect(plainItems).toHaveLength(1);
+    expect(dottedItems).toHaveLength(1);
+    expect(plainItems[0]?.itemKey).toBe(dottedItems[0]?.itemKey);
+  });
+
+  it("does not trust raw metadata to identify a complete review snapshot", () => {
     // Given
     const output = "review finished";
 
     // When / Then
-    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(true);
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(false);
     expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: false })).toBe(false);
   });
 

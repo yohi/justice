@@ -310,7 +310,7 @@ describe("validateRecordSchema", () => {
       }),
     ).toThrow("Invalid decision evidenceRef");
   });
-  it("accepts a message record with neither claims nor evidence", () => {
+  it("accepts a legacy message record with both fields undefined (normalized)", () => {
     expect(() =>
       validateRecordSchema({
         ...validMessage(),

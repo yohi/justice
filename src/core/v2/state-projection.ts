@@ -8,30 +8,13 @@ import {
 import type { Evidence, ObservationRecord, PersistedLogRecord } from "./observation-model";
 import { toEvidenceArray } from "./evidence-list";
 import type { Verdict } from "./decision-model";
+import type { ReviewSummary, ScopeReviewSummary } from "./review-types";
+export type { ReviewSummary, ReviewSummaryItem, ScopeReviewSummary } from "./review-types";
 import { aggregateReviews } from "./review-aggregator";
 
 export type ProjectedEvidence = {
   readonly evidence: Evidence;
   readonly ref: FullEvidenceRef;
-};
-
-export type ReviewSummaryItem = {
-  readonly itemKey: string;
-  readonly ref: FullEvidenceRef;
-  readonly severity: "critical" | "major" | "minor";
-};
-
-export type ScopeReviewSummary = {
-  readonly critical: readonly ReviewSummaryItem[];
-  readonly major: readonly ReviewSummaryItem[];
-  readonly minor: readonly ReviewSummaryItem[];
-  readonly resolved: readonly ReviewSummaryItem[];
-  readonly open: readonly ReviewSummaryItem[];
-};
-
-export type ReviewSummary = ScopeReviewSummary & {
-  readonly authority: "observed_review_output";
-  readonly byScope: ReadonlyMap<string, ScopeReviewSummary>;
 };
 
 export type TaskStatus = "open" | Verdict;
