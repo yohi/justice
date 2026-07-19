@@ -461,7 +461,7 @@ describe("validateRecordSchema()", () => {
     ).toThrow(/message record/);
   });
 
-  it("accepts a message record without declaredClaims/evidence for backward compatibility", () => {
+  it("accepts a legacy message record without declaredClaims/evidence (normalized)", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -539,7 +539,7 @@ describe("validateRecordSchema()", () => {
     ).not.toThrow();
   });
 
-  it("accepts a message record with only evidence array undefined", () => {
+  it("rejects a message record with evidence array missing", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -551,10 +551,10 @@ describe("validateRecordSchema()", () => {
         finalized: true,
         declaredClaims: [],
       }),
-    ).not.toThrow();
+    ).toThrow(/message record/);
   });
 
-  it("accepts a message record with only declaredClaims array undefined", () => {
+  it("rejects a message record with declaredClaims array missing", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -566,7 +566,7 @@ describe("validateRecordSchema()", () => {
         finalized: true,
         evidence: [],
       }),
-    ).not.toThrow();
+    ).toThrow(/message record/);
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {

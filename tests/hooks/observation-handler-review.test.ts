@@ -84,7 +84,7 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("does not append an empty review observation from raw complete snapshot metadata", async () => {
+  it("appends an empty review observation from trusted complete snapshot metadata", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
@@ -104,8 +104,12 @@ describe("ObservationHandler review observations", () => {
 
     // Then
     const events = await logStore.readAll();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "tool_executed" });
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({
+      kind: "review_observed",
+      isCompleteSnapshot: true,
+      items: [],
+    });
   });
 
   it.each(["bash", "task", "arbitrary_custom_tool"])(
@@ -177,6 +181,59 @@ describe("ObservationHandler review observations", () => {
     const events = await logStore.readAll();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ kind: "tool_executed" });
+  });
+
+  it("does not interpret ordinary command output as a review", async () => {
+    const { handler, logStore } = createHandler();
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-command",
+      callId: "call-command",
+      payload: {
+        toolName: "bash",
+        toolInput: { command: "bun run test" },
+        toolResult: "MUST FIX: fixture text emitted by a test command",
+        error: false,
+      },
+    });
+
+    const events = await logStore.readAll();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "tool_executed" });
+  });
+
+  it("resolves absent items from a trusted complete code review snapshot", async () => {
+    const { handler, logStore } = createHandler();
+    const initial = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId: "call-review",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    });
+    expect(initial).toEqual({ action: "proceed" });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId: "call-review",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "Review complete with no findings",
+        error: false,
+        metadata: { isCompleteSnapshot: true },
+      },
+    });
+
+    const state = project(await logStore.readAll(), "2026-07-18T00:00:00.000Z");
+    expect(state.reviewSummary.open).toEqual([]);
+    expect(state.reviewSummary.resolved).toHaveLength(1);
   });
 
   it("does not observe a justice_review call without a typed resolution artifact", async () => {

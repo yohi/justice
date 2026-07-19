@@ -16,7 +16,7 @@ Task 0.2（3つの De-risk スパイク）は、Phase 1〜2（`feature/phase1-*`
 
 ### 実施内容と制約
 
-Phase 4（observation-handler）が未実装のため、実際の `tool.execute.after` フックから v2 Evidence engine / Observation Log が呼ばれる経路はまだ存在しない（`src/opencode-plugin.ts` / `src/runtime/opencode-adapter.ts` は task ツール限定の v1 経路のみ）。そのため、Phase 4 実装時に**毎ツール呼び出しごとに実行されることになる支配的コストである** `ObservationLogStore.append()`（実ファイルシステム・temp dir 経由、mock ではない）を対象に計測した。
+計測時点では Phase 4（observation-handler）が未実装で、実際の `tool.execute.after` フックから v2 Evidence engine / Observation Log が呼ばれる経路は存在しなかった。その後、全ツール観測経路は実装済みである（`src/opencode-plugin.ts` / `src/runtime/opencode-adapter.ts`）。したがって、ここで記録する数値は旧 write queue 実装に対する履歴値であり、現行実装のエンドツーエンド性能を示すものではない。
 
 計測スクリプト: [`spikes/observation-latency/measure.ts`](../../../spikes/observation-latency/measure.ts)
 
@@ -39,7 +39,7 @@ bun run spikes/observation-latency/measure.ts
 
 ### 結論と設計書への反映
 
-- **目標未達を記録**。ただし v2.0 は L0 advisory（非ブロッキング）であり、`ObservationLogStore.append()` はいずれも `onError` で fail-open するため機能停止には至らない。
+- **目標未達を記録**。ただしこの計測は後続の write queue 改修前の履歴値であり、現行経路の再計測が必要である。v2.0 は L0 advisory（非ブロッキング）であり、`ObservationLogStore.append()` はいずれも `onError` で fail-open するため機能停止には至らない。
 - 対応方針（Phase 4 実装時に検討すべき事項として記録、本スパイクでは実装しない）:
   1. 同一 shard 内での append をバッチ化する、または
   2. `readExisting` を毎回ではなく初回のみ行い、以降はインメモリでバッファして定期 flush する非同期キュー方式に変更する。

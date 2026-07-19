@@ -36,6 +36,12 @@ function ev(
 }
 
 describe("orderEventsForProjection() / MergeHeap", () => {
+  it("uses an unambiguous composite shard key", () => {
+    const first = ev("atlas", "session:a", "writer-b", 1, "2026-07-08T00:00:00Z");
+    const second = ev("atlas", "session", "a:writer-b", 1, "2026-07-08T00:00:00Z");
+
+    expect(shardKeyOf(first)).not.toBe(shardKeyOf(second));
+  });
   it("performs a k-way merge across 3+ shards, ordering globally by timestamp", () => {
     const w1 = [
       ev("atlas", "s1", "w1", 1, "2026-07-08T00:00:01Z"),
@@ -54,12 +60,12 @@ describe("orderEventsForProjection() / MergeHeap", () => {
     const sorted = orderEventsForProjection(events);
 
     expect(sorted.map((e) => `${shardKeyOf(e)}#${e.sequence}`)).toEqual([
-      "atlas:s1:w1#1",
-      "atlas:s1:w2#1",
-      "atlas:s1:w3#1",
-      "atlas:s1:w1#2",
-      "atlas:s1:w2#2",
-      "atlas:s1:w3#2",
+      '["atlas","s1","w1"]#1',
+      '["atlas","s1","w2"]#1',
+      '["atlas","s1","w3"]#1',
+      '["atlas","s1","w1"]#2',
+      '["atlas","s1","w2"]#2',
+      '["atlas","s1","w3"]#2',
     ]);
   });
 
@@ -77,15 +83,17 @@ describe("orderEventsForProjection() / MergeHeap", () => {
 
   it("tie-breaks on identical timestamps by shardKeyOf (lexicographic), not input order", () => {
     const sameTs = "2026-07-08T00:00:00Z";
-    // w3's record is listed FIRST in the input, but "atlas:s1:w1" < "atlas:s1:w3"
-    // lexicographically, so w1 must win the tie-break and come out first.
     const events = [
       ev("atlas", "s1", "w3", 1, sameTs),
       ev("atlas", "s1", "w1", 1, sameTs),
       ev("atlas", "s1", "w2", 1, sameTs),
     ];
     const sorted = orderEventsForProjection(events);
-    expect(sorted.map((e) => shardKeyOf(e))).toEqual(["atlas:s1:w1", "atlas:s1:w2", "atlas:s1:w3"]);
+    expect(sorted.map((e) => shardKeyOf(e))).toEqual([
+      '["atlas","s1","w1"]',
+      '["atlas","s1","w2"]',
+      '["atlas","s1","w3"]',
+    ]);
   });
 
   it("keeps within-shard sequence order intact even if a shard's own timestamps invert", () => {

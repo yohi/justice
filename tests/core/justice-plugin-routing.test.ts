@@ -105,6 +105,11 @@ describe("JusticePlugin routing guard", () => {
 
   it("keeps the task window open until every PostToolUse handler settles", async () => {
     const plugin = createPlugin();
+    await plugin.handleEvent({
+      type: "AgentMapped",
+      sessionId: "s-1",
+      payload: { sessionId: "s-1", agentName: "hephaestus" },
+    });
     let releaseObservation: (() => void) | undefined;
     const observationDone = new Promise<void>((resolve) => {
       releaseObservation = resolve;

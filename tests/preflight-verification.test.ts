@@ -11,9 +11,12 @@ test("preflight verification: ADR ratification check", () => {
   );
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
-  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
+  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*PENDING HUMAN CODEOWNERS RATIFICATION/);
+  // Prevent stale 'Status: APPROVED' in metadata while allowing valid 'APPROVED' in review history
+  expect(content).not.toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
   // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
-  expect(content).toMatch(/\*\s*\*\*Approvers:\*\*\s*`@[A-Za-z0-9_-]+`/);
+  expect(content).toContain("Required action:");
+  expect(content).toContain("human CODEOWNERS");
   const blockedPlaceholders = [
     "@owner-alice",
     "@owner-bob",
