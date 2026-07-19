@@ -199,8 +199,9 @@ export async function executeJusticeReviewTool(
       output: JSON.stringify({ status: "OK", reviewResolutionArtifact: artifact }, null, 2),
       metadata: { reviewResolutionArtifact: artifact },
     };
-  } catch {
-    return formatError("Unable to read the current review state.");
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return formatError(`Unable to read the current review state: ${message}`);
   }
 }
 
