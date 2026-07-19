@@ -1,7 +1,12 @@
 import { REVIEW_REJECTION_PATTERNS } from "./review-rejection-patterns";
 import type { ReviewItem } from "./v2/observation-model";
 import { hashString } from "./v2/hash";
-import { classifySeverity, deriveItemKey } from "./v2/review-severity";
+import {
+  classifySeverity,
+  deriveItemKey,
+  normalizeLocationForKey,
+  type ReviewSeverity,
+} from "./v2/review-severity";
 
 export type { ReviewItem } from "./v2/observation-model";
 
@@ -67,9 +72,9 @@ export class ReviewRejectionDetector {
       lineIndex = continuationIndex - 1;
       const summary = findingLines.join("\n").slice(0, MAX_EXCERPT_LENGTH);
 
-      const severity = classifySeverity(summary);
+      const severity = this.resolveSeverity(heading, summary);
       const location = extractReviewLocation(summary);
-      const normalizedSummary = summary.toLowerCase().replace(/\s+/gu, " ");
+      const normalizedSummary = this.normalizeSummaryForKey(summary, location, workspaceRoot);
       const itemKey = deriveItemKey(
         severity,
         `review-rejection-${patternIndex + 1}`,
@@ -89,10 +94,68 @@ export class ReviewRejectionDetector {
     return [...items.values()];
   }
 
-  isCompleteSnapshot(_text: string, metadata?: Readonly<Record<string, unknown>>): boolean {
-    return metadata?.isCompleteSnapshot === true;
+  isCompleteSnapshot(_text: string, _metadata?: Readonly<Record<string, unknown>>): boolean {
+    // No trusted typed producer currently exists for complete review snapshots.
+    // Generic tool metadata must never resolve previously observed review items.
+    return false;
   }
 
+  private resolveSeverity(heading: string, summary: string): ReviewSeverity {
+    const classified = classifySeverity(summary);
+    const headingLower = heading.toLowerCase();
+    const isBlockerHeading =
+      /\bBLOCKER\s*:/u.test(heading) ||
+      /\b(blocking)\s+(issue|concern|problem)s?\b/u.test(headingLower) ||
+      /ブロッカー/u.test(heading);
+    if (isBlockerHeading && (classified === "minor" || classified === "major")) {
+      return "critical";
+    }
+    return classified;
+  }
+
+  private normalizeSummaryForKey(
+    summary: string,
+    location: string,
+    workspaceRoot?: string,
+  ): string {
+    const canonicalLocation = normalizeLocationForKey(location, workspaceRoot);
+    const normalized = summary.toLowerCase().replace(/\s+/gu, " ");
+
+    if (canonicalLocation.length === 0 || canonicalLocation === "unknown") {
+      return normalized;
+    }
+
+    const canonicalLocationWithoutLine = stripLineNumber(canonicalLocation);
+    const rawLocation = location.split("\\").join("/").trim();
+    const rawLocationWithoutLine = stripLineNumber(rawLocation);
+
+    const locationVariants = [
+      canonicalLocation,
+      canonicalLocationWithoutLine,
+      rawLocation,
+      rawLocationWithoutLine,
+    ];
+
+    if (workspaceRoot) {
+      const root = stripTrailingSlashes(workspaceRoot.replace(/\\/g, "/"));
+      locationVariants.push(
+        `${root}/${canonicalLocation}`,
+        `${root}/${canonicalLocationWithoutLine}`,
+      );
+    }
+
+    const deduped = locationVariants
+      .map((variant) => variant.toLowerCase())
+      .filter((variant) => variant.length > 0)
+      .filter((variant, index, self) => self.indexOf(variant) === index)
+      .sort((a, b) => b.length - a.length);
+
+    let result = normalized;
+    for (const variant of deduped) {
+      result = result.split(variant).join(" ").replace(/\s+/gu, " ").trim();
+    }
+    return result;
+  }
   private extractExcerpts(text: string): readonly string[] {
     const excerpts: string[] = [];
 
@@ -110,12 +173,48 @@ export class ReviewRejectionDetector {
   }
 }
 
+const LEADING_PUNCTUATION = new Set("([{'\"`");
+const TRAILING_PUNCTUATION = new Set("])},;'\"`");
+
+function stripEdgePunctuation(token: string): string {
+  let start = 0;
+  let end = token.length;
+  while (start < end && LEADING_PUNCTUATION.has(token.charAt(start))) {
+    start += 1;
+  }
+  while (end > start && TRAILING_PUNCTUATION.has(token.charAt(end - 1))) {
+    end -= 1;
+  }
+  return token.slice(start, end);
+}
+
+function stripLineNumber(value: string): string {
+  const colonIndex = value.lastIndexOf(":");
+  if (colonIndex < 0) return value;
+  const afterColon = value.slice(colonIndex + 1);
+  if (!/^\d+$/u.test(afterColon)) return value;
+  return value.slice(0, colonIndex).trim();
+}
+
+function stripTrailingSlashes(value: string): string {
+  let result = value;
+  while (result.endsWith("/")) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+
 function extractReviewLocation(summary: string): string {
   for (const token of summary.split(/\s+/u)) {
-    const candidate = token.replace(/^[([{'"`]+/u, "").replace(/[\])},;'"`]+$/u, "");
+    const candidate = stripEdgePunctuation(token);
     const separatorIndex = Math.max(candidate.lastIndexOf("/"), candidate.lastIndexOf("\\"));
-    if (separatorIndex < 0) continue;
-    const filePart = candidate.slice(separatorIndex + 1).split(":")[0] ?? "";
+    if (separatorIndex < 0) {
+      const [filePart = ""] = candidate.split(":");
+      if (filePart.lastIndexOf(".") > 0) return candidate;
+      continue;
+    }
+    const [filePart = ""] = candidate.slice(separatorIndex + 1).split(":");
     if (filePart.lastIndexOf(".") > 0) return candidate;
   }
   return "unknown";

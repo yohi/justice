@@ -61,21 +61,15 @@ export type SessionErrorRecordInput = {
   readonly envelope: PendingEnvelope;
   readonly errorKind?: string;
   readonly message: string;
-  readonly pendingAssistantText?: string;
 };
 
 export function buildSessionErrorRecord(input: SessionErrorRecordInput): PendingObservationRecord {
-  const pendingAssistantSnippet =
-    input.pendingAssistantText === undefined || input.pendingAssistantText.length === 0
-      ? undefined
-      : redactForPersistence(redactAbsolutePaths(input.pendingAssistantText));
   return {
     ...input.envelope,
     recordType: "observation",
     kind: "session_error",
     errorKind: input.errorKind ?? "unknown",
     message: redactForPersistence(redactAbsolutePaths(input.message)),
-    ...(pendingAssistantSnippet === undefined ? {} : { pendingAssistantSnippet }),
   };
 }
 

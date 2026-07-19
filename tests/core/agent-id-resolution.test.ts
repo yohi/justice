@@ -7,7 +7,7 @@ import type { AgentId, AgentMappedEvent, FileReader, FileWriter } from "../../sr
 const PERSONAS: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
 
 function agentMapped(sessionId: string, agentName: string): AgentMappedEvent {
-  return { type: "AgentMapped", payload: { sessionId, agentName } };
+  return { type: "AgentMapped", sessionId, payload: { sessionId, agentName } };
 }
 
 describe("Task 3.4: agentId resolution & session state mapping", () => {
@@ -140,6 +140,19 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       const provider = new SessionStateProvider();
       expect(() => provider.closeActiveTaskWindow("ghost")).not.toThrow();
       expect(provider.getActiveTaskId("ghost")).toBeUndefined();
+    });
+
+    it("removes task windows belonging to a removed session", () => {
+      const provider = new SessionStateProvider();
+      provider.setAgentMapping("session-removed", "hephaestus");
+      provider.setAgentMapping("session-retained", "sisyphus");
+      provider.setActiveTaskWindow("call-removed", "task-removed", "session-removed");
+      provider.setActiveTaskWindow("call-retained", "task-retained", "session-retained");
+
+      provider.removeSession("session-removed");
+
+      expect(provider.getActiveTaskId("call-removed")).toBeUndefined();
+      expect(provider.getActiveTaskId("call-retained")).toBe("task-retained");
     });
   });
 

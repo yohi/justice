@@ -1,6 +1,7 @@
 // src/core/v2/integrity.ts
 import { hashString } from "./hash";
 import type { PersistedLogRecord } from "./observation-model";
+import { shardKeyOf as shardLayoutKeyOf } from "./shard-layout";
 
 /**
  * Stable shard identity key used to group and order records.
@@ -8,7 +9,7 @@ import type { PersistedLogRecord } from "./observation-model";
 export function shardKeyOf(
   event: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId">,
 ): string {
-  return `${event.agentId}:${event.sessionId}:${event.writerId}`;
+  return shardLayoutKeyOf(event);
 }
 
 /**
