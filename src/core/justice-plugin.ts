@@ -45,7 +45,13 @@ function openSessionTaskWindow(
   const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
-    provider.setActiveTaskWindow(callId, taskId, event.sessionId);
+    // Open the window unconditionally at PreToolUse time.  The sessionId is
+    // intentionally omitted here so that the window is always created even
+    // when the session has not yet been mapped (e.g. in tests that skip
+    // AgentMapped).  The guarded re-registration with sessionId happens after
+    // Promise.all (race-condition guard), so only legitimate callers that
+    // survive the generation check will ever tag a window with a session.
+    provider.setActiveTaskWindow(callId, taskId);
   } catch {
     // Fail-open: a task-window tracking failure must not break the hook flow.
   }
@@ -355,6 +361,11 @@ export class JusticePlugin {
         // Open the callId-keyed task window before delegation logic runs. The
         // window is closed in the matching PostToolUse case regardless of success.
         openSessionTaskWindow(this.sessionStateProvider, event);
+        // Capture session generation before Promise.all so we can detect if the
+        // session was removed while handlers were pending (race-condition guard).
+        const capturedGeneration = event.sessionId !== undefined
+          ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+          : undefined;
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
@@ -376,7 +387,14 @@ export class JusticePlugin {
         );
         if (event.callId !== undefined && taskId !== undefined) {
           try {
-            this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
+            // Only re-register the window if the session wasn't removed during
+            // the Promise.all above (generation would be undefined if removed).
+            const currentGeneration = event.sessionId !== undefined
+              ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+              : undefined;
+            if (capturedGeneration !== undefined && currentGeneration === capturedGeneration) {
+              this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
+            }
           } catch (err) {
             this.options.logger?.warn("failed to set active task window", err);
           }
