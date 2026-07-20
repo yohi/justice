@@ -255,13 +255,18 @@ describe("FF-001", () => {
 
     expect(files.length).toBeGreaterThan(0);
 
+    const violations: string[] = [];
     for (const file of files) {
       // The file list comes from the architecture test's source glob.
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       const content = readFileSync(file, "utf-8");
       const importsOpenCode = detectOpenCodeImports(content);
-      expect(importsOpenCode).toBe(false);
+      if (importsOpenCode) {
+        violations.push(file);
+      }
     }
+
+    expect(violations).toEqual([]);
   });
 
   it("detects opencode imports across boundary-case fixtures (regression)", () => {
