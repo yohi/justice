@@ -60,13 +60,13 @@
 - Consumes: `src/core/` file list.
 - Produces: Test that no `src/core/` file imports from `@opencode-ai/*`.
 
-- [ ] **Step 0: 依存パッケージ `glob` を追加**
+- [x] **Step 0: 依存パッケージ `glob` を追加**
 
 ```bash
 bun add -d glob
 ```
 
-- [ ] **Step 1: arch test を実装**
+- [x] **Step 1: arch test を実装**
 
 ```typescript
 // tests/arch/core-no-opencode-imports.test.ts
@@ -85,20 +85,20 @@ describe("FF-001", () => {
 });
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [x] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/arch/core-no-opencode-imports.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add package.json bun.lock tests/arch/core-no-opencode-imports.test.ts
 git commit -m "test(v2): FF-001 core no opencode imports"
 ```
 
-- [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
