@@ -461,7 +461,7 @@ describe("validateRecordSchema()", () => {
     ).toThrow(/message record/);
   });
 
-  it("accepts a message record without declaredClaims/evidence for backward compatibility", () => {
+  it("accepts a legacy message record without declaredClaims/evidence (normalized)", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -539,7 +539,7 @@ describe("validateRecordSchema()", () => {
     ).not.toThrow();
   });
 
-  it("accepts a message record with only evidence array undefined", () => {
+  it("rejects a message record with evidence array missing", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -551,10 +551,10 @@ describe("validateRecordSchema()", () => {
         finalized: true,
         declaredClaims: [],
       }),
-    ).not.toThrow();
+    ).toThrow(/message record/);
   });
 
-  it("accepts a message record with only declaredClaims array undefined", () => {
+  it("rejects a message record with declaredClaims array missing", () => {
     expect(() =>
       validateRecordSchema({
         ...base,
@@ -566,7 +566,7 @@ describe("validateRecordSchema()", () => {
         finalized: true,
         evidence: [],
       }),
-    ).not.toThrow();
+    ).toThrow(/message record/);
   });
 
   it("rejects unknown recordType and unknown observation kind", () => {
@@ -885,5 +885,29 @@ describe("rotateIfNeeded() defensive guard", () => {
     };
 
     await expect(internal.rotateIfNeeded("unregistered/path.jsonl")).resolves.toBe(false);
+  });
+});
+
+describe("ReadOnlyObservationLog interface", () => {
+  it("ObservationLogStore satisfies ReadOnlyObservationLog structurally", () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    // Structural typing check: the store should be assignable to ReadOnlyObservationLog
+    const readOnly: import("../../src/runtime/observation-log-store").ReadOnlyObservationLog =
+      store;
+    expect(readOnly).toBeDefined();
+    expect(typeof readOnly.readAll).toBe("function");
+  });
+
+  it("readAll returns readonly records through the ReadOnlyObservationLog interface", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    await store.append(shard, msgRecord());
+
+    const readOnly: import("../../src/runtime/observation-log-store").ReadOnlyObservationLog =
+      store;
+    const records = await readOnly.readAll();
+    expect(records).toHaveLength(1);
+    expect(records[0].sequence).toBe(1);
   });
 });

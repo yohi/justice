@@ -35,20 +35,22 @@
 ---
 
 > **Split plan:** This file is part 08 of the split Justice v2.0 Foundation implementation plan.
-> **Scope:** Read-only justice_status, justice_gate, and justice_review custom tools.
+> **Scope:** 人間承認を明示的に取得する、唯一の `justice_review` custom tool。`justice_status`、`justice_gate`、または第 4 の Justice custom tool は導入しない。
 > **Index:** See `2026-06-26-justice-v2-foundation.md` for the complete split-plan map and cross-phase dependency summary.
 
-## Phase 7: Justice Tools
+## Phase 7: Approved Review Resolution Tool
 
 **Base Branch:** `feature/phase7-v2-justice-tools__base`
 
-**目的:** `justice_status`, `justice_gate`, `justice_review` の read-only custom tool を実装。本 Phase だけで on-demand な照会機能が完成する。
+**目的:** 唯一の `justice_review` custom tool で review summary を照会し、選択した open item の解決だけを人間承認後に記録する。本 Phase は public custom tool を追加しない。
 
-**判断:** Phase 7 は Phase 2/3/5/6 の log store, projection, rule engine, review aggregator を使用。Task 7.1 は projection 読取（Phase 2）なので Base から、Task 7.2 は 7.1 + Phase 5 engine なので Task 7.1 から、Task 7.3 は 7.1 + Phase 6 aggregator なので Task 7.1 から。実際には Phase 7 Base は Phase 6 Base から派生し、Task 7.1 はその Base から分岐。Phase 7 内では 7.1 → 7.2 → 7.3 と積み上げる。
+**判断:** Phase 7 は Phase 6 の log store、projection、review aggregator を使用する。承認の trust boundary は `justice_review` 内の `ToolContext.ask` のみであり、Adapter は完全一致する `justice_review` の成功 metadata だけを型付き resolution artifact に昇格する。自由文、tool args、汎用 tool metadata から承認を導出しない。
 
 ---
 
-### Task 7.1: justice_status Tool
+### Superseded Task 7.1: No justice_status Tool
+
+> **Current design:** `justice_status` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
 
 **Files:**
 
@@ -61,34 +63,62 @@
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
 
-- [ ] **Step 1: `justice_status` 実装**
+- [x] **Step 1: `justice_status` 実装**
+
+> **Note:** 実装では `OpenCodeAdapter` を単一のエントリーポイントとして受け取り、内部で依存を解決する方式に簡略化されています（個別の `store` / `cache` 受け渡しから変更）。
 
 ```typescript
 // src/runtime/justice-tools.ts
-import { z } from "zod";
+import { tool } from "@opencode-ai/plugin";
 import type { ToolDefinition } from "@opencode-ai/plugin";
 import { toSerializableProjectedState, project } from "../core/v2/state-projection.ts";
+import type { OpenCodeAdapter } from "./opencode-adapter";
 
-export function defineJusticeStatusTool(store: ObservationLogStore, cache: StateProjectionCache): ToolDefinition {
-  return {
+export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
     description: "Justice の現在の投影状態を表示します",
     args: {},
-    execute: async () => {
+    execute: async (_args, _context) => {
       try {
-        const events = await store.readAll();
-        const state = project(events);
-        await cache.write(state).catch(() => {});
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return JSON.stringify({ status: "ERROR", reason: "Justice not initialized" }, null, 2);
+
+        const observationHandler = justice.getObservationHandler();
+        const events = await observationHandler.getLogStore().readAll();
+        const state = project(events, new Date().toISOString());
+        await observationHandler
+          .getProjectionCache()
+          ?.write(state)
+          .catch(() => {});
         return JSON.stringify(toSerializableProjectedState(state), null, 2);
-      } catch (err: any) {
-        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ status: "ERROR", reason: message }, null, 2);
       }
     },
-  };
+  });
 }
 ```
 
-- [ ] **Step 2: adapter に tool 定義を返す getTools() を実装し、opencode-plugin.ts 側から公開登録（D4）**
 
+- [x] **Step 2: adapter に tool 定義を返す `getRegisteredTools()` を実装し、opencode-plugin.ts 側から公開登録（D4）**
+
+> **Note:** 実際の登録は `OpenCodeAdapter` のコンストラクタ内で `defineXxxTool(this)` として呼び出し、最終的な tool map に格納されます。
+
+```typescript
+// src/runtime/opencode-adapter.ts
+// コンストラクタ内で初期化
+this.registeredTools = new Map<string, ToolDefinition>([
+  [defineJusticeStatusTool(this).name, defineJusticeStatusTool(this)],
+  [defineJusticeGateTool(this).name, defineJusticeGateTool(this)],
+  [defineJusticeReviewTool(this).name, defineJusticeReviewTool(this)],
+]);
+
+getRegisteredTools(): ReadonlyMap<string, ToolDefinition> {
+  return this.registeredTools;
+}
+```
 ```typescript
 // src/runtime/opencode-adapter.ts
 getTools(): Record<string, ToolDefinition> {
@@ -106,7 +136,7 @@ return {
 };
 ```
 
-- [ ] **Step 2b: justice_status resilience tests**
+- [x] **Step 2b: justice_status resilience tests**
 
 ```typescript
 // tests/runtime/justice-status-tool.test.ts
@@ -117,20 +147,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-status-tool.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add package.json bun.lock src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
 git commit -m "feat(v2): justice_status read-only custom tool"
 ```
 
-- [ ] **Step 5: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -140,7 +170,9 @@ gt submit
 
 ---
 
-### Task 7.2: justice_gate Tool (Dry-Run)
+### Superseded Task 7.2: No justice_gate Tool
+
+> **Current design:** `justice_gate` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
 
 **Files:**
 
@@ -153,38 +185,72 @@ gt submit
 - Consumes: `project`, `loadGates`, `evaluate`, `GateContext`.
 - Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50). Note: `justice_*` tools are explicitly excluded from Observation Log processing in the adapter.
 
-- [ ] **Step 1: `justice_gate` 実装（D50）**
+- [x] **Step 1: `justice_gate` 実装（D50）**
+
+> **Note:** 実装では `OpenCodeAdapter` を単一のエントリーポイントとして受け取り、`adapter.getJustice()` から `logStore` と `gateLoader` を取得します。`taskId` は optional に変更され、未指定時は empty gate 評価を行います。
 
 ```typescript
-export function defineJusticeGateTool(
-  store: ObservationLogStore,
-  gateLoader: GateLoader,
-  context: { readonly agentId: string; readonly sessionId: string }
-): ToolDefinition {
-  return {
-    description: "現 event log から gate を dry-run 評価します",
-    args: { taskId: z.string() },
-    execute: async ({ taskId }) => {
-      if (typeof taskId !== "string" || taskId.length === 0) {
-        return JSON.stringify({ status: "SKIP", ruleResults: [], reason: "no taskId provided" }, null, 2);
-      }
+// src/runtime/justice-tools.ts
+import { tool } from "@opencode-ai/plugin";
+import { SessionStateProvider } from "../core/session-state-provider";
+import { collectReviewScopes } from "../core/v2/review-scope";
+import { evaluate } from "../core/v2/rule-evaluation-engine";
+import { project } from "../core/v2/state-projection";
+import type { OpenCodeAdapter } from "./opencode-adapter";
+
+export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "現 event log から task_complete トリガーの gate を dry-run 評価します",
+    args: { taskId: tool.schema.string().optional() },
+    execute: async ({ taskId }, context) => {
       try {
-        const events = await store.readAll();
-        const state = project(events);
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return JSON.stringify({ status: "ERROR", reason: "Justice not initialized" }, null, 2);
+
+        const scopedTaskId = taskId?.length ? taskId : undefined;
+        if (scopedTaskId === undefined) {
+          return JSON.stringify(
+            evaluate([], [], {
+              trigger: "task_complete",
+              taskId: undefined,
+              agentId: SessionStateProvider.resolveAgentId(context.agent),
+              sessionId: context.sessionID,
+              reviewScope: [],
+            }),
+            null,
+            2,
+          );
+        }
+
+        const observationHandler = justice.getObservationHandler();
+        const gateLoader = observationHandler.getGateLoader();
+        if (gateLoader === undefined) return JSON.stringify({ status: "ERROR", reason: "Gate loader not configured" }, null, 2);
+
+        const events = await observationHandler.getLogStore().readAll();
+        const state = project(events, new Date().toISOString());
         const gates = await gateLoader.load();
-        const ctx: GateContext = { trigger: "task_complete", taskId, agentId: context.agentId, sessionId: context.sessionId, reviewScope: collectReviewScopes(state, taskId) };
-        const evidence = collectTaskEvidence(state, taskId);
-        const verdict = evaluate(gates, evidence, ctx);
-        return JSON.stringify(verdict, null, 2);
-      } catch (err: any) {
-        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+        const gateContext = {
+          trigger: "task_complete" as const,
+          taskId: scopedTaskId,
+          agentId: SessionStateProvider.resolveAgentId(context.agent),
+          sessionId: context.sessionID,
+          reviewScope: collectReviewScopes(state, scopedTaskId),
+          reviewSummary: state.reviewSummary,
+        };
+        const evidence = state.tasks.get(scopedTaskId)?.evidence ?? [];
+        return JSON.stringify(evaluate(gates, evidence, gateContext), null, 2);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ status: "ERROR", reason: message }, null, 2);
       }
     },
-  };
+  });
 }
 ```
 
-- [ ] **Step 1.5: justice_gate resilience tests**
+
+- [x] **Step 1.5: justice_gate resilience tests**
 
 ```typescript
 // tests/runtime/justice-gate-tool.test.ts
@@ -194,20 +260,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 });
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [x] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-gate-tool.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-gate-tool.test.ts
 git commit -m "feat(v2): justice_gate dry-run tool"
 ```
 
-- [ ] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -217,7 +283,14 @@ gt submit
 
 ---
 
-### Task 7.3: justice_review Tool
+### Task 7.3: Sole justice_review Tool
+
+> **Current approval contract (supersedes the legacy read-only sketch below):**
+>
+> - `justice_review` is the sole public Justice custom tool; no fourth tool is added.
+> - A resolution is emitted only after `ToolContext.ask` succeeds for `justice_review.resolve`. The request carries the selected currently-open `itemKeys`, `reviewScope`, and `artifactRef`.
+> - Denial returns an informational `ERROR` result with no metadata. Approval produces the human-approved artifact, which flows through `tool.execute.after` to resolve only those selected open items.
+> - `OpenCodeAdapter` trusts metadata only when the producing tool name is exactly `justice_review`; generic metadata remains untyped. The resolution path creates no `tool_executed` observation and leaves gate semantics unchanged.
 
 **Files:**
 
@@ -230,30 +303,56 @@ gt submit
 - Consumes: `project`, `ReviewSummary`.
 - Produces: `justice_review` tool output (Review Summary Artifact rendering).
 
-- [ ] **Step 1: `justice_review` 実装**
+- [x] **Step 1: `justice_review` 実装**
+
+> **Note:** 実装では `OpenCodeAdapter` を単一のエントリーポイントとして受け取り、さらに `resolve` パラメータ（承認付き解決フロー）が追加されています。解決フローでは `Effect.runPromise(context.ask(approval))` による人間承認を取得します。
 
 ```typescript
-export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinition {
-  return {
-    description: "Review Summary Artifact を表示します",
-    args: { scope: z.string().optional() },
-    execute: async ({ scope }) => {
+// src/runtime/justice-tools.ts
+import { tool } from "@opencode-ai/plugin";
+import { Effect } from "effect";
+import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
+import { project } from "../core/v2/state-projection";
+import type { OpenCodeAdapter } from "./opencode-adapter";
+
+export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinition {
+  return tool({
+    description: "Review Summary Artifact を表示・解決します",
+    args: {
+      scope: tool.schema.string().optional(),
+      resolve: tool.schema
+        .object({
+          itemKeys: tool.schema.array(tool.schema.string()),
+          artifactRef: tool.schema.string(),
+        })
+        .optional(),
+    },
+    execute: async (args, context) => {
       try {
-        const events = await store.readAll();
-        const state = project(events);
-        const summary = scope
-          ? state.reviewSummary.byScope.get(scope) ?? { status: "ERROR", reason: `Unknown scope: ${scope}` }
-          : { ...state.reviewSummary, byScope: Object.fromEntries(state.reviewSummary.byScope) };
-        return JSON.stringify(summary, null, 2);
-      } catch (err: any) {
-        return JSON.stringify({ status: "ERROR", reason: err?.message ?? String(err) }, null, 2);
+        await adapter.ensureInitialized();
+        const justice = adapter.getJustice();
+        if (justice === null) return JSON.stringify({ status: "ERROR", reason: "Justice not initialized" }, null, 2);
+
+        const observationHandler = justice.getObservationHandler();
+        // 実際の execute 処理は executeJusticeReviewTool に委譲
+        return await executeJusticeReviewTool({
+          logReader: observationHandler.getLogStore(),
+          args,
+          requestApproval: async (approval) => {
+            await Effect.runPromise(context.ask(approval));
+          },
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ status: "ERROR", reason: message }, null, 2);
       }
     },
-  };
+  });
 }
 ```
 
-- [ ] **Step 1.5: justice_review resilience tests**
+
+- [x] **Step 1.5: justice_review approval-boundary tests**
 
 ```typescript
 // tests/runtime/justice-review-tool.test.ts
@@ -263,20 +362,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 });
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [x] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/runtime/justice-review-tool.test.ts
+devcontainer exec --workspace-folder . bun run test tests/runtime/justice-review-tool.test.ts tests/integration/approved-review-resolution.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-review-tool.test.ts
 git commit -m "feat(v2): justice_review tool"
 ```
 
-- [ ] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit

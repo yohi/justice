@@ -1,5 +1,6 @@
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import { ReviewRejectionDetector } from "../core/review-rejection-detector";
+import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
   HookResponse,
@@ -99,7 +100,6 @@ export class ObservationHandler {
     readonly sessionId: string;
   }): Promise<HookResponse> {
     try {
-      const pendingAssistantText = this.messageRoleBuffer.getPendingAssistantText(error.sessionId);
       const record = buildSessionErrorRecord({
         envelope: {
           schemaVersion: 1 as const,
@@ -111,7 +111,6 @@ export class ObservationHandler {
         },
         errorKind: error.kind,
         message: error.message,
-        pendingAssistantText,
       });
 
       await this.options.logStore.append(
@@ -119,15 +118,8 @@ export class ObservationHandler {
         record,
       );
       this.scheduleProjectionRefresh();
-      // D65: session.error GC's the messageRoleBuffer immediately -- this is
-      // intentional (not deferred to confirmed session teardown). Any pending,
-      // possibly-unfinalized assistant text was already captured above into
-      // pendingAssistantSnippet before this discard, so a recoverable session
-      // that later resumes no longer silently loses that text from the audit
-      // trail. The buffer is discarded only once the session_error append
-      // above has durably succeeded: if append() failed, the buffered parts
-      // are kept so a later message_updated(finalized:true)/text_complete can
-      // still reconstruct them via the normal message path.
+      // D65: discard in-flight text after a durable error record. Message bodies
+      // are deliberately not copied into session_error records (D34).
       this.messageRoleBuffer.removeSession(error.sessionId);
     } catch (err) {
       this.options.logger?.warn(
@@ -252,13 +244,32 @@ export class ObservationHandler {
     if (event.payload.toolName !== "task" || event.callId === undefined) return PROCEED;
     const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
     if (taskId !== undefined) {
-      this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId);
+      this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
     }
     return PROCEED;
   }
 
   async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
     const callId = event.callId;
+    const reviewResolutionArtifact = event.payload.reviewResolutionArtifact;
+    if (reviewResolutionArtifact !== undefined) {
+      try {
+        const agentId = this.options.sessionStateProvider.getAgentId(event.sessionId);
+        await this.handleReviewResolutionArtifact({
+          agentId,
+          sessionId: event.sessionId,
+          reviewScope: reviewResolutionArtifact.reviewScope,
+          itemKeys: reviewResolutionArtifact.itemKeys,
+          artifactRef: reviewResolutionArtifact.artifactRef,
+        });
+      } catch (error) {
+        this.options.logger?.warn(
+          "observation-handler: typed review resolution handling failed, degrading to PROCEED",
+          error,
+        );
+      }
+      return PROCEED;
+    }
     if (callId === undefined || event.payload.toolName.startsWith("justice_")) return PROCEED;
 
     let taskId: string | undefined;
@@ -315,16 +326,17 @@ export class ObservationHandler {
           this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
         }
       }
-      await this.appendReviewObservationsIfDetected(
-        shardId,
-        taskId,
-        event.sessionId,
-        callId,
-        event.payload.toolName,
-        event.payload.toolResult,
-        event.payload.metadata,
-      );
-
+      if (isReviewObservationTool(event.payload.toolName)) {
+        await this.appendReviewObservationsIfDetected(
+          shardId,
+          taskId,
+          event.sessionId,
+          callId,
+          event.payload.toolName,
+          event.payload.toolResult,
+          event.payload.metadata,
+        );
+      }
       let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
@@ -475,12 +487,9 @@ export class ObservationHandler {
       const items = this.reviewRejectionDetector.detectMultiple(
         toolResult,
         metadata,
-        process.cwd(),
+        this.options.workspaceRoot ?? process.cwd(),
       );
-      const isCompleteSnapshot = this.reviewRejectionDetector.isCompleteSnapshot(
-        toolResult,
-        metadata,
-      );
+      const isCompleteSnapshot = isTrustedCompleteReviewSnapshot(toolName, metadata);
       if (items.length === 0 && !isCompleteSnapshot) return;
 
       const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
@@ -514,6 +523,9 @@ export class ObservationHandler {
     readonly artifactRef: string;
   }): Promise<HookResponse> {
     try {
+      const artifact = normalizeReviewResolutionArtifact(payload);
+      if (artifact === undefined) return PROCEED;
+
       const shardId: ShardId = {
         agentId: payload.agentId,
         sessionId: payload.sessionId,
@@ -530,9 +542,9 @@ export class ObservationHandler {
             writerId: this.options.writerId,
             recordType: "observation",
           },
-          payload.reviewScope,
-          payload.itemKeys,
-          payload.artifactRef,
+          artifact.reviewScope,
+          artifact.itemKeys,
+          artifact.artifactRef,
         ),
       );
       this.scheduleProjectionRefresh();
@@ -604,4 +616,24 @@ export class ObservationHandler {
       return PROCEED;
     }
   }
+}
+
+function isReviewObservationTool(toolName: string): boolean {
+  return toolName === "task" || toolName === "code_review";
+}
+
+/**
+ * Returns true when the tool result is a trusted complete review snapshot.
+ *
+ * Trust boundary: we rely ONLY on `metadata.isCompleteSnapshot`, which is set
+ * by the OpenCode platform (or a trusted wrapper), NOT on `toolResult`. The
+ * previous implementation also checked `toolResult`, but that was removed
+ * because `code_review` output is generated by the agent itself and therefore
+ * sits outside the trust boundary for snapshot-completeness assertions.
+ */
+function isTrustedCompleteReviewSnapshot(
+  toolName: string,
+  metadata: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  return toolName === "code_review" && metadata?.isCompleteSnapshot === true;
 }

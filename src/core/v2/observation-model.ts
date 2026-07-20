@@ -100,7 +100,6 @@ export type SessionErrorRecord = {
   readonly kind: "session_error";
   readonly errorKind: string;
   readonly message: string;
-  readonly pendingAssistantSnippet?: string;
 };
 export type ReflectionRecord = {
   readonly kind: "reflection";

@@ -396,3 +396,14 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
     expect(output.context).toEqual(["snapshot-body"]);
   });
 });
+
+describe("OpenCodeAdapter.getTools", () => {
+  it("returns all justice tools including justice_review", () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const tools = adapter.getTools();
+
+    expect(Object.keys(tools).sort()).toEqual(["justice_gate", "justice_review", "justice_status"]);
+    expect(tools.justice_review?.description).toContain("Review Summary Artifact");
+    expect(typeof tools.justice_review?.execute).toBe("function");
+  });
+});

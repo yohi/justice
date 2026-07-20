@@ -1,203 +1,415 @@
-import type { ToolContext, ToolDefinition, ToolResult } from "@opencode-ai/plugin";
+import { createOpencodeClient } from "@opencode-ai/sdk";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { PluginInput, ToolContext, ToolResult } from "@opencode-ai/plugin";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { OpenCodePlugin } from "../../src/opencode-plugin";
-import type { ObservationRecord, ReviewItem } from "../../src/core/v2/observation-model";
+import type { ShardId } from "../../src/core/types";
+import type { ReviewItem } from "../../src/core/v2/observation-model";
+import {
+  executeJusticeReviewTool,
+  type JusticeReviewToolArgs,
+} from "../../src/runtime/justice-tools";
+import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
-import type { ReviewSummaryItem, ScopeReviewSummary } from "../../src/core/v2/state-projection";
 import { fakeInit } from "../helpers/fake-opencode-init";
+import { createMemFs } from "../helpers/mock-file-system";
 
-function createToolContext(): ToolContext {
+function createShell(): PluginInput["$"] {
+  const unimplemented = (..._args: unknown[]): never => {
+    throw new Error("test shell must not execute");
+  };
+  const shell: PluginInput["$"] = Object.assign(unimplemented, {
+    braces: (_pattern: string): string[] => [],
+    escape: (input: string): string => input,
+    env: (): PluginInput["$"] => shell,
+    cwd: (): PluginInput["$"] => shell,
+    nothrow: (): PluginInput["$"] => shell,
+    throws: (_shouldThrow: boolean): PluginInput["$"] => shell,
+  });
+  return shell;
+}
+
+function createPluginInput(): PluginInput {
   return {
-    sessionID: "session-1",
-    messageID: "message-1",
-    agent: "sisyphus",
-    directory: ".",
-    worktree: ".",
-    abort: new AbortController().signal,
-    metadata: () => undefined,
-    ask: (): never => {
-      throw new Error("justice_review must not request permission");
+    client: createOpencodeClient(),
+    project: {
+      id: "justice-review-test",
+      worktree: "/tmp/justice-review-test",
+      time: { created: 0 },
     },
+    directory: "/tmp/justice-review-test",
+    worktree: "/tmp/justice-review-test",
+    experimental_workspace: {
+      register: (): void => {},
+    },
+    serverUrl: new URL("http://localhost"),
+    $: createShell(),
   };
 }
 
-function requireStringResult(result: ToolResult): string {
-  if (typeof result !== "string") {
-    throw new Error("Expected justice_review to return a string result");
-  }
-  return result;
-}
-
-function requireReviewTool(adapter: OpenCodeAdapter): ToolDefinition {
-  const definition = adapter.getTools().justice_review;
-  if (definition === undefined) throw new Error("justice_review definition is missing");
-  return definition;
-}
-
-function reviewEvent(sequence: number, scope = "task-7.3"): ObservationRecord {
-  const item: ReviewItem = {
-    itemKey: "review-major-1",
-    evidenceId: "review-evidence-1",
+function reviewItem(itemKey: string): ReviewItem {
+  return {
+    itemKey,
+    evidenceId: `evidence:${itemKey}`,
     severity: "major",
-    summary: "Blocking review item",
+    summary: itemKey,
     location: "src/example.ts",
     status: "open",
   };
-  return {
-    schemaVersion: 1,
-    sequence,
-    timestamp: `2026-07-16T00:00:0${sequence}Z`,
+}
+
+async function createReviewStore(): Promise<ObservationLogStore> {
+  const { reader, writer } = createMemFs();
+  const store = new ObservationLogStore(writer, reader, "w-review");
+  const shard: ShardId = {
     agentId: "atlas",
-    sessionId: "source-session",
-    writerId: "writer-1",
+    sessionId: "session-review",
+    writerId: "w-review",
+  };
+  await store.append(shard, {
+    schemaVersion: 1,
+    timestamp: "2026-07-18T00:00:00.000Z",
+    agentId: shard.agentId,
+    sessionId: shard.sessionId,
+    writerId: shard.writerId,
     recordType: "observation",
-    taskId: "task-7.3",
     kind: "review_observed",
-    reviewScope: scope,
-    items: [item],
-  };
+    reviewScope: "task-6.3",
+    items: [reviewItem("major:parser")],
+  });
+  return store;
 }
 
-function projectedReviewItem(sequence: number): ReviewSummaryItem {
-  return {
-    itemKey: "review-major-1",
-    ref: {
-      agentId: "atlas",
-      sessionId: "source-session",
-      writerId: "writer-1",
-      sequence,
-      kind: "full",
-      evidenceId: "review-evidence-1",
+function executeReviewTool(input: {
+  readonly store: ObservationLogStore;
+  readonly args: JusticeReviewToolArgs;
+  readonly ask: ToolContext["ask"];
+}): Promise<ToolResult> {
+  return executeJusticeReviewTool({
+    logReader: input.store,
+    args: input.args,
+    requestApproval: async (approval): Promise<void> => {
+      await Effect.runPromise(input.ask(approval));
     },
-    severity: "major",
-  };
+  });
 }
 
-function expectedScopeSummary(sequence: number): ScopeReviewSummary {
-  const item = projectedReviewItem(sequence);
-  return { critical: [], major: [item], minor: [], resolved: [], open: [item] };
+function outputOf(result: ToolResult): string {
+  return typeof result === "string" ? result : result.output;
 }
 
-describe("justice_review tool", () => {
-  it("registers justice_review on the plugin tool hook", async () => {
+function metadataOf(result: ToolResult): Record<string, unknown> | undefined {
+  return typeof result === "string" ? undefined : result.metadata;
+}
+
+describe("OpenCodePlugin justice_review tool", () => {
+  it("registers the Justice status and review tools", async () => {
     // Given
-    const init = fakeInit();
+    const pluginInput = createPluginInput();
 
     // When
-    const hooks = await OpenCodePlugin(init as never);
+    const hooks = await OpenCodePlugin(pluginInput);
 
     // Then
-    expect(hooks.tool).toHaveProperty("justice_review");
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual([
+      "justice_gate",
+      "justice_review",
+      "justice_status",
+    ]);
+  });
+});
+
+describe("defineJusticeReviewTool", () => {
+  it("returns a read-only summary without asking for approval", async () => {
+    // Given
+    const store = await createReviewStore();
+    const before = await store.readAll();
+    const ask = vi.fn(() => Effect.succeed(undefined));
+
+    // When
+    const result = await executeReviewTool({ store, args: {}, ask });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toMatchObject({
+      authority: "observed_review_output",
+      open: [{ itemKey: "major:parser" }],
+    });
+    expect(metadataOf(result)).toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+    expect(await store.readAll()).toEqual(before);
   });
 
-  it("resolves Justice lazily when the review tool executes", async () => {
+  it("returns the scoped summary for a padded read-only scope", async () => {
     // Given
-    const adapter = new OpenCodeAdapter(fakeInit());
-    const definition = requireReviewTool(adapter);
-    expect(adapter.getJustice()).toBeNull();
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
 
     // When
-    const output = requireStringResult(await definition.execute({}, createToolContext()));
+    const result = await executeReviewTool({ store, args: { scope: " task-6.3 " }, ask });
 
     // Then
-    expect(adapter.getJustice()).not.toBeNull();
-    expect(JSON.parse(output)).toEqual({
-      authority: "observed_review_output",
+    expect(JSON.parse(outputOf(result))).toMatchObject({
       critical: [],
-      major: [],
+      major: [{ itemKey: "major:parser" }],
       minor: [],
       resolved: [],
-      open: [],
-      byScope: {},
+      open: [{ itemKey: "major:parser" }],
     });
+    expect(ask).not.toHaveBeenCalled();
   });
 
-  it("projects and serializes the unscoped review summary", async () => {
+  it("returns the full summary for a whitespace-only read-only scope", async () => {
     // Given
-    const adapter = new OpenCodeAdapter(fakeInit());
-    await adapter.ensureInitialized();
-    const justice = adapter.getJustice();
-    if (justice === null) throw new Error("Justice test fixture failed to initialize");
-    const logStore = justice.getObservationHandler().getLogStore();
-    vi.spyOn(logStore, "readAll").mockResolvedValue([reviewEvent(1)]);
-    const definition = requireReviewTool(adapter);
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
 
     // When
-    const output = requireStringResult(await definition.execute({}, createToolContext()));
+    const result = await executeReviewTool({ store, args: { scope: "   " }, ask });
 
     // Then
-    const result = JSON.parse(output);
-    const summary = expectedScopeSummary(1);
-    expect(result).toEqual({
+    expect(JSON.parse(outputOf(result))).toMatchObject({
       authority: "observed_review_output",
-      ...summary,
-      byScope: { "task-7.3": summary },
+      open: [{ itemKey: "major:parser" }],
+    });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("returns a normalized human-approved artifact only after approval for current open items", async () => {
+    // Given
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
+
+    // When
+    const result = await executeReviewTool({
+      store,
+      args: {
+        scope: " task-6.3 ",
+        resolve: {
+          itemKeys: [" major:parser "],
+          artifactRef: " refs/reviews/task-6.3 ",
+        },
+      },
+      ask,
+    });
+
+    // Then
+    expect(ask).toHaveBeenCalledWith({
+      permission: "justice_review.resolve",
+      patterns: ["task-6.3", "major:parser"],
+      always: [],
+      metadata: {
+        reviewScope: "task-6.3",
+        itemKeys: ["major:parser"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
+    });
+    expect(metadataOf(result)).toEqual({
+      reviewResolutionArtifact: {
+        authority: "human_approved",
+        reviewScope: "task-6.3",
+        itemKeys: ["major:parser"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
     });
   });
 
-  it("returns only the requested scope summary", async () => {
+  it("rejects a resolve request without a non-empty scope before asking for approval", async () => {
     // Given
-    const adapter = new OpenCodeAdapter(fakeInit());
-    await adapter.ensureInitialized();
-    const justice = adapter.getJustice();
-    if (justice === null) throw new Error("Justice test fixture failed to initialize");
-    vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockResolvedValue([
-      reviewEvent(1, "task-7.3"),
-      reviewEvent(2, "task-other"),
-    ]);
-    const definition = requireReviewTool(adapter);
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
 
     // When
-    const output = requireStringResult(
-      await definition.execute({ scope: "task-7.3" }, createToolContext()),
-    );
-
-    // Then
-    const result = JSON.parse(output);
-    expect(result).toEqual(expectedScopeSummary(1));
-  });
-
-  it("returns a JSON ERROR for an unknown scope", async () => {
-    // Given
-    const adapter = new OpenCodeAdapter(fakeInit());
-    await adapter.ensureInitialized();
-    const justice = adapter.getJustice();
-    if (justice === null) throw new Error("Justice test fixture failed to initialize");
-    vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockResolvedValue([
-      reviewEvent(1),
-    ]);
-    const definition = requireReviewTool(adapter);
-
-    // When
-    const output = requireStringResult(
-      await definition.execute({ scope: "missing-scope" }, createToolContext()),
-    );
-
-    // Then
-    expect(JSON.parse(output)).toEqual({
-      status: "ERROR",
-      reason: "Unknown scope: missing-scope",
+    const result = await executeReviewTool({
+      store,
+      args: {
+        resolve: { itemKeys: ["major:parser"], artifactRef: "refs/reviews/task-6.3" },
+      },
+      ask,
     });
+
+    // Then
+    expect(outputOf(result)).toBe(
+      JSON.stringify(
+        {
+          status: "ERROR",
+          reason: "Review resolution requires a non-empty scope. Provide scope when using resolve.",
+        },
+        null,
+        2,
+      ),
+    );
+    expect(metadataOf(result)).toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
   });
 
-  it("fails open with JSON ERROR when the observation log cannot be read", async () => {
+  it("rejects a resolution request for items that are not currently open without prompting", async () => {
     // Given
-    const adapter = new OpenCodeAdapter(fakeInit());
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
+
+    // When
+    const result = await executeReviewTool({
+      store,
+      args: {
+        scope: "task-6.3",
+        resolve: { itemKeys: ["major:missing"], artifactRef: "refs/reviews/task-6.3" },
+      },
+      ask,
+    });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toMatchObject({ status: "ERROR" });
+    expect(metadataOf(result)).toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("returns an informational error without metadata or state changes when approval is denied", async () => {
+    // Given
+    const store = await createReviewStore();
+    const before = await store.readAll();
+    const ask = vi.fn(() => Effect.promise(() => Promise.reject(new Error("denied"))));
+
+    // When
+    const result = await executeReviewTool({
+      store,
+      args: {
+        scope: "task-6.3",
+        resolve: { itemKeys: ["major:parser"], artifactRef: "refs/reviews/task-6.3" },
+      },
+      ask,
+    });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toMatchObject({ status: "ERROR" });
+    expect(metadataOf(result)).toBeUndefined();
+    expect(await store.readAll()).toEqual(before);
+  });
+});
+
+describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
+  function createToolContext(agent = "sisyphus", sessionID = "session-1"): ToolContext {
+    return {
+      sessionID,
+      messageID: "message-1",
+      agent,
+      directory: ".",
+      worktree: ".",
+      abort: new AbortController().signal,
+      metadata: () => undefined,
+      ask: (): never => {
+        throw new Error("justice_review must not request permission in this test case");
+      },
+    };
+  }
+
+  it("returns a review summary via the adapter tool definition", async () => {
+    // Given
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
-    vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockRejectedValue(
-      new Error("corrupted observation log"),
-    );
-    const definition = requireReviewTool(adapter);
+
+    const observationHandler = justice.getObservationHandler();
+    const logStore =
+      observationHandler.getLogStore() as import("../../src/runtime/observation-log-store").ObservationLogStore;
+    const shard: import("../../src/core/types").ShardId = {
+      agentId: "atlas",
+      sessionId: "session-review",
+      writerId: logStore.getWriterId(),
+    };
+    await logStore.append(shard, {
+      schemaVersion: 1,
+      timestamp: "2026-07-18T00:00:00.000Z",
+      agentId: shard.agentId,
+      sessionId: shard.sessionId,
+      writerId: shard.writerId,
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "task-6.3",
+      items: [reviewItem("major:adapter")],
+    });
+
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
 
     // When
-    const output = requireStringResult(await definition.execute({}, createToolContext()));
+    const result = await definition.execute({}, createToolContext());
 
     // Then
-    expect(JSON.parse(output)).toEqual({
-      status: "ERROR",
-      reason: "corrupted observation log",
+    const output = typeof result === "string" ? result : result.output;
+    const parsed = JSON.parse(output);
+    expect(parsed.authority).toBe("observed_review_output");
+    expect(parsed.open.length).toBeGreaterThanOrEqual(1);
+    expect(parsed.open[0]).toMatchObject({ itemKey: "major:adapter" });
+  });
+
+  it("requests approval through context.ask when resolving", async () => {
+    // Given
+    const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice test fixture failed to initialize");
+
+    const observationHandler = justice.getObservationHandler();
+    const logStore =
+      observationHandler.getLogStore() as import("../../src/runtime/observation-log-store").ObservationLogStore;
+    const shard: import("../../src/core/types").ShardId = {
+      agentId: "atlas",
+      sessionId: "session-review",
+      writerId: logStore.getWriterId(),
+    };
+    await logStore.append(shard, {
+      schemaVersion: 1,
+      timestamp: "2026-07-18T00:00:00.000Z",
+      agentId: shard.agentId,
+      sessionId: shard.sessionId,
+      writerId: shard.writerId,
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "task-6.3",
+      items: [reviewItem("major:resolve")],
+    });
+
+    const ask = vi.fn(() => Effect.succeed(undefined));
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute(
+      {
+        scope: "task-6.3",
+        resolve: { itemKeys: ["major:resolve"], artifactRef: "refs/reviews/task-6.3" },
+      },
+      { ...createToolContext(), ask },
+    );
+
+    // Then
+    expect(ask).toHaveBeenCalledWith({
+      permission: "justice_review.resolve",
+      patterns: ["task-6.3", "major:resolve"],
+      always: [],
+      metadata: {
+        reviewScope: "task-6.3",
+        itemKeys: ["major:resolve"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
+    });
+
+    const metadata = typeof result === "string" ? undefined : result.metadata;
+    expect(metadata).toEqual({
+      reviewResolutionArtifact: {
+        authority: "human_approved",
+        reviewScope: "task-6.3",
+        itemKeys: ["major:resolve"],
+        artifactRef: "refs/reviews/task-6.3",
+      },
     });
   });
 
@@ -210,15 +422,58 @@ describe("justice_review tool", () => {
         worktree: undefined,
       }),
     );
-    const definition = requireReviewTool(adapter);
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
 
     // When
-    const output = requireStringResult(await definition.execute({}, createToolContext()));
+    const result = await definition.execute({}, createToolContext());
 
     // Then
+    const output = typeof result === "string" ? result : result.output;
     expect(JSON.parse(output)).toEqual({
       status: "ERROR",
       reason: "Justice not initialized",
+    });
+  });
+
+  it("falls through to the outer catch when readAll throws", async () => {
+    // Given
+    const ask = vi.fn(() => Effect.succeed(undefined));
+    const failingReader = {
+      readAll: vi.fn(() => Promise.reject(new Error("disk read failed"))),
+    };
+
+    // When
+    const result = await executeJusticeReviewTool({
+      logReader: failingReader,
+      args: {},
+      requestApproval: async (approval): Promise<void> => {
+        await Effect.runPromise(ask(approval));
+      },
+    });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toEqual({
+      status: "ERROR",
+      reason: "Unable to read the current review state: disk read failed",
+    });
+  });
+
+  it("falls through to the adapter outer catch when ensureInitialized throws", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    vi.spyOn(adapter, "ensureInitialized").mockRejectedValue(new Error("init boom"));
+    const definition = adapter.getTools().justice_review;
+    if (definition === undefined) throw new Error("justice_review definition is missing");
+
+    // When
+    const result = await definition.execute({}, createToolContext());
+
+    // Then
+    const output = typeof result === "string" ? result : result.output;
+    expect(JSON.parse(output)).toEqual({
+      status: "ERROR",
+      reason: "init boom",
     });
   });
 });

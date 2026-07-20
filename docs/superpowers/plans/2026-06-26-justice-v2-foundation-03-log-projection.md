@@ -559,7 +559,7 @@ export type ProjectedEvidence = {
 };
 
 export type ProjectedState = {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly rebuiltAt: string;
   readonly integrity: {
     readonly sourceHash: string;
@@ -763,7 +763,7 @@ export function project(
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     rebuiltAt,
     integrity: {
       sourceHash: hashString(sorted.map((e) => JSON.stringify(e)).join("\n")),

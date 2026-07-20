@@ -97,7 +97,7 @@ describe("evaluate provenance gating", () => {
 
     expect(result.verdict).toBe("WARN");
     if (result.verdict === "SKIP") throw new Error("expected an evaluated task gate");
-    expect(result.ruleResults[0]?.evidenceRefs).toEqual([evidence.ref]);
+    expect(result.ruleResults[0]?.evidenceRefs).toEqual([]);
   });
 
   it("uses onMissingEvidence rather than onViolation for declared failing evidence_outcome", () => {
