@@ -507,7 +507,7 @@ gt submit
 - Consumes: 全 Phase 成果。
 - Produces: 全テスト green、CI green、v2.0 DoD 充足。
 
-- [ ] **Step 1: Devcontainer 内で全テスト・型検査・lint・build を実行**
+- [x] **Step 1: Devcontainer 内で全テスト・型検査・lint・build を実行**
 
 ```bash
 devcontainer exec --workspace-folder . bash -c "
@@ -521,7 +521,7 @@ devcontainer exec --workspace-folder . bash -c "
 
 Expected: lint/typecheck/test/build 全 green。新テスト数 + 563 既存テストが passing。
 
-- [ ] **Step 2: テスト数を確認**
+- [x] **Step 2: テスト数を確認**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test -- --reporter=verbose
@@ -529,7 +529,7 @@ devcontainer exec --workspace-folder . bun run test -- --reporter=verbose
 
 Expected: 563 + 新規テスト数が全 pass。
 
-- [ ] **Step 3: CI workflow が `ubuntu-slim`・`master` トリガーであることを確認**
+- [x] **Step 3: CI workflow が `ubuntu-slim`・`master` トリガーであることを確認**
 
 `.github/workflows/ci.yml` は既に `runs-on: ubuntu-slim` かつ `branches: [master]` なので変更不要。必要に応じて `.github/workflows/ci.yml` の `jobs` に devcontainer-smoke ジョブが追加されていればそれを含む。
 

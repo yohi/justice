@@ -614,7 +614,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | FF-005 | 新 spine は plan.md に書かない（+ DEBT-001 allowlist） | INV-005 | `tests/arch/no-planmd-write.test.ts`（allowlist は実 `writeFile` 呼出箇所=`task-feedback.ts`/`loop-handler.ts`。`PlanParser` は純粋関数で I/O せず対象外・M2） |
 | FF-006 | 全 hook が注入障害下でも有効 HookResponse | INV-006 | fault-injection `tests/hooks/fail-open.test.ts` |
 | FF-007 | L1+ deny の Evidence provenance ∈ {observed,derived} | INV-004 | provenance ゲーティングの単体テスト（先行実装・enforcement は v2.5） |
-| FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared／task サマリ由来は不算入・`derived` は observed 起源限定・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/gate-provenance-gating.test.ts` |
+| FF-008 | L0 gate 充足（PASS）に算入する Evidence provenance ∈ {observed,derived}（declared／task サマリ由来は不算入・`derived` は observed 起源限定・WARN 材料） | INV-004 | provenance ゲーティングの単体テスト `tests/core/v2/gate-provenance-gating.test.ts` |
 
 **FF-005 の扱い（D7・M2 精緻化）**: 「新 spine は plan.md に書かない」をアサートする。**実ディスク書込は `this.fileWriter.writeFile()` 呼出箇所**＝`src/hooks/task-feedback.ts`（成功時✅: `updateCheckbox` 適用後の writeFile）と `src/hooks/loop-handler.ts`（error-note: `appendErrorNote` 適用後の writeFile）に限られ、**allowlist はこの writeFile 呼出箇所を対象**とする。`PlanParser.updateCheckbox`/`appendErrorNote` は文字列を返す純粋関数で I/O せず書込元ではない（allowlist 対象は「pure 変換」ではなく「I/O 実行点」）。新規違反はブロックし、v2.5 で allowlist を空にして全域アサートへ移行。
 
@@ -629,7 +629,7 @@ v2.0:  task-feedback の ✅付与 / loop-handler の error-note 追記は【温
 | INV-008 | FF-004 | `tests/core/observation-log-replay.test.ts` |
 | INV-005 | FF-005 | `tests/arch/no-planmd-write.test.ts` |
 | INV-006 | FF-006 | `tests/hooks/fail-open.test.ts` |
-| INV-004 | FF-007, FF-008 | `tests/core/evidence-provenance.test.ts` / `tests/core/gate-provenance-gating.test.ts` |
+| INV-004 | FF-007, FF-008 | `tests/core/evidence-provenance.test.ts` / `tests/core/v2/gate-provenance-gating.test.ts` |
 
 ### 9.3 Core 単体テスト（100% 目標）
 
@@ -642,7 +642,7 @@ Core 純粋テスト（§9.3）では捕捉できない **Runtime/状態ロジ�
 | 対象 | 検証内容 | 根拠 | Test（target path） |
 |---|---|---|---|
 | per-shard 直列化キュー | 同一 shard への並行 append が read-modify-write 競合なくイベントを失わず順次採番される | D23/§9.4 | `tests/runtime/observation-log-queue.test.ts` |
-| writerId 衝突再採番 | 既存ファイル衝突時に `"w-"+crypto.randomUUID()` を再採番し「1 ファイル=1 writer」を保つ | D55 | `tests/runtime/writer-id-collision.test.ts` |
+| writerId 衝突再採番 | 既存ファイル衝突時に `"w-"+crypto.randomUUID()` を再採番し「1 ファイル=1 writer」を保つ | D55 | `tests/runtime/writer-id.test.ts` |
 | rotation 跨ぎ sequence | active+archive 双方の最大 sequence から継続し `{shardId, sequence}` 一意性と replay 決定性を rotation 跨ぎで保つ | D33 | `tests/runtime/rotation-sequence-continuity.test.ts` |
 | messageRoleBuffer 相関/GC | part 先行（到着順逆転）→後続 role 解決、role≠assistant 破棄、finalized/TTL で GC | D53/§6.1.1 | `tests/hooks/message-role-buffer.test.ts` |
 | record sub-entity refs | message claim は 1 claim = 1 Evidence、review item は `evidenceId=itemKey` として `DecisionRecord.evidenceRefs[]` から復元できる | D70 | `tests/core/record-reference-resolution.test.ts` |
