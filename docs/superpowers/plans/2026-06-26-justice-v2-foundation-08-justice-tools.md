@@ -63,7 +63,7 @@
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
 
-- [ ] **Step 1: `justice_status` 実装**
+- [x] **Step 1: `justice_status` 実装**
 
 ```typescript
 // src/runtime/justice-tools.ts
@@ -89,7 +89,7 @@ export function defineJusticeStatusTool(store: ObservationLogStore, cache: State
 }
 ```
 
-- [ ] **Step 2: adapter に tool 定義を返す getTools() を実装し、opencode-plugin.ts 側から公開登録（D4）**
+- [x] **Step 2: adapter に tool 定義を返す getTools() を実装し、opencode-plugin.ts 側から公開登録（D4）**
 
 ```typescript
 // src/runtime/opencode-adapter.ts
@@ -108,7 +108,7 @@ return {
 };
 ```
 
-- [ ] **Step 2b: justice_status resilience tests**
+- [x] **Step 2b: justice_status resilience tests**
 
 ```typescript
 // tests/runtime/justice-status-tool.test.ts
@@ -119,20 +119,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 
 ```
 
-- [ ] **Step 3: テスト実行（Devcontainer 内）**
+- [x] **Step 3: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-status-tool.test.ts
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add package.json bun.lock src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
 git commit -m "feat(v2): justice_status read-only custom tool"
 ```
 
-- [ ] **Step 5: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 5: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -157,7 +157,7 @@ gt submit
 - Consumes: `project`, `loadGates`, `evaluate`, `GateContext`.
 - Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50). Note: `justice_*` tools are explicitly excluded from Observation Log processing in the adapter.
 
-- [ ] **Step 1: `justice_gate` 実装（D50）**
+- [x] **Step 1: `justice_gate` 実装（D50）**
 
 ```typescript
 export function defineJusticeGateTool(
@@ -188,7 +188,7 @@ export function defineJusticeGateTool(
 }
 ```
 
-- [ ] **Step 1.5: justice_gate resilience tests**
+- [x] **Step 1.5: justice_gate resilience tests**
 
 ```typescript
 // tests/runtime/justice-gate-tool.test.ts
@@ -198,20 +198,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 });
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [x] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-gate-tool.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-gate-tool.test.ts
 git commit -m "feat(v2): justice_gate dry-run tool"
 ```
 
-- [ ] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -241,7 +241,7 @@ gt submit
 - Consumes: `project`, `ReviewSummary`.
 - Produces: `justice_review` tool output (Review Summary Artifact rendering).
 
-- [ ] **Step 1: `justice_review` 実装**
+- [x] **Step 1: `justice_review` 実装**
 
 ```typescript
 export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinition {
@@ -264,7 +264,7 @@ export function defineJusticeReviewTool(store: ObservationLogStore): ToolDefinit
 }
 ```
 
-- [ ] **Step 1.5: justice_review approval-boundary tests**
+- [x] **Step 1.5: justice_review approval-boundary tests**
 
 ```typescript
 // tests/runtime/justice-review-tool.test.ts
@@ -274,20 +274,20 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 });
 ```
 
-- [ ] **Step 2: テスト実行（Devcontainer 内）**
+- [x] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-review-tool.test.ts tests/integration/approved-review-resolution.test.ts
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-review-tool.test.ts
 git commit -m "feat(v2): justice_review tool"
 ```
 
-- [ ] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
+- [x] **Step 4: Phase 7 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
