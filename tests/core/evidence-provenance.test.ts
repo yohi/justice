@@ -42,12 +42,19 @@ function declaredEvidence(
   };
 }
 
-function gate(onMissingEvidence: GateRule["onMissingEvidence"] = "warn"): GateRule {
+function gate(
+  onMissingEvidence: GateRule["onMissingEvidence"] = "warn",
+  checkType: "evidence_outcome" | "evidence_present" = "evidence_outcome",
+): GateRule {
+  const check: GateRule["check"] =
+    checkType === "evidence_outcome"
+      ? { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" }
+      : { type: "evidence_present", evidenceKind: "test" };
   return {
     id: "required-tests",
     gateType: "task",
     trigger: { on: "task_complete" },
-    check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
+    check,
     onViolation: "fail",
     onMissingEvidence,
     enabled: true,
@@ -68,5 +75,30 @@ describe("FF-007 / FF-008 evidence provenance", () => {
   it("even onMissingEvidence=pass is capped at WARN for declared-only evidence", () => {
     const result = evaluate([gate("pass")], [declaredEvidence("pass", "task_summary")], CONTEXT);
     expect(result.verdict).toBe("WARN");
+  });
+
+  it("onMissingEvidence=fail returns FAIL for declared-only evidence_outcome", () => {
+    const result = evaluate([gate("fail")], [declaredEvidence("pass", "message")], CONTEXT);
+    expect(result.verdict).toBe("FAIL");
+  });
+
+  it("declared-only evidence does not satisfy evidence_present", () => {
+    const result = evaluate([gate("warn", "evidence_present")], [declaredEvidence("pass", "message")], CONTEXT);
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("declared task_summary claim does not satisfy evidence_present", () => {
+    const result = evaluate([gate("warn", "evidence_present")], [declaredEvidence("pass", "task_summary")], CONTEXT);
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("onMissingEvidence=pass is capped at WARN for declared-only evidence_present", () => {
+    const result = evaluate([gate("pass", "evidence_present")], [declaredEvidence("pass", "task_summary")], CONTEXT);
+    expect(result.verdict).toBe("WARN");
+  });
+
+  it("onMissingEvidence=fail returns FAIL for declared-only evidence_present", () => {
+    const result = evaluate([gate("fail", "evidence_present")], [declaredEvidence("pass", "message")], CONTEXT);
+    expect(result.verdict).toBe("FAIL");
   });
 });
