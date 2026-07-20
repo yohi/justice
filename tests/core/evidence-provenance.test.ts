@@ -46,7 +46,7 @@ function gate(
   onMissingEvidence: GateRule["onMissingEvidence"] = "warn",
   checkType: "evidence_outcome" | "evidence_present" = "evidence_outcome",
 ): GateRule {
-  const check =
+  const check: GateRule["check"] =
     checkType === "evidence_outcome"
       ? { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" }
       : { type: "evidence_present", evidenceKind: "test" };
