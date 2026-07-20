@@ -119,7 +119,7 @@ gt submit
 - Consumes: `evaluate`, `project`, `extractEvidenceFromTool`.
 - Produces: Tests proving same input → same output, and no I/O during evaluation.
 
-- [x] **Step 1: determinism + no side effects test を実装**
+- [ ] **Step 1: determinism + no side effects test を実装**
 
 ```typescript
 // tests/core/rule-engine-determinism.test.ts
@@ -163,20 +163,20 @@ describe("FF-002 / FF-003", () => {
 });
 ```
 
-- [x] **Step 2: テスト実行（Devcontainer 内）**
+- [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/rule-engine-determinism.test.ts
 ```
 
-- [x] **Step 3: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/core/rule-engine-determinism.test.ts
 git commit -m "test(v2): FF-002 determinism and FF-003 no side effects"
 ```
 
-- [x] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -198,7 +198,7 @@ gt submit
 - Produces:
   - Allowlist-based plan.md write check.
 
-- [x] **Step 1: FF-005 allowlist test を実装（D7/FF-005）**
+- [ ] **Step 1: FF-005 allowlist test を実装（D7/FF-005）**
 
 ```typescript
 // tests/arch/no-planmd-write.test.ts
@@ -221,20 +221,20 @@ describe("FF-005", () => {
 });
 ```
 
-- [x] **Step 2: テスト実行（Devcontainer 内）**
+- [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/arch/no-planmd-write.test.ts
 ```
 
-- [x] **Step 3: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/arch/no-planmd-write.test.ts
 git commit -m "test(v2): FF-005 no plan.md write"
 ```
 
-- [x] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -255,7 +255,7 @@ gt submit
 - Consumes: `ObservationHandler`, `ObservationLogStore`, `JusticePlugin`.
 - Produces: Fault-injection tests proving infra failures degrade to `PROCEED`.
 
-- [x] **Step 1: fail-open test を実装**
+- [ ] **Step 1: fail-open test を実装**
 
 ```typescript
 // tests/hooks/fail-open.test.ts
@@ -272,20 +272,20 @@ describe("FF-006 fail-open", () => {
 });
 ```
 
-- [x] **Step 2: テスト実行（Devcontainer 内）**
+- [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/hooks/fail-open.test.ts
 ```
 
-- [x] **Step 3: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/hooks/fail-open.test.ts
 git commit -m "test(v2): FF-006 fail-open behavior"
 ```
 
-- [x] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -307,7 +307,7 @@ gt submit
 - Consumes: `Evidence`, `evaluate`, `GateRule`.
 - Produces: Tests proving `declared` and task-summary-derived claims do not satisfy PASS.
 
-- [x] **Step 1: provenance gating test を実装**
+- [ ] **Step 1: provenance gating test を実装**
 
 ```typescript
 // tests/core/evidence-provenance.test.ts
@@ -321,20 +321,20 @@ describe("FF-007 / FF-008", () => {
 });
 ```
 
-- [x] **Step 2: テスト実行（Devcontainer 内）**
+- [ ] **Step 2: テスト実行（Devcontainer 内）**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test tests/core/evidence-provenance.test.ts
 ```
 
-- [x] **Step 3: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/core/evidence-provenance.test.ts
 git commit -m "test(v2): FF-007/008 provenance gating"
 ```
 
-- [x] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 4: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -356,7 +356,7 @@ gt submit
 - Consumes: `redactForPersistence`, `redactAbsolutePaths`, `ObservationLogStore`, `project`, `DecisionRecord.evidenceRefs[]`.
 - Produces: Tests proving secrets and absolute paths are redacted before persistence; `file_content` reads are stored as `rawOutputHash` + minimal snippet only; message claim and review item are resolvable from `DecisionRecord.evidenceRefs[]`.
 
-- [x] **Step 1: redaction integration test を実装（D25/D61）**
+- [ ] **Step 1: redaction integration test を実装（D25/D61）**
 
 ```typescript
 // tests/core/v2/redaction-integration.test.ts
@@ -460,7 +460,7 @@ it("rejects injected or invalid gate.yaml payloads and keeps file_content reads 
 });
 ```
 
-- [x] **Step 3: record sub-entity reference resolution test を実装（D70）**
+- [ ] **Step 3: record sub-entity reference resolution test を実装（D70）**
 
 ```typescript
 // tests/core/record-reference-resolution.test.ts
@@ -470,7 +470,7 @@ it("resolves message claim and review item from DecisionRecord.evidenceRefs", ()
 });
 ```
 
-- [x] **Step 4: テスト実行（Devcontainer 内）**
+- [ ] **Step 4: テスト実行（Devcontainer 内）**
 
   - `tests/hooks/message-role-buffer.test.ts` は Task 3.1 の runtime buffer coverage で扱うため、この Phase 8 regression bundle からは外す。
 
@@ -478,14 +478,14 @@ it("resolves message claim and review item from DecisionRecord.evidenceRefs", ()
 devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 ```
 
-- [x] **Step 5: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 git commit -m "test(v2): NFR security, integrity, reference resolution, and gate validation"
 ```
 
-- [x] **Step 6: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 6: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
@@ -507,7 +507,7 @@ gt submit
 - Consumes: 全 Phase 成果。
 - Produces: 全テスト green、CI green、v2.0 DoD 充足。
 
-- [x] **Step 1: Devcontainer 内で全テスト・型検査・lint・build を実行**
+- [ ] **Step 1: Devcontainer 内で全テスト・型検査・lint・build を実行**
 
 ```bash
 devcontainer exec --workspace-folder . bash -c "
@@ -521,7 +521,7 @@ devcontainer exec --workspace-folder . bash -c "
 
 Expected: lint/typecheck/test/build 全 green。新テスト数 + 563 既存テストが passing。
 
-- [x] **Step 2: テスト数を確認**
+- [ ] **Step 2: テスト数を確認**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test -- --reporter=verbose
@@ -529,11 +529,11 @@ devcontainer exec --workspace-folder . bun run test -- --reporter=verbose
 
 Expected: 563 + 新規テスト数が全 pass。
 
-- [x] **Step 3: CI workflow が `ubuntu-slim`・`master` トリガーであることを確認**
+- [ ] **Step 3: CI workflow が `ubuntu-slim`・`master` トリガーであることを確認**
 
 `.github/workflows/ci.yml` は既に `runs-on: ubuntu-slim` かつ `branches: [master]` なので変更不要。必要に応じて `.github/workflows/ci.yml` の `jobs` に devcontainer-smoke ジョブが追加されていればそれを含む。
 
-- [x] **Step 4: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 # 変更がある場合のみ commit
@@ -543,7 +543,7 @@ git diff --quiet .github/workflows/ci.yml || {
 }
 ```
 
-- [x] **Step 5: Phase 8 Base に向けた Draft PR を作成する**
+- [ ] **Step 5: Phase 8 Base に向けた Draft PR を作成する**
 
 ```bash
 gt submit
