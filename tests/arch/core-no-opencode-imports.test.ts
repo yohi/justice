@@ -102,10 +102,12 @@ function detectOpenCodeImports(content: string): boolean {
 
   const readUntilModuleSpecifier = (): string | undefined => {
     // Reads the body of an import/export declaration. We are called immediately
-    // after the opening keyword and want to find the module specifier string.
-    // It handles `import "source";`, `import X from "source";`, `export * from "source";`, etc.
+    // after the opening keyword and want to find the module specifier string that
+    // follows the `from` keyword. Only string literals appearing after a top-level
+    // `from` (braceDepth === 0 && parenDepth === 0) are valid module specifiers.
     let braceDepth = 0;
     let parenDepth = 0;
+    let sawFrom = false;
 
     while (i < len) {
       const ch = content[i];
@@ -141,13 +143,19 @@ function detectOpenCodeImports(content: string): boolean {
         }
         const start = i + 1;
         readStringLiteral(ch);
-        const source = content.slice(start, i - 1);
-        return source;
+        if (sawFrom && braceDepth === 0 && parenDepth === 0) {
+          const source = content.slice(start, i - 1);
+          return source;
+        }
+        // Otherwise it is just a string literal in the declaration body;
+        // keep scanning for the real module specifier after `from`.
+        continue;
       }
       if (isIdentifierStart(ch)) {
-        // Consume identifier but do not interpret it specially. The module
-        // specifier is detected by the string literal that follows `from`.
-        readIdentifier();
+        const id = readIdentifier();
+        if (!sawFrom && id === "from" && braceDepth === 0 && parenDepth === 0) {
+          sawFrom = true;
+        }
         continue;
       }
       i++;
@@ -218,8 +226,16 @@ function detectOpenCodeImports(content: string): boolean {
             if (stringMatch && stringMatch[2].startsWith(OPENCODE_MODULE_PREFIX)) {
               return true;
             }
+          } else if (next === '"' || next === "'") {
+            // side-effect import: import "source";
+            const start = i + 1;
+            readStringLiteral(next);
+            const source = content.slice(start, i - 1);
+            if (source.startsWith(OPENCODE_MODULE_PREFIX)) {
+              return true;
+            }
           } else {
-            // static or side-effect import
+            // static import with optional `from` clause
             const source = readUntilModuleSpecifier();
             if (source?.startsWith(OPENCODE_MODULE_PREFIX)) {
               return true;
@@ -308,6 +324,10 @@ describe("FF-001", () => {
       "const example = \"export { Foo } from '@opencode-ai/plugin';\";",
       // pseudo dynamic import inside a template literal must be ignored
       'const example = `import("@opencode-ai/plugin")`;',
+      // value export containing the prefix must not be treated as a module specifier
+      'export const OPENCODE_PREFIX = "@opencode-ai/plugin";',
+      // string inside a class body must not be treated as a re-export specifier
+      'export default class Foo { static MODULE = "@opencode-ai/plugin"; }',
       // template literal with embedded expression containing pseudo import
       'const example = `${"import(\\"@opencode-ai/plugin\\")"}`;\nexport const y = 2;',
     ];
