@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { FileGateLoader } from "../../src/runtime/gate-loader";
+import { FileGateLoader, mergeWithDefaults } from "../../src/runtime/gate-loader";
+import { DEFAULT_GATES } from "../../src/core/v2/default-gates";
 import { createMockFileReader } from "../helpers/mock-file-system";
+
+function gateYaml(body: string): string {
+  return `schemaVersion: 1\nauthority: human_approved\n${body}`;
+}
 
 describe("gate yaml validation", () => {
   it("rejects injected or invalid gate.yaml payloads and falls back to defaults", async () => {
     const reader = createMockFileReader({
-      ".justice/gate.yaml": `
+      ".justice/gate.yaml": gateYaml(`
 gates:
   - id: injected
     gateType: task
@@ -18,7 +23,7 @@ gates:
     onViolation: warn
     onMissingEvidence: warn
     enabled: true
-`,
+`),
     });
     const logger = { warn: vi.fn() };
     const loader = new FileGateLoader(reader, ".justice/gate.yaml", logger);
@@ -38,5 +43,49 @@ gates:
     expect(gates.some((g) => g.id === "required-tests")).toBe(true);
     expect(gates.some((g) => g.id === "build-green")).toBe(true);
     expect(gates.some((g) => g.id === "review-clean")).toBe(true);
+  });
+
+  it("overriding an existing default gate id can disable the security gate", async () => {
+    const reader = createMockFileReader({
+      ".justice/gate.yaml": gateYaml(`
+gates:
+  - id: required-tests
+    gateType: task
+    trigger:
+      on: task_complete
+    check:
+      type: evidence_present
+      evidenceKind: test
+    onViolation: pass
+    onMissingEvidence: pass
+    enabled: true
+`),
+    });
+    const logger = { warn: vi.fn() };
+    const loader = new FileGateLoader(reader, ".justice/gate.yaml", logger);
+    const gates = await loader.load();
+
+    const requiredTests = gates.find((g) => g.id === "required-tests");
+    expect(requiredTests).toBeDefined();
+    expect(requiredTests?.check).toEqual({ type: "evidence_present", evidenceKind: "test" });
+    expect(requiredTests?.onViolation).toBe("pass");
+    expect(requiredTests?.onMissingEvidence).toBe("pass");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("mergeWithDefaults allows default gate override and disables gates marked enabled: false", () => {
+    const customGates = DEFAULT_GATES.map((g) =>
+      g.id === "required-tests"
+        ? {
+            ...g,
+            check: { type: "evidence_present" as const, evidenceKind: "test" as const },
+            enabled: false as const,
+          }
+        : g,
+    );
+
+    const merged = mergeWithDefaults(customGates);
+    expect(merged.some((g) => g.id === "required-tests")).toBe(false);
+    expect(merged.some((g) => g.id === "build-green")).toBe(true);
   });
 });
