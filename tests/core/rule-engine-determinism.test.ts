@@ -135,6 +135,9 @@ describe("FF-002 / FF-003", () => {
     const before = structuredClone({ gates, evidence, ctx });
 
     const first = evaluate(gates, evidence, ctx);
+    expect(first.verdict).not.toBe("SKIP");
+    expect(structuredClone({ gates, evidence, ctx })).toEqual(before);
+
     const second = evaluate(gates, evidence, ctx);
 
     expect(first).toEqual(second);
