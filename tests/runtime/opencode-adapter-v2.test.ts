@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
@@ -646,7 +647,7 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("silently ignores message.part.updated with empty part id or text", async () => {
+  it("drops message.part.updated without a part id but retains an empty text update", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -665,7 +666,48 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
       },
     });
 
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "s",
+      payload: {
+        kind: "message_part_updated",
+        sessionId: "s",
+        messageID: "m",
+        partID: "p",
+        text: "",
+      },
+    });
+  });
+
+  it("maps the agent supplied by chat.message before forwarding its user content", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: {
+          sessionID: "sess-chat",
+          message: { role: "user", content: "delegate next task", agent: "prometheus" },
+        },
+      },
+    });
+
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: "AgentMapped",
+        sessionId: "sess-chat",
+        payload: { sessionId: "sess-chat", agentName: "prometheus" },
+      },
+      {
+        type: "Message",
+        sessionId: "sess-chat",
+        payload: { role: "user", content: "delegate next task" },
+      },
+    ]);
   });
 
   it("(g) still dispatches the plan-bridge Message when AgentMapped dispatch throws", async () => {
@@ -799,6 +841,44 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
         message: "ordinary provider failure",
       },
     });
+  });
+
+  it("routes session.deleted properties.info.id to complete Justice session cleanup", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const sessionId = "session-deleted";
+    const taskFeedbackSessions = justice.getTaskFeedback() as unknown as {
+      readonly sessions: ReadonlyMap<string, unknown>;
+    };
+    const clearActivePlan = vi.spyOn(justice.getTaskFeedback(), "clearActivePlan");
+
+    justice.getPlanBridge().setActivePlan(sessionId, "plan.md");
+    justice.getTaskFeedback().setActivePlan(sessionId, "plan.md", "task-1");
+    justice.getSessionStateProvider().setAgentMapping(sessionId, "atlas");
+    justice.getSessionStateProvider().setActiveTaskWindow("call-deleted", "task-1", sessionId);
+
+    const deletedEvent = {
+      type: "session.deleted",
+      properties: {
+        info: {
+          id: sessionId,
+          projectID: "project-1",
+          directory: "project",
+          title: "Deleted session",
+          version: "1",
+          time: { created: 0, updated: 0 },
+        },
+      },
+    } satisfies EventSessionDeleted;
+
+    await adapter.onEvent({ event: deletedEvent });
+
+    expect(clearActivePlan).toHaveBeenCalledWith(sessionId);
+    expect(justice.getPlanBridge().getActivePlan(sessionId)).toBeNull();
+    expect(taskFeedbackSessions.sessions.has(sessionId)).toBe(false);
+    expect(justice.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
+    expect(justice.getSessionStateProvider().getActiveTaskId("call-deleted")).toBeUndefined();
   });
 
   it("keeps failing open when message.updated handling throws", async () => {

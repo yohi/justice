@@ -13,6 +13,7 @@ import {
   validateRecordSchema,
   validateShardSequences,
 } from "./validation";
+import { redactPendingLogRecord } from "../core/v2/persistence-redaction";
 
 const EVENTS_ROOT = ".justice/events";
 const ARCHIVE_ROOT = ".justice/archive/events";
@@ -130,7 +131,7 @@ export class ObservationLogStore {
     }
     const path = toPhysicalPath(shardId);
     this.shardsByPath.set(path, shardId);
-    return this.writeQueue.enqueue(path, record);
+    return this.writeQueue.enqueue(path, redactPendingLogRecord(record));
   }
 
   /**

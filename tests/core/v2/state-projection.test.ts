@@ -102,6 +102,40 @@ function decisionEvent(
   };
 }
 
+function messageEvent(
+  sequence: number,
+  timestamp: string,
+  taskId: string,
+  outcome: "pass" | "fail",
+): ObservationRecord {
+  return {
+    schemaVersion: 1,
+    sequence,
+    timestamp,
+    agentId: "atlas",
+    sessionId: "s1",
+    writerId: "w1",
+    recordType: "observation",
+    taskId,
+    kind: "message",
+    messageID: "message-1",
+    role: "assistant",
+    textHash: `hash-${sequence}`,
+    declaredClaims: [{ evidenceId: "message-1-test", claimKind: "test", outcome }],
+    evidence: [
+      {
+        evidenceId: "message-1-test",
+        kind: "test",
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "message",
+        claim: { claimKind: "test", outcome },
+      },
+    ],
+    finalized: true,
+  };
+}
+
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
@@ -127,6 +161,106 @@ describe("project() task fold", () => {
     };
     const state = project([noTask], REBUILT_AT);
     expect(state.tasks.size).toBe(0);
+  });
+
+  it("keeps only the latest finalized message claim for each evidence identity", () => {
+    const state = project(
+      [
+        messageEvent(1, "2026-07-06T00:00:01Z", "task-1", "pass"),
+        messageEvent(2, "2026-07-06T00:00:02Z", "task-1", "fail"),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.tasks.get("task-1")?.evidence).toEqual([
+      expect.objectContaining({
+        evidence: expect.objectContaining({
+          evidenceId: "message-1-test",
+          claim: expect.objectContaining({ outcome: "fail" }),
+        }),
+        ref: expect.objectContaining({ sequence: 2, evidenceId: "message-1-test" }),
+      }),
+    ]);
+  });
+
+  it("removes claims absent from the latest message revision while retaining other evidence", () => {
+    const firstRevision: ObservationRecord = {
+      ...messageEvent(1, "2026-07-06T00:00:01Z", "task-1", "pass"),
+      declaredClaims: [
+        { evidenceId: "message-1-test", claimKind: "test", outcome: "pass" },
+        { evidenceId: "message-1-build", claimKind: "build", outcome: "pass" },
+      ],
+      evidence: [
+        {
+          evidenceId: "message-1-test",
+          kind: "test",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "test", outcome: "pass" },
+        },
+        {
+          evidenceId: "message-1-build",
+          kind: "build",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "build", outcome: "pass" },
+        },
+      ],
+    };
+    const latestRevision: ObservationRecord = {
+      ...firstRevision,
+      sequence: 3,
+      timestamp: "2026-07-06T00:00:03Z",
+      textHash: "hash-latest-revision",
+      declaredClaims: [{ evidenceId: "message-1-test", claimKind: "test", outcome: "fail" }],
+      evidence: [
+        {
+          evidenceId: "message-1-test",
+          kind: "test",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "test", outcome: "fail" },
+        },
+      ],
+    };
+    const otherMessage: ObservationRecord = {
+      ...messageEvent(4, "2026-07-06T00:00:04Z", "task-1", "pass"),
+      messageID: "message-2",
+      textHash: "hash-message-2",
+      declaredClaims: [{ evidenceId: "message-2-test", claimKind: "test", outcome: "pass" }],
+      evidence: [
+        {
+          evidenceId: "message-2-test",
+          kind: "test",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "test", outcome: "pass" },
+        },
+      ],
+    };
+
+    const state = project(
+      [
+        firstRevision,
+        toolEvent(2, "2026-07-06T00:00:02Z", "task-1", "tool-evidence"),
+        latestRevision,
+        otherMessage,
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.tasks.get("task-1")?.evidence.map((entry) => entry.ref.evidenceId)).toEqual([
+      "tool-evidence",
+      "message-1-test",
+      "message-2-test",
+    ]);
+    expect(state.tasks.get("task-1")?.evidence[1]?.evidence).toMatchObject({
+      claim: { outcome: "fail" },
+    });
   });
 
   it("records maxSequenceByShard per shard", () => {

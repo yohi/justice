@@ -157,7 +157,7 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     });
   });
 
-  it("reports stale_append when per-shard maxSequence matches but sourceHash differs (ordering drift)", () => {
+  it("rejects source hash tampering when per-shard maxSequence still matches", () => {
     const events = [toolEvent(1, "task-1"), toolEvent(2, "task-1")];
     const state = project(events, REBUILT_AT);
     // Tamper only the cached sourceHash; maxSequenceByShard still matches the
@@ -170,7 +170,23 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     };
     expect(validateProjectionCacheAgainstEvents(tampered, events)).toEqual({
       valid: false,
-      reason: "stale_append",
+      reason: "mismatch_payload",
+    });
+  });
+
+  it("rejects a cache whose projected payload was altered without changing integrity metadata", () => {
+    const events = [toolEvent(1, "task-1")];
+    const state = project(events, REBUILT_AT);
+    const task = state.tasks.get("task-1");
+    if (task === undefined) throw new Error("test fixture must include task-1");
+    const tampered: ProjectedState = {
+      ...state,
+      tasks: new Map([["task-1", { ...task, evidence: [] }]]),
+    };
+
+    expect(validateProjectionCacheAgainstEvents(tampered, events)).toEqual({
+      valid: false,
+      reason: "mismatch_payload",
     });
   });
 

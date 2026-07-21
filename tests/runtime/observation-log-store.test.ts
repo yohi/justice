@@ -688,6 +688,61 @@ describe("ObservationLogStore", () => {
     expect(store.getWriterId()).toBe("w-1");
   });
 
+  it("redacts direct append payloads at the persistence boundary without altering existing markers", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const unredacted: PendingLogRecord = {
+      ...msgRecord(),
+      kind: "tool_executed",
+      toolName: "bash",
+      callId: "call-redaction",
+      evidence: {
+        evidenceId: "e-redaction",
+        kind: "command",
+        sourceClass: "tool_output",
+        provenance: "observed",
+        toolOutputClass: "command_exec",
+        command: "echo /home/alice/private GITHUB_TOKEN=token-value",
+        rawOutput: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890 [REDACTED_SECRET]",
+      },
+    };
+
+    await store.append(shard, unredacted);
+
+    const persisted = files.get(toPhysicalPath(shard)) ?? "";
+    expect(persisted).not.toContain("/home/alice/private");
+    expect(persisted).not.toContain("GITHUB_TOKEN=token-value");
+    expect(persisted).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890");
+    expect(persisted).toContain("[REDACTED_PATH]");
+    expect(persisted).toContain("[REDACTED_ENV]");
+    expect(persisted).toContain("[REDACTED_SECRET]");
+  });
+
+  it("redacts declared claim claimKind values at the canonical append boundary", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const unredacted: PendingLogRecord = {
+      ...msgRecord(),
+      kind: "tool_executed",
+      toolName: "task",
+      callId: "call-declared-claim-redaction",
+      evidence: {
+        evidenceId: "e-declared-claim-redaction",
+        kind: "generic",
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "task_summary",
+        claim: { claimKind: "GITHUB_TOKEN=declared-secret", outcome: "pass" },
+      },
+    };
+
+    await store.append(shard, unredacted);
+
+    const persisted = files.get(toPhysicalPath(shard)) ?? "";
+    expect(persisted).not.toContain("GITHUB_TOKEN=declared-secret");
+    expect(persisted).toContain("[REDACTED_ENV]");
+  });
+
   it("degrades fail-open when an event file contains malformed JSON", async () => {
     const { files, reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");

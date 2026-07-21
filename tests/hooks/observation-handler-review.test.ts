@@ -37,7 +37,7 @@ describe("ObservationHandler review observations", () => {
   it("appends every detected review item before projection and redacts persisted text", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
-    sessionState.setActiveTaskWindow("call-review", "task-6.3");
+    sessionState.setActiveTaskWindow("call-review", "task-6.3", "session-review");
 
     // When
     await handler.handlePostToolUse({
@@ -120,7 +120,7 @@ describe("ObservationHandler review observations", () => {
       const callId = "call-generic-review";
       const toolInput = toolName === "task" ? { taskId: "task-6.3" } : { command: "review" };
       if (toolName === "task") {
-        sessionState.setActiveTaskWindow(callId, "task-6.3");
+        sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
       }
       await handler.handlePostToolUse({
         type: "PostToolUse",
@@ -138,7 +138,7 @@ describe("ObservationHandler review observations", () => {
 
       // When
       if (toolName === "task") {
-        sessionState.setActiveTaskWindow(callId, "task-6.3");
+        sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
       }
       await handler.handlePostToolUse({
         type: "PostToolUse",
@@ -304,7 +304,7 @@ describe("ObservationHandler review observations", () => {
   it("resolves only artifact-identified items after observing the review", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
-    sessionState.setActiveTaskWindow("call-review", "task-6.3");
+    sessionState.setActiveTaskWindow("call-review", "task-6.3", "session-review");
     await handler.handlePostToolUse({
       type: "PostToolUse",
       sessionId: "session-review",

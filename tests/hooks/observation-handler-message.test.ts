@@ -353,6 +353,55 @@ describe("ObservationHandler message observation", () => {
     });
   });
 
+  it("persists an empty finalized revision so it clears prior declared claims", async () => {
+    const { files, reader, writer } = createMemFs();
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    const handler = new ObservationHandler({
+      logStore: new ObservationLogStore(writer, reader, "w-handler"),
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    await handler.handleMessage("session-1", {
+      kind: "message_part_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "tests pass",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_part_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      partID: "part-1",
+      text: "",
+    });
+    await handler.handleMessage("session-1", {
+      kind: "message_updated",
+      sessionId: "session-1",
+      messageID: "message-1",
+      role: "assistant",
+      finalized: true,
+    });
+
+    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const records = (files.get(path) ?? "")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { readonly declaredClaims: readonly unknown[] });
+
+    expect(records).toHaveLength(2);
+    expect(records[1]?.declaredClaims).toEqual([]);
+  });
+
   it("clears persisted IDs and buffered parts when a session ends", async () => {
     const { reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();

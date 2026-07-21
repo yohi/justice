@@ -1,11 +1,10 @@
 import type { ToolDefinition } from "@opencode-ai/plugin";
+import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import {
-  defineJusticeGateTool,
   defineJusticeReviewTool,
-  defineJusticeStatusTool,
 } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
@@ -47,8 +46,20 @@ const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freez
 interface GenericEventInput {
   readonly event: {
     readonly type: string;
-    readonly properties?: Record<string, unknown>;
+    readonly properties?: object;
   };
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function isSessionDeletedEvent(
+  event: GenericEventInput["event"],
+): event is EventSessionDeleted {
+  const properties = toRecord(event.properties);
+  const info = toRecord(properties.info);
+  return event.type === "session.deleted" && typeof info.id === "string";
 }
 
 export class OpenCodeAdapter {
@@ -106,9 +117,7 @@ export class OpenCodeAdapter {
 
   getTools(): Record<string, ToolDefinition> {
     return {
-      justice_gate: defineJusticeGateTool(this),
       justice_review: defineJusticeReviewTool(this),
-      justice_status: defineJusticeStatusTool(this),
     };
   }
 
@@ -196,7 +205,12 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      const properties = input.event.properties ?? {};
+      if (isSessionDeletedEvent(input.event)) {
+        await this.#handleSessionDeleted(input.event.properties.info.id);
+        return;
+      }
+
+      const properties = toRecord(input.event.properties);
 
       switch (input.event.type) {
         case "message.updated":
@@ -315,7 +329,7 @@ export class OpenCodeAdapter {
 
     const partID = this.#readString(part, "id") || this.#readString(properties, "partID");
     const text = this.#readString(part, "text") || this.#readString(properties, "text");
-    if (partID.length === 0 || text.length === 0) return;
+    if (partID.length === 0) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -329,28 +343,34 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * Handles a `chat.message` event. Only user messages are forwarded into the
-   * Justice observation log; assistant text is already captured via
-   * `#handleMessagePartUpdated` and tool-use hooks, so forwarding it here would
-   * create duplicates. Dropping non-user roles is therefore intentional.
+   * Handles a `chat.message` event. Its optional agent field is always used to
+   * establish session identity; only user content is forwarded into the legacy
+   * message path to avoid duplicating assistant text observations.
    */
   async #handleChatMessage(properties: Record<string, unknown>): Promise<void> {
     const message = this.#readRecord(properties, "message");
     const sessionId =
       this.#readString(properties, "sessionID") || this.#readString(message, "sessionID");
     const content = this.#readString(message, "content");
-    // Intentionally drop assistant/system messages — see method JSDoc above.
-    if (
-      sessionId.length === 0 ||
-      content.length === 0 ||
-      this.#readString(message, "role") !== "user"
-    ) {
-      return;
-    }
+    const isUserMessage = content.length > 0 && this.#readString(message, "role") === "user";
+    const agentName = this.#resolveAgentName(properties, message);
+    if (sessionId.length === 0 || (!isUserMessage && agentName.length === 0)) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
     if (!justice) return;
+    if (agentName.length > 0) {
+      try {
+        await justice.handleEvent({
+          type: "AgentMapped",
+          sessionId,
+          payload: { sessionId, agentName },
+        });
+      } catch (err) {
+        await this.log("error", "[Justice] chat.message AgentMapped dispatch failed", err);
+      }
+    }
+    if (!isUserMessage) return;
     await justice.handleEvent({ type: "Message", sessionId, payload: { role: "user", content } });
   }
 
@@ -441,6 +461,13 @@ export class OpenCodeAdapter {
     } catch (err) {
       await this.log("error", "[Justice] loop-detector dispatch failed", err);
     }
+  }
+
+  async #handleSessionDeleted(sessionId: string): Promise<void> {
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    justice.destroySession(sessionId);
   }
 
   /**
@@ -640,8 +667,7 @@ export class OpenCodeAdapter {
 
   #readRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
     // eslint-disable-next-line security/detect-object-injection
-    const value = record[key];
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return toRecord(record[key]);
   }
 
   #readString(record: Record<string, unknown>, key: string): string {

@@ -45,6 +45,11 @@ type MutableTask = {
   observedReviewScopes: string[];
 };
 
+type LatestMessageClaims = {
+  readonly taskId: string;
+  readonly evidenceRefKeys: ReadonlySet<string>;
+};
+
 function ensureTask(tasks: Map<string, MutableTask>, taskId: string): MutableTask {
   const existing = tasks.get(taskId);
   if (existing) return existing;
@@ -58,8 +63,17 @@ function ensureTask(tasks: Map<string, MutableTask>, taskId: string): MutableTas
   return created;
 }
 
+function fullEvidenceRefKey(ref: FullEvidenceRef): string {
+  return JSON.stringify([ref.agentId, ref.sessionId, ref.writerId, ref.sequence, ref.evidenceId]);
+}
+
+function messageKey(sessionId: string, messageID: string): string {
+  return JSON.stringify([sessionId, messageID]);
+}
+
 function applyObservationEvent(
   tasks: Map<string, MutableTask>,
+  latestMessageClaims: Map<string, LatestMessageClaims>,
   event: Extract<PersistedLogRecord, { recordType: "observation" }>,
   baseRef: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId" | "sequence">,
 ): void {
@@ -73,6 +87,28 @@ function applyObservationEvent(
         ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
       });
     }
+  } else if (event.kind === "message") {
+    const key = messageKey(event.sessionId, event.messageID);
+    const previousClaims = latestMessageClaims.get(key);
+    if (previousClaims) {
+      const previousTask = tasks.get(previousClaims.taskId);
+      if (previousTask) {
+        previousTask.evidence = previousTask.evidence.filter(
+          (current) => !previousClaims.evidenceRefKeys.has(fullEvidenceRefKey(current.ref)),
+        );
+      }
+    }
+
+    const evidenceRefKeys = new Set<string>();
+    for (const ev of event.evidence) {
+      const projectedEvidence: ProjectedEvidence = {
+        evidence: ev,
+        ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
+      };
+      taskState.evidence.push(projectedEvidence);
+      evidenceRefKeys.add(fullEvidenceRefKey(projectedEvidence.ref));
+    }
+    latestMessageClaims.set(key, { taskId, evidenceRefKeys });
   } else if (event.kind === "review_observed") {
     if (event.reviewScope && !taskState.observedReviewScopes.includes(event.reviewScope)) {
       taskState.observedReviewScopes.push(event.reviewScope);
@@ -102,6 +138,7 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
 
   const maxSequenceByShard = computeMaxSequenceByShard(sorted);
   const tasks = new Map<string, MutableTask>();
+  const latestMessageClaims = new Map<string, LatestMessageClaims>();
 
   for (const event of sorted) {
     const baseRef = {
@@ -112,7 +149,7 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
     };
 
     if (event.recordType === "observation") {
-      applyObservationEvent(tasks, event, baseRef);
+      applyObservationEvent(tasks, latestMessageClaims, event, baseRef);
     } else if (event.recordType === "decision") {
       applyDecisionEvent(tasks, event);
     }

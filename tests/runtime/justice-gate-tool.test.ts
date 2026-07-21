@@ -6,6 +6,7 @@ import { SessionStateProvider } from "../../src/core/session-state-provider";
 import type { GateRule } from "../../src/core/v2/gate-definition";
 import type { ObservationRecord, ReviewItem } from "../../src/core/v2/observation-model";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { defineJusticeGateTool } from "../../src/runtime/justice-tools";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 const skipResultSchema = z.object({
@@ -49,9 +50,7 @@ function createToolContext(agent = "sisyphus", sessionID = "session-1"): ToolCon
 }
 
 function requireGateTool(adapter: OpenCodeAdapter): ToolDefinition {
-  const definition = adapter.getTools().justice_gate;
-  if (definition === undefined) throw new Error("justice_gate definition is missing");
-  return definition;
+  return defineJusticeGateTool(adapter);
 }
 
 function requireStringResult(result: ToolResult): string {
@@ -138,7 +137,7 @@ const TEST_AND_REVIEW_GATES: readonly GateRule[] = [
 ];
 
 describe("justice_gate tool", () => {
-  it("registers justice_gate on the plugin tool hook", async () => {
+  it("does not register justice_gate on the public plugin tool hook", async () => {
     // Given
     const init = fakeInit();
 
@@ -146,8 +145,7 @@ describe("justice_gate tool", () => {
     const hooks = await OpenCodePlugin(init as never);
 
     // Then
-    expect(hooks.tool).toHaveProperty("justice_gate");
-    expect(hooks.tool?.justice_gate?.description).toContain("task_complete");
+    expect(hooks.tool).not.toHaveProperty("justice_gate");
   });
 
   it("resolves Justice and the invoking agent lazily for an unscoped dry-run", async () => {

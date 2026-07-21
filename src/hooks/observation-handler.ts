@@ -185,7 +185,7 @@ export class ObservationHandler {
 
     try {
       const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
-      if (text === undefined || text.length === 0) {
+      if (text === undefined) {
         return PROCEED;
       }
       const textHash = hashString(text);

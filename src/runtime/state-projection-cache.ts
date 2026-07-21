@@ -7,10 +7,11 @@ import {
   orderEventsForProjection,
 } from "../core/v2/integrity";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
-import type { ProjectedState } from "../core/v2/state-projection";
 import {
   fromSerializableProjectedState,
+  project,
   toSerializableProjectedState,
+  type ProjectedState,
 } from "../core/v2/state-projection";
 
 type CacheLogger = { warn(message: string, err?: unknown): void };
@@ -105,7 +106,12 @@ function isValidCacheStructure(parsed: unknown): boolean {
   );
 }
 
-export type CacheValidationReason = "valid" | "stale_append" | "mismatch_seq" | "structural";
+export type CacheValidationReason =
+  | "valid"
+  | "stale_append"
+  | "mismatch_seq"
+  | "mismatch_payload"
+  | "structural";
 
 export type CacheValidationResult = {
   readonly valid: boolean;
@@ -155,21 +161,19 @@ export function validateProjectionCacheAgainstEvents(
 
   // Reaching here means every per-shard maxSequence already matched, so a normal
   // append cannot be the cause (it raises a shard's maxSequence and is caught
-  // above as stale_append). A hash mismatch here therefore implies ordering drift
-  // or a mid-stream anomaly. Per plan design (§ silent-rebuild) this is still
-  // classified stale_append to favor stability over noise; it is fail-safe (never
-  // reports a corrupt cache as valid).
+  // above as stale_append). Any content-hash or projected-payload difference is
+  // therefore cache tampering/corruption and must rebuild from the event log.
   const currentSourceHash = computeSourceHash(orderEventsForProjection(events));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
-    // Distinct from ordinary stale_append (which is caught by the maxSequence
-    // checks above): every shard's maxSequence already matched here, so this
-    // specific mismatch implies ordering drift or a mid-stream anomaly rather
-    // than a normal append. Logged (not just returned) so this rarer path is
-    // observable without changing the fail-safe stale_append classification.
-    console.warn(
-      "state.json cache: sourceHash mismatch with matching per-shard maxSequence (possible ordering drift), rebuilding",
-    );
-    return { valid: false, reason: "stale_append" };
+    return { valid: false, reason: "mismatch_payload" };
+  }
+
+  const rebuilt = project(events, cacheState.rebuiltAt);
+  if (
+    JSON.stringify(toSerializableProjectedState(cacheState)) !==
+    JSON.stringify(toSerializableProjectedState(rebuilt))
+  ) {
+    return { valid: false, reason: "mismatch_payload" };
   }
 
   return { valid: true, reason: "valid" };

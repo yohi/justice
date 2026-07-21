@@ -170,7 +170,7 @@ describe("ObservationHandler skill and task summary observation", () => {
       }),
     };
     const sessionStateProvider = new SessionStateProvider();
-    sessionStateProvider.setActiveTaskWindow("call-1", "task-1");
+    sessionStateProvider.setActiveTaskWindow("call-1", "task-1", "session-1");
     const handler = new ObservationHandler({
       logStore,
       sessionStateProvider,

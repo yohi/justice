@@ -271,6 +271,21 @@ describe("JusticePlugin", () => {
 
       expect(removeSpy).toHaveBeenCalledWith("s-0");
     });
+
+    it("clears TaskFeedback active plans when a session is removed", () => {
+      const sessionId = "s-task-feedback";
+      const taskFeedback = plugin.getTaskFeedback();
+      const taskFeedbackSessions = taskFeedback as unknown as {
+        readonly sessions: ReadonlyMap<string, unknown>;
+      };
+
+      taskFeedback.setActivePlan(sessionId, "plan.md", "task-1");
+      expect(taskFeedbackSessions.sessions.has(sessionId)).toBe(true);
+
+      plugin.getLoopHandler().removeSession(sessionId);
+
+      expect(taskFeedbackSessions.sessions.has(sessionId)).toBe(false);
+    });
   });
 
   describe("wisdom store integration", () => {

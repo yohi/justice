@@ -45,13 +45,7 @@ function openSessionTaskWindow(
   const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
-    // Open the window unconditionally at PreToolUse time.  The sessionId is
-    // intentionally omitted here so that the window is always created even
-    // when the session has not yet been mapped (e.g. in tests that skip
-    // AgentMapped).  The guarded re-registration with sessionId happens after
-    // Promise.all (race-condition guard), so only legitimate callers that
-    // survive the generation check will ever tag a window with a session.
-    provider.setActiveTaskWindow(callId, taskId);
+    provider.setActiveTaskWindow(callId, taskId, event.sessionId);
   } catch {
     // Fail-open: a task-window tracking failure must not break the hook flow.
   }
@@ -301,9 +295,7 @@ export class JusticePlugin {
 
     // Ensure session cleanup propagates from loopHandler to all stateful handlers
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
-      this.planBridge.destroySession(sessionId);
-      this.sessionStateProvider.removeSession(sessionId);
-      this.observationHandler.destroySession(sessionId);
+      this.destroySessionState(sessionId);
     });
 
     this.taskFeedback.setObservationHandler(this.observationHandler);
@@ -512,6 +504,10 @@ export class JusticePlugin {
     return this.sessionStateProvider;
   }
 
+  destroySession(sessionId: string): void {
+    this.loopHandler.removeSession(sessionId);
+  }
+
   /**
    * Route Event-type events based on eventType payload.
    */
@@ -582,6 +578,26 @@ export class JusticePlugin {
       }
       default:
         return PROCEED;
+    }
+  }
+
+  private destroySessionState(sessionId: string): void {
+    const cleanupSteps: readonly (() => void)[] = [
+      (): void => this.planBridge.destroySession(sessionId),
+      (): void => this.taskFeedback.clearActivePlan(sessionId),
+      (): void => this.sessionStateProvider.removeSession(sessionId),
+      (): void => this.observationHandler.destroySession(sessionId),
+    ];
+    for (const cleanup of cleanupSteps) {
+      try {
+        cleanup();
+      } catch (error) {
+        try {
+          this.options.logger?.warn("Justice session cleanup failed", error);
+        } catch {
+          // Fail-open: one cleanup failure must not retain other session state.
+        }
+      }
     }
   }
 
