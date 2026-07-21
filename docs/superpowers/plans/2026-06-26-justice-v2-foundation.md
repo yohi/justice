@@ -47,7 +47,7 @@ The original single-file implementation plan has been split into reviewable exec
 | 05 | [Phase 4: Observation Handler Implementation](./2026-06-26-justice-v2-foundation-05-observation-handler.md) | Tool, message, skill, task-summary, session-error, and reflection observation handlers. |
 | 06 | [Phase 5: Rule Engine and Gate Definition](./2026-06-26-justice-v2-foundation-06-gates.md) | Gate schema, rule evaluation, default gates, gate loading, and DecisionRecord append. |
 | 07 | [Phase 6: Review Aggregator](./2026-06-26-justice-v2-foundation-07-review-aggregator.md) | Review severity classification, scope-aware review aggregation, and review_observed generation. |
-| 08 | [Phase 7: Justice Tools](./2026-06-26-justice-v2-foundation-08-justice-tools.md) | Read-only justice_status, justice_gate, and justice_review custom tools. |
+| 08 | [Phase 7: Justice Tools](./2026-06-26-justice-v2-foundation-08-justice-tools.md) | Internal status/gate helpers and the sole public `justice_review` custom tool. |
 | 09 | [Phase 8: Fitness Functions and NFR Tests](./2026-06-26-justice-v2-foundation-09-fitness-nfr.md) | Fitness function tests, NFR security/integrity tests, full regression, and CI finalization. |
 
 ## Review Convergence Policy
