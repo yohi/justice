@@ -5,6 +5,7 @@ import { SessionStateProvider } from "../../../src/core/session-state-provider";
 import { ObservationLogStore } from "../../../src/runtime/observation-log-store";
 import { createMockFileReader, createMockFileWriter } from "../../helpers/mock-file-system";
 import { toPhysicalPath } from "../../../src/core/v2/shard-layout";
+import { hashString } from "../../../src/core/v2/hash";
 import type { PostToolUseEvent } from "../../../src/core/types";
 
 function buildHandler(writerId: string): { handler: ObservationHandler; writer: ReturnType<typeof createMockFileWriter> } {
@@ -115,7 +116,8 @@ describe("redaction integration", () => {
     const evidence = (record.evidence as Record<string, unknown>[])[0]!;
     expect(evidence.toolOutputClass).toBe("file_content");
     expect(evidence.rawOutput).toBeUndefined();
-    expect(evidence.rawOutputSnippet).toContain("this is the content");
+    expect(evidence.rawOutputHash).toBe(hashString(rawOutput));
+    expect(evidence.rawOutputSnippet).toBe("this is the content of plan.md");
     expect(written).not.toContain('"rawOutput"');
   });
 });
