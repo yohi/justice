@@ -12,6 +12,7 @@ function buildPostToolUseEvent(sessionId: string): {
   payload: {
     toolName: "task";
     toolResult: string;
+    error: boolean;
   };
 } {
   return {
@@ -20,6 +21,7 @@ function buildPostToolUseEvent(sessionId: string): {
     payload: {
       toolName: "task",
       toolResult: "task completed",
+      error: false,
     },
   };
 }

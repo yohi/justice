@@ -62,6 +62,7 @@ describe("FF-006 fail-open", () => {
       logStore,
       sessionStateProvider: sessionState,
       writerId: "w-1",
+      projectionCache: { read: async () => undefined, write: async () => {} },
     });
 
     const result = await handler.handlePostToolUse(buildPostToolUseEvent("session-1", "c1"));
