@@ -6,6 +6,53 @@ import {
 } from "../../src/runtime/validation";
 import type { PersistedLogRecord, FullEvidenceRef } from "../../src/core/v2/observation-model";
 
+function payloadForKind(kind: string): Record<string, unknown> {
+  switch (kind) {
+    case "tool_executed":
+      return {
+        toolName: "bash",
+        callId: "c1",
+        evidence: [
+          {
+            evidenceId: "c1",
+            kind: "command",
+            sourceClass: "tool_output",
+            provenance: "observed",
+            toolOutputClass: "command_exec",
+            command: "echo hi",
+            rawOutput: "hi",
+          },
+        ],
+      };
+    case "message":
+      return {
+        messageID: "m1",
+        role: "assistant",
+        textHash: "sha256:x",
+        textSnippet: "hi",
+        declaredClaims: [],
+        evidence: [],
+        finalized: true,
+      };
+    case "skill_invoked":
+      return { skillName: "writing-plans", source: "skill_tool" };
+    case "review_observed":
+      return { reviewScope: "scope-1", items: [] };
+    case "session_error":
+      return { errorKind: "unknown", message: "error" };
+    case "reflection":
+      return {
+        reflection: {
+          trigger: "task_succeeded",
+          planRef: { path: "plan.md", taskId: "task-1" },
+          intent: "check_complete",
+        },
+      };
+    default:
+      return {};
+  }
+}
+
 function baseRecord(kind: string, sequence: number): PersistedLogRecord {
   return {
     schemaVersion: 1,
@@ -16,47 +63,7 @@ function baseRecord(kind: string, sequence: number): PersistedLogRecord {
     recordType: "observation",
     sequence,
     kind,
-    ...(kind === "tool_executed"
-      ? {
-          toolName: "bash",
-          callId: "c1",
-          evidence: [
-            {
-              evidenceId: "c1",
-              kind: "command",
-              sourceClass: "tool_output",
-              provenance: "observed",
-              toolOutputClass: "command_exec",
-              command: "echo hi",
-              rawOutput: "hi",
-            },
-          ],
-        }
-      : kind === "message"
-        ? {
-            messageID: "m1",
-            role: "assistant",
-            textHash: "sha256:x",
-            textSnippet: "hi",
-            declaredClaims: [],
-            evidence: [],
-            finalized: true,
-          }
-        : kind === "skill_invoked"
-          ? { skillName: "writing-plans", source: "skill_tool" }
-          : kind === "review_observed"
-            ? { reviewScope: "scope-1", items: [] }
-            : kind === "session_error"
-              ? { errorKind: "unknown", message: "error" }
-              : kind === "reflection"
-                ? {
-                    reflection: {
-                      trigger: "task_succeeded",
-                      planRef: { path: "plan.md", taskId: "task-1" },
-                      intent: "check_complete",
-                    },
-                  }
-                : {}),
+    ...payloadForKind(kind),
   } as unknown as PersistedLogRecord;
 }
 

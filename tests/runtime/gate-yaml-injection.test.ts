@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FileGateLoader, mergeWithDefaults } from "../../src/runtime/gate-loader";
-import { DEFAULT_GATES } from "../../src/core/v2/default-gates";
+import { FileGateLoader } from "../../src/runtime/gate-loader";
 import { createMockFileReader } from "../helpers/mock-file-system";
 
 function gateYaml(body: string): string {
@@ -43,6 +42,7 @@ gates:
     expect(gates.some((g) => g.id === "required-tests")).toBe(true);
     expect(gates.some((g) => g.id === "build-green")).toBe(true);
     expect(gates.some((g) => g.id === "review-clean")).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("overriding an existing default gate id can disable the security gate", async () => {
@@ -73,19 +73,29 @@ gates:
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("mergeWithDefaults allows default gate override and disables gates marked enabled: false", () => {
-    const customGates = DEFAULT_GATES.map((g) =>
-      g.id === "required-tests"
-        ? {
-            ...g,
-            check: { type: "evidence_present" as const, evidenceKind: "test" as const },
-            enabled: false as const,
-          }
-        : g,
-    );
+  it("loads valid gate.yaml that disables a default gate while retaining others", async () => {
+    const reader = createMockFileReader({
+      ".justice/gate.yaml": gateYaml(`
+gates:
+  - id: required-tests
+    gateType: task
+    trigger:
+      on: task_complete
+    check:
+      type: evidence_present
+      evidenceKind: test
+    onViolation: pass
+    onMissingEvidence: pass
+    enabled: false
+`),
+    });
+    const logger = { warn: vi.fn() };
+    const loader = new FileGateLoader(reader, ".justice/gate.yaml", logger);
+    const gates = await loader.load();
 
-    const merged = mergeWithDefaults(customGates);
-    expect(merged.some((g) => g.id === "required-tests")).toBe(false);
-    expect(merged.some((g) => g.id === "build-green")).toBe(true);
+    expect(gates.some((g) => g.id === "required-tests")).toBe(false);
+    expect(gates.some((g) => g.id === "build-green")).toBe(true);
+    expect(gates.some((g) => g.id === "review-clean")).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

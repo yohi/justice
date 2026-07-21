@@ -41,6 +41,20 @@ function buildPostToolUseEvent(
   };
 }
 
+function parseJsonl(written: string): unknown[] {
+  return written
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+function findFirstRecord(written: string): unknown {
+  const records = parseJsonl(written);
+  expect(records.length).toBeGreaterThan(0);
+  return records[0]!;
+}
+
 describe("redaction integration", () => {
   it("redacts secrets, absolute paths, env vars, and token URLs before append via observation-handler", async () => {
     const writerId = "w-redact-1";
@@ -57,35 +71,51 @@ describe("redaction integration", () => {
     const written = writer.writtenFiles[physicalPath];
     expect(written).toBeDefined();
 
-    expect(written).not.toContain("/home/alice/project");
-    expect(written).not.toContain("~/secret_tilde");
-    expect(written).not.toContain("quoted_path");
-    expect(written).not.toContain("/tmp/foo");
-    expect(written).not.toContain("/workspace/src");
-    expect(written).not.toContain("/Users/bob/project");
-    expect(written).not.toContain("C:\\Users\\carol\\project");
-    expect(written).not.toContain("GITHUB_TOKEN=ghp_xxx");
-    expect(written).not.toContain("https://user:token@example.com");
-    expect(written).not.toContain("user:token");
-    expect(written).not.toContain(secretKey);
-    expect(written).toContain("[REDACTED_PATH]");
-    expect(written).toContain("[REDACTED_ENV]");
-    expect(written).toContain("[REDACTED_TOKEN_URL]");
-    expect(written).toContain("[REDACTED_SECRET]");
+    const record = findFirstRecord(written) as Record<string, unknown>;
+    expect(record.recordType).toBe("observation");
+    expect(record.kind).toBe("tool_executed");
+    const evidence = (record.evidence as Record<string, unknown>[])[0]!;
+    const command = evidence.command as string;
+    const rawOutput = evidence.rawOutput as string;
+
+    expect(command).not.toContain("/home/alice/project");
+    expect(command).not.toContain("~/secret_tilde");
+    expect(command).not.toContain("quoted_path");
+    expect(command).not.toContain("/tmp/foo");
+    expect(command).not.toContain("/workspace/src");
+    expect(command).not.toContain("/Users/bob/project");
+    expect(command).not.toContain("C:\\Users\\carol\\project");
+    expect(command).not.toContain("\\\\server\\share\\secret_unc");
+    expect(command).not.toContain("GITHUB_TOKEN=ghp_xxx");
+    expect(command).not.toContain("https://user:token@example.com");
+    expect(command).not.toContain("user:token");
+    expect(command).toContain("[REDACTED_PATH]");
+    expect(command).toContain("[REDACTED_ENV]");
+    expect(command).toContain("[REDACTED_TOKEN_URL]");
+
+    expect(rawOutput).not.toContain(secretKey);
+    expect(rawOutput).toContain("[REDACTED_SECRET]");
   });
 
   it("stores file_content reads as rawOutputHash plus minimal snippet", async () => {
     const writerId = "w-redact-2";
     const { handler, writer } = buildHandler(writerId);
-
+    const rawOutput = "this is the content of plan.md";
     await handler.handlePostToolUse(
-      buildPostToolUseEvent("bash", "this is the content of plan.md", { command: "cat plan.md" }),
+      buildPostToolUseEvent("bash", rawOutput, { command: "cat plan.md" }),
     );
 
     const physicalPath = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId });
     const written = writer.writtenFiles[physicalPath];
     expect(written).toBeDefined();
-    expect(written).toContain("rawOutputHash");
+
+    const record = findFirstRecord(written) as Record<string, unknown>;
+    expect(record.recordType).toBe("observation");
+    expect(record.kind).toBe("tool_executed");
+    const evidence = (record.evidence as Record<string, unknown>[])[0]!;
+    expect(evidence.toolOutputClass).toBe("file_content");
+    expect(evidence.rawOutput).toBeUndefined();
+    expect(evidence.rawOutputSnippet).toContain("this is the content");
     expect(written).not.toContain('"rawOutput"');
   });
 });
