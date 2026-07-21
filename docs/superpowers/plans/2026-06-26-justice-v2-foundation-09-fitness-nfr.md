@@ -408,7 +408,7 @@ it("redacts secrets, absolute paths, env vars, and token URLs before append via 
 
 - Create: `tests/runtime/observation-log-integrity.test.ts`
 - Create: `tests/runtime/observation-log-queue.test.ts`
-- Create: `tests/runtime/writer-id-collision.test.ts`
+- Create: `tests/runtime/writer-id.test.ts`
 - Create: `tests/runtime/rotation-sequence-continuity.test.ts`
 
 ```typescript
@@ -475,13 +475,13 @@ it("resolves message claim and review item from DecisionRecord.evidenceRefs", ()
   - `tests/hooks/message-role-buffer.test.ts` は Task 3.1 の runtime buffer coverage で扱うため、この Phase 8 regression bundle からは外す。
 
 ```bash
-devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
+devcontainer exec --workspace-folder . bun run test tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id-collision.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
+git add tests/core/v2/redaction-integration.test.ts tests/runtime/observation-log-integrity.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-queue.test.ts tests/runtime/writer-id.test.ts tests/runtime/rotation-sequence-continuity.test.ts tests/runtime/gate-yaml-injection.test.ts
 git commit -m "test(v2): NFR security, integrity, reference resolution, and gate validation"
 ```
 
