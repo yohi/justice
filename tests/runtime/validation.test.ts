@@ -280,6 +280,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: "not-array",
           },
         ],
@@ -295,6 +296,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",
@@ -328,6 +330,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",

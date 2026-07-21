@@ -127,7 +127,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     for (const item of scopeState.items.values()) addToSummary(global, item);
   }
 
-  return { authority: "observed_review_output", ...global, byScope };
+  return { authority: "observed_review_output", authorship: null, ...global, byScope };
 }
 
 function assertNever(value: never): never {

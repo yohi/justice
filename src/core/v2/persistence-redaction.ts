@@ -34,6 +34,31 @@ function redactDeclaredClaimEvidence(evidence: DeclaredClaimEvidence): DeclaredC
   };
 }
 
+function redactMessageClaimKind(claimKind: string): "test" | "build" | "lint" | "generic" {
+  switch (redactForPersistence(claimKind)) {
+    case "test":
+      return "test";
+    case "build":
+      return "build";
+    case "lint":
+      return "lint";
+    default:
+      return "generic";
+  }
+}
+
+function redactMessageDeclaredClaimEvidence(
+  evidence: DeclaredClaimEvidence,
+): DeclaredClaimEvidence {
+  return {
+    ...evidence,
+    claim: {
+      ...evidence.claim,
+      claimKind: redactMessageClaimKind(evidence.claim.claimKind),
+    },
+  };
+}
+
 function redactEvidence(evidence: Evidence): Evidence {
   return evidence.sourceClass === "tool_output"
     ? redactToolEvidence(evidence)
@@ -76,6 +101,11 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
     case "message":
       return {
         ...record,
+        declaredClaims: record.declaredClaims.map((claim) => ({
+          ...claim,
+          claimKind: redactMessageClaimKind(claim.claimKind),
+        })),
+        evidence: record.evidence.map(redactMessageDeclaredClaimEvidence),
         ...(record.textSnippet === undefined
           ? {}
           : { textSnippet: redactForPersistence(record.textSnippet) }),

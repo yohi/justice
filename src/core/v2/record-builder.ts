@@ -22,6 +22,7 @@ export type MessageRecordInput = {
     PendingObservationRecord,
     | "kind"
     | "messageID"
+    | "partID"
     | "role"
     | "textHash"
     | "textSnippet"
@@ -30,6 +31,7 @@ export type MessageRecordInput = {
     | "finalized"
   >;
   readonly messageID: string;
+  readonly partID?: string;
   readonly text: string;
   readonly claims: readonly DeclaredClaim[];
 };
@@ -48,6 +50,7 @@ export function buildMessageRecord(input: MessageRecordInput): PendingObservatio
     ...input.envelope,
     kind: "message",
     messageID: input.messageID,
+    ...(input.partID === undefined ? {} : { partID: input.partID }),
     role: "assistant",
     textHash: hashString(input.text),
     textSnippet: sliceCodeUnitsSafe(redactMessageSnippet(input.text), 200),

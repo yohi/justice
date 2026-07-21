@@ -67,8 +67,10 @@ function fullEvidenceRefKey(ref: FullEvidenceRef): string {
   return JSON.stringify([ref.agentId, ref.sessionId, ref.writerId, ref.sequence, ref.evidenceId]);
 }
 
-function messageKey(sessionId: string, messageID: string): string {
-  return JSON.stringify([sessionId, messageID]);
+function messageKey(sessionId: string, messageID: string, partID: string | undefined): string {
+  // Historical records without partID share a distinct legacy key; newly generated
+  // message evidence is always keyed by the complete (session, message, part) tuple.
+  return JSON.stringify([sessionId, messageID, partID ?? null]);
 }
 
 function applyObservationEvent(
@@ -88,7 +90,7 @@ function applyObservationEvent(
       });
     }
   } else if (event.kind === "message") {
-    const key = messageKey(event.sessionId, event.messageID);
+    const key = messageKey(event.sessionId, event.messageID, event.partID);
     const previousClaims = latestMessageClaims.get(key);
     if (previousClaims) {
       const previousTask = tasks.get(previousClaims.taskId);
@@ -179,6 +181,7 @@ type SerializedProjectedState = {
   readonly tasks: Record<string, ProjectedTask>;
   readonly reviewSummary: ScopeReviewSummary & {
     readonly authority: "observed_review_output";
+    readonly authorship?: null;
     readonly byScope: Record<string, ScopeReviewSummary>;
   };
 };
@@ -198,6 +201,7 @@ export function toSerializableProjectedState(state: ProjectedState): SerializedP
     tasks: Object.fromEntries(state.tasks),
     reviewSummary: {
       authority: state.reviewSummary.authority,
+      authorship: state.reviewSummary.authorship ?? null,
       critical: state.reviewSummary.critical,
       major: state.reviewSummary.major,
       minor: state.reviewSummary.minor,
@@ -224,6 +228,7 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
     tasks: new Map(Object.entries(raw.tasks)),
     reviewSummary: {
       authority: raw.reviewSummary.authority,
+      authorship: raw.reviewSummary.authorship ?? null,
       critical: raw.reviewSummary.critical,
       major: raw.reviewSummary.major,
       minor: raw.reviewSummary.minor,

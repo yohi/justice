@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
+import type { FileWriter } from "../../src/core/types";
 import { toPhysicalPath } from "../../src/core/v2/shard-layout";
 import { createMemFs } from "../helpers/mock-file-system";
 
@@ -11,9 +12,14 @@ function parseJsonl(content: string | undefined): unknown[] {
     .map((line) => JSON.parse(line));
 }
 
+function isReflectionRecord(value: unknown): value is { readonly kind: string } {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
 
 describe("JusticePlugin reflection event integration", () => {
-  it("emits a reflection event when TaskFeedbackHandler handles a successful task", async () => {
+  it("emits a reflection event after the task PreToolUse flow registers feedback state", async () => {
+    // Given
     const { files, reader, writer } = createMemFs();
     const plan = ["## Task 1: Setup", "- [ ] Init", ""].join("\n");
     files.set("plan.md", plan);
@@ -23,7 +29,14 @@ describe("JusticePlugin reflection event integration", () => {
       workspaceRoot: "/workspace",
     });
     plugin.getPlanBridge().setActivePlan("session-1", "plan.md");
-    plugin.getTaskFeedback().setActivePlan("session-1", "plan.md", "task-1");
+
+    // When
+    await plugin.handleEvent({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
 
     await plugin.handleEvent({
       type: "PostToolUse",
@@ -37,6 +50,7 @@ describe("JusticePlugin reflection event integration", () => {
       },
     });
 
+    // Then
     const path = toPhysicalPath({
       agentId: "unknown",
       sessionId: "session-1",
@@ -45,7 +59,9 @@ describe("JusticePlugin reflection event integration", () => {
     const persisted = files.get(path);
     expect(persisted).toBeDefined();
     const events = parseJsonl(persisted);
-    const reflection = events.find((e: { kind: string }) => e.kind === "reflection");
+    const reflection = events.find(
+      (event) => isReflectionRecord(event) && event.kind === "reflection",
+    );
     expect(reflection).toMatchObject({
       kind: "reflection",
       reflection: {
@@ -54,6 +70,73 @@ describe("JusticePlugin reflection event integration", () => {
         intent: "check_complete",
       },
     });
+  });
+
+  it("does not emit an error reflection when appending the error note fails", async () => {
+    // Given
+    const { files, reader, writer } = createMemFs();
+    files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
+    const failingWriter: FileWriter = {
+      writeFile: async (path, content) => {
+        if (path === "plan.md") throw new Error("disk full");
+        await writer.writeFile(path, content);
+      },
+      rename: writer.rename,
+      mkdir: writer.mkdir,
+      rmdir: writer.rmdir,
+      deleteFile: writer.deleteFile,
+    };
+    const plugin = new JusticePlugin(reader, failingWriter, {
+      writerId: "w-error-write",
+      workspaceRoot: "/workspace",
+    });
+    plugin.getTaskFeedback().setActivePlan("session-error", "plan.md", "task-1");
+    const reflectionSpy = vi.spyOn(plugin.getObservationHandler(), "emitReflectionEvent");
+
+    // When
+    await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "session-error",
+      callId: "call-error",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1", prompt: "run" },
+        toolResult: "FAIL tests/setup.test.ts\nTests: 0 passed, 1 failed",
+        error: true,
+      },
+    });
+
+    // Then
+    expect(reflectionSpy).not.toHaveBeenCalled();
+  });
+
+  it("allocates a UUID-based writer ID when none is provided", async () => {
+    // Given
+    const { reader, writer } = createMemFs();
+
+    // When
+    const first = new JusticePlugin(reader, writer, { workspaceRoot: "/workspace" });
+    const second = new JusticePlugin(reader, writer, { workspaceRoot: "/workspace" });
+    await first.handleEvent({
+      type: "Event",
+      sessionId: "writer-first",
+      payload: { eventType: "session_error", sessionId: "writer-first", message: "first" },
+    });
+    await second.handleEvent({
+      type: "Event",
+      sessionId: "writer-second",
+      payload: { eventType: "session_error", sessionId: "writer-second", message: "second" },
+    });
+    const writerIds = (await first.getObservationHandler().getLogStore().readAll()).map(
+      (event) => event.writerId,
+    );
+
+    // Then
+    expect(writerIds).toHaveLength(2);
+    expect(writerIds).toSatisfy((ids: readonly string[]) =>
+      ids.every((writerId) => /^w-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(writerId)),
+    );
+    expect(new Set(writerIds)).toHaveLength(2);
   });
 
   it("does not emit a reflection event when the active task is absent from the plan", async () => {
@@ -86,8 +169,7 @@ describe("JusticePlugin reflection event integration", () => {
     });
     const events = parseJsonl(files.get(path));
     const reflection = events.find(
-      (event): event is { readonly kind: string } =>
-        typeof event === "object" && event !== null && "kind" in event && event.kind === "reflection",
+      (event) => isReflectionRecord(event) && event.kind === "reflection",
     );
     expect(reflection).toBeUndefined();
   });
@@ -122,7 +204,9 @@ describe("JusticePlugin reflection event integration", () => {
     const persisted = files.get(path);
     expect(persisted).toBeDefined();
     const events = parseJsonl(persisted);
-    const reflection = events.find((e: { kind: string }) => e.kind === "reflection");
+    const reflection = events.find(
+      (event) => isReflectionRecord(event) && event.kind === "reflection",
+    );
     expect(reflection).toMatchObject({
       kind: "reflection",
       reflection: {
@@ -161,7 +245,9 @@ describe("JusticePlugin reflection event integration", () => {
     const persisted = files.get(path);
     expect(persisted).toBeDefined();
     const events = parseJsonl(persisted);
-    const sessionError = events.find((e: { kind: string }) => e.kind === "session_error");
+    const sessionError = events.find(
+      (event) => isReflectionRecord(event) && event.kind === "session_error",
+    );
     expect(sessionError).toMatchObject({
       kind: "session_error",
       errorKind: "crash",

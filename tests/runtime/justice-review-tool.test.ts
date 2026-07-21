@@ -131,6 +131,7 @@ describe("defineJusticeReviewTool", () => {
     // Then
     expect(JSON.parse(outputOf(result))).toMatchObject({
       authority: "observed_review_output",
+      authorship: null,
       open: [{ itemKey: "major:parser" }],
     });
     expect(metadataOf(result)).toBeUndefined();

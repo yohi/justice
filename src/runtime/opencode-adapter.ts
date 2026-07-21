@@ -3,6 +3,7 @@ import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
+import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
   defineJusticeReviewTool,
 } from "./justice-tools";
@@ -41,6 +42,9 @@ export interface OpenCodeAdapterOptions {
 
 const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
   "justice_review",
+] as const);
+const TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
+  "code_review",
 ] as const);
 
 interface GenericEventInput {
@@ -235,10 +239,9 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * Forward a `message.updated` event. Preserves the legacy user/assistant
-   * content path (plan-bridge delegation) and additionally emits an
-   * `AgentMapped` event (when an agent name is present) and an observation
-   * `message_updated` payload for assistant messages.
+   * Forward a `message.updated` event. Its content is preserved only for the
+   * explicitly separate legacy PlanBridge path; the observation payload below
+   * is lifecycle-only and intentionally never carries content.
    */
   async #handleMessageUpdated(properties: Record<string, unknown>): Promise<void> {
     const sessionId = this.#readString(properties, "sessionID");
@@ -272,11 +275,10 @@ export class OpenCodeAdapter {
       }
     }
 
-    // (2) Legacy user/assistant content path (plan-bridge delegation). Preserved
-    // exactly: only forwarded when content is present so empty streaming updates
-    // do not spuriously trigger delegation. Wrapped in its own try/catch (mirrors
-    // (1) above) so a delegation dispatch failure can never block the
-    // observation log (3) below.
+    // (2) Legacy PlanBridge-only user/assistant content path. PlanBridge still
+    // analyzes assistant messages for plan references, so retain this path while
+    // keeping it structurally separate from declared Evidence observation (3).
+    // Empty streaming updates never trigger delegation.
     if ((role === "assistant" || role === "user") && content.length > 0) {
       try {
         await justice.handleEvent({
@@ -289,10 +291,9 @@ export class OpenCodeAdapter {
       }
     }
 
-    // (3) Observation message_updated for assistant messages, carrying the
-    // finalization signal. Requires a messageID to be routable in the Observation
-    // Log; unroutable (id-less) updates are dropped.
-    if (role === "assistant" && messageID.length > 0) {
+    // (3) Lifecycle-only observation payload. It carries role/finalization but
+    // never info.content: declared Evidence can only obtain text from part events.
+    if ((role === "assistant" || role === "user") && messageID.length > 0) {
       await justice.handleEvent({
         type: "Message",
         sessionId,
@@ -300,7 +301,7 @@ export class OpenCodeAdapter {
           kind: "message_updated",
           sessionId,
           messageID,
-          role: "assistant",
+          role,
           finalized: this.#detectFinalized(info),
         },
       });
@@ -576,6 +577,21 @@ export class OpenCodeAdapter {
         await this.log("warn", "[Justice] malformed review resolution artifact ignored");
       }
 
+      const isTrustedReviewSnapshotArtifactSource =
+        TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS.includes(input.tool);
+      const canPromoteReviewSnapshotArtifact =
+        isTrustedReviewSnapshotArtifactSource && output.metadata?.error !== true;
+      const reviewSnapshotArtifact = canPromoteReviewSnapshotArtifact
+        ? parseReviewSnapshotArtifact(output.metadata?.reviewSnapshotArtifact)
+        : undefined;
+      if (
+        canPromoteReviewSnapshotArtifact &&
+        output.metadata?.reviewSnapshotArtifact !== undefined &&
+        reviewSnapshotArtifact === undefined
+      ) {
+        await this.log("warn", "[Justice] malformed review snapshot artifact ignored");
+      }
+
       const response = await justice.handleEvent({
         type: "PostToolUse",
         sessionId: input.sessionID,
@@ -587,6 +603,7 @@ export class OpenCodeAdapter {
           toolResult: output.output,
           metadata: output.metadata,
           ...(reviewResolutionArtifact === undefined ? {} : { reviewResolutionArtifact }),
+          ...(reviewSnapshotArtifact === undefined ? {} : { reviewSnapshotArtifact }),
           error: output.metadata?.error === true,
         },
       });

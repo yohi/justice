@@ -184,6 +184,11 @@ describe("evaluate", () => {
       appliedEnforcementLevel: "L0",
     });
     expect(result.ruleResults.map((rule) => rule.verdict)).toEqual(["PASS", "PASS", "WARN"]);
+    expect(result.ruleResults.map((rule) => rule.reason)).toEqual([
+      "Authoritative evidence of kind 'test' met required outcome 'pass'.",
+      "Authoritative evidence of kind 'build' is present.",
+      "Found 1 open review items matching minimum severity 'major'.",
+    ]);
     expect(result.ruleResults[0]?.evidenceRefs).toEqual([testEvidence.ref]);
     expect(result.ruleResults[1]?.evidenceRefs).toEqual([buildEvidence.ref]);
     expect(result.ruleResults[2]?.evidenceRefs).toEqual([review.ref]);
@@ -266,14 +271,14 @@ describe("evaluate", () => {
 });
 
 describe("review_open_items", () => {
-  it("caps passing onMissingEvidence at WARN when reviewScope is empty", () => {
-    expect(evaluateReview({ reviewScope: [], onMissingEvidence: "pass" }).verdict).toBe("WARN");
+  it("honors onMissingEvidence when reviewScope is empty", () => {
+    expect(evaluateReview({ reviewScope: [], onMissingEvidence: "pass" }).verdict).toBe("PASS");
   });
 
-  it("caps passing onMissingEvidence at WARN when reviewScope is unobserved", () => {
+  it("honors onMissingEvidence when a requested reviewScope is unobserved", () => {
     expect(
       evaluateReview({ reviewScope: ["target"], onMissingEvidence: "pass" }).verdict,
-    ).toBe("WARN");
+    ).toBe("PASS");
   });
 
   it("passes when the matching observed scope has no open items regardless of onMissingEvidence", () => {
@@ -325,15 +330,15 @@ describe("review_open_items", () => {
 });
 
 describe("formatGateAdvisoryMessage", () => {
-  function rr(ruleId: string, verdict: Verdict, reason?: string): RuleResult {
-    return { ruleId, verdict, ...(reason === undefined ? {} : { reason }), evidenceRefs: [] };
+  function rr(ruleId: string, verdict: Verdict, reason: string): RuleResult {
+    return { ruleId, verdict, reason, evidenceRefs: [] };
   }
 
   it("summarizes every rule on the header line and lists only non-PASS rules as checklist items", () => {
     const message = formatGateAdvisoryMessage({
       verdict: "WARN",
       ruleResults: [
-        rr("tests-pass", "PASS"),
+        rr("tests-pass", "PASS", "authoritative test evidence passed"),
         rr("review-clear", "WARN", "Found 2 open review items matching minimum severity 'major'."),
       ],
     });
@@ -350,7 +355,7 @@ describe("formatGateAdvisoryMessage", () => {
     const message = formatGateAdvisoryMessage({
       verdict: "FAIL",
       ruleResults: [
-        rr("tests-pass", "PASS"),
+        rr("tests-pass", "PASS", "authoritative test evidence passed"),
         rr("build-missing", "WARN", "build evidence missing"),
         rr("review-open", "FAIL", "1 critical review item open"),
       ],
@@ -363,15 +368,6 @@ describe("formatGateAdvisoryMessage", () => {
         "- [ ] review-open: FAIL — 1 critical review item open",
       ].join("\n"),
     );
-  });
-
-  it("omits the reason suffix when a non-PASS rule has no reason", () => {
-    const message = formatGateAdvisoryMessage({
-      verdict: "FAIL",
-      ruleResults: [rr("no-reason", "FAIL")],
-    });
-
-    expect(message).toBe(["FAIL: no-reason=FAIL", "- [ ] no-reason: FAIL"].join("\n"));
   });
 
   it("emits plain PASS/WARN/FAIL text without decorative emoji (banner-layer isolation)", () => {

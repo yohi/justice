@@ -94,7 +94,14 @@ function baseDecisionRecord(
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
-    ruleResults: [{ ruleId: "required-tests", verdict: "PASS", evidenceRefs: [baseFullRef("c1")] }],
+    ruleResults: [
+      {
+        ruleId: "required-tests",
+        verdict: "PASS",
+        reason: "test fixture",
+        evidenceRefs: [baseFullRef("c1")],
+      },
+    ],
     ...overrides,
   } as unknown as PersistedLogRecord;
 }
@@ -177,7 +184,7 @@ describe("decision log integrity", () => {
 
   it("throws for invalid ruleResult shape", () => {
     const record = baseDecisionRecord(1, {
-      ruleResults: [{ ruleId: 123, verdict: "PASS", evidenceRefs: [] }],
+      ruleResults: [{ ruleId: 123, verdict: "PASS", reason: "test fixture", evidenceRefs: [] }],
     });
     expect(() => validateRecordSchema(record)).toThrow("Invalid decision ruleResult");
   });
@@ -188,6 +195,7 @@ describe("decision log integrity", () => {
         {
           ruleId: "required-tests",
           verdict: "PASS",
+          reason: "test fixture",
           evidenceRefs: [{ evidenceId: "c1" }],
         },
       ],
@@ -201,6 +209,7 @@ describe("decision log integrity", () => {
         {
           ruleId: "required-tests",
           verdict: "PASS",
+          reason: "test fixture",
           evidenceRefs: [baseFullRef("c1", -1)],
         },
       ],

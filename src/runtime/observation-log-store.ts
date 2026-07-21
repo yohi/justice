@@ -7,6 +7,7 @@ import {
   toArchivePath,
   toPhysicalPath,
 } from "../core/v2/shard-layout";
+import { encodeSafeSegment } from "../core/v2/safe-segment";
 import { createShardWriteQueue, type ShardWriteQueue } from "./write-queue";
 import {
   validatePhysicalFileSequenceOrder,
@@ -58,6 +59,50 @@ export interface ReadOnlyObservationLog {
   readAll(): Promise<readonly PersistedLogRecord[]>;
 }
 
+export type ReadIntegrityStatus = {
+  readonly hasIntegrityViolation: boolean;
+};
+
+type PhysicalShardIdentity = {
+  readonly agentId: string;
+  readonly safeSessionId: string;
+  readonly writerId: string;
+};
+
+type IngestedRecord = {
+  readonly record: PersistedLogRecord;
+  readonly physicalShardKey: string;
+};
+
+function fromArchivePath(path: string): PhysicalShardIdentity | null {
+  const parts = path.split("/");
+  if (parts.length !== 6) return null;
+  const [root, archive, events, agentId, safeSessionId, fileName] = parts;
+  if (root !== ".justice" || archive !== "archive" || events !== "events") return null;
+  if (!agentId || !safeSessionId || !fileName?.endsWith(".jsonl")) return null;
+  const archiveFileName = fileName.slice(0, -".jsonl".length);
+  const separator = archiveFileName.lastIndexOf(".");
+  if (separator <= 0) return null;
+  const writerId = archiveFileName.slice(0, separator);
+  return writerId ? { agentId, safeSessionId, writerId } : null;
+}
+
+function getPhysicalShardIdentity(path: string): PhysicalShardIdentity | null {
+  return fromPhysicalPath(path) ?? fromArchivePath(path);
+}
+
+function physicalShardKeyOf(identity: PhysicalShardIdentity): string {
+  return JSON.stringify([identity.agentId, identity.safeSessionId, identity.writerId]);
+}
+
+function matchesPhysicalShard(record: PersistedLogRecord, identity: PhysicalShardIdentity): boolean {
+  return (
+    record.agentId === identity.agentId &&
+    record.writerId === identity.writerId &&
+    encodeSafeSegment(record.sessionId) === identity.safeSessionId
+  );
+}
+
 /**
  * Append-only observation log store. Writes are serialized per physical shard
  * path via a write queue; each append is persisted atomically (temp file +
@@ -77,6 +122,7 @@ export class ObservationLogStore {
   // one shard's successful rotation cannot mask another shard's persistent failure.
   private readonly rotationFailuresByPath = new Map<string, number>();
   private lastRotationError: unknown = undefined;
+  private lastReadIntegrity: ReadIntegrityStatus = { hasIntegrityViolation: false };
 
   constructor(
     private readonly fileWriter: FileWriter,
@@ -123,11 +169,22 @@ export class ObservationLogStore {
     };
   }
 
+  getLastReadIntegrity(): ReadIntegrityStatus {
+    return { ...this.lastReadIntegrity };
+  }
+
   async append(shardId: ShardId, record: PendingLogRecord): Promise<number> {
     if (shardId.writerId !== this.writerId) {
       throw new Error(
         `ObservationLogStore.append: shardId.writerId (${shardId.writerId}) does not match store writerId (${this.writerId})`,
       );
+    }
+    if (
+      record.agentId !== shardId.agentId ||
+      record.sessionId !== shardId.sessionId ||
+      record.writerId !== shardId.writerId
+    ) {
+      throw new Error("ObservationLogStore.append: record envelope does not match shard");
     }
     const path = toPhysicalPath(shardId);
     this.shardsByPath.set(path, shardId);
@@ -158,6 +215,8 @@ export class ObservationLogStore {
   }
 
   async readAll(): Promise<readonly PersistedLogRecord[]> {
+    let hasIntegrityViolation = false;
+    this.lastReadIntegrity = { hasIntegrityViolation: false };
     const activePaths = await this.fileReader.listFiles(EVENTS_ROOT);
     const archivePaths = await this.fileReader.listFiles(ARCHIVE_ROOT);
     const activePathSet = new Set(activePaths);
@@ -168,27 +227,44 @@ export class ObservationLogStore {
       ...[...archivePaths].sort((a, b) => a.localeCompare(b)),
       ...[...activePaths].sort((a, b) => a.localeCompare(b)),
     ];
-    const records: PersistedLogRecord[] = [];
-    const invalidPhysicalOrderShardKeys = new Set<string>();
+    const records: IngestedRecord[] = [];
+    const invalidPhysicalShardKeys = new Set<string>();
 
     const ingest = (content: string, sourcePath: string): void => {
+      const physicalIdentity = getPhysicalShardIdentity(sourcePath);
+      if (physicalIdentity === null) {
+        hasIntegrityViolation = true;
+        console.warn("Failed to identify physical shard for %s, excluding file from result", sourcePath);
+        return;
+      }
+      const physicalShardKey = physicalShardKeyOf(physicalIdentity);
       const fileRecords: PersistedLogRecord[] = [];
+      let fileCorrupted = false;
       for (const line of content.split("\n").filter((l) => l.trim())) {
         try {
           const parsed: unknown = JSON.parse(line);
           validateRecordSchema(parsed);
-          fileRecords.push(parsed as PersistedLogRecord);
+          const record = parsed as PersistedLogRecord;
+          if (!matchesPhysicalShard(record, physicalIdentity)) {
+            throw new Error("record envelope does not match physical shard");
+          }
+          fileRecords.push(record);
         } catch (err) {
+          fileCorrupted = true;
           console.error("Failed to parse or validate line in %s", sourcePath, err);
         }
       }
+      if (fileCorrupted) {
+        hasIntegrityViolation = true;
+        invalidPhysicalShardKeys.add(physicalShardKey);
+        return;
+      }
       try {
         validatePhysicalFileSequenceOrder(fileRecords);
-        records.push(...fileRecords);
+        records.push(...fileRecords.map((record) => ({ record, physicalShardKey })));
       } catch (err) {
-        for (const record of fileRecords) {
-          invalidPhysicalOrderShardKeys.add(shardKeyOf(record));
-        }
+        hasIntegrityViolation = true;
+        invalidPhysicalShardKeys.add(physicalShardKey);
         console.warn(
           "Failed to validate physical sequence order in %s, excluding affected shard from result",
           sourcePath,
@@ -225,22 +301,23 @@ export class ObservationLogStore {
     // returned as if it were complete, while still keeping the store fail-open
     // (no exception escapes `readAll`; other shards are unaffected).
     const byShardKey = new Map<string, PersistedLogRecord[]>();
-    for (const r of records) {
-      const shardKey = shardKeyOf(r);
+    for (const { record, physicalShardKey } of records) {
+      if (invalidPhysicalShardKeys.has(physicalShardKey)) continue;
+      const shardKey = shardKeyOf(record);
       const group = byShardKey.get(shardKey);
       if (group) {
-        group.push(r);
+        group.push(record);
       } else {
-        byShardKey.set(shardKey, [r]);
+        byShardKey.set(shardKey, [record]);
       }
     }
     const validRecords: PersistedLogRecord[] = [];
     for (const [shardKey, group] of byShardKey) {
-      if (invalidPhysicalOrderShardKeys.has(shardKey)) continue;
       try {
         validateShardSequences(group);
         validRecords.push(...group);
       } catch (err) {
+        hasIntegrityViolation = true;
         console.warn(
           "Failed to validate shard sequences for %s, excluding shard from result",
           shardKey,
@@ -248,6 +325,7 @@ export class ObservationLogStore {
         );
       }
     }
+    this.lastReadIntegrity = { hasIntegrityViolation };
     return validRecords;
   }
 

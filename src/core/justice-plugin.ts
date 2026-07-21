@@ -26,6 +26,7 @@ import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
+import { generateWriterId } from "../runtime/writer-id";
 import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
@@ -225,7 +226,7 @@ export interface JusticePluginOptions {
   /**
    * Bootstrapped writer ID for Observation Log shards (D55/D39).
    * Used by ObservationHandler to identify the writer of observation log shards.
-   * Defaults to "w-local" when not specified.
+   * Defaults to a newly generated UUID-based writer ID when not specified.
    */
   readonly writerId?: string;
 }
@@ -282,7 +283,7 @@ export class JusticePlugin {
     this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    const writerId = options.writerId ?? "w-local";
+    const writerId = options.writerId ?? generateWriterId();
     this.observationHandler = new ObservationHandler({
       logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
       sessionStateProvider: this.sessionStateProvider,
@@ -377,6 +378,10 @@ export class JusticePlugin {
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
         );
+        const planPath = this.planBridge.getActivePlan(event.sessionId);
+        if (event.payload.toolName === "task" && taskId !== undefined && planPath !== null) {
+          this.taskFeedback.setActivePlan(event.sessionId, planPath, taskId);
+        }
         if (event.callId !== undefined && taskId !== undefined) {
           try {
             // Only re-register the window if the session wasn't removed during

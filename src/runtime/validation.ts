@@ -194,7 +194,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
       !isObject(ruleResult) ||
       typeof ruleResult.ruleId !== "string" ||
       !isOneOf(ruleResult.verdict, ["PASS", "WARN", "FAIL"]) ||
-      (ruleResult.reason !== undefined && typeof ruleResult.reason !== "string") ||
+      typeof ruleResult.reason !== "string" ||
       !Array.isArray(ruleResult.evidenceRefs)
     ) {
       throw new Error("Invalid decision ruleResult");

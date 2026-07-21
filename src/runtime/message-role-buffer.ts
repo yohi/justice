@@ -24,6 +24,8 @@ type BufferEntry = {
   lastUpdatedAt: number;
   messageSignaled: boolean; // raw: a message_updated(finalized=true) or text_complete has been observed
   forcedFinalized: boolean; // hard override flag: set only by finalize(sessionId, messageId) with no partId
+  messageFinalized: boolean;
+  projectionFlushesAfterFinalization: number;
 };
 
 export class MessageRoleBuffer {
@@ -42,10 +44,12 @@ export class MessageRoleBuffer {
         // Re-updating an existing partID overwrites its text (D67): claims are
         // always re-derived from the latest state, never accumulated.
         entry.parts.set(payload.partID, { text: payload.text, finalized: false });
+        if (entry.messageFinalized) entry.projectionFlushesAfterFinalization = 0;
         break;
       case "text_complete":
         entry.parts.set(payload.partID, { text: payload.text, finalized: true });
         entry.messageSignaled = true;
+        if (entry.messageFinalized) entry.projectionFlushesAfterFinalization = 0;
         break;
       case "message_updated":
         entry.role = payload.role;
@@ -64,6 +68,8 @@ export class MessageRoleBuffer {
           // INV-004), so this tradeoff is accepted rather than "fixed".
           for (const part of entry.parts.values()) part.finalized = true;
           entry.messageSignaled = true;
+          entry.messageFinalized = true;
+          entry.projectionFlushesAfterFinalization = 0;
         }
         break;
     }
@@ -79,6 +85,8 @@ export class MessageRoleBuffer {
       for (const part of entry.parts.values()) part.finalized = true;
       entry.messageSignaled = true;
       entry.forcedFinalized = true;
+      entry.messageFinalized = true;
+      entry.projectionFlushesAfterFinalization = 0;
       entry.lastUpdatedAt = this.now();
       return;
     }
@@ -114,6 +122,32 @@ export class MessageRoleBuffer {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
     if (entry?.role !== "assistant") return undefined;
     return this.getFinalizedText(sessionId, messageId, partId);
+  }
+
+  getFinalizedAssistantPartIDs(sessionId: string, messageId: string): readonly string[] {
+    const entry = this.buffer.get(this.keyOf(sessionId, messageId));
+    if (entry?.role !== "assistant") return [];
+    return [...entry.parts.entries()]
+      .filter(([, part]): boolean => part.finalized)
+      .map(([partId]): string => partId)
+      .sort();
+  }
+
+  /**
+   * Retain finalized parts for one completed projection flush because
+   * message.updated and experimental.text.complete have no ordering guarantee.
+   * A correction resets the grace counter in update(); the next flush then gets
+   * the same grace before the complete entry is discarded.
+   */
+  releaseFinalizedAfterProjectionFlush(): void {
+    for (const [key, entry] of this.buffer) {
+      if (!entry.messageFinalized) continue;
+      if (entry.projectionFlushesAfterFinalization > 0) {
+        this.buffer.delete(key);
+        continue;
+      }
+      entry.projectionFlushesAfterFinalization += 1;
+    }
   }
 
   gc(maxAgeMs: number, maxEntries: number): void {
@@ -155,6 +189,8 @@ export class MessageRoleBuffer {
       lastUpdatedAt: this.now(),
       messageSignaled: false,
       forcedFinalized: false,
+      messageFinalized: false,
+      projectionFlushesAfterFinalization: 0,
     };
     this.buffer.set(key, created);
     return created;

@@ -302,6 +302,16 @@ export class TaskFeedbackHandler {
       );
       await this.fileWriter.writeFile(session.planPath, updatedContent);
 
+      if (this.observationHandler) {
+        await this.observationHandler.emitReflectionEvent({
+          trigger: "task_error",
+          planRef: { path: session.planPath, taskId: action.taskId },
+          intent: "append_error_note",
+          note: `${action.errorClass}: ${action.message}`,
+          sessionId,
+        });
+      }
+
       // Generate split suggestion
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === action.taskId);
@@ -328,16 +338,6 @@ export class TaskFeedbackHandler {
     );
     for (const learning of learnings) {
       this.wisdomStore.add(learning);
-    }
-
-    if (this.observationHandler) {
-      await this.observationHandler.emitReflectionEvent({
-        trigger: "task_error",
-        planRef: { path: session.planPath, taskId: action.taskId },
-        intent: "append_error_note",
-        note: `${action.errorClass}: ${action.message}`,
-        sessionId,
-      });
     }
 
     return {

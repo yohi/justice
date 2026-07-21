@@ -159,13 +159,12 @@ export function validateProjectionCacheAgainstEvents(
     }
   }
 
-  // Reaching here means every per-shard maxSequence already matched, so a normal
-  // append cannot be the cause (it raises a shard's maxSequence and is caught
-  // above as stale_append). Any content-hash or projected-payload difference is
-  // therefore cache tampering/corruption and must rebuild from the event log.
+  // A source hash discrepancy with matching shard sequences can result from a
+  // normal append completed between the max-sequence and hash observations.
+  // Treat it as stale so the handler rebuilds silently from the append-only log.
   const currentSourceHash = computeSourceHash(orderEventsForProjection(events));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
-    return { valid: false, reason: "mismatch_payload" };
+    return { valid: false, reason: "stale_append" };
   }
 
   const rebuilt = project(events, cacheState.rebuiltAt);

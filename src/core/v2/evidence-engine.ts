@@ -101,7 +101,7 @@ export function extractEvidenceFromTool(
     evidenceId: observedId,
     kind,
     sourceClass: "tool_output",
-    provenance: "unknown",
+    provenance: "observed",
     toolOutputClass: "file_content",
     command, // rawOutput must not be stored in file_content
     rawOutputHash: hashString(rawOutput),

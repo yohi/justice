@@ -478,6 +478,41 @@ describe("ObservationHandler tool observation", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it("warns and rebuilds when log ingestion excludes a corrupted shard", async () => {
+    const { files, reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const logger = { warn: vi.fn() };
+    files.set(
+      ".justice/events/atlas/corrupted__1f0f1462/w-corrupted.jsonl",
+      "not-json\n",
+    );
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-corruption",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache log integrity violation, rebuilding",
+      expect.any(Error),
+    );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
+  });
+
   it("continues gate evaluation even when projection cache refresh fails during PostToolUse", async () => {
     const { reader, writer } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-handler");

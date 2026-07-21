@@ -11,13 +11,13 @@ describe("ReviewRejectionDetector", () => {
   it("ignores empty text", () => {
     const signal = detector.detect("");
 
-    expect(signal).toEqual({ matched: false, excerpts: [], summary: "" });
+    expect(signal).toEqual({ matched: false, excerpts: [], summary: "", severity: "minor" });
   });
 
   it("does not treat approval as rejection", () => {
     const signal = detector.detect("approved with minor nits");
 
-    expect(signal).toEqual({ matched: false, excerpts: [], summary: "" });
+    expect(signal).toEqual({ matched: false, excerpts: [], summary: "", severity: "minor" });
   });
 
   it("detects a single-line rejection", () => {
@@ -25,6 +25,7 @@ describe("ReviewRejectionDetector", () => {
 
     expect(signal.matched).toBe(true);
     expect(signal.excerpts).toEqual(["REJECTED: missing error handling"]);
+    expect(signal.severity).toBe("minor");
     expect(signal.summary.length).toBeGreaterThan(0);
     expect(signal.summary.length).toBeLessThanOrEqual(300);
   });
@@ -130,6 +131,16 @@ describe("ReviewRejectionDetector", () => {
       },
     ]);
     expect(items.every((item) => item.evidenceId === item.itemKey)).toBe(true);
+  });
+
+  it("reuses the detected signal severity for the corresponding review item", () => {
+    const output = "BLOCKER: security vulnerability at src/auth.ts:42";
+
+    const signal = detector.detect(output);
+    const items = detector.detectMultiple(output);
+
+    expect(signal.severity).toBe("critical");
+    expect(items[0]?.severity).toBe(signal.severity);
   });
 
   it("classifies a rejection from its immediately following detail line", () => {

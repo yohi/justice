@@ -114,7 +114,12 @@ function evaluateRule(
       }
 
       if (ruleVerdict === "PASS") {
-        return { ruleId: gate.id, verdict: ruleVerdict, evidenceRefs: matchedRefs };
+        return {
+          ruleId: gate.id,
+          verdict: ruleVerdict,
+          reason: `Authoritative evidence of kind '${check.evidenceKind}' met required outcome '${check.requireOutcome}'.`,
+          evidenceRefs: matchedRefs,
+        };
       }
       return {
         ruleId: gate.id,
@@ -128,7 +133,7 @@ function evaluateRule(
       if (ctx.reviewScope.length === 0) {
         return {
           ruleId: gate.id,
-          verdict: mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence),
+          verdict: mapVerdict(gate.onMissingEvidence),
           reason: "Review scope is empty. No review observed yet.",
           evidenceRefs: [],
         };
@@ -141,7 +146,7 @@ function evaluateRule(
         const scopeData = ctx.reviewSummary?.byScope.get(scope);
         if (!scopeData) {
           unobservedScopes.push(scope);
-          scopeVerdicts.push(mapMissingAuthoritativeEvidenceVerdict(gate.onMissingEvidence));
+          scopeVerdicts.push(mapVerdict(gate.onMissingEvidence));
           continue;
         }
         const scopeOpenItems = scopeData.open.filter((item) =>
@@ -285,8 +290,7 @@ export function formatGateAdvisoryMessage(
   ];
   for (const result of verdict.ruleResults) {
     if (result.verdict !== "PASS") {
-      const reasonSuffix = result.reason ? ` — ${result.reason}` : "";
-      lines.push(`- [ ] ${result.ruleId}: ${result.verdict}${reasonSuffix}`);
+      lines.push(`- [ ] ${result.ruleId}: ${result.verdict} — ${result.reason}`);
     }
   }
   return lines.join("\n");

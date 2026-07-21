@@ -11,7 +11,7 @@ export type Verdict = "PASS" | "WARN" | "FAIL";
 export type RuleResult = {
   readonly ruleId: string;
   readonly verdict: Verdict;
-  readonly reason?: string;
+  readonly reason: string;
   readonly evidenceRefs: readonly FullEvidenceRef[];
 };
 

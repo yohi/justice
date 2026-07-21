@@ -84,7 +84,7 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("appends an empty review observation from trusted complete snapshot metadata", async () => {
+  it("does not append an empty review observation from untrusted complete snapshot metadata", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
@@ -104,12 +104,8 @@ describe("ObservationHandler review observations", () => {
 
     // Then
     const events = await logStore.readAll();
-    expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      kind: "review_observed",
-      isCompleteSnapshot: true,
-      items: [],
-    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
   it.each(["bash", "task", "arbitrary_custom_tool"])(
@@ -203,7 +199,7 @@ describe("ObservationHandler review observations", () => {
     expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
-  it("resolves absent items from a trusted complete code review snapshot", async () => {
+  it("resolves absent items only from a typed complete code review snapshot", async () => {
     const { handler, logStore } = createHandler();
     const initial = await handler.handlePostToolUse({
       type: "PostToolUse",
@@ -228,6 +224,11 @@ describe("ObservationHandler review observations", () => {
         toolResult: "Review complete with no findings",
         error: false,
         metadata: { isCompleteSnapshot: true },
+        reviewSnapshotArtifact: {
+          authority: "review_tool",
+          schemaVersion: 1,
+          complete: true,
+        },
       },
     });
 

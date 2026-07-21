@@ -105,6 +105,54 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     });
   });
 
+  it("promotes a validated complete snapshot artifact only from exact code_review", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const reviewSnapshotArtifact = {
+      authority: "review_tool",
+      schemaVersion: 1,
+      complete: true,
+    };
+
+    await adapter.onToolExecuteAfter(
+      { tool: "code_review", sessionID: "s", callID: "c1", args: {} },
+      { output: "Review complete with no findings", metadata: { reviewSnapshotArtifact } },
+    );
+
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      type: "PostToolUse",
+      payload: {
+        toolName: "code_review",
+        reviewSnapshotArtifact,
+      },
+    });
+  });
+
+  it("does not promote malformed complete snapshot metadata from code_review", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteAfter(
+      { tool: "code_review", sessionID: "s", callID: "c1", args: {} },
+      {
+        output: "Review complete with no findings",
+        metadata: {
+          reviewSnapshotArtifact: {
+            authority: "review_tool",
+            schemaVersion: 1,
+            complete: "true",
+          },
+        },
+      },
+    );
+
+    expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewSnapshotArtifact");
+  });
+
   it.each(["justice_Review", "justice_review_extra", "justice_review "])(
     "does not forward variant %s as a trusted review-resolution source",
     async (tool) => {
@@ -466,6 +514,44 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
         finalized: true,
       },
     });
+  });
+
+  it("forwards user message.updated only as a content-free lifecycle observation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "sess-1",
+          info: { id: "msg-1", role: "user", content: "delegate next task" },
+        },
+      },
+    });
+
+    const events = spy.mock.calls.map((call) => call[0]);
+    const lifecycleMessage = events.find(
+      (event) =>
+        event.type === "Message" &&
+        "kind" in event.payload &&
+        event.payload.kind === "message_updated",
+    );
+
+    expect(lifecycleMessage).toMatchObject({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: {
+        kind: "message_updated",
+        sessionId: "sess-1",
+        messageID: "msg-1",
+        role: "user",
+        finalized: false,
+      },
+    });
+    expect(lifecycleMessage).not.toHaveProperty("payload.content");
   });
 
   it("(d) does not forward an observation message_updated when messageID is absent (unroutable)", async () => {

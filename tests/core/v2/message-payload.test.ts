@@ -25,6 +25,17 @@ describe("ObservationMessagePayload type", () => {
     expect(p.kind).toBe("message_updated");
   });
 
+  it("accepts a user role for message_updated lifecycle correlation", () => {
+    const p: ObservationMessagePayload = {
+      kind: "message_updated",
+      sessionId: "ses_1",
+      messageID: "msg-1",
+      role: "user",
+      finalized: false,
+    };
+    expect(p.role).toBe("user");
+  });
+
   it("text_complete variant is assignable and discriminates on kind", () => {
     const p: ObservationMessagePayload = {
       kind: "text_complete",

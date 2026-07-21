@@ -157,7 +157,7 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     });
   });
 
-  it("rejects source hash tampering when per-shard maxSequence still matches", () => {
+  it("treats a source hash mismatch with matching sequences as a stale cache", () => {
     const events = [toolEvent(1, "task-1"), toolEvent(2, "task-1")];
     const state = project(events, REBUILT_AT);
     // Tamper only the cached sourceHash; maxSequenceByShard still matches the
@@ -170,7 +170,7 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     };
     expect(validateProjectionCacheAgainstEvents(tampered, events)).toEqual({
       valid: false,
-      reason: "mismatch_payload",
+      reason: "stale_append",
     });
   });
 

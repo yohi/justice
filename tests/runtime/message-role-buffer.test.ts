@@ -203,6 +203,18 @@ describe("MessageRoleBuffer", () => {
   });
 
   describe("gc()", () => {
+    it("keeps a finalized buffer through one projection flush before releasing it", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+
+      buffer.releaseFinalizedAfterProjectionFlush();
+      expect(buffer.getFinalizedText("s", "m")).toBe("tests pass");
+
+      buffer.releaseFinalizedAfterProjectionFlush();
+      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
+    });
+
     it("evicts entries older than maxAgeMs", () => {
       const clock = makeClock(0);
       const buffer = new MessageRoleBuffer(clock.now);
