@@ -282,21 +282,6 @@ export class LoopDetectionHandler {
     session.lastAccess = Date.now();
 
     try {
-      await this.observationHandler?.emitReflectionEvent({
-        trigger: "task_error",
-        planRef: { path: session.planPath, taskId: session.activeTaskId },
-        intent: "append_error_note",
-        note: `loop_detected: ${String(event.payload.message)}`,
-        sessionId: event.sessionId,
-      });
-    } catch (err) {
-      console.warn(
-        "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
-        err,
-      );
-    }
-
-    try {
       const planContent = await this.fileReader.readFile(session.planPath);
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === session.activeTaskId);
@@ -317,6 +302,22 @@ export class LoopDetectionHandler {
           `loop_detected: ${reason}`,
         );
         await this.fileWriter.writeFile(session.planPath, updatedPlan);
+
+        // Emit reflection event only after successful plan update
+        try {
+          await this.observationHandler?.emitReflectionEvent({
+            trigger: "task_error",
+            planRef: { path: session.planPath, taskId: session.activeTaskId },
+            intent: "append_error_note",
+            note: `loop_detected: ${reason}`,
+            sessionId: event.sessionId,
+          });
+        } catch (err) {
+          console.warn(
+            "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
+            err,
+          );
+        }
 
         // Generate split suggestion
         const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");

@@ -132,7 +132,8 @@ describe("MessageRoleBuffer", () => {
 
     it("getFinalizedAssistantText returns undefined when role is not assistant", () => {
       const buffer = new MessageRoleBuffer();
-      buffer.update("s", textComplete("s", "m", "p1", "chunk")); // role stays unset
+      buffer.update("s", partUpdated("s", "m", "p1", "chunk")); // existing entry, role stays unset
+      buffer.update("s", textComplete("s", "m", "p1", "chunk"));
       expect(buffer.getFinalizedText("s", "m", "p1")).toBe("chunk"); // role-agnostic
       expect(buffer.getFinalizedAssistantText("s", "m", "p1")).toBeUndefined();
     });
@@ -316,14 +317,15 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
   });
 
   describe("regression: finalized monotonic latch bug (D53 fix)", () => {
-    it("text_complete(p1) finalizes -> new unfinalizedpart p2 arrives -> getFinalizedText returns undefined until p2 completes", () => {
+    it("text_complete(p1) finalizes -> new unfinalized part p2 arrives -> getFinalizedText returns undefined until p2 completes", () => {
       const buffer = new MessageRoleBuffer();
       // Step 1: p1 completes via text_complete -> message becomes finalized
+      // New entry created by text_complete gets role=assistant (D53 fix)
       buffer.update("s", textComplete("s", "m", "p1", "part one"));
       expect(buffer.getFinalizedText("s", "m")).toBe("part one");
-      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined(); // role not set yet
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("part one");
 
-      // Step 2: new unfinalizedpart p2 arrives via message_part_updated
+      // Step 2: new unfinalized part p2 arrives via message_part_updated
       buffer.update("s", messageUpdated("s", "m", false)); // set role to assistant
       buffer.update("s", partUpdated("s", "m", "p2", "part two (draft)"));
       // BUG: old code would still return "part one" because finalized was latched to true

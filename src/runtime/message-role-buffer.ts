@@ -25,6 +25,7 @@ type BufferEntry = {
   messageSignaled: boolean; // raw: a message_updated(finalized=true) or text_complete has been observed
   forcedFinalized: boolean; // hard override flag: set only by finalize(sessionId, messageId) with no partId
   messageFinalized: boolean;
+  textCompleteReceived: boolean; // at least one text_complete has been observed for this message
   projectionFlushesAfterFinalization: number;
 };
 
@@ -38,7 +39,10 @@ export class MessageRoleBuffer {
   }
 
   update(sessionId: string, payload: ObservationMessagePayload): void {
-    const entry = this.ensureEntry(this.keyOf(sessionId, payload.messageID));
+    const key = this.keyOf(sessionId, payload.messageID);
+    const existing = this.buffer.get(key);
+    const entry = this.ensureEntry(key);
+    const isNewlyCreated = existing === undefined;
     switch (payload.kind) {
       case "message_part_updated":
         // Re-updating an existing partID overwrites its text (D67): claims are
@@ -49,6 +53,10 @@ export class MessageRoleBuffer {
       case "text_complete":
         entry.parts.set(payload.partID, { text: payload.text, finalized: true });
         entry.messageSignaled = true;
+        entry.textCompleteReceived = true;
+        // text_complete implies assistant role when the entry is newly created
+        // after the prior entry was evicted by projection flush (D53).
+        if (isNewlyCreated) entry.role = "assistant";
         if (entry.messageFinalized) entry.projectionFlushesAfterFinalization = 0;
         break;
       case "message_updated":
@@ -188,6 +196,7 @@ export class MessageRoleBuffer {
       messageSignaled: false,
       forcedFinalized: false,
       messageFinalized: false,
+      textCompleteReceived: false,
       projectionFlushesAfterFinalization: 0,
     };
     this.buffer.set(key, created);

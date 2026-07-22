@@ -1,6 +1,6 @@
 import { hashString } from "./hash";
 
-const CRITICAL = /security|vulnerability|data ?loss|破壊的|重大/i;
+const CRITICAL = /security|vulnerability|data ?loss|破壊的|重大|blocker|blocking|ブロッカー/i;
 const MAJOR = /must fix|required|bug|regression|要修正|不具合/i;
 const MINOR = /nit|suggestion|optional|style|軽微|提案/i;
 

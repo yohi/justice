@@ -271,11 +271,11 @@ describe("JusticePlugin reflection event integration", () => {
     });
   });
 
-  it("emits a loop reflection when appending the plan error note fails", async () => {
+  it("emits a loop reflection after successful plan update", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 2: Loop", "- [ ] Fix loop", ""].join("\n"));
-    const plugin = new JusticePlugin(reader, rejectPlanWrites(writer), {
+    const plugin = new JusticePlugin(reader, writer, {
       writerId: "w-loop-write",
       workspaceRoot: "/workspace",
     });
