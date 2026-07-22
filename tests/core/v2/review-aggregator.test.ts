@@ -21,7 +21,7 @@ function reviewItem(
 ): ReviewItem {
   return {
     itemKey,
-    evidenceId: `evidence:${itemKey}`,
+    evidenceId: itemKey,
     severity,
     summary: itemKey,
     location: "src/example.ts",
@@ -64,7 +64,26 @@ describe("aggregateReviews() D32 resolution", () => {
       "major:foo",
       "minor:bar",
     ]);
-    expect(summary.byScope.get("task-1")?.open[0]?.ref.evidenceId).toBe("evidence:major:foo");
+    expect(summary.byScope.get("task-1")?.open[0]?.ref.evidenceId).toBe("major:foo");
+  });
+
+  it("projects a review item reference from its itemKey", () => {
+    const records = [
+      reviewObserved({
+        sequence: 1,
+        scope: "task-1",
+        items: [
+          {
+            ...reviewItem("major:foo", "major"),
+            evidenceId: "legacy-evidence-id",
+          },
+        ],
+      }),
+    ];
+
+    const summary = aggregateReviews(records);
+
+    expect(summary.byScope.get("task-1")?.open[0]?.ref.evidenceId).toBe("major:foo");
   });
 
   it("resolves an open item when an explicit marker is observed", () => {

@@ -320,7 +320,7 @@ describe("project() review summary fold", () => {
     const rs = state.reviewSummary;
 
     expect(rs.authority).toBe("observed_review_output");
-    expect(rs.authorship).toBeNull();
+    expect(rs).not.toHaveProperty("authorship");
     expect(rs.critical.map((i) => i.itemKey)).toEqual(["a"]);
     expect(rs.major.map((i) => i.itemKey)).toEqual(["b"]);
     expect(rs.minor.map((i) => i.itemKey)).toEqual(["c"]);
@@ -417,13 +417,40 @@ describe("ProjectedState JSON round-trip", () => {
     // Serialized maps must be plain objects, not arrays.
     expect(Array.isArray(serialized.integrity.maxSequenceByShard)).toBe(false);
     expect(Array.isArray(serialized.reviewSummary.byScope)).toBe(false);
-    expect(serialized.reviewSummary.authorship).toBeNull();
+    expect(serialized.reviewSummary).not.toHaveProperty("authorship");
 
     const restored = fromSerializableProjectedState(json);
     expect(restored.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(2);
     expect(restored.tasks.get("task-1")?.evidence).toHaveLength(1);
     expect(restored.reviewSummary.byScope.get("src/api")?.critical).toHaveLength(1);
-    expect(restored.reviewSummary.authorship).toBeNull();
+    expect(restored.reviewSummary).not.toHaveProperty("authorship");
     expect(restored.integrity.sourceHash).toBe(state.integrity.sourceHash);
+  });
+
+  it("reads a legacy schema-v2 cache that still carries authorship:null", () => {
+    const state = project(
+      [
+        toolEvent(1, "2026-07-06T00:00:01Z", "task-1", "ev-1"),
+        reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/api", [
+          reviewItem("a", "critical", "open"),
+        ]),
+      ],
+      REBUILT_AT,
+    );
+    const serialized = toSerializableProjectedState(state);
+    // Simulate a state.json written by an earlier build that persisted authorship:null.
+    const legacy = {
+      ...serialized,
+      reviewSummary: { ...serialized.reviewSummary, authorship: null },
+    };
+    const json = JSON.parse(JSON.stringify(legacy)) as unknown;
+
+    const restored = fromSerializableProjectedState(json);
+
+    // The legacy cache remains readable: its projected content is fully restored.
+    expect(restored.reviewSummary.byScope.get("src/api")?.critical).toHaveLength(1);
+    expect(restored.reviewSummary.open.map((i) => i.itemKey)).toEqual(["a"]);
+    // ...but the legacy authorship:null is not retained in newly produced state.
+    expect(restored.reviewSummary).not.toHaveProperty("authorship");
   });
 });

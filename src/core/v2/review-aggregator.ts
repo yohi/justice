@@ -33,7 +33,7 @@ function projectItem(record: ReviewObservedRecord, item: ReviewItem): ReviewSumm
       writerId: record.writerId,
       sequence: record.sequence,
       kind: "full",
-      evidenceId: item.evidenceId,
+      evidenceId: item.itemKey,
     },
     severity: item.severity,
   };
@@ -127,7 +127,7 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
     for (const item of scopeState.items.values()) addToSummary(global, item);
   }
 
-  return { authority: "observed_review_output", authorship: null, ...global, byScope };
+  return { authority: "observed_review_output", ...global, byScope };
 }
 
 function assertNever(value: never): never {

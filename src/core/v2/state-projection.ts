@@ -181,7 +181,6 @@ type SerializedProjectedState = {
   readonly tasks: Record<string, ProjectedTask>;
   readonly reviewSummary: ScopeReviewSummary & {
     readonly authority: "observed_review_output";
-    readonly authorship?: null;
     readonly byScope: Record<string, ScopeReviewSummary>;
   };
 };
@@ -201,7 +200,6 @@ export function toSerializableProjectedState(state: ProjectedState): SerializedP
     tasks: Object.fromEntries(state.tasks),
     reviewSummary: {
       authority: state.reviewSummary.authority,
-      authorship: state.reviewSummary.authorship ?? null,
       critical: state.reviewSummary.critical,
       major: state.reviewSummary.major,
       minor: state.reviewSummary.minor,
@@ -228,7 +226,6 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
     tasks: new Map(Object.entries(raw.tasks)),
     reviewSummary: {
       authority: raw.reviewSummary.authority,
-      authorship: raw.reviewSummary.authorship ?? null,
       critical: raw.reviewSummary.critical,
       major: raw.reviewSummary.major,
       minor: raw.reviewSummary.minor,

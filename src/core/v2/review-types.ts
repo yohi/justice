@@ -23,6 +23,5 @@ export type ScopeReviewSummary = {
 
 export type ReviewSummary = ScopeReviewSummary & {
   readonly authority: "observed_review_output";
-  readonly authorship?: null;
   readonly byScope: ReadonlyMap<string, ScopeReviewSummary>;
 };

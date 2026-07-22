@@ -143,6 +143,13 @@ describe("ReviewRejectionDetector", () => {
     expect(items[0]?.severity).toBe(signal.severity);
   });
 
+  it("does not escalate a blocker heading beyond the D57 severity classifier", () => {
+    const items = detector.detectMultiple("BLOCKER: style suggestion at src/parser.ts:10");
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.severity).toBe("minor");
+  });
+
   it("classifies a rejection from its immediately following detail line", () => {
     // Given
     const output = "BLOCKER:\nsecurity vulnerability at src/auth.ts:42";
@@ -169,7 +176,7 @@ describe("ReviewRejectionDetector", () => {
 
     // Then
     expect(items).toMatchObject([
-      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+      { severity: "minor", summary: "BLOCKER:", location: "unknown" },
     ]);
   });
 
@@ -182,7 +189,7 @@ describe("ReviewRejectionDetector", () => {
 
     // Then
     expect(items).toMatchObject([
-      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+      { severity: "minor", summary: "BLOCKER:", location: "unknown" },
     ]);
   });
 

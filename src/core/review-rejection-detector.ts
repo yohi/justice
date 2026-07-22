@@ -98,19 +98,6 @@ export class ReviewRejectionDetector {
     return false;
   }
 
-  private resolveSeverity(heading: string, summary: string): ReviewSeverity {
-    const classified = classifySeverity(summary);
-    const headingLower = heading.toLowerCase();
-    const isBlockerHeading =
-      /\bBLOCKER\s*:/u.test(heading) ||
-      /\b(blocking)\s+(issue|concern|problem)s?\b/u.test(headingLower) ||
-      /ブロッカー/u.test(heading);
-    if (isBlockerHeading && (classified === "minor" || classified === "major")) {
-      return "critical";
-    }
-    return classified;
-  }
-
   private emptySignal(): ReviewRejectionSignal {
     return { matched: false, excerpts: [], summary: "", severity: "minor" };
   }
@@ -123,7 +110,7 @@ export class ReviewRejectionDetector {
       matched: true,
       excerpts,
       summary,
-      severity: this.resolveSeverity(excerpts.at(0) ?? "", summary),
+      severity: classifySeverity(summary),
     };
   }
 

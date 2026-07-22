@@ -365,27 +365,37 @@ describe("ObservationHandler review observations", () => {
     expect(state.reviewSummary.open.map((item) => item.itemKey)).toEqual([openItem.itemKey]);
   });
 
-  it("fails open when appending a review observation fails", async () => {
+  it("skips projection and gate evaluation when a canonical review observation append fails", async () => {
     // Given
     const logger = { warn: vi.fn() };
     const sessionState = new SessionStateProvider();
     const appended: PendingLogRecord[] = [];
+    const appendError = new Error("review append failed");
+    const readAll = vi.fn(async () => []);
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
     const logStore = {
       append: vi.fn(async (_shardId, record: PendingLogRecord) => {
         if (record.recordType === "observation" && record.kind === "review_observed") {
-          throw new Error("review append failed");
+          throw appendError;
         }
         appended.push(record);
         return 0;
       }),
-      readAll: vi.fn(async () => []),
+      readAll,
     } as unknown as ObservationLogStore;
     const handler = new ObservationHandler({
       logStore,
       sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
       writerId: "w-review",
       logger,
     });
+    sessionState.setActiveTaskWindow("call-fail-open", "task-6.3", "session-review");
 
     // When
     const response = await handler.handlePostToolUse({
@@ -393,8 +403,8 @@ describe("ObservationHandler review observations", () => {
       sessionId: "session-review",
       callId: "call-fail-open",
       payload: {
-        toolName: "code_review",
-        toolInput: {},
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
         toolResult: "MUST FIX: parser regression at src/parser.ts:10",
         error: false,
       },
@@ -403,9 +413,13 @@ describe("ObservationHandler review observations", () => {
     // Then
     expect(response).toEqual({ action: "proceed" });
     expect(appended).toHaveLength(1);
+    expect(readAll).not.toHaveBeenCalled();
+    expect(projectionCache.read).not.toHaveBeenCalled();
+    expect(projectionCache.write).not.toHaveBeenCalled();
+    expect(gateLoader.load).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: review_observed generation failed",
-      expect.any(Error),
+      "observation-handler: tool observation failed, degrading to PROCEED",
+      appendError,
     );
   });
 

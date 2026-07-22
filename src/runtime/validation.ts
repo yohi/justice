@@ -124,10 +124,11 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
     for (const item of r.items) {
       if (
-        !isObject(item) ||
-        typeof item.itemKey !== "string" ||
-        typeof item.evidenceId !== "string" ||
-        typeof item.summary !== "string" ||
+          !isObject(item) ||
+          typeof item.itemKey !== "string" ||
+          typeof item.evidenceId !== "string" ||
+          item.evidenceId !== item.itemKey ||
+          typeof item.summary !== "string" ||
         typeof item.location !== "string" ||
         !isOneOf(item.severity, ["critical", "major", "minor"]) ||
         !isOneOf(item.status, ["open", "resolved"])
@@ -143,8 +144,19 @@ function validateObservationRecord(r: Record<string, unknown>): void {
         if (
           !isObject(marker) ||
           typeof marker.itemKey !== "string" ||
+          marker.itemKey.length === 0 ||
           !isOneOf(marker.resolution, ["explicit_marker", "snapshot_absence", "human_artifact"]) ||
           (marker.artifactRef !== undefined && typeof marker.artifactRef !== "string")
+        ) {
+          throw new Error("Invalid review_observed resolution marker");
+        }
+        // A human_artifact resolution can only originate from a validated
+        // human-approved justice_review artifact, which always carries a
+        // non-empty artifactRef. Reject a marker lacking it so a malformed or
+        // forged marker cannot spoof a human-approved resolution on replay.
+        if (
+          marker.resolution === "human_artifact" &&
+          (typeof marker.artifactRef !== "string" || marker.artifactRef.length === 0)
         ) {
           throw new Error("Invalid review_observed resolution marker");
         }

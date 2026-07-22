@@ -129,7 +129,7 @@ describe("validateRecordSchema()", () => {
         items: [
           {
             itemKey: "k",
-            evidenceId: "e",
+            evidenceId: "k",
             severity: "major",
             summary: "s",
             location: "src/foo.ts:1",

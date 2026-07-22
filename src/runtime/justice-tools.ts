@@ -136,7 +136,6 @@ function serializeReviewSummary(summary: ReviewSummary, scope: string | undefine
   return JSON.stringify(
     {
       authority: summary.authority,
-      authorship: summary.authorship ?? null,
       critical: summary.critical,
       major: summary.major,
       minor: summary.minor,

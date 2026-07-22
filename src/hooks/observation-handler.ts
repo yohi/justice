@@ -1,5 +1,5 @@
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
-import { ReviewRejectionDetector } from "../core/review-rejection-detector";
+import { ReviewRejectionDetector, type ReviewItem } from "../core/review-rejection-detector";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
@@ -326,7 +326,9 @@ export class ObservationHandler {
       };
 
       if (event.payload.toolName === "task") {
-        await this.appendTaskSummaryDeclaredEvidence(shardId, toolRecordInput);
+        if (!(await this.appendTaskSummaryDeclaredEvidence(shardId, toolRecordInput))) {
+          return PROCEED;
+        }
       } else {
         await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
       }
@@ -349,10 +351,11 @@ export class ObservationHandler {
           );
         } catch (error) {
           this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
+          return PROCEED;
         }
       }
       if (isReviewObservationTool(event.payload.toolName)) {
-        await this.appendReviewObservationsIfDetected(
+        if (!(await this.appendReviewObservationsIfDetected(
           shardId,
           taskId,
           event.sessionId,
@@ -361,7 +364,9 @@ export class ObservationHandler {
           event.payload.toolResult,
           event.payload.metadata,
           event.payload.reviewSnapshotArtifact !== undefined,
-        );
+        ))) {
+          return PROCEED;
+        }
       }
       let cachedState: ProjectedState | undefined;
       try {
@@ -431,7 +436,7 @@ export class ObservationHandler {
   private async appendTaskSummaryDeclaredEvidence(
     shardId: ShardId,
     input: ToolExecutedRecordInput,
-  ): Promise<void> {
+  ): Promise<boolean> {
     let summaryClaims: readonly DeclaredClaim[] = [];
     if (input.envelope.taskId !== undefined) {
       try {
@@ -440,17 +445,11 @@ export class ObservationHandler {
         this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
       }
     }
-    try {
-      await this.options.logStore.append(
-        shardId,
-        buildToolExecutedRecord({ ...input, summaryClaims }),
-      );
-    } catch (error) {
-      this.options.logger?.warn(
-        "observation-handler: task summary declared evidence failed",
-        error,
-      );
-    }
+    await this.options.logStore.append(
+      shardId,
+      buildToolExecutedRecord({ ...input, summaryClaims }),
+    );
+    return true;
   }
 
   private scheduleProjectionRefresh(): void {
@@ -517,36 +516,39 @@ export class ObservationHandler {
     toolResult: string,
     metadata?: Readonly<Record<string, unknown>>,
     isCompleteSnapshot = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let items: readonly ReviewItem[];
     try {
-      const items = this.reviewRejectionDetector.detectMultiple(
+      items = this.reviewRejectionDetector.detectMultiple(
         toolResult,
         metadata,
         this.options.workspaceRoot ?? process.cwd(),
       );
-      if (items.length === 0 && !isCompleteSnapshot) return;
-
-      const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
-      await this.options.logStore.append(
-        shardId,
-        buildReviewObservedRecord(
-          {
-            schemaVersion: 1,
-            timestamp: new Date().toISOString(),
-            agentId: shardId.agentId,
-            sessionId,
-            writerId: this.options.writerId,
-            ...(taskId === undefined ? {} : { taskId }),
-            recordType: "observation",
-          },
-          reviewScope,
-          items,
-          isCompleteSnapshot,
-        ),
-      );
     } catch (error) {
       this.options.logger?.warn("observation-handler: review_observed generation failed", error);
+      return false;
     }
+    if (items.length === 0 && !isCompleteSnapshot) return true;
+
+    const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
+    await this.options.logStore.append(
+      shardId,
+      buildReviewObservedRecord(
+        {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId: shardId.agentId,
+          sessionId,
+          writerId: this.options.writerId,
+          ...(taskId === undefined ? {} : { taskId }),
+          recordType: "observation",
+        },
+        reviewScope,
+        items,
+        isCompleteSnapshot,
+      ),
+    );
+    return true;
   }
 
   async handleReviewResolutionArtifact(payload: {

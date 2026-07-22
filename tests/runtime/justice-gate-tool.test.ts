@@ -94,7 +94,7 @@ function evidenceEvent(sequence: number, kind: "test" | "build"): ObservationRec
 function reviewEvent(sequence: number): ObservationRecord {
   const item: ReviewItem = {
     itemKey: "review-major-1",
-    evidenceId: "review-evidence-1",
+    evidenceId: "review-major-1",
     severity: "major",
     summary: "Blocking review item",
     location: "src/example.ts",
@@ -256,7 +256,7 @@ describe("justice_gate tool", () => {
       "Found 1 open review items matching minimum severity 'major'.",
     );
     expect(reviewRule?.evidenceRefs).toEqual([
-      expect.objectContaining({ evidenceId: "review-evidence-1", sequence: 3 }),
+      expect.objectContaining({ evidenceId: "review-major-1", sequence: 3 }),
     ]);
   });
 

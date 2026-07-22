@@ -53,7 +53,7 @@ function createPluginInput(): PluginInput {
 function reviewItem(itemKey: string): ReviewItem {
   return {
     itemKey,
-    evidenceId: `evidence:${itemKey}`,
+    evidenceId: itemKey,
     severity: "major",
     summary: itemKey,
     location: "src/example.ts",
@@ -131,9 +131,9 @@ describe("defineJusticeReviewTool", () => {
     // Then
     expect(JSON.parse(outputOf(result))).toMatchObject({
       authority: "observed_review_output",
-      authorship: null,
       open: [{ itemKey: "major:parser" }],
     });
+    expect(JSON.parse(outputOf(result))).not.toHaveProperty("authorship");
     expect(metadataOf(result)).toBeUndefined();
     expect(ask).not.toHaveBeenCalled();
     expect(await store.readAll()).toEqual(before);
