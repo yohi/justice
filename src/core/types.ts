@@ -153,7 +153,7 @@ export interface AgentMappedEvent {
 
 /** MessagePayload 型ガード: PlanBridge 専用の legacy payload か判定する */
 export function isLegacyMessagePayload(
-  payload: MessagePayload | ObservationMessagePayload,
+  payload: LegacyPlanBridgeMessagePayload | ObservationMessagePayload,
 ): payload is LegacyPlanBridgeMessagePayload {
   return "role" in payload && "content" in payload;
 }

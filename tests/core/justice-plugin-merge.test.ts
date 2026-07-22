@@ -77,6 +77,94 @@ describe("mergePostToolUseResponses", () => {
       "Conflict detected in pre-tool-use modifiedPayload; using the first response",
     );
   });
+
+  it("merges gate-only context into gateAdvisoryContext", () => {
+    const merged = mergePostToolUseResponses([
+      {
+        action: "inject",
+        injectedContext: "Gate advisory context",
+        variant: "gate_advisory",
+      },
+    ]);
+
+    expect(merged).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        injectedContext: "Gate advisory context",
+        gateAdvisoryContext: "Gate advisory context",
+        variant: "gate_advisory",
+      }),
+    );
+  });
+
+  it("preserves both normalInjectedContext and gateAdvisoryContext in mixed merge", () => {
+    const merged = mergePostToolUseResponses([
+      {
+        action: "inject",
+        injectedContext: "Normal context",
+        normalInjectedContext: "Normal context",
+      },
+      {
+        action: "inject",
+        injectedContext: "Gate context",
+        gateAdvisoryContext: "Gate context",
+        variant: "gate_advisory",
+      },
+    ]);
+
+    expect(merged).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        injectedContext: "Normal context\n\n---\n\nGate context",
+        normalInjectedContext: "Normal context",
+        gateAdvisoryContext: "Gate context",
+        variant: "gate_advisory",
+      }),
+    );
+  });
+
+  it("falls back from injectedContext to gateAdvisoryContext for legacy gate_advisory variant", () => {
+    const merged = mergePostToolUseResponses([
+      {
+        action: "inject",
+        injectedContext: "Legacy gate context",
+        variant: "gate_advisory",
+      },
+    ]);
+
+    expect(merged).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        injectedContext: "Legacy gate context",
+        gateAdvisoryContext: "Legacy gate context",
+        variant: "gate_advisory",
+      }),
+    );
+  });
+
+  it("handles multiple gate-only contexts by concatenating them", () => {
+    const merged = mergePostToolUseResponses([
+      {
+        action: "inject",
+        injectedContext: "Gate context 1",
+        variant: "gate_advisory",
+      },
+      {
+        action: "inject",
+        injectedContext: "Gate context 2",
+        variant: "gate_advisory",
+      },
+    ]);
+
+    expect(merged).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        injectedContext: "Gate context 1\n\n---\n\nGate context 2",
+        gateAdvisoryContext: "Gate context 1\n\n---\n\nGate context 2",
+        variant: "gate_advisory",
+      }),
+    );
+  });
 });
 
 describe("JusticePlugin PostToolUse merge", () => {

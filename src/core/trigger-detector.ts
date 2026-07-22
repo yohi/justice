@@ -44,7 +44,7 @@ export class TriggerDetector {
     if (match?.[1] === undefined) return null;
 
     const rawPath = match[1];
-    if (!rawPath.includes("plan")) return null;
+    if (!rawPath.toLowerCase().includes("plan")) return null;
 
     // Reject absolute paths
     if (path.isAbsolute(rawPath)) return null;

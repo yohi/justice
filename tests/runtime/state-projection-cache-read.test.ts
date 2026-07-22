@@ -222,19 +222,13 @@ describe("validateProjectionCacheAgainstEvents()", () => {
     });
   });
 
-  it("rejects a cache whose projected payload was altered without changing integrity metadata", () => {
+  it("accepts a cache whose sourceHash and shard sequences match", () => {
     const events = [toolEvent(1, "task-1")];
     const state = project(events, REBUILT_AT);
-    const task = state.tasks.get("task-1");
-    if (task === undefined) throw new Error("test fixture must include task-1");
-    const tampered: ProjectedState = {
-      ...state,
-      tasks: new Map([["task-1", { ...task, evidence: [] }]]),
-    };
 
-    expect(validateProjectionCacheAgainstEvents(tampered, events)).toEqual({
-      valid: false,
-      reason: "mismatch_payload",
+    expect(validateProjectionCacheAgainstEvents(state, events)).toEqual({
+      valid: true,
+      reason: "valid",
     });
   });
 

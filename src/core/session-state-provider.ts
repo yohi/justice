@@ -46,8 +46,9 @@ export class SessionStateProvider {
 
   /**
    * Removes the session mapping and generation for `sessionId`. Call this when a
-   * session ends. Any subsequent `setActiveTaskWindow` with this `sessionId` will
-   * be ignored until `setAgentMapping` re-establishes the session.
+   * session ends. Subsequent `setActiveTaskWindow` calls with this `sessionId` will
+   * recreate the session with a new generation via `ensureSession`, even before
+   * `setAgentMapping` runs again. Existing task windows for the session are closed.
    */
   removeSession(sessionId: string): void {
     this.sessionAgentIds.delete(sessionId);

@@ -449,12 +449,19 @@ Task Gate は FR-005 の確認項目のうち **Required Tests / Evidence / Revi
 ### 6.3 projection 再構築（読取時）
 
 ```text
-トリガ: hook 起点の評価または公開 `justice_review` が横断状態を要する時
-  → observation-log-store.readAll(active + archive の全 segment)   ← Runtime I/O（D40）
-  → state-projection.project(events): 純粋 fold
-       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId, writerId}・D39）→ ProjectedState（決定論的・FF-004）
-  → state.json にキャッシュ
-  → current_branch / active_prs は別途 live クエリ
+トリガ: 3つの異なるパスで projection 更新が発生
+  (1) PostToolUse 後の同期キャッシュ検証 + 非同期スケジュール更新:
+      → refreshProjectionCache() を同期実行（state.json の背景更新）
+      → 確認済みメッセージについてはスケジュール更新を登録（遅延: 数秒～数十秒）
+      → 期待される遅延: 同期部分は即座、非同期部分は最大 30秒
+  (2) オンデマンド読取（gate 評価または公開 `justice_review` が横断状態を要する時）:
+      → observation-log-store.readAll(active + archive の全 segment)   ← Runtime I/O（D40）
+      → state-projection.project(events): 純粋 fold
+           ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId, writerId}・D39）→ ProjectedState（決定論的・FF-004）
+      → 期待される遅延: I/O 依存（通常 100ms～1秒）
+  (3) キャッシュ（state.json）の特性:
+      → append-only log に基づくため、設計上の遅延あり（最新の観測が反映されない可能性）
+      → 背景更新と on-demand 読取の分離により、評価時には常に最新状態を取得可能
 ```
 
 ### 6.4 Fail-Open 境界（INV-006）

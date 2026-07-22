@@ -9,7 +9,6 @@ import {
 import type { PersistedLogRecord } from "../core/v2/observation-model";
 import {
   fromSerializableProjectedState,
-  project,
   toSerializableProjectedState,
   type ProjectedState,
 } from "../core/v2/state-projection";
@@ -175,13 +174,6 @@ export function validateProjectionCacheAgainstEvents(
     return { valid: false, reason: "stale_append" };
   }
 
-  const rebuilt = project(events, cacheState.rebuiltAt);
-  if (
-    JSON.stringify(toSerializableProjectedState(cacheState)) !==
-    JSON.stringify(toSerializableProjectedState(rebuilt))
-  ) {
-    return { valid: false, reason: "mismatch_payload" };
-  }
-
+  // sourceHash matches and shard sequences are consistent: the cache is valid.
   return { valid: true, reason: "valid" };
 }

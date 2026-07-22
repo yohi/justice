@@ -351,7 +351,7 @@ export class ObservationHandler {
           );
         } catch (error) {
           this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
-          return PROCEED;
+          continue;
         }
       }
       if (isReviewObservationTool(event.payload.toolName)) {

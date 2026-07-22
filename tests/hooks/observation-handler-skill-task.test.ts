@@ -227,7 +227,7 @@ describe("ObservationHandler skill and task summary observation", () => {
     );
   });
 
-  it("skips projection and gate evaluation when a skill observation append fails", async () => {
+  it("continues projection and gate evaluation when a skill observation append fails", async () => {
     const readAll = vi.fn(async () => []);
     const projectionCache = {
       read: vi.fn(async () => undefined),
@@ -242,10 +242,14 @@ describe("ObservationHandler skill and task summary observation", () => {
         return 0;
       }),
       readAll,
+      getLastReadIntegrity: vi.fn(() => ({ hasIntegrityViolation: false })),
     } as unknown as ObservationLogStore;
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    sessionState.setActiveTaskWindow("call-task", "task-1", "session-1");
     const handler = new ObservationHandler({
       logStore,
-      sessionStateProvider: new SessionStateProvider(),
+      sessionStateProvider: sessionState,
       projectionCache,
       gateLoader,
       writerId: "w-skill-failure",
@@ -264,10 +268,9 @@ describe("ObservationHandler skill and task summary observation", () => {
     });
 
     expect(response).toEqual({ action: "proceed" });
-    expect(readAll).not.toHaveBeenCalled();
-    expect(projectionCache.read).not.toHaveBeenCalled();
-    expect(projectionCache.write).not.toHaveBeenCalled();
-    expect(gateLoader.load).not.toHaveBeenCalled();
+    expect(readAll).toHaveBeenCalled();
+    expect(projectionCache.read).toHaveBeenCalled();
+    expect(gateLoader.load).toHaveBeenCalled();
   });
 
   it("orders task completion observation, review, projection, and gate evaluation", async () => {
