@@ -96,9 +96,7 @@ export class MessageRoleBuffer {
   }
 
   extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[] {
-    const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (entry?.role !== "assistant") return [];
-    const text = this.collectText(entry, partId);
+    const text = this.getFinalizedAssistantText(sessionId, messageId, partId);
     if (text === undefined) return [];
     return extractDeclaredClaims(this.sourceIdOf(messageId, partId), text);
   }

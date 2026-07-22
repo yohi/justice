@@ -282,6 +282,21 @@ export class LoopDetectionHandler {
     session.lastAccess = Date.now();
 
     try {
+      await this.observationHandler?.emitReflectionEvent({
+        trigger: "task_error",
+        planRef: { path: session.planPath, taskId: session.activeTaskId },
+        intent: "append_error_note",
+        note: `loop_detected: ${String(event.payload.message)}`,
+        sessionId: event.sessionId,
+      });
+    } catch (err) {
+      console.warn(
+        `[JUSTICE] Failed to emit loop ReflectionEvent: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
+    }
+
+    try {
       const planContent = await this.fileReader.readFile(session.planPath);
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === session.activeTaskId);
@@ -306,16 +321,6 @@ export class LoopDetectionHandler {
         // Generate split suggestion
         const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
-
-        if (this.observationHandler) {
-          await this.observationHandler.emitReflectionEvent({
-            trigger: "task_error",
-            planRef: { path: session.planPath, taskId: session.activeTaskId },
-            intent: "append_error_note",
-            note: `loop_detected: ${reason}`,
-            sessionId: event.sessionId,
-          });
-        }
 
         // エスカレーション判定
         const escalation = this.evaluateEscalation(

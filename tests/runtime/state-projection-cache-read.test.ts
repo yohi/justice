@@ -62,6 +62,54 @@ describe("StateProjectionCache.read() fail-open", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
   });
 
+  it.each([
+    ["a missing sourceHash", { maxSequenceByShard: {} }],
+    ["a non-string sourceHash", { sourceHash: 42, maxSequenceByShard: {} }],
+    ["an array maxSequenceByShard", { sourceHash: "hash", maxSequenceByShard: [] }],
+    [
+      "a non-number maxSequenceByShard entry",
+      { sourceHash: "hash", maxSequenceByShard: { shard: "1" } },
+    ],
+    [
+      "a negative maxSequenceByShard entry",
+      { sourceHash: "hash", maxSequenceByShard: { shard: -1 } },
+    ],
+  ])("returns undefined and warns when integrity metadata has %s", async (_case, integrity) => {
+    // Given
+    const { files, reader, writer } = createMemFs();
+    const validState = toSerializableProjectedState(project([toolEvent(1, "task-1")], REBUILT_AT));
+    files.set(PATH, JSON.stringify({ ...validState, integrity }));
+    const warn = vi.fn();
+    const cache = new StateProjectionCache(writer, reader, PATH, { warn });
+
+    // When
+    const restored = await cache.read();
+
+    // Then
+    expect(restored).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
+  });
+
+  it("returns undefined and warns on a non-finite maxSequenceByShard entry", async () => {
+    // Given
+    const { files, reader, writer } = createMemFs();
+    const validState = toSerializableProjectedState(project([toolEvent(1, "task-1")], REBUILT_AT));
+    const contentWithMarker = JSON.stringify({
+      ...validState,
+      integrity: { sourceHash: "hash", maxSequenceByShard: "MAX_SEQUENCE_MARKER" },
+    });
+    files.set(PATH, contentWithMarker.replace('"MAX_SEQUENCE_MARKER"', '{"shard":1e400}'));
+    const warn = vi.fn();
+    const cache = new StateProjectionCache(writer, reader, PATH, { warn });
+
+    // When
+    const restored = await cache.read();
+
+    // Then
+    expect(restored).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("structure invalid"));
+  });
+
   it("reconstructs a valid persisted state", async () => {
     const { reader, writer } = createMemFs();
     const cache = new StateProjectionCache(writer, reader);

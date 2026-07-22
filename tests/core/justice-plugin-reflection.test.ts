@@ -16,6 +16,18 @@ function isReflectionRecord(value: unknown): value is { readonly kind: string } 
   return typeof value === "object" && value !== null && "kind" in value;
 }
 
+function rejectPlanWrites(writer: FileWriter): FileWriter {
+  return {
+    writeFile: async (path, content) => {
+      if (path === "plan.md") throw new Error("disk full");
+      await writer.writeFile(path, content);
+    },
+    rename: writer.rename,
+    mkdir: writer.mkdir,
+    rmdir: writer.rmdir,
+    deleteFile: writer.deleteFile,
+  };
+}
 
 describe("JusticePlugin reflection event integration", () => {
   it("emits a reflection event after the task PreToolUse flow registers feedback state", async () => {
@@ -72,20 +84,11 @@ describe("JusticePlugin reflection event integration", () => {
     });
   });
 
-  it("does not emit an error reflection when appending the error note fails", async () => {
+  it("emits an error reflection when appending the error note fails", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
-    const failingWriter: FileWriter = {
-      writeFile: async (path, content) => {
-        if (path === "plan.md") throw new Error("disk full");
-        await writer.writeFile(path, content);
-      },
-      rename: writer.rename,
-      mkdir: writer.mkdir,
-      rmdir: writer.rmdir,
-      deleteFile: writer.deleteFile,
-    };
+    const failingWriter = rejectPlanWrites(writer);
     const plugin = new JusticePlugin(reader, failingWriter, {
       writerId: "w-error-write",
       workspaceRoot: "/workspace",
@@ -107,7 +110,50 @@ describe("JusticePlugin reflection event integration", () => {
     });
 
     // Then
-    expect(reflectionSpy).not.toHaveBeenCalled();
+    expect(reflectionSpy).toHaveBeenCalledWith({
+      trigger: "task_error",
+      planRef: { path: "plan.md", taskId: "task-1" },
+      intent: "append_error_note",
+      note: expect.stringContaining("test_failure"),
+      sessionId: "session-error",
+    });
+  });
+
+  it("emits a success reflection and reports an unchanged plan when completion writing fails", async () => {
+    // Given
+    const { files, reader, writer } = createMemFs();
+    files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
+    const plugin = new JusticePlugin(reader, rejectPlanWrites(writer), {
+      writerId: "w-success-write",
+      workspaceRoot: "/workspace",
+    });
+    plugin.getTaskFeedback().setActivePlan("session-success", "plan.md", "task-1");
+    const reflectionSpy = vi.spyOn(plugin.getObservationHandler(), "emitReflectionEvent");
+
+    // When
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "session-success",
+      callId: "call-success",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1", prompt: "run" },
+        toolResult: "Task completed successfully",
+        error: false,
+      },
+    });
+
+    // Then
+    expect(reflectionSpy).toHaveBeenCalledWith({
+      trigger: "task_succeeded",
+      planRef: { path: "plan.md", taskId: "task-1" },
+      intent: "check_complete",
+      sessionId: "session-success",
+    });
+    expect(response).toMatchObject({
+      action: "inject",
+      injectedContext: expect.stringContaining("plan.md was not updated"),
+    });
   });
 
   it("allocates a UUID-based writer ID when none is provided", async () => {
@@ -139,7 +185,7 @@ describe("JusticePlugin reflection event integration", () => {
     expect(new Set(writerIds)).toHaveLength(2);
   });
 
-  it("does not emit a reflection event when the active task is absent from the plan", async () => {
+  it("emits a reflection event when the active task is absent from the plan", async () => {
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
 
@@ -171,7 +217,14 @@ describe("JusticePlugin reflection event integration", () => {
     const reflection = events.find(
       (event) => isReflectionRecord(event) && event.kind === "reflection",
     );
-    expect(reflection).toBeUndefined();
+    expect(reflection).toMatchObject({
+      kind: "reflection",
+      reflection: {
+        trigger: "task_succeeded",
+        intent: "check_complete",
+        planRef: { taskId: "task-missing" },
+      },
+    });
   });
 
   it("emits a reflection event when LoopDetectionHandler detects a loop", async () => {
@@ -215,6 +268,38 @@ describe("JusticePlugin reflection event integration", () => {
         intent: "append_error_note",
         note: "loop_detected: Loop detected: repeated command pattern",
       },
+    });
+  });
+
+  it("emits a loop reflection when appending the plan error note fails", async () => {
+    // Given
+    const { files, reader, writer } = createMemFs();
+    files.set("plan.md", ["## Task 2: Loop", "- [ ] Fix loop", ""].join("\n"));
+    const plugin = new JusticePlugin(reader, rejectPlanWrites(writer), {
+      writerId: "w-loop-write",
+      workspaceRoot: "/workspace",
+    });
+    plugin.getLoopHandler().setActivePlan("session-loop", "plan.md", "task-2", "hephaestus");
+    const reflectionSpy = vi.spyOn(plugin.getObservationHandler(), "emitReflectionEvent");
+
+    // When
+    await plugin.handleEvent({
+      type: "Event",
+      sessionId: "session-loop",
+      payload: {
+        eventType: "loop-detector",
+        sessionId: "session-loop",
+        message: "Loop detected: repeated command pattern",
+      },
+    });
+
+    // Then
+    expect(reflectionSpy).toHaveBeenCalledWith({
+      trigger: "task_error",
+      planRef: { path: "plan.md", taskId: "task-2" },
+      intent: "append_error_note",
+      note: "loop_detected: Loop detected: repeated command pattern",
+      sessionId: "session-loop",
     });
   });
 

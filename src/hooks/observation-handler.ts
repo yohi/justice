@@ -433,10 +433,12 @@ export class ObservationHandler {
     input: ToolExecutedRecordInput,
   ): Promise<void> {
     let summaryClaims: readonly DeclaredClaim[] = [];
-    try {
-      summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
-    } catch (error) {
-      this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+    if (input.envelope.taskId !== undefined) {
+      try {
+        summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
+      } catch (error) {
+        this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+      }
     }
     try {
       await this.options.logStore.append(

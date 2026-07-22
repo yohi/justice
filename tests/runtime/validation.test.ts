@@ -135,6 +135,16 @@ describe("validateRecordSchema", () => {
     );
   });
 
+  it.each([
+    ["unsafe agentId", { agentId: "attacker" }],
+    ["reserved writerId", { writerId: "w-system" }],
+    ["unsafe writerId segment", { writerId: "w-a/b" }],
+  ])("rejects an envelope with %s", (_caseName, override) => {
+    expect(() => validateRecordSchema({ ...validToolExecuted(), ...override })).toThrow(
+      "Invalid record: unsafe shard identifier fields",
+    );
+  });
+
   it("rejects unknown recordType", () => {
     expect(() => validateRecordSchema({ ...validToolExecuted(), recordType: "learning" })).toThrow(
       "Invalid record: unknown recordType: learning",

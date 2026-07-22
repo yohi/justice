@@ -6,7 +6,7 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMemFs } from "../helpers/mock-file-system";
 
 describe("ObservationHandler message observation", () => {
-  it("persists text_complete after the assistant role is known without a message finalization signal", async () => {
+  it("persists text_complete claims after the assistant role is known without a message finalization signal", async () => {
     const { files, reader, writer } = createMemFs();
     const sessionState = new SessionStateProvider();
     sessionState.setAgentMapping("session-1", "atlas");
@@ -36,7 +36,22 @@ describe("ObservationHandler message observation", () => {
       sessionId: "session-1",
       writerId: "w-handler",
     });
-    expect(files.get(path)).toContain('"kind":"message"');
+    const record = JSON.parse(files.get(path) ?? "") as {
+      readonly kind: string;
+      readonly declaredClaims: readonly {
+        readonly evidenceId: string;
+        readonly claimKind: string;
+        readonly outcome: string;
+      }[];
+    };
+    expect(record.kind).toBe("message");
+    expect(record.declaredClaims).toEqual([
+      {
+        evidenceId: '["message-1","part-1"]-test',
+        claimKind: "test",
+        outcome: "pass",
+      },
+    ]);
   });
 
   it("persists finalized assistant claims when message_updated carries the finish signal", async () => {

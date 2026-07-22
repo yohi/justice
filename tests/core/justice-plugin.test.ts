@@ -47,6 +47,7 @@ describe("JusticePlugin", () => {
     const inject = (injectedContext: string): HookResponse => ({
       action: "inject",
       injectedContext,
+      normalInjectedContext: injectedContext,
     });
 
     it("should merge proceed + proceed into proceed", () => {
@@ -78,6 +79,7 @@ describe("JusticePlugin", () => {
       expect(result).toEqual({
         action: "inject",
         injectedContext: "from-a\n\n---\n\nfrom-b",
+        normalInjectedContext: "from-a\n\n---\n\nfrom-b",
       });
     });
 
@@ -99,6 +101,7 @@ describe("JusticePlugin", () => {
       expect(result).toEqual({
         action: "inject",
         injectedContext: "tail",
+        normalInjectedContext: "tail",
       });
     });
 
@@ -106,6 +109,7 @@ describe("JusticePlugin", () => {
       const a: InjectResponse = {
         action: "inject",
         injectedContext: "from-a",
+        normalInjectedContext: "from-a",
         modifiedPayload: { args: { loadSkills: ["skill-a"] } },
       };
       const result = mergePostToolUseResponses([a, proceed]);
@@ -129,6 +133,7 @@ describe("JusticePlugin", () => {
       expect(result).toEqual({
         action: "inject",
         injectedContext: "from-a\n\n---\n\nfrom-b",
+        normalInjectedContext: "from-a\n\n---\n\nfrom-b",
         modifiedPayload: { key: "a" },
       });
     });
@@ -148,6 +153,7 @@ describe("JusticePlugin", () => {
       expect(result).toEqual({
         action: "inject",
         injectedContext: "from-a\n\n---\n\nfrom-b",
+        normalInjectedContext: "from-a\n\n---\n\nfrom-b",
         modifiedPayload: { key: "b" },
       });
     });
@@ -167,6 +173,7 @@ describe("JusticePlugin", () => {
       expect(mergePostToolUseResponses([a, b])).toEqual({
         action: "inject",
         injectedContext: "from-a\n\n---\n\nfrom-b",
+        normalInjectedContext: "from-a\n\n---\n\nfrom-b",
         modifiedPayload: { key: "a", extra: true },
       });
     });

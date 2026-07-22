@@ -48,13 +48,11 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
 
-    it("returns claims once role is assistant (finalized not required for preview)", () => {
+    it("returns [] when role is assistant but text is not finalized", () => {
       const buffer = new MessageRoleBuffer();
       buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
       buffer.update("s", messageUpdated("s", "m", false));
-      const claims = buffer.extractAssistantClaims("s", "m");
-      expect(claims).toHaveLength(1);
-      expect(claims[0]).toMatchObject({ claimKind: "test", outcome: "pass" });
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
 
     it("returns [] for an unknown message", () => {
@@ -82,9 +80,31 @@ describe("MessageRoleBuffer", () => {
       buffer.update("s", messageUpdated("s", "m", false));
       buffer.update("s", partUpdated("s", "m", "p1", "tests fail"));
       buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
       const claims = buffer.extractAssistantClaims("s", "m");
       expect(claims).toHaveLength(1);
       expect(claims[0]).toMatchObject({ claimKind: "test", outcome: "pass" });
+    });
+  });
+
+  describe("finalized claim extraction", () => {
+    it("returns claims for a finalized assistant part", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", textComplete("s", "m", "p1", "tests pass"));
+
+      expect(buffer.extractAssistantClaims("s", "m", "p1")).toEqual([
+        { evidenceId: '["m","p1"]-test', claimKind: "test", outcome: "pass" },
+      ]);
+    });
+
+    it("returns no whole-message claims while any assistant part is unfinalized", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", textComplete("s", "m", "p1", "tests pass"));
+      buffer.update("s", partUpdated("s", "m", "p2", "build pass"));
+
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
   });
 

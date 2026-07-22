@@ -238,16 +238,58 @@ export class OpenCodeAdapter {
     }
   }
 
+  async onChatMessage(input: unknown, output?: unknown): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      const inputRecord = toRecord(input);
+      if (output === undefined) {
+        await this.#handleChatMessage(inputRecord);
+        return;
+      }
+      const outputRecord = toRecord(output);
+      const message = this.#readRecord(outputRecord, "message");
+      const parts = Array.isArray(outputRecord.parts) ? outputRecord.parts : [];
+      const text = parts
+        .map((part) => toRecord(part))
+        .filter((part) => this.#readString(part, "type") === "text")
+        .map((part) => this.#readString(part, "text"))
+        .filter((partText) => partText.length > 0)
+        .join("\n");
+      await this.#handleChatMessage({
+        ...inputRecord,
+        message: {
+          ...message,
+          content: this.#readString(message, "role") === "user" ? text : "",
+          role: this.#readString(message, "role"),
+        },
+      });
+    } catch (err) {
+      await this.log("error", "[Justice] chat.message hook failure", err);
+    }
+  }
+
+  async onChatParams(input: unknown): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      await this.#handleChatParams(toRecord(input));
+    } catch (err) {
+      await this.log("error", "[Justice] chat.params hook failure", err);
+    }
+  }
+
   /**
    * Forward a `message.updated` event. Its content is preserved only for the
    * explicitly separate legacy PlanBridge path; the observation payload below
    * is lifecycle-only and intentionally never carries content.
    */
   async #handleMessageUpdated(properties: Record<string, unknown>): Promise<void> {
-    const sessionId = this.#readString(properties, "sessionID");
+    const info = this.#readRecord(properties, "info");
+    const sessionId =
+      this.#readString(properties, "sessionID") || this.#readString(info, "sessionID");
     if (!sessionId) return;
 
-    const info = this.#readRecord(properties, "info");
     const role = this.#readString(info, "role");
     const content = this.#readString(info, "content");
     const messageID = this.#readString(info, "id");
@@ -608,9 +650,18 @@ export class OpenCodeAdapter {
         },
       });
 
-      // Nothing sets variant "gate_advisory" until Phase 5, so this branch is
-      // dormant scaffolding; it must still be wired correctly and type-safely.
-      if (response.action !== "inject" || response.variant !== "gate_advisory") return;
+      if (response.action !== "inject") return;
+      const normalInjectedContext =
+        response.normalInjectedContext ??
+        (response.variant === "gate_advisory" ? "" : response.injectedContext);
+      if (normalInjectedContext.length > 0) {
+        output.output = output.output + "\n\n" + normalInjectedContext;
+      }
+
+      const gateAdvisoryContext =
+        response.gateAdvisoryContext ??
+        (response.variant === "gate_advisory" ? response.injectedContext : "");
+      if (gateAdvisoryContext.length === 0) return;
 
       const notifier = this.#notifier;
 
@@ -622,7 +673,7 @@ export class OpenCodeAdapter {
             level: "warning",
             variant: "justice_gate",
             title: "Task Gate",
-            message: response.injectedContext,
+            message: gateAdvisoryContext,
             sessionId: input.sessionID,
             taskId:
               (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
@@ -639,7 +690,7 @@ export class OpenCodeAdapter {
           level: "warning",
           variant: "justice_gate",
           title: "Task Gate",
-          message: response.injectedContext,
+          message: gateAdvisoryContext,
         });
         output.output = output.output + "\n\n" + banner;
       }

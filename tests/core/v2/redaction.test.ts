@@ -80,6 +80,28 @@ describe("redactEnvironmentValues()", () => {
   it("does not redact lowercase names", () => {
     expect(redactEnvironmentValues("foo=bar")).toBe("foo=bar");
   });
+
+  it("redacts uppercase names containing digits", () => {
+    // Given
+    const input = "HTTP2_PROXY=proxy S3_BUCKET=bucket NODE_V8_COVERAGE=coverage";
+
+    // When
+    const result = redactEnvironmentValues(input);
+
+    // Then
+    expect(result).toBe("[REDACTED_ENV] [REDACTED_ENV] [REDACTED_ENV]");
+  });
+
+  it("does not redact lowercase or digit-prefixed names containing digits", () => {
+    // Given
+    const input = "http2_PROXY=proxy 2FA_SECRET=secret";
+
+    // When
+    const result = redactEnvironmentValues(input);
+
+    // Then
+    expect(result).toBe(input);
+  });
 });
 
 describe("redactTokenUrls()", () => {

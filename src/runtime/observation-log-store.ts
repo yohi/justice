@@ -8,6 +8,8 @@ import {
   toPhysicalPath,
 } from "../core/v2/shard-layout";
 import { encodeSafeSegment } from "../core/v2/safe-segment";
+import { isSafeObservationAgentId } from "../core/v2/observation-agent-id-validation";
+import { isSafeWriterId } from "../core/v2/writer-id-validation";
 import { createShardWriteQueue, type ShardWriteQueue } from "./write-queue";
 import {
   validatePhysicalFileSequenceOrder,
@@ -88,14 +90,25 @@ function fromArchivePath(path: string): PhysicalShardIdentity | null {
 }
 
 function getPhysicalShardIdentity(path: string): PhysicalShardIdentity | null {
-  return fromPhysicalPath(path) ?? fromArchivePath(path);
+  const identity = fromPhysicalPath(path) ?? fromArchivePath(path);
+  if (
+    identity === null ||
+    !isSafeObservationAgentId(identity.agentId) ||
+    !isSafeWriterId(identity.writerId)
+  ) {
+    return null;
+  }
+  return identity;
 }
 
 function physicalShardKeyOf(identity: PhysicalShardIdentity): string {
   return JSON.stringify([identity.agentId, identity.safeSessionId, identity.writerId]);
 }
 
-function matchesPhysicalShard(record: PersistedLogRecord, identity: PhysicalShardIdentity): boolean {
+function matchesPhysicalShard(
+  record: PersistedLogRecord,
+  identity: PhysicalShardIdentity,
+): boolean {
   return (
     record.agentId === identity.agentId &&
     record.writerId === identity.writerId &&
@@ -234,7 +247,10 @@ export class ObservationLogStore {
       const physicalIdentity = getPhysicalShardIdentity(sourcePath);
       if (physicalIdentity === null) {
         hasIntegrityViolation = true;
-        console.warn("Failed to identify physical shard for %s, excluding file from result", sourcePath);
+        console.warn(
+          "Failed to identify physical shard for %s, excluding file from result",
+          sourcePath,
+        );
         return;
       }
       const physicalShardKey = physicalShardKeyOf(physicalIdentity);

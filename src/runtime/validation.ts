@@ -1,6 +1,8 @@
 // src/runtime/validation.ts
 import type { PersistedLogRecord } from "../core/v2/observation-model";
+import { isSafeObservationAgentId } from "../core/v2/observation-agent-id-validation";
 import { shardKeyOf } from "../core/v2/shard-layout";
+import { isSafeWriterId } from "../core/v2/writer-id-validation";
 import { isValidSkillInvokedRecord } from "./skill-invoked-record-validator";
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -72,13 +74,8 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     // both fields undefined. Normalizing them to empty arrays prevents silent
     // data loss during readAll() ingestion on upgraded instances.
     const declaredClaims =
-      r.declaredClaims === undefined && r.evidence === undefined
-        ? []
-        : r.declaredClaims;
-    const evidence =
-      r.declaredClaims === undefined && r.evidence === undefined
-        ? []
-        : r.evidence;
+      r.declaredClaims === undefined && r.evidence === undefined ? [] : r.declaredClaims;
+    const evidence = r.declaredClaims === undefined && r.evidence === undefined ? [] : r.evidence;
     const mismatched =
       !Array.isArray(declaredClaims) ||
       !Array.isArray(evidence) ||
@@ -242,6 +239,9 @@ export function validateRecordSchema(record: unknown): void {
     typeof r.writerId !== "string"
   ) {
     throw new TypeError("Invalid record: missing or invalid shard identifier fields");
+  }
+  if (!isSafeObservationAgentId(r.agentId) || !isSafeWriterId(r.writerId)) {
+    throw new TypeError("Invalid record: unsafe shard identifier fields");
   }
 
   if (r.recordType === "observation") {

@@ -811,6 +811,35 @@ describe("ObservationLogStore", () => {
     expect(all).toEqual([]);
   });
 
+  it("excludes unsafe physical shard identities while preserving valid active and archive records", async () => {
+    // Given: valid active/archive files plus attacker-controlled paths whose envelopes match those paths.
+    const { files, reader, writer } = createMemFs();
+    const safeSessionId = encodeSafeSegment("ses-1");
+    files.set(
+      `.justice/archive/events/atlas/${safeSessionId}/w-2.20260101T000000Z.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "atlas", writerId: "w-2", sequence: 1 })}\n`,
+    );
+    files.set(toPhysicalPath(shard), `${JSON.stringify({ ...msgRecord(), sequence: 1 })}\n`);
+    files.set(
+      `.justice/events/attacker/${safeSessionId}/w-7.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "attacker", writerId: "w-7", sequence: 1 })}\n`,
+    );
+    files.set(
+      `.justice/archive/events/atlas/${safeSessionId}/w-system.20260101T000000Z.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "atlas", writerId: "w-system", sequence: 1 })}\n`,
+    );
+    const store = new ObservationLogStore(writer, reader, "w-1");
+
+    // When: every listed physical file is ingested.
+    const all = await store.readAll();
+
+    // Then: only the valid active and archive records reach projection input.
+    expect(all.map(({ agentId, writerId }) => [agentId, writerId])).toEqual([
+      ["atlas", "w-2"],
+      ["sisyphus", "w-1"],
+    ]);
+  });
+
   it("continues sequence numbering across an archived segment (rotation continuity)", async () => {
     const { files, reader, writer } = createMemFs();
     const enc = encodeSafeSegment("ses-1");
@@ -897,9 +926,9 @@ describe("ObservationLogStore", () => {
     const { reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
 
-    await expect(store.append(shard, { ...msgRecord(), sessionId: "other-session" })).rejects.toThrow(
-      /envelope.*shard/i,
-    );
+    await expect(
+      store.append(shard, { ...msgRecord(), sessionId: "other-session" }),
+    ).rejects.toThrow(/envelope.*shard/i);
   });
 });
 

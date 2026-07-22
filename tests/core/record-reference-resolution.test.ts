@@ -11,7 +11,7 @@ function baseEnvelope(): Record<string, unknown> {
     timestamp: "2026-07-20T00:00:00.000Z",
     agentId: "atlas" as const,
     sessionId: "session-1",
-    writerId: "writer-1",
+    writerId: "w-1",
     recordType: "observation" as const,
   };
 }
@@ -21,7 +21,7 @@ function buildFullRef(evidenceId: string, sequence = 1): FullEvidenceRef {
     kind: "full",
     agentId: "atlas",
     sessionId: "session-1",
-    writerId: "writer-1",
+    writerId: "w-1",
     sequence,
     evidenceId,
   };
@@ -98,7 +98,7 @@ describe("record sub-entity reference resolution (D70)", () => {
       kind: "full",
       agentId: "atlas",
       sessionId: "session-1",
-      writerId: "writer-1",
+      writerId: "w-1",
       sequence: 1,
     } as unknown as FullEvidenceRef;
     const decision: DecisionRecord = {

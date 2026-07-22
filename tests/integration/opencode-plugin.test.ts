@@ -36,6 +36,8 @@ describe("OpenCodePlugin (integration)", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         "event",
+        "chat.message",
+        "chat.params",
         "tool.execute.before",
         "tool.execute.after",
         "experimental.session.compacting",

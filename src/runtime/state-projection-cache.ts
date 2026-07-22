@@ -71,8 +71,13 @@ function isValidCacheStructure(parsed: unknown): boolean {
   if (!isPlainRecord(parsed)) return false;
   if (parsed.schemaVersion !== 2) return false;
   const integrity = parsed.integrity;
-  if (!integrity || typeof integrity !== "object") return false;
-  if (!("maxSequenceByShard" in integrity)) return false;
+  if (!isPlainRecord(integrity)) return false;
+  if (typeof integrity.sourceHash !== "string") return false;
+  const maxSequenceByShard = integrity.maxSequenceByShard;
+  if (!isPlainRecord(maxSequenceByShard)) return false;
+  for (const sequence of Object.values(maxSequenceByShard)) {
+    if (typeof sequence !== "number" || !Number.isFinite(sequence) || sequence < 0) return false;
+  }
   // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
   // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
   // cache) silently becomes an index-keyed Map, and `undefined` throws. Require

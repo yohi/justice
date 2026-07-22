@@ -240,6 +240,8 @@ export interface SkipResponse {
 export interface InjectResponse {
   readonly action: "inject";
   readonly injectedContext: string;
+  readonly normalInjectedContext?: string;
+  readonly gateAdvisoryContext?: string;
   readonly modifiedPayload?: unknown;
   readonly variant?: "gate_advisory";
 }

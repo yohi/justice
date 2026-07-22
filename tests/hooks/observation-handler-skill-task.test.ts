@@ -25,24 +25,32 @@ function createHandler(): {
   };
 }
 
+function observePassingTask(
+  handler: ObservationHandler,
+  callId: string,
+  taskId: string,
+): Promise<HookResponse> {
+  return handler.handlePostToolUse({
+    type: "PostToolUse",
+    sessionId: "session-1",
+    callId,
+    payload: {
+      toolName: "task",
+      toolInput: { taskId },
+      toolResult: "Tests passed and build passed",
+      error: false,
+    },
+  });
+}
+
 describe("ObservationHandler skill and task summary observation", () => {
   it("cohabits observed and declared task-summary evidence in one tool record", async () => {
-    const { handler, logStore } = createHandler();
+    const { handler, logStore, sessionState } = createHandler();
+    sessionState.setActiveTaskWindow("call-task", "task-1", "session-1");
 
-    await handler.handlePostToolUse({
-      type: "PostToolUse",
-      sessionId: "session-1",
-      callId: "call-task",
-      payload: {
-        toolName: "task",
-        toolInput: { taskId: "task-1" },
-        toolResult: "Tests passed and build passed",
-        error: false,
-      },
-    });
+    await observePassingTask(handler, "call-task", "task-1");
 
     const events = await logStore.readAll();
-    expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       kind: "tool_executed",
       toolName: "task",
@@ -61,6 +69,22 @@ describe("ObservationHandler skill and task summary observation", () => {
         },
       ],
     });
+  });
+
+  it("persists only observed task evidence when no correlated task window exists", async () => {
+    const { handler, logStore } = createHandler();
+
+    await observePassingTask(handler, "call-uncorrelated", "task-payload-only");
+
+    const events = await logStore.readAll();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "tool_executed",
+      toolName: "task",
+      callId: "call-uncorrelated",
+      evidence: [{ evidenceId: "call-uncorrelated", provenance: "observed" }],
+    });
+    expect(events[0]?.taskId).toBeUndefined();
   });
 
   it("appends a skill_invoked record after the direct skill tool record", async () => {

@@ -32,6 +32,14 @@ interface SessionState {
   lastAccess: number;
 }
 
+type ReflectionEventInput = {
+  readonly trigger: "task_succeeded" | "task_error";
+  readonly planRef: { readonly path: string; readonly taskId: string };
+  readonly intent: "check_complete" | "append_error_note";
+  readonly note?: string;
+  readonly sessionId: string;
+};
+
 export class TaskFeedbackHandler {
   private readonly fileReader: FileReader;
   private readonly fileWriter: FileWriter;
@@ -236,6 +244,7 @@ export class TaskFeedbackHandler {
   ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
+    let planUpdated = false;
 
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
@@ -251,15 +260,7 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
-
-        if (this.observationHandler) {
-          await this.observationHandler.emitReflectionEvent({
-            trigger: "task_succeeded",
-            planRef: { path: session.planPath, taskId: session.activeTaskId },
-            intent: "check_complete",
-            sessionId,
-          });
-        }
+        planUpdated = true;
       }
     } catch (err) {
       console.warn(
@@ -267,6 +268,13 @@ export class TaskFeedbackHandler {
         err,
       );
     }
+
+    await this.emitReflectionEvent({
+      trigger: "task_succeeded",
+      planRef: { path: session.planPath, taskId: session.activeTaskId },
+      intent: "check_complete",
+      sessionId,
+    });
 
     // Extract and accumulate learnings from success
     const learnings = this.learningExtractor.extract(
@@ -280,7 +288,7 @@ export class TaskFeedbackHandler {
 
     return {
       action: "inject",
-      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md updated. ✅]`,
+      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md ${planUpdated ? "updated" : "was not updated"}. ✅]`,
     };
   }
 
@@ -302,16 +310,6 @@ export class TaskFeedbackHandler {
       );
       await this.fileWriter.writeFile(session.planPath, updatedContent);
 
-      if (this.observationHandler) {
-        await this.observationHandler.emitReflectionEvent({
-          trigger: "task_error",
-          planRef: { path: session.planPath, taskId: action.taskId },
-          intent: "append_error_note",
-          note: `${action.errorClass}: ${action.message}`,
-          sessionId,
-        });
-      }
-
       // Generate split suggestion
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === action.taskId);
@@ -325,6 +323,14 @@ export class TaskFeedbackHandler {
         err,
       );
     }
+
+    await this.emitReflectionEvent({
+      trigger: "task_error",
+      planRef: { path: session.planPath, taskId: action.taskId },
+      intent: "append_error_note",
+      note: `${action.errorClass}: ${action.message}`,
+      sessionId,
+    });
 
     // Extract and accumulate learnings from escalation
     const learnings = this.learningExtractor.extract(
@@ -353,6 +359,19 @@ export class TaskFeedbackHandler {
         "---",
       ].join("\n"),
     };
+  }
+
+  private async emitReflectionEvent(input: ReflectionEventInput): Promise<void> {
+    if (!this.observationHandler) return;
+
+    try {
+      await this.observationHandler.emitReflectionEvent(input);
+    } catch (err) {
+      console.warn(
+        `[JUSTICE] Failed to emit ReflectionEvent: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      );
+    }
   }
 
   private cleanupSessions(): void {

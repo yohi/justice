@@ -377,27 +377,69 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
   });
 
   it("(c) appends the banner to output.output when enableAdvisoryOutputAppend is true", async () => {
+    // Given
+    const formatBannerSpy = vi
+      .spyOn(OpenCodeNotifier.prototype, "formatBanner")
+      .mockReturnValue("<gate-banner />");
     const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
-      injectedContext: "GATE: blocked",
+      injectedContext: "<gate-context />",
       variant: "gate_advisory",
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
     await adapter.onToolExecuteAfter(
       { tool: "bash", sessionID: "s", callID: "c1", args: {} },
       output,
     );
 
-    expect(output.output.startsWith("raw\n\n")).toBe(true);
-    expect(output.output).toContain("JUSTICE NOTIFICATION");
-    expect(output.output).toContain("Task Gate");
+    // Then
+    expect(formatBannerSpy).toHaveBeenCalledTimes(1);
+    expect(output.output).toBe("raw\n\n<gate-banner />");
   });
 
-  it("(c) a plain inject (no gate_advisory variant) does not notify or mutate output", async () => {
+  it("appends normal guidance while sending only the gate advisory through notifier channels", async () => {
+    // Given
+    const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
+    const formatBannerSpy = vi
+      .spyOn(OpenCodeNotifier.prototype, "formatBanner")
+      .mockReturnValue("<gate-banner />");
+    const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
+    await adapter.ensureInitialized();
+    notifySpy.mockClear();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "normal guidance\n\n---\n\ngate advisory",
+      normalInjectedContext: "normal guidance",
+      gateAdvisoryContext: "gate advisory",
+      variant: "gate_advisory",
+    });
+    const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
+
+    // Then
+    expect(output.output).toBe("raw\n\nnormal guidance\n\n<gate-banner />");
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gate advisory" }),
+    );
+    expect(formatBannerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gate advisory" }),
+    );
+  });
+
+  it("(c) appends a plain inject exactly once without notifying", async () => {
+    // Given
     const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
     const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
     await adapter.ensureInitialized();
@@ -409,13 +451,16 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
     await adapter.onToolExecuteAfter(
       { tool: "bash", sessionID: "s", callID: "c1", args: {} },
       output,
     );
 
+    // Then
     expect(notifySpy).not.toHaveBeenCalled();
-    expect(output.output).toBe("raw");
+    expect(output.output).toBe("raw\n\nsome other inject");
   });
 
   it("(c) gate_advisory notify falls back to taskId 'unknown' when input.args has no taskId", async () => {
@@ -552,6 +597,37 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
       },
     });
     expect(lifecycleMessage).not.toHaveProperty("payload.content");
+  });
+
+  it("routes message.updated with info.sessionID when the top-level sessionID is absent", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    // When
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: { sessionID: "nested-session", id: "msg-1", role: "user", content: "delegate" },
+        },
+      },
+    });
+
+    // Then
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "nested-session",
+      payload: {
+        kind: "message_updated",
+        sessionId: "nested-session",
+        messageID: "msg-1",
+        role: "user",
+        finalized: false,
+      },
+    });
   });
 
   it("(d) does not forward an observation message_updated when messageID is absent (unroutable)", async () => {
@@ -731,6 +807,29 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     });
 
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("maps an assistant chat.message agent without forwarding its text to the legacy Message route", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    // When
+    await adapter.onChatMessage({
+      sessionID: "sess-chat",
+      message: { role: "assistant", content: "assistant-only text", agent: "atlas" },
+    });
+
+    // Then
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: "AgentMapped",
+        sessionId: "sess-chat",
+        payload: { sessionId: "sess-chat", agentName: "atlas" },
+      },
+    ]);
   });
 
   it("drops message.part.updated without a part id but retains an empty text update", async () => {

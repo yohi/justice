@@ -17,6 +17,12 @@ export const OpenCodePlugin: Plugin = async (init) => {
         },
       );
     },
+    "chat.message": async (input, output): Promise<void> => {
+      await adapter.onChatMessage(input, output);
+    },
+    "chat.params": async (input): Promise<void> => {
+      await adapter.onChatParams(input);
+    },
     "tool.execute.before": async (input, output): Promise<void> => {
       await adapter.onToolExecuteBefore(
         input as { tool: string; sessionID: string; callID: string },
