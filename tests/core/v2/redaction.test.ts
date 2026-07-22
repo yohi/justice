@@ -68,8 +68,16 @@ describe("redactAbsolutePaths()", () => {
 });
 
 describe("redactEnvironmentValues()", () => {
-  it("redacts an environment variable assignment", () => {
-    expect(redactEnvironmentValues("FOO_BAR=secret")).toBe("[REDACTED_ENV]");
+  it("redacts double-quoted env var values", () => {
+    expect(redactEnvironmentValues('API2_KEY="secret value"')).toBe("[REDACTED_ENV]");
+  });
+
+  it("redacts single-quoted env var values", () => {
+    expect(redactEnvironmentValues("API2_KEY='secret'")).toBe("[REDACTED_ENV]");
+  });
+
+  it("redacts unquoted env var values", () => {
+    expect(redactEnvironmentValues("API_KEY=unquoted")).toBe("[REDACTED_ENV]");
   });
 
   it("redacts env var inline in text", () => {
