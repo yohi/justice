@@ -128,7 +128,7 @@ export class MessageRoleBuffer {
     return [...entry.parts.entries()]
       .filter(([, part]): boolean => part.finalized)
       .map(([partId]): string => partId)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
   }
 
   /**

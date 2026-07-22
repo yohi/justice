@@ -67,26 +67,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isValidCacheStructure(parsed: unknown): boolean {
-  if (!isPlainRecord(parsed)) return false;
-  if (parsed.schemaVersion !== 2) return false;
-  const integrity = parsed.integrity;
-  if (!isPlainRecord(integrity)) return false;
-  if (typeof integrity.sourceHash !== "string") return false;
-  const maxSequenceByShard = integrity.maxSequenceByShard;
-  if (!isPlainRecord(maxSequenceByShard)) return false;
-  for (const sequence of Object.values(maxSequenceByShard)) {
-    if (typeof sequence !== "number" || !Number.isFinite(sequence) || sequence < 0) return false;
-  }
-  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
-  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
-  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
-  // both to be plain objects. The `reviewSummary` array fields are copied by
-  // reference, so a partial `reviewSummary` would leave them `undefined` and
-  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
-  // rebuilds instead.
-  if (!isPlainRecord(parsed.tasks)) return false;
-  const reviewSummary = parsed.reviewSummary;
+function isValidReviewSummary(reviewSummary: unknown): boolean {
   if (!isPlainRecord(reviewSummary)) return false;
   if (!isPlainRecord(reviewSummary.byScope)) return false;
   if (reviewSummary.authority !== "observed_review_output") return false;
@@ -109,6 +90,28 @@ function isValidCacheStructure(parsed: unknown): boolean {
     Array.isArray(reviewSummary.resolved) &&
     Array.isArray(reviewSummary.open)
   );
+}
+
+function isValidCacheStructure(parsed: unknown): boolean {
+  if (!isPlainRecord(parsed)) return false;
+  if (parsed.schemaVersion !== 2) return false;
+  const integrity = parsed.integrity;
+  if (!isPlainRecord(integrity)) return false;
+  if (typeof integrity.sourceHash !== "string") return false;
+  const maxSequenceByShard = integrity.maxSequenceByShard;
+  if (!isPlainRecord(maxSequenceByShard)) return false;
+  for (const sequence of Object.values(maxSequenceByShard)) {
+    if (typeof sequence !== "number" || !Number.isFinite(sequence) || sequence < 0) return false;
+  }
+  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
+  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
+  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
+  // both to be plain objects. The `reviewSummary` array fields are copied by
+  // reference, so a partial `reviewSummary` would leave them `undefined` and
+  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
+  // rebuilds instead.
+  if (!isPlainRecord(parsed.tasks)) return false;
+  return isValidReviewSummary(parsed.reviewSummary);
 }
 
 export type CacheValidationReason =

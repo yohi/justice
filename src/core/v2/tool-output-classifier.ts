@@ -192,6 +192,37 @@ function isGitFileContentCommand(tokens: readonly string[]): boolean {
   return subcommand === "format-patch" && subcommandArguments.includes("--stdout");
 }
 
+// Classifies a single pipeline stage (one `|`-separated command). A search command appearing after a
+// pipe with only its pattern is an stdin filter (not a file read). Returns whether this stage reads
+// file content and/or executes a process; the caller aggregates these flags across all stages.
+function classifyPipelineStage(
+  pipelineCommand: string,
+  pipelineIndex: number,
+): { readonly fileContent: boolean; readonly commandExec: boolean } {
+  const tokens = pipelineCommand.trim().split(/\s+/).filter(Boolean);
+  const { firstToken, sawRunner, unwrappedTokens } = unwrapRunnerPrefixes(tokens);
+  const isStdinOnlyFilter =
+    pipelineIndex > 0 &&
+    PIPELINE_STDIN_FILTER_COMMANDS.has(firstToken) &&
+    unwrappedTokens.slice(1).filter((token) => !token.startsWith("-")).length <= 1;
+
+  let fileContent = false;
+  let commandExec = false;
+
+  if (FILE_CONTENT_COMMANDS.has(firstToken) && !isStdinOnlyFilter) fileContent = true;
+  if (firstToken === "git" && isGitFileContentCommand(unwrappedTokens)) fileContent = true;
+  // A runner-wrapped invocation executes a process; treat as command_exec.
+  if (sawRunner || COMMAND_EXEC_COMMANDS.has(firstToken)) commandExec = true;
+  // Interpreter one-liners that read a file (e.g. `node -e "...readFileSync..."`,
+  // `python -c "open('f').read()"`) read file content even though the leading token is a
+  // command-exec interpreter. Scoped to interpreters to avoid matching incidental substrings.
+  if (INTERPRETERS.has(firstToken) && FILE_INLINE_READ_PATTERN.test(pipelineCommand)) {
+    fileContent = true;
+  }
+
+  return { fileContent, commandExec };
+}
+
 // Classifies a full shell command string. Splits by sequential delimiters (&&, ||, ;) and scans every
 // pipeline stage. A search command after a pipe with only its pattern is an stdin filter, not a file
 // read. file_content wins if any sub-command reads file content; otherwise command_exec if any is
@@ -203,23 +234,9 @@ function classifyShellCommand(command: string): "command_exec" | "file_content" 
 
   for (const sub of subCommands) {
     for (const [pipelineIndex, pipelineCommand] of sub.split("|").entries()) {
-      const tokens = pipelineCommand.trim().split(/\s+/).filter(Boolean);
-      const { firstToken, sawRunner, unwrappedTokens } = unwrapRunnerPrefixes(tokens);
-      const isStdinOnlyFilter =
-        pipelineIndex > 0 &&
-        PIPELINE_STDIN_FILTER_COMMANDS.has(firstToken) &&
-        unwrappedTokens.slice(1).filter((token) => !token.startsWith("-")).length <= 1;
-
-      if (FILE_CONTENT_COMMANDS.has(firstToken) && !isStdinOnlyFilter) hasFileContent = true;
-      if (firstToken === "git" && isGitFileContentCommand(unwrappedTokens)) hasFileContent = true;
-      // A runner-wrapped invocation executes a process; treat as command_exec.
-      if (sawRunner || COMMAND_EXEC_COMMANDS.has(firstToken)) hasCommandExec = true;
-      // Interpreter one-liners that read a file (e.g. `node -e "...readFileSync..."`,
-      // `python -c "open('f').read()"`) read file content even though the leading token is a
-      // command-exec interpreter. Scoped to interpreters to avoid matching incidental substrings.
-      if (INTERPRETERS.has(firstToken) && FILE_INLINE_READ_PATTERN.test(pipelineCommand)) {
-        hasFileContent = true;
-      }
+      const stage = classifyPipelineStage(pipelineCommand, pipelineIndex);
+      if (stage.fileContent) hasFileContent = true;
+      if (stage.commandExec) hasCommandExec = true;
     }
   }
 

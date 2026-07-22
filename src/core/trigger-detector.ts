@@ -19,7 +19,7 @@ export interface TriggerContext {
   readonly lastUserMessage?: string;
 }
 
-const PLAN_PATH_REGEX = /(?:^|\s|["'`])([\w./-]*plan[\w./-]*\.md)\b/i;
+const PLAN_PATH_REGEX = /(?:^|\s|["'`])([\w./-]+\.md)\b/i;
 
 const DELEGATION_KEYWORDS: RegExp[] = [
   /\bdelegate\b/i,
@@ -44,6 +44,7 @@ export class TriggerDetector {
     if (match?.[1] === undefined) return null;
 
     const rawPath = match[1];
+    if (!rawPath.includes("plan")) return null;
 
     // Reject absolute paths
     if (path.isAbsolute(rawPath)) return null;

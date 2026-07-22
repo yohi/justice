@@ -73,6 +73,37 @@ function messageKey(sessionId: string, messageID: string, partID: string | undef
   return JSON.stringify([sessionId, messageID, partID ?? null]);
 }
 
+function applyMessageObservation(
+  tasks: Map<string, MutableTask>,
+  latestMessageClaims: Map<string, LatestMessageClaims>,
+  event: Extract<PersistedLogRecord, { recordType: "observation"; kind: "message" }>,
+  taskId: string,
+  taskState: MutableTask,
+  baseRef: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId" | "sequence">,
+): void {
+  const key = messageKey(event.sessionId, event.messageID, event.partID);
+  const previousClaims = latestMessageClaims.get(key);
+  if (previousClaims) {
+    const previousTask = tasks.get(previousClaims.taskId);
+    if (previousTask) {
+      previousTask.evidence = previousTask.evidence.filter(
+        (current) => !previousClaims.evidenceRefKeys.has(fullEvidenceRefKey(current.ref)),
+      );
+    }
+  }
+
+  const evidenceRefKeys = new Set<string>();
+  for (const ev of event.evidence) {
+    const projectedEvidence: ProjectedEvidence = {
+      evidence: ev,
+      ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
+    };
+    taskState.evidence.push(projectedEvidence);
+    evidenceRefKeys.add(fullEvidenceRefKey(projectedEvidence.ref));
+  }
+  latestMessageClaims.set(key, { taskId, evidenceRefKeys });
+}
+
 function applyObservationEvent(
   tasks: Map<string, MutableTask>,
   latestMessageClaims: Map<string, LatestMessageClaims>,
@@ -90,27 +121,7 @@ function applyObservationEvent(
       });
     }
   } else if (event.kind === "message") {
-    const key = messageKey(event.sessionId, event.messageID, event.partID);
-    const previousClaims = latestMessageClaims.get(key);
-    if (previousClaims) {
-      const previousTask = tasks.get(previousClaims.taskId);
-      if (previousTask) {
-        previousTask.evidence = previousTask.evidence.filter(
-          (current) => !previousClaims.evidenceRefKeys.has(fullEvidenceRefKey(current.ref)),
-        );
-      }
-    }
-
-    const evidenceRefKeys = new Set<string>();
-    for (const ev of event.evidence) {
-      const projectedEvidence: ProjectedEvidence = {
-        evidence: ev,
-        ref: { ...baseRef, kind: "full", evidenceId: ev.evidenceId },
-      };
-      taskState.evidence.push(projectedEvidence);
-      evidenceRefKeys.add(fullEvidenceRefKey(projectedEvidence.ref));
-    }
-    latestMessageClaims.set(key, { taskId, evidenceRefKeys });
+    applyMessageObservation(tasks, latestMessageClaims, event, taskId, taskState, baseRef);
   } else if (event.kind === "review_observed") {
     if (event.reviewScope && !taskState.observedReviewScopes.includes(event.reviewScope)) {
       taskState.observedReviewScopes.push(event.reviewScope);
