@@ -262,19 +262,19 @@ export class TaskFeedbackHandler {
         await this.fileWriter.writeFile(session.planPath, updatedContent);
         planUpdated = true;
       }
+
+      await this.emitReflectionEvent({
+        trigger: "task_succeeded",
+        planRef: { path: session.planPath, taskId: session.activeTaskId },
+        intent: "check_complete",
+        sessionId,
+      });
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,
         err,
       );
     }
-
-    await this.emitReflectionEvent({
-      trigger: "task_succeeded",
-      planRef: { path: session.planPath, taskId: session.activeTaskId },
-      intent: "check_complete",
-      sessionId,
-    });
 
     // Extract and accumulate learnings from success
     const learnings = this.learningExtractor.extract(
@@ -317,20 +317,20 @@ export class TaskFeedbackHandler {
         const suggestion = this.splitter.suggestSplit(activeTask, action.errorClass);
         splitSuggestionContext = "\n\n" + this.splitter.formatAsPlanMarkdown(suggestion);
       }
+
+      await this.emitReflectionEvent({
+        trigger: "task_error",
+        planRef: { path: session.planPath, taskId: action.taskId },
+        intent: "append_error_note",
+        note: `${action.errorClass}: ${action.message}`,
+        sessionId,
+      });
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`,
         err,
       );
     }
-
-    await this.emitReflectionEvent({
-      trigger: "task_error",
-      planRef: { path: session.planPath, taskId: action.taskId },
-      intent: "append_error_note",
-      note: `${action.errorClass}: ${action.message}`,
-      sessionId,
-    });
 
     // Extract and accumulate learnings from escalation
     const learnings = this.learningExtractor.extract(

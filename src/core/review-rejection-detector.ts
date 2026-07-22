@@ -69,7 +69,7 @@ export class ReviewRejectionDetector {
       lineIndex = continuationIndex - 1;
       const summary = findingLines.join("\n").slice(0, MAX_EXCERPT_LENGTH);
 
-      const signal = this.matchedSignal([heading], summary);
+      const signal = this.matchedSignal([heading], summary, heading);
       const severity = signal.severity;
       const location = extractReviewLocation(summary);
       const normalizedSummary = this.normalizeSummaryForKey(summary, location, workspaceRoot);
@@ -105,12 +105,13 @@ export class ReviewRejectionDetector {
   private matchedSignal(
     excerpts: readonly string[],
     summary: string,
+    heading?: string,
   ): ReviewRejectionSignal {
     return {
       matched: true,
       excerpts,
       summary,
-      severity: classifySeverity(summary),
+      severity: classifySeverity(heading ? `${heading}\n${summary}` : summary),
     };
   }
 

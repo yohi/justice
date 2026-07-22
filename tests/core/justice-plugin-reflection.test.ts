@@ -84,7 +84,7 @@ describe("JusticePlugin reflection event integration", () => {
     });
   });
 
-  it("emits an error reflection when appending the error note fails", async () => {
+  it("does not emit an error reflection when appending the error note fails", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
@@ -110,16 +110,10 @@ describe("JusticePlugin reflection event integration", () => {
     });
 
     // Then
-    expect(reflectionSpy).toHaveBeenCalledWith({
-      trigger: "task_error",
-      planRef: { path: "plan.md", taskId: "task-1" },
-      intent: "append_error_note",
-      note: expect.stringContaining("test_failure"),
-      sessionId: "session-error",
-    });
+    expect(reflectionSpy).not.toHaveBeenCalled();
   });
 
-  it("emits a success reflection and reports an unchanged plan when completion writing fails", async () => {
+  it("does not emit a success reflection when completion writing fails", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
@@ -144,12 +138,7 @@ describe("JusticePlugin reflection event integration", () => {
     });
 
     // Then
-    expect(reflectionSpy).toHaveBeenCalledWith({
-      trigger: "task_succeeded",
-      planRef: { path: "plan.md", taskId: "task-1" },
-      intent: "check_complete",
-      sessionId: "session-success",
-    });
+    expect(reflectionSpy).not.toHaveBeenCalled();
     expect(response).toMatchObject({
       action: "inject",
       injectedContext: expect.stringContaining("plan.md was not updated"),
