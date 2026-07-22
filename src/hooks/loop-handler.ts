@@ -291,7 +291,7 @@ export class LoopDetectionHandler {
       });
     } catch (err) {
       console.warn(
-        `[JUSTICE] Failed to emit loop ReflectionEvent: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
         err,
       );
     }
@@ -357,7 +357,8 @@ export class LoopDetectionHandler {
       }
     } catch (err) {
       console.warn(
-        `[JUSTICE] LoopDetectionHandler failed to handle event: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] LoopDetectionHandler failed to handle event: %s",
+        err instanceof Error ? err.message : String(err),
       );
     }
 

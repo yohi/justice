@@ -368,8 +368,8 @@ export class TaskFeedbackHandler {
       await this.observationHandler.emitReflectionEvent(input);
     } catch (err) {
       console.warn(
-        `[JUSTICE] Failed to emit ReflectionEvent: ${err instanceof Error ? err.message : String(err)}`,
-        err,
+        "[JUSTICE] Failed to emit ReflectionEvent: %s",
+        err instanceof Error ? err.message : String(err),
       );
     }
   }
