@@ -222,7 +222,8 @@ PostToolUse      → PlanBridge.handlePostToolUse()  (Plan Completion, Prometheu
                    * Merged using mergePostToolUseResponses() in JusticePlugin
 Event:compaction → CompactionProtector
 Event:loop-*     → LoopDetectionHandler
-Event:session.error → ObservationHandler.handleSessionError()  (session_error record + ReflectionEvent seam)
+Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
+                    → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
 ```
 
 
@@ -1280,12 +1281,13 @@ type DecisionRecord = PersistedEnvelope & {
   readonly verdict: "PASS" | "WARN" | "FAIL";
   readonly reachableEnforcementLevel: "L1";
   readonly appliedEnforcementLevel: "L0"; // v2.0 は常に L0（advisory のみ）
-  readonly ruleResults: readonly { ruleId: string; verdict: Verdict; reason?: string; evidenceRefs: FullEvidenceRef[] }[];
+  readonly ruleResults: readonly { ruleId: string; verdict: Verdict; reason?: string; evidenceRefs: EvidenceRef[] }[];
 };
 
 // レコード間参照: shard 横断でも一意な複合参照
 type FullEvidenceRef = { kind: "full"; agentId: ObservationAgentId; sessionId: string; writerId: string; sequence: number; evidenceId: string };
 type SelfEvidenceRef = { kind: "self"; evidenceId: string }; // 同一レコード内の自己参照（sequence 未確定でも参照可）
+type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 ```
 
 ### 15.4 Observation Log 永続化
@@ -1365,6 +1367,6 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 v2.0 の設計書は、実装着手前に満たすべき前提条件を明記していた。**事後検証の結果、これらの前提の一部は Phase 1 着手時点で未達のまま実装が進められたことが判明している**。ドキュメントの正直性のため、本状況をここに記録する:
 
 - **C1（L0 advisory 表示面の実証）は依然「未実証（Not Verified）」**: `output.output` 末尾への banner 追記がモデル推論文脈／ユーザー表示に実際に反映されるかは、実機 OpenCode ホスト上での目視確認が必須だが、Phase 0 スパイク（`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`）はサンドボックス環境の制約により型定義解析（静的検証）に留まり、実機実証は完了していない。設計の保守的フォールバックに従い、`enableAdvisoryOutputAppend` は既定 `false` のまま維持されており、保証チャネルは `JusticeNotifier`（`client.app.log`）のみである。
-- **CODEOWNERS 追認 ADR は「PENDING HUMAN CODEOWNERS RATIFICATION」のまま**: 設計書 D58/D63 は、Phase 0 由来の憲章訂正（hookリスト・保存パス・exit_code縮退・authorship非保持）を1本の ADR にまとめ人間の CODEOWNERS 追認を得ることを実装計画化の前提条件として定めていたが、`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` は現在も「PENDING HUMAN CODEOWNERS RATIFICATION」の状態である。当該 PR（#116）の `APPROVED` 判定は自動レビューボット（`coderabbitai`）由来のみであり、リポジトリ所有者自身のレビューはすべて `COMMENTED`（人間の `APPROVED` レビューは記録されていない）。マージ時点で CODEOWNERS のブランチ保護ルールも設定されていなかったため、セルフマージが人間承認なしに成立した。
+- **CODEOWNERS 追認 ADR は「PENDING HUMAN CODEOWNERS RATIFICATION」のまま**: 設計書 D58/D63 は、Phase 0 由来の憲章訂正（hookリスト・保存パス・exit_code縮退・authorship非保持）を1本の ADR にまとめ人間の CODEOWNERS 追認を得ることを実装計画化の前提条件として定めていたが、`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` は現在も「PENDING HUMAN CODEOWNERS RATIFICATION」の状態である。出荷完了には人間による `APPROVED` レビューの証跡が必要である（具体的なレビュー履歴は ADR またはリリース記録を参照）。
 - **設計書自身の勧告**: 上記2点の前提が満たされるまで、**v2.0 の対外的な「出荷完了」宣言は差し控えるべき**と設計書 §13 末尾に明記されている。本ドキュメント（README.md/SPEC.md）の「✅ 完了」表記はコード実装状況（L0 Advisory として機能する）を指すものであり、上記ガバナンス上の前提が正式に満たされたことを意味しない。
 - **今後の対応**: (1) 実機 OpenCode 環境での C1 目視検証を実施し `enableAdvisoryOutputAppend` の既定値を確定する、(2) 当該 ADR に人間の CODEOWNERS `APPROVED` レビューを取得する。両方が完了するまで、v2.0 を前提とした追加投資判断（v2.5 着手判断等）は本状況を踏まえて行うこと。

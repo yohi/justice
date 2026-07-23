@@ -166,13 +166,13 @@ export default { plugins: [OpenCodePlugin] };
 
 Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。
 > [!NOTE]
-> 本機能はL0 Advisoryとして実装・動作していますが、`output.output`へのadvisory反映の実機検証と、設計乖離ADRの人間CODEOWNERS承認が未完了のため、出荷完了宣言の前提は未充足です（[SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項・ガバナンス状況重要)）。
+> 本機能はL0 Advisoryとして実装・動作していますが、`output.output`へのadvisory反映の実機検証と、設計乖離ADRの人間CODEOWNERS承認が未完了のため、出荷完了宣言の前提は未充足です（[SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要)）。
 
 - **全ツール・メッセージ観測**: `tool.execute.*` / `message.*` イベントを `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` へ追記専用（append-only）で記録します。テスト実行結果・lint/build 出力・レビュー指摘などが対象です（コード本文やチャット全文は保持しません）。
-- **品質ゲート (`.justice/gate.yaml`)**: タスク完了時（`task_complete`）およびツール実行観測時（`tool_observed`）に、テスト/ビルド/lint の合否や未解決レビュー指摘を判定します。既定は3種の gate（`required-tests` / `build-green` / `review-clean`）で、すべて `warn`（advisory）始まりです。プロジェクトの `.justice/gate.yaml` でカスタム gate を追加、または既定 gate を上書き・無効化（`enabled: false`）できます。
+- **品質ゲート (`.justice/gate.yaml`)**: タスク完了時（`task_complete`）およびツール実行観測時（`tool_observed`）に、テスト・ビルド・未解決レビュー指摘を判定します。既定は3種の gate（`required-tests` / `build-green` / `review-clean`）で、それぞれテスト合格・ビルド合格・未解決レビュー指摘の不存在を判定し、すべて `warn`（advisory）始まりです。lint は既定 gate には含まれず、プロジェクトの `.justice/gate.yaml` でカスタム gate を追加した場合のみ対象となります。既定 gate を上書き・無効化（`enabled: false`）することもできます。
 - **`justice_review` ツール**: エージェントが呼び出せる唯一の公開カスタムツールです。`scope` 未指定で全体のレビュー要約（critical/major/minor、open/resolved）を表示し、`resolve: { itemKeys, artifactRef }` を渡すと人間承認（`context.ask`）を経て該当指摘を解決済みにできます。
 - **Provenance（証拠の出自）**: 「テストが通った」というエージェントの自己申告（`declared`）だけでは Gate は PASS しません。Justice が実際にツール実行を観測した（`observed`/`derived`）場合のみ PASS 算入されます。
-- **Fail-Open**: Observation Log の書込・読込・投影（projection）のいずれかが失敗しても、常に `PROCEED`（黙って続行）に縮退します。
+- **Fail-Open**: Observation Log の書込・読込・投影（projection）のいずれかが失敗しても、セッションを停止せず必要に応じてログを記録したうえで `PROCEED` に縮退します。
 
 ## コアコンポーネント
 
@@ -302,7 +302,7 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 | 9 | 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
 | 10 | v2.0 Quality Control Plane 基盤 (Observation Log / Gate Engine / Review Aggregator) | 🟡 実装完了・ガバナンス未完了（※1） |
 
-※1: L0 Advisoryとしてコードは実装・動作していますが、(a) `output.output` への advisory 反映の実機検証（C1）が未完了、(b) 憲章乖離 ADR（`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`）の人間 CODEOWNERS 承認が未取得（現在 `PENDING HUMAN CODEOWNERS RATIFICATION`）のため、設計上の前提条件は未充足です。詳細は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項・ガバナンス状況重要) を参照してください。
+※1: L0 Advisoryとしてコードは実装・動作していますが、(a) `output.output` への advisory 反映の実機検証（C1）が未完了、(b) 憲章乖離 ADR（`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`）の人間 CODEOWNERS 承認が未取得（現在 `PENDING HUMAN CODEOWNERS RATIFICATION`）のため、設計上の前提条件は未充足です。詳細は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要) を参照してください。
 
 ## ドキュメント
 

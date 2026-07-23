@@ -9,7 +9,8 @@ Justice is an OpenCode plugin bridging [Superpowers](https://github.com/oh-my-op
 ## Environment
 
 - Runtime is **Bun**, not Node/npm — use `bun run <script>`, not `npm run`.
-- `bun run lint` / `typecheck` / `format` / `test` / `build` must run **inside the Devcontainer** (`.devcontainer/`), never on the host.
+- **Repository development** (building/editing this repo itself): `bun run lint` / `typecheck` / `format` / `test` / `build` must run **inside the Devcontainer** (`.devcontainer/`), never on the host.
+- **Source-based user setup** (building the plugin from this repo for personal use): `bun install` and `bun run build` may run outside the Devcontainer, but CI-grade checks should still use the Devcontainer for reproducibility.
 
 ## Non-negotiable invariants
 
