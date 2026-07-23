@@ -1,8 +1,8 @@
 # Justice Plugin — 仕様書
 
-> **バージョン**: 0.1.0
-> **ステータス**: プロダクションレディ (Phase 7 完了)
-> **最終更新日**: 2026-04-21
+> **バージョン**: 2.4.0
+> **ステータス**: プロダクションレディ (v1: Phase 1-9 完了 / v2.0: Quality Control Plane 基盤 完了・L0 Advisory)
+> **最終更新日**: 2026-07-23
 
 ## 1. 概要
 
@@ -61,6 +61,8 @@ Justice は以下の手順でこのギャップを埋めます：
 ┌──────────────────▼──────────────────────────────────┐
 │  oh-my-openagent (実行エンジン)                     │
 │  task()  /  background_output()  /  compaction      │
+└──────────────────────────────────────────────────────┘
+```
 
 ### 2.2 責務の分割
 
@@ -204,6 +206,25 @@ interface ProtectedContext {
 ---
 
 ## 4. フック仕様 (Hook Specifications)
+
+### 4.0 イベントルーティング概要（`JusticePlugin.handleEvent()`）
+
+すべての Hook イベントは `JusticePlugin.handleEvent()` を経由し、以下のとおりルーティングされる（v1 + v2 合流済み）。各ハンドリングの詳細は §4.1〜4.4（v1）と §15.2（v2 ObservationHandler）を参照。
+
+```text
+Message          → PlanBridge.handleMessage() (user message) / ObservationHandler.handleMessage() (declared claim payload)
+PreToolUse       → PlanBridge.handlePreToolUse()  (task のみ)
+                 → ObservationHandler.handlePreToolUse()  (task 窓の callId 単位登録, D74)
+                   * Merged using mergePreToolUseResponses() in JusticePlugin
+PostToolUse      → PlanBridge.handlePostToolUse()  (Plan Completion, Prometheus Pivot)
+                 → TaskFeedbackHandler.handlePostToolUse()  (Task Checkboxes, Wisdom extraction)
+                 → ObservationHandler.handlePostToolUse()  (Observation Log append, Gate evaluation)
+                   * Merged using mergePostToolUseResponses() in JusticePlugin
+Event:compaction → CompactionProtector
+Event:loop-*     → LoopDetectionHandler
+Event:session.error → ObservationHandler.handleSessionError()  (session_error record + ReflectionEvent seam)
+```
+
 
 ### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 
@@ -954,18 +975,40 @@ justice/
 │   │   ├── review-rejection-patterns.ts — レビュー却下の検出用正規表現パターン
 │   │   ├── review-rejection-detector.ts — Prometheus 却下シグナルの検出・抽出
 │   │   ├── plan-completion-detector.ts — A+Bハイブリッド完了検知によるスキル・計画完了検出
+│   │   ├── session-state-provider.ts   — sessionId→AgentId マッピングと callId 単位の task 窓管理 (v2)
+│   │   ├── review-resolution-artifact.ts — justice_review resolve 入力の正規化・検証 (v2)
+│   │   ├── review-snapshot-artifact.ts — code_review ツール経由の完全スナップショット契約 (v2)
+│   │   ├── hook-response-merger.ts     — PostToolUse 複数レスポンスの合流規則 (v2)
+│   │   ├── v2/                          — Quality Control Plane 内部モジュール群（§15、詳細後述）
+│   │   │     observation-model.ts・decision-model.ts・gate-definition.ts・gate-yaml-parser.ts・default-gates.ts
+│   │   │     gate-context.ts・rule-evaluation-engine.ts・evidence-engine.ts・tool-output-classifier.ts
+│   │   │     declared-claim-extractor.ts・task-summary-claim-extractor.ts・skill-invoked-detector.ts
+│   │   │     record-builder.ts・redaction.ts・persistence-redaction.ts・safe-segment.ts・shard-layout.ts
+│   │   │     writer-id-validation.ts・observation-agent-id-validation.ts・state-projection.ts・integrity.ts
+│   │   │     review-aggregator.ts・review-scope.ts・review-severity.ts・review-types.ts・reflection-event.ts
+│   │   │     message-payload.ts・evidence-list.ts・hash.ts・references.ts
 │   │   └── justice-notifier.ts         — トースト相当の通知処理のための最小限のインターフェース
 │   ├── hooks/
 │   │   ├── plan-bridge.ts            — Message/PreToolUse にバインドされるフック
 │   │   ├── task-feedback.ts          — PostToolUse エラー処理等へのフィードバック
 │   │   ├── compaction-protector.ts   — コンパクションから身を守って保持するフック
-│   │   └── loop-handler.ts           — ループを検知するためのフック
+│   │   ├── loop-handler.ts           — ループを検知するためのフック
+│   │   └── observation-handler.ts    — 全 tool/message 観測を Observation Log へ記録し Gate 評価を発火 (v2)
 │   ├── runtime/
 │   │   ├── node-file-system.ts       — 実際の Bun.file ベースによるファイルの読み書き
 │   │   ├── opencode-adapter.ts       — OpenCode hook ↔ Justice HookEvent adapter
-│   │   └── opencode-notifier.ts      — client.app.log を使用したログ通知処理
+│   │   ├── opencode-notifier.ts      — client.app.log を使用したログ通知処理
+│   │   ├── observation-log-store.ts  — per-writer segment JSONL への直列化 atomic append (v2)
+│   │   ├── write-queue.ts            — shard 単位の非同期直列化 write queue (v2)
+│   │   ├── validation.ts             — record schema / shard sequence 整合性検証 (v2)
+│   │   ├── state-projection-cache.ts — `.justice/state.json` の書込・読込・stale 検証 (v2)
+│   │   ├── gate-loader.ts            — `.justice/gate.yaml` の読込・既定 gate へのマージ (v2)
+│   │   ├── justice-tools.ts          — `justice_review` 等のカスタムツール定義 (v2)
+│   │   ├── message-role-buffer.ts    — assistant メッセージの role/finalize 相関バッファ (v2)
+│   │   ├── writer-id.ts              — writerId の採番・衝突回避 (v2)
+│   │   └── skill-invoked-record-validator.ts — skill_invoked レコードの schema 検証 (v2)
 │   ├── opencode-plugin.ts            — OpenCode Plugin entrypoint
-│   └── index.ts                      — 上記の外部・公開APIの全エクスポート
+│   └── index.ts                      — 上記の外部・公開APIの全エクスポート（v2 内部モジュールは非公開）
 ├── tests/
 │   ├── core/          — コア層に対するテスト用ファイル群
 │   ├── hooks/         — フック層に対するテスト・ファイル群
@@ -1022,13 +1065,14 @@ justice/
 
 ### 11.1 テスト件数の内訳 (*Invisible Advisor 実装完了時に基づく*)
 
-| 解析層 | 対象となるファイル数 | サンプルテスト件数 |
+| 解析層 | 対象となるファイル数 | 概要 |
 |-------|-------|-------|
-| コアロジック部 | 27 ファイル | 約 440 件 |
-| フック・ハンドラ群 | 4 ファイル | 約 70 件 |
-| ランタイム処理 | 2 ファイル | 17 件 |
-| 実環境・結合検証 (統合テスト) | 19 ファイル | 約 36 件 |
-| **合計総数** | **52 テストファイル** | **563 件** |
+| コアロジック部 (`src/core/` + `src/core/v2/`) | 69 ファイル | v1 純粋ロジック（PlanParser 等）＋ v2 Observation/Gate/Review 純粋関数群 |
+| フック・ハンドラ群 (`src/hooks/`) | 12 ファイル | `observation-handler.ts`（v2）を含む全 Hook |
+| ランタイム処理 (`src/runtime/`) | 20 ファイル | `observation-log-store`/`write-queue`/`gate-loader`/`justice-tools` 等（v2）を含む I/O 層 |
+| アーキテクチャ制約検証 (`tests/arch/`) | 2 ファイル | FF-001（Core は `@opencode-ai/*` を import しない）等の静的検証 |
+| 実環境・結合検証 (統合テスト) | 15 ファイル | フェーズ横断のエンドツーエンド検証 |
+| **合計総数** | **119 テストファイル** | **1,339 件**（v1 Phase 1-9 + v2.0 Quality Control Plane 基盤） |
 
 ### 11.2 テスト戦略と方針
 
@@ -1109,6 +1153,8 @@ export type {
 } from "./core/types";
 ```
 
+**v2.0 に関する注記:** `src/core/v2/` および `src/runtime/observation-log-store.ts` 等の Quality Control Plane 内部モジュールは、意図的に本パッケージの公開 API（`src/index.ts`）からエクスポートされません（D50）。これは内部 dry-run helper（`justice_status`/`justice_gate`）が canonical な Observation Log や Decision Record を変更しない contract を保つためであり、v2.0 のユーザー向け公開面は OpenCode カスタムツール `justice_review`（`OpenCodeAdapter.getTools()` 経由で登録）のみに限定されます。詳細は §15 を参照してください。
+
 ---
 
 ## 13. 開発の流れ (Development Workflow)
@@ -1152,7 +1198,173 @@ bun run build
 | Phase 6: オーケストレーションによる並行協調の確立 (Multi-Agent Coordination) | ✅ 完了 |
 | Phase 7: 実環境への統合オーケストレーター構築 (Plugin Orchestrator & Runtime) | ✅ 完了 |
 | Phase 8: 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
+| **v2.0: Quality Control Plane 基盤** (Observation Log / State Projection / Gate Engine / Review Aggregator / `justice_review` ツール、§15 参照) | 🟡 実装完了・ガバナンス未完了（L0 Advisory。§15.12 参照 — C1未実証・CODEOWNERS追認未取得） |
+| v2.5: Handoff（サブエージェント実行結果の直接相関）/ Final Verifier / Acceptance Criteria 判定 | 🔲 計画中 |
+| v2.5+: L1 deny（強制ブロック）等のエンフォースメント強化 / 物理 prune | 🔲 計画中 |
 | 拡張 CLI 用途のサポート (`justice init`, `justice status` など) | 🔲 計画中 |
 | VSCode 拡張機能などへのアダプタ | 🔲 計画中 |
 | Claude Code との連携における互換性の見直し | 🔲 計画中 |
 | Custom Skill SDK の提供 | 🔲 計画中 |
+
+---
+
+## 15. Justice v2.0 — Quality Control Plane（Observation & Gate Engine）
+
+### 15.1 目的と設計原則
+
+AI 開発では「タスクは完了と報告されたが機能は壊れている」（Task Success ≠ Feature Success）という失敗が頻発します。v2.0 はこれを検出するための **Quality Control Plane の基盤層**です。Justice が観測した事実（Evidence）と下した判定（Verdict）をイベントとして記録し、状態をそこから投影（projection）する「背骨」を、既存の v1 機能（plan-bridge / task-feedback / wisdom）を **一切変更せず加算**する形で追加しています（加算シャドウ・dual アーキテクチャ）。
+
+- **L0 Advisory のみ**: v2.0 は強制（block）を行いません。Gate が `FAIL` を返してもツール実行やタスク完了そのものは妨げられず、警告・バナー・チェックリストの提示に留まります。判定権限（Verdict authority）は Justice が保持しますが、強制機構（Enforcement）の段階的強化は v2.5 以降に委ねられます。
+- **Pure Core / Fail-Open / Immutable**: v1 と同じ設計原則を継承します。`src/core/v2/` は `@opencode-ai/*` を import しない純粋関数群であり、I/O 境界（`src/runtime/`）・Hook 境界（`src/hooks/observation-handler.ts`）はすべて `try/catch` で保護され、失敗時は `PROCEED` に縮退します。
+
+### 15.2 アーキテクチャ概要
+
+```text
+OpenCode イベント (tool.execute.*, message.*, session.error)
+        │
+        ▼
+OpenCodeAdapter (onToolExecuteBefore/After, onMessage*, onEvent)
+        │  ToolObservationPayload / ObservationMessagePayload へ変換
+        ▼
+JusticePlugin.handleEvent()
+        │  PostToolUse: [observationHandler, (task時)planBridge, (task時)taskFeedback] を
+        │               mergePostToolUseResponses() で単一 HookResponse に合流
+        ▼
+ObservationHandler (src/hooks/observation-handler.ts)
+        │  1. reviewResolutionArtifact があれば専用分岐のみ実行して PROCEED（通常観測をスキップ）
+        │  2. SessionStateProvider.getActiveTaskId(callId) で taskId を解決（callId 単位の task 窓）
+        │  3. record-builder.ts で ObservationRecord + Evidence を purely構築（redaction 含む）
+        │  4. ObservationLogStore.append() で永続化（per-shard write queue → atomic append）
+        │  5. skill_invoked / review_observed の検出・追記
+        │  6. project(events) で ProjectedState を再構築 → StateProjectionCache へ書込
+        │  7. evaluateGateIfTriggered("task_complete"|"tool_observed", ...) で Gate 評価
+        ▼                                              ▲
+DecisionRecord (WARN/FAIL 時)                    GateLoader (.justice/gate.yaml)
+        │                                              │
+        ▼                                        rule-evaluation-engine.evaluate()
+advisory 送出:                                          │
+  (保証) JusticeNotifier.notify() → client.app.log       │
+  (best-effort) output.output 末尾追記（既定 false）      │
+                                                          │
+review_observed レコード群 ──► review-aggregator.aggregateReviews() ──► ReviewSummary (byScope)
+                                                                              │
+                                                                              ▼
+                                                                    `justice_review` ツール（表示・解決）
+```
+
+### 15.3 データモデル
+
+```typescript
+// src/core/v2/observation-model.ts
+type ObservationRecord = PendingEnvelope & { readonly sequence: number } & (
+  | { kind: "tool_executed"; toolName: string; callId: string; evidence: Evidence[] }
+  | { kind: "message"; messageID: string; partID?: string; role: "assistant";
+      textHash: string; textSnippet?: string; declaredClaims: DeclaredClaim[]; evidence: DeclaredClaimEvidence[]; finalized: boolean }
+  | { kind: "skill_invoked"; skillName: string; source: "skill_tool" | "task_load_skills"; callId?: string }
+  | { kind: "review_observed"; reviewScope: string; isCompleteSnapshot?: boolean; items: ReviewItem[]; resolutionMarkers?: ResolutionMarker[] }
+  | { kind: "session_error"; errorKind: string; message: string }
+  | { kind: "reflection"; reflection: { trigger: "task_succeeded" | "task_error"; planRef: { path: string; taskId: string }; intent: string; note?: string } }
+);
+
+// Evidence: 出自（sourceClass）で二分される discriminated union
+type Evidence = ToolOutputEvidence | DeclaredClaimEvidence;
+// ToolOutputEvidence: toolOutputClass "command_exec"（rawOutput 保存）| "file_content"（rawOutputHash + snippet のみ）
+// DeclaredClaimEvidence: declaredFrom "message" | "task_summary"、claim: { claimKind, outcome }
+
+// provenance の4値: "observed" | "derived" | "declared" | "unknown"
+// Gate 充足（PASS）に算入できるのは observed / derived のみ。declared は WARN 材料に限定（FF-008）。
+
+// DecisionRecord: gate 判定結果（per-rule 化）
+type DecisionRecord = PersistedEnvelope & {
+  readonly gateType: "task";
+  readonly verdict: "PASS" | "WARN" | "FAIL";
+  readonly reachableEnforcementLevel: "L1";
+  readonly appliedEnforcementLevel: "L0"; // v2.0 は常に L0（advisory のみ）
+  readonly ruleResults: readonly { ruleId: string; verdict: Verdict; reason?: string; evidenceRefs: FullEvidenceRef[] }[];
+};
+
+// レコード間参照: shard 横断でも一意な複合参照
+type FullEvidenceRef = { kind: "full"; agentId: ObservationAgentId; sessionId: string; writerId: string; sequence: number; evidenceId: string };
+type SelfEvidenceRef = { kind: "self"; evidenceId: string }; // 同一レコード内の自己参照（sequence 未確定でも参照可）
+```
+
+### 15.4 Observation Log 永続化
+
+- **物理レイアウト**: `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl`。shard 鍵は `{agentId, sessionId, writerId}` で、**1 物理ファイル = 1 writer** を構造保証（`writerId = "w-" + crypto.randomUUID()`、Runtime が plugin インスタンス起動時に採番）。複数プロセスが同一ファイルへ並行 append する経路を排除する。
+- **アーカイブ（rotation）**: shard サイズ 5MB 超過、または最古レコードの経過 14 日でアクティブ shard を `.justice/archive/events/<agentId>/<sessionId>/<writerId>.<timestamp>.jsonl` へ退避。sequence は active + archive 双方の最大値から継続採番される。**v2.0 は archive への移送のみで物理 prune（削除）は行わない**（総量上限の完全な充足は v2.5+ に委ねる）。
+- **直列化**: 同一 shard への append は per-shard 非同期 write queue で直列化し、sequence 採番もキュー内で実施。各 append は一時ファイル書込 + rename による atomic 操作。
+- **整合性検証**: `readAll()` はレコード schema 検証、shard 内 sequence の単調性・重複・物理行順改竄（sequence 降順の出現）を検査し、不正が検出された shard は fail-open で結果から除外する（部分的に壊れたデータを返すことはしない）。
+- **投影キャッシュ**: `.justice/state.json` に `ProjectedState` を書込（`StateProjectionCache`）。`sourceHash` と `maxSequenceByShard` で event log との整合性を検証し、通常の追記に伴う自然な stale（`stale_append`）は警告なしで静かに再構築、構造破損・schema 不正・`maxSequenceByShard` 不一致時は警告のうえ再構築する。event log 自体が常に権威であり、`state.json` はキャッシュに過ぎない。
+
+### 15.5 State Projection（決定論的 Fold）
+
+`project(events, rebuiltAt): ProjectedState` は event log から状態を再構築する純粋関数。2 段階マージで決定論を保証する: **(1) shard 内は `sequence` 順**（append 順の因果関係を保持）→ **(2) shard 間は `timestamp` → `shardId` → `sequence` の全順序**。同一イベント集合は常に同一 `ProjectedState` を生成する（FF-004・replay 可能性）。`tasks: Map<taskId, {status, lastVerdict, evidence[], observedReviewScopes[]}>` と `reviewSummary`（グローバル集約 + `byScope: Map<scope, ScopeReviewSummary>`）を持つ。
+
+### 15.6 Evidence 収集ポリシー（Redaction・Provenance）
+
+- **toolOutputClass 分類**（`src/core/v2/tool-output-classifier.ts`）: `bash`/`shell` の `args.command` を解析し、テスト/ビルド/lint 等の合否観測系コマンドは `command_exec`（`rawOutput` を redact + truncation して保存）、`cat`/`head`/`grep` 等のファイル本文閲覧系コマンドは `file_content`（`rawOutput` を保存せず `rawOutputHash` 必須 + 最小 `rawOutputSnippet` のみ）に分類する。git サブコマンド判別・runner prefix（`uv run`/`npx` 等）の unwrap・インタプリタのインライン file-read 検出まで対応し、**判定不能な場合は常に安全側 `file_content` へフォールバック**する（plan/design/code 本文の全文複製を構造的に遮断）。
+- **保存前 redaction**: `SecretPatternDetector`（API キー等）＋絶対パス＋環境変数値＋トークン付き URL（`user:token@...`）を、**構造的パスを先に適用してから** secret スキャンする順序で redact する（環境変数名が secret パターンに部分マッチして値が漏れる退行を防ぐため）。message 本文・session_error メッセージにも同様に適用する。
+- **provenance と PASS 算入**: 自己申告（`declared`：message 由来 / task summary 由来）は Gate の PASS 判定に**絶対に算入しない**（FF-008）。task summary が transcript を含んでいても `declared` のまま扱う — 親セッションは子（サブエージェント）の実コマンドを直接観測していないため（サブエージェント結果の PASS 算入相関確立は v2.5 Handoff 以降）。
+
+### 15.7 Gate Engine（品質ゲート）
+
+- **設定**: `.justice/gate.yaml`（`GateLoader`）。存在しない、または解析・検証に失敗した場合は警告のうえ既定 gate（`DEFAULT_GATES`）へ fail-open フォールバックする。カスタム gate は既定 gate と同一 `id` で属性を上書き（無効化を含む）でき、新規 `id` は追加登録される。
+- **既定 gate**（すべて `enabled: true`、`onViolation`/`onMissingEvidence` = `warn` = trust-first）:
+  - `required-tests` — `evidence_outcome`（test, requireOutcome: pass）
+  - `build-green` — `evidence_outcome`（build, requireOutcome: pass）
+  - `review-clean` — `review_open_items`（minimumSeverity: major）
+- **check 種別**: `evidence_present`（指定 kind の権威ある Evidence が存在するか）／`evidence_outcome`（指定 kind の権威ある Evidence が指定 outcome を満たすか）／`review_open_items`（当該 task の観測済み reviewScope に、指定 severity 以上の未解決指摘が無いか）。
+- **trigger と task 窓**: `task_complete`（task 完了時）と `tool_observed`（task 窓内の全ツール観測時）の 2 トリガー。`ctx.taskId` が不在（task 窓外）の場合は gate 評価を **skip**（DecisionRecord 非生成）。task 窓は `SessionStateProvider` が `callId` 単位（PreToolUse で開き対応する PostToolUse で閉じる）で管理し、**セッション単位の単一 active taskId フォールバックは採用しない**（並行 task 実行時の窓混同を防止）。
+- **advisory 送出**: 保証チャネルは `JusticeNotifier.notify()`（`client.app.log`）。`output.output` 末尾への banner 追記は best-effort（既定 `enableAdvisoryOutputAppend: false`）で、有効化時のみ実施する。
+
+### 15.8 Review Aggregator と解決規則
+
+- `review_observed` レコード（`reviewScope` 付き）を scope 別に集約し、severity（`critical`/`major`/`minor`）は凍結語彙の決定論的正規表現分類器（`review-severity.ts`）で導出する。`itemKey` は severity・ruleId・location ハッシュ・evidence ハッシュから決定的に合成される。
+- **`open → resolved` の遷移が許される経路は次の 3 つのみ**（D32）。単なる指摘の消失（範囲差・検出漏れ・出力形式変化）では **`open` のまま据置**する:
+  1. 明示的解決マーカー（`resolutionMarkers[]`）
+  2. 同一 `reviewScope` の完全スナップショット（`isCompleteSnapshot: true`）における当該指摘の不在
+  3. 人間承認済み artifact（`justice_review` の `resolve` 経由、後述）
+- **scope-aware gate 評価**: `review_open_items` gate は `GateContext.reviewScope[]`（当該 task 窓内で観測した scope の集合）に一致する `byScope[scope].open` のみを参照し、他 task・他レビュー範囲の未解決指摘を verdict に混入させない。レビュー未観測（`reviewScope[]` が空）は `onMissingEvidence` へ、観測済みだが open が無い場合は `PASS` となる。
+
+### 15.9 `justice_review` ツール
+
+OpenCode に公開される **唯一のカスタムツール**です（`OpenCodeAdapter.getTools()` は `{ justice_review }` のみを返す）。内部 dry-run helper（`justice_status`/`justice_gate` 相当）は実装として存在するが、canonical な Observation Log・DecisionRecord・replay・KPI を変えないためツールとして登録されない（D50）。
+
+- **表示（view）**: `{ scope? }`。`scope` 未指定時は全体のレビュー要約（`critical`/`major`/`minor`/`open`/`resolved` + `byScope`）、指定時は当該 scope の `ScopeReviewSummary` のみを返す。
+- **解決（resolve）**: `{ scope, resolve: { itemKeys, artifactRef } }`。対象 item がすべて現在 `open` であることを検証したうえで、`requestApproval`（`context.ask` 経由の人間承認）を要求する。承認された場合のみ `ReviewResolutionArtifact { authority: "human_approved", reviewScope, itemKeys, artifactRef }` を `metadata` として返し、以後の observation で当該指摘が解決済みとして記録される。承認が得られなかった場合はエラーを返す。
+- **trust boundary**: `OpenCodeAdapter.onToolExecuteAfter` は `TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS = ["justice_review"]` と**完全一致するツール名**からの `metadata.reviewResolutionArtifact` のみを信頼して取り込む。他のツール（`justice_` プレフィックスの内部ツールを含む）からの偽装した artifact は一切受け付けない。
+
+### 15.10 Fitness Functions（不変条件の抜粋）
+
+| ID | 内容 |
+|---|---|
+| FF-001 | `src/core/`（および `src/core/v2/`）は `@opencode-ai/*` を import しない（`tests/arch/` で静的検証） |
+| FF-002 | Evidence 抽出・toolOutputClass 分類・severity 分類等の判定はすべて純粋関数（外部状態や現在時刻に依存しない決定論） |
+| FF-004 | 同一イベント集合の `project()` は常に同一 `ProjectedState` を生成する（replay 決定性） |
+| FF-005 | 新 spine（Observation Log）は `plan.md` に書き込まない（既存の DEBT-001 allowlist を除く） |
+| FF-006 | Observation Log の append/read/projection いずれの失敗も `PROCEED` に縮退する（fail-open） |
+| FF-007 | evidenceId は `callId` 等から決定論的に導出され、同一実行から同一 evidenceId が再生成される |
+| FF-008 | `declared` provenance は Gate の PASS 判定に算入しない（`observed`/`derived` のみ算入可） |
+
+### 15.11 v2.0 のスコープ縮退（v2.5+ へ委譲）
+
+以下は v2.0 では意図的に対象外（deferred）とされており、将来フェーズでの拡張対象です:
+
+- **Handoff（FR-003）**: サブエージェント実行結果の `observed` 相関。v2.0 では task summary 経由の合否主張は transcript を含んでいても `declared` 据置（PASS 非算入）。
+- **Final Verifier（FR-007）**: v2.5 以降。
+- **Acceptance Criteria 判定（FR-005）**: `plan.md` 由来の feature 級基準は外部 SoT に属するため v2.5+（Feature Gate）で対応。
+- **OmO agents awareness（FR-002 の一部）**: v2.0 は skill awareness（`skill_invoked` 観測）のみに対応。どの OmO agent が起動したかの把握は v2.5 Handoff へ。
+- **Enforcement 強化（L1 deny 等）**: v2.0 は L0 Advisory のみ。強制ブロックは v2.5 以降で段階的に導入。
+- **物理 prune / checkpoint**: v2.0 は archive への移送のみ。event log の物理削除は canonical snapshot/checkpoint 定義後（v2.5+）に解禁。
+- **Artifact の authorship**: v2.0 の Artifact（`gate.yaml`/Review Summary）は `authority`（`human_approved` 等）のみを保持し、`authorship`（from→to）は持たない。Handoff（v2.5）導入時に拡張。
+- **`exit_code` の直接観測不可（限界-2）**: `tool.execute.after` には `exit_code`/`stderr` フィールドが無いため、Evidence は独立の `exit_code` フィールドを持たず、出力テキストの解析または `metadata.error` から導出した `interpretation.outcome`（`provenance: derived`）で代替する。`stderr` は `rawOutput` に統合される。将来的な OpenCode API 拡張の要望として記録。
+- **KPI-1/KPI-3 は v2.0 で未測定（限界-3）**: 憲章の KPI-1（設計乖離率）・KPI-3（Handoff 連続性）は v2.5+ のコンポーネント（Feature Gate/Handoff）に依存するため v2.0 では測定できない。v2.0 は「観測カバレッジ率」「Gate verdict 分布と provenance 分布」「replay 決定性（FF-004 pass）」を先行指標として代替する。
+
+### 15.12 既知の未解決事項・ガバナンス状況（重要）
+
+v2.0 の設計書は、実装着手前に満たすべき前提条件を明記していた。**事後検証の結果、これらの前提の一部は Phase 1 着手時点で未達のまま実装が進められたことが判明している**。ドキュメントの正直性のため、本状況をここに記録する:
+
+- **C1（L0 advisory 表示面の実証）は依然「未実証（Not Verified）」**: `output.output` 末尾への banner 追記がモデル推論文脈／ユーザー表示に実際に反映されるかは、実機 OpenCode ホスト上での目視確認が必須だが、Phase 0 スパイク（`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`）はサンドボックス環境の制約により型定義解析（静的検証）に留まり、実機実証は完了していない。設計の保守的フォールバックに従い、`enableAdvisoryOutputAppend` は既定 `false` のまま維持されており、保証チャネルは `JusticeNotifier`（`client.app.log`）のみである。
+- **CODEOWNERS 追認 ADR は「PENDING HUMAN CODEOWNERS RATIFICATION」のまま**: 設計書 D58/D63 は、Phase 0 由来の憲章訂正（hookリスト・保存パス・exit_code縮退・authorship非保持）を1本の ADR にまとめ人間の CODEOWNERS 追認を得ることを実装計画化の前提条件として定めていたが、`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` は現在も「PENDING HUMAN CODEOWNERS RATIFICATION」の状態である。当該 PR（#116）の `APPROVED` 判定は自動レビューボット（`coderabbitai`）由来のみであり、リポジトリ所有者自身のレビューはすべて `COMMENTED`（人間の `APPROVED` レビューは記録されていない）。マージ時点で CODEOWNERS のブランチ保護ルールも設定されていなかったため、セルフマージが人間承認なしに成立した。
+- **設計書自身の勧告**: 上記2点の前提が満たされるまで、**v2.0 の対外的な「出荷完了」宣言は差し控えるべき**と設計書 §13 末尾に明記されている。本ドキュメント（README.md/SPEC.md）の「✅ 完了」表記はコード実装状況（L0 Advisory として機能する）を指すものであり、上記ガバナンス上の前提が正式に満たされたことを意味しない。
+- **今後の対応**: (1) 実機 OpenCode 環境での C1 目視検証を実施し `enableAdvisoryOutputAppend` の既定値を確定する、(2) 当該 ADR に人間の CODEOWNERS `APPROVED` レビューを取得する。両方が完了するまで、v2.0 を前提とした追加投資判断（v2.5 着手判断等）は本状況を踏まえて行うこと。

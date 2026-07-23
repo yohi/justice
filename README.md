@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-743%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1300%2B%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 
@@ -20,11 +20,18 @@ Justice がない環境では、`plan.md` のチェックボックスリスト�
 ```text
 Superpowers (頭脳)               Justice Plugin (神経系)                 oh-my-openagent (手足)
 ─────────────────────       ────────────────────────────────────    ────────────────────────
-plan.md                 →   フック層 (Hook Layer):                →   task()
+plan.md                 →   v1: フック層 (Hook Layer):            →   task()
 design.md               →     plan-bridge (Message/PreToolUse)  →   background_output()
 role-prompt.md          →     task-feedback (PostToolUse)        ←   compaction イベント
                         →     compaction-protector (Event)        ←   loop-detector イベント
                         →     loop-handler (Event)
+                             ↕
+                             v2: Quality Control Plane (Observation & Gate):
+                               observation-handler (全 tool/message 観測)  ←   tool.execute.*
+                               → ObservationLogStore (.justice/events/**.jsonl) ←   message.*
+                               → State Projection (.justice/state.json)
+                               → Gate Engine (.justice/gate.yaml) → advisory
+                               → Review Aggregator → `justice_review` tool
                              ↕
                              コアロジック層 (純粋関数、I/Oなし):
                                PlanParser · TaskPackager · ErrorClassifier
@@ -155,6 +162,18 @@ export default { plugins: [OpenCodePlugin] };
 
 **委譲のキーワード (英語/日本語):** `delegate`, `next task`, `execute task`, `次のタスク`, `タスクを委譲`, `タスクを実行`, `タスクを開始`
 
+## Quality Control Plane (v2.0)
+
+Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。
+> [!NOTE]
+> 本機能はL0 Advisoryとして実装・動作していますが、`output.output`へのadvisory反映の実機検証と、設計乖離ADRの人間CODEOWNERS承認が未完了のため、出荷完了宣言の前提は未充足です（[SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項・ガバナンス状況重要)）。
+
+- **全ツール・メッセージ観測**: `tool.execute.*` / `message.*` イベントを `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` へ追記専用（append-only）で記録します。テスト実行結果・lint/build 出力・レビュー指摘などが対象です（コード本文やチャット全文は保持しません）。
+- **品質ゲート (`.justice/gate.yaml`)**: タスク完了時（`task_complete`）およびツール実行観測時（`tool_observed`）に、テスト/ビルド/lint の合否や未解決レビュー指摘を判定します。既定は3種の gate（`required-tests` / `build-green` / `review-clean`）で、すべて `warn`（advisory）始まりです。プロジェクトの `.justice/gate.yaml` でカスタム gate を追加、または既定 gate を上書き・無効化（`enabled: false`）できます。
+- **`justice_review` ツール**: エージェントが呼び出せる唯一の公開カスタムツールです。`scope` 未指定で全体のレビュー要約（critical/major/minor、open/resolved）を表示し、`resolve: { itemKeys, artifactRef }` を渡すと人間承認（`context.ask`）を経て該当指摘を解決済みにできます。
+- **Provenance（証拠の出自）**: 「テストが通った」というエージェントの自己申告（`declared`）だけでは Gate は PASS しません。Justice が実際にツール実行を観測した（`observed`/`derived`）場合のみ PASS 算入されます。
+- **Fail-Open**: Observation Log の書込・読込・投影（projection）のいずれかが失敗しても、常に `PROCEED`（黙って続行）に縮退します。
+
 ## コアコンポーネント
 
 | コンポーネント | 層 | 目的 |
@@ -183,6 +202,13 @@ export default { plugins: [OpenCodePlugin] };
 | `NodeFileSystem` | Runtime | `Bun.file` を基盤とした `FileReader`/`FileWriter` 実装 |
 | `TieredWisdomStore` | Core | プロジェクトローカルとユーザーグローバルの2層 Wisdom ストア |
 | `SecretPatternDetector` | Core | 秘密情報の自動検出（API キー、パスワード等） |
+| `ObservationHandler` | Hook | 全 tool/message 観測を Observation Log へ記録し、Gate 評価を発火 |
+| `ObservationLogStore` | Runtime | per-writer segment JSONL への直列化 atomic append + shard 横断 readAll |
+| `rule-evaluation-engine` (`evaluate`) | Core | Gate ルール（evidence_present/evidence_outcome/review_open_items）の判定 |
+| `GateLoader` | Runtime | `.justice/gate.yaml` の読込・検証・既定 gate へのマージ／フォールバック |
+| `review-aggregator` | Core | レビュー指摘（`review_observed`）を scope 別に集約し open/resolved を判定 |
+| `SessionStateProvider` | Core | `sessionId → AgentId` マッピングと `callId` 単位の task 窓管理 |
+| `justice_review` | Tool | レビュー要約の表示・（承認を経た）指摘解決を行う唯一の公開カスタムツール |
 
 ## Cross-Project Wisdom Store
 
@@ -274,6 +300,9 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 | 7 | プラグインオーケストレーターとランタイム | ✅ 完了 |
 | 8 | OpenCode Plugin 統合 (`@yohi/justice/opencode` エントリ) | ✅ 完了 (v1.2.0) |
 | 9 | 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
+| 10 | v2.0 Quality Control Plane 基盤 (Observation Log / Gate Engine / Review Aggregator) | 🟡 実装完了・ガバナンス未完了（※1） |
+
+※1: L0 Advisoryとしてコードは実装・動作していますが、(a) `output.output` への advisory 反映の実機検証（C1）が未完了、(b) 憲章乖離 ADR（`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`）の人間 CODEOWNERS 承認が未取得（現在 `PENDING HUMAN CODEOWNERS RATIFICATION`）のため、設計上の前提条件は未充足です。詳細は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項・ガバナンス状況重要) を参照してください。
 
 ## ドキュメント
 
