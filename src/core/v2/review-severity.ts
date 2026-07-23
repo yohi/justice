@@ -6,10 +6,11 @@ const MINOR = /nit|suggestion|optional|style|軽微|提案/i;
 
 export type ReviewSeverity = "critical" | "major" | "minor";
 
-export function classifySeverity(summary: string): ReviewSeverity {
-  if (CRITICAL.test(summary)) return "critical";
-  if (MAJOR.test(summary)) return "major";
-  if (MINOR.test(summary)) return "minor";
+export function classifySeverity(summary: string, heading?: string): ReviewSeverity {
+  const source = heading ?? summary;
+  if (CRITICAL.test(source)) return "critical";
+  if (MAJOR.test(source)) return "major";
+  if (MINOR.test(source)) return "minor";
   return "minor";
 }
 

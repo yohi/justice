@@ -111,7 +111,7 @@ export class ReviewRejectionDetector {
       matched: true,
       excerpts,
       summary,
-      severity: classifySeverity(heading ? `${heading}\n${summary}` : summary),
+      severity: classifySeverity(summary, heading),
     };
   }
 

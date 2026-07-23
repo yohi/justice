@@ -266,6 +266,18 @@ describe("ReviewRejectionDetector", () => {
     expect(detector.detect(text).matched).toBe(true);
   });
 
+  it("does not inflate severity from negated terms in the body", () => {
+    // Given: heading is MAJOR, body contains negated critical term
+    const output = "MUST FIX: update README\nThis is not a blocker but should be fixed";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then: severity is based on heading (MAJOR), not negated body text
+    expect(items).toHaveLength(1);
+    expect(items[0]?.severity).toBe("major");
+  });
+
   it("exports frozen review rejection patterns", () => {
     expect(Object.isFrozen(REVIEW_REJECTION_PATTERNS)).toBe(true);
     expect(REVIEW_REJECTION_PATTERNS).toHaveLength(11);
