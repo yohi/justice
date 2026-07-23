@@ -82,6 +82,7 @@ describe("redactPendingLogRecord", () => {
           sourceClass: "tool_output",
           provenance: "observed",
           toolOutputClass: "file_content",
+          command: undefined,
           rawOutputHash: "abc123",
         },
       };
@@ -179,6 +180,36 @@ describe("redactPendingLogRecord", () => {
       const result = redactPendingLogRecord(record);
       const msg = result as Extract<typeof result, { kind: "message" }>;
       expect(msg.textSnippet).toBeUndefined();
+    });
+
+    it("handles generic claimKind via default case", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "message",
+        messageID: "m3",
+        role: "assistant",
+        textHash: "hash3",
+        declaredClaims: [
+          { evidenceId: "c-generic", claimKind: "generic", outcome: "pass" },
+        ],
+        evidence: [
+          {
+            evidenceId: "e-generic",
+            kind: "generic",
+            sourceClass: "declared_claim",
+            provenance: "declared",
+            declaredFrom: "message",
+            claim: { claimKind: "generic", outcome: "pass" },
+          } as DeclaredClaimEvidence,
+        ],
+        finalized: true,
+      };
+
+      const result = redactPendingLogRecord(record);
+      const msg = result as Extract<typeof result, { kind: "message" }>;
+      expect(msg.declaredClaims[0].claimKind).toBe("generic");
+      expect(msg.evidence[0].claim.claimKind).toBe("generic");
     });
   });
 
