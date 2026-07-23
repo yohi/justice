@@ -1,6 +1,6 @@
 // src/core/v2/decision-model.ts
 import type { PendingEnvelope, PersistedEnvelope } from "./observation-model";
-import type { FullEvidenceRef } from "../types";
+import type { EvidenceRef } from "../types";
 
 /**
  * Task-gate verdict literals. Single source of truth so projection can narrow
@@ -12,7 +12,7 @@ export type RuleResult = {
   readonly ruleId: string;
   readonly verdict: Verdict;
   readonly reason: string;
-  readonly evidenceRefs: readonly FullEvidenceRef[];
+  readonly evidenceRefs: readonly EvidenceRef[];
 };
 
 export type DecisionPayload = {
