@@ -261,14 +261,14 @@ export class TaskFeedbackHandler {
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
         planUpdated = true;
+        await this.emitReflectionEvent({
+          trigger: "task_succeeded",
+          planRef: { path: session.planPath, taskId: session.activeTaskId },
+          intent: "check_complete",
+          sessionId,
+        });
       }
 
-      await this.emitReflectionEvent({
-        trigger: "task_succeeded",
-        planRef: { path: session.planPath, taskId: session.activeTaskId },
-        intent: "check_complete",
-        sessionId,
-      });
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,
