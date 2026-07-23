@@ -84,6 +84,12 @@ describe("classifyToolOutputClass", () => {
     );
   });
 
+  it("classifies a file-reading command after a pipeline as file_content", () => {
+    expect(classifyToolOutputClass("bash", { command: "bun run test | cat secret.txt" })).toBe(
+      "file_content",
+    );
+  });
+
   it("classifies general command-exec tools (network/VCS/containers/interpreters) as command_exec (Issue 4)", () => {
     expect(classifyToolOutputClass("bash", { command: "curl https://example.com" })).toBe(
       "command_exec",

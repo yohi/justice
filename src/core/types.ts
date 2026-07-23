@@ -151,10 +151,10 @@ export interface AgentMappedEvent {
   };
 }
 
-/** MessagePayload 型ガード: legacy user/assistant payload か判定する */
+/** MessagePayload 型ガード: PlanBridge 専用の legacy payload か判定する */
 export function isLegacyMessagePayload(
-  payload: MessagePayload | ObservationMessagePayload,
-): payload is MessagePayload {
+  payload: LegacyPlanBridgeMessagePayload | ObservationMessagePayload,
+): payload is LegacyPlanBridgeMessagePayload {
   return "role" in payload && "content" in payload;
 }
 
@@ -205,11 +205,17 @@ export interface EventEvent {
 
 export type HookEventType = HookEvent["type"];
 
-/** Message イベントのペイロード */
-export interface MessagePayload {
+/**
+ * PlanBridge の plan 参照検出だけが使う、従来の role/content payload。
+ * ObservationMessagePayload と混在させず、declared Evidence の本文源にはしない。
+ */
+export interface LegacyPlanBridgeMessagePayload {
   readonly role: "user" | "assistant";
   readonly content: string;
 }
+
+/** @deprecated 新規コードは LegacyPlanBridgeMessagePayload を明示して利用する。 */
+export type MessagePayload = LegacyPlanBridgeMessagePayload;
 
 /** PreToolUse イベントのペイロード */
 export interface PreToolUsePayload {
@@ -234,6 +240,8 @@ export interface SkipResponse {
 export interface InjectResponse {
   readonly action: "inject";
   readonly injectedContext: string;
+  readonly normalInjectedContext?: string;
+  readonly gateAdvisoryContext?: string;
   readonly modifiedPayload?: unknown;
   readonly variant?: "gate_advisory";
 }
@@ -255,6 +263,7 @@ export interface PostToolUsePayload {
   readonly toolInput?: Record<string, unknown>;
   readonly metadata?: Record<string, unknown>;
   readonly reviewResolutionArtifact?: ReviewResolutionArtifact;
+  readonly reviewSnapshotArtifact?: ReviewSnapshotArtifact;
 }
 
 export interface ReviewResolutionArtifact {
@@ -262,6 +271,12 @@ export interface ReviewResolutionArtifact {
   readonly reviewScope: string;
   readonly itemKeys: readonly string[];
   readonly artifactRef: string;
+}
+
+export interface ReviewSnapshotArtifact {
+  readonly authority: "review_tool";
+  readonly schemaVersion: 1;
+  readonly complete: true;
 }
 
 /** ファイル書き込みアクセスの抽象化 */

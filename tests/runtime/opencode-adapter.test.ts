@@ -398,11 +398,11 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
 });
 
 describe("OpenCodeAdapter.getTools", () => {
-  it("returns all justice tools including justice_review", () => {
+  it("returns only the public justice_review tool", () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     const tools = adapter.getTools();
 
-    expect(Object.keys(tools).sort()).toEqual(["justice_gate", "justice_review", "justice_status"]);
+    expect(Object.keys(tools)).toEqual(["justice_review"]);
     expect(tools.justice_review?.description).toContain("Review Summary Artifact");
     expect(typeof tools.justice_review?.execute).toBe("function");
   });

@@ -26,6 +26,7 @@ import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
 import { ObservationLogStore } from "../runtime/observation-log-store";
+import { generateWriterId } from "../runtime/writer-id";
 import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
@@ -45,13 +46,7 @@ function openSessionTaskWindow(
   const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
   if (!taskId) return;
   try {
-    // Open the window unconditionally at PreToolUse time.  The sessionId is
-    // intentionally omitted here so that the window is always created even
-    // when the session has not yet been mapped (e.g. in tests that skip
-    // AgentMapped).  The guarded re-registration with sessionId happens after
-    // Promise.all (race-condition guard), so only legitimate callers that
-    // survive the generation check will ever tag a window with a session.
-    provider.setActiveTaskWindow(callId, taskId);
+    provider.setActiveTaskWindow(callId, taskId, event.sessionId);
   } catch {
     // Fail-open: a task-window tracking failure must not break the hook flow.
   }
@@ -231,7 +226,7 @@ export interface JusticePluginOptions {
   /**
    * Bootstrapped writer ID for Observation Log shards (D55/D39).
    * Used by ObservationHandler to identify the writer of observation log shards.
-   * Defaults to "w-local" when not specified.
+   * Defaults to a newly generated UUID-based writer ID when not specified.
    */
   readonly writerId?: string;
 }
@@ -288,7 +283,7 @@ export class JusticePlugin {
     this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    const writerId = options.writerId ?? "w-local";
+    const writerId = options.writerId ?? generateWriterId();
     this.observationHandler = new ObservationHandler({
       logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
       sessionStateProvider: this.sessionStateProvider,
@@ -301,9 +296,7 @@ export class JusticePlugin {
 
     // Ensure session cleanup propagates from loopHandler to all stateful handlers
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
-      this.planBridge.destroySession(sessionId);
-      this.sessionStateProvider.removeSession(sessionId);
-      this.observationHandler.destroySession(sessionId);
+      this.destroySessionState(sessionId);
     });
 
     this.taskFeedback.setObservationHandler(this.observationHandler);
@@ -385,6 +378,10 @@ export class JusticePlugin {
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
         );
+        const planPath = this.planBridge.getActivePlan(event.sessionId);
+        if (event.payload.toolName === "task" && taskId !== undefined && planPath !== null) {
+          this.taskFeedback.setActivePlan(event.sessionId, planPath, taskId);
+        }
         if (event.callId !== undefined && taskId !== undefined) {
           try {
             // Only re-register the window if the session wasn't removed during
@@ -512,6 +509,10 @@ export class JusticePlugin {
     return this.sessionStateProvider;
   }
 
+  destroySession(sessionId: string): void {
+    this.loopHandler.removeSession(sessionId);
+  }
+
   /**
    * Route Event-type events based on eventType payload.
    */
@@ -582,6 +583,26 @@ export class JusticePlugin {
       }
       default:
         return PROCEED;
+    }
+  }
+
+  private destroySessionState(sessionId: string): void {
+    const cleanupSteps: readonly (() => void)[] = [
+      (): void => this.planBridge.destroySession(sessionId),
+      (): void => this.taskFeedback.clearActivePlan(sessionId),
+      (): void => this.sessionStateProvider.removeSession(sessionId),
+      (): void => this.observationHandler.destroySession(sessionId),
+    ];
+    for (const cleanup of cleanupSteps) {
+      try {
+        cleanup();
+      } catch (error) {
+        try {
+          this.options.logger?.warn("Justice session cleanup failed", error);
+        } catch {
+          // Fail-open: one cleanup failure must not retain other session state.
+        }
+      }
     }
   }
 

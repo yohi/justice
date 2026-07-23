@@ -24,6 +24,9 @@ type BufferEntry = {
   lastUpdatedAt: number;
   messageSignaled: boolean; // raw: a message_updated(finalized=true) or text_complete has been observed
   forcedFinalized: boolean; // hard override flag: set only by finalize(sessionId, messageId) with no partId
+  messageFinalized: boolean;
+  textCompleteReceived: boolean; // at least one text_complete has been observed for this message
+  projectionFlushesAfterFinalization: number;
 };
 
 export class MessageRoleBuffer {
@@ -36,16 +39,25 @@ export class MessageRoleBuffer {
   }
 
   update(sessionId: string, payload: ObservationMessagePayload): void {
-    const entry = this.ensureEntry(this.keyOf(sessionId, payload.messageID));
+    const key = this.keyOf(sessionId, payload.messageID);
+    const existing = this.buffer.get(key);
+    const entry = this.ensureEntry(key);
+    const isNewlyCreated = existing === undefined;
     switch (payload.kind) {
       case "message_part_updated":
         // Re-updating an existing partID overwrites its text (D67): claims are
         // always re-derived from the latest state, never accumulated.
         entry.parts.set(payload.partID, { text: payload.text, finalized: false });
+        if (entry.messageFinalized) entry.projectionFlushesAfterFinalization = 0;
         break;
       case "text_complete":
         entry.parts.set(payload.partID, { text: payload.text, finalized: true });
         entry.messageSignaled = true;
+        entry.textCompleteReceived = true;
+        // text_complete implies assistant role when the entry is newly created
+        // after the prior entry was evicted by projection flush (D53).
+        if (isNewlyCreated) entry.role = "assistant";
+        if (entry.messageFinalized) entry.projectionFlushesAfterFinalization = 0;
         break;
       case "message_updated":
         entry.role = payload.role;
@@ -64,6 +76,8 @@ export class MessageRoleBuffer {
           // INV-004), so this tradeoff is accepted rather than "fixed".
           for (const part of entry.parts.values()) part.finalized = true;
           entry.messageSignaled = true;
+          entry.messageFinalized = true;
+          entry.projectionFlushesAfterFinalization = 0;
         }
         break;
     }
@@ -79,6 +93,8 @@ export class MessageRoleBuffer {
       for (const part of entry.parts.values()) part.finalized = true;
       entry.messageSignaled = true;
       entry.forcedFinalized = true;
+      entry.messageFinalized = true;
+      entry.projectionFlushesAfterFinalization = 0;
       entry.lastUpdatedAt = this.now();
       return;
     }
@@ -88,9 +104,7 @@ export class MessageRoleBuffer {
   }
 
   extractAssistantClaims(sessionId: string, messageId: string, partId?: string): DeclaredClaim[] {
-    const entry = this.buffer.get(this.keyOf(sessionId, messageId));
-    if (entry?.role !== "assistant") return [];
-    const text = this.collectText(entry, partId);
+    const text = this.getFinalizedAssistantText(sessionId, messageId, partId);
     if (text === undefined) return [];
     return extractDeclaredClaims(this.sourceIdOf(messageId, partId), text);
   }
@@ -114,6 +128,36 @@ export class MessageRoleBuffer {
     const entry = this.buffer.get(this.keyOf(sessionId, messageId));
     if (entry?.role !== "assistant") return undefined;
     return this.getFinalizedText(sessionId, messageId, partId);
+  }
+
+  getFinalizedAssistantPartIDs(sessionId: string, messageId: string): readonly string[] {
+    const entry = this.buffer.get(this.keyOf(sessionId, messageId));
+    if (entry?.role !== "assistant") return [];
+    return [...entry.parts.entries()]
+      .filter(([, part]): boolean => part.finalized)
+      .map(([partId]): string => partId)
+      .sort((a, b) => {
+        if (a < b) return -1;
+        if (a > b) return 1;
+        return 0;
+      });
+  }
+
+  /**
+   * Retain finalized parts for one completed projection flush because
+   * message.updated and experimental.text.complete have no ordering guarantee.
+   * A correction resets the grace counter in update(); the next flush then gets
+   * the same grace before the complete entry is discarded.
+   */
+  releaseFinalizedAfterProjectionFlush(): void {
+    for (const [key, entry] of this.buffer) {
+      if (!entry.messageFinalized) continue;
+      if (entry.projectionFlushesAfterFinalization > 0) {
+        this.buffer.delete(key);
+        continue;
+      }
+      entry.projectionFlushesAfterFinalization += 1;
+    }
   }
 
   gc(maxAgeMs: number, maxEntries: number): void {
@@ -155,6 +199,9 @@ export class MessageRoleBuffer {
       lastUpdatedAt: this.now(),
       messageSignaled: false,
       forcedFinalized: false,
+      messageFinalized: false,
+      textCompleteReceived: false,
+      projectionFlushesAfterFinalization: 0,
     };
     this.buffer.set(key, created);
     return created;

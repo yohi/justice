@@ -303,19 +303,25 @@ export class LoopDetectionHandler {
         );
         await this.fileWriter.writeFile(session.planPath, updatedPlan);
 
-        // Generate split suggestion
-        const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
-        const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
-
-        if (this.observationHandler) {
-          await this.observationHandler.emitReflectionEvent({
+        // Emit reflection event only after successful plan update
+        try {
+          await this.observationHandler?.emitReflectionEvent({
             trigger: "task_error",
             planRef: { path: session.planPath, taskId: session.activeTaskId },
             intent: "append_error_note",
             note: `loop_detected: ${reason}`,
             sessionId: event.sessionId,
           });
+        } catch (err) {
+          console.warn(
+            "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
+            err,
+          );
         }
+
+        // Generate split suggestion
+        const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
+        const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
 
         // エスカレーション判定
         const escalation = this.evaluateEscalation(
@@ -352,7 +358,8 @@ export class LoopDetectionHandler {
       }
     } catch (err) {
       console.warn(
-        `[JUSTICE] LoopDetectionHandler failed to handle event: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] LoopDetectionHandler failed to handle event: %s",
+        err instanceof Error ? err.message : String(err),
       );
     }
 

@@ -105,7 +105,7 @@ describe("extractEvidenceFromTool", () => {
     expect("rawOutput" in ev).toBe(false);
   });
 
-  it("marks file_content evidence as non-authoritative while retaining its audit hash", () => {
+  it("marks file_content evidence as directly observed while retaining its audit hash", () => {
     const ev = extractEvidenceFromTool(
       "read",
       undefined,
@@ -116,7 +116,7 @@ describe("extractEvidenceFromTool", () => {
     if (ev.sourceClass !== "tool_output" || ev.toolOutputClass !== "file_content") {
       throw new Error("expected file_content tool_output evidence");
     }
-    expect(ev.provenance).toBe("unknown");
+    expect(ev.provenance).toBe("observed");
     expect(ev.rawOutputHash.startsWith("sha256:")).toBe(true);
   });
 

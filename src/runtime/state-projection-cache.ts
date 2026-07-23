@@ -7,10 +7,10 @@ import {
   orderEventsForProjection,
 } from "../core/v2/integrity";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
-import type { ProjectedState } from "../core/v2/state-projection";
 import {
   fromSerializableProjectedState,
   toSerializableProjectedState,
+  type ProjectedState,
 } from "../core/v2/state-projection";
 
 type CacheLogger = { warn(message: string, err?: unknown): void };
@@ -66,21 +66,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isValidCacheStructure(parsed: unknown): boolean {
-  if (!isPlainRecord(parsed)) return false;
-  if (parsed.schemaVersion !== 2) return false;
-  const integrity = parsed.integrity;
-  if (!integrity || typeof integrity !== "object") return false;
-  if (!("maxSequenceByShard" in integrity)) return false;
-  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
-  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
-  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
-  // both to be plain objects. The `reviewSummary` array fields are copied by
-  // reference, so a partial `reviewSummary` would leave them `undefined` and
-  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
-  // rebuilds instead.
-  if (!isPlainRecord(parsed.tasks)) return false;
-  const reviewSummary = parsed.reviewSummary;
+function isValidReviewSummary(reviewSummary: unknown): boolean {
   if (!isPlainRecord(reviewSummary)) return false;
   if (!isPlainRecord(reviewSummary.byScope)) return false;
   if (reviewSummary.authority !== "observed_review_output") return false;
@@ -105,7 +91,34 @@ function isValidCacheStructure(parsed: unknown): boolean {
   );
 }
 
-export type CacheValidationReason = "valid" | "stale_append" | "mismatch_seq" | "structural";
+function isValidCacheStructure(parsed: unknown): boolean {
+  if (!isPlainRecord(parsed)) return false;
+  if (parsed.schemaVersion !== 2) return false;
+  const integrity = parsed.integrity;
+  if (!isPlainRecord(integrity)) return false;
+  if (typeof integrity.sourceHash !== "string") return false;
+  const maxSequenceByShard = integrity.maxSequenceByShard;
+  if (!isPlainRecord(maxSequenceByShard)) return false;
+  for (const sequence of Object.values(maxSequenceByShard)) {
+    if (typeof sequence !== "number" || !Number.isFinite(sequence) || sequence < 0) return false;
+  }
+  // `fromSerializableProjectedState` rebuilds `tasks` and `reviewSummary.byScope`
+  // with `new Map(Object.entries(...))`: an array (schema drift / hand-edited
+  // cache) silently becomes an index-keyed Map, and `undefined` throws. Require
+  // both to be plain objects. The `reviewSummary` array fields are copied by
+  // reference, so a partial `reviewSummary` would leave them `undefined` and
+  // crash callers doing `.map()`/`.length`. Reject such caches so `read()`
+  // rebuilds instead.
+  if (!isPlainRecord(parsed.tasks)) return false;
+  return isValidReviewSummary(parsed.reviewSummary);
+}
+
+export type CacheValidationReason =
+  | "valid"
+  | "stale_append"
+  | "mismatch_seq"
+  | "mismatch_payload"
+  | "structural";
 
 export type CacheValidationResult = {
   readonly valid: boolean;
@@ -153,24 +166,14 @@ export function validateProjectionCacheAgainstEvents(
     }
   }
 
-  // Reaching here means every per-shard maxSequence already matched, so a normal
-  // append cannot be the cause (it raises a shard's maxSequence and is caught
-  // above as stale_append). A hash mismatch here therefore implies ordering drift
-  // or a mid-stream anomaly. Per plan design (§ silent-rebuild) this is still
-  // classified stale_append to favor stability over noise; it is fail-safe (never
-  // reports a corrupt cache as valid).
+  // A source hash discrepancy with matching shard sequences can result from a
+  // normal append completed between the max-sequence and hash observations.
+  // Treat it as stale so the handler rebuilds silently from the append-only log.
   const currentSourceHash = computeSourceHash(orderEventsForProjection(events));
   if (cacheState.integrity.sourceHash !== currentSourceHash) {
-    // Distinct from ordinary stale_append (which is caught by the maxSequence
-    // checks above): every shard's maxSequence already matched here, so this
-    // specific mismatch implies ordering drift or a mid-stream anomaly rather
-    // than a normal append. Logged (not just returned) so this rarer path is
-    // observable without changing the fail-safe stale_append classification.
-    console.warn(
-      "state.json cache: sourceHash mismatch with matching per-shard maxSequence (possible ordering drift), rebuilding",
-    );
     return { valid: false, reason: "stale_append" };
   }
 
+  // sourceHash matches and shard sequences are consistent: the cache is valid.
   return { valid: true, reason: "valid" };
 }

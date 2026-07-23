@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 import { OpenCodePlugin } from "../../src/opencode-plugin";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import { defineJusticeStatusTool } from "../../src/runtime/justice-tools";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 const serializedStateSchema = z.object({
@@ -52,7 +53,7 @@ function requireStringResult(result: ToolResult): string {
 }
 
 describe("justice_status tool", () => {
-  it("registers justice_status on the plugin tool hook", async () => {
+  it("does not register justice_status on the public plugin tool hook", async () => {
     // Given
     const init = fakeInit();
 
@@ -60,14 +61,13 @@ describe("justice_status tool", () => {
     const hooks = await OpenCodePlugin(init as never);
 
     // Then
-    expect(hooks.tool).toHaveProperty("justice_status");
+    expect(hooks.tool).not.toHaveProperty("justice_status");
   });
 
   it("resolves Justice lazily when the registered tool executes", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
     expect(adapter.getJustice()).toBeNull();
 
     // When
@@ -90,8 +90,7 @@ describe("justice_status tool", () => {
     if (projectionCache === undefined) throw new Error("Projection cache fixture is missing");
     vi.spyOn(logStore, "readAll").mockResolvedValue([]);
     const cacheWrite = vi.spyOn(projectionCache, "write").mockResolvedValue(undefined);
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));
@@ -114,8 +113,7 @@ describe("justice_status tool", () => {
     const projectionCache = observationHandler.getProjectionCache();
     if (projectionCache === undefined) throw new Error("Projection cache fixture is missing");
     vi.spyOn(projectionCache, "write").mockRejectedValue(new Error("cache unavailable"));
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));
@@ -135,8 +133,7 @@ describe("justice_status tool", () => {
     const observationHandler = justice.getObservationHandler();
     vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
     vi.spyOn(observationHandler, "getProjectionCache").mockReturnValue(undefined);
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));
@@ -158,8 +155,7 @@ describe("justice_status tool", () => {
     if (projectionCache === undefined) throw new Error("Projection cache fixture is missing");
     const cacheError = new Error("cache unavailable");
     vi.spyOn(projectionCache, "write").mockRejectedValue(cacheError);
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     await definition.execute({}, createToolContext());
@@ -182,8 +178,7 @@ describe("justice_status tool", () => {
     vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockRejectedValue(
       new Error("corrupted observation log"),
     );
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));
@@ -204,8 +199,7 @@ describe("justice_status tool", () => {
     vi.spyOn(justice.getObservationHandler().getLogStore(), "readAll").mockRejectedValue(
       "corrupted observation log",
     );
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));
@@ -226,8 +220,7 @@ describe("justice_status tool", () => {
         worktree: undefined,
       }),
     );
-    const definition = adapter.getTools().justice_status;
-    if (definition === undefined) throw new Error("justice_status definition is missing");
+    const definition = defineJusticeStatusTool(adapter);
 
     // When
     const output = requireStringResult(await definition.execute({}, createToolContext()));

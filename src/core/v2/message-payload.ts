@@ -11,7 +11,7 @@ export type ObservationMessagePayload =
       readonly kind: "message_updated";
       readonly sessionId: string;
       readonly messageID: string;
-      readonly role: "assistant";
+      readonly role: "assistant" | "user";
       readonly finalized: boolean;
     }
   | {

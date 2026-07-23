@@ -68,8 +68,16 @@ describe("redactAbsolutePaths()", () => {
 });
 
 describe("redactEnvironmentValues()", () => {
-  it("redacts an environment variable assignment", () => {
-    expect(redactEnvironmentValues("FOO_BAR=secret")).toBe("[REDACTED_ENV]");
+  it("redacts double-quoted env var values", () => {
+    expect(redactEnvironmentValues('API2_KEY="secret value"')).toBe("[REDACTED_ENV]");
+  });
+
+  it("redacts single-quoted env var values", () => {
+    expect(redactEnvironmentValues("API2_KEY='secret'")).toBe("[REDACTED_ENV]");
+  });
+
+  it("redacts unquoted env var values", () => {
+    expect(redactEnvironmentValues("API_KEY=unquoted")).toBe("[REDACTED_ENV]");
   });
 
   it("redacts env var inline in text", () => {
@@ -79,6 +87,28 @@ describe("redactEnvironmentValues()", () => {
 
   it("does not redact lowercase names", () => {
     expect(redactEnvironmentValues("foo=bar")).toBe("foo=bar");
+  });
+
+  it("redacts uppercase names containing digits", () => {
+    // Given
+    const input = "HTTP2_PROXY=proxy S3_BUCKET=bucket NODE_V8_COVERAGE=coverage";
+
+    // When
+    const result = redactEnvironmentValues(input);
+
+    // Then
+    expect(result).toBe("[REDACTED_ENV] [REDACTED_ENV] [REDACTED_ENV]");
+  });
+
+  it("does not redact lowercase or digit-prefixed names containing digits", () => {
+    // Given
+    const input = "http2_PROXY=proxy 2FA_SECRET=secret";
+
+    // When
+    const result = redactEnvironmentValues(input);
+
+    // Then
+    expect(result).toBe(input);
   });
 });
 

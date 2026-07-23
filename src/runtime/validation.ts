@@ -1,6 +1,8 @@
 // src/runtime/validation.ts
 import type { PersistedLogRecord } from "../core/v2/observation-model";
+import { isSafeObservationAgentId } from "../core/v2/observation-agent-id-validation";
 import { shardKeyOf } from "../core/v2/shard-layout";
+import { isSafeWriterId } from "../core/v2/writer-id-validation";
 import { isValidSkillInvokedRecord } from "./skill-invoked-record-validator";
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -72,13 +74,8 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     // both fields undefined. Normalizing them to empty arrays prevents silent
     // data loss during readAll() ingestion on upgraded instances.
     const declaredClaims =
-      r.declaredClaims === undefined && r.evidence === undefined
-        ? []
-        : r.declaredClaims;
-    const evidence =
-      r.declaredClaims === undefined && r.evidence === undefined
-        ? []
-        : r.evidence;
+      r.declaredClaims === undefined && r.evidence === undefined ? [] : r.declaredClaims;
+    const evidence = r.declaredClaims === undefined && r.evidence === undefined ? [] : r.evidence;
     const mismatched =
       !Array.isArray(declaredClaims) ||
       !Array.isArray(evidence) ||
@@ -127,10 +124,11 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
     for (const item of r.items) {
       if (
-        !isObject(item) ||
-        typeof item.itemKey !== "string" ||
-        typeof item.evidenceId !== "string" ||
-        typeof item.summary !== "string" ||
+          !isObject(item) ||
+          typeof item.itemKey !== "string" ||
+          typeof item.evidenceId !== "string" ||
+          item.evidenceId !== item.itemKey ||
+          typeof item.summary !== "string" ||
         typeof item.location !== "string" ||
         !isOneOf(item.severity, ["critical", "major", "minor"]) ||
         !isOneOf(item.status, ["open", "resolved"])
@@ -146,8 +144,19 @@ function validateObservationRecord(r: Record<string, unknown>): void {
         if (
           !isObject(marker) ||
           typeof marker.itemKey !== "string" ||
+          marker.itemKey.length === 0 ||
           !isOneOf(marker.resolution, ["explicit_marker", "snapshot_absence", "human_artifact"]) ||
           (marker.artifactRef !== undefined && typeof marker.artifactRef !== "string")
+        ) {
+          throw new Error("Invalid review_observed resolution marker");
+        }
+        // A human_artifact resolution can only originate from a validated
+        // human-approved justice_review artifact, which always carries a
+        // non-empty artifactRef. Reject a marker lacking it so a malformed or
+        // forged marker cannot spoof a human-approved resolution on replay.
+        if (
+          marker.resolution === "human_artifact" &&
+          (typeof marker.artifactRef !== "string" || marker.artifactRef.length === 0)
         ) {
           throw new Error("Invalid review_observed resolution marker");
         }
@@ -194,7 +203,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
       !isObject(ruleResult) ||
       typeof ruleResult.ruleId !== "string" ||
       !isOneOf(ruleResult.verdict, ["PASS", "WARN", "FAIL"]) ||
-      (ruleResult.reason !== undefined && typeof ruleResult.reason !== "string") ||
+      typeof ruleResult.reason !== "string" ||
       !Array.isArray(ruleResult.evidenceRefs)
     ) {
       throw new Error("Invalid decision ruleResult");
@@ -242,6 +251,9 @@ export function validateRecordSchema(record: unknown): void {
     typeof r.writerId !== "string"
   ) {
     throw new TypeError("Invalid record: missing or invalid shard identifier fields");
+  }
+  if (!isSafeObservationAgentId(r.agentId) || !isSafeWriterId(r.writerId)) {
+    throw new TypeError("Invalid record: unsafe shard identifier fields");
   }
 
   if (r.recordType === "observation") {

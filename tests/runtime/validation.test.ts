@@ -49,7 +49,7 @@ function validReviewObserved(): Record<string, unknown> {
     items: [
       {
         itemKey: "i-1",
-        evidenceId: "e-1",
+        evidenceId: "i-1",
         severity: "critical",
         summary: "bad",
         location: "file.ts:1",
@@ -132,6 +132,16 @@ describe("validateRecordSchema", () => {
   it("rejects invalid shard identifier fields", () => {
     expect(() => validateRecordSchema({ ...validToolExecuted(), agentId: undefined })).toThrow(
       "Invalid record: missing or invalid shard identifier fields",
+    );
+  });
+
+  it.each([
+    ["unsafe agentId", { agentId: "attacker" }],
+    ["reserved writerId", { writerId: "w-system" }],
+    ["unsafe writerId segment", { writerId: "w-a/b" }],
+  ])("rejects an envelope with %s", (_caseName, override) => {
+    expect(() => validateRecordSchema({ ...validToolExecuted(), ...override })).toThrow(
+      "Invalid record: unsafe shard identifier fields",
     );
   });
 
@@ -280,6 +290,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: "not-array",
           },
         ],
@@ -295,6 +306,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",
@@ -328,6 +340,7 @@ describe("validateRecordSchema", () => {
           {
             ruleId: "r-1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",
@@ -656,6 +669,24 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid review_observed item");
   });
 
+  it("rejects a review_observed item whose evidenceId does not equal its itemKey", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validReviewObserved(),
+        items: [
+          {
+            itemKey: "i-1",
+            evidenceId: "different-evidence-id",
+            severity: "critical",
+            summary: "bad",
+            location: "file.ts:1",
+            status: "open",
+          },
+        ],
+      }),
+    ).toThrow("Invalid review_observed item");
+  });
+
   it("rejects a review_observed item with invalid status", () => {
     expect(() =>
       validateRecordSchema({
@@ -681,6 +712,15 @@ describe("validateRecordSchema", () => {
     { resolutionMarkers: [{ itemKey: "i-1", resolution: "bogus" }] },
     {
       resolutionMarkers: [{ itemKey: "i-1", resolution: "human_artifact", artifactRef: 42 }],
+    },
+    { resolutionMarkers: [{ itemKey: "i-1", resolution: "human_artifact" }] },
+    {
+      resolutionMarkers: [{ itemKey: "i-1", resolution: "human_artifact", artifactRef: "" }],
+    },
+    {
+      resolutionMarkers: [
+        { itemKey: "", resolution: "human_artifact", artifactRef: "reviews/i-1.md" },
+      ],
     },
   ])("rejects malformed review_observed resolution markers: %j", (invalidFields) => {
     expect(() =>

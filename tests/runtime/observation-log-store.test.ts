@@ -129,7 +129,7 @@ describe("validateRecordSchema()", () => {
         items: [
           {
             itemKey: "k",
-            evidenceId: "e",
+            evidenceId: "k",
             severity: "major",
             summary: "s",
             location: "src/foo.ts:1",
@@ -318,6 +318,7 @@ describe("validateRecordSchema()", () => {
           {
             ruleId: "r1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",
@@ -347,6 +348,7 @@ describe("validateRecordSchema()", () => {
           {
             ruleId: "r1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 kind: "full",
@@ -376,6 +378,7 @@ describe("validateRecordSchema()", () => {
           {
             ruleId: "r1",
             verdict: "PASS",
+            reason: "test fixture",
             evidenceRefs: [
               {
                 agentId: "sisyphus",
@@ -688,6 +691,92 @@ describe("ObservationLogStore", () => {
     expect(store.getWriterId()).toBe("w-1");
   });
 
+  it("redacts direct append payloads at the persistence boundary without altering existing markers", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const unredacted: PendingLogRecord = {
+      ...msgRecord(),
+      kind: "tool_executed",
+      toolName: "bash",
+      callId: "call-redaction",
+      evidence: {
+        evidenceId: "e-redaction",
+        kind: "command",
+        sourceClass: "tool_output",
+        provenance: "observed",
+        toolOutputClass: "command_exec",
+        command: "echo /home/alice/private GITHUB_TOKEN=token-value",
+        rawOutput: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890 [REDACTED_SECRET]",
+      },
+    };
+
+    await store.append(shard, unredacted);
+
+    const persisted = files.get(toPhysicalPath(shard)) ?? "";
+    expect(persisted).not.toContain("/home/alice/private");
+    expect(persisted).not.toContain("GITHUB_TOKEN=token-value");
+    expect(persisted).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890");
+    expect(persisted).toContain("[REDACTED_PATH]");
+    expect(persisted).toContain("[REDACTED_ENV]");
+    expect(persisted).toContain("[REDACTED_SECRET]");
+  });
+
+  it("redacts declared claim claimKind values at the canonical append boundary", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const unredacted: PendingLogRecord = {
+      ...msgRecord(),
+      kind: "tool_executed",
+      toolName: "task",
+      callId: "call-declared-claim-redaction",
+      evidence: {
+        evidenceId: "e-declared-claim-redaction",
+        kind: "generic",
+        sourceClass: "declared_claim",
+        provenance: "declared",
+        declaredFrom: "task_summary",
+        claim: { claimKind: "GITHUB_TOKEN=declared-secret", outcome: "pass" },
+      },
+    };
+
+    await store.append(shard, unredacted);
+
+    const persisted = files.get(toPhysicalPath(shard)) ?? "";
+    expect(persisted).not.toContain("GITHUB_TOKEN=declared-secret");
+    expect(persisted).toContain("[REDACTED_ENV]");
+  });
+
+  it("removes secrets from declaredClaims while retaining a schema-valid claim kind", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const unsafeRecord = {
+      ...msgRecord(),
+      declaredClaims: [
+        {
+          evidenceId: "claim-1",
+          claimKind: "GITHUB_TOKEN=declared-secret",
+          outcome: "pass",
+        },
+      ],
+      evidence: [
+        {
+          evidenceId: "claim-1",
+          kind: "generic",
+          sourceClass: "declared_claim",
+          provenance: "declared",
+          declaredFrom: "message",
+          claim: { claimKind: "GITHUB_TOKEN=declared-secret", outcome: "pass" },
+        },
+      ],
+    } as unknown as PendingLogRecord;
+
+    await store.append(shard, unsafeRecord);
+
+    const persisted = files.get(toPhysicalPath(shard)) ?? "";
+    expect(persisted).not.toContain("GITHUB_TOKEN=declared-secret");
+    expect(persisted).toContain('"claimKind":"generic"');
+  });
+
   it("degrades fail-open when an event file contains malformed JSON", async () => {
     const { files, reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
@@ -696,6 +785,59 @@ describe("ObservationLogStore", () => {
 
     const all = await store.readAll();
     expect(all).toHaveLength(1);
+  });
+
+  it("excludes a shard when one line in its physical segment is malformed", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    const validLine = `${JSON.stringify({ ...msgRecord(), sequence: 1 })}\n`;
+    files.set(toPhysicalPath(shard), `${validLine}not-json\n`);
+
+    const all = await store.readAll();
+
+    expect(all).toEqual([]);
+  });
+
+  it("excludes records whose envelope does not match the physical shard path", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+    files.set(
+      toPhysicalPath(shard),
+      `${JSON.stringify({ ...msgRecord(), agentId: "atlas", sequence: 1 })}\n`,
+    );
+
+    const all = await store.readAll();
+
+    expect(all).toEqual([]);
+  });
+
+  it("excludes unsafe physical shard identities while preserving valid active and archive records", async () => {
+    // Given: valid active/archive files plus attacker-controlled paths whose envelopes match those paths.
+    const { files, reader, writer } = createMemFs();
+    const safeSessionId = encodeSafeSegment("ses-1");
+    files.set(
+      `.justice/archive/events/atlas/${safeSessionId}/w-2.20260101T000000Z.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "atlas", writerId: "w-2", sequence: 1 })}\n`,
+    );
+    files.set(toPhysicalPath(shard), `${JSON.stringify({ ...msgRecord(), sequence: 1 })}\n`);
+    files.set(
+      `.justice/events/attacker/${safeSessionId}/w-7.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "attacker", writerId: "w-7", sequence: 1 })}\n`,
+    );
+    files.set(
+      `.justice/archive/events/atlas/${safeSessionId}/w-system.20260101T000000Z.jsonl`,
+      `${JSON.stringify({ ...msgRecord(), agentId: "atlas", writerId: "w-system", sequence: 1 })}\n`,
+    );
+    const store = new ObservationLogStore(writer, reader, "w-1");
+
+    // When: every listed physical file is ingested.
+    const all = await store.readAll();
+
+    // Then: only the valid active and archive records reach projection input.
+    expect(all.map(({ agentId, writerId }) => [agentId, writerId])).toEqual([
+      ["atlas", "w-2"],
+      ["sisyphus", "w-1"],
+    ]);
   });
 
   it("continues sequence numbering across an archived segment (rotation continuity)", async () => {
@@ -716,9 +858,10 @@ describe("ObservationLogStore", () => {
     await store.append(shard, msgRecord());
     await store.append(shard, msgRecord());
     // Corrupted shard: a different writer whose on-disk log has a gap (seq 1 then 3, missing 2).
-    const gappyPath = ".justice/events/sisyphus/other/w-9.jsonl";
-    const gappyLine1 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 1 })}\n`;
-    const gappyLine2 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 3 })}\n`;
+    const otherShard: ShardId = { agentId: "sisyphus", sessionId: "other", writerId: "w-9" };
+    const gappyPath = toPhysicalPath(otherShard);
+    const gappyLine1 = `${JSON.stringify({ ...msgRecord(), ...otherShard, sequence: 1 })}\n`;
+    const gappyLine2 = `${JSON.stringify({ ...msgRecord(), ...otherShard, sequence: 3 })}\n`;
     files.set(gappyPath, gappyLine1 + gappyLine2);
 
     const all = await store.readAll();
@@ -734,9 +877,10 @@ describe("ObservationLogStore", () => {
     const { files, reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
     await store.append(shard, msgRecord());
-    const reorderedPath = ".justice/events/sisyphus/other/w-9.jsonl";
-    const sequence2 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 2 })}\n`;
-    const sequence1 = `${JSON.stringify({ ...msgRecord(), writerId: "w-9", sequence: 1 })}\n`;
+    const otherShard: ShardId = { agentId: "sisyphus", sessionId: "other", writerId: "w-9" };
+    const reorderedPath = toPhysicalPath(otherShard);
+    const sequence2 = `${JSON.stringify({ ...msgRecord(), ...otherShard, sequence: 2 })}\n`;
+    const sequence1 = `${JSON.stringify({ ...msgRecord(), ...otherShard, sequence: 1 })}\n`;
     files.set(reorderedPath, sequence2 + sequence1);
 
     // When: all physical files are read and validated.
@@ -776,6 +920,15 @@ describe("ObservationLogStore", () => {
     const store = new ObservationLogStore(writer, reader, "w-1");
     const mismatched: ShardId = { agentId: "sisyphus", sessionId: "ses-1", writerId: "w-2" };
     await expect(store.append(mismatched, msgRecord())).rejects.toThrow(/writerId/);
+  });
+
+  it("rejects append when the record envelope does not match the shard", async () => {
+    const { reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-1");
+
+    await expect(
+      store.append(shard, { ...msgRecord(), sessionId: "other-session" }),
+    ).rejects.toThrow(/envelope.*shard/i);
   });
 });
 

@@ -162,6 +162,8 @@ gt submit
 ### Task 0.2: De-risk Spikes (実証スパイク)
 
 > **[ベストエフォート実施済 2026-07-08]** 本 Task は Phase 1 への着手前に未実施のまま進んでいたことが判明したため、事後的にサンドボックス環境で可能な範囲でベストエフォート実施した。結果は [`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`](../spikes/2026-06-26-v2-phase0-spikes.md) に集約。Step 1（レイテンシ実測）のみ実機ベンチマークによる代替検証を完了。Step 1b（C1/L0 advisory表示面実証）は実機OpenCodeの目視確認が必須のため未実証、Step 2（Message fallback matrix）は型定義の静的解析で代替したが実行時順序/重複/遅延の実測は未実証のまま。いずれも受入基準を完全には満たしていないため、下記各Stepのチェックボックスはあえて未チェックのままにし、残作業として明記する。**実行時の遅延/順序逆転/重複などの実機検証、および CI devcontainer 検証ジョブは、方針上不要として対応しない（devcontainer はローカル環境汚染回避目的であり、CI はそもそもコンテナ仮想環境のため）。**
+>
+> **[現行実装注記 2026-07-21]** ここに記録した p95 レイテンシは当時のスパイク結果であり、現行実装の性能保証ではない。イベント配線の未登録を示す過去の記述も現状には適用しない。現在は [`src/opencode-plugin.ts`](../../../src/opencode-plugin.ts) が `experimental.text.complete` を直接登録し、[`src/runtime/opencode-adapter.ts`](../../../src/runtime/opencode-adapter.ts) が generic event 経由で `message.part.updated` を処理している。残る未実証事項は、これらのイベントが実OpenCode hostで示す順序・重複・遅延および表示面の挙動である。
 
 **Files:**
 

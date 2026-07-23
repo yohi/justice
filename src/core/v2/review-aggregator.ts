@@ -33,7 +33,7 @@ function projectItem(record: ReviewObservedRecord, item: ReviewItem): ReviewSumm
       writerId: record.writerId,
       sequence: record.sequence,
       kind: "full",
-      evidenceId: item.evidenceId,
+      evidenceId: item.itemKey,
     },
     severity: item.severity,
   };

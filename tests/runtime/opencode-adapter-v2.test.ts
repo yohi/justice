@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
@@ -102,6 +103,54 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
         },
       },
     });
+  });
+
+  it("promotes a validated complete snapshot artifact only from exact code_review", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const reviewSnapshotArtifact = {
+      authority: "review_tool",
+      schemaVersion: 1,
+      complete: true,
+    };
+
+    await adapter.onToolExecuteAfter(
+      { tool: "code_review", sessionID: "s", callID: "c1", args: {} },
+      { output: "Review complete with no findings", metadata: { reviewSnapshotArtifact } },
+    );
+
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      type: "PostToolUse",
+      payload: {
+        toolName: "code_review",
+        reviewSnapshotArtifact,
+      },
+    });
+  });
+
+  it("does not promote malformed complete snapshot metadata from code_review", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteAfter(
+      { tool: "code_review", sessionID: "s", callID: "c1", args: {} },
+      {
+        output: "Review complete with no findings",
+        metadata: {
+          reviewSnapshotArtifact: {
+            authority: "review_tool",
+            schemaVersion: 1,
+            complete: "true",
+          },
+        },
+      },
+    );
+
+    expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("payload.reviewSnapshotArtifact");
   });
 
   it.each(["justice_Review", "justice_review_extra", "justice_review "])(
@@ -328,27 +377,69 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
   });
 
   it("(c) appends the banner to output.output when enableAdvisoryOutputAppend is true", async () => {
+    // Given
+    const formatBannerSpy = vi
+      .spyOn(OpenCodeNotifier.prototype, "formatBanner")
+      .mockReturnValue("<gate-banner />");
     const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
-      injectedContext: "GATE: blocked",
+      injectedContext: "<gate-context />",
       variant: "gate_advisory",
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
     await adapter.onToolExecuteAfter(
       { tool: "bash", sessionID: "s", callID: "c1", args: {} },
       output,
     );
 
-    expect(output.output.startsWith("raw\n\n")).toBe(true);
-    expect(output.output).toContain("JUSTICE NOTIFICATION");
-    expect(output.output).toContain("Task Gate");
+    // Then
+    expect(formatBannerSpy).toHaveBeenCalledTimes(1);
+    expect(output.output).toBe("raw\n\n<gate-banner />");
   });
 
-  it("(c) a plain inject (no gate_advisory variant) does not notify or mutate output", async () => {
+  it("appends normal guidance while sending only the gate advisory through notifier channels", async () => {
+    // Given
+    const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
+    const formatBannerSpy = vi
+      .spyOn(OpenCodeNotifier.prototype, "formatBanner")
+      .mockReturnValue("<gate-banner />");
+    const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
+    await adapter.ensureInitialized();
+    notifySpy.mockClear();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "normal guidance\n\n---\n\ngate advisory",
+      normalInjectedContext: "normal guidance",
+      gateAdvisoryContext: "gate advisory",
+      variant: "gate_advisory",
+    });
+    const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
+    await adapter.onToolExecuteAfter(
+      { tool: "bash", sessionID: "s", callID: "c1", args: {} },
+      output,
+    );
+
+    // Then
+    expect(output.output).toBe("raw\n\nnormal guidance\n\n<gate-banner />");
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gate advisory" }),
+    );
+    expect(formatBannerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gate advisory" }),
+    );
+  });
+
+  it("(c) appends a plain inject exactly once without notifying", async () => {
+    // Given
     const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
     const adapter = new OpenCodeAdapter(fakeInit(), { enableAdvisoryOutputAppend: true });
     await adapter.ensureInitialized();
@@ -360,13 +451,16 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     });
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
+
+    // When
     await adapter.onToolExecuteAfter(
       { tool: "bash", sessionID: "s", callID: "c1", args: {} },
       output,
     );
 
+    // Then
     expect(notifySpy).not.toHaveBeenCalled();
-    expect(output.output).toBe("raw");
+    expect(output.output).toBe("raw\n\nsome other inject");
   });
 
   it("(c) gate_advisory notify falls back to taskId 'unknown' when input.args has no taskId", async () => {
@@ -463,6 +557,75 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
         messageID: "msg-1",
         role: "assistant",
         finalized: true,
+      },
+    });
+  });
+
+  it("forwards user message.updated only as a content-free lifecycle observation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          sessionID: "sess-1",
+          info: { id: "msg-1", role: "user", content: "delegate next task" },
+        },
+      },
+    });
+
+    const events = spy.mock.calls.map((call) => call[0]);
+    const lifecycleMessage = events.find(
+      (event) =>
+        event.type === "Message" &&
+        "kind" in event.payload &&
+        event.payload.kind === "message_updated",
+    );
+
+    expect(lifecycleMessage).toMatchObject({
+      type: "Message",
+      sessionId: "sess-1",
+      payload: {
+        kind: "message_updated",
+        sessionId: "sess-1",
+        messageID: "msg-1",
+        role: "user",
+        finalized: false,
+      },
+    });
+    expect(lifecycleMessage).not.toHaveProperty("payload.content");
+  });
+
+  it("routes message.updated with info.sessionID when the top-level sessionID is absent", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    // When
+    await adapter.onEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: { sessionID: "nested-session", id: "msg-1", role: "user", content: "delegate" },
+        },
+      },
+    });
+
+    // Then
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "nested-session",
+      payload: {
+        kind: "message_updated",
+        sessionId: "nested-session",
+        messageID: "msg-1",
+        role: "user",
+        finalized: false,
       },
     });
   });
@@ -646,7 +809,30 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("silently ignores message.part.updated with empty part id or text", async () => {
+  it("maps an assistant chat.message agent without forwarding its text to the legacy Message route", async () => {
+    // Given
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    // When
+    await adapter.onChatMessage({
+      sessionID: "sess-chat",
+      message: { role: "assistant", content: "assistant-only text", agent: "atlas" },
+    });
+
+    // Then
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: "AgentMapped",
+        sessionId: "sess-chat",
+        payload: { sessionId: "sess-chat", agentName: "atlas" },
+      },
+    ]);
+  });
+
+  it("drops message.part.updated without a part id but retains an empty text update", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -665,7 +851,48 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
       },
     });
 
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "s",
+      payload: {
+        kind: "message_part_updated",
+        sessionId: "s",
+        messageID: "m",
+        partID: "p",
+        text: "",
+      },
+    });
+  });
+
+  it("maps the agent supplied by chat.message before forwarding its user content", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "chat.message",
+        properties: {
+          sessionID: "sess-chat",
+          message: { role: "user", content: "delegate next task", agent: "prometheus" },
+        },
+      },
+    });
+
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: "AgentMapped",
+        sessionId: "sess-chat",
+        payload: { sessionId: "sess-chat", agentName: "prometheus" },
+      },
+      {
+        type: "Message",
+        sessionId: "sess-chat",
+        payload: { role: "user", content: "delegate next task" },
+      },
+    ]);
   });
 
   it("(g) still dispatches the plan-bridge Message when AgentMapped dispatch throws", async () => {
@@ -799,6 +1026,44 @@ describe("OpenCodeAdapter v2 — message / agent observation forwarding", () => 
         message: "ordinary provider failure",
       },
     });
+  });
+
+  it("routes session.deleted properties.info.id to complete Justice session cleanup", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const sessionId = "session-deleted";
+    const taskFeedbackSessions = justice.getTaskFeedback() as unknown as {
+      readonly sessions: ReadonlyMap<string, unknown>;
+    };
+    const clearActivePlan = vi.spyOn(justice.getTaskFeedback(), "clearActivePlan");
+
+    justice.getPlanBridge().setActivePlan(sessionId, "plan.md");
+    justice.getTaskFeedback().setActivePlan(sessionId, "plan.md", "task-1");
+    justice.getSessionStateProvider().setAgentMapping(sessionId, "atlas");
+    justice.getSessionStateProvider().setActiveTaskWindow("call-deleted", "task-1", sessionId);
+
+    const deletedEvent = {
+      type: "session.deleted",
+      properties: {
+        info: {
+          id: sessionId,
+          projectID: "project-1",
+          directory: "project",
+          title: "Deleted session",
+          version: "1",
+          time: { created: 0, updated: 0 },
+        },
+      },
+    } satisfies EventSessionDeleted;
+
+    await adapter.onEvent({ event: deletedEvent });
+
+    expect(clearActivePlan).toHaveBeenCalledWith(sessionId);
+    expect(justice.getPlanBridge().getActivePlan(sessionId)).toBeNull();
+    expect(taskFeedbackSessions.sessions.has(sessionId)).toBe(false);
+    expect(justice.getSessionStateProvider().getAgentId(sessionId)).toBe("unknown");
+    expect(justice.getSessionStateProvider().getActiveTaskId("call-deleted")).toBeUndefined();
   });
 
   it("keeps failing open when message.updated handling throws", async () => {

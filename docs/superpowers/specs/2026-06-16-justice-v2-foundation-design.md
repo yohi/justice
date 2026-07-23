@@ -77,7 +77,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 | D47 | L0 advisory の PostToolUse 注入 surface（保証=notifier・output.output は要実証） | `tool.execute.after` は注入専用フィールド（parts/context）を持たず `output:{title,output,metadata}` のみ、かつ現 adapter は PostToolUse 戻り値を破棄する。advisory surface を**保証度で2段に分けて定義**: **(保証) (2) `JusticeNotifier`（`client.app.log`）でバナー送出**＝型上確実なチャネル。**(best-effort・要実証) (1) Runtime が可変 `output.output` 末尾へ `formatBanner` を追記**＝モデル文脈/ユーザー表示への反映は型定義に保証明記が無く Phase 0 スパイク（§3）で実証するまで断定しない（D45 の「未確認は未確認」基準を水平適用）。(3) on-demand `justice_gate` 表示。Core は `HookResponse{action:"inject"}` を返し adapter（拡張）が (1)(2) に適用（PreToolUse の prompt mutation と対称だが、Pre=実行前 args 消費が自明なのに対し Post=実行後 output の文脈反映は別問題） | `tool.execute.after`=`{title,output,metadata}`・PostToolUse 戻り値破棄（`onToolExecuteAfter`）・`output:{readonly output}` の readonly 撤廃と戻り値捕捉が (1) の前提。`experimental.session.compacting` と異なり反映明記の JSDoc が無い。中核 advisory の保証は notifier、output.output は実証後に確定（本レビュー指摘 C1・D45 と同基準） |
 | D48 | 全ツール観測 hook からの agentId 取得経路 | `tool.execute.before/after` の input は `{tool,sessionID,callID,args}` で agent を持たないため、Runtime が `chat.message`（`agent?`）/`chat.params`（`agent`）観測で `sessionID→agentId` マップを構築し tool 観測時に sessionID で解決。未解決時は予約 shard `{system,system}`（D38）または `agentId:"unknown"` へフォールバック。OpenCode agent 名（自由文字列）→ Justice `AgentId`（atlas/hephaestus/sisyphus/prometheus）の写像を Core に定義し未知は `unknown` | tool hook に agent 不在（`@opencode-ai/plugin` 型定義）。agentId 必須 shard（D39）・persona isolation・Evidence 帰属が実装者依存になる穴。`chat.*` に agent が実在し解決可能（本レビュー指摘2・FR-001） |
 | D49 | tool Evidence rawOutput の kind 別保存ポリシー | D34（message 本文非永続化）と同原則を tool Evidence に適用。`test`/`build`/`lint`/`command`（コマンド実行系）は `rawOutput` を redact+truncation して保存（合否観測に必要）。`read`/検索/ファイル本文系ツール出力は **rawOutput 全文を保存せず** `rawOutputHash`（必須）＋最小 snippet＋kind 分類のみ（plan/design/code 本文の複製を遮断） | read/bash(cat)/grep 出力に plan/design/code 本文が混入し `.justice/events` が外部 SoT の複製になる（FR-001 非目的・INV-008）。redaction+truncation は secrets/path 向けでコンテンツ境界を守れず、D34 と非対称だった穴を解消（本レビュー指摘3） |
-| D50 | `justice_gate` の dry-run 化（DecisionRecord 非生成） | `justice_gate` は **dry-run 表示のみ**で DecisionRecord を **append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成。justice_gate は現 projection/Evidence への評価結果表示に留め canonical log・replay・KPI を変えない | §7.5 read-only 注記は state.json キャッシュ書込のみ許容と述べ DecisionRecord 追記を沈黙。照会が判定ログを変えれば read-only・replay・verdict 分布 KPI を汚す（本レビュー指摘4・INV-002） |
+| D50 | 内部 gate dry-run の非変更性（DecisionRecord 非生成） | 内部 `justice_gate` helper は **dry-run 評価のみ**で DecisionRecord を **append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成。helper は現 projection/Evidence の評価結果を返すだけで canonical log・replay・KPI を変えず、公開 custom tool としては登録しない | 照会が判定ログを変えれば replay・verdict 分布 KPI を汚す。公開面を `justice_review` のみに固定しつつ既存の内部 dry-run テストを保全する（本レビュー指摘4・INV-002） |
 | D51 | ReflectionEvent `planRef` の path 化 | `planRef` を `{ path, taskId }` に改め `path` は **workspace 相対パス必須・絶対パス禁止**（グローバル No Absolute Paths 準拠）。値は `PlanBridge`/`TaskFeedbackHandler` の `setActivePlan(sessionId, planPath)` 追跡済み実 path を記録し "plan.md" 固定を廃止 | 本プロジェクトは `docs/superpowers/specs/*.md` 等 複数 plan/design を持ち basename 固定では v2.5 で所有者が更新対象を復元不能（本レビュー指摘5・No Absolute Paths） |
 | D52 | tool Evidence 保存ポリシーの schema 化（D49 の正規化） | D49 の保存方針を **`toolOutputClass`（`"command_exec"` / `"file_content"`）軸**（`kind` と直交）として §5.3 に追加。`rawOutput`（command_exec・redact+truncation 保存）と **`rawOutputHash`（必須）＋`rawOutputSnippet`（任意・最小・redact後）**（file_content）を discriminated union で排他化。分類器（§5.3）に read/grep/glob/cat 等→`file_content` 分岐を追加 | D49 の決定が §5.3 スキーマへ未伝播で、`kind` enum・分類器に file-content 軸も `rawOutputHash`/`rawOutputSnippet` フィールドも無く、read 出力が rawOutput 全文保存され plan/design/code 本文を複製する（FR-001 非目的・本レビュー指摘1・INV-008） |
 | D53 | assistant 本文の role 相関モデル | 本文（part・role 無し）と role（`message.updated`）を結合する一時 projection **`messageRoleBuffer: {sessionId, messageID} → { role, partIDs[], finalized }`**（複合鍵・TTL 既定 10 分・LRU 上限は D65）を observation-handler に定義。part 先行（到着順逆転）時は pending 保留→後続 `message.updated` で role 解決後に評価、role≠assistant は破棄、`finalized`/TTL で GC。declaredClaims 抽出は role=assistant 確定 part のみ（§6.1.1） | 本文と role が別イベントのため相関機構なしでは role=assistant 強制が不能でユーザー入力を declared 誤抽出し得た（本レビュー指摘2・FR-004/INV-004） |
@@ -153,7 +153,7 @@ v2.0 は **L0 Advisory のみ**（強制せず、警告・バナー・チェッ�
 |---|---|
 | `observation-log-store.ts` | `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl`（shard 鍵=`{agentId, sessionId, writerId}`・per-writer segment・§9.4/D30/D39）への atomic 追記（temp+rename）+ active＋archive 全 segment 読取マージ（D40）。**同一 shard への append は per-shard async write queue で直列化**（read-modify-write 競合とイベント消失を防止・§9.4 並行性）。sequence は直列化キュー内でインメモリ管理（初回は当該 shard の **active + archive 双方の最大 sequence** から復元・rotation 跨ぎ衝突を防止・D33） |
 | `gate-loader.ts` | `.justice/gate.yaml` 読込・パース（+ 組込デフォルト）→ 純粋 engine へ data 注入 |
-| `justice-tools.ts` | `justice_status` / `justice_gate` / `justice_review` の tool 定義（read-only） |
+| `justice-tools.ts` | 公開 `justice_review` の定義と、未登録の内部 status/gate helper（gate は D50 dry-run） |
 | `opencode-adapter.ts`（既存拡張） | `tool !== "task"` フィルタ撤廃 + 新観測イベント送出。`tool` hook 配線 |
 
 ### 4.4 配線（`justice-plugin.ts` 拡張）
@@ -449,12 +449,19 @@ Task Gate は FR-005 の確認項目のうち **Required Tests / Evidence / Revi
 ### 6.3 projection 再構築（読取時）
 
 ```text
-トリガ: justice_status tool / 評価が横断状態を要する時
-  → observation-log-store.readAll(active + archive の全 segment)   ← Runtime I/O（D40）
-  → state-projection.project(events): 純粋 fold
-       ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId, writerId}・D39）→ ProjectedState（決定論的・FF-004）
-  → state.json にキャッシュ
-  → current_branch / active_prs は別途 live クエリ
+トリガ: 3つの異なるパスで projection 更新が発生
+  (1) PostToolUse 後の同期キャッシュ検証 + 非同期スケジュール更新:
+      → refreshProjectionCache() を同期実行（state.json の背景更新）
+      → 確認済みメッセージについてはスケジュール更新を登録（遅延: 数秒～数十秒）
+      → 期待される遅延: 同期部分は即座、非同期部分は最大 30秒
+  (2) オンデマンド読取（gate 評価または公開 `justice_review` が横断状態を要する時）:
+      → observation-log-store.readAll(active + archive の全 segment)   ← Runtime I/O（D40）
+      → state-projection.project(events): 純粋 fold
+           ① shard 内を sequence 昇順で整列（因果順保持）→ ② shard 間を (timestamp, shardId, sequence) でマージ（shardId={agentId, sessionId, writerId}・D39）→ ProjectedState（決定論的・FF-004）
+      → 期待される遅延: I/O 依存（通常 100ms～1秒）
+  (3) キャッシュ（state.json）の特性:
+      → append-only log に基づくため、設計上の遅延あり（最新の観測が反映されない可能性）
+      → 背景更新と on-demand 読取の分離により、評価時には常に最新状態を取得可能
 ```
 
 ### 6.4 Fail-Open 境界（INV-006）
@@ -547,17 +554,18 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 - `.justice/gate.yaml` があれば **同一 id を上書き / 新規追加 / `enabled:false` で無効化**。
 - **trust-first**: デフォルトは `onViolation: warn`。信頼を積んでから `fail` へ引上げ。L0 では FAIL も非ブロッキング（強バナー化のみ）。
 
-### 7.5 `justice_*` read-only custom tool（INV-002）
+### 7.5 公開 `justice_review` と内部 dry-run helper（INV-002 / D50）
 
-| tool 名 | 責務 | v2.0 |
+| 名称 | 責務 | v2.0 |
 |---|---|---|
-| `justice_status` | projection を読み現在状態を報告 | ✅ |
-| `justice_gate` | 現 event log から再構築した projection/Evidence に対し gate 評価を実行し verdict 表示（**dry-run・DecisionRecord 非生成**・D50） | ✅ |
-| `justice_review` | Review Summary Artifact を表示 | ✅ |
+| `justice_review` | Review Summary Artifact を表示し、`ToolContext.ask` による人間承認後のみ選択済み open item の解決 artifact を生成 | **唯一の公開 custom tool** |
+| `justice_gate` | projection/Evidence に対する gate の **内部 dry-run**（DecisionRecord 非生成） | 未登録。既存内部テスト専用 |
+| `justice_status` | projection 状態の内部照会 helper | 未登録。公開 custom tool ではない |
 | `justice_verify` | Final Verifier（Release Report） | ⏸ v2.5（FR-007） |
 
-> **「read-only」のスコープ**: ここでの read-only は **workspace / コード / コマンド実行に対する** read-only（INV-002＝「コードを書かない・実行しない」）を指す。projection 読取に伴う `.justice/state.json` への**内部キャッシュ書込は許容**される（state.json は再構築可能な非 SoT キャッシュ・§5.6、書込失敗は fail-open・§9.4）。
-> **`justice_gate` の非変更性（D50）**: `justice_gate` は dry-run 表示のみで **DecisionRecord を append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成し、照会は canonical log・replay・KPI を変化させない。
+> **公開面の固定**: `OpenCodeAdapter.getTools()` と plugin の tool map は `justice_review` だけを公開する。`justice_status` と `justice_gate` は公開登録も hook 登録も行わない。`justice_review` は workspace のコードを書かずコマンドを実行しない（INV-002）。解決 artifact は `ToolContext.ask` による人間承認の成功時だけ生成する。
+>
+> **内部 `justice_gate` の非変更性（D50）**: 内部 helper は dry-run 評価のみで **DecisionRecord を append しない**。正式な DecisionRecord は hook 起点の gate 評価（trigger=`task_complete`/`tool_observed`・§6.2）のみが生成し、helper は canonical log・replay・KPI を変化させない。
 
 ### 7.6 Review Aggregator の入力源と解決規則（Finding 4 対応）
 
@@ -571,7 +579,7 @@ evaluate(gates: GateRule[], evidence: Evidence[], ctx: GateContext): Verdict
 
 ### 7.7 ユーザー露出インターフェース名（Finding 6 対応）
 
-v2.0 は **custom tool 名（`justice_status` 等）で提供**。`/justice-*` slash 体験は `command.execute.before` の `output.parts` 注入面を使う互換エイリアスとして提供できる**可能性はあるが、§3/D45 のとおり同フックは登録・短絡(cancel) API を持たず `output.parts` の反映も未実証のため、v2.0 では実現可能性を未確定（実証待ち）とし、既定は `justice_*` custom tool 名のみとする**（slash 登録 API は無い・§3・D45）。
+v2.0 は **`justice_review` を唯一の custom tool 名として提供**する。`/justice-*` slash 体験は `command.execute.before` の `output.parts` 注入面を使う互換エイリアスとして提供できる**可能性はあるが、§3/D45 のとおり同フックは登録・短絡(cancel) API を持たず `output.parts` の反映も未実証のため、v2.0 では実現可能性を未確定（実証待ち）とする**（slash 登録 API は無い・§3・D45）。
 
 ---
 
@@ -673,7 +681,7 @@ Core 純粋テスト（§9.3）では捕捉できない **Runtime/状態ロジ�
 | FR-004 Evidence Engine（observed/derived） | L1 permission deny |
 | FR-005 L0 Task Gate / Rule Engine（Required Tests/Evidence/Review・WARN 既定） | DEBT-001 完全カットオーバー |
 | FR-006 Review Aggregator | サブエージェント Evidence 相関 |
-| 観測拡張（全ツール）・`justice_status/gate/review` | 豊富な event タップ（file.edited 等） |
+| 観測拡張（全ツール）・公開 `justice_review`・内部 D50 gate dry-run | 豊富な event タップ（file.edited 等） |
 | FF-001〜004,006〜008 + FF-005(新 spine 限定) | Phase/Feature Gate, L2 CI/PR, Acceptance Criteria 観測・判定(FR-005・D35) |
 
 ### 10.2 KPI（v2.0 は基盤層・先行指標）
@@ -717,8 +725,8 @@ Phase 1(build):
 | INV | 本設計での担保 |
 |---|---|
 | INV-001（設計を生成しない） | Justice は plan/design を著作しない。観測と判定のみ |
-| INV-002（コードを書かない・実行しない） | `justice_*` は read-only custom tool（§7.5/D13/D22）。Core は OpenCode 非依存（FF-001） |
-| INV-003（Verdict authority 保持） | rule-evaluation-engine が Verdict を産出。Verdict は DecisionRecord として Observation Log に永続化され（§5.4）、L0 advisory において injectedContext / notifier を通じて提示され（§6.2/D47）、さらに `justice_gate`（§7.5）の on-demand 表示で消費される |
+| INV-002（コードを書かない・実行しない） | 公開 custom tool は `justice_review` のみで、workspace のコードを書かずコマンドを実行しない（§7.5）。Core は OpenCode 非依存（FF-001） |
+| INV-003（Verdict authority 保持） | rule-evaluation-engine が Verdict を産出。Verdict は DecisionRecord として Observation Log に永続化され（§5.4）、L0 advisory において injectedContext / notifier を通じて提示される（§6.2/D47）。内部 D50 helper は既存 Evidence を dry-run 評価するだけで DecisionRecord を生成しない |
 | INV-004（observed/derived のみ Evidence） | Evidence に provenance 必須。declared（message 由来＋**task サマリ由来**）は記録のみで **gate 充足に不算入**、`derived` は **observed 起源に限定**（観測のみが PASS を生む・§5.8/D29）。L0 充足ゲーティング=FF-008／L1+ deny ゲーティング=FF-007 |
 | INV-005（plan.md 非著作） | 新 spine は書込まない（FF-005 新 spine 限定）。DEBT-001 は v2.5 で解消 |
 | INV-006（Fail-Open(A) 不破） | observation-handler / adapter の try/catch（FF-006） |

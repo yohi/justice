@@ -175,17 +175,27 @@ describe("ObservationHandler tool observation", () => {
     expect(sessionState.getActiveTaskId("call-b")).toBeUndefined();
   });
 
-  it("fails open and closes the task window when append fails", async () => {
+  it("skips projection and gate evaluation when the canonical task observation append fails", async () => {
     const sessionState = new SessionStateProvider();
     const logger = { warn: vi.fn() };
+    const appendError = new Error("append failed");
+    const append = vi.fn(async (): Promise<number> => {
+      throw appendError;
+    });
+    const readAll = vi.fn(async () => []);
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
     const handler = new ObservationHandler({
       logStore: {
-        append: async (): Promise<number> => {
-          throw new Error("append failed");
-        },
-        readAll: async () => [],
+        append,
+        readAll,
       } as unknown as ObservationLogStore,
       sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
       writerId: "w-handler",
       logger,
     });
@@ -205,9 +215,14 @@ describe("ObservationHandler tool observation", () => {
 
     expect(response).toEqual({ action: "proceed" });
     expect(sessionState.getActiveTaskId("call-1")).toBeUndefined();
+    expect(append).toHaveBeenCalledOnce();
+    expect(readAll).not.toHaveBeenCalled();
+    expect(projectionCache.read).not.toHaveBeenCalled();
+    expect(projectionCache.write).not.toHaveBeenCalled();
+    expect(gateLoader.load).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: task summary declared evidence failed",
-      expect.any(Error),
+      "observation-handler: tool observation failed, degrading to PROCEED",
+      appendError,
     );
   });
 
@@ -476,6 +491,41 @@ describe("ObservationHandler tool observation", () => {
 
     await vi.waitFor(() => expect(projectionCache.write).toHaveBeenCalledOnce());
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns and rebuilds when log ingestion excludes a corrupted shard", async () => {
+    const { files, reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    const logger = { warn: vi.fn() };
+    files.set(
+      ".justice/events/atlas/corrupted__1f0f1462/w-corrupted.jsonl",
+      "not-json\n",
+    );
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      writerId: "w-handler",
+      logger,
+    });
+
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-corruption",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler projection cache log integrity violation, rebuilding",
+      expect.any(Error),
+    );
+    expect(projectionCache.write).toHaveBeenCalledOnce();
   });
 
   it("continues gate evaluation even when projection cache refresh fails during PostToolUse", async () => {

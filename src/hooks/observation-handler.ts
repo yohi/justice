@@ -1,5 +1,5 @@
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
-import { ReviewRejectionDetector } from "../core/review-rejection-detector";
+import { ReviewRejectionDetector, type ReviewItem } from "../core/review-rejection-detector";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
@@ -184,50 +184,75 @@ export class ObservationHandler {
     this.messageRoleBuffer.update(sessionId, payload);
 
     try {
-      const text = this.messageRoleBuffer.getFinalizedAssistantText(sessionId, payload.messageID);
-      if (text === undefined || text.length === 0) {
-        return PROCEED;
-      }
-      const textHash = hashString(text);
-      // Only an exact repeat is suppressed. A hash change from a legitimate
-      // correction (e.g. a delayed text_complete overwriting a part that was
-      // soft-finalized by message_updated -- see message-role-buffer.ts) is
-      // intentionally appended as a NEW immutable audit revision rather than
-      // replacing the prior record; declared claims here are non-authoritative
-      // (audit visibility only, never gate evidence).
-      if (this.persistedMessageHashes.get(sessionId)?.get(payload.messageID) === textHash) {
-        return PROCEED;
-      }
-
-      const claims = this.messageRoleBuffer.extractAssistantClaims(sessionId, payload.messageID);
       const agentId = this.options.sessionStateProvider.getAgentId(sessionId);
-      const record = buildMessageRecord({
-        envelope: {
-          schemaVersion: 1,
-          timestamp: new Date().toISOString(),
-          agentId,
+      let projectionRefreshNeeded =
+        payload.kind === "message_updated" && payload.finalized;
+      for (const partID of this.finalizedAssistantPartIDs(sessionId, payload)) {
+        const text = this.messageRoleBuffer.getFinalizedAssistantText(
           sessionId,
-          writerId: this.options.writerId,
-          recordType: "observation",
-        },
-        messageID: payload.messageID,
-        text,
-        claims,
-      });
-      await this.options.logStore.append(
-        { agentId, sessionId, writerId: this.options.writerId },
-        record,
-      );
-      const sessionHashes = this.persistedMessageHashes.get(sessionId) ?? new Map<string, string>();
-      sessionHashes.set(payload.messageID, textHash);
-      this.persistedMessageHashes.set(sessionId, sessionHashes);
-      this.scheduleProjectionRefresh();
+          payload.messageID,
+          partID,
+        );
+        if (text === undefined) continue;
+
+        const textHash = hashString(text);
+        const messagePartKey = JSON.stringify([payload.messageID, partID]);
+        // A correction is a new immutable audit revision, but only for its own
+        // (messageID, partID) identity. Other finalized parts remain untouched.
+        if (this.persistedMessageHashes.get(sessionId)?.get(messagePartKey) === textHash) {
+          continue;
+        }
+
+        const claims = this.messageRoleBuffer.extractAssistantClaims(
+          sessionId,
+          payload.messageID,
+          partID,
+        );
+        const record = buildMessageRecord({
+          envelope: {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId,
+            sessionId,
+            writerId: this.options.writerId,
+            recordType: "observation",
+          },
+          messageID: payload.messageID,
+          partID,
+          text,
+          claims,
+        });
+        await this.options.logStore.append(
+          { agentId, sessionId, writerId: this.options.writerId },
+          record,
+        );
+        const sessionHashes =
+          this.persistedMessageHashes.get(sessionId) ?? new Map<string, string>();
+        sessionHashes.set(messagePartKey, textHash);
+        this.persistedMessageHashes.set(sessionId, sessionHashes);
+        projectionRefreshNeeded = true;
+      }
+      if (projectionRefreshNeeded) this.scheduleProjectionRefresh();
     } catch (error) {
       this.options.logger?.warn("observation-handler message failed", error);
     } finally {
       this.cleanupMessageBuffer();
     }
     return PROCEED;
+  }
+
+  private finalizedAssistantPartIDs(
+    sessionId: string,
+    payload: ObservationMessagePayload,
+  ): readonly string[] {
+    switch (payload.kind) {
+      case "message_part_updated":
+        return [];
+      case "text_complete":
+        return [payload.partID];
+      case "message_updated":
+        return this.messageRoleBuffer.getFinalizedAssistantPartIDs(sessionId, payload.messageID);
+    }
   }
 
   destroySession(sessionId: string): void {
@@ -301,7 +326,9 @@ export class ObservationHandler {
       };
 
       if (event.payload.toolName === "task") {
-        await this.appendTaskSummaryDeclaredEvidence(shardId, toolRecordInput);
+        if (!(await this.appendTaskSummaryDeclaredEvidence(shardId, toolRecordInput))) {
+          return PROCEED;
+        }
       } else {
         await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
       }
@@ -324,10 +351,11 @@ export class ObservationHandler {
           );
         } catch (error) {
           this.options.logger?.warn("observation-handler: skill_invoked observation failed", error);
+          continue;
         }
       }
       if (isReviewObservationTool(event.payload.toolName)) {
-        await this.appendReviewObservationsIfDetected(
+        if (!(await this.appendReviewObservationsIfDetected(
           shardId,
           taskId,
           event.sessionId,
@@ -335,7 +363,10 @@ export class ObservationHandler {
           event.payload.toolName,
           event.payload.toolResult,
           event.payload.metadata,
-        );
+          event.payload.reviewSnapshotArtifact !== undefined,
+        ))) {
+          return PROCEED;
+        }
       }
       let cachedState: ProjectedState | undefined;
       try {
@@ -405,32 +436,28 @@ export class ObservationHandler {
   private async appendTaskSummaryDeclaredEvidence(
     shardId: ShardId,
     input: ToolExecutedRecordInput,
-  ): Promise<void> {
+  ): Promise<boolean> {
     let summaryClaims: readonly DeclaredClaim[] = [];
-    try {
-      summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
-    } catch (error) {
-      this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+    if (input.envelope.taskId !== undefined) {
+      try {
+        summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
+      } catch (error) {
+        this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+      }
     }
-    try {
-      await this.options.logStore.append(
-        shardId,
-        buildToolExecutedRecord({ ...input, summaryClaims }),
-      );
-    } catch (error) {
-      this.options.logger?.warn(
-        "observation-handler: task summary declared evidence failed",
-        error,
-      );
-    }
+    await this.options.logStore.append(
+      shardId,
+      buildToolExecutedRecord({ ...input, summaryClaims }),
+    );
+    return true;
   }
 
   private scheduleProjectionRefresh(): void {
-    if (this.options.projectionCache === undefined) return;
     this.projectionRefresh = this.projectionRefresh
       .catch(() => {})
       .then(async () => {
         await this.refreshProjectionCache();
+        this.messageRoleBuffer.releaseFinalizedAfterProjectionFlush();
       })
       .catch((error) => {
         this.options.logger?.warn("observation-handler projection cache refresh failed", error);
@@ -440,6 +467,12 @@ export class ObservationHandler {
   private async refreshProjectionCache(): Promise<ProjectedState | undefined> {
     if (this.options.projectionCache === undefined) return undefined;
     const events = await this.options.logStore.readAll();
+    if (this.options.logStore.getLastReadIntegrity().hasIntegrityViolation) {
+      this.options.logger?.warn(
+        "observation-handler projection cache log integrity violation, rebuilding",
+        new Error("log integrity violation"),
+      );
+    }
     const cached = await this.options.projectionCache.read?.();
     if (cached !== undefined) {
       const validation = validateProjectionCacheAgainstEvents(cached, events);
@@ -482,37 +515,40 @@ export class ObservationHandler {
     toolName: string,
     toolResult: string,
     metadata?: Readonly<Record<string, unknown>>,
-  ): Promise<void> {
+    isCompleteSnapshot = false,
+  ): Promise<boolean> {
+    let items: readonly ReviewItem[];
     try {
-      const items = this.reviewRejectionDetector.detectMultiple(
+      items = this.reviewRejectionDetector.detectMultiple(
         toolResult,
         metadata,
         this.options.workspaceRoot ?? process.cwd(),
       );
-      const isCompleteSnapshot = isTrustedCompleteReviewSnapshot(toolName, metadata);
-      if (items.length === 0 && !isCompleteSnapshot) return;
-
-      const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
-      await this.options.logStore.append(
-        shardId,
-        buildReviewObservedRecord(
-          {
-            schemaVersion: 1,
-            timestamp: new Date().toISOString(),
-            agentId: shardId.agentId,
-            sessionId,
-            writerId: this.options.writerId,
-            ...(taskId === undefined ? {} : { taskId }),
-            recordType: "observation",
-          },
-          reviewScope,
-          items,
-          isCompleteSnapshot,
-        ),
-      );
     } catch (error) {
       this.options.logger?.warn("observation-handler: review_observed generation failed", error);
+      return false;
     }
+    if (items.length === 0 && !isCompleteSnapshot) return true;
+
+    const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
+    await this.options.logStore.append(
+      shardId,
+      buildReviewObservedRecord(
+        {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId: shardId.agentId,
+          sessionId,
+          writerId: this.options.writerId,
+          ...(taskId === undefined ? {} : { taskId }),
+          recordType: "observation",
+        },
+        reviewScope,
+        items,
+        isCompleteSnapshot,
+      ),
+    );
+    return true;
   }
 
   async handleReviewResolutionArtifact(payload: {
@@ -620,20 +656,4 @@ export class ObservationHandler {
 
 function isReviewObservationTool(toolName: string): boolean {
   return toolName === "task" || toolName === "code_review";
-}
-
-/**
- * Returns true when the tool result is a trusted complete review snapshot.
- *
- * Trust boundary: we rely ONLY on `metadata.isCompleteSnapshot`, which is set
- * by the OpenCode platform (or a trusted wrapper), NOT on `toolResult`. The
- * previous implementation also checked `toolResult`, but that was removed
- * because `code_review` output is generated by the agent itself and therefore
- * sits outside the trust boundary for snapshot-completeness assertions.
- */
-function isTrustedCompleteReviewSnapshot(
-  toolName: string,
-  metadata: Readonly<Record<string, unknown>> | undefined,
-): boolean {
-  return toolName === "code_review" && metadata?.isCompleteSnapshot === true;
 }

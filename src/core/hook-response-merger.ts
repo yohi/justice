@@ -62,13 +62,30 @@ export function mergePostToolUseResponses(
   const contexts = injects
     .map((inject) => inject.injectedContext)
     .filter((context) => context !== "");
+  const normalContexts = injects
+    .map((inject) =>
+      inject.normalInjectedContext ??
+      (inject.variant === "gate_advisory" ? "" : inject.injectedContext),
+    )
+    .filter((context) => context !== "");
+  const gateContexts = injects
+    .map((inject) =>
+      inject.gateAdvisoryContext ??
+      (inject.variant === "gate_advisory" ? inject.injectedContext : ""),
+    )
+    .filter((context) => context !== "");
   const base: InjectResponse = {
     action: "inject",
     injectedContext: contexts.join("\n\n---\n\n"),
   };
-  const result: InjectResponse = injects.some((inject) => inject.variant === "gate_advisory")
-    ? { ...base, variant: "gate_advisory" }
-    : base;
+  const normalInjectedContext = normalContexts.join("\n\n---\n\n");
+  const gateAdvisoryContext = gateContexts.join("\n\n---\n\n");
+  const result: InjectResponse = {
+    ...base,
+    ...(normalInjectedContext.length === 0 ? {} : { normalInjectedContext }),
+    ...(gateAdvisoryContext.length === 0 ? {} : { gateAdvisoryContext }),
+    ...(gateAdvisoryContext.length === 0 ? {} : { variant: "gate_advisory" }),
+  };
 
   const modifieds = injects.filter((inject) => inject.modifiedPayload !== undefined);
   if (modifieds.length > 1) {

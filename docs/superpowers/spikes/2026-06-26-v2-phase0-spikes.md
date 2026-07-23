@@ -90,7 +90,7 @@ D47 自身が用意した保守的フォールバック（「反映不可なら 
 
 - D41/D53/D67 の**型レベルでの整合性は確認できた**（`message.part.updated` から `TextPart.text` を取得できること、`message.updated` の `finish`/`completed` を lifecycle 確定シグナルとして使えること、`chat.message` が assistant 本文源として使用不可であることは、いずれも型定義と矛盾しない）。
 - ただし、**実行時の順序保証（part 先行 vs role 確定の到着順逆転）・重複発火・遅延の実測は本スパイクでは代替不可**（型定義には現れない実行時挙動のため）。D53/D65 の `messageRoleBuffer`（TTL・LRU・pending 保留ロジック）が本当に必要かどうかは、Phase 3 着手前に実機での短時間の観測ログ収集を推奨する。
-- **現状の実装ギャップの再確認**: `src/opencode-plugin.ts` は `"experimental.text.complete"` および `"message.part.updated"` をフックとして一切登録していない（`event`/`tool.execute.before`/`tool.execute.after`/`experimental.session.compacting` の4種のみ）。本スパイクは Phase 3 着手のための設計前提の妥当性確認であり、実装状況そのものは変化していない。
+- **フック登録状況の訂正**: `src/opencode-plugin.ts` は `"experimental.text.complete"` を個別フックとして直接登録しており、`"message.part.updated"` は汎用 `event` フックを介して `src/runtime/opencode-adapter.ts` の `onEvent()` が受け取り、`#handleMessagePartUpdated()` から Justice 内部の `message_part_updated` ペイロードへ転送している。ただし、実行時の順序保証・重複発火・遅延は依然として実測されていない。
 
 ---
 

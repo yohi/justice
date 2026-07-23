@@ -22,10 +22,12 @@ export function redactAbsolutePaths(text: string): string {
 }
 
 export function redactEnvironmentValues(text: string): string {
-  // Known gap (spec-faithful): [A-Z_]{3,} intentionally skips env var names containing
-  // digits (e.g. HTTP2_PROXY, S3_BUCKET, NODE_V8_COVERAGE). Secret-shaped values are still
-  // caught by SecretPatternDetector.redact; this pass only redacts plain NAME=value pairs.
-  return text.replace(/\b[A-Z_]{3,}=[^\s"']+/g, "[REDACTED_ENV]");
+  // Match NAME=value where value may be double-quoted, single-quoted, or unquoted.
+  // Double-quoted values can contain spaces; single-quoted and unquoted stop at whitespace.
+  return text.replace(
+    /\b[A-Z_][A-Z0-9_]{2,}=(?:"[^"]*"|'[^']*'|[^\s"']+)/g,
+    "[REDACTED_ENV]",
+  );
 }
 export function redactTokenUrls(text: string): string {
   // Redact the entire token URL to prevent leaking userinfo (user:token) credentials (D61)

@@ -25,24 +25,32 @@ function createHandler(): {
   };
 }
 
+function observePassingTask(
+  handler: ObservationHandler,
+  callId: string,
+  taskId: string,
+): Promise<HookResponse> {
+  return handler.handlePostToolUse({
+    type: "PostToolUse",
+    sessionId: "session-1",
+    callId,
+    payload: {
+      toolName: "task",
+      toolInput: { taskId },
+      toolResult: "Tests passed and build passed",
+      error: false,
+    },
+  });
+}
+
 describe("ObservationHandler skill and task summary observation", () => {
   it("cohabits observed and declared task-summary evidence in one tool record", async () => {
-    const { handler, logStore } = createHandler();
+    const { handler, logStore, sessionState } = createHandler();
+    sessionState.setActiveTaskWindow("call-task", "task-1", "session-1");
 
-    await handler.handlePostToolUse({
-      type: "PostToolUse",
-      sessionId: "session-1",
-      callId: "call-task",
-      payload: {
-        toolName: "task",
-        toolInput: { taskId: "task-1" },
-        toolResult: "Tests passed and build passed",
-        error: false,
-      },
-    });
+    await observePassingTask(handler, "call-task", "task-1");
 
     const events = await logStore.readAll();
-    expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       kind: "tool_executed",
       toolName: "task",
@@ -61,6 +69,22 @@ describe("ObservationHandler skill and task summary observation", () => {
         },
       ],
     });
+  });
+
+  it("persists only observed task evidence when no correlated task window exists", async () => {
+    const { handler, logStore } = createHandler();
+
+    await observePassingTask(handler, "call-uncorrelated", "task-payload-only");
+
+    const events = await logStore.readAll();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "tool_executed",
+      toolName: "task",
+      callId: "call-uncorrelated",
+      evidence: [{ evidenceId: "call-uncorrelated", provenance: "observed" }],
+    });
+    expect(events[0]?.taskId).toBeUndefined();
   });
 
   it("appends a skill_invoked record after the direct skill tool record", async () => {
@@ -143,9 +167,110 @@ describe("ObservationHandler skill and task summary observation", () => {
 
     expect(response).toEqual({ action: "proceed" });
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: task summary declared evidence failed",
+      "observation-handler: tool observation failed, degrading to PROCEED",
       expect.any(Error),
     );
+  });
+
+  it("skips projection and gate evaluation when the canonical task-summary append fails", async () => {
+    const logger = { warn: vi.fn() };
+    const appended: PendingLogRecord[] = [];
+    const appendError = new Error("task summary append failed");
+    const readAll = vi.fn(async () => []);
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
+    const logStore = {
+      append: vi.fn(async (_shardId, record: PendingLogRecord) => {
+        if (record.recordType === "observation" && record.kind === "tool_executed") {
+          throw appendError;
+        }
+        appended.push(record);
+        return 0;
+      }),
+      readAll,
+    } as unknown as ObservationLogStore;
+    const sessionState = new SessionStateProvider();
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
+      writerId: "w-task43",
+      logger,
+    });
+    sessionState.setActiveTaskWindow("call-task", "task-1", "session-1");
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-task",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1" },
+        toolResult: "Tests passed",
+        error: false,
+      },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(appended).toEqual([]);
+    expect(readAll).not.toHaveBeenCalled();
+    expect(projectionCache.read).not.toHaveBeenCalled();
+    expect(projectionCache.write).not.toHaveBeenCalled();
+    expect(gateLoader.load).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler: tool observation failed, degrading to PROCEED",
+      appendError,
+    );
+  });
+
+  it("continues projection and gate evaluation when a skill observation append fails", async () => {
+    const readAll = vi.fn(async () => []);
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
+    const logStore = {
+      append: vi.fn(async (_shardId, record: PendingLogRecord) => {
+        if (record.recordType === "observation" && record.kind === "skill_invoked") {
+          throw new Error("skill append failed");
+        }
+        return 0;
+      }),
+      readAll,
+      getLastReadIntegrity: vi.fn(() => ({ hasIntegrityViolation: false })),
+    } as unknown as ObservationLogStore;
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "atlas");
+    sessionState.setActiveTaskWindow("call-task", "task-1", "session-1");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
+      writerId: "w-skill-failure",
+    });
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-task",
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-1", load_skills: ["programming"] },
+        toolResult: "done",
+        error: false,
+      },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(readAll).toHaveBeenCalled();
+    expect(projectionCache.read).toHaveBeenCalled();
+    expect(gateLoader.load).toHaveBeenCalled();
   });
 
   it("orders task completion observation, review, projection, and gate evaluation", async () => {
@@ -170,7 +295,7 @@ describe("ObservationHandler skill and task summary observation", () => {
       }),
     };
     const sessionStateProvider = new SessionStateProvider();
-    sessionStateProvider.setActiveTaskWindow("call-1", "task-1");
+    sessionStateProvider.setActiveTaskWindow("call-1", "task-1", "session-1");
     const handler = new ObservationHandler({
       logStore,
       sessionStateProvider,
@@ -178,11 +303,12 @@ describe("ObservationHandler skill and task summary observation", () => {
       writerId: "w-task43",
     });
     const internals = handler as unknown as {
-      appendReviewObservationsIfDetected(): Promise<void>;
+      appendReviewObservationsIfDetected(): Promise<boolean>;
       evaluateGateIfTriggered(): Promise<HookResponse>;
     };
     vi.spyOn(internals, "appendReviewObservationsIfDetected").mockImplementation(async () => {
       order.push("review");
+      return true;
     });
     const evaluateGateIfTriggered = vi
       .spyOn(internals, "evaluateGateIfTriggered")

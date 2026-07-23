@@ -5,7 +5,7 @@ import type { ObservationRecord, ReviewItem } from "../../../src/core/v2/observa
 function reviewItem(itemKey: string, severity: ReviewItem["severity"]): ReviewItem {
   return {
     itemKey,
-    evidenceId: `evidence:${itemKey}`,
+    evidenceId: itemKey,
     severity,
     summary: itemKey,
     location: "src/example.ts",
@@ -44,7 +44,7 @@ describe("project() D32 review aggregation", () => {
     expect(state.reviewSummary.open.map((item) => item.itemKey)).toEqual(["minor:bar"]);
     expect(state.reviewSummary.resolved.map((item) => item.itemKey)).toEqual(["major:foo"]);
     expect(state.reviewSummary.byScope.get("task-1")?.resolved[0]?.ref.evidenceId).toBe(
-      "evidence:major:foo",
+      "major:foo",
     );
   });
 });

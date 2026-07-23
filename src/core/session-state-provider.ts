@@ -14,15 +14,18 @@ import type { AgentId, ObservationAgentId } from "./types";
  *   その `AgentId`、そうでなければ `"unknown"`。マッピング未登録のセッションも
  *   `"unknown"` を返す。
  *
- *   task 窓 (spec §5.8 / D74): `callId` をキーとする `Map<string, string>`
- *   (値 = `taskId`)。`setActiveTaskWindow` で PreToolUse 時に開き、
- *   `closeActiveTaskWindow` で対応する PostToolUse 時に閉じる。セッション単位の
- *   単一 active taskId 方式は採用しない。
+ *   task 窓 (spec §5.8 / D74): `callId` をキーとする session-owned map
+ *   (値 = `taskId`)。PreToolUse 時に開き、対応する PostToolUse または session
+ *   removal 時に閉じる。セッション単位の単一 active taskId 方式は採用しない。
  */
 export class SessionStateProvider {
   private readonly sessionAgentIds = new Map<string, ObservationAgentId>();
-  private readonly activeTaskWindows = new Map<string, { readonly sessionId?: string; readonly taskId: string; readonly generation?: number }>();
+  private readonly activeTaskWindows = new Map<
+    string,
+    { readonly sessionId: string; readonly taskId: string; readonly generation: number }
+  >();
   private readonly sessionGenerations = new Map<string, number>();
+  private nextSessionGeneration = 0;
 
   /**
    * Records an `AgentMapped` payload, resolving `agentName` → `AgentId` internally.
@@ -30,9 +33,7 @@ export class SessionStateProvider {
    */
   setAgentMapping(sessionId: string, agentName: string): void {
     this.sessionAgentIds.set(sessionId, SessionStateProvider.resolveAgentId(agentName));
-    if (!this.sessionGenerations.has(sessionId)) {
-      this.sessionGenerations.set(sessionId, 0);
-    }
+    this.ensureSession(sessionId);
   }
 
   /**
@@ -45,8 +46,9 @@ export class SessionStateProvider {
 
   /**
    * Removes the session mapping and generation for `sessionId`. Call this when a
-   * session ends. Any subsequent `setActiveTaskWindow` with this `sessionId` will
-   * be ignored until `setAgentMapping` re-establishes the session.
+   * session ends. Subsequent `setActiveTaskWindow` calls with this `sessionId` will
+   * recreate the session with a new generation via `ensureSession`, even before
+   * `setAgentMapping` runs again. Existing task windows for the session are closed.
    */
   removeSession(sessionId: string): void {
     this.sessionAgentIds.delete(sessionId);
@@ -82,24 +84,16 @@ export class SessionStateProvider {
   /**
    * Opens (or overwrites) the task window for `callId` (PreToolUse).
    *
-   * When `sessionId` is provided, the window is only created if the session has
-   * an active generation (i.e. `setAgentMapping` was called and `removeSession`
-   * has not yet been called).  This prevents stale windows from being created
-   * for sessions that have already ended.
-   *
-   * When `sessionId` is omitted, a generation-less window is created for
-   * backwards compatibility with callers that do not track session lifecycles.
+   * Every window is explicitly owned by its session, including windows opened
+   * before an agent mapping arrives. This makes session cleanup complete rather
+   * than relying on a later mapping pass to tag the window.
    */
-  setActiveTaskWindow(callId: string, taskId: string, sessionId?: string): void {
-    if (sessionId !== undefined) {
-      const generation = this.sessionGenerations.get(sessionId);
-      if (generation === undefined) {
-        return; // Session has been removed or never mapped
-      }
-      this.activeTaskWindows.set(callId, { taskId, sessionId, generation });
-    } else {
-      this.activeTaskWindows.set(callId, { taskId });
-    }
+  setActiveTaskWindow(callId: string, taskId: string, sessionId: string): void {
+    this.activeTaskWindows.set(callId, {
+      taskId,
+      sessionId,
+      generation: this.ensureSession(sessionId),
+    });
   }
 
   /**
@@ -128,5 +122,13 @@ export class SessionStateProvider {
       return lower as AgentId;
     }
     return "unknown";
+  }
+
+  private ensureSession(sessionId: string): number {
+    const existing = this.sessionGenerations.get(sessionId);
+    if (existing !== undefined) return existing;
+    const generation = ++this.nextSessionGeneration;
+    this.sessionGenerations.set(sessionId, generation);
+    return generation;
   }
 }

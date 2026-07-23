@@ -48,13 +48,11 @@ describe("MessageRoleBuffer", () => {
       expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
 
-    it("returns claims once role is assistant (finalized not required for preview)", () => {
+    it("returns [] when role is assistant but text is not finalized", () => {
       const buffer = new MessageRoleBuffer();
       buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
       buffer.update("s", messageUpdated("s", "m", false));
-      const claims = buffer.extractAssistantClaims("s", "m");
-      expect(claims).toHaveLength(1);
-      expect(claims[0]).toMatchObject({ claimKind: "test", outcome: "pass" });
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
 
     it("returns [] for an unknown message", () => {
@@ -82,9 +80,31 @@ describe("MessageRoleBuffer", () => {
       buffer.update("s", messageUpdated("s", "m", false));
       buffer.update("s", partUpdated("s", "m", "p1", "tests fail"));
       buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
       const claims = buffer.extractAssistantClaims("s", "m");
       expect(claims).toHaveLength(1);
       expect(claims[0]).toMatchObject({ claimKind: "test", outcome: "pass" });
+    });
+  });
+
+  describe("finalized claim extraction", () => {
+    it("returns claims for a finalized assistant part", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", textComplete("s", "m", "p1", "tests pass"));
+
+      expect(buffer.extractAssistantClaims("s", "m", "p1")).toEqual([
+        { evidenceId: '["m","p1"]-test', claimKind: "test", outcome: "pass" },
+      ]);
+    });
+
+    it("returns no whole-message claims while any assistant part is unfinalized", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", messageUpdated("s", "m", false));
+      buffer.update("s", textComplete("s", "m", "p1", "tests pass"));
+      buffer.update("s", partUpdated("s", "m", "p2", "build pass"));
+
+      expect(buffer.extractAssistantClaims("s", "m")).toEqual([]);
     });
   });
 
@@ -112,7 +132,8 @@ describe("MessageRoleBuffer", () => {
 
     it("getFinalizedAssistantText returns undefined when role is not assistant", () => {
       const buffer = new MessageRoleBuffer();
-      buffer.update("s", textComplete("s", "m", "p1", "chunk")); // role stays unset
+      buffer.update("s", partUpdated("s", "m", "p1", "chunk")); // existing entry, role stays unset
+      buffer.update("s", textComplete("s", "m", "p1", "chunk"));
       expect(buffer.getFinalizedText("s", "m", "p1")).toBe("chunk"); // role-agnostic
       expect(buffer.getFinalizedAssistantText("s", "m", "p1")).toBeUndefined();
     });
@@ -203,6 +224,18 @@ describe("MessageRoleBuffer", () => {
   });
 
   describe("gc()", () => {
+    it("keeps a finalized buffer through one projection flush before releasing it", () => {
+      const buffer = new MessageRoleBuffer();
+      buffer.update("s", partUpdated("s", "m", "p1", "tests pass"));
+      buffer.update("s", messageUpdated("s", "m", true));
+
+      buffer.releaseFinalizedAfterProjectionFlush();
+      expect(buffer.getFinalizedText("s", "m")).toBe("tests pass");
+
+      buffer.releaseFinalizedAfterProjectionFlush();
+      expect(buffer.getFinalizedText("s", "m")).toBeUndefined();
+    });
+
     it("evicts entries older than maxAgeMs", () => {
       const clock = makeClock(0);
       const buffer = new MessageRoleBuffer(clock.now);
@@ -284,14 +317,15 @@ describe("extractFinalizedAssistantClaims (pure)", () => {
   });
 
   describe("regression: finalized monotonic latch bug (D53 fix)", () => {
-    it("text_complete(p1) finalizes -> new unfinalizedpart p2 arrives -> getFinalizedText returns undefined until p2 completes", () => {
+    it("text_complete(p1) finalizes -> new unfinalized part p2 arrives -> getFinalizedText returns undefined until p2 completes", () => {
       const buffer = new MessageRoleBuffer();
       // Step 1: p1 completes via text_complete -> message becomes finalized
+      // New entry created by text_complete gets role=assistant (D53 fix)
       buffer.update("s", textComplete("s", "m", "p1", "part one"));
       expect(buffer.getFinalizedText("s", "m")).toBe("part one");
-      expect(buffer.getFinalizedAssistantText("s", "m")).toBeUndefined(); // role not set yet
+      expect(buffer.getFinalizedAssistantText("s", "m")).toBe("part one");
 
-      // Step 2: new unfinalizedpart p2 arrives via message_part_updated
+      // Step 2: new unfinalized part p2 arrives via message_part_updated
       buffer.update("s", messageUpdated("s", "m", false)); // set role to assistant
       buffer.update("s", partUpdated("s", "m", "p2", "part two (draft)"));
       // BUG: old code would still return "part one" because finalized was latched to true

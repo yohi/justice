@@ -108,7 +108,7 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
       const provider = new SessionStateProvider();
       expect(provider.getActiveTaskId("call-1")).toBeUndefined();
 
-      provider.setActiveTaskWindow("call-1", "task-1");
+      provider.setActiveTaskWindow("call-1", "task-1", "session-1");
       expect(provider.getActiveTaskId("call-1")).toBe("task-1");
 
       provider.closeActiveTaskWindow("call-1");
@@ -117,8 +117,8 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
 
     it("keeps distinct callIds independent", () => {
       const provider = new SessionStateProvider();
-      provider.setActiveTaskWindow("call-a", "task-a");
-      provider.setActiveTaskWindow("call-b", "task-b");
+      provider.setActiveTaskWindow("call-a", "task-a", "session-a");
+      provider.setActiveTaskWindow("call-b", "task-b", "session-b");
 
       expect(provider.getActiveTaskId("call-a")).toBe("task-a");
       expect(provider.getActiveTaskId("call-b")).toBe("task-b");
@@ -131,8 +131,8 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
 
     it("overwrites the taskId when the same callId window is re-opened", () => {
       const provider = new SessionStateProvider();
-      provider.setActiveTaskWindow("call-x", "task-old");
-      provider.setActiveTaskWindow("call-x", "task-new");
+      provider.setActiveTaskWindow("call-x", "task-old", "session-x");
+      provider.setActiveTaskWindow("call-x", "task-new", "session-x");
       expect(provider.getActiveTaskId("call-x")).toBe("task-new");
     });
 
@@ -153,6 +153,16 @@ describe("Task 3.4: agentId resolution & session state mapping", () => {
 
       expect(provider.getActiveTaskId("call-removed")).toBeUndefined();
       expect(provider.getActiveTaskId("call-retained")).toBe("task-retained");
+    });
+
+    it("owns and removes a pre-mapping task window with its session", () => {
+      const provider = new SessionStateProvider();
+
+      provider.setActiveTaskWindow("call-pre-mapping", "task-pre-mapping", "session-unmapped");
+      expect(provider.getActiveTaskId("call-pre-mapping")).toBe("task-pre-mapping");
+
+      provider.removeSession("session-unmapped");
+      expect(provider.getActiveTaskId("call-pre-mapping")).toBeUndefined();
     });
   });
 

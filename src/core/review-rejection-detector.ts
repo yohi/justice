@@ -19,28 +19,25 @@ export interface ReviewRejectionSignal {
   readonly matched: boolean;
   readonly excerpts: readonly string[];
   readonly summary: string;
+  readonly severity: ReviewSeverity;
 }
 
 export class ReviewRejectionDetector {
   detect(text: string): ReviewRejectionSignal {
     if (text.length === 0) {
-      return { matched: false, excerpts: [], summary: "" };
+      return this.emptySignal();
     }
 
     const excerpts = this.extractExcerpts(text);
     if (excerpts.length === 0) {
-      return { matched: false, excerpts: [], summary: "" };
+      return this.emptySignal();
     }
 
     const joined = excerpts.join("\n");
     const isTruncated = joined.length > MAX_SUMMARY_LENGTH;
     const summary = isTruncated ? `${joined.slice(0, MAX_SUMMARY_LENGTH - 3)}...` : joined;
 
-    return {
-      matched: true,
-      excerpts,
-      summary,
-    };
+    return this.matchedSignal(excerpts, summary);
   }
 
   detectMultiple(
@@ -72,7 +69,8 @@ export class ReviewRejectionDetector {
       lineIndex = continuationIndex - 1;
       const summary = findingLines.join("\n").slice(0, MAX_EXCERPT_LENGTH);
 
-      const severity = this.resolveSeverity(heading, summary);
+      const signal = this.matchedSignal([heading], summary, heading);
+      const severity = signal.severity;
       const location = extractReviewLocation(summary);
       const normalizedSummary = this.normalizeSummaryForKey(summary, location, workspaceRoot);
       const itemKey = deriveItemKey(
@@ -100,17 +98,21 @@ export class ReviewRejectionDetector {
     return false;
   }
 
-  private resolveSeverity(heading: string, summary: string): ReviewSeverity {
-    const classified = classifySeverity(summary);
-    const headingLower = heading.toLowerCase();
-    const isBlockerHeading =
-      /\bBLOCKER\s*:/u.test(heading) ||
-      /\b(blocking)\s+(issue|concern|problem)s?\b/u.test(headingLower) ||
-      /ブロッカー/u.test(heading);
-    if (isBlockerHeading && (classified === "minor" || classified === "major")) {
-      return "critical";
-    }
-    return classified;
+  private emptySignal(): ReviewRejectionSignal {
+    return { matched: false, excerpts: [], summary: "", severity: "minor" };
+  }
+
+  private matchedSignal(
+    excerpts: readonly string[],
+    summary: string,
+    heading?: string,
+  ): ReviewRejectionSignal {
+    return {
+      matched: true,
+      excerpts,
+      summary,
+      severity: classifySeverity(summary, heading),
+    };
   }
 
   private normalizeSummaryForKey(

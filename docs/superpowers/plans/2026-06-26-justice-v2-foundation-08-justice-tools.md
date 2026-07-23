@@ -42,15 +42,15 @@
 
 **Base Branch:** `feature/phase7-v2-justice-tools__base`
 
-**目的:** 唯一の `justice_review` custom tool で review summary を照会し、選択した open item の解決だけを人間承認後に記録する。本 Phase は public custom tool を追加しない。
+**目的:** 唯一の `justice_review` custom tool で review summary を照会し、選択した open item の解決だけを人間承認後に記録する。第2の public custom tool は追加しない。
 
 **判断:** Phase 7 は Phase 6 の log store、projection、review aggregator を使用する。承認の trust boundary は `justice_review` 内の `ToolContext.ask` のみであり、Adapter は完全一致する `justice_review` の成功 metadata だけを型付き resolution artifact に昇格する。自由文、tool args、汎用 tool metadata から承認を導出しない。
 
 ---
 
-### Superseded Task 7.1: No justice_status Tool
+### Superseded Task 7.1: Internal status helper only
 
-> **Current design:** `justice_status` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
+> **Current design:** `defineJusticeStatusTool` とその既存テストは内部の projection 照会動作を固定するために残す。ただし `OpenCodeAdapter.getTools()` と plugin の tool map はこれを公開・登録しない。公開 custom tool は `justice_review` のみである。以下のコード断片は旧契約の歴史記録であり、登録実装として再利用してはならない。
 
 **Files:**
 
@@ -63,7 +63,7 @@
 - Consumes: `ObservationLogStore.readAll()`, `project`.
 - Produces: `justice_status` tool output (projection summary, task statuses, review counts).
 
-- [x] **Step 1: `justice_status` 実装**
+- [x] **Historical Step 1: 内部 `justice_status` helper 実装**
 
 > **Note:** 実装では `OpenCodeAdapter` を単一のエントリーポイントとして受け取り、内部で依存を解決する方式に簡略化されています（個別の `store` / `cache` 受け渡しから変更）。
 
@@ -102,7 +102,7 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
 ```
 
 
-- [x] **Step 2: adapter に tool 定義を返す `getRegisteredTools()` を実装し、opencode-plugin.ts 側から公開登録（D4）**
+- [x] **Historical Step 2: 旧 public 登録案（現行契約では廃止）**
 
 > **Note:** 実際の登録は `OpenCodeAdapter` のコンストラクタ内で `defineXxxTool(this)` として呼び出し、最終的な tool map に格納されます。
 
@@ -110,8 +110,6 @@ export function defineJusticeStatusTool(adapter: OpenCodeAdapter): ToolDefinitio
 // src/runtime/opencode-adapter.ts
 // コンストラクタ内で初期化
 this.registeredTools = new Map<string, ToolDefinition>([
-  [defineJusticeStatusTool(this).name, defineJusticeStatusTool(this)],
-  [defineJusticeGateTool(this).name, defineJusticeGateTool(this)],
   [defineJusticeReviewTool(this).name, defineJusticeReviewTool(this)],
 ]);
 
@@ -123,8 +121,7 @@ getRegisteredTools(): ReadonlyMap<string, ToolDefinition> {
 // src/runtime/opencode-adapter.ts
 getTools(): Record<string, ToolDefinition> {
   return {
-    justice_status: defineJusticeStatusTool(this.logStore, this.projectionCache),
-    // justice_gate / justice_review added in later tasks
+    justice_review: defineJusticeReviewTool(this),
   };
 }
 
@@ -153,11 +150,11 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-status-tool.test.ts
 ```
 
-- [x] **Step 4: Commit**
+- [x] **Historical Step 4: Commit（現行名は internal helper を表す）**
 
 ```bash
 git add package.json bun.lock src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-status-tool.test.ts
-git commit -m "feat(v2): justice_status read-only custom tool"
+git commit -m "test(v2): retain justice_status internal helper coverage"
 ```
 
 - [x] **Step 5: Phase 7 Base に向けた Draft PR を作成する**
@@ -170,9 +167,9 @@ gt submit
 
 ---
 
-### Superseded Task 7.2: No justice_gate Tool
+### Superseded Task 7.2: Internal D50 gate dry-run only
 
-> **Current design:** `justice_gate` is not a public Justice custom tool. This retained historical task is superseded by the single-tool contract stated above.
+> **Current design:** `defineJusticeGateTool` と `tests/runtime/justice-gate-tool.test.ts` は D50 の非変更 dry-run を固定する内部 helper として残す。`OpenCodeAdapter.getTools()` と plugin の tool map はこれを公開・登録しない。helper は DecisionRecord を append せず、canonical log・replay・KPI を変化させない。以下のコード断片は旧契約の歴史記録であり、登録実装として再利用してはならない。
 
 **Files:**
 
@@ -183,9 +180,9 @@ gt submit
 **Interfaces:**
 
 - Consumes: `project`, `loadGates`, `evaluate`, `GateContext`.
-- Produces: `justice_gate` tool output (current projection dry-run verdict, no DecisionRecord append — D50). Note: `justice_*` tools are explicitly excluded from Observation Log processing in the adapter.
+- Produces: internal `justice_gate` helper output (current projection dry-run verdict, no DecisionRecord append — D50). It is excluded from the public tool map and from Observation Log processing in the adapter.
 
-- [x] **Step 1: `justice_gate` 実装（D50）**
+- [x] **Historical Step 1: 内部 `justice_gate` dry-run helper 実装（D50）**
 
 > **Note:** 実装では `OpenCodeAdapter` を単一のエントリーポイントとして受け取り、`adapter.getJustice()` から `logStore` と `gateLoader` を取得します。`taskId` は optional に変更され、未指定時は empty gate 評価を行います。
 
@@ -266,11 +263,11 @@ it("fails open and returns ERROR status if log store is corrupted", async () => 
 devcontainer exec --workspace-folder . bun run test tests/runtime/justice-gate-tool.test.ts
 ```
 
-- [x] **Step 3: Commit**
+- [x] **Historical Step 3: Commit（現行名は internal helper を表す）**
 
 ```bash
 git add src/runtime/justice-tools.ts src/runtime/opencode-adapter.ts tests/runtime/justice-gate-tool.test.ts
-git commit -m "feat(v2): justice_gate dry-run tool"
+git commit -m "test(v2): retain justice_gate internal dry-run coverage"
 ```
 
 - [x] **Step 4: Phase 7 Base に向けた Draft PR を作成する**

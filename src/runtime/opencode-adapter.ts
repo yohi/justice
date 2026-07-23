@@ -1,11 +1,11 @@
 import type { ToolDefinition } from "@opencode-ai/plugin";
+import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
+import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
-  defineJusticeGateTool,
   defineJusticeReviewTool,
-  defineJusticeStatusTool,
 } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
@@ -43,12 +43,27 @@ export interface OpenCodeAdapterOptions {
 const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
   "justice_review",
 ] as const);
+const TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
+  "code_review",
+] as const);
 
 interface GenericEventInput {
   readonly event: {
     readonly type: string;
-    readonly properties?: Record<string, unknown>;
+    readonly properties?: object;
   };
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function isSessionDeletedEvent(
+  event: GenericEventInput["event"],
+): event is EventSessionDeleted {
+  const properties = toRecord(event.properties);
+  const info = toRecord(properties.info);
+  return event.type === "session.deleted" && typeof info.id === "string";
 }
 
 export class OpenCodeAdapter {
@@ -106,9 +121,7 @@ export class OpenCodeAdapter {
 
   getTools(): Record<string, ToolDefinition> {
     return {
-      justice_gate: defineJusticeGateTool(this),
       justice_review: defineJusticeReviewTool(this),
-      justice_status: defineJusticeStatusTool(this),
     };
   }
 
@@ -196,7 +209,12 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      const properties = input.event.properties ?? {};
+      if (isSessionDeletedEvent(input.event)) {
+        await this.#handleSessionDeleted(input.event.properties.info.id);
+        return;
+      }
+
+      const properties = toRecord(input.event.properties);
 
       switch (input.event.type) {
         case "message.updated":
@@ -220,17 +238,58 @@ export class OpenCodeAdapter {
     }
   }
 
+  async onChatMessage(input: unknown, output?: unknown): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      const inputRecord = toRecord(input);
+      if (output === undefined) {
+        await this.#handleChatMessage(inputRecord);
+        return;
+      }
+      const outputRecord = toRecord(output);
+      const message = this.#readRecord(outputRecord, "message");
+      const parts = Array.isArray(outputRecord.parts) ? outputRecord.parts : [];
+      const text = parts
+        .map((part) => toRecord(part))
+        .filter((part) => this.#readString(part, "type") === "text")
+        .map((part) => this.#readString(part, "text"))
+        .filter((partText) => partText.length > 0)
+        .join("\n");
+      await this.#handleChatMessage({
+        ...inputRecord,
+        message: {
+          ...message,
+          content: this.#readString(message, "role") === "user" ? text : "",
+          role: this.#readString(message, "role"),
+        },
+      });
+    } catch (err) {
+      await this.log("error", "[Justice] chat.message hook failure", err);
+    }
+  }
+
+  async onChatParams(input: unknown): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      await this.#handleChatParams(toRecord(input));
+    } catch (err) {
+      await this.log("error", "[Justice] chat.params hook failure", err);
+    }
+  }
+
   /**
-   * Forward a `message.updated` event. Preserves the legacy user/assistant
-   * content path (plan-bridge delegation) and additionally emits an
-   * `AgentMapped` event (when an agent name is present) and an observation
-   * `message_updated` payload for assistant messages.
+   * Forward a `message.updated` event. Its content is preserved only for the
+   * explicitly separate legacy PlanBridge path; the observation payload below
+   * is lifecycle-only and intentionally never carries content.
    */
   async #handleMessageUpdated(properties: Record<string, unknown>): Promise<void> {
-    const sessionId = this.#readString(properties, "sessionID");
+    const info = this.#readRecord(properties, "info");
+    const sessionId =
+      this.#readString(properties, "sessionID") || this.#readString(info, "sessionID");
     if (!sessionId) return;
 
-    const info = this.#readRecord(properties, "info");
     const role = this.#readString(info, "role");
     const content = this.#readString(info, "content");
     const messageID = this.#readString(info, "id");
@@ -258,11 +317,10 @@ export class OpenCodeAdapter {
       }
     }
 
-    // (2) Legacy user/assistant content path (plan-bridge delegation). Preserved
-    // exactly: only forwarded when content is present so empty streaming updates
-    // do not spuriously trigger delegation. Wrapped in its own try/catch (mirrors
-    // (1) above) so a delegation dispatch failure can never block the
-    // observation log (3) below.
+    // (2) Legacy PlanBridge-only user/assistant content path. PlanBridge still
+    // analyzes assistant messages for plan references, so retain this path while
+    // keeping it structurally separate from declared Evidence observation (3).
+    // Empty streaming updates never trigger delegation.
     if ((role === "assistant" || role === "user") && content.length > 0) {
       try {
         await justice.handleEvent({
@@ -275,10 +333,9 @@ export class OpenCodeAdapter {
       }
     }
 
-    // (3) Observation message_updated for assistant messages, carrying the
-    // finalization signal. Requires a messageID to be routable in the Observation
-    // Log; unroutable (id-less) updates are dropped.
-    if (role === "assistant" && messageID.length > 0) {
+    // (3) Lifecycle-only observation payload. It carries role/finalization but
+    // never info.content: declared Evidence can only obtain text from part events.
+    if ((role === "assistant" || role === "user") && messageID.length > 0) {
       await justice.handleEvent({
         type: "Message",
         sessionId,
@@ -286,7 +343,7 @@ export class OpenCodeAdapter {
           kind: "message_updated",
           sessionId,
           messageID,
-          role: "assistant",
+          role,
           finalized: this.#detectFinalized(info),
         },
       });
@@ -315,7 +372,7 @@ export class OpenCodeAdapter {
 
     const partID = this.#readString(part, "id") || this.#readString(properties, "partID");
     const text = this.#readString(part, "text") || this.#readString(properties, "text");
-    if (partID.length === 0 || text.length === 0) return;
+    if (partID.length === 0) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -329,28 +386,34 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * Handles a `chat.message` event. Only user messages are forwarded into the
-   * Justice observation log; assistant text is already captured via
-   * `#handleMessagePartUpdated` and tool-use hooks, so forwarding it here would
-   * create duplicates. Dropping non-user roles is therefore intentional.
+   * Handles a `chat.message` event. Its optional agent field is always used to
+   * establish session identity; only user content is forwarded into the legacy
+   * message path to avoid duplicating assistant text observations.
    */
   async #handleChatMessage(properties: Record<string, unknown>): Promise<void> {
     const message = this.#readRecord(properties, "message");
     const sessionId =
       this.#readString(properties, "sessionID") || this.#readString(message, "sessionID");
     const content = this.#readString(message, "content");
-    // Intentionally drop assistant/system messages — see method JSDoc above.
-    if (
-      sessionId.length === 0 ||
-      content.length === 0 ||
-      this.#readString(message, "role") !== "user"
-    ) {
-      return;
-    }
+    const isUserMessage = content.length > 0 && this.#readString(message, "role") === "user";
+    const agentName = this.#resolveAgentName(properties, message);
+    if (sessionId.length === 0 || (!isUserMessage && agentName.length === 0)) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
     if (!justice) return;
+    if (agentName.length > 0) {
+      try {
+        await justice.handleEvent({
+          type: "AgentMapped",
+          sessionId,
+          payload: { sessionId, agentName },
+        });
+      } catch (err) {
+        await this.log("error", "[Justice] chat.message AgentMapped dispatch failed", err);
+      }
+    }
+    if (!isUserMessage) return;
     await justice.handleEvent({ type: "Message", sessionId, payload: { role: "user", content } });
   }
 
@@ -441,6 +504,13 @@ export class OpenCodeAdapter {
     } catch (err) {
       await this.log("error", "[Justice] loop-detector dispatch failed", err);
     }
+  }
+
+  async #handleSessionDeleted(sessionId: string): Promise<void> {
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+    justice.destroySession(sessionId);
   }
 
   /**
@@ -549,6 +619,21 @@ export class OpenCodeAdapter {
         await this.log("warn", "[Justice] malformed review resolution artifact ignored");
       }
 
+      const isTrustedReviewSnapshotArtifactSource =
+        TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS.includes(input.tool);
+      const canPromoteReviewSnapshotArtifact =
+        isTrustedReviewSnapshotArtifactSource && output.metadata?.error !== true;
+      const reviewSnapshotArtifact = canPromoteReviewSnapshotArtifact
+        ? parseReviewSnapshotArtifact(output.metadata?.reviewSnapshotArtifact)
+        : undefined;
+      if (
+        canPromoteReviewSnapshotArtifact &&
+        output.metadata?.reviewSnapshotArtifact !== undefined &&
+        reviewSnapshotArtifact === undefined
+      ) {
+        await this.log("warn", "[Justice] malformed review snapshot artifact ignored");
+      }
+
       const response = await justice.handleEvent({
         type: "PostToolUse",
         sessionId: input.sessionID,
@@ -560,13 +645,23 @@ export class OpenCodeAdapter {
           toolResult: output.output,
           metadata: output.metadata,
           ...(reviewResolutionArtifact === undefined ? {} : { reviewResolutionArtifact }),
+          ...(reviewSnapshotArtifact === undefined ? {} : { reviewSnapshotArtifact }),
           error: output.metadata?.error === true,
         },
       });
 
-      // Nothing sets variant "gate_advisory" until Phase 5, so this branch is
-      // dormant scaffolding; it must still be wired correctly and type-safely.
-      if (response.action !== "inject" || response.variant !== "gate_advisory") return;
+      if (response.action !== "inject") return;
+      const normalInjectedContext =
+        response.normalInjectedContext ??
+        (response.variant === "gate_advisory" ? "" : response.injectedContext);
+      if (normalInjectedContext.length > 0) {
+        output.output = output.output + "\n\n" + normalInjectedContext;
+      }
+
+      const gateAdvisoryContext =
+        response.gateAdvisoryContext ??
+        (response.variant === "gate_advisory" ? response.injectedContext : "");
+      if (gateAdvisoryContext.length === 0) return;
 
       const notifier = this.#notifier;
 
@@ -578,7 +673,7 @@ export class OpenCodeAdapter {
             level: "warning",
             variant: "justice_gate",
             title: "Task Gate",
-            message: response.injectedContext,
+            message: gateAdvisoryContext,
             sessionId: input.sessionID,
             taskId:
               (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
@@ -595,7 +690,7 @@ export class OpenCodeAdapter {
           level: "warning",
           variant: "justice_gate",
           title: "Task Gate",
-          message: response.injectedContext,
+          message: gateAdvisoryContext,
         });
         output.output = output.output + "\n\n" + banner;
       }
@@ -640,8 +735,7 @@ export class OpenCodeAdapter {
 
   #readRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
     // eslint-disable-next-line security/detect-object-injection
-    const value = record[key];
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return toRecord(record[key]);
   }
 
   #readString(record: Record<string, unknown>, key: string): string {

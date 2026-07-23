@@ -24,6 +24,7 @@ describe("D64 - PostToolUse merge rules", () => {
     expect(mergePostToolUseResponses(responses)).toEqual({
       action: "inject",
       injectedContext: "context A\n\n---\n\ncontext B",
+      normalInjectedContext: "context A\n\n---\n\ncontext B",
     });
   });
 
@@ -44,6 +45,7 @@ describe("D64 - PostToolUse merge rules", () => {
     expect(mergePostToolUseResponses(responses)).toEqual({
       action: "inject",
       injectedContext: "tail",
+      normalInjectedContext: "tail",
     });
   });
 
@@ -55,6 +57,7 @@ describe("D64 - PostToolUse merge rules", () => {
     expect(mergePostToolUseResponses(responses)).toEqual({
       action: "inject",
       injectedContext: "A\n\n---\n\nB",
+      normalInjectedContext: "A\n\n---\n\nB",
       modifiedPayload: { key: "a" },
     });
   });
@@ -79,19 +82,47 @@ describe("D64 - PostToolUse merge rules", () => {
     expect(result).toEqual({
       action: "inject",
       injectedContext: "A\n\n---\n\nB",
+      normalInjectedContext: "A\n\n---\n\nB",
       modifiedPayload: { toolName: "task", modified: 1 },
     });
     expect(warnings).toEqual(["Conflict detected in post-tool-use modifiedPayload; using the first response"]);
   });
 
-  it("should propagate the gate_advisory variant across merged inject responses", () => {
+  it("preserves full injection order while splitting normal and gate advisory channels", () => {
+    // Given
     const responses: HookResponse[] = [
       { action: "inject", injectedContext: "A" },
       { action: "inject", injectedContext: "B", variant: "gate_advisory" },
+      { action: "inject", injectedContext: "C" },
     ];
-    expect(mergePostToolUseResponses(responses)).toEqual({
+
+    // When
+    const merged = mergePostToolUseResponses(responses);
+
+    // Then
+    expect(merged).toEqual({
       action: "inject",
-      injectedContext: "A\n\n---\n\nB",
+      injectedContext: "A\n\n---\n\nB\n\n---\n\nC",
+      normalInjectedContext: "A\n\n---\n\nC",
+      gateAdvisoryContext: "B",
+      variant: "gate_advisory",
+    });
+  });
+
+  it("exposes a gate advisory channel for a gate-only injection", () => {
+    // Given
+    const responses: HookResponse[] = [
+      { action: "inject", injectedContext: "gate context", variant: "gate_advisory" },
+    ];
+
+    // When
+    const merged = mergePostToolUseResponses(responses);
+
+    // Then
+    expect(merged).toEqual({
+      action: "inject",
+      injectedContext: "gate context",
+      gateAdvisoryContext: "gate context",
       variant: "gate_advisory",
     });
   });

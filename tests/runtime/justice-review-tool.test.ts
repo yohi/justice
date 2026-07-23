@@ -53,7 +53,7 @@ function createPluginInput(): PluginInput {
 function reviewItem(itemKey: string): ReviewItem {
   return {
     itemKey,
-    evidenceId: `evidence:${itemKey}`,
+    evidenceId: itemKey,
     severity: "major",
     summary: itemKey,
     location: "src/example.ts",
@@ -106,7 +106,7 @@ function metadataOf(result: ToolResult): Record<string, unknown> | undefined {
 }
 
 describe("OpenCodePlugin justice_review tool", () => {
-  it("registers the Justice status and review tools", async () => {
+  it("registers justice_review as the sole public Justice custom tool", async () => {
     // Given
     const pluginInput = createPluginInput();
 
@@ -114,11 +114,7 @@ describe("OpenCodePlugin justice_review tool", () => {
     const hooks = await OpenCodePlugin(pluginInput);
 
     // Then
-    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual([
-      "justice_gate",
-      "justice_review",
-      "justice_status",
-    ]);
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["justice_review"]);
   });
 });
 
@@ -137,6 +133,7 @@ describe("defineJusticeReviewTool", () => {
       authority: "observed_review_output",
       open: [{ itemKey: "major:parser" }],
     });
+    expect(JSON.parse(outputOf(result))).not.toHaveProperty("authorship");
     expect(metadataOf(result)).toBeUndefined();
     expect(ask).not.toHaveBeenCalled();
     expect(await store.readAll()).toEqual(before);

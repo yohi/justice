@@ -37,7 +37,7 @@ describe("ObservationHandler review observations", () => {
   it("appends every detected review item before projection and redacts persisted text", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
-    sessionState.setActiveTaskWindow("call-review", "task-6.3");
+    sessionState.setActiveTaskWindow("call-review", "task-6.3", "session-review");
 
     // When
     await handler.handlePostToolUse({
@@ -84,7 +84,7 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("appends an empty review observation from trusted complete snapshot metadata", async () => {
+  it("does not append an empty review observation from untrusted complete snapshot metadata", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
@@ -104,12 +104,8 @@ describe("ObservationHandler review observations", () => {
 
     // Then
     const events = await logStore.readAll();
-    expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      kind: "review_observed",
-      isCompleteSnapshot: true,
-      items: [],
-    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
   it.each(["bash", "task", "arbitrary_custom_tool"])(
@@ -120,7 +116,7 @@ describe("ObservationHandler review observations", () => {
       const callId = "call-generic-review";
       const toolInput = toolName === "task" ? { taskId: "task-6.3" } : { command: "review" };
       if (toolName === "task") {
-        sessionState.setActiveTaskWindow(callId, "task-6.3");
+        sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
       }
       await handler.handlePostToolUse({
         type: "PostToolUse",
@@ -138,7 +134,7 @@ describe("ObservationHandler review observations", () => {
 
       // When
       if (toolName === "task") {
-        sessionState.setActiveTaskWindow(callId, "task-6.3");
+        sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
       }
       await handler.handlePostToolUse({
         type: "PostToolUse",
@@ -203,7 +199,7 @@ describe("ObservationHandler review observations", () => {
     expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
-  it("resolves absent items from a trusted complete code review snapshot", async () => {
+  it("resolves absent items only from a typed complete code review snapshot", async () => {
     const { handler, logStore } = createHandler();
     const initial = await handler.handlePostToolUse({
       type: "PostToolUse",
@@ -228,6 +224,11 @@ describe("ObservationHandler review observations", () => {
         toolResult: "Review complete with no findings",
         error: false,
         metadata: { isCompleteSnapshot: true },
+        reviewSnapshotArtifact: {
+          authority: "review_tool",
+          schemaVersion: 1,
+          complete: true,
+        },
       },
     });
 
@@ -304,7 +305,7 @@ describe("ObservationHandler review observations", () => {
   it("resolves only artifact-identified items after observing the review", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
-    sessionState.setActiveTaskWindow("call-review", "task-6.3");
+    sessionState.setActiveTaskWindow("call-review", "task-6.3", "session-review");
     await handler.handlePostToolUse({
       type: "PostToolUse",
       sessionId: "session-review",
@@ -364,27 +365,37 @@ describe("ObservationHandler review observations", () => {
     expect(state.reviewSummary.open.map((item) => item.itemKey)).toEqual([openItem.itemKey]);
   });
 
-  it("fails open when appending a review observation fails", async () => {
+  it("skips projection and gate evaluation when a canonical review observation append fails", async () => {
     // Given
     const logger = { warn: vi.fn() };
     const sessionState = new SessionStateProvider();
     const appended: PendingLogRecord[] = [];
+    const appendError = new Error("review append failed");
+    const readAll = vi.fn(async () => []);
+    const projectionCache = {
+      read: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    };
+    const gateLoader = { load: vi.fn(async () => []) };
     const logStore = {
       append: vi.fn(async (_shardId, record: PendingLogRecord) => {
         if (record.recordType === "observation" && record.kind === "review_observed") {
-          throw new Error("review append failed");
+          throw appendError;
         }
         appended.push(record);
         return 0;
       }),
-      readAll: vi.fn(async () => []),
+      readAll,
     } as unknown as ObservationLogStore;
     const handler = new ObservationHandler({
       logStore,
       sessionStateProvider: sessionState,
+      projectionCache,
+      gateLoader,
       writerId: "w-review",
       logger,
     });
+    sessionState.setActiveTaskWindow("call-fail-open", "task-6.3", "session-review");
 
     // When
     const response = await handler.handlePostToolUse({
@@ -392,8 +403,8 @@ describe("ObservationHandler review observations", () => {
       sessionId: "session-review",
       callId: "call-fail-open",
       payload: {
-        toolName: "code_review",
-        toolInput: {},
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
         toolResult: "MUST FIX: parser regression at src/parser.ts:10",
         error: false,
       },
@@ -402,9 +413,13 @@ describe("ObservationHandler review observations", () => {
     // Then
     expect(response).toEqual({ action: "proceed" });
     expect(appended).toHaveLength(1);
+    expect(readAll).not.toHaveBeenCalled();
+    expect(projectionCache.read).not.toHaveBeenCalled();
+    expect(projectionCache.write).not.toHaveBeenCalled();
+    expect(gateLoader.load).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: review_observed generation failed",
-      expect.any(Error),
+      "observation-handler: tool observation failed, degrading to PROCEED",
+      appendError,
     );
   });
 
