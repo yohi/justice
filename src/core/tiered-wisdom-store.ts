@@ -126,7 +126,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     errorClass?: ErrorClass;
     maxEntries?: number;
     persona?: AgentId;
-  }): WisdomEntry[] {
+  }): ReadonlyArray<WisdomEntry> {
     const limit = options?.maxEntries ?? 10;
     const local = this.localStore.getRelevant({
       errorClass: options?.errorClass,
@@ -154,13 +154,13 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     return [...local, ...globalFiltered];
   }
 
-  getByTaskId(taskId: string): WisdomEntry[] {
+  getByTaskId(taskId: string): ReadonlyArray<WisdomEntry> {
     const local = this.localStore.getByTaskId(taskId);
     const global = this.globalStore.getByTaskId(taskId);
     return this.deduplicate([...local, ...global]);
   }
 
-  formatForInjection(entries: WisdomEntry[]): string {
+  formatForInjection(entries: ReadonlyArray<WisdomEntry>): string {
     if (entries.length === 0) return "";
     const presentPersonas = new Set(entries.map((e) => e.persona));
 
