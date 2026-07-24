@@ -5,54 +5,60 @@ import type {
   FileReader,
   FileWriter,
   HookEvent,
+  PreToolUseEvent,
   HookResponse,
-  InjectResponse,
   EventEvent,
   CompactionPayload,
 } from "./types";
+import { isLegacyMessagePayload } from "./types";
+import { mergePostToolUseResponses, mergePreToolUseResponses } from "./hook-response-merger";
 import { PlanBridge } from "../hooks/plan-bridge";
 import { TaskFeedbackHandler } from "../hooks/task-feedback";
 import { CompactionProtector } from "../hooks/compaction-protector";
 import { LoopDetectionHandler } from "../hooks/loop-handler";
+import { ObservationHandler } from "../hooks/observation-handler";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "./wisdom-store";
+import { SessionStateProvider } from "./session-state-provider";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { TieredWisdomStore } from "./tiered-wisdom-store";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import type { JusticeNotifier } from "./justice-notifier";
 import { NodeFileSystem } from "../runtime/node-file-system";
+import { ObservationLogStore } from "../runtime/observation-log-store";
+import { generateWriterId } from "../runtime/writer-id";
+import { FileGateLoader } from "../runtime/gate-loader";
+import { StateProjectionCache } from "../runtime/state-projection-cache";
+import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
+import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function mergePostToolUseResponses(a: HookResponse, b: HookResponse): HookResponse {
-  if (a.action === "skip" || b.action === "skip") {
-    return { action: "skip" };
+function openSessionTaskWindow(
+  provider: SessionStateProvider,
+  event: PreToolUseEvent,
+): void {
+  const callId = event.callId;
+  if (!callId) return;
+  // Reuse the same strict "task-" prefixed extraction PlanBridge/TaskPackager
+  // rely on (D74) so this earliest window-set can never admit a value the
+  // stricter downstream checks would reject.
+  const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
+  if (!taskId) return;
+  try {
+    provider.setActiveTaskWindow(callId, taskId, event.sessionId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
   }
+}
 
-  if (a.action === "inject" && b.action === "inject") {
-    const contexts = [a.injectedContext, b.injectedContext].filter((ctx) => ctx !== "");
-    const result: InjectResponse = {
-      action: "inject",
-      injectedContext: contexts.join("\n\n---\n\n"),
-    };
-    if (a.modifiedPayload !== undefined) {
-      return { ...result, modifiedPayload: a.modifiedPayload };
-    }
-    if (b.modifiedPayload !== undefined) {
-      return { ...result, modifiedPayload: b.modifiedPayload };
-    }
-    return result;
+function closeSessionTaskWindow(provider: SessionStateProvider, callId: string | undefined): void {
+  if (!callId) return;
+  try {
+    provider.closeActiveTaskWindow(callId);
+  } catch {
+    // Fail-open: a task-window tracking failure must not break the hook flow.
   }
-
-  if (a.action === "inject") {
-    return { ...a };
-  }
-
-  if (b.action === "inject") {
-    return { ...b };
-  }
-
-  return { action: "proceed" };
 }
 
 export interface CreateGlobalFsResult {
@@ -163,6 +169,12 @@ export class NoOpPersistence extends WisdomPersistence {
       async fileExists(): Promise<boolean> {
         return false;
       },
+      async listFiles(): Promise<readonly string[]> {
+        return [];
+      },
+      async readFileStats(): Promise<null> {
+        return null;
+      },
     };
     const noopWriter: FileWriter = {
       async writeFile(): Promise<void> {
@@ -205,11 +217,18 @@ export interface JusticePluginOptions {
   };
   readonly onError?: (error: unknown) => void;
   readonly notifier?: JusticeNotifier;
+  readonly workspaceRoot?: string;
   readonly globalFileSystem?: {
     readonly fs: FileReader & FileWriter;
     readonly relativePath: string;
     readonly absolutePath?: string;
   };
+  /**
+   * Bootstrapped writer ID for Observation Log shards (D55/D39).
+   * Used by ObservationHandler to identify the writer of observation log shards.
+   * Defaults to a newly generated UUID-based writer ID when not specified.
+   */
+  readonly writerId?: string;
 }
 
 export class JusticePlugin {
@@ -218,6 +237,8 @@ export class JusticePlugin {
   private readonly taskFeedback: TaskFeedbackHandler;
   private readonly compactionProtector: CompactionProtector;
   private readonly loopHandler: LoopDetectionHandler;
+  private readonly observationHandler: ObservationHandler;
+  private readonly sessionStateProvider: SessionStateProvider;
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly options: JusticePluginOptions;
@@ -238,8 +259,7 @@ export class JusticePlugin {
         )
       : new NoOpPersistence(500);
 
-    const globalDisplayPath =
-      options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
+    const globalDisplayPath = options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
 
     this.tieredWisdomStore = new TieredWisdomStore({
       localStore: this.wisdomStore,
@@ -260,13 +280,27 @@ export class JusticePlugin {
       options.notifier,
     );
 
-    // Ensure session cleanup propagates from loopHandler to planBridge
-    this.loopHandler.setSessionRemovedCallback((sessionId) => {
-      this.planBridge.destroySession(sessionId);
-    });
-
+    this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
+    const writerId = options.writerId ?? generateWriterId();
+    this.observationHandler = new ObservationHandler({
+      logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
+      sessionStateProvider: this.sessionStateProvider,
+      projectionCache: new StateProjectionCache(fileWriter, fileReader, ".justice/state.json", options.logger ?? console),
+      writerId,
+      workspaceRoot: options.workspaceRoot,
+      logger: options.logger,
+      gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
+    });
+
+    // Ensure session cleanup propagates from loopHandler to all stateful handlers
+    this.loopHandler.setSessionRemovedCallback((sessionId) => {
+      this.destroySessionState(sessionId);
+    });
+
+    this.taskFeedback.setObservationHandler(this.observationHandler);
+    this.loopHandler.setObservationHandler(this.observationHandler);
   }
 
   /**
@@ -276,6 +310,7 @@ export class JusticePlugin {
   async initialize(): Promise<void> {
     try {
       await this.tieredWisdomStore.loadAll();
+      await this.observationHandler.initializeProjectionCache();
       try {
         await this.options.notifier?.notify({
           level: "info",
@@ -300,17 +335,107 @@ export class JusticePlugin {
    */
   async handleEvent(event: HookEvent): Promise<HookResponse> {
     switch (event.type) {
-      case "Message":
-        return this.planBridge.handleMessage(event);
-      case "PreToolUse":
-        return this.planBridge.handlePreToolUse(event);
-      case "PostToolUse":
-        return mergePostToolUseResponses(
-          await this.planBridge.handlePostToolUse(event),
-          await this.taskFeedback.handlePostToolUse(event),
+      case "Message": {
+        // User/assistant payloads drive plan-bridge delegation; observation-kind
+        // payloads (Task 3.2 widening) feed the observation pipeline. The
+        // observation branch is fail-open: any error degrades to PROCEED.
+        const { payload } = event;
+        if (isLegacyMessagePayload(payload)) {
+          return this.planBridge.handleMessage(event);
+        }
+        return await this.observationHandler
+          .handleMessage(event.sessionId, payload as ObservationMessagePayload)
+          .catch((err) => {
+            this.options.logger?.warn("observation-handler message failed", err);
+            return PROCEED;
+          });
+      }
+      case "PreToolUse": {
+        // Open the callId-keyed task window before delegation logic runs. The
+        // window is closed in the matching PostToolUse case regardless of success.
+        openSessionTaskWindow(this.sessionStateProvider, event);
+        // Capture session generation before Promise.all so we can detect if the
+        // session was removed while handlers were pending (race-condition guard).
+        const capturedGeneration = event.sessionId !== undefined
+          ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+          : undefined;
+        // The observation handler runs for EVERY tool; only the task tool also
+        // drives plan-bridge delegation. Run independent handlers in parallel.
+        const [observation, planBridge] = await Promise.all([
+          this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
+            this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+            return PROCEED;
+          }),
+          event.payload.toolName === "task"
+            ? this.planBridge.handlePreToolUse(event)
+            : Promise.resolve(PROCEED),
+        ]);
+        const response = mergePreToolUseResponses(
+          observation,
+          planBridge,
+          (message) => this.warnMergeConflict(message),
         );
+        const taskId = resolveTaskIdFromModifiedPayload(
+          response.action === "inject" ? response.modifiedPayload : undefined,
+        );
+        const planPath = this.planBridge.getActivePlan(event.sessionId);
+        if (event.payload.toolName === "task" && taskId !== undefined && planPath !== null) {
+          this.taskFeedback.setActivePlan(event.sessionId, planPath, taskId);
+        }
+        if (event.callId !== undefined && taskId !== undefined) {
+          try {
+            // Only re-register the window if the session wasn't removed during
+            // the Promise.all above (generation would be undefined if removed).
+            const currentGeneration = event.sessionId !== undefined
+              ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+              : undefined;
+            if (capturedGeneration !== undefined && currentGeneration === capturedGeneration) {
+              this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
+            }
+          } catch (err) {
+            this.options.logger?.warn("failed to set active task window", err);
+          }
+        }
+        return response;
+      }
+      case "PostToolUse": {
+        try {
+          // Keep the window open while observation associates the tool result with its task.
+          const [observation, planBridge, taskFeedback] = await Promise.all([
+            this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
+              this.options.logger?.warn("observation-handler post-tool-use failed", err);
+              return PROCEED;
+            }),
+            event.payload.toolName === "task"
+              ? this.planBridge.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("plan-bridge post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+            event.payload.toolName === "task"
+              ? this.taskFeedback.handlePostToolUse(event).catch((err) => {
+                  this.options.logger?.warn("task-feedback post-tool-use failed", err);
+                  return PROCEED;
+                })
+              : Promise.resolve(PROCEED),
+          ]);
+          return mergePostToolUseResponses(
+            [observation, planBridge, taskFeedback],
+            (message) => this.warnMergeConflict(message),
+          );
+        } finally {
+          closeSessionTaskWindow(this.sessionStateProvider, event.callId);
+        }
+      }
+
       case "Event":
         return this.handleEventType(event);
+      case "AgentMapped": {
+        // Full agent-name → persona mapping is implemented in Task 3.4.
+        const { sessionId, agentName } = event.payload;
+        this.sessionStateProvider.setAgentMapping(sessionId, agentName);
+        return PROCEED;
+      }
       default: {
         const _exhaustiveCheck: never = event;
         void _exhaustiveCheck;
@@ -371,10 +496,41 @@ export class JusticePlugin {
   }
 
   /**
+   * Get the ObservationHandler instance (routes observation tool/message events).
+   */
+  getObservationHandler(): ObservationHandler {
+    return this.observationHandler;
+  }
+
+  /**
+   * Get the SessionStateProvider instance (sessionId → AgentId + callId task windows).
+   */
+  getSessionStateProvider(): SessionStateProvider {
+    return this.sessionStateProvider;
+  }
+
+  destroySession(sessionId: string): void {
+    this.loopHandler.removeSession(sessionId);
+  }
+
+  /**
    * Route Event-type events based on eventType payload.
    */
   private async handleEventType(event: EventEvent): Promise<HookResponse> {
     switch (event.payload.eventType) {
+      case "session_error": {
+        await this.observationHandler.handleSessionError({
+          message: typeof event.payload.message === "string" ? event.payload.message : "",
+          kind: typeof event.payload.kind === "string" ? event.payload.kind : undefined,
+          agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+          sessionId: event.sessionId,
+        }).catch(() => {
+          // Fail-open: the adapter already logs dispatch failures; swallow here
+          // so a degraded observation store never floods the log channel.
+        });
+        return PROCEED;
+      }
+
       case "loop-detector":
         return this.loopHandler.handleEvent(event);
       case "compaction": {
@@ -427,6 +583,34 @@ export class JusticePlugin {
       }
       default:
         return PROCEED;
+    }
+  }
+
+  private destroySessionState(sessionId: string): void {
+    const cleanupSteps: readonly (() => void)[] = [
+      (): void => this.planBridge.destroySession(sessionId),
+      (): void => this.taskFeedback.clearActivePlan(sessionId),
+      (): void => this.sessionStateProvider.removeSession(sessionId),
+      (): void => this.observationHandler.destroySession(sessionId),
+    ];
+    for (const cleanup of cleanupSteps) {
+      try {
+        cleanup();
+      } catch (error) {
+        try {
+          this.options.logger?.warn("Justice session cleanup failed", error);
+        } catch {
+          // Fail-open: one cleanup failure must not retain other session state.
+        }
+      }
+    }
+  }
+
+  private warnMergeConflict(message: string): void {
+    try {
+      this.options.logger?.warn(message);
+    } catch {
+      return;
     }
   }
 }

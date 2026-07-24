@@ -9,6 +9,7 @@ import {
   rename as fsRename,
   unlink,
   rmdir as fsRmdir,
+  readdir,
 } from "node:fs/promises";
 
 export class NodeFileSystem implements FileReader, FileWriter {
@@ -52,6 +53,32 @@ export class NodeFileSystem implements FileReader, FileWriter {
         return false;
       }
       throw err;
+    }
+  }
+
+  async listFiles(prefix: string): Promise<readonly string[]> {
+    try {
+      const safePrefix = await this.resolveSafely(prefix);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path validated by resolveSafely
+      const entries = await readdir(safePrefix, { recursive: true, withFileTypes: true });
+      return entries
+        .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
+        .map((e) => relative(this.rootDir, join(e.parentPath, e.name)));
+    } catch {
+      return [];
+    }
+  }
+
+  async readFileStats(
+    path: string,
+  ): Promise<{ readonly size: number; readonly mtimeMs: number } | null> {
+    try {
+      const safePath = await this.resolveSafely(path);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path validated by resolveSafely
+      const s = await stat(safePath);
+      return { size: s.size, mtimeMs: s.mtimeMs };
+    } catch {
+      return null;
     }
   }
 

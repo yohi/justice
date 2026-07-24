@@ -3,17 +3,25 @@ import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-ada
 import { debugLog } from "./runtime/debug";
 
 export const OpenCodePlugin: Plugin = async (init) => {
-  const adapter = new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
+  const adapter =
+    (init as unknown as { __justiceTestAdapter?: OpenCodeAdapter }).__justiceTestAdapter ??
+    new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
 
   debugLog("Plugin factory invoked, adapter created.");
-
   return {
+    tool: adapter.getTools(),
     event: async (input): Promise<void> => {
       await adapter.onEvent(
         input as {
           event: { type: string; properties?: Record<string, unknown> };
         },
       );
+    },
+    "chat.message": async (input, output): Promise<void> => {
+      await adapter.onChatMessage(input, output);
+    },
+    "chat.params": async (input): Promise<void> => {
+      await adapter.onChatParams(input);
     },
     "tool.execute.before": async (input, output): Promise<void> => {
       await adapter.onToolExecuteBefore(
@@ -44,6 +52,9 @@ export const OpenCodePlugin: Plugin = async (init) => {
         input as { sessionID: string },
         output as { context?: string[]; prompt?: string },
       );
+    },
+    "experimental.text.complete": async (input, output): Promise<void> => {
+      await adapter.onTextComplete(input, output);
     },
   };
 };

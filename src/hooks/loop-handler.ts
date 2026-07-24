@@ -82,6 +82,7 @@ export class LoopDetectionHandler {
   private readonly maxRetries: number;
   private readonly maxRejections: number;
   private onSessionRemoved?: (sessionId: string) => void;
+  private observationHandler?: import("./observation-handler").ObservationHandler;
 
   constructor(
     private readonly fileReader: FileReader,
@@ -92,6 +93,13 @@ export class LoopDetectionHandler {
     this.detector = new ReviewRejectionDetector();
     this.maxRetries = resolveMaxRetries();
     this.maxRejections = resolveMaxRejections();
+  }
+
+  /**
+   * Inject the ObservationHandler so loop/pivot outcomes can emit reflection events.
+   */
+  setObservationHandler(handler: import("./observation-handler").ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -295,6 +303,22 @@ export class LoopDetectionHandler {
         );
         await this.fileWriter.writeFile(session.planPath, updatedPlan);
 
+        // Emit reflection event only after successful plan update
+        try {
+          await this.observationHandler?.emitReflectionEvent({
+            trigger: "task_error",
+            planRef: { path: session.planPath, taskId: session.activeTaskId },
+            intent: "append_error_note",
+            note: `loop_detected: ${reason}`,
+            sessionId: event.sessionId,
+          });
+        } catch (err) {
+          console.warn(
+            "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
+            err,
+          );
+        }
+
         // Generate split suggestion
         const suggestion = this.splitter.suggestSplit(activeTask, "loop_detected");
         const formattedSuggestion = this.splitter.formatAsPlanMarkdown(suggestion);
@@ -334,7 +358,8 @@ export class LoopDetectionHandler {
       }
     } catch (err) {
       console.warn(
-        `[JUSTICE] LoopDetectionHandler failed to handle event: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] LoopDetectionHandler failed to handle event: %s",
+        err instanceof Error ? err.message : String(err),
       );
     }
 
@@ -360,7 +385,11 @@ export class LoopDetectionHandler {
     }
   }
 
-  private removeSession(sessionId: string): void {
+  /**
+   * Removes the session and its associated state. Public so that tests and
+   * orchestrators can explicitly trigger the session-removed callback path.
+   */
+  removeSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     // 階層型 Map により、sessionId をキーに一括削除可能（衝突リスクの排除と効率化）
     this.trials.delete(sessionId);
