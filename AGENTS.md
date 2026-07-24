@@ -18,7 +18,7 @@ These are architectural, not stylistic — breaking them corrupts the design, no
 
 - **Pure Core**: `src/core/**` (including `src/core/v2/`) never imports `@opencode-ai/*`. Business logic lives in `src/core/`; `src/hooks/` only coordinates and delegates to it.
 - **Fail-Open**: every hook/adapter boundary wraps I/O and notifier calls in `try/catch` and degrades to `PROCEED` — never crash a session.
-- **Immutable state**: `readonly` / `ReadonlyArray` / `ReadonlyMap` everywhere; never mutate.
+- **Immutable state**: `readonly` / `ReadonlyArray` / `ReadonlyMap` everywhere; never mutate. (Exception: a class's own private internal state — e.g. `WisdomStore`'s/`SessionStateProvider`'s internal `Map`/array fields — may be mutable as an established precedent, provided the public API returns only already-resolved immutable values. This is not a license to introduce new mutable public state.)
 - **No external DBs**: persistence is JSON flat files only (`WisdomPersistence`, `ObservationLogStore`), written atomically (temp file + rename).
 - **Single public tool**: only `justice_review` is registered via `OpenCodeAdapter.getTools()`. Never register internal dry-run helpers (`justice_status`/`justice_gate`) as tools — they must stay unreachable from outside the trust boundary (design decision D50).
 - **`declared` evidence never satisfies a Gate PASS**: only `observed`/`derived` provenance can (`src/core/v2/rule-evaluation-engine.ts`, fitness function FF-008).
