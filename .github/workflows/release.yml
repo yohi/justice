@@ -24,7 +24,7 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ steps.release.outputs.release_created }}
         with:
           node-version: '22'
@@ -39,7 +39,7 @@ jobs:
         run: bun run build
         if: ${{ steps.release.outputs.release_created }}
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: justice-dist
           path: dist/
