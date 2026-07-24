@@ -17,9 +17,7 @@ describe("Sisyphus debugging integration flow", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected Sisyphus insight injection");
     expect(response.injectedContext).toContain("🔬");
-    expect(response.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(
-      true,
-    );
+    expect(response.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(true);
 
     const entries = wisdomStore.getRelevant({ persona: "sisyphus" });
     expect(entries.length).toBeGreaterThanOrEqual(1);

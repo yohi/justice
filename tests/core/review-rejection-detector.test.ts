@@ -11,13 +11,13 @@ describe("ReviewRejectionDetector", () => {
   it("ignores empty text", () => {
     const signal = detector.detect("");
 
-    expect(signal).toEqual({ matched: false, excerpts: [], summary: "" });
+    expect(signal).toEqual({ matched: false, excerpts: [], summary: "", severity: "minor" });
   });
 
   it("does not treat approval as rejection", () => {
     const signal = detector.detect("approved with minor nits");
 
-    expect(signal).toEqual({ matched: false, excerpts: [], summary: "" });
+    expect(signal).toEqual({ matched: false, excerpts: [], summary: "", severity: "minor" });
   });
 
   it("detects a single-line rejection", () => {
@@ -25,6 +25,7 @@ describe("ReviewRejectionDetector", () => {
 
     expect(signal.matched).toBe(true);
     expect(signal.excerpts).toEqual(["REJECTED: missing error handling"]);
+    expect(signal.severity).toBe("minor");
     expect(signal.summary.length).toBeGreaterThan(0);
     expect(signal.summary.length).toBeLessThanOrEqual(300);
   });
@@ -103,6 +104,150 @@ describe("ReviewRejectionDetector", () => {
     expect(signal.excerpts).toEqual(["approval denied due to security"]);
   });
 
+  it("parses every rejection line into a deterministic review item", () => {
+    // Given
+    const output = [
+      "BLOCKER: security vulnerability at src/auth.ts:42",
+      "MUST FIX: parser regression at src/parser.ts:10",
+    ].join("\n");
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toHaveLength(2);
+    expect(items).toMatchObject([
+      {
+        severity: "critical",
+        summary: "BLOCKER: security vulnerability at src/auth.ts:42",
+        location: "src/auth.ts:42",
+        status: "open",
+      },
+      {
+        severity: "major",
+        summary: "MUST FIX: parser regression at src/parser.ts:10",
+        location: "src/parser.ts:10",
+        status: "open",
+      },
+    ]);
+    expect(items.every((item) => item.evidenceId === item.itemKey)).toBe(true);
+  });
+
+  it("reuses the detected signal severity for the corresponding review item", () => {
+    const output = "BLOCKER: security vulnerability at src/auth.ts:42";
+
+    const signal = detector.detect(output);
+    const items = detector.detectMultiple(output);
+
+    expect(signal.severity).toBe("critical");
+    expect(items[0]?.severity).toBe(signal.severity);
+  });
+
+  it("escalates a blocker heading to critical severity", () => {
+    const items = detector.detectMultiple("BLOCKER: style suggestion at src/parser.ts:10");
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.severity).toBe("critical");
+  });
+
+  it("classifies a rejection from its immediately following detail line", () => {
+    // Given
+    const output = "BLOCKER:\nsecurity vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([
+      {
+        severity: "critical",
+        summary: "BLOCKER:\nsecurity vulnerability at src/auth.ts:42",
+        location: "src/auth.ts:42",
+      },
+    ]);
+  });
+
+  it("stops rejection continuation at a blank line", () => {
+    // Given
+    const output = "BLOCKER:\n\nsecurity vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
+  });
+
+  it("stops rejection continuation at a Markdown heading", () => {
+    // Given
+    const output = "BLOCKER:\n## Security vulnerability at src/auth.ts:42";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then
+    expect(items).toMatchObject([
+      { severity: "critical", summary: "BLOCKER:", location: "unknown" },
+    ]);
+  });
+
+  it("deduplicates repeated review findings by item key", () => {
+    // Given
+    const finding = "MUST FIX: parser regression at src/parser.ts:10";
+
+    // When
+    const items = detector.detectMultiple(`${finding}\n${finding}`);
+
+    // Then
+    expect(items).toHaveLength(1);
+  });
+
+  it("produces the same item key for absolute and relative location summaries", () => {
+    // Given
+    const relativeFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const absoluteFinding = "MUST FIX: parser regression at /workspace/src/parser.ts:10";
+
+    // When
+    const relativeItems = detector.detectMultiple(relativeFinding, {}, "/workspace");
+    const absoluteItems = detector.detectMultiple(absoluteFinding, {}, "/workspace");
+
+    // Then
+    expect(relativeItems).toHaveLength(1);
+    expect(absoluteItems).toHaveLength(1);
+    expect(relativeItems[0]?.itemKey).toBe(absoluteItems[0]?.itemKey);
+  });
+
+  it("produces the same item key for dotted and plain relative locations", () => {
+    // Given
+    const plainFinding = "MUST FIX: parser regression at src/parser.ts:10";
+    const dottedFinding = "MUST FIX: parser regression at ./src/parser.ts:10";
+
+    // When
+    const plainItems = detector.detectMultiple(plainFinding);
+    const dottedItems = detector.detectMultiple(dottedFinding);
+
+    // Then
+    expect(plainItems).toHaveLength(1);
+    expect(dottedItems).toHaveLength(1);
+    expect(plainItems[0]?.itemKey).toBe(dottedItems[0]?.itemKey);
+  });
+
+  it("does not trust raw metadata to identify a complete review snapshot", () => {
+    // Given
+    const output = "review finished";
+
+    // When / Then
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: true })).toBe(false);
+    expect(detector.isCompleteSnapshot(output, { isCompleteSnapshot: false })).toBe(false);
+  });
+
+  it("does not infer a complete review snapshot without metadata", () => {
+    // Given / When / Then
+    expect(detector.isCompleteSnapshot("complete review with no findings")).toBe(false);
+  });
+
   it("detects uppercase do not merge wording", () => {
     const signal = detector.detect("DO NOT MERGE");
 
@@ -119,6 +264,18 @@ describe("ReviewRejectionDetector", () => {
   ])("matches pattern sample: %s", (text) => {
     expect(matchesReviewRejection(text)).toBe(true);
     expect(detector.detect(text).matched).toBe(true);
+  });
+
+  it("does not inflate severity from negated terms in the body", () => {
+    // Given: heading is MAJOR, body contains negated critical term
+    const output = "MUST FIX: update README\nThis is not a blocker but should be fixed";
+
+    // When
+    const items = detector.detectMultiple(output);
+
+    // Then: severity is based on heading (MAJOR), not negated body text
+    expect(items).toHaveLength(1);
+    expect(items[0]?.severity).toBe("major");
   });
 
   it("exports frozen review rejection patterns", () => {

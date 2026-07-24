@@ -1,6 +1,6 @@
 {
   "name": "@yohi/justice",
-  "version": "2.3.0",
+  "version": "1.0.0",
   "description": "OpenCode plugin bridging Superpowers and oh-my-openagent",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -34,9 +34,9 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "bun run vitest run",
+    "test:watch": "bun run vitest",
+    "test:coverage": "bun run vitest run --coverage",
     "lint": "eslint src/ tests/",
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
     "typecheck": "tsc --noEmit",
@@ -47,10 +47,11 @@
     "@opencode-ai/plugin": "^1.14.21",
     "@types/bun": "latest",
     "@types/node": "^25.5.0",
-    "@vitest/coverage-v8": "4.1.1",
+    "@vitest/coverage-v8": "4.1.10",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-security": "^4.0.0",
+    "glob": "^13.0.6",
     "prettier": "^3.8.1",
     "typescript-eslint": "^8.57.2",
     "vitest": "^4.1.1"
@@ -58,5 +59,10 @@
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.14.21",
     "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.48",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   }
 }

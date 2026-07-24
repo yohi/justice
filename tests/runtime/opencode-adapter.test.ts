@@ -148,7 +148,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     );
   });
 
-  it("routes loop-like session.error events to loop-detector Event", async () => {
+  it("routes loop-like session.error events to observation and loop-detector Events", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -161,9 +161,17 @@ describe("OpenCodeAdapter.onEvent", () => {
       },
     });
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    const [event] = spy.mock.calls[0];
-    expect(event).toMatchObject({
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      type: "Event",
+      sessionId: "s",
+      payload: {
+        eventType: "session_error",
+        sessionId: "s",
+        message: "loop detected in planning",
+      },
+    });
+    expect(spy.mock.calls[1][0]).toMatchObject({
       type: "Event",
       sessionId: "s",
       payload: {
@@ -174,7 +182,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     });
   });
 
-  it("ignores non-loop session.error events without calling justice or logging", async () => {
+  it("routes non-loop session.error events to observation without logging", async () => {
     const init = fakeInit();
     const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
     const adapter = new OpenCodeAdapter(init);
@@ -186,12 +194,47 @@ describe("OpenCodeAdapter.onEvent", () => {
     await adapter.onEvent({
       event: {
         type: "session.error",
-        properties: { sessionID: "s", error: { message: "timeout while calling provider" } },
+        properties: {
+          sessionID: "s",
+          error: { name: "ProviderTimeoutError", message: "timeout while calling provider" },
+        },
       },
     });
 
-    expect(handleSpy).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
+    expect(handleSpy).toHaveBeenCalledWith({
+      type: "Event",
+      sessionId: "s",
+      payload: {
+        eventType: "session_error",
+        sessionId: "s",
+        message: "timeout while calling provider",
+        kind: "ProviderTimeoutError",
+      },
+    });
+    expect(logSpy).not.toHaveBeenCalledWith(expect.objectContaining({ level: "error" }));
+  });
+
+  it("still dispatches loop detection when session-error observation fails", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleSpy = vi
+      .spyOn(justice, "handleEvent")
+      .mockRejectedValueOnce(new Error("observation failure"))
+      .mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "session.error",
+        properties: { sessionID: "s", error: { message: "loop detected in planning" } },
+      },
+    });
+
+    expect(handleSpy).toHaveBeenCalledTimes(2);
+    expect(handleSpy.mock.calls[1][0]).toMatchObject({
+      type: "Event",
+      payload: { eventType: "loop-detector", sessionId: "s" },
+    });
   });
 
   it("fails open when event handling throws", async () => {
@@ -240,15 +283,15 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     });
   });
 
-  it("skips non-task tools", async () => {
+  it("skips justice_* query tools (D50: must not perturb the Observation Log)", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onToolExecuteBefore(
-      { tool: "bash", sessionID: "s", callID: "c1" },
-      { args: { command: "ls" } },
+      { tool: "justice_status", sessionID: "s", callID: "c1" },
+      { args: {} },
     );
 
     expect(spy).not.toHaveBeenCalled();
@@ -351,5 +394,16 @@ describe("OpenCodeAdapter.onSessionCompacting", () => {
     const output = { context: [] as string[], prompt: undefined as string | undefined };
     await adapter.onSessionCompacting({ sessionID: "s" }, output);
     expect(output.context).toEqual(["snapshot-body"]);
+  });
+});
+
+describe("OpenCodeAdapter.getTools", () => {
+  it("returns only the public justice_review tool", () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const tools = adapter.getTools();
+
+    expect(Object.keys(tools)).toEqual(["justice_review"]);
+    expect(tools.justice_review?.description).toContain("Review Summary Artifact");
+    expect(typeof tools.justice_review?.execute).toBe("function");
   });
 });

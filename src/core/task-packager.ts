@@ -8,6 +8,38 @@ import type {
 import { CategoryClassifier } from "./category-classifier";
 import { AgentRouter, type RoutingCategory } from "./agent-router";
 
+export function resolveTaskIdFromToolInput(
+  toolInput: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const taskId = toolInput.taskId;
+  return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
+}
+
+export function resolveTaskIdFromModifiedPayload(payload: unknown): string | undefined {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("args" in payload) ||
+    typeof payload.args !== "object" ||
+    payload.args === null
+  ) {
+    return undefined;
+  }
+  const taskId = "taskId" in payload.args ? payload.args.taskId : undefined;
+  return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
+}
+
+export function enrichTaskToolInput(
+  toolInput: Readonly<Record<string, unknown>>,
+  taskId: string,
+): Record<string, unknown> {
+  const existingTaskId = resolveTaskIdFromToolInput(toolInput);
+  return {
+    ...toolInput,
+    taskId: existingTaskId ?? taskId,
+  };
+}
+
 export interface PackageOptions {
   planFilePath: string;
   referenceFiles: string[];

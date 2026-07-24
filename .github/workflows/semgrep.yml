@@ -16,7 +16,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: semgrep scan --config=auto --sarif --output semgrep.sarif
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
