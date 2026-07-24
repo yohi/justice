@@ -3,7 +3,7 @@
 | 項目 | 値 |
 |---|---|
 | 実施日 | 2026-07-08 |
-| 対応計画 | [`2026-06-26-justice-v2-foundation-01-phase0-spikes.md`](../plans/2026-06-26-justice-v2-foundation-01-phase0-spikes.md) Task 0.2 |
+| 対応計画 | [`SPEC.md §15.12`](../../../SPEC.md#1512-既知の未解決事項ガバナンス状況重要) Task 0.2 |
 | 実施環境 | サンドボックス環境（実機 OpenCode 上での動作確認は不可）。可能な範囲でベストエフォート実施。 |
 
 ## 背景
