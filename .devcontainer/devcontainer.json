@@ -6,7 +6,10 @@
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {}
   },
-  "postCreateCommand": "bun install",
+  "mounts": [
+    "source=justice-node-modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+  ],
+  "postCreateCommand": "bun install --frozen-lockfile",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -20,5 +23,8 @@
       }
     }
   },
-  "remoteUser": "bun"
+  // rootless Docker では「ホストユーザ ↔ コンテナ内 root (uid 0)」がマッピングされるため、
+  // バインドマウントされた /workspace の所有者・権限を一致させる目的で root を指定（Dockerfile の USER bun を意図的に上書き）。
+  // root 実行のため、破壊的操作はマウント経由でホスト側ファイルにも波及し得る点に注意。
+  "remoteUser": "root"
 }

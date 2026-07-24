@@ -6,7 +6,8 @@ export type NotificationVariant =
   | "sisyphus_insight"
   | "escalation"
   | "wisdom_saved"
-  | "loop_detected";
+  | "loop_detected"
+  | "justice_gate";
 
 export interface JusticeNotification {
   readonly level: NotificationLevel;
@@ -41,6 +42,8 @@ export function iconFor(variant: NotificationVariant): string {
       return "💡";
     case "loop_detected":
       return "🔁";
+    case "justice_gate":
+      return "🚦";
   }
 }
 

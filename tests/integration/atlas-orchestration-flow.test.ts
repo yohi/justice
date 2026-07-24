@@ -46,9 +46,7 @@ describe("Atlas orchestration integration flow", () => {
     expect(post.injectedContext).toContain("Atlas Orchestration");
     expect(post.injectedContext).toContain("hephaestus");
     expect(notifier.calls.filter((call) => call.variant === "atlas_orchestration")).toHaveLength(1);
-    expect(post.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(
-      true,
-    );
+    expect(post.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(true);
 
     wisdomStore.add(
       {
