@@ -7,7 +7,8 @@ import type {
   PlanTask,
   AgentId,
 } from "../core/types";
-import { mergePostToolUseResponses } from "../core/justice-plugin";
+import { isLegacyMessagePayload } from "../core/types";
+import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
 import { TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
@@ -20,6 +21,7 @@ import type { JusticeNotifier } from "../core/justice-notifier";
 import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
+import { enrichTaskToolInput } from "../core/task-packager";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -134,6 +136,10 @@ export class PlanBridge {
    */
   async handleMessage(event: HookEvent): Promise<HookResponse> {
     if (event.type !== "Message") return PROCEED;
+
+    // Observation-kind message payloads (Task 3.2 widening) carry no role/content and are
+    // consumed by the observation pipeline (Task 3.3); ignore them here to stay fail-open.
+    if (!isLegacyMessagePayload(event.payload)) return PROCEED;
 
     // Track last user message for TriggerDetector guard
     if (event.payload.role === "user") {
@@ -334,6 +340,9 @@ export class PlanBridge {
     return {
       action: "inject",
       injectedContext: this.buildInjectedContext(planContent, delegation),
+      modifiedPayload: {
+        args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId),
+      },
     };
   }
 
@@ -437,7 +446,9 @@ export class PlanBridge {
 
       if (!hasError) {
         if (nextTask) {
-          const planPathPart = writingCompletion.planFilePath ? ` (${writingCompletion.planFilePath})` : "";
+          const planPathPart = writingCompletion.planFilePath
+            ? ` (${writingCompletion.planFilePath})`
+            : "";
           const source = `Detection source: ${writingCompletion.source}${planPathPart}`;
           const mediumNote =
             writingCompletion.confidence === "medium"
@@ -471,10 +482,13 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses(response, {
-            action: "inject",
-            injectedContext: `${banner}\n${atlasGuidance}`,
-          });
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: `${banner}\n${atlasGuidance}`,
+            },
+          ]);
 
           this.safeNotify(
             sessionId,
@@ -501,10 +515,13 @@ export class PlanBridge {
             "---",
           ].join("\n");
 
-          response = mergePostToolUseResponses(response, {
-            action: "inject",
-            injectedContext: `${banner}\n${atlasGuidance}`,
-          });
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: `${banner}\n${atlasGuidance}`,
+            },
+          ]);
 
           this.safeNotify(
             sessionId,
@@ -565,13 +582,16 @@ export class PlanBridge {
         message: `Sisyphusがsystematic-debuggingを完了しました。${savedCount} 件のWisdomを保存しました。`,
       });
       const breakdownText = breakdown ? ` ${breakdown}` : "";
-      response = mergePostToolUseResponses(response, {
-        action: "inject",
-        injectedContext:
-          `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
-          `**Confidence**: ${debuggingCompletion.confidence}\n` +
-          `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
-      });
+      response = mergePostToolUseResponses([
+        response,
+        {
+          action: "inject",
+          injectedContext:
+            `${banner}\n---\n## SISYPHUS INSIGHT DIRECTIVE\n\n` +
+            `**Confidence**: ${debuggingCompletion.confidence}\n` +
+            `**Action**: 根本原因特定と修正を完了。${savedCount} 件のWisdomをSisyphus名前空間に保存しました${breakdownText}。\n\n---`,
+        },
+      ]);
       this.safeNotify(
         sessionId,
         undefined,
@@ -626,10 +646,13 @@ export class PlanBridge {
           "---",
         ].join("\n");
 
-        response = mergePostToolUseResponses(response, {
-          action: "inject",
-          injectedContext: `${banner}\n${pivotBody}`,
-        });
+        response = mergePostToolUseResponses([
+          response,
+          {
+            action: "inject",
+            injectedContext: `${banner}\n${pivotBody}`,
+          },
+        ]);
         this.safeNotify(
           sessionId,
           taskId,
@@ -655,10 +678,13 @@ export class PlanBridge {
           rawOutput: toolResult,
         });
         if (legacyCompletion) {
-          response = mergePostToolUseResponses(response, {
-            action: "inject",
-            injectedContext: legacyCompletion.guidance,
-          });
+          response = mergePostToolUseResponses([
+            response,
+            {
+              action: "inject",
+              injectedContext: legacyCompletion.guidance,
+            },
+          ]);
         }
       }
     }

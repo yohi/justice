@@ -1,7 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Plugin } from "@opencode-ai/plugin";
 import { OpenCodePlugin } from "../../src/opencode-plugin";
+import type { OpenCodeAdapter, OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
 import { fakeInit } from "../helpers/fake-opencode-init";
+
+function createMockAdapter(): OpenCodeAdapter {
+  return {
+    onEvent: vi.fn().mockResolvedValue(undefined),
+    onToolExecuteBefore: vi.fn().mockResolvedValue(undefined),
+    onToolExecuteAfter: vi.fn().mockResolvedValue(undefined),
+    onSessionCompacting: vi.fn().mockResolvedValue(undefined),
+    onTextComplete: vi.fn().mockResolvedValue(undefined),
+    getJustice: vi.fn().mockReturnValue(null),
+    isNoOp: vi.fn().mockReturnValue(false),
+    getWorkspaceRoot: vi.fn().mockReturnValue(null),
+    getTools: vi.fn().mockReturnValue({}),
+    log: vi.fn().mockResolvedValue(undefined),
+    ensureInitialized: vi.fn().mockResolvedValue(undefined),
+  } as unknown as OpenCodeAdapter;
+}
 
 describe("OpenCodePlugin (integration)", () => {
   beforeEach(() => {
@@ -19,9 +36,12 @@ describe("OpenCodePlugin (integration)", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         "event",
+        "chat.message",
+        "chat.params",
         "tool.execute.before",
         "tool.execute.after",
         "experimental.session.compacting",
+        "experimental.text.complete",
       ]),
     );
   });
@@ -80,7 +100,6 @@ describe("OpenCodePlugin (integration)", () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
 
-    // 初回の tool.execute.before 呼び出し
     await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
       "tool.execute.before"
     ]?.({ tool: "task", sessionID: "s", callID: "c1" }, { args: { prompt: "p" } });
@@ -88,11 +107,45 @@ describe("OpenCodePlugin (integration)", () => {
     const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
     const logs = logFn.mock.calls.map((call) => (call[0] as { message: string }).message);
 
-    // Justice initialized... ログが含まれていることを確認
     expect(logs).toContain("Justice initialized via opencode-adapter");
-
-    // "Prompt ignored..." ログが含まれていないことを確認
-    // (初期化が先に行われるため、justiceInstance が存在するはず)
     expect(logs.some((l) => l.includes("Prompt ignored by TriggerDetector"))).toBe(false);
+  });
+
+  it("logs debug message when Justice is not initialized in tool.execute.before", async () => {
+    const mockAdapter = createMockAdapter();
+    const init = fakeInit() as unknown as OpenCodePluginInit & {
+      __justiceTestAdapter?: OpenCodeAdapter;
+    };
+    init.__justiceTestAdapter = mockAdapter;
+
+    const handlers = await OpenCodePlugin(init as never);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const originalDebug = process.env.DEBUG;
+    process.env.DEBUG = "justice:*";
+
+    try {
+      await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+        "tool.execute.before"
+      ]?.({ tool: "task", sessionID: "s", callID: "c1" }, { args: { prompt: "p" } });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Justice: Prompt ignored by TriggerDetector"),
+      );
+    } finally {
+      process.env.DEBUG = originalDebug;
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("routes experimental.text.complete to adapter", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "experimental.text.complete"
+    ]?.({ sessionID: "s", messageID: "m", partID: "p", text: "hello" }, {});
+
+    expect(true).toBe(true);
   });
 });

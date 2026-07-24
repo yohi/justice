@@ -15,6 +15,7 @@ import { SmartRetryPolicy } from "../core/smart-retry-policy";
 import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "../core/wisdom-store";
 import { LearningExtractor } from "../core/learning-extractor";
+import type { ObservationHandler } from "./observation-handler";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -31,6 +32,14 @@ interface SessionState {
   lastAccess: number;
 }
 
+type ReflectionEventInput = {
+  readonly trigger: "task_succeeded" | "task_error";
+  readonly planRef: { readonly path: string; readonly taskId: string };
+  readonly intent: "check_complete" | "append_error_note";
+  readonly note?: string;
+  readonly sessionId: string;
+};
+
 export class TaskFeedbackHandler {
   private readonly fileReader: FileReader;
   private readonly fileWriter: FileWriter;
@@ -42,6 +51,7 @@ export class TaskFeedbackHandler {
   private readonly wisdomStore: WisdomStoreInterface;
   private readonly learningExtractor: LearningExtractor;
   private readonly sessions: Map<string, SessionState> = new Map();
+  private observationHandler?: ObservationHandler;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
     this.fileReader = fileReader;
@@ -53,6 +63,13 @@ export class TaskFeedbackHandler {
     this.splitter = new TaskSplitter();
     this.wisdomStore = wisdomStore ?? new WisdomStore();
     this.learningExtractor = new LearningExtractor();
+  }
+
+  /**
+   * Inject the ObservationHandler so task outcomes can emit reflection events.
+   */
+  setObservationHandler(handler: ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -111,7 +128,7 @@ export class TaskFeedbackHandler {
     const action = this.determineAction(feedback, session, payload.toolResult);
 
     // Execute the action
-    return this.executeAction(action, feedback, session, payload.toolResult);
+    return this.executeAction(action, feedback, session, payload.toolResult, event.sessionId);
   }
 
   private determineAction(
@@ -179,10 +196,11 @@ export class TaskFeedbackHandler {
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     switch (action.type) {
       case "success":
-        return this.handleSuccess(session, feedback, rawResult);
+        return this.handleSuccess(session, feedback, rawResult, sessionId);
       case "retry":
         // Increment retry count
         session.retryCounts.set(action.errorClass, action.retryCount);
@@ -209,7 +227,7 @@ export class TaskFeedbackHandler {
         // Layer 1: proceed silently, OmO auto-fix handles it
         return PROCEED;
       case "escalate":
-        return this.handleEscalation(action, feedback, session, rawResult);
+        return this.handleEscalation(action, feedback, session, rawResult, sessionId);
       default: {
         const _exhaustiveCheck: never = action;
         void _exhaustiveCheck;
@@ -222,9 +240,11 @@ export class TaskFeedbackHandler {
     session: SessionState,
     feedback: TaskFeedback,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
+    let planUpdated = false;
 
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
@@ -240,7 +260,15 @@ export class TaskFeedbackHandler {
           }
         }
         await this.fileWriter.writeFile(session.planPath, updatedContent);
+        planUpdated = true;
+        await this.emitReflectionEvent({
+          trigger: "task_succeeded",
+          planRef: { path: session.planPath, taskId: session.activeTaskId },
+          intent: "check_complete",
+          sessionId,
+        });
       }
+
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,
@@ -260,7 +288,7 @@ export class TaskFeedbackHandler {
 
     return {
       action: "inject",
-      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md updated. ✅]`,
+      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md ${planUpdated ? "updated" : "was not updated"}. ✅]`,
     };
   }
 
@@ -269,6 +297,7 @@ export class TaskFeedbackHandler {
     feedback: TaskFeedback,
     session: SessionState,
     rawResult: string,
+    sessionId: string,
   ): Promise<HookResponse> {
     let splitSuggestionContext = "";
     try {
@@ -288,6 +317,14 @@ export class TaskFeedbackHandler {
         const suggestion = this.splitter.suggestSplit(activeTask, action.errorClass);
         splitSuggestionContext = "\n\n" + this.splitter.formatAsPlanMarkdown(suggestion);
       }
+
+      await this.emitReflectionEvent({
+        trigger: "task_error",
+        planRef: { path: session.planPath, taskId: action.taskId },
+        intent: "append_error_note",
+        note: `${action.errorClass}: ${action.message}`,
+        sessionId,
+      });
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`,
@@ -322,6 +359,19 @@ export class TaskFeedbackHandler {
         "---",
       ].join("\n"),
     };
+  }
+
+  private async emitReflectionEvent(input: ReflectionEventInput): Promise<void> {
+    if (!this.observationHandler) return;
+
+    try {
+      await this.observationHandler.emitReflectionEvent(input);
+    } catch (err) {
+      console.warn(
+        "[JUSTICE] Failed to emit ReflectionEvent: %s",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   private cleanupSessions(): void {

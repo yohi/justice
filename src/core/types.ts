@@ -1,3 +1,5 @@
+import type { ObservationMessagePayload } from "./v2/message-payload";
+
 /** plan.mdから抽出されたタスク */
 export interface PlanTask {
   readonly id: string;
@@ -37,6 +39,27 @@ export interface DelegationContext {
 
 /** Oh My OpenAgent のエージェント識別子 */
 export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
+
+export type ObservationAgentId = AgentId | "system" | "unknown";
+
+export type ShardId = {
+  readonly agentId: ObservationAgentId;
+  readonly sessionId: string;
+  readonly writerId: string; // validated via isSafeWriterId
+};
+
+export type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
+
+export type FullEvidenceRef = ShardId & {
+  readonly kind: "full";
+  readonly sequence: number;
+  readonly evidenceId: string;
+};
+
+export type SelfEvidenceRef = {
+  readonly kind: "self";
+  readonly evidenceId: string;
+};
 
 /** task()完了後のフィードバック */
 export interface TaskFeedback {
@@ -104,13 +127,35 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 };
 
 /** OmO Hook イベントの Discriminated Union */
-export type HookEvent = MessageEvent | PreToolUseEvent | PostToolUseEvent | EventEvent;
+export type HookEvent =
+  | MessageEvent
+  | PreToolUseEvent
+  | PostToolUseEvent
+  | EventEvent
+  | AgentMappedEvent;
 
 export interface MessageEvent {
   readonly type: "Message";
-  readonly payload: MessagePayload;
+  readonly payload: MessagePayload | ObservationMessagePayload;
   readonly sessionId: string;
   readonly callId?: string;
+}
+
+/** エージェント割当イベント: message properties から検出した agent 名を伝播する (Task 3.4 で状態反映) */
+export interface AgentMappedEvent {
+  readonly type: "AgentMapped";
+  readonly sessionId: string;
+  readonly payload: {
+    readonly sessionId: string;
+    readonly agentName: string;
+  };
+}
+
+/** MessagePayload 型ガード: PlanBridge 専用の legacy payload か判定する */
+export function isLegacyMessagePayload(
+  payload: LegacyPlanBridgeMessagePayload | ObservationMessagePayload,
+): payload is LegacyPlanBridgeMessagePayload {
+  return "role" in payload && "content" in payload;
 }
 
 export interface PreToolUseEvent {
@@ -160,16 +205,23 @@ export interface EventEvent {
 
 export type HookEventType = HookEvent["type"];
 
-/** Message イベントのペイロード */
-export interface MessagePayload {
+/**
+ * PlanBridge の plan 参照検出だけが使う、従来の role/content payload。
+ * ObservationMessagePayload と混在させず、declared Evidence の本文源にはしない。
+ */
+export interface LegacyPlanBridgeMessagePayload {
   readonly role: "user" | "assistant";
   readonly content: string;
 }
+
+/** @deprecated 新規コードは LegacyPlanBridgeMessagePayload を明示して利用する。 */
+export type MessagePayload = LegacyPlanBridgeMessagePayload;
 
 /** PreToolUse イベントのペイロード */
 export interface PreToolUsePayload {
   readonly toolName: string;
   readonly toolInput: Record<string, unknown>;
+  readonly callId?: string;
 }
 
 /** フックのレスポンスの Discriminated Union */
@@ -188,7 +240,10 @@ export interface SkipResponse {
 export interface InjectResponse {
   readonly action: "inject";
   readonly injectedContext: string;
+  readonly normalInjectedContext?: string;
+  readonly gateAdvisoryContext?: string;
   readonly modifiedPayload?: unknown;
+  readonly variant?: "gate_advisory";
 }
 
 /** ファイルシステムアクセスの抽象化（テスト可能にするため） */
@@ -204,6 +259,24 @@ export interface PostToolUsePayload {
   readonly toolName: string;
   readonly toolResult: string;
   readonly error: boolean;
+  readonly callId?: string;
+  readonly toolInput?: Record<string, unknown>;
+  readonly metadata?: Record<string, unknown>;
+  readonly reviewResolutionArtifact?: ReviewResolutionArtifact;
+  readonly reviewSnapshotArtifact?: ReviewSnapshotArtifact;
+}
+
+export interface ReviewResolutionArtifact {
+  readonly authority: "human_approved";
+  readonly reviewScope: string;
+  readonly itemKeys: readonly string[];
+  readonly artifactRef: string;
+}
+
+export interface ReviewSnapshotArtifact {
+  readonly authority: "review_tool";
+  readonly schemaVersion: 1;
+  readonly complete: true;
 }
 
 /** ファイル書き込みアクセスの抽象化 */
@@ -309,11 +382,11 @@ export type WisdomScope = "local" | "global";
  */
 export interface WisdomStoreInterface {
   add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry;
-  getByTaskId(taskId: string): WisdomEntry[];
+  getByTaskId(taskId: string): readonly WisdomEntry[];
   getRelevant(options?: {
     errorClass?: ErrorClass;
     maxEntries?: number;
     persona?: AgentId;
-  }): WisdomEntry[];
-  formatForInjection(entries: WisdomEntry[]): string;
+  }): readonly WisdomEntry[];
+  formatForInjection(entries: readonly WisdomEntry[]): string;
 }
