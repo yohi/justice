@@ -382,11 +382,11 @@ export type WisdomScope = "local" | "global";
  */
 export interface WisdomStoreInterface {
   add(entry: WisdomEntryInput, options?: AddOptions): WisdomEntry;
-  getByTaskId(taskId: string): ReadonlyArray<WisdomEntry>;
+  getByTaskId(taskId: string): readonly WisdomEntry[];
   getRelevant(options?: {
     errorClass?: ErrorClass;
     maxEntries?: number;
     persona?: AgentId;
-  }): ReadonlyArray<WisdomEntry>;
-  formatForInjection(entries: ReadonlyArray<WisdomEntry>): string;
+  }): readonly WisdomEntry[];
+  formatForInjection(entries: readonly WisdomEntry[]): string;
 }

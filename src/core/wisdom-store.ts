@@ -61,7 +61,7 @@ export class WisdomStore implements WisdomStoreInterface {
   /**
    * Retrieves all entries associated with a specific task ID.
    */
-  getByTaskId(taskId: string): ReadonlyArray<WisdomEntry> {
+  getByTaskId(taskId: string): readonly WisdomEntry[] {
     return this.entryOrder.filter((entry) => entry.taskId === taskId);
   }
 
@@ -73,7 +73,7 @@ export class WisdomStore implements WisdomStoreInterface {
     errorClass?: ErrorClass;
     maxEntries?: number;
     persona?: AgentId;
-  }): ReadonlyArray<WisdomEntry> {
+  }): readonly WisdomEntry[] {
     const limit = options?.maxEntries ?? 10;
     let results = options?.persona
       ? this.getEntriesForPersona(options.persona)
@@ -94,7 +94,7 @@ export class WisdomStore implements WisdomStoreInterface {
    * Formats a list of wisdom entries into a Markdown string for injection
    * into a prompt's PREVIOUS LEARNINGS section.
    */
-  formatForInjection(entries: ReadonlyArray<WisdomEntry>): string {
+  formatForInjection(entries: readonly WisdomEntry[]): string {
     if (entries.length === 0) {
       return "";
     }
