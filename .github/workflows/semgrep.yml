@@ -17,7 +17,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - run: semgrep scan --config=auto --sarif --output semgrep.sarif --exclude-rule generic.secrets.security.detected-sonarqube-docs-api-key.detected-sonarqube-docs-api-key # codecov.yml の SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} は GitHub Secrets 参照であり false positive
+      - run: semgrep scan --config=auto --sarif --output semgrep.sarif
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
         if: always()
