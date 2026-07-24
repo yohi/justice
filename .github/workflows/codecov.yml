@@ -14,7 +14,7 @@ jobs:
     name: Upload coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -26,7 +26,7 @@ jobs:
         run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage/lcov.info
@@ -55,7 +55,7 @@ jobs:
       - name: Save coverage file to temp location
         run: cp lcov.info /tmp/lcov.info 2>/dev/null || true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
         run: mkdir -p coverage && cp /tmp/lcov.info coverage/lcov.info 2>/dev/null || true
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v7
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

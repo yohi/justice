@@ -1,0 +1,7 @@
+# Semgrep scan exclusions
+# Files listed here are skipped entirely during Semgrep analysis.
+
+# CI workflow file containing GitHub Secrets references that trigger false positives
+# in generic secret detection rules (e.g., SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}).
+# These are variable references, not hardcoded credentials.
+.github/workflows/codecov.yml
