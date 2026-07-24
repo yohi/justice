@@ -1300,7 +1300,7 @@ type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 ### 15.5 State Projection（決定論的 Fold）
 
-`project(events, rebuiltAt): ProjectedState` は event log から状態を再構築する純粋関数。2 段階マージで決定論を保証する: **(1) shard 内は `sequence` 順**（append 順の因果関係を保持）→ **(2) shard 間は `timestamp` → `shardId` → `sequence` の全順序**。同一イベント集合は常に同一 `ProjectedState` を生成する（FF-004・replay 可能性）。`tasks: Map<taskId, {status, lastVerdict, evidence[], observedReviewScopes[]}>` と `reviewSummary`（グローバル集約 + `byScope: Map<scope, ScopeReviewSummary>`）を持つ。
+`project(events, rebuiltAt): ProjectedState` は event log から状態を再構築する純粋関数。2 段階マージで決定論を保証する: **(1) shard 内は `sequence` 順**（append 順の因果関係を保持）→ **(2) shard 間は `timestamp` → `shardId` → `sequence` の全順序**。同一イベント集合は常に同一 `ProjectedState` を生成する（FF-004・replay 可能性）。`tasks: ReadonlyMap<taskId, {status, lastVerdict, evidence[], observedReviewScopes[]}>` と `reviewSummary`（グローバル集約 + `byScope: ReadonlyMap<scope, ScopeReviewSummary>`）を持つ。
 
 ### 15.6 Evidence 収集ポリシー（Redaction・Provenance）
 
