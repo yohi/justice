@@ -2082,19 +2082,18 @@ justiceはCLI主体ではなく
 
 ## Plugin Hook
 
-利用イベント
+### 利用可能なフック
 
 ```text
-Session Start
-Agent Start
-Agent Complete
-Tool Execute
-Git Commit
-PR Create
-Session End
+tool.execute.before
+tool.execute.after
+chat.message
+chat.params
+experimental.session.compacting
+experimental.text.complete
 ```
 
-OpenCodeプラグインはイベントフック型で拡張する前提です。([OpenCode](https://opencode.ai/docs/plugins/?utm_source=chatgpt.com))
+OpenCodeプラグインはイベントフック型で拡張する前提です。旧来の `Session Start` / `Agent Start` / `Agent Complete` / `Git Commit` / `PR Create` / `Session End` は列挙しません。([OpenCode](https://opencode.ai/docs/plugins/?utm_source=chatgpt.com))
 
 ---
 
@@ -3205,11 +3204,11 @@ Agent間引継ぎ追跡
 
 ## 目的
 
-証跡収集
+証跡収集と信頼境界の記録
 
 ---
 
-保存先
+### 保存先
 
 ```text
 .justice/evidence
@@ -3217,47 +3216,34 @@ Agent間引継ぎ追跡
 
 ---
 
-収集対象
-
-### テスト
+### 証跡スキーマ
 
 ```json
 {
+  "evidence_id": "",
+  "source_class": "tool_output",
+  "provenance": "observed",
+  "observed_by": "",
+  "observed_at": "",
+  "tool_call_id": "",
   "command": "",
-  "exit_code": 0
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "interpretation": {
+    "outcome": "pass",
+    "basis": "parsed_output"
+  }
 }
 ```
 
 ---
 
-### レビュー
+### 信頼境界
 
-```json
-{
-  "reviewer": "",
-  "severity": ""
-}
-```
-
----
-
-### Git
-
-```text
-commit
-branch
-pr
-```
-
----
-
-### Gate結果
-
-```text
-PASS
-WARN
-FAIL
-```
+- `observed` / `derived` のみ PASS 判定に使用する
+- `declared` / `manual` / `unknown` は Justice 自身が観測していないため PASS にしない
+- Agent の自己申告値と Justice の観測値は別フィールドで保持する
 
 ---
 
@@ -3314,19 +3300,23 @@ Negative Criteria
 
 ---
 
-## 結果
+## 判定モデル
 
 ```text
-PASS
-WARN
-FAIL
+PASS / WARN / FAIL
 ```
+
+### Advisory ルール
+
+- PASS: 要件を満たした証跡として記録する
+- WARN: 警告として記録し、後続のレビューや人間確認に回す
+- FAIL: 失敗として記録するが、Feature 実行は停止せず advisory として扱う
 
 ---
 
 ## 実装方針
 
-既存PostToolUseフックを拡張して実装する。
+既存PostToolUseフックを拡張して実装する。判定・警告・証跡化は advisory として扱い、FAIL でも Feature 実行は止めない。
 
 ---
 
@@ -4533,4 +4523,3 @@ Review aggregation
 - **v2実装ではAdvisorとして振る舞う**が、それはOpenCodeプラグインAPIの制約による実装形態であり、プロダクト全体の設計思想ではないことを要件定義に明記する。
 
 この修正により、**短期の実装可能性と長期のアーキテクチャビジョンを両立**できる要件定義になります。
-
