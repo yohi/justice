@@ -1,6 +1,6 @@
 # TDD Develop Flow — Refined Future Note
 
-この文書は、`tdd-develop-flow.md` に書かれている開発フローを、README の Future に載せる前提で少し整理したものです。実装済みの仕様書ではなく、将来の品質改善ロードマップです。
+この文書は、リポジトリ直下の [`tdd-develop-flow.md`](../../tdd-develop-flow.md) に書かれている開発フローを、README の Future に載せる前提で少し整理したものです。実装済みの仕様書ではなく、将来の品質改善ロードマップです。
 
 ## 1. 現在の開発フロー
 
