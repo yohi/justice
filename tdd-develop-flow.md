@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file -->
+<!-- Generated transcript-style doc; markdownlint is intentionally disabled for this file. -->
 # you asked
 
 message time: 2026-06-12 14:48:50
@@ -3429,17 +3431,16 @@ Not Ready
 
 # OpenCode Hooks
 
-利用対象
-
 ```text
-SessionStart
-PostToolUse
-AgentStart
-AgentComplete
-GitCommit
-PRCreate
-SessionEnd
+tool.execute.before
+tool.execute.after
+chat.message
+chat.params
+experimental.session.compacting
+experimental.text.complete
 ```
+
+OpenCode で実際に使えるフック名のみを列挙し、`SessionStart` / `AgentStart` / `AgentComplete` / `GitCommit` / `PRCreate` / `SessionEnd` のような旧来の擬似名は使わない。
 
 ---
 
