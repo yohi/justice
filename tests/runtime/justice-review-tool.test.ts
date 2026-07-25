@@ -92,7 +92,9 @@ function executeReviewTool(input: {
     logReader: input.store,
     args: input.args,
     requestApproval: async (approval): Promise<void> => {
-      await Effect.runPromise(input.ask(approval));
+      await Effect.runPromise(
+        input.ask(approval) as unknown as Effect.Effect<void>,
+      );
     },
   });
 }
@@ -445,7 +447,9 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
       logReader: failingReader,
       args: {},
       requestApproval: async (approval): Promise<void> => {
-        await Effect.runPromise(ask(approval));
+        await Effect.runPromise(
+          ask(approval) as unknown as Effect.Effect<void>,
+        );
       },
     });
 
