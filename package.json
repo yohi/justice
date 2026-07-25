@@ -1,6 +1,6 @@
 {
   "name": "@yohi/justice",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenCode plugin bridging Superpowers and oh-my-openagent",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -64,8 +64,7 @@
     "effect": "4.0.0-beta.101",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
-  }
-,
+  },
   "overrides": {
     "effect": "4.0.0-beta.101"
   }
