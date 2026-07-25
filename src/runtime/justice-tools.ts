@@ -228,7 +228,9 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
           logReader: observationHandler.getLogStore(),
           args,
           requestApproval: async (approval): Promise<void> => {
-            await Effect.runPromise(context.ask(approval));
+            await Effect.runPromise(
+              context.ask(approval) as unknown as Effect.Effect<void>,
+            );
           },
         });
       } catch (error: unknown) {
