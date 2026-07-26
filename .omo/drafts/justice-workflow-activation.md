@@ -1,9 +1,9 @@
 ---
 slug: justice-workflow-activation
-status: drafting
+status: awaiting-approval
 intent: clear
 review_required: false
-pending-action: user approval to write .omo/plans/justice-workflow-activation.md
+pending-action: user approval to execute .omo/plans/justice-workflow-activation.md
 approach: Add /justice-start as the explicit OpenCode workflow bootstrap, backed by command.execute.before, and retain an explicit natural-language marker as a cross-harness fallback. Connect its lifecycle to the existing v2 observation and advisory systems without adding a public tool.
 ---
 
@@ -52,6 +52,6 @@ approach: Add /justice-start as the explicit OpenCode workflow bootstrap, backed
 
 ## Approval gate
 status: awaiting-approval
-Proposed implementation: add a v1 workflow bootstrap initiated primarily by `/justice-start` via OpenCode `command.execute.before`, with `Justice: start workflow` retained as a cross-harness fallback. It deterministically establishes or guides creation of design and plan artifacts, then lets the existing PlanBridge and task PreToolUse injection execute the next task. v2 records the lifecycle but remains advisory-only. User selected this slash-command approach; create the decision-complete implementation plan and do not implement in this session.
+Proposed implementation: add a v1 workflow bootstrap initiated primarily by `/justice-start` via OpenCode `command.execute.before`, with `Justice: start workflow` retained as a cross-harness fallback. It deterministically establishes or guides creation of design and plan artifacts, then lets the existing PlanBridge and task PreToolUse injection execute the next task. v2 records the lifecycle but remains advisory-only. The decision-complete Work Plan is ready; do not implement it until the user approves execution.
 <!-- When exploration is exhausted and unknowns are answered, set status: awaiting-approval. -->
 <!-- That durable record is the loop guard: on a later turn read it and resume at the gate instead of re-running exploration. -->

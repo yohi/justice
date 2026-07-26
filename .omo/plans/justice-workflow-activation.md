@@ -42,30 +42,41 @@ Your next move: run this plan in a separate implementation session with `$start-
 
 ## Execution strategy
 ### Parallel execution waves
-> Target 5-8 todos per wave. Fewer than 3 (except the final) means you under-split.
+> Group only independent todos in a wave. Dependency chains may require a single-todo wave.
 
 | Wave | Todos | Rationale |
 | --- | --- | --- |
-| 1 | 1, 2 | Establish the pure request contract and the stateful PlanBridge behavior independently. |
-| 2 | 3, 4 | Wire the adapter/plugin command boundary and add v2 audit records after the core contract is stable. |
-| 3 | 5, 6 | Exercise end-to-end behavior and document the user-visible configuration and workflow. |
+| 1 | 0, 1 | Verify the SDK command-hook boundary and establish the pure request contract independently. |
+| 2 | 2, 4 | Establish stateful PlanBridge behavior and additive v2 audit records after the request contract is stable. |
+| 3 | 3 | Wire the adapter/plugin command boundary after its SDK contract and core dependencies are verified. |
+| 4 | 5 | Exercise the complete workflow after all runtime and observation dependencies are available. |
+| 5 | 6 | Document the user-visible configuration and workflow after integration coverage is established. |
 
 ### Dependency matrix
 | Todo | Depends on | Blocks | Can parallelize with |
 | --- | --- | --- | --- |
-| 1 | none | 2, 3, 5 | 2 |
-| 2 | 1 | 3, 5 | 1 |
-| 3 | 1, 2 | 5, 6 | 4 |
-| 4 | 1 | 5, 6 | 3 |
+| 0 | none | 3 | 1 |
+| 1 | none | 2, 3, 4 | 0 |
+| 2 | 1 | 3, 5 | 4 |
+| 3 | 0, 1, 2 | 5, 6 | none |
+| 4 | 1 | 5, 6 | 2 |
 | 5 | 2, 3, 4 | 6, final wave | none |
 | 6 | 3, 4, 5 | final wave | none |
 
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
+- [ ] 0. Verify the installed OpenCode command-hook SDK contract
+  What to do / Must NOT do: In the Devcontainer, inspect the resolved `@opencode-ai/plugin` type declarations and compile a focused type-level test double for `command.execute.before`. Verify the hook registration key, input fields, and mutable `output.parts` element shape before implementing the adapter boundary. Record the exact confirmed contract in task evidence and update Todo 3's implementation details if it differs. Do not add production behavior or infer the contract from documentation alone.
+  Parallelization: Wave 1 | Blocked by: none | Blocks: 3
+  References (executor has NO interview context - be exhaustive): `package.json`; `bun.lock`; installed `@opencode-ai/plugin` declarations in the Devcontainer; `src/opencode-plugin.ts`; `src/runtime/opencode-adapter.ts`; `AGENTS.md` fail-open invariant.
+  Acceptance criteria (agent-executable): A focused compile-time fixture confirms the exact registration and handler input/output types supplied by the resolved package; the recorded evidence identifies the package version and verified fields. Run `bun run typecheck` in Devcontainer.
+  QA scenarios (name the exact tool + invocation): Happy: the fixture type-checks using the resolved hook contract. Failure: an `@ts-expect-error` assertion proves an invalid field or incompatible `parts` element is rejected. Evidence `<attemptDir>/task-0-justice-workflow-activation.txt`.
+  Commit: N | No production change; retain the verification fixture only when it is a durable regression test.
+
 - [ ] 1. Add a pure workflow-start request contract and parser
   What to do / Must NOT do: Add immutable types for a parsed workflow-start request and phase, and pure parsing/validation for `/justice-start` arguments plus the `Justice: start workflow` fallback. Reuse the current plan-path safety rules; reject absolute paths, backslashes, traversal, unknown flags, and missing goals. Do not import OpenCode packages or perform file I/O in the core parser.
-  Parallelization: Wave 1 | Blocked by: none | Blocks: 2, 3, 5
+  Parallelization: Wave 1 | Blocked by: none | Blocks: 2, 3, 4
   References (executor has NO interview context - be exhaustive): `src/core/trigger-detector.ts:22-111`; `src/core/types.ts`; `tests/core/trigger-detector.test.ts`; `AGENTS.md` Pure Core and immutable-state invariants.
   Acceptance criteria (agent-executable): New parser tests cover command success, fallback success, invalid paths, unknown options, and no-match input; `bun run test tests/core/trigger-detector.test.ts` passes in Devcontainer.
   QA scenarios (name the exact tool + invocation): Happy: parser returns goal and normalized paths for valid command args. Failure: malicious or malformed arguments return no request and do not throw. Evidence `<attemptDir>/task-1-justice-workflow-activation.txt`.
@@ -73,7 +84,7 @@ Your next move: run this plan in a separate implementation session with `$start-
 
 - [ ] 2. Establish session bootstrap state in PlanBridge
   What to do / Must NOT do: Add a minimal private per-session bootstrap state to PlanBridge. It must inspect the requested design and plan through injected FileReader, select exactly one phase (`design_required`, `plan_required`, `plan_ready`), set `activePlan` only after a readable plan is available, and return structured guidance. Ensure destroySession removes bootstrap state. Do not write any design/plan file or invoke a skill/task.
-  Parallelization: Wave 1 | Blocked by: 1 | Blocks: 3, 5
+  Parallelization: Wave 2 | Blocked by: 1 | Blocks: 3, 5
   References (executor has NO interview context - be exhaustive): `src/hooks/plan-bridge.ts:89-124`; `src/hooks/plan-bridge.ts:137-233`; `src/hooks/plan-bridge.ts:235-346`; `tests/hooks/plan-bridge.test.ts`; `tests/helpers/mock-file-system.ts`.
   Acceptance criteria (agent-executable): Tests prove each artifact-state branch, active plan creation only for an existing plan, traversal rejection from the parser boundary, and session cleanup. Run `bun run test tests/hooks/plan-bridge.test.ts` in Devcontainer.
   QA scenarios (name the exact tool + invocation): Happy: existing plan yields `plan_ready` and the next `task` receives the current plan context. Failure: missing plan yields guidance only and a later task receives no stale context. Evidence `<attemptDir>/task-2-justice-workflow-activation.txt`.
@@ -81,8 +92,8 @@ Your next move: run this plan in a separate implementation session with `$start-
 
 - [ ] 3. Wire `/justice-start` through the OpenCode command hook
   What to do / Must NOT do: Add `onCommandExecuteBefore` to OpenCodeAdapter and expose `command.execute.before` from OpenCodePlugin. For exactly `justice-start`, parse `input.arguments`, initialize Justice fail-open, hand the request to PlanBridge, and append a typed workflow directive to `output.parts`; leave every other command untouched. Retain chat-message fallback processing. Do not add a custom tool, alter tool registration, or assume command-hook failure can stop OpenCode.
-  Parallelization: Wave 2 | Blocked by: 1, 2 | Blocks: 5, 6
-  References (executor has NO interview context - be exhaustive): `src/opencode-plugin.ts:5-60`; `src/runtime/opencode-adapter.ts:78-150`; `src/runtime/opencode-adapter.ts:241-269`; `src/runtime/opencode-adapter.ts:539-579`; OpenCode command hook contract from current API: `command.execute.before(input: { command, sessionID, arguments }, output: { parts })`.
+  Parallelization: Wave 3 | Blocked by: 0, 1, 2 | Blocks: 5, 6
+  References (executor has NO interview context - be exhaustive): `src/opencode-plugin.ts:5-60`; `src/runtime/opencode-adapter.ts:78-150`; `src/runtime/opencode-adapter.ts:241-269`; `src/runtime/opencode-adapter.ts:539-579`; verified command-hook contract and evidence from Todo 0.
   Acceptance criteria (agent-executable): Adapter and plugin integration tests prove command registration, directive appending, non-Justice command no-op, malformed-command fail-open logging, and no additional tool beyond `justice_review`. Run `bun run test tests/runtime/opencode-adapter.test.ts tests/integration/opencode-plugin.test.ts` in Devcontainer.
   QA scenarios (name the exact tool + invocation): Happy: `/justice-start --plan plan.md goal` appends a plan-ready directive and subsequent task injection receives the active plan. Failure: `other-command` leaves output parts unchanged; invalid args neither mutate state nor throw. Evidence `<attemptDir>/task-3-justice-workflow-activation.txt`.
   Commit: Y | `feat(runtime): add justice start command hook`
@@ -97,7 +108,7 @@ Your next move: run this plan in a separate implementation session with `$start-
 
 - [ ] 5. Add end-to-end workflow-bootstrap regression coverage
   What to do / Must NOT do: Create integration coverage from command hook through bootstrap phase selection, existing PlanBridge PreToolUse task injection, and v2 observation. Test design-missing, plan-missing, and plan-ready workflows. Do not require real OpenCode services or real disk; use existing injected mocks only.
-  Parallelization: Wave 3 | Blocked by: 2, 3, 4 | Blocks: 6, final wave
+  Parallelization: Wave 4 | Blocked by: 2, 3, 4 | Blocks: 6, final wave
   References (executor has NO interview context - be exhaustive): `tests/integration/opencode-plugin.test.ts`; `tests/integration/plan-bridge-flow.test.ts`; `tests/integration/atlas-orchestration-flow.test.ts:1-75`; `tests/helpers/fake-opencode-init.ts`; `tests/helpers/mock-file-system.ts`; `AGENTS.md` testing constraints.
   Acceptance criteria (agent-executable): Focused integration suite verifies all three transitions and proves plan-ready injection without relying on assistant-message echo. Run the new test file and `bun run test tests/integration/opencode-plugin.test.ts` in Devcontainer.
   QA scenarios (name the exact tool + invocation): Happy: plan-ready session injects the next task and emits an audit record. Failure: missing design/plan cannot cause task dispatch or stale state reuse across session IDs. Evidence `<attemptDir>/task-5-justice-workflow-activation.txt`.
@@ -105,7 +116,7 @@ Your next move: run this plan in a separate implementation session with `$start-
 
 - [ ] 6. Document and package the OpenCode command entrypoint
   What to do / Must NOT do: Update README installation/usage with an opt-in `justice-start` command configuration template, argument grammar, artifact-state table, fallback marker, expected notifier/log signal, and `justice_review` usage after execution. State that command configuration is user-owned and is not modified by the plugin. Do not create a project OpenCode configuration file, embed local absolute paths, or claim v2 advisory UI visibility is verified.
-  Parallelization: Wave 3 | Blocked by: 3, 4, 5 | Blocks: final wave
+  Parallelization: Wave 5 | Blocked by: 3, 4, 5 | Blocks: final wave
   References (executor has NO interview context - be exhaustive): `README.md` Quick Start, Installation, and Usage sections; `SPEC.md:1216-1219`; `SPEC.md:1331-1337`; `SPEC.md:1365-1372`; `AGENTS.md` documentation and no-new-agent-config rules.
   Acceptance criteria (agent-executable): Markdown lint passes if configured; documentation examples match parser tests exactly; search confirms no documentation claims that Justice auto-dispatches tasks or blocks Gates. Run `bun run lint` and the repository markdown checker if present, inside Devcontainer.
   QA scenarios (name the exact tool + invocation): Happy: an example lets an agent identify the required command, artifacts, and post-run review action. Failure: source-build instructions contain no machine-specific absolute path. Evidence `<attemptDir>/task-6-justice-workflow-activation.txt`.
