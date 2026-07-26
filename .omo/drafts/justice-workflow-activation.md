@@ -24,7 +24,7 @@ approach: Add /justice-start as the explicit OpenCode workflow bootstrap, backed
 <!-- assumption | adopted default | rationale | reversible? -->
 | No new public Justice tool | Use an OpenCode slash command, which is separate from the tool registry, and retain a natural-language fallback. | D50 limits public tools to justice_review; OpenCode command hooks provide a dedicated command boundary. |
 | Bootstrap is opt-in | Primary trigger is `/justice-start`; fallback requires the exact marker `Justice: start workflow`. Both accept optional relative artifact paths. | Avoid accidental activation from ordinary plan discussion while supporting non-OpenCode harnesses. |
-| Brainstorming is conditional | Require brainstorming only when no design artifact is referenced; require writing-plans only when the requested plan file is absent. | Avoid re-running planning on an existing approved plan; deterministic from supplied paths and file existence. |
+| Brainstorming is conditional | Require brainstorming only when the requested design artifact is absent; require writing-plans only when the requested plan file is absent. | Avoid re-running planning on an existing approved plan; deterministic from FileReader results for supplied paths and file existence. |
 | v2 remains non-authoritative for execution | v2 observes bootstrap and reports advisory results but does not decide which task to dispatch. | Preserves v2's additive shadow architecture and L0 contract. |
 
 ## Findings (cited - path:lines)

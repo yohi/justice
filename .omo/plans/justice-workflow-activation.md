@@ -53,6 +53,7 @@ Your next move: run this plan in a separate implementation session with `$start-
 | 5 | 6 | Document the user-visible configuration and workflow after integration coverage is established. |
 
 ### Dependency matrix
+
 | Todo | Depends on | Blocks | Can parallelize with |
 | --- | --- | --- | --- |
 | 0 | none | 3 | 1 |
