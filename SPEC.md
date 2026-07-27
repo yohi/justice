@@ -1265,6 +1265,12 @@ type ObservationRecord = PendingEnvelope & { readonly sequence: number } & (
   | { kind: "review_observed"; reviewScope: string; isCompleteSnapshot?: boolean; items: ReviewItem[]; resolutionMarkers?: ResolutionMarker[] }
   | { kind: "session_error"; errorKind: string; message: string }
   | { kind: "reflection"; reflection: { trigger: "task_succeeded" | "task_error"; planRef: { path: string; taskId: string }; intent: string; note?: string } }
+  // workflow bootstrap lifecycle（`/justice-start`）: 監査専用の非権威レコード。Evidence を一切持たないため
+  // Gate の PASS 判定に算入され得ず（FF-008 が自明に成立）、`project()` は `ensureTask()` の前に skip する。
+  // 読み取りは `workflow-bootstrap-projection.ts` の `projectWorkflowBootstrapAudit()` が別系統で提供する。
+  | { kind: "workflow_started" | "design_requested" | "plan_requested" | "plan_activated";
+      workflow: { phase: "design_required" | "plan_required" | "plan_ready"; source: "command" | "fallback_marker";
+        goalHash: string; goalSnippet: string; designPath?: string; planPath?: string } }
 );
 
 // Evidence: 出自（sourceClass）で二分される discriminated union
