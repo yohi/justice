@@ -1,0 +1,26 @@
+{
+  // Scoped tsc project for compile-time type fixtures.
+  //
+  // WHY THIS EXISTS: the repository root `tsconfig.json` sets
+  // `include: ["src/**/*"]` / `exclude: [..., "tests"]`, so `bun run typecheck`
+  // does NOT type-check anything under `tests/`. A fixture placed there would be
+  // dead weight. This project re-includes ONLY `*.contract-fixture.ts` so the
+  // fixtures are genuinely compiled, without pulling in the ~120 pre-existing
+  // type errors that live in the rest of `tests/` (they have never been checked).
+  //
+  // Executed by `command-execute-before.contract.test.ts` (and therefore by
+  // `bun run test`), which is what makes these fixtures a permanent gate.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    // The fixture needs no ambient runtime globals — keeping this empty makes the
+    // scoped compile markedly faster than inheriting ["bun", "node"].
+    "types": []
+  },
+  "include": ["*.contract-fixture.ts"],
+  "exclude": []
+}
