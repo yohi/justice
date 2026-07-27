@@ -162,6 +162,90 @@ export default { plugins: [OpenCodePlugin] };
 
 **委譲のキーワード (英語/日本語):** `delegate`, `next task`, `execute task`, `次のタスク`, `タスクを委譲`, `タスクを実行`, `タスクを開始`
 
+## `/justice-start` コマンド
+
+ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、次のアクション（`brainstorming` または `writing-plans` スキルの実行、または直接タスク委譲）を案内します。
+
+### 基本的な使い方
+
+```bash
+/justice-start <goal words...> [--design <path>] [--plan <path>]
+```
+
+**例:**
+
+```
+/justice-start ship the feature --plan docs/plans/feature.md
+/justice-start --design docs/design.md --plan docs/plans/feature.md implement the API
+justice-start add retry logic --plan plan.md
+```
+
+### 引数文法
+
+- **`<goal words...>`** (必須): 非フラグトークンの空白区切り結合。最低1語以上必要。
+- **`--design <path>`** (任意): 設計ファイルの相対パス。スペース区切り形式のみ対応（`--design=path` 形式は非対応）。
+- **`--plan <path>`** (任意): 計画ファイルの相対パス。スペース区切り形式のみ対応。
+- **フラグの位置**: `--design` / `--plan` は goal の前後どちらに置いても可。
+
+**パス制約:**
+
+- 絶対パス（`/` で始まる）は拒否される。
+- バックスラッシュ（`\`）を含むパスは拒否される。
+- パストラバーサル（`..`）を含むパスは拒否される。
+- 安全でないパスが指定された場合、コマンドは `null` を返し、エラーメッセージなしで処理を続行する（fail-open）。
+
+### Artifact 状態表
+
+コマンド実行後、以下のいずれかの状態に遷移します。
+
+| 状態 | 条件 | 次のアクション | 備考 |
+|------|------|----------------|------|
+| `design_required` | `--design` で指定されたファイルが読めない | `brainstorming` スキルで設計を作成 | 計画ファイルが読める場合でも、設計が優先される |
+| `plan_required` | 設計は OK だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
+| `plan_ready` | 計画ファイルが読める | 直接 `task()` で次のタスクを委譲可能 | `activePlanPath` が設定され、後続の `task()` 呼び出しがプランコンテキストを受け取る |
+
+### フォールバックマーカー
+
+OpenCode のチャットメッセージ内で以下のマーカーを行頭に記述することで、コマンド形式と同じ引数をパースできます。
+
+```
+Justice: start workflow ship the feature --plan docs/plans/feature.md
+```
+
+**重要な制限:**
+
+- マーカーは **完全一致・大文字小文字を区別** します（`justice: start workflow` や `Justice: Start Workflow` は認識されません）。
+- 現在、このマーカーは **OpenCode のチャットメッセージフック内では接続されていません**。つまり、チャットに入力しても起動しません。
+- このマーカーは、将来のクロスハーネス統合（他ツールが `parseWorkflowStartFallbackMarker` を直接利用する場合）のための予約された形式です。
+
+### 期待される通知・ログ信号
+
+コマンド実行時、以下のイベントが v2 Observation Log (`.justice/events/**`) に記録されます。
+
+1. **`workflow_started`** — ワークフロー開始イベント（常に記録）
+2. **`design_requested`** / **`plan_requested`** / **`plan_activated`** — 状態に応じた遷移イベント（いずれか1件）
+
+これらはすべて **L0 Advisory（監査専用、Gate 判定に影響しない）** です。
+
+**ユーザーへの可視フィードバック:**
+
+コマンド実行後、`output.parts` に synthetic なテキストパートが追記されます。内容は状態に応じて異なります。
+
+- **`design_required`**: 「設計が未整備です。`brainstorming` スキルで要件と設計を固めてください。」
+- **`plan_required`**: 「実行可能な計画書がありません。`writing-plans` スキルで計画書を作成してください。」
+- **`plan_ready`**: 「既存の計画書で実行を開始できます。次の未完了タスクを `task()` に委譲してください。」
+
+### 実行後の `justice_review` 使用法
+
+ワークフロー開始後、作業が進むにつれて `justice_review` ツールでレビュー要約を確認できます。詳細は「Quality Control Plane (v2.0)」セクションの「`justice_review` ツール」を参照してください。
+
+**典型的なフロー:**
+
+1. `/justice-start` でワークフローを開始し、計画を有効化（`plan_ready`）
+2. `task()` で複数のタスクを委譲・実行
+3. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認
+4. 必要に応じて `justice_review` の `resolve` パラメータで指摘を解決済みにマーク
+
 ## Quality Control Plane (v2.0)
 
 Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。
