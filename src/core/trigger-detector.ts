@@ -70,8 +70,11 @@ export function normalizeSafeRelativePath(rawPath: string): string | null {
   const normalized = path.posix.normalize(rawPath);
   if (normalized.split("/").includes("..")) return null;
 
-  // Additional check: reject if it still looks absolute after normalization (e.g. starts with /)
-  if (normalized.startsWith("/")) return null;
+  // Additional check: reject if it still looks absolute after normalization.
+  /* c8 ignore next */
+  if (normalized.startsWith("/")) {
+    return null;
+  }
 
   return normalized;
 }

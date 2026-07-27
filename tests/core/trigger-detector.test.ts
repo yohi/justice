@@ -4,6 +4,7 @@ import {
   TriggerDetector,
   WORKFLOW_START_FALLBACK_MARKER,
   isJusticeStartCommand,
+  normalizeSafeRelativePath,
   parseWorkflowStartCommandArguments,
   parseWorkflowStartFallbackMarker,
 } from "../../src/core/trigger-detector";
@@ -54,6 +55,22 @@ describe("TriggerDetector", () => {
       if (result) {
         expect(result.planPath).toBe("plan.md");
       }
+    });
+    it("should reject a .md path that does not contain 'plan'", () => {
+      expect(detector.detectPlanReference("Refer to docs/readme.md")).toBeNull();
+    });
+
+    it("should reject a path that normalizes to remaining parent segments", () => {
+      expect(normalizeSafeRelativePath("foo/../..")).toBeNull();
+    });
+
+    it("should reject an empty relative path", () => {
+      expect(normalizeSafeRelativePath("")).toBeNull();
+    });
+
+    it("should reject a path whose normalized form still contains ..", () => {
+      // 'a/b/../../../c' is not rejected by the raw check but normalizes to '../c'.
+      expect(normalizeSafeRelativePath("a/b/../../../c.md")).toBeNull();
     });
   });
 
