@@ -47,6 +47,9 @@ export const OpenCodePlugin: Plugin = async (init) => {
         output as { output: string; metadata?: Record<string, unknown> },
       );
     },
+    "command.execute.before": async (input, output): Promise<void> => {
+      await adapter.onCommandExecuteBefore(input, output);
+    },
     "experimental.session.compacting": async (input, output): Promise<void> => {
       await adapter.onSessionCompacting(
         input as { sessionID: string },
