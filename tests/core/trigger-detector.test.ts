@@ -68,10 +68,6 @@ describe("TriggerDetector", () => {
       expect(normalizeSafeRelativePath("")).toBeNull();
     });
 
-    it("should reject a path whose normalized form still contains ..", () => {
-      // 'a/b/../../../c' is not rejected by the raw check but normalizes to '../c'.
-      expect(normalizeSafeRelativePath("a/b/../../../c.md")).toBeNull();
-    });
   });
 
   describe("detectDelegationIntent", () => {

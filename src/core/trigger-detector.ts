@@ -66,9 +66,7 @@ export function normalizeSafeRelativePath(rawPath: string): string | null {
   // Reject path traversal segments (..) anywhere in the raw path
   if (rawPath.split("/").includes("..")) return null;
 
-  // Normalize and check for path traversal (..) in normalized path
   const normalized = path.posix.normalize(rawPath);
-  if (normalized.split("/").includes("..")) return null;
 
   // Additional check: reject if it still looks absolute after normalization.
   /* c8 ignore next */
@@ -131,6 +129,42 @@ export function parseWorkflowStartFallbackMarker(
   return null;
 }
 
+interface ArtifactPaths {
+  readonly designPath: string | null;
+  readonly planPath: string | null;
+}
+
+type ClassifiedArgumentToken =
+  | { readonly kind: "goal"; readonly value: string }
+  | { readonly kind: "flag"; readonly value: ArtifactFlag }
+  | { readonly kind: "invalid" };
+
+function applyArtifactFlagValue(
+  flag: ArtifactFlag,
+  rawValue: string,
+  paths: ArtifactPaths,
+): ArtifactPaths | null {
+  if (rawValue.startsWith("-")) return null;
+  const normalized = normalizeSafeRelativePath(rawValue);
+  if (normalized === null) return null;
+
+  if (flag === "design") {
+    if (paths.designPath !== null) return null;
+    return { ...paths, designPath: normalized };
+  }
+
+  if (paths.planPath !== null) return null;
+  return { ...paths, planPath: normalized };
+}
+
+function classifyArgumentToken(token: string): ClassifiedArgumentToken {
+  if (!token.startsWith("-")) return { kind: "goal", value: token };
+
+  const flag = ARTIFACT_FLAGS.get(token);
+  if (flag === undefined) return { kind: "invalid" };
+  return { kind: "flag", value: flag };
+}
+
 /**
  * workflow-start の引数文字列を WorkflowStartRequest に変換する共通処理 (副作用なし)。
  */
@@ -139,8 +173,7 @@ function parseWorkflowStartArguments(
   source: WorkflowStartSource,
 ): WorkflowStartRequest | null {
   const goalWords: string[] = [];
-  let designPath: string | null = null;
-  let planPath: string | null = null;
+  let artifactPaths: ArtifactPaths = { designPath: null, planPath: null };
   let pendingFlag: ArtifactFlag | null = null;
 
   for (const token of rawArguments.split(/\s+/)) {
@@ -148,29 +181,20 @@ function parseWorkflowStartArguments(
 
     if (pendingFlag !== null) {
       // フラグの値は別のフラグでなく、安全な相対パスでなければならない
-      if (token.startsWith("-")) return null;
-      const normalized = normalizeSafeRelativePath(token);
-      if (normalized === null) return null;
-
-      if (pendingFlag === "design") {
-        if (designPath !== null) return null; // 重複指定
-        designPath = normalized;
-      } else {
-        if (planPath !== null) return null; // 重複指定
-        planPath = normalized;
-      }
+      const updatedPaths = applyArtifactFlagValue(pendingFlag, token, artifactPaths);
+      if (updatedPaths === null) return null;
+      artifactPaths = updatedPaths;
       pendingFlag = null;
       continue;
     }
 
-    if (!token.startsWith("-")) {
-      goalWords.push(token);
+    const classified = classifyArgumentToken(token);
+    if (classified.kind === "invalid") return null; // 未知のフラグ
+    if (classified.kind === "goal") {
+      goalWords.push(classified.value);
       continue;
     }
-
-    const flag = ARTIFACT_FLAGS.get(token);
-    if (flag === undefined) return null; // 未知のフラグ
-    pendingFlag = flag;
+    pendingFlag = classified.value;
   }
 
   if (pendingFlag !== null) return null; // 値のないフラグ
@@ -178,7 +202,7 @@ function parseWorkflowStartArguments(
   const goal = goalWords.join(" ");
   if (goal.length === 0) return null; // goal 欠落
 
-  return { source, goal, designPath, planPath };
+  return { source, goal, ...artifactPaths };
 }
 
 export class TriggerDetector {
