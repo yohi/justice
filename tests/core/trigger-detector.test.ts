@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { TriggerDetector } from "../../src/core/trigger-detector";
+import {
+  JUSTICE_START_COMMAND,
+  TriggerDetector,
+  WORKFLOW_START_FALLBACK_MARKER,
+  isJusticeStartCommand,
+  parseWorkflowStartCommandArguments,
+  parseWorkflowStartFallbackMarker,
+} from "../../src/core/trigger-detector";
 
 describe("TriggerDetector", () => {
   const detector = new TriggerDetector();
@@ -229,6 +236,197 @@ describe("TriggerDetector", () => {
         expect(result.shouldTrigger).toBe(true);
         expect(result.fallbackTriggered).toBe(false);
       });
+    });
+  });
+});
+
+describe("workflow start request parsing", () => {
+  describe("protocol constants", () => {
+    it("should expose the justice-start command name and fallback marker", () => {
+      expect(JUSTICE_START_COMMAND).toBe("justice-start");
+      expect(WORKFLOW_START_FALLBACK_MARKER).toBe("Justice: start workflow");
+    });
+
+    it("should recognize the justice-start command with or without a leading slash", () => {
+      expect(isJusticeStartCommand("justice-start")).toBe(true);
+      expect(isJusticeStartCommand("/justice-start")).toBe(true);
+      expect(isJusticeStartCommand("  justice-start  ")).toBe(true);
+    });
+
+    it("should reject any other command name", () => {
+      expect(isJusticeStartCommand("justice-review")).toBe(false);
+      expect(isJusticeStartCommand("justice-start-now")).toBe(false);
+      expect(isJusticeStartCommand("Justice-Start")).toBe(false);
+      expect(isJusticeStartCommand("")).toBe(false);
+      expect(isJusticeStartCommand(undefined)).toBe(false);
+    });
+  });
+
+  // Pattern 1: command success
+  describe("command success", () => {
+    it("should parse a goal-only argument list", () => {
+      const result = parseWorkflowStartCommandArguments("add retry to the plan bridge");
+      expect(result).toEqual({
+        source: "command",
+        goal: "add retry to the plan bridge",
+        designPath: null,
+        planPath: null,
+      });
+    });
+
+    it("should parse both artifact flags placed before the goal", () => {
+      const result = parseWorkflowStartCommandArguments(
+        "--design docs/design.md --plan docs/plans/feature.md ship the feature",
+      );
+      expect(result).toEqual({
+        source: "command",
+        goal: "ship the feature",
+        designPath: "docs/design.md",
+        planPath: "docs/plans/feature.md",
+      });
+    });
+
+    it("should parse an artifact flag placed after the goal", () => {
+      const result = parseWorkflowStartCommandArguments("ship the feature --plan plan.md");
+      expect(result).toEqual({
+        source: "command",
+        goal: "ship the feature",
+        designPath: null,
+        planPath: "plan.md",
+      });
+    });
+
+    it("should normalize relative artifact paths and collapse goal whitespace", () => {
+      const result = parseWorkflowStartCommandArguments(
+        "  --plan docs/./plans/feature.md   ship   it  ",
+      );
+      expect(result).toEqual({
+        source: "command",
+        goal: "ship it",
+        designPath: null,
+        planPath: "docs/plans/feature.md",
+      });
+    });
+  });
+
+  // Pattern 2: fallback success
+  describe("fallback marker success", () => {
+    it("should parse the fallback marker followed by a goal", () => {
+      const result = parseWorkflowStartFallbackMarker("Justice: start workflow ship the feature");
+      expect(result).toEqual({
+        source: "fallback_marker",
+        goal: "ship the feature",
+        designPath: null,
+        planPath: null,
+      });
+    });
+
+    it("should parse artifact flags after the fallback marker", () => {
+      const result = parseWorkflowStartFallbackMarker(
+        "Justice: start workflow --plan docs/plans/feature.md --design docs/design.md ship it",
+      );
+      expect(result).toEqual({
+        source: "fallback_marker",
+        goal: "ship it",
+        designPath: "docs/design.md",
+        planPath: "docs/plans/feature.md",
+      });
+    });
+
+    it("should only consume the marker line and ignore surrounding lines", () => {
+      const result = parseWorkflowStartFallbackMarker(
+        ["Some preamble", "Justice: start workflow ship it", "unrelated trailing line"].join("\n"),
+      );
+      expect(result).toEqual({
+        source: "fallback_marker",
+        goal: "ship it",
+        designPath: null,
+        planPath: null,
+      });
+    });
+  });
+
+  // Pattern 3: invalid paths
+  describe("invalid artifact paths", () => {
+    it("should reject absolute paths without throwing", () => {
+      expect(() => parseWorkflowStartCommandArguments("--plan /etc/passwd goal")).not.toThrow();
+      expect(parseWorkflowStartCommandArguments("--plan /etc/passwd goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--design /abs/design.md goal")).toBeNull();
+    });
+
+    it("should reject path traversal segments", () => {
+      expect(parseWorkflowStartCommandArguments("--plan ../../secret.md goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--plan docs/../../secret.md goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--design docs/../design.md goal")).toBeNull();
+    });
+
+    it("should reject backslashes", () => {
+      expect(parseWorkflowStartCommandArguments("--plan docs\\plans\\plan.md goal")).toBeNull();
+    });
+
+    it("should reject unsafe paths supplied through the fallback marker", () => {
+      expect(
+        parseWorkflowStartFallbackMarker("Justice: start workflow --plan /abs.md goal"),
+      ).toBeNull();
+      expect(
+        parseWorkflowStartFallbackMarker("Justice: start workflow --design ../design.md goal"),
+      ).toBeNull();
+    });
+  });
+
+  // Pattern 4: unknown options
+  describe("unknown or malformed options", () => {
+    it("should reject unknown flags", () => {
+      expect(parseWorkflowStartCommandArguments("--force goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("-p plan.md goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--plan=plan.md goal")).toBeNull();
+    });
+
+    it("should reject a flag without a value", () => {
+      expect(parseWorkflowStartCommandArguments("goal --plan")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--plan --design docs/design.md goal")).toBeNull();
+    });
+
+    it("should reject duplicated artifact flags", () => {
+      expect(parseWorkflowStartCommandArguments("--plan a.md --plan b.md goal")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--design a.md --design b.md goal")).toBeNull();
+    });
+
+    it("should not throw for malformed options", () => {
+      expect(() => parseWorkflowStartCommandArguments("--plan")).not.toThrow();
+      expect(() =>
+        parseWorkflowStartFallbackMarker("Justice: start workflow --plan"),
+      ).not.toThrow();
+    });
+  });
+
+  // Pattern 5: no-match input
+  describe("no-match input", () => {
+    it("should return null for empty or missing command arguments", () => {
+      expect(parseWorkflowStartCommandArguments("")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("   ")).toBeNull();
+      expect(parseWorkflowStartCommandArguments(undefined)).toBeNull();
+    });
+
+    it("should return null when the goal is missing", () => {
+      expect(parseWorkflowStartCommandArguments("--plan docs/plans/feature.md")).toBeNull();
+      expect(
+        parseWorkflowStartFallbackMarker("Justice: start workflow --plan docs/plans/feature.md"),
+      ).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow")).toBeNull();
+    });
+
+    it("should return null when the fallback marker is absent", () => {
+      expect(parseWorkflowStartFallbackMarker("please start the justice workflow")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker(undefined)).toBeNull();
+    });
+
+    it("should return null for a marker that is not exact", () => {
+      expect(parseWorkflowStartFallbackMarker("justice: start workflow ship it")).toBeNull();
+      expect(
+        parseWorkflowStartFallbackMarker("See Justice: start workflow for details"),
+      ).toBeNull();
     });
   });
 });
