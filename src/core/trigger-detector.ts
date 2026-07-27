@@ -1,6 +1,8 @@
 /* eslint-disable security/detect-unsafe-regex -- Trigger detection relies on fixed message-matching patterns. */
 import * as path from "node:path";
 
+import type { WorkflowStartRequest, WorkflowStartSource } from "./types";
+
 export interface PlanReference {
   readonly planPath: string;
 }
@@ -34,6 +36,175 @@ const DELEGATION_KEYWORDS: RegExp[] = [
   /\b(?:implement|build|create)\s+(?:the\s+)?(?:task|issue|ticket|story|feature|component|module|service|test|code|fix)\b/i,
 ];
 
+/** `/justice-start` コマンド名 (先頭スラッシュなし) */
+export const JUSTICE_START_COMMAND = "justice-start";
+
+/** コマンドを使えないハーネス向けのフォールバックマーカー (完全一致・大文字小文字を区別) */
+export const WORKFLOW_START_FALLBACK_MARKER = "Justice: start workflow";
+
+/** `--design` / `--plan` で指定できる成果物パスの種別 */
+type ArtifactFlag = "design" | "plan";
+
+const ARTIFACT_FLAGS: ReadonlyMap<string, ArtifactFlag> = new Map<string, ArtifactFlag>([
+  ["--design", "design"],
+  ["--plan", "plan"],
+]);
+
+/**
+ * 相対パスを正規化し、安全でない場合は null を返す。
+ * 絶対パス・バックスラッシュ・パストラバーサル (..) を拒否する共通ルール。
+ */
+export function normalizeSafeRelativePath(rawPath: string): string | null {
+  if (rawPath.length === 0) return null;
+
+  // Reject absolute paths
+  if (path.isAbsolute(rawPath)) return null;
+
+  // Reject backslashes
+  if (rawPath.includes("\\")) return null;
+
+  // Reject path traversal segments (..) anywhere in the raw path
+  if (rawPath.split("/").includes("..")) return null;
+
+  const normalized = path.posix.normalize(rawPath);
+
+  // Additional check: reject if it still looks absolute after normalization.
+  /* c8 ignore next */
+  if (normalized.startsWith("/")) {
+    return null;
+  }
+
+  return normalized;
+}
+
+/**
+ * コマンド名が `/justice-start` かを判定する。
+ * 先頭スラッシュと前後の空白は許容するが、それ以外は完全一致を要求する。
+ */
+export function isJusticeStartCommand(commandName: string | undefined): boolean {
+  if (commandName === undefined) return false;
+  const trimmed = commandName.trim();
+  const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  return withoutSlash === JUSTICE_START_COMMAND;
+}
+
+/**
+ * `/justice-start` の引数列をパースする。
+ *
+ * 文法: `<goal words...>` に加えて、任意の `--design <path>` / `--plan <path>` を任意の位置に置ける。
+ * 未知のフラグ、値のないフラグ、重複フラグ、安全でないパス、goal 欠落はすべて null (no request) として扱い、
+ * 例外は投げない。
+ */
+export function parseWorkflowStartCommandArguments(
+  rawArguments: string | undefined,
+): WorkflowStartRequest | null {
+  if (rawArguments === undefined) return null;
+  return parseWorkflowStartArguments(rawArguments, "command");
+}
+
+/**
+ * チャットメッセージ中の `Justice: start workflow` フォールバックマーカーをパースする。
+ *
+ * 誤発動を防ぐため、マーカーはいずれかの行頭 (前後空白を除く) に完全一致で現れる必要がある。
+ * 引数として解釈するのはマーカーがある行の残りだけで、後続行は goal に取り込まない。
+ */
+export function parseWorkflowStartFallbackMarker(
+  message: string | undefined,
+): WorkflowStartRequest | null {
+  if (message === undefined) return null;
+
+  for (const line of message.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(WORKFLOW_START_FALLBACK_MARKER)) continue;
+
+    // マーカー直後は行末または空白でなければ、他の単語への接頭辞一致と見なして拒否
+    const nextChar = trimmed[WORKFLOW_START_FALLBACK_MARKER.length];
+    if (nextChar !== undefined && !/\s/.test(nextChar)) continue;
+    return parseWorkflowStartArguments(
+      trimmed.slice(WORKFLOW_START_FALLBACK_MARKER.length),
+      "fallback_marker",
+    );
+  }
+
+  return null;
+}
+
+interface ArtifactPaths {
+  readonly designPath: string | null;
+  readonly planPath: string | null;
+}
+
+type ClassifiedArgumentToken =
+  | { readonly kind: "goal"; readonly value: string }
+  | { readonly kind: "flag"; readonly value: ArtifactFlag }
+  | { readonly kind: "invalid" };
+
+function applyArtifactFlagValue(
+  flag: ArtifactFlag,
+  rawValue: string,
+  paths: ArtifactPaths,
+): ArtifactPaths | null {
+  if (rawValue.startsWith("-")) return null;
+  const normalized = normalizeSafeRelativePath(rawValue);
+  if (normalized === null) return null;
+
+  if (flag === "design") {
+    if (paths.designPath !== null) return null;
+    return { ...paths, designPath: normalized };
+  }
+
+  if (paths.planPath !== null) return null;
+  return { ...paths, planPath: normalized };
+}
+
+function classifyArgumentToken(token: string): ClassifiedArgumentToken {
+  if (!token.startsWith("-")) return { kind: "goal", value: token };
+
+  const flag = ARTIFACT_FLAGS.get(token);
+  if (flag === undefined) return { kind: "invalid" };
+  return { kind: "flag", value: flag };
+}
+
+/**
+ * workflow-start の引数文字列を WorkflowStartRequest に変換する共通処理 (副作用なし)。
+ */
+function parseWorkflowStartArguments(
+  rawArguments: string,
+  source: WorkflowStartSource,
+): WorkflowStartRequest | null {
+  const goalWords: string[] = [];
+  let artifactPaths: ArtifactPaths = { designPath: null, planPath: null };
+  let pendingFlag: ArtifactFlag | null = null;
+
+  for (const token of rawArguments.split(/\s+/)) {
+    if (token.length === 0) continue;
+
+    if (pendingFlag !== null) {
+      // フラグの値は別のフラグでなく、安全な相対パスでなければならない
+      const updatedPaths = applyArtifactFlagValue(pendingFlag, token, artifactPaths);
+      if (updatedPaths === null) return null;
+      artifactPaths = updatedPaths;
+      pendingFlag = null;
+      continue;
+    }
+
+    const classified = classifyArgumentToken(token);
+    if (classified.kind === "invalid") return null; // 未知のフラグ
+    if (classified.kind === "goal") {
+      goalWords.push(classified.value);
+      continue;
+    }
+    pendingFlag = classified.value;
+  }
+
+  if (pendingFlag !== null) return null; // 値のないフラグ
+
+  const goal = goalWords.join(" ");
+  if (goal.length === 0) return null; // goal 欠落
+
+  return { source, goal, ...artifactPaths };
+}
+
 export class TriggerDetector {
   /**
    * Detect a reference to a plan file (*.plan*.md or plan.md) in the message.
@@ -46,21 +217,9 @@ export class TriggerDetector {
     const rawPath = match[1];
     if (!rawPath.toLowerCase().includes("plan")) return null;
 
-    // Reject absolute paths
-    if (path.isAbsolute(rawPath)) return null;
-
-    // Reject backslashes
-    if (rawPath.includes("\\")) return null;
-
-    // Reject path traversal segments (..) anywhere in the raw path
-    if (rawPath.split("/").includes("..")) return null;
-
-    // Normalize and check for path traversal (..) in normalized path
-    const normalized = path.posix.normalize(rawPath);
-    if (normalized.split("/").includes("..")) return null;
-
-    // Additional check: reject if it still looks absolute after normalization (e.g. starts with /)
-    if (normalized.startsWith("/")) return null;
+    // 絶対パス・バックスラッシュ・パストラバーサルは共通ルールで拒否する
+    const normalized = normalizeSafeRelativePath(rawPath);
+    if (normalized === null) return null;
 
     return { planPath: normalized };
   }

@@ -26,6 +26,14 @@ export type {
 
 // Phase 2 Exports
 export { TriggerDetector } from "./core/trigger-detector";
+export {
+  JUSTICE_START_COMMAND,
+  WORKFLOW_START_FALLBACK_MARKER,
+  isJusticeStartCommand,
+  normalizeSafeRelativePath,
+  parseWorkflowStartCommandArguments,
+  parseWorkflowStartFallbackMarker,
+} from "./core/trigger-detector";
 export { PlanBridgeCore } from "./core/plan-bridge-core";
 export { PlanBridge } from "./hooks/plan-bridge";
 

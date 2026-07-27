@@ -37,6 +37,26 @@ export interface DelegationContext {
   readonly agentId?: AgentId;
 }
 
+/** workflow-start リクエストの起点 (明示コマンド or クロスハーネス用フォールバックマーカー) */
+export type WorkflowStartSource = "command" | "fallback_marker";
+
+/**
+ * パース済みの workflow-start リクエスト。
+ * goal は必須、design/plan は任意の「安全な相対パス」に正規化済み (未指定は null)。
+ */
+export interface WorkflowStartRequest {
+  readonly source: WorkflowStartSource;
+  readonly goal: string;
+  readonly designPath: string | null;
+  readonly planPath: string | null;
+}
+
+/**
+ * ワークフロー・ブートストラップのフェーズ。
+ * design → plan → 実行可能 の順に、ちょうど1つだけが選択される。
+ */
+export type WorkflowBootstrapPhase = "design_required" | "plan_required" | "plan_ready";
+
 /** Oh My OpenAgent のエージェント識別子 */
 export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
 
