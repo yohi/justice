@@ -445,5 +445,21 @@ describe("workflow start request parsing", () => {
         parseWorkflowStartFallbackMarker("See Justice: start workflow for details"),
       ).toBeNull();
     });
+
+    it("should reject a marker followed by a word character without whitespace", () => {
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflowing ship it")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflowing")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow-foo ship it")).toBeNull();
+    });
+
+    it("should accept a marker immediately followed by line end or whitespace", () => {
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow\tship it")).toEqual({
+        source: "fallback_marker",
+        goal: "ship it",
+        designPath: null,
+        planPath: null,
+      });
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow")).toBeNull();
+    });
   });
 });

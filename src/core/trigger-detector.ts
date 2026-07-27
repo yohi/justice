@@ -118,6 +118,10 @@ export function parseWorkflowStartFallbackMarker(
   for (const line of message.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith(WORKFLOW_START_FALLBACK_MARKER)) continue;
+
+    // マーカー直後は行末または空白でなければ、他の単語への接頭辞一致と見なして拒否
+    const nextChar = trimmed[WORKFLOW_START_FALLBACK_MARKER.length];
+    if (nextChar !== undefined && !/\s/.test(nextChar)) continue;
     return parseWorkflowStartArguments(
       trimmed.slice(WORKFLOW_START_FALLBACK_MARKER.length),
       "fallback_marker",
