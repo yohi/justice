@@ -8,6 +8,8 @@ import type {
   PostToolUseEvent,
   PreToolUseEvent,
   ShardId,
+  WorkflowBootstrapPhase,
+  WorkflowStartRequest,
 } from "../core/types";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import {
@@ -17,7 +19,10 @@ import {
   buildSessionErrorRecord,
   buildSkillInvokedRecord,
   buildToolExecutedRecord,
+  buildWorkflowPhaseRecord,
+  buildWorkflowStartedRecord,
   type ToolExecutedRecordInput,
+  type WorkflowBootstrapRecordInput,
 } from "../core/v2/record-builder";
 import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
 import { buildReflectionEvent } from "../core/v2/reflection-event";
@@ -36,6 +41,7 @@ import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-
 import type { GateContext } from "../core/v2/gate-context";
 import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope";
 import type { PendingDecisionRecord } from "../core/v2/decision-model";
+import type { PendingObservationRecord } from "../core/v2/observation-model";
 import type { GateLoader } from "../runtime/gate-loader";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -48,6 +54,16 @@ const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
 type ProjectionCacheAccess = {
   readonly read?: () => Promise<ProjectedState | undefined>;
   readonly write: (state: ProjectedState) => Promise<void>;
+};
+
+/**
+ * Input for the workflow bootstrap lifecycle observations. Deliberately carries no
+ * `taskId`: these records are audit-only and must never open a task window.
+ */
+export type WorkflowBootstrapEventInput = {
+  readonly request: WorkflowStartRequest;
+  readonly phase: WorkflowBootstrapPhase;
+  readonly sessionId: string;
 };
 
 /**
@@ -175,6 +191,64 @@ export class ObservationHandler {
         err,
       );
     }
+  }
+
+  /**
+   * Records the `workflow_started` audit observation for a parsed workflow-start
+   * request. Non-authoritative: no evidence, no `taskId`, no effect on Gate
+   * verdicts. Always resolves to PROCEED (fail-open).
+   */
+  async emitWorkflowStartedEvent(input: WorkflowBootstrapEventInput): Promise<HookResponse> {
+    return this.appendWorkflowBootstrapRecord(buildWorkflowStartedRecord, input);
+  }
+
+  /**
+   * Records the lifecycle transition matching `input.phase`: `design_requested`,
+   * `plan_requested`, or `plan_activated` — exactly one record per transition.
+   * Always resolves to PROCEED (fail-open).
+   */
+  async emitWorkflowPhaseEvent(input: WorkflowBootstrapEventInput): Promise<HookResponse> {
+    return this.appendWorkflowBootstrapRecord(buildWorkflowPhaseRecord, input);
+  }
+
+  /**
+   * Shared append path for the bootstrap lifecycle records: reuses the store's
+   * serialized atomic append (and its redaction boundary) and swallows every
+   * failure so a rejected log write can never block command processing.
+   */
+  private async appendWorkflowBootstrapRecord(
+    build: (input: WorkflowBootstrapRecordInput) => PendingObservationRecord,
+    input: WorkflowBootstrapEventInput,
+  ): Promise<HookResponse> {
+    try {
+      const agentId = this.options.sessionStateProvider.getAgentId(input.sessionId);
+      const record = build({
+        envelope: {
+          schemaVersion: 1 as const,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId: input.sessionId,
+          writerId: this.options.writerId,
+          recordType: "observation" as const,
+        },
+        request: input.request,
+        phase: input.phase,
+      });
+
+      await this.options.logStore.append(
+        { agentId, sessionId: input.sessionId, writerId: this.options.writerId },
+        record,
+      );
+      // Keeps state.json's integrity fields aligned with the log so the next read
+      // is not a spurious `stale_append`; the record itself changes no projection.
+      this.scheduleProjectionRefresh();
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: workflow bootstrap observation failed, degrading to PROCEED",
+        error,
+      );
+    }
+    return PROCEED;
   }
 
   async handleMessage(

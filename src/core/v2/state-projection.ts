@@ -11,6 +11,7 @@ import type { Verdict } from "./decision-model";
 import type { ReviewSummary, ScopeReviewSummary } from "./review-types";
 export type { ReviewSummary, ReviewSummaryItem, ScopeReviewSummary } from "./review-types";
 import { aggregateReviews } from "./review-aggregator";
+import { isWorkflowBootstrapRecordKind } from "./workflow-bootstrap-projection";
 
 export type ProjectedEvidence = {
   readonly evidence: Evidence;
@@ -110,6 +111,10 @@ function applyObservationEvent(
   event: Extract<PersistedLogRecord, { recordType: "observation" }>,
   baseRef: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId" | "sequence">,
 ): void {
+  // Workflow bootstrap records are audit-only: skipped BEFORE ensureTask() so they
+  // neither open a projected task window nor contribute evidence, even when they
+  // carry a taskId. `projectWorkflowBootstrapAudit` exposes them separately.
+  if (isWorkflowBootstrapRecordKind(event.kind)) return;
   const taskId = event.taskId;
   if (!taskId) return;
   const taskState = ensureTask(tasks, taskId);
