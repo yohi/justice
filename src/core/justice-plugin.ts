@@ -301,6 +301,7 @@ export class JusticePlugin {
 
     this.taskFeedback.setObservationHandler(this.observationHandler);
     this.loopHandler.setObservationHandler(this.observationHandler);
+    this.planBridge.setObservationHandler(this.observationHandler);
   }
 
   /**

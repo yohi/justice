@@ -4,6 +4,7 @@ import {
   TriggerDetector,
   WORKFLOW_START_FALLBACK_MARKER,
   isJusticeStartCommand,
+  normalizeSafeRelativePath,
   parseWorkflowStartCommandArguments,
   parseWorkflowStartFallbackMarker,
 } from "../../src/core/trigger-detector";
@@ -55,6 +56,18 @@ describe("TriggerDetector", () => {
         expect(result.planPath).toBe("plan.md");
       }
     });
+    it("should reject a .md path that does not contain 'plan'", () => {
+      expect(detector.detectPlanReference("Refer to docs/readme.md")).toBeNull();
+    });
+
+    it("should reject a path that normalizes to remaining parent segments", () => {
+      expect(normalizeSafeRelativePath("foo/../..")).toBeNull();
+    });
+
+    it("should reject an empty relative path", () => {
+      expect(normalizeSafeRelativePath("")).toBeNull();
+    });
+
   });
 
   describe("detectDelegationIntent", () => {
@@ -427,6 +440,22 @@ describe("workflow start request parsing", () => {
       expect(
         parseWorkflowStartFallbackMarker("See Justice: start workflow for details"),
       ).toBeNull();
+    });
+
+    it("should reject a marker followed by a word character without whitespace", () => {
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflowing ship it")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflowing")).toBeNull();
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow-foo ship it")).toBeNull();
+    });
+
+    it("should accept a marker immediately followed by line end or whitespace", () => {
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow\tship it")).toEqual({
+        source: "fallback_marker",
+        goal: "ship it",
+        designPath: null,
+        planPath: null,
+      });
+      expect(parseWorkflowStartFallbackMarker("Justice: start workflow")).toBeNull();
     });
   });
 });
