@@ -12,6 +12,7 @@ import type {
 import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
+import type { ObservationHandler } from "./observation-handler";
 import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
@@ -82,6 +83,7 @@ export class PlanBridge {
   private readonly agentRouter: AgentRouter;
   private readonly categoryClassifier: CategoryClassifier;
   private readonly learningExtractor: LearningExtractor;
+  private observationHandler: ObservationHandler | null = null;
 
   constructor(
     fileReader: FileReader,
@@ -109,6 +111,15 @@ export class PlanBridge {
       this.wisdomStore = wisdomStore ?? null;
     }
     this.notifier = notifier ?? null;
+  }
+
+  /**
+   * Inject the observation handler so `handleWorkflowStart` can emit the
+   * workflow bootstrap audit records. Uses setter injection to preserve the
+   * legacy constructor signature used by existing tests.
+   */
+  setObservationHandler(handler: ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -184,6 +195,8 @@ export class PlanBridge {
     const phase = await this.resolveBootstrapPhase(request);
     this.workflowBootstraps.set(sessionId, { phase, request });
 
+    await this.emitWorkflowBootstrapObservations(sessionId, request, phase);
+
     if (phase === "plan_ready") {
       this.setActivePlan(sessionId, request.planPath);
     } else {
@@ -200,6 +213,41 @@ export class PlanBridge {
       activePlanPath,
       guidance: this.formatWorkflowGuidance(request, phase, activePlanPath),
     };
+  }
+
+  /**
+   * Emit `workflow_started` plus the lifecycle phase transition observation.
+   * Audit-only records: failures are logged and swallowed so bootstrap guidance
+   * is never blocked by the observation log.
+   */
+  private async emitWorkflowBootstrapObservations(
+    sessionId: string,
+    request: WorkflowStartRequest,
+    phase: WorkflowBootstrapPhase,
+  ): Promise<void> {
+    const handler = this.observationHandler;
+    if (handler === null) return;
+
+    const results = await Promise.allSettled([
+      handler.emitWorkflowStartedEvent({ request, phase, sessionId }),
+      handler.emitWorkflowPhaseEvent({ request, phase, sessionId }),
+    ]);
+
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      try {
+        this.notifier?.notify({
+          sessionId,
+          taskId: undefined,
+          level: "warning",
+          variant: "escalation",
+          title: "Workflow bootstrap observation failed",
+          message: `Failed to emit workflow bootstrap observations: ${failures.map((f) => String(f.reason)).join(", ")}`,
+        });
+      } catch {
+        /* fail-open: notification failures must not throw */
+      }
+    }
   }
 
   /**
