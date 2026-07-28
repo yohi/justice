@@ -167,6 +167,7 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Task ID");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
     });
 
     it("should not inject context for a different session", async () => {
@@ -539,7 +540,7 @@ describe("PlanBridge", () => {
 
       expect(result.phase).toBe("plan_ready");
       expect(result.guidance).toContain("docs/plan.md");
-      expect(result.guidance).toContain("brainstorming / writing-plans は不要");
+      expect(result.guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
     });
   });
 });

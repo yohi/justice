@@ -25,6 +25,7 @@ import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "..
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import { enrichTaskToolInput } from "../core/task-packager";
+import { formatWorkflowDirective } from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -315,7 +316,7 @@ export class PlanBridge {
       `**Plan**: ${request.planPath ?? "(not requested)"}`,
       "",
       "**次のアクション**:",
-      ...this.formatWorkflowActions(phase, activePlanPath),
+      ...this.formatWorkflowActions(request, phase, activePlanPath),
       "---",
     ];
 
@@ -323,30 +324,47 @@ export class PlanBridge {
   }
 
   private formatWorkflowActions(
+    request: WorkflowStartRequest,
     phase: WorkflowBootstrapPhase,
     activePlanPath: string | null,
   ): readonly string[] {
     switch (phase) {
       case "design_required":
         return [
-          "> 設計が未整備です。`brainstorming` スキルで要件と設計を固めてください。",
-          "> 設計が固まったら `writing-plans` で計画書を作成し、再度 workflow を開始してください。",
+          formatWorkflowDirective({
+            stage: "design_required",
+            goal: request.goal,
+            designPath: request.designPath,
+            planPath: request.planPath,
+          }),
           "",
           NO_WRITE_NOTICE,
         ];
       case "plan_required":
         return [
-          "> 実行可能な計画書がありません。`writing-plans` スキルで計画書を作成してください。",
-          "> 計画書ができたら再度 workflow を開始すると、task() 委譲時にタスクコンテキストが注入されます。",
+          formatWorkflowDirective({
+            stage: "plan_required",
+            goal: request.goal,
+            designPath: request.designPath,
+            planPath: request.planPath,
+          }),
           "",
           NO_WRITE_NOTICE,
         ];
       case "plan_ready":
         return [
-          `> 既存の計画書 (${activePlanPath ?? "unknown"}) で実行を開始できます。`,
-          "> brainstorming / writing-plans は不要です。次の未完了タスクを task() に委譲してください。",
+          formatWorkflowDirective({
+            stage: "plan_review_required",
+            goal: request.goal,
+            designPath: request.designPath,
+            planPath: activePlanPath,
+          }),
         ];
     }
+  }
+
+  private withImplementationDirective(context: string): string {
+    return `${context}\n\n${formatWorkflowDirective({ stage: "implementation" })}`;
   }
 
   /**
@@ -436,7 +454,9 @@ export class PlanBridge {
 
     this.rememberCompletionInput(event.sessionId, event.callId, delegation);
 
-    let injectedContext = this.buildInjectedContext(planContent, delegation);
+    let injectedContext = this.withImplementationDirective(
+      this.buildInjectedContext(planContent, delegation),
+    );
     if (fallbackTriggered) {
       injectedContext =
         `[JUSTICE:FALLBACK] Delegation triggered by plan reference only (no explicit keyword match).\n` +
@@ -557,7 +577,9 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: this.buildInjectedContext(planContent, delegation),
+      injectedContext: this.withImplementationDirective(
+        this.buildInjectedContext(planContent, delegation),
+      ),
       modifiedPayload: {
         args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId),
       },
