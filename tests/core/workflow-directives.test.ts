@@ -19,6 +19,15 @@ describe("formatWorkflowDirective", () => {
     // Then
     expect(directive).toContain(marker);
   });
+
+  it("states that Justice cannot verify external approval or merge status for implementation", () => {
+    // When
+    const directive = formatWorkflowDirective({ stage: "implementation" });
+
+    // Then
+    expect(directive).toContain("Justiceは外部での承認やマージ状態を検証できません");
+    expect(directive).toContain("外部で承認が確認できた場合にのみ");
+  });
   it("assertNever throws for an unexpected stage value", () => {
     // Given
     const invalidStage = "invalid_stage" as unknown as Parameters<typeof formatWorkflowDirective>[0]["stage"];

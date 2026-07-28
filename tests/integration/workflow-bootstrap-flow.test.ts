@@ -135,15 +135,20 @@ describe("Justice workflow bootstrap integration flow", () => {
     const { adapter, justice, handleMessage } = await createHarness();
     const sessionId = "s-plan-ready";
 
-    const guidance = workflowGuidance(
-      await startWorkflow(adapter, sessionId, `--plan ${PLAN_PATH} ship the bootstrap`),
+    const output = await startWorkflow(
+      adapter,
+      sessionId,
+      `--plan ${PLAN_PATH} ship the bootstrap`,
     );
+    const guidance = workflowGuidance(output);
 
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
+    expect(guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
     expect(guidance).toContain("**Phase**: plan_ready");
     expect(guidance).toContain("**Goal**: ship the bootstrap");
     expect(guidance).toContain(PLAN_PATH);
     expect(justice.getPlanBridge().getActivePlan(sessionId)).toBe(PLAN_PATH);
+    expect(output.parts).toHaveLength(1);
 
     const records = await observationRecordsFor(justice, sessionId);
     expect(records.map((record) => record.kind)).toEqual(["workflow_started", "plan_activated"]);

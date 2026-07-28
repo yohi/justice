@@ -24,7 +24,7 @@ import type { JusticeNotifier } from "../core/justice-notifier";
 import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
-import { enrichTaskToolInput } from "../core/task-packager";
+import { enrichTaskToolInput, mergeSkillArrays, resolveSkillsFromToolInput } from "../core/task-packager";
 import { formatWorkflowDirective } from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -508,20 +508,18 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // toolInput からスキルを抽出 (空配列の場合は loadSkills にフォールバックする長さを意識した判定)
-    const rawSkills = event.payload.toolInput.skills;
-    const hasSkills = Array.isArray(rawSkills) && rawSkills.some((v) => typeof v === "string");
-    const skillsVal = hasSkills ? rawSkills : event.payload.toolInput.loadSkills;
-
-    const toolInputSkills = Array.isArray(skillsVal)
-      ? (skillsVal.filter((v): v is string => typeof v === "string") as string[])
-      : [];
+    // toolInput からスキルを抽出 (skills または loadSkills)
+    const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
+    const mergedLoadSkills = mergeSkillArrays(toolInputSkills, [
+      "test-driven-development",
+      "verification-before-completion",
+    ]);
 
     // 1) delegation を仮生成して推奨エージェントを決定
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
-      loadSkills: toolInputSkills,
+      loadSkills: mergedLoadSkills,
     });
 
     if (!initialDelegation) {
@@ -560,7 +558,7 @@ export class PlanBridge {
         referenceFiles: [],
         previousLearnings,
         agentId: persona,
-        loadSkills: toolInputSkills,
+        loadSkills: mergedLoadSkills,
       }) ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
@@ -581,7 +579,9 @@ export class PlanBridge {
         this.buildInjectedContext(planContent, delegation),
       ),
       modifiedPayload: {
-        args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId),
+        args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
+          loadSkills: mergedLoadSkills,
+        }),
       },
     };
   }
