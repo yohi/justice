@@ -303,12 +303,12 @@ describe("ObservationHandler skill and task summary observation", () => {
       writerId: "w-task43",
     });
     const internals = handler as unknown as {
-      appendReviewObservationsIfDetected(): Promise<boolean>;
+      appendReviewObservationsIfDetected(): Promise<{ readonly kind: "not_review" }>;
       evaluateGateIfTriggered(): Promise<HookResponse>;
     };
     vi.spyOn(internals, "appendReviewObservationsIfDetected").mockImplementation(async () => {
       order.push("review");
-      return true;
+      return { kind: "not_review" };
     });
     const evaluateGateIfTriggered = vi
       .spyOn(internals, "evaluateGateIfTriggered")
