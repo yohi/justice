@@ -8,7 +8,9 @@ import { fakeInit } from "../helpers/fake-opencode-init";
 const workspaces: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(workspaces.splice(0).map(async (workspace) => rm(workspace, { recursive: true })));
+  await Promise.all(
+    workspaces.splice(0).map(async (workspace) => rm(workspace, { recursive: true })),
+  );
 });
 
 describe("OpenCodeAdapter reflection flow", () => {
@@ -31,7 +33,11 @@ describe("OpenCodeAdapter reflection flow", () => {
         type: "message.updated",
         properties: {
           sessionID: "session-adapter",
-          info: { id: "message-user", role: "user", content: "plan.md の次のタスクを実行してください" },
+          info: {
+            id: "message-user",
+            role: "user",
+            content: "plan.md の次のタスクを実行してください",
+          },
         },
       },
     });

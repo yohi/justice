@@ -83,22 +83,38 @@ describe("FF-007 / FF-008 evidence provenance", () => {
   });
 
   it("declared-only evidence does not satisfy evidence_present", () => {
-    const result = evaluate([gate("warn", "evidence_present")], [declaredEvidence("pass", "message")], CONTEXT);
+    const result = evaluate(
+      [gate("warn", "evidence_present")],
+      [declaredEvidence("pass", "message")],
+      CONTEXT,
+    );
     expect(result.verdict).toBe("WARN");
   });
 
   it("declared task_summary claim does not satisfy evidence_present", () => {
-    const result = evaluate([gate("warn", "evidence_present")], [declaredEvidence("pass", "task_summary")], CONTEXT);
+    const result = evaluate(
+      [gate("warn", "evidence_present")],
+      [declaredEvidence("pass", "task_summary")],
+      CONTEXT,
+    );
     expect(result.verdict).toBe("WARN");
   });
 
   it("onMissingEvidence=pass is capped at WARN for declared-only evidence_present", () => {
-    const result = evaluate([gate("pass", "evidence_present")], [declaredEvidence("pass", "task_summary")], CONTEXT);
+    const result = evaluate(
+      [gate("pass", "evidence_present")],
+      [declaredEvidence("pass", "task_summary")],
+      CONTEXT,
+    );
     expect(result.verdict).toBe("WARN");
   });
 
   it("onMissingEvidence=fail returns FAIL for declared-only evidence_present", () => {
-    const result = evaluate([gate("fail", "evidence_present")], [declaredEvidence("pass", "message")], CONTEXT);
+    const result = evaluate(
+      [gate("fail", "evidence_present")],
+      [declaredEvidence("pass", "message")],
+      CONTEXT,
+    );
     expect(result.verdict).toBe("FAIL");
   });
 });

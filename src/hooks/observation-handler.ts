@@ -32,10 +32,7 @@ import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extracto
 import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
 import type { SessionStateProvider } from "../core/session-state-provider";
 import { MessageRoleBuffer } from "../runtime/message-role-buffer";
-import type {
-  ObservationLogStore,
-  ReadOnlyObservationLog,
-} from "../runtime/observation-log-store";
+import type { ObservationLogStore, ReadOnlyObservationLog } from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
 import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
 import type { GateContext } from "../core/v2/gate-context";
@@ -259,8 +256,7 @@ export class ObservationHandler {
 
     try {
       const agentId = this.options.sessionStateProvider.getAgentId(sessionId);
-      let projectionRefreshNeeded =
-        payload.kind === "message_updated" && payload.finalized;
+      let projectionRefreshNeeded = payload.kind === "message_updated" && payload.finalized;
       for (const partID of this.finalizedAssistantPartIDs(sessionId, payload)) {
         const text = this.messageRoleBuffer.getFinalizedAssistantText(
           sessionId,
@@ -429,16 +425,18 @@ export class ObservationHandler {
         }
       }
       if (isReviewObservationTool(event.payload.toolName)) {
-        if (!(await this.appendReviewObservationsIfDetected(
-          shardId,
-          taskId,
-          event.sessionId,
-          callId,
-          event.payload.toolName,
-          event.payload.toolResult,
-          event.payload.metadata,
-          event.payload.reviewSnapshotArtifact !== undefined,
-        ))) {
+        if (
+          !(await this.appendReviewObservationsIfDetected(
+            shardId,
+            taskId,
+            event.sessionId,
+            callId,
+            event.payload.toolName,
+            event.payload.toolResult,
+            event.payload.metadata,
+            event.payload.reviewSnapshotArtifact !== undefined,
+          ))
+        ) {
           return PROCEED;
         }
       }
@@ -516,7 +514,10 @@ export class ObservationHandler {
       try {
         summaryClaims = extractTaskSummaryClaims(input.callId, input.toolOutput.output ?? "");
       } catch (error) {
-        this.options.logger?.warn("observation-handler: task summary claim extraction failed", error);
+        this.options.logger?.warn(
+          "observation-handler: task summary claim extraction failed",
+          error,
+        );
       }
     }
     await this.options.logStore.append(

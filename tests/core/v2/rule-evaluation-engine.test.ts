@@ -276,9 +276,9 @@ describe("review_open_items", () => {
   });
 
   it("honors onMissingEvidence when a requested reviewScope is unobserved", () => {
-    expect(
-      evaluateReview({ reviewScope: ["target"], onMissingEvidence: "pass" }).verdict,
-    ).toBe("PASS");
+    expect(evaluateReview({ reviewScope: ["target"], onMissingEvidence: "pass" }).verdict).toBe(
+      "PASS",
+    );
   });
 
   it("passes when the matching observed scope has no open items regardless of onMissingEvidence", () => {
@@ -317,9 +317,7 @@ describe("review_open_items", () => {
   });
 
   it("aggregates the worst verdict across multiple scopes: unobserved scope plus a violating scope", () => {
-    const byScope = new Map([
-      ["scope-a", scopeSummary([reviewItem("scope-a-major", "major")])],
-    ]);
+    const byScope = new Map([["scope-a", scopeSummary([reviewItem("scope-a-major", "major")])]]);
 
     const result = evaluateReview({ reviewScope: ["scope-a", "scope-b"], byScope });
 

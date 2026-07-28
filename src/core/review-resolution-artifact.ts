@@ -9,7 +9,9 @@ type ReviewResolutionArtifactFields = Pick<
   "reviewScope" | "itemKeys" | "artifactRef"
 >;
 
-export function parseReviewResolutionArtifact(value: unknown): ReviewResolutionArtifact | undefined {
+export function parseReviewResolutionArtifact(
+  value: unknown,
+): ReviewResolutionArtifact | undefined {
   if (!isRecord(value)) return undefined;
 
   const reviewScope = readString(value, "reviewScope");
@@ -76,7 +78,10 @@ function readString(record: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function readStringArray(record: Record<string, unknown>, key: string): readonly string[] | undefined {
+function readStringArray(
+  record: Record<string, unknown>,
+  key: string,
+): readonly string[] | undefined {
   // eslint-disable-next-line security/detect-object-injection
   const value = record[key];
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {

@@ -10,11 +10,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function parseReviewSnapshotArtifact(value: unknown): ReviewSnapshotArtifact | undefined {
   if (!isRecord(value)) return undefined;
-  if (
-    value.authority !== "review_tool" ||
-    value.schemaVersion !== 1 ||
-    value.complete !== true
-  ) {
+  if (value.authority !== "review_tool" || value.schemaVersion !== 1 || value.complete !== true) {
     return undefined;
   }
   return { authority: "review_tool", schemaVersion: 1, complete: true };

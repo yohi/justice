@@ -14,11 +14,7 @@ export interface GateLoaderLogger {
 
 /** Node の `ENOENT`（ファイル不存在）エラーかどうかを判定する。 */
 function isEnoentError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    "code" in err &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 /** 有効（`enabled !== false`）な gate のみを残す。 */

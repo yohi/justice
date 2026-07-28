@@ -69,10 +69,12 @@ describe("mergePostToolUseResponses", () => {
       sessionId: "s-1",
     });
 
-    expect(response).toEqual(expect.objectContaining({
-      action: "inject",
-      modifiedPayload: { source: "observation" },
-    }));
+    expect(response).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        modifiedPayload: { source: "observation" },
+      }),
+    );
     expect(warn).toHaveBeenCalledWith(
       "Conflict detected in pre-tool-use modifiedPayload; using the first response",
     );
@@ -194,10 +196,12 @@ describe("JusticePlugin PostToolUse merge", () => {
       sessionId: "s-1",
     } as PostToolUseEvent);
 
-    expect(response).toEqual(expect.objectContaining({
-      action: "inject",
-      modifiedPayload: { source: "observation" },
-    }));
+    expect(response).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        modifiedPayload: { source: "observation" },
+      }),
+    );
     expect(warn).toHaveBeenCalledWith(
       "Conflict detected in post-tool-use modifiedPayload; using the first response",
     );
@@ -263,9 +267,11 @@ describe("JusticePlugin PostToolUse merge", () => {
 
     // The logger.warn throw must be swallowed (fail-open); the merge result
     // itself is unaffected.
-    expect(response).toEqual(expect.objectContaining({
-      action: "inject",
-      modifiedPayload: { source: "observation" },
-    }));
+    expect(response).toEqual(
+      expect.objectContaining({
+        action: "inject",
+        modifiedPayload: { source: "observation" },
+      }),
+    );
   });
 });

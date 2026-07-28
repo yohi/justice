@@ -66,9 +66,7 @@ function redactEvidence(evidence: Evidence): Evidence {
     : redactDeclaredClaimEvidence(evidence);
 }
 
-function isEvidenceList(
-  evidence: Evidence | readonly Evidence[],
-): evidence is readonly Evidence[] {
+function isEvidenceList(evidence: Evidence | readonly Evidence[]): evidence is readonly Evidence[] {
   return Array.isArray(evidence);
 }
 

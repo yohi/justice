@@ -67,7 +67,6 @@ describe("TriggerDetector", () => {
     it("should reject an empty relative path", () => {
       expect(normalizeSafeRelativePath("")).toBeNull();
     });
-
   });
 
   describe("detectDelegationIntent", () => {

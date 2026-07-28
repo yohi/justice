@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { enrichTaskToolInput, TaskPackager } from "../../src/core/task-packager";
 import type { PlanTask } from "../../src/core/types";
 
@@ -23,6 +23,45 @@ describe("TaskPackager", () => {
 
     expect(enriched).toEqual({ prompt: "run", taskId: "task-existing" });
     expect(original).toEqual({ prompt: "run", taskId: "task-existing" });
+  });
+
+  it("merges loadSkills into task tool input while preserving existing taskId", () => {
+    const original = { prompt: "run", taskId: "task-existing", loadSkills: ["writing-plans"] };
+
+    const enriched = enrichTaskToolInput(original, "task-generated", {
+      loadSkills: ["writing-plans", "test-driven-development"],
+    });
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      taskId: "task-existing",
+      loadSkills: ["writing-plans", "test-driven-development"],
+    });
+    expect(original).toEqual({
+      prompt: "run",
+      taskId: "task-existing",
+      loadSkills: ["writing-plans"],
+    });
+  });
+
+  it("deduplicates loadSkills when merging into task tool input", () => {
+    const original = { prompt: "run", skills: ["writing-plans"] };
+
+    const enriched = enrichTaskToolInput(original, "task-generated", {
+      loadSkills: ["verification-before-completion", "test-driven-development"],
+    });
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      taskId: "task-generated",
+      loadSkills: ["writing-plans", "verification-before-completion", "test-driven-development"],
+    });
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      taskId: "task-generated",
+      loadSkills: ["writing-plans", "verification-before-completion", "test-driven-development"],
+    });
   });
 
   describe("package", () => {

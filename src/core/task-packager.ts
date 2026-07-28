@@ -32,12 +32,50 @@ export function resolveTaskIdFromModifiedPayload(payload: unknown): string | und
 export function enrichTaskToolInput(
   toolInput: Readonly<Record<string, unknown>>,
   taskId: string,
+  options?: { readonly loadSkills?: readonly string[] },
 ): Record<string, unknown> {
   const existingTaskId = resolveTaskIdFromToolInput(toolInput);
-  return {
+  const existingSkills = resolveSkillsFromToolInput(toolInput);
+  const mergedSkills = mergeSkillArrays(existingSkills, options?.loadSkills ?? []);
+
+  const result: Record<string, unknown> = {
     ...toolInput,
     taskId: existingTaskId ?? taskId,
   };
+  // skills/loadSkills は resolveSkillsFromToolInput で読み込み、統合済みなので元のフィールドは不要
+  delete result.skills;
+  delete result.loadSkills;
+
+  if (mergedSkills.length > 0) {
+    result.loadSkills = mergedSkills;
+  }
+
+  return result;
+}
+
+export function resolveSkillsFromToolInput(toolInput: Readonly<Record<string, unknown>>): string[] {
+  const rawSkills = toolInput.skills;
+  const rawLoadSkills = toolInput.loadSkills;
+  const skills = Array.isArray(rawSkills)
+    ? rawSkills.filter((v): v is string => typeof v === "string")
+    : [];
+  const loadSkills = Array.isArray(rawLoadSkills)
+    ? rawLoadSkills.filter((v): v is string => typeof v === "string")
+    : [];
+  return mergeSkillArrays(skills, loadSkills);
+}
+
+export function mergeSkillArrays(...arrays: readonly (readonly string[])[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const array of arrays) {
+    for (const skill of array) {
+      if (seen.has(skill)) continue;
+      seen.add(skill);
+      result.push(skill);
+    }
+  }
+  return result;
 }
 
 export interface PackageOptions {

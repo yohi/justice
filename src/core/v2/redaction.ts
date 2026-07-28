@@ -24,10 +24,7 @@ export function redactAbsolutePaths(text: string): string {
 export function redactEnvironmentValues(text: string): string {
   // Match NAME=value where value may be double-quoted, single-quoted, or unquoted.
   // Double-quoted values can contain spaces; single-quoted and unquoted stop at whitespace.
-  return text.replace(
-    /\b[A-Z_][A-Z0-9_]{2,}=(?:"[^"]*"|'[^']*'|[^\s"']+)/g,
-    "[REDACTED_ENV]",
-  );
+  return text.replace(/\b[A-Z_][A-Z0-9_]{2,}=(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "[REDACTED_ENV]");
 }
 export function redactTokenUrls(text: string): string {
   // Redact the entire token URL to prevent leaking userinfo (user:token) credentials (D61)

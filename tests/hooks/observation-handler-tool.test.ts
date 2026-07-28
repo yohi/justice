@@ -498,10 +498,7 @@ describe("ObservationHandler tool observation", () => {
     const logStore = new ObservationLogStore(writer, reader, "w-handler");
     const sessionState = new SessionStateProvider();
     const logger = { warn: vi.fn() };
-    files.set(
-      ".justice/events/atlas/corrupted__1f0f1462/w-corrupted.jsonl",
-      "not-json\n",
-    );
+    files.set(".justice/events/atlas/corrupted__1f0f1462/w-corrupted.jsonl", "not-json\n");
     const projectionCache = {
       read: vi.fn(async () => undefined),
       write: vi.fn(async () => undefined),

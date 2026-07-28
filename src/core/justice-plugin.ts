@@ -34,10 +34,7 @@ import type { ObservationMessagePayload } from "./v2/message-payload";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-function openSessionTaskWindow(
-  provider: SessionStateProvider,
-  event: PreToolUseEvent,
-): void {
+function openSessionTaskWindow(provider: SessionStateProvider, event: PreToolUseEvent): void {
   const callId = event.callId;
   if (!callId) return;
   // Reuse the same strict "task-" prefixed extraction PlanBridge/TaskPackager
@@ -287,7 +284,12 @@ export class JusticePlugin {
     this.observationHandler = new ObservationHandler({
       logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
       sessionStateProvider: this.sessionStateProvider,
-      projectionCache: new StateProjectionCache(fileWriter, fileReader, ".justice/state.json", options.logger ?? console),
+      projectionCache: new StateProjectionCache(
+        fileWriter,
+        fileReader,
+        ".justice/state.json",
+        options.logger ?? console,
+      ),
       writerId,
       workspaceRoot: options.workspaceRoot,
       logger: options.logger,
@@ -357,9 +359,10 @@ export class JusticePlugin {
         openSessionTaskWindow(this.sessionStateProvider, event);
         // Capture session generation before Promise.all so we can detect if the
         // session was removed while handlers were pending (race-condition guard).
-        const capturedGeneration = event.sessionId !== undefined
-          ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
-          : undefined;
+        const capturedGeneration =
+          event.sessionId !== undefined
+            ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+            : undefined;
         // The observation handler runs for EVERY tool; only the task tool also
         // drives plan-bridge delegation. Run independent handlers in parallel.
         const [observation, planBridge] = await Promise.all([
@@ -371,10 +374,8 @@ export class JusticePlugin {
             ? this.planBridge.handlePreToolUse(event)
             : Promise.resolve(PROCEED),
         ]);
-        const response = mergePreToolUseResponses(
-          observation,
-          planBridge,
-          (message) => this.warnMergeConflict(message),
+        const response = mergePreToolUseResponses(observation, planBridge, (message) =>
+          this.warnMergeConflict(message),
         );
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
@@ -387,9 +388,10 @@ export class JusticePlugin {
           try {
             // Only re-register the window if the session wasn't removed during
             // the Promise.all above (generation would be undefined if removed).
-            const currentGeneration = event.sessionId !== undefined
-              ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
-              : undefined;
+            const currentGeneration =
+              event.sessionId !== undefined
+                ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
+                : undefined;
             if (capturedGeneration !== undefined && currentGeneration === capturedGeneration) {
               this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
             }
@@ -420,9 +422,8 @@ export class JusticePlugin {
                 })
               : Promise.resolve(PROCEED),
           ]);
-          return mergePostToolUseResponses(
-            [observation, planBridge, taskFeedback],
-            (message) => this.warnMergeConflict(message),
+          return mergePostToolUseResponses([observation, planBridge, taskFeedback], (message) =>
+            this.warnMergeConflict(message),
           );
         } finally {
           closeSessionTaskWindow(this.sessionStateProvider, event.callId);
@@ -520,15 +521,17 @@ export class JusticePlugin {
   private async handleEventType(event: EventEvent): Promise<HookResponse> {
     switch (event.payload.eventType) {
       case "session_error": {
-        await this.observationHandler.handleSessionError({
-          message: typeof event.payload.message === "string" ? event.payload.message : "",
-          kind: typeof event.payload.kind === "string" ? event.payload.kind : undefined,
-          agentId: this.sessionStateProvider.getAgentId(event.sessionId),
-          sessionId: event.sessionId,
-        }).catch(() => {
-          // Fail-open: the adapter already logs dispatch failures; swallow here
-          // so a degraded observation store never floods the log channel.
-        });
+        await this.observationHandler
+          .handleSessionError({
+            message: typeof event.payload.message === "string" ? event.payload.message : "",
+            kind: typeof event.payload.kind === "string" ? event.payload.kind : undefined,
+            agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+            sessionId: event.sessionId,
+          })
+          .catch(() => {
+            // Fail-open: the adapter already logs dispatch failures; swallow here
+            // so a degraded observation store never floods the log channel.
+          });
         return PROCEED;
       }
 

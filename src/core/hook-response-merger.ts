@@ -63,15 +63,17 @@ export function mergePostToolUseResponses(
     .map((inject) => inject.injectedContext)
     .filter((context) => context !== "");
   const normalContexts = injects
-    .map((inject) =>
-      inject.normalInjectedContext ??
-      (inject.variant === "gate_advisory" ? "" : inject.injectedContext),
+    .map(
+      (inject) =>
+        inject.normalInjectedContext ??
+        (inject.variant === "gate_advisory" ? "" : inject.injectedContext),
     )
     .filter((context) => context !== "");
   const gateContexts = injects
-    .map((inject) =>
-      inject.gateAdvisoryContext ??
-      (inject.variant === "gate_advisory" ? inject.injectedContext : ""),
+    .map(
+      (inject) =>
+        inject.gateAdvisoryContext ??
+        (inject.variant === "gate_advisory" ? inject.injectedContext : ""),
     )
     .filter((context) => context !== "");
   const base: InjectResponse = {

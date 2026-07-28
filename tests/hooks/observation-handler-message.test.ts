@@ -141,7 +141,11 @@ describe("ObservationHandler message observation", () => {
       text: "tests fail",
     });
 
-    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
     const records = (files.get(path) ?? "")
       .split("\n")
       .filter(Boolean)
@@ -157,10 +161,12 @@ describe("ObservationHandler message observation", () => {
       );
 
     expect(records).toHaveLength(3);
-    expect(records.map((record) => ({
-      partID: record.partID,
-      claim: record.declaredClaims[0],
-    }))).toEqual([
+    expect(
+      records.map((record) => ({
+        partID: record.partID,
+        claim: record.declaredClaims[0],
+      })),
+    ).toEqual([
       {
         partID: "part-1",
         claim: { evidenceId: '["message-1","part-1"]-test', claimKind: "test", outcome: "pass" },
@@ -456,7 +462,11 @@ describe("ObservationHandler message observation", () => {
       finalized: true,
     });
 
-    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
     const firstContent = files.get(path);
     await handler.handleMessage("session-1", {
       kind: "message_part_updated",
@@ -537,7 +547,11 @@ describe("ObservationHandler message observation", () => {
       finalized: true,
     });
 
-    const path = toPhysicalPath({ agentId: "atlas", sessionId: "session-1", writerId: "w-handler" });
+    const path = toPhysicalPath({
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+    });
     const records = (files.get(path) ?? "")
       .split("\n")
       .filter(Boolean)

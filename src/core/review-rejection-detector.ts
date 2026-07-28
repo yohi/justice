@@ -206,7 +206,6 @@ function stripTrailingSlashes(value: string): string {
   return result;
 }
 
-
 function extractReviewLocation(summary: string): string {
   for (const token of summary.split(/\s+/u)) {
     const candidate = stripEdgePunctuation(token);

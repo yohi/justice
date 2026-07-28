@@ -34,6 +34,17 @@ function createMockFileReader(files: Record<string, string>): FileReader {
 function createLoopHandler(reader: FileReader): LoopDetectionHandler {
   return new LoopDetectionHandler(reader, createMockFileWriter(), new TaskSplitter());
 }
+function createWorkflowStartRequest(
+  overrides: Partial<WorkflowStartRequest> = {},
+): WorkflowStartRequest {
+  return {
+    source: "command",
+    goal: "add workflow bootstrap state",
+    designPath: null,
+    planPath: null,
+    ...overrides,
+  };
+}
 
 function createObservationHandler(): ObservationHandler & {
   emitWorkflowStartedEvent: ReturnType<typeof vi.fn>;
@@ -70,8 +81,44 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain(
+        "Justiceは外部での承認やマージ状態を検証できません",
+      );
+    });
+
+    it("warns that delegation is unauthorized when workflow bootstrap reached plan_ready", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      // Bootstrap the workflow into plan_ready first
+      await bridge.handleWorkflowStart(
+        "s-msg-ready",
+        createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
+      );
+
+      const event: HookEvent = {
+        type: "Message",
+        payload: {
+          role: "assistant",
+          content: "Delegate the next task from docs/plans/sample-plan.md",
+        },
+        sessionId: "s-msg-ready",
+      };
+
+      const response = await bridge.handleMessage(event);
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
       expect(response.injectedContext).toContain("Setup project structure");
-      expect(bridge.getActivePlan("s-1")).toBe("docs/plans/sample-plan.md");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).toContain(
+        "まだ外部で人間による承認・マージが確認されていません",
+      );
+      expect(response.injectedContext).toContain("task() をキャンセル");
     });
 
     it("should return PROCEED when file read fails", async () => {
@@ -167,6 +214,73 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Task ID");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain(
+        "Justiceは外部での承認やマージ状態を検証できません",
+      );
+    });
+
+    it("uses the standard implementation directive when no workflow bootstrap state exists", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      // Active plan set without a workflow-start bootstrap (legacy/manual path)
+      bridge.setActivePlan("s-legacy", "docs/plans/sample-plan.md");
+
+      const event: HookEvent = {
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do something" },
+        },
+        sessionId: "s-legacy",
+      };
+
+      const response = await bridge.handlePreToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain(
+        "Justiceは外部での承認やマージ状態を検証できません",
+      );
+      expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+    });
+    it("warns that task() is unauthorized when workflow bootstrap reached plan_ready", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      // Bootstrap the workflow into plan_ready first
+      await bridge.handleWorkflowStart(
+        "s-ready",
+        createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
+      );
+
+      const event: HookEvent = {
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do something" },
+        },
+        sessionId: "s-ready",
+      };
+
+      const response = await bridge.handlePreToolUse(event);
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("Task ID");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).toContain(
+        "まだ外部で人間による承認・マージが確認されていません",
+      );
+      expect(response.injectedContext).toContain("task() をキャンセル");
     });
 
     it("should not inject context for a different session", async () => {
@@ -539,7 +653,7 @@ describe("PlanBridge", () => {
 
       expect(result.phase).toBe("plan_ready");
       expect(result.guidance).toContain("docs/plan.md");
-      expect(result.guidance).toContain("brainstorming / writing-plans は不要");
+      expect(result.guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
     });
   });
 });

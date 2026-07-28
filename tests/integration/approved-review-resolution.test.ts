@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import type { Hooks, PluginInput, ToolContext, ToolDefinition, ToolResult } from "@opencode-ai/plugin";
+import type {
+  Hooks,
+  PluginInput,
+  ToolContext,
+  ToolDefinition,
+  ToolResult,
+} from "@opencode-ai/plugin";
 import { Effect } from "effect";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -92,7 +98,11 @@ async function createHarness(): Promise<PluginHarness> {
   const beforeToolExecution = hooks["tool.execute.before"];
   const afterToolExecution = hooks["tool.execute.after"];
 
-  if (reviewTool === undefined || beforeToolExecution === undefined || afterToolExecution === undefined) {
+  if (
+    reviewTool === undefined ||
+    beforeToolExecution === undefined ||
+    afterToolExecution === undefined
+  ) {
     throw new Error("Justice plugin must expose the review tool and tool execution hooks");
   }
 
@@ -216,7 +226,9 @@ describe("approved review resolution through OpenCodePlugin", () => {
     }
     const eventsBeforeDenial = await harness.logStore.readAll();
     const stateBeforeDenial = project(eventsBeforeDenial, "2026-07-18T00:00:00.000Z");
-    const deniedContext = createToolContext(harness.workspace, () => Effect.die(new Error("denied")));
+    const deniedContext = createToolContext(harness.workspace, () =>
+      Effect.die(new Error("denied")),
+    );
 
     // When
     const denial = await harness.reviewTool.execute(
