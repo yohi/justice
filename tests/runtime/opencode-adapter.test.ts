@@ -605,7 +605,6 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
 
     expect(output.parts).toEqual([]);
   });
-});
 
   it("leaves output.parts empty when PlanBridge returns no guidance", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
@@ -627,3 +626,4 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
 
     expect(output.parts).toEqual([]);
   });
+});
