@@ -519,7 +519,7 @@ export class PlanBridge {
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
-      loadSkills: mergedLoadSkills,
+      loadSkills: toolInputSkills,
     });
 
     if (!initialDelegation) {

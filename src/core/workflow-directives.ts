@@ -53,11 +53,6 @@ export function formatWorkflowDirective(input: WorkflowDirectiveInput): string {
         "Justiceは外部での承認やマージ状態を検証できません。実装は、外部で承認が確認できた場合にのみ進めてください。",
         "実装PRでは、計画との差分、テスト、退行リスクをAIレビューし、人間の承認を待ってください。",
       ].join("\n");
-      return [
-        "[JUSTICE: IMPLEMENTATION]",
-        "承認済みの設計・計画に従い、変更を最小限にして検証を実行してください。",
-        "実装PRでは、計画との差分、テスト、退行リスクをAIレビューし、人間の承認を待ってください。",
-      ].join("\n");
     default:
       return assertNever(input.stage);
   }
