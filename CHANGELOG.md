@@ -26,6 +26,17 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.0.0](https://github.com/yohi/justice/compare/v1.2.0...v2.0.0) (2026-07-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* major version bump
+
+### Features
+
+* major version bump ([d5b502f](https://github.com/yohi/justice/commit/d5b502f69a900d483bd68a34655b2f19a6a1505c))
+
 ## [1.2.0](https://github.com/yohi/justice/compare/v1.1.0...v1.2.0) (2026-07-28)
 
 
