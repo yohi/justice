@@ -48,7 +48,8 @@ function evaluateRule(
     case "evidence_present": {
       const matching = evidence.filter(
         (item) =>
-          item.evidence.kind === check.evidenceKind && isAuthoritativeExecutionEvidence(item.evidence),
+          item.evidence.kind === check.evidenceKind &&
+          isAuthoritativeExecutionEvidence(item.evidence),
       );
       if (matching.length > 0) {
         return {
@@ -69,7 +70,8 @@ function evaluateRule(
     case "evidence_outcome": {
       const matching = evidence.filter(
         (item) =>
-          item.evidence.kind === check.evidenceKind && isAuthoritativeExecutionEvidence(item.evidence),
+          item.evidence.kind === check.evidenceKind &&
+          isAuthoritativeExecutionEvidence(item.evidence),
       );
       if (matching.length === 0) {
         return {
@@ -93,11 +95,7 @@ function evaluateRule(
         if (outcome === check.requireOutcome) {
           hasAuthoritativePass = true;
         }
-        if (
-          outcome !== undefined &&
-          outcome !== "unknown" &&
-          outcome !== check.requireOutcome
-        ) {
+        if (outcome !== undefined && outcome !== "unknown" && outcome !== check.requireOutcome) {
           violationDetected = true;
           ruleVerdict = worstOf([ruleVerdict, mapVerdict(gate.onViolation)]);
           invalidRefs.push(item.ref);
@@ -205,9 +203,7 @@ function mapVerdict(verdict: GateRule["onViolation"]): Verdict {
   }
 }
 
-function mapMissingAuthoritativeEvidenceVerdict(
-  verdict: GateRule["onMissingEvidence"],
-): Verdict {
+function mapMissingAuthoritativeEvidenceVerdict(verdict: GateRule["onMissingEvidence"]): Verdict {
   const mapped = mapVerdict(verdict);
   return mapped === "PASS" ? "WARN" : mapped;
 }

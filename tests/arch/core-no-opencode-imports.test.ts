@@ -56,7 +56,7 @@ function detectOpenCodeImports(content: string): boolean {
             braceDepth++;
           } else if (content[i] === "}") {
             braceDepth--;
-          } else if (content[i] === "\"" || content[i] === "'" || content[i] === "`") {
+          } else if (content[i] === '"' || content[i] === "'" || content[i] === "`") {
             if (content[i] === "`") {
               readTemplateLiteral();
             } else {

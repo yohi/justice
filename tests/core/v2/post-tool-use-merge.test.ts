@@ -85,7 +85,9 @@ describe("D64 - PostToolUse merge rules", () => {
       normalInjectedContext: "A\n\n---\n\nB",
       modifiedPayload: { toolName: "task", modified: 1 },
     });
-    expect(warnings).toEqual(["Conflict detected in post-tool-use modifiedPayload; using the first response"]);
+    expect(warnings).toEqual([
+      "Conflict detected in post-tool-use modifiedPayload; using the first response",
+    ]);
   });
 
   it("preserves full injection order while splitting normal and gate advisory channels", () => {
@@ -194,7 +196,9 @@ describe("D64 - PreToolUse merge rules", () => {
       injectedContext: "A\n\n---\n\nB",
       modifiedPayload: { toolName: "task", modified: 1 },
     });
-    expect(warnings).toEqual(["Conflict detected in pre-tool-use modifiedPayload; using the first response"]);
+    expect(warnings).toEqual([
+      "Conflict detected in pre-tool-use modifiedPayload; using the first response",
+    ]);
   });
   it("should attach modifiedPayload from the first inject when only the first side carries one", () => {
     const a: HookResponse = {

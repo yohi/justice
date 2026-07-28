@@ -8,7 +8,10 @@ import { toPhysicalPath } from "../../../src/core/v2/shard-layout";
 import { hashString } from "../../../src/core/v2/hash";
 import type { PostToolUseEvent } from "../../../src/core/types";
 
-function buildHandler(writerId: string): { handler: ObservationHandler; writer: ReturnType<typeof createMockFileWriter> } {
+function buildHandler(writerId: string): {
+  handler: ObservationHandler;
+  writer: ReturnType<typeof createMockFileWriter>;
+} {
   const writer = createMockFileWriter();
   const reader = createMockFileReader({});
   const store = new ObservationLogStore(writer, reader, writerId);
@@ -61,7 +64,8 @@ describe("redaction integration", () => {
     const writerId = "w-redact-1";
     const { handler, writer } = buildHandler(writerId);
 
-    const rawCommand = 'echo /home/alice/project/secret ~/secret_tilde \\\\server\\share\\secret_unc "/home/alice/quoted_path" /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com';
+    const rawCommand =
+      'echo /home/alice/project/secret ~/secret_tilde \\\\server\\share\\secret_unc "/home/alice/quoted_path" /tmp/foo /workspace/src /Users/bob/project C:\\Users\\carol\\project GITHUB_TOKEN=ghp_xxx https://user:token@example.com';
     const secretKey = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890";
 
     await handler.handlePostToolUse(

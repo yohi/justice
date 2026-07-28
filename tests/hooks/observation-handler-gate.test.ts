@@ -50,7 +50,9 @@ function makeLogStore(events: readonly PersistedLogRecord[] = []): {
   return { store, appended, readAll };
 }
 
-function makeGateLoader(gates: readonly GateRule[]): GateLoader & { load: ReturnType<typeof vi.fn> } {
+function makeGateLoader(
+  gates: readonly GateRule[],
+): GateLoader & { load: ReturnType<typeof vi.fn> } {
   return { load: vi.fn(async () => gates) };
 }
 
@@ -152,7 +154,11 @@ describe("ObservationHandler gate evaluation", () => {
       sessionId: "s-1",
       writerId: "w-test",
     });
-    expect(appended[0]?.shardId).toEqual({ agentId: "atlas", sessionId: "s-1", writerId: "w-test" });
+    expect(appended[0]?.shardId).toEqual({
+      agentId: "atlas",
+      sessionId: "s-1",
+      writerId: "w-test",
+    });
   });
 
   it("returns a gate_advisory inject and appends the DecisionRecord when a gate warns", async () => {

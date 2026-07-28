@@ -36,10 +36,7 @@ function validatePlanPath(workspaceRoot: string | undefined, planPath: string): 
   const resolvedPath = path.resolve(workspaceRoot, planPath);
   const relativePath = path.relative(workspaceRoot, resolvedPath);
 
-  if (
-    relativePath.startsWith("..") ||
-    path.isAbsolute(relativePath)
-  ) {
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error("Invalid plan path: Absolute path or traversal detected");
   }
 }

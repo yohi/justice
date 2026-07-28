@@ -169,11 +169,12 @@ describe("JusticePlugin reflection event integration", () => {
     // Then
     expect(writerIds).toHaveLength(2);
     expect(writerIds).toSatisfy((ids: readonly string[]) =>
-      ids.every((writerId) => /^w-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(writerId)),
+      ids.every((writerId) =>
+        /^w-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(writerId),
+      ),
     );
     expect(new Set(writerIds)).toHaveLength(2);
   });
-
 
   it("emits a reflection event when LoopDetectionHandler detects a loop", async () => {
     const { files, reader, writer } = createMemFs();

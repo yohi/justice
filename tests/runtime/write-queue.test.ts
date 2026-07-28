@@ -115,7 +115,12 @@ describe("createShardWriteQueue() release()", () => {
 
   it("release() on an unknown path is a safe no-op", () => {
     const { writer, readExisting } = createMemFs();
-    const { release } = createShardWriteQueue(writer, readExisting, async () => 0, () => {});
+    const { release } = createShardWriteQueue(
+      writer,
+      readExisting,
+      async () => 0,
+      () => {},
+    );
     expect(() => release(".justice/events/sisyphus/ses-x/never.jsonl")).not.toThrow();
   });
 

@@ -268,7 +268,6 @@ export class TaskFeedbackHandler {
           sessionId,
         });
       }
-
     } catch (err) {
       console.warn(
         `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,

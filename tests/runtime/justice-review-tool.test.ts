@@ -92,9 +92,7 @@ function executeReviewTool(input: {
     logReader: input.store,
     args: input.args,
     requestApproval: async (approval): Promise<void> => {
-      await Effect.runPromise(
-        input.ask(approval) as unknown as Effect.Effect<void>,
-      );
+      await Effect.runPromise(input.ask(approval) as unknown as Effect.Effect<void>);
     },
   });
 }
@@ -308,7 +306,9 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
     // Given
     const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
     mkdirSync(testDir, { recursive: true });
-    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
+    const adapter = new OpenCodeAdapter(
+      fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }),
+    );
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
@@ -351,7 +351,9 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
     // Given
     const testDir = join(tmpdir(), `justice-review-test-${Date.now()}`);
     mkdirSync(testDir, { recursive: true });
-    const adapter = new OpenCodeAdapter(fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }));
+    const adapter = new OpenCodeAdapter(
+      fakeInit({ project: { root: testDir }, directory: testDir, worktree: testDir }),
+    );
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice test fixture failed to initialize");
@@ -447,9 +449,7 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
       logReader: failingReader,
       args: {},
       requestApproval: async (approval): Promise<void> => {
-        await Effect.runPromise(
-          ask(approval) as unknown as Effect.Effect<void>,
-        );
+        await Effect.runPromise(ask(approval) as unknown as Effect.Effect<void>);
       },
     });
 

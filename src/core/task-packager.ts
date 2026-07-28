@@ -51,11 +51,9 @@ export function enrichTaskToolInput(
   }
 
   return result;
-    }
+}
 
-export function resolveSkillsFromToolInput(
-  toolInput: Readonly<Record<string, unknown>>,
-): string[] {
+export function resolveSkillsFromToolInput(toolInput: Readonly<Record<string, unknown>>): string[] {
   const rawSkills = toolInput.skills;
   const rawLoadSkills = toolInput.loadSkills;
   const skills = Array.isArray(rawSkills)

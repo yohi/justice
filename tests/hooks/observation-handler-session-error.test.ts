@@ -4,7 +4,13 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import { createMemFs } from "../helpers/mock-file-system";
 
-function createHandler(options: { workspaceRoot?: string; writerId?: string } = {}): { handler: ObservationHandler; logStore: ObservationLogStore; files: Map<string, string>; reader: FileReader; logger: { warn: ReturnType<typeof vi.fn> }; } {
+function createHandler(options: { workspaceRoot?: string; writerId?: string } = {}): {
+  handler: ObservationHandler;
+  logStore: ObservationLogStore;
+  files: Map<string, string>;
+  reader: FileReader;
+  logger: { warn: ReturnType<typeof vi.fn> };
+} {
   const { reader, writer } = createMemFs();
   const logStore = new ObservationLogStore(writer, reader, options.writerId ?? "w-test");
   const sessionStateProvider = new SessionStateProvider();

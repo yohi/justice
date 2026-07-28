@@ -361,7 +361,9 @@ describe("ObservationHandler review observations", () => {
 
     // Then
     const state = project(await logStore.readAll(), "2026-07-18T00:00:00.000Z");
-    expect(state.reviewSummary.resolved.map((item) => item.itemKey)).toEqual([resolvedItem.itemKey]);
+    expect(state.reviewSummary.resolved.map((item) => item.itemKey)).toEqual([
+      resolvedItem.itemKey,
+    ]);
     expect(state.reviewSummary.open.map((item) => item.itemKey)).toEqual([openItem.itemKey]);
   });
 

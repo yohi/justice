@@ -313,10 +313,7 @@ export class LoopDetectionHandler {
             sessionId: event.sessionId,
           });
         } catch (err) {
-          console.warn(
-            "[JUSTICE] Failed to emit loop ReflectionEvent: %s",
-            err,
-          );
+          console.warn("[JUSTICE] Failed to emit loop ReflectionEvent: %s", err);
         }
 
         // Generate split suggestion

@@ -190,9 +190,7 @@ describe("redactPendingLogRecord", () => {
         messageID: "m3",
         role: "assistant",
         textHash: "hash3",
-        declaredClaims: [
-          { evidenceId: "c-generic", claimKind: "generic", outcome: "pass" },
-        ],
+        declaredClaims: [{ evidenceId: "c-generic", claimKind: "generic", outcome: "pass" }],
         evidence: [
           {
             evidenceId: "e-generic",

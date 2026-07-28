@@ -9,9 +9,7 @@ import {
 } from "../core/trigger-detector";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
-import {
-  defineJusticeReviewTool,
-} from "./justice-tools";
+import { defineJusticeReviewTool } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -75,9 +73,7 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function isSessionDeletedEvent(
-  event: GenericEventInput["event"],
-): event is EventSessionDeleted {
+function isSessionDeletedEvent(event: GenericEventInput["event"]): event is EventSessionDeleted {
   const properties = toRecord(event.properties);
   const info = toRecord(properties.info);
   return event.type === "session.deleted" && typeof info.id === "string";
@@ -636,8 +632,9 @@ export class OpenCodeAdapter {
         await this.log("warn", "[Justice] malformed review resolution artifact ignored");
       }
 
-      const isTrustedReviewSnapshotArtifactSource =
-        TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS.includes(input.tool);
+      const isTrustedReviewSnapshotArtifactSource = TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS.includes(
+        input.tool,
+      );
       const canPromoteReviewSnapshotArtifact =
         isTrustedReviewSnapshotArtifactSource && output.metadata?.error !== true;
       const reviewSnapshotArtifact = canPromoteReviewSnapshotArtifact
