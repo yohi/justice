@@ -4,7 +4,8 @@ export type WorkflowDirectiveStage =
   | "plan_review_required"
   | "review_remediation"
   | "review_clear"
-  | "implementation";
+  | "implementation"
+  | "implementation_unauthorized";
 
 export interface WorkflowDirectiveInput {
   readonly stage: WorkflowDirectiveStage;
@@ -52,6 +53,14 @@ export function formatWorkflowDirective(input: WorkflowDirectiveInput): string {
         "外部で承認が確認できた設計・計画に従い、変更を最小限にして検証を実行してください。",
         "Justiceは外部での承認やマージ状態を検証できません。実装は、外部で承認が確認できた場合にのみ進めてください。",
         "実装PRでは、計画との差分、テスト、退行リスクをAIレビューし、人間の承認を待ってください。",
+      ].join("\n");
+    case "implementation_unauthorized":
+      return [
+        "[JUSTICE: IMPLEMENTATION UNAUTHORIZED]",
+        "この実装タスクは、まだ外部で人間による承認・マージが確認されていません。",
+        "JusticeはPR作成、承認、マージを観測できないため、実行を物理的に停止することはできません。",
+        "タスクを実行する前に、設計・計画PRがレビューされ、人間による明示的な承認とマージが完了していることを確認してください。",
+        "確認が取れない場合は、この task() をキャンセルし、計画の承認・マージを先に進めてください。",
       ].join("\n");
     default:
       return assertNever(input.stage);

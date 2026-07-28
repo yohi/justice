@@ -24,7 +24,11 @@ import type { JusticeNotifier } from "../core/justice-notifier";
 import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
-import { enrichTaskToolInput, mergeSkillArrays, resolveSkillsFromToolInput } from "../core/task-packager";
+import {
+  enrichTaskToolInput,
+  mergeSkillArrays,
+  resolveSkillsFromToolInput,
+} from "../core/task-packager";
 import { formatWorkflowDirective } from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -363,8 +367,11 @@ export class PlanBridge {
     }
   }
 
-  private withImplementationDirective(context: string): string {
-    return `${context}\n\n${formatWorkflowDirective({ stage: "implementation" })}`;
+  private withImplementationDirective(context: string, sessionId: string): string {
+    const bootstrap = this.getWorkflowBootstrap(sessionId);
+    const stage =
+      bootstrap?.phase === "plan_ready" ? "implementation_unauthorized" : "implementation";
+    return `${context}\n\n${formatWorkflowDirective({ stage })}`;
   }
 
   /**
@@ -456,6 +463,7 @@ export class PlanBridge {
 
     let injectedContext = this.withImplementationDirective(
       this.buildInjectedContext(planContent, delegation),
+      event.sessionId,
     );
     if (fallbackTriggered) {
       injectedContext =
@@ -577,6 +585,7 @@ export class PlanBridge {
       action: "inject",
       injectedContext: this.withImplementationDirective(
         this.buildInjectedContext(planContent, delegation),
+        event.sessionId,
       ),
       modifiedPayload: {
         args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
