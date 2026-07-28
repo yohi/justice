@@ -26,10 +26,16 @@ import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import {
   enrichTaskToolInput,
-  mergeSkillArrays,
+  mergeTaskLoadSkills,
   resolveSkillsFromToolInput,
 } from "../core/task-packager";
-import { formatWorkflowDirective } from "../core/workflow-directives";
+import {
+  assertNever,
+  formatWorkflowDirective,
+  resolveWorkflowDirective,
+  type CanonicalWorkflowSkill,
+  type WorkflowDirectiveStage,
+} from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -48,6 +54,8 @@ export interface WorkflowBootstrapState {
  */
 export interface WorkflowStartResult {
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage: WorkflowDirectiveStage;
+  readonly recommendedSkills: readonly CanonicalWorkflowSkill[];
   readonly goal: string;
   readonly nextSkill: WorkflowNextSkill | null;
   readonly activePlanPath: string | null;
@@ -210,14 +218,36 @@ export class PlanBridge {
     }
 
     const activePlanPath = this.getActivePlan(sessionId);
+    const directiveStage = this.resolveBootstrapDirectiveStage(phase);
+    const directive = resolveWorkflowDirective({
+      stage: directiveStage,
+      goal: request.goal,
+      designPath: request.designPath,
+      planPath: activePlanPath ?? request.planPath,
+    });
 
     return {
       phase,
+      directiveStage: directive.stage,
+      recommendedSkills: directive.requiredSkills,
       goal: request.goal,
       nextSkill: NEXT_SKILL_BY_PHASE.get(phase) ?? null,
       activePlanPath,
       guidance: this.formatWorkflowGuidance(request, phase, activePlanPath),
     };
+  }
+
+  private resolveBootstrapDirectiveStage(phase: WorkflowBootstrapPhase): WorkflowDirectiveStage {
+    switch (phase) {
+      case "design_required":
+        return "design_required";
+      case "plan_required":
+        return "plan_required";
+      case "plan_ready":
+        return "plan_review_required";
+      default:
+        return assertNever(phase);
+    }
   }
 
   /**
@@ -518,16 +548,17 @@ export class PlanBridge {
 
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
-    const mergedLoadSkills = mergeSkillArrays(toolInputSkills, [
-      "test-driven-development",
-      "verification-before-completion",
-    ]);
+    const implementationDirective = resolveWorkflowDirective({ stage: "implementation" });
+    const mergedLoadSkills = mergeTaskLoadSkills(
+      toolInputSkills,
+      implementationDirective.requiredSkills,
+    );
 
     // 1) delegation を仮生成して推奨エージェントを決定
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
-      loadSkills: toolInputSkills,
+      loadSkills: mergedLoadSkills,
     });
 
     if (!initialDelegation) {
@@ -543,7 +574,7 @@ export class PlanBridge {
 
     // dominant_override が発生するかどうかを確認
     let dominantAgentId: AgentId | undefined;
-    const routingResult = this.agentRouter.route(initialDelegation.category, toolInputSkills);
+    const routingResult = this.agentRouter.route(initialDelegation.category, mergedLoadSkills);
     if (routingResult.reason === "dominant_override") {
       dominantAgentId = routingResult.agentId;
     }

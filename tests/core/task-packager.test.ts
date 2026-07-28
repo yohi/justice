@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { enrichTaskToolInput, TaskPackager } from "../../src/core/task-packager";
+import {
+  enrichTaskToolInput,
+  mergeTaskLoadSkills,
+  TaskPackager,
+} from "../../src/core/task-packager";
 import type { PlanTask } from "../../src/core/types";
 
 describe("TaskPackager", () => {
@@ -14,6 +18,29 @@ describe("TaskPackager", () => {
     ],
     status: "pending",
     ...overrides,
+  });
+
+  it("preserves caller skills while adding required implementation skills", () => {
+    // When
+    const skills = mergeTaskLoadSkills(["domain-skill"], ["test-driven-development"]);
+
+    // Then
+    expect(skills).toEqual(["domain-skill", "test-driven-development"]);
+  });
+
+  it("deduplicates task load skills while preserving first-seen order", () => {
+    // When
+    const skills = mergeTaskLoadSkills(
+      ["domain-skill", "test-driven-development"],
+      ["test-driven-development", "verification-before-completion"],
+    );
+
+    // Then
+    expect(skills).toEqual([
+      "domain-skill",
+      "test-driven-development",
+      "verification-before-completion",
+    ]);
   });
 
   it("preserves an existing taskId while enriching task tool input", () => {

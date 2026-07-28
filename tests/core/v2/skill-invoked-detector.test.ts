@@ -31,6 +31,22 @@ describe("detectSkillInvoked", () => {
     ]);
   });
 
+  it("observes canonical OmO loadSkills without duplicating aliases", () => {
+    // When
+    const result = detectSkillInvoked("task", {
+      loadSkills: ["test-driven-development", "test-driven-development"],
+      load_skills: ["ignored-legacy-duplicate"],
+    });
+
+    // Then
+    expect(result).toEqual([
+      {
+        skillName: "test-driven-development",
+        source: "task_load_skills",
+      },
+    ]);
+  });
+
   it("returns no invocations for malformed or unrelated arguments", () => {
     expect(detectSkillInvoked("skill", { name: "" })).toEqual([]);
     expect(detectSkillInvoked("task", { load_skills: "programming" })).toEqual([]);

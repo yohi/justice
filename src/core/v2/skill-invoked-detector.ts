@@ -26,10 +26,15 @@ export function detectSkillInvoked(
       : [];
   }
 
-  if (toolName === "task" && "load_skills" in args && Array.isArray(args.load_skills)) {
-    return args.load_skills
-      .filter((skill): skill is string => typeof skill === "string" && skill.length > 0)
-      .map((skill) => withCallId(skill, "task_load_skills", callId));
+  if (toolName === "task") {
+    const rawSkills =
+      "loadSkills" in args ? args.loadSkills : "load_skills" in args ? args.load_skills : undefined;
+    if (!Array.isArray(rawSkills)) return [];
+
+    const normalizedSkills = new Set(
+      rawSkills.filter((skill): skill is string => typeof skill === "string" && skill.length > 0),
+    );
+    return [...normalizedSkills].map((skill) => withCallId(skill, "task_load_skills", callId));
   }
 
   return [];

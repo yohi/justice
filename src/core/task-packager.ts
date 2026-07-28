@@ -78,21 +78,28 @@ export function mergeSkillArrays(...arrays: readonly (readonly string[])[]): str
   return result;
 }
 
+export function mergeTaskLoadSkills(
+  existing: readonly string[],
+  required: readonly string[],
+): readonly string[] {
+  return [...new Set([...existing, ...required])];
+}
+
 export interface PackageOptions {
-  planFilePath: string;
-  referenceFiles: string[];
-  rolePrompt?: string;
-  previousLearnings?: string;
-  runInBackground?: boolean;
-  category?: TaskCategory;
-  loadSkills?: string[];
+  readonly planFilePath: string;
+  readonly referenceFiles: readonly string[];
+  readonly rolePrompt?: string;
+  readonly previousLearnings?: string;
+  readonly runInBackground?: boolean;
+  readonly category?: TaskCategory;
+  readonly loadSkills?: readonly string[];
   /** 明示的にエージェントを指定したい場合の上書き */
-  agentId?: AgentId;
+  readonly agentId?: AgentId;
   /**
    * AgentRouter に渡すルーティング用カテゴリ。
    * 未指定時は `category` または `CategoryClassifier.classify(task)` の結果を流用する。
    */
-  routingCategory?: RoutingCategory;
+  readonly routingCategory?: RoutingCategory;
 }
 
 export interface TaskPackagerDependencies {
@@ -143,7 +150,7 @@ export class TaskPackager {
     const context: DelegationContext = {
       planFilePath: options.planFilePath,
       taskId: task.id,
-      referenceFiles: options.referenceFiles,
+      referenceFiles: [...options.referenceFiles],
       rolePrompt: options.rolePrompt,
       previousLearnings: options.previousLearnings,
       agentId,
@@ -207,11 +214,6 @@ export class TaskPackager {
       }
       sections.push("");
     }
-
-    sections.push("**MUST DO**:");
-    sections.push("- Follow TDD: write failing test first, then implement");
-    sections.push("- Commit after each step");
-    sections.push("");
 
     sections.push("**MUST NOT DO**:");
     sections.push("- Do not modify files outside the task scope");

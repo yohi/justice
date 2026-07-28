@@ -220,6 +220,41 @@ describe("PlanBridge", () => {
       );
     });
 
+    it("preserves caller loadSkills and appends implementation directive skills", async () => {
+      // Given
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setActivePlan("s-skills", "docs/plans/sample-plan.md");
+
+      // When
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            prompt: "do something",
+            loadSkills: ["domain-skill", "test-driven-development"],
+          },
+        },
+        sessionId: "s-skills",
+      });
+
+      // Then
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.modifiedPayload).toEqual({
+        args: {
+          prompt: "do something",
+          taskId: "task-1",
+          loadSkills: ["domain-skill", "test-driven-development", "verification-before-completion"],
+        },
+      });
+    });
+
     it("uses the standard implementation directive when no workflow bootstrap state exists", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
@@ -509,6 +544,8 @@ describe("PlanBridge", () => {
       );
 
       expect(result.phase).toBe("design_required");
+      expect(result.directiveStage).toBe("design_required");
+      expect(result.recommendedSkills).toEqual(["brainstorming"]);
       expect(bridge.getWorkflowBootstrap("s-wf-1")?.phase).toBe("design_required");
       expect(bridge.getActivePlan("s-wf-1")).toBeNull();
     });
@@ -528,6 +565,8 @@ describe("PlanBridge", () => {
       );
 
       expect(result.phase).toBe("plan_ready");
+      expect(result.directiveStage).toBe("plan_review_required");
+      expect(result.recommendedSkills).toEqual(["requesting-code-review"]);
       expect(result.nextSkill).toBeNull();
       expect(result.activePlanPath).toBe("docs/plans/sample-plan.md");
       expect(bridge.getActivePlan("s-wf-3")).toBe("docs/plans/sample-plan.md");
