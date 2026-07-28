@@ -4,6 +4,7 @@ import { isSafeObservationAgentId } from "../core/v2/observation-agent-id-valida
 import { shardKeyOf } from "../core/v2/shard-layout";
 import { isSafeWriterId } from "../core/v2/writer-id-validation";
 import { isValidSkillInvokedRecord } from "./skill-invoked-record-validator";
+import { isWorkflowBootstrapRecordKind } from "../core/v2/workflow-bootstrap-projection";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -11,6 +12,31 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isOneOf(value: unknown, options: readonly string[]): boolean {
   return typeof value === "string" && options.includes(value);
+}
+
+/**
+ * A bootstrap audit path is either absent or a safe relative path. Mirrors the
+ * reflection `planRef.path` checks so a hand-forged record cannot smuggle an
+ * absolute path (or a traversal) past the builder's redaction on replay.
+ */
+function isValidBootstrapPath(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/u.test(value)) return false;
+  return !value.split(/[\\/]/u).includes("..");
+}
+
+function isValidWorkflowBootstrapAudit(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  return (
+    isOneOf(value.phase, ["design_required", "plan_required", "plan_ready"]) &&
+    isOneOf(value.source, ["command", "fallback_marker"]) &&
+    typeof value.goalHash === "string" &&
+    value.goalHash.length > 0 &&
+    typeof value.goalSnippet === "string" &&
+    isValidBootstrapPath(value.designPath) &&
+    isValidBootstrapPath(value.planPath)
+  );
 }
 
 function isValidEvidence(value: unknown): boolean {
@@ -124,11 +150,11 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
     for (const item of r.items) {
       if (
-          !isObject(item) ||
-          typeof item.itemKey !== "string" ||
-          typeof item.evidenceId !== "string" ||
-          item.evidenceId !== item.itemKey ||
-          typeof item.summary !== "string" ||
+        !isObject(item) ||
+        typeof item.itemKey !== "string" ||
+        typeof item.evidenceId !== "string" ||
+        item.evidenceId !== item.itemKey ||
+        typeof item.summary !== "string" ||
         typeof item.location !== "string" ||
         !isOneOf(item.severity, ["critical", "major", "minor"]) ||
         !isOneOf(item.status, ["open", "resolved"])
@@ -176,12 +202,18 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       r.reflection.planRef.path.startsWith("/") ||
       r.reflection.planRef.path.startsWith("\\") ||
       /^[A-Za-z]:/u.test(r.reflection.planRef.path) ||
-      r.reflection.planRef.path.split(/[\\/]/u).some((seg) => seg === "..") ||
+      r.reflection.planRef.path.split(/[\\/]/u).includes("..") ||
       typeof r.reflection.planRef.taskId !== "string" ||
       !isOneOf(r.reflection.intent, ["check_complete", "append_error_note"]) ||
       (r.reflection.note !== undefined && typeof r.reflection.note !== "string")
     ) {
       throw new Error("Invalid reflection record");
+    }
+  } else if (isWorkflowBootstrapRecordKind(kind)) {
+    // Bootstrap lifecycle records are audit-only: no evidence, no claims. Only the
+    // audit payload needs validating.
+    if (!isValidWorkflowBootstrapAudit(r.workflow)) {
+      throw new Error("Invalid workflow bootstrap record");
     }
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);

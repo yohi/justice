@@ -3,6 +3,7 @@ import type {
   Evidence,
   PendingLogRecord,
   ToolOutputEvidence,
+  WorkflowBootstrapAudit,
 } from "./observation-model";
 import { redactForPersistence } from "./redaction";
 
@@ -75,6 +76,22 @@ function redactEvidenceValue(
   evidence: Evidence | readonly Evidence[],
 ): Evidence | readonly Evidence[] {
   return isEvidenceList(evidence) ? evidence.map(redactEvidence) : redactEvidence(evidence);
+}
+
+/**
+ * Idempotent redaction of the bootstrap audit payload. `goalHash` is already a
+ * one-way hash and `phase`/`source` are frozen enums, so only the free-text
+ * snippet and the two paths need a pass.
+ */
+function redactWorkflowBootstrapAudit(audit: WorkflowBootstrapAudit): WorkflowBootstrapAudit {
+  return {
+    ...audit,
+    goalSnippet: redactForPersistence(audit.goalSnippet),
+    ...(audit.designPath === undefined
+      ? {}
+      : { designPath: redactForPersistence(audit.designPath) }),
+    ...(audit.planPath === undefined ? {} : { planPath: redactForPersistence(audit.planPath) }),
+  };
 }
 
 /**
@@ -151,5 +168,15 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
               })),
             }),
       };
+    // Each bootstrap kind is spread under its own literal `kind` so the result
+    // stays assignable to a single PendingObservationRecord member.
+    case "workflow_started":
+      return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
+    case "design_requested":
+      return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
+    case "plan_requested":
+      return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
+    case "plan_activated":
+      return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
   }
 }

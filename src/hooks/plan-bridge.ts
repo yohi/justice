@@ -6,11 +6,14 @@ import type {
   WisdomStoreInterface,
   PlanTask,
   AgentId,
+  WorkflowBootstrapPhase,
+  WorkflowStartRequest,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
-import { TriggerDetector } from "../core/trigger-detector";
+import type { ObservationHandler } from "./observation-handler";
+import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
@@ -25,6 +28,40 @@ import { enrichTaskToolInput } from "../core/task-packager";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
+/** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
+export type WorkflowNextSkill = "brainstorming" | "writing-plans";
+
+/** セッション単位のワークフロー・ブートストラップ状態のスナップショット。 */
+export interface WorkflowBootstrapState {
+  readonly phase: WorkflowBootstrapPhase;
+  readonly request: WorkflowStartRequest;
+}
+
+/**
+ * `handleWorkflowStart` が返す構造化ガイダンス。
+ * Justice は成果物を書き込まないため、次手の指示のみを返す。
+ */
+export interface WorkflowStartResult {
+  readonly phase: WorkflowBootstrapPhase;
+  readonly goal: string;
+  readonly nextSkill: WorkflowNextSkill | null;
+  readonly activePlanPath: string | null;
+  readonly guidance: string;
+}
+
+/** phase から「次に読み込むべきスキル」への写像 (plan_ready は追加スキル不要)。 */
+const NEXT_SKILL_BY_PHASE: ReadonlyMap<WorkflowBootstrapPhase, WorkflowNextSkill> = new Map<
+  WorkflowBootstrapPhase,
+  WorkflowNextSkill
+>([
+  ["design_required", "brainstorming"],
+  ["plan_required", "writing-plans"],
+]);
+
+/** ガイダンス末尾に添える、Justice が書き込みを行わないことの明示。 */
+const NO_WRITE_NOTICE =
+  "（Justice は設計・計画ファイルを書き込みません。作成は呼び出し側の責務です。）";
+
 export class PlanBridge {
   private readonly fileReader: FileReader;
   private readonly triggerDetector: TriggerDetector;
@@ -35,6 +72,7 @@ export class PlanBridge {
   private readonly completionDetector: PlanCompletionDetector;
   private readonly activePlanPaths: Map<string, string> = new Map();
   private readonly lastUserMessages: Map<string, string> = new Map();
+  private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
   private readonly lastCompletionInputs: Map<
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
@@ -45,6 +83,7 @@ export class PlanBridge {
   private readonly agentRouter: AgentRouter;
   private readonly categoryClassifier: CategoryClassifier;
   private readonly learningExtractor: LearningExtractor;
+  private observationHandler: ObservationHandler | null = null;
 
   constructor(
     fileReader: FileReader,
@@ -72,6 +111,15 @@ export class PlanBridge {
       this.wisdomStore = wisdomStore ?? null;
     }
     this.notifier = notifier ?? null;
+  }
+
+  /**
+   * Inject the observation handler so `handleWorkflowStart` can emit the
+   * workflow bootstrap audit records. Uses setter injection to preserve the
+   * legacy constructor signature used by existing tests.
+   */
+  setObservationHandler(handler: ObservationHandler): void {
+    this.observationHandler = handler;
   }
 
   /**
@@ -120,6 +168,7 @@ export class PlanBridge {
   destroySession(sessionId: string): void {
     this.activePlanPaths.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
+    this.workflowBootstraps.delete(sessionId);
     this.clearSessionCompletionInputs(sessionId);
   }
 
@@ -128,6 +177,175 @@ export class PlanBridge {
       if (key.startsWith(`${sessionId}:`)) {
         this.lastCompletionInputs.delete(key);
       }
+    }
+  }
+
+  /**
+   * Resolve a workflow-start request into exactly one bootstrap phase.
+   *
+   * Requested design/plan artifacts are inspected through the injected FileReader
+   * only — Justice never creates or edits them. `plan_ready` is the only phase that
+   * activates a plan; every other phase clears the session's plan context so a
+   * following task() delegation cannot inherit a stale plan.
+   */
+  async handleWorkflowStart(
+    sessionId: string,
+    request: WorkflowStartRequest,
+  ): Promise<WorkflowStartResult> {
+    const phase = await this.resolveBootstrapPhase(request);
+    this.workflowBootstraps.set(sessionId, { phase, request });
+
+    await this.emitWorkflowBootstrapObservations(sessionId, request, phase);
+
+    if (phase === "plan_ready") {
+      this.setActivePlan(sessionId, request.planPath);
+    } else {
+      this.setActivePlan(sessionId, null);
+      this.clearSessionCompletionInputs(sessionId);
+    }
+
+    const activePlanPath = this.getActivePlan(sessionId);
+
+    return {
+      phase,
+      goal: request.goal,
+      nextSkill: NEXT_SKILL_BY_PHASE.get(phase) ?? null,
+      activePlanPath,
+      guidance: this.formatWorkflowGuidance(request, phase, activePlanPath),
+    };
+  }
+
+  /**
+   * Emit `workflow_started` plus the lifecycle phase transition observation.
+   * Audit-only records: failures are logged and swallowed so bootstrap guidance
+   * is never blocked by the observation log.
+   */
+  private async emitWorkflowBootstrapObservations(
+    sessionId: string,
+    request: WorkflowStartRequest,
+    phase: WorkflowBootstrapPhase,
+  ): Promise<void> {
+    const handler = this.observationHandler;
+    if (handler === null) return;
+
+    const results = await Promise.allSettled([
+      handler.emitWorkflowStartedEvent({ request, phase, sessionId }),
+      handler.emitWorkflowPhaseEvent({ request, phase, sessionId }),
+    ]);
+
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      try {
+        this.notifier?.notify({
+          sessionId,
+          taskId: undefined,
+          level: "warning",
+          variant: "escalation",
+          title: "Workflow bootstrap observation failed",
+          message: `Failed to emit workflow bootstrap observations: ${failures.map((f) => String(f.reason)).join(", ")}`,
+        });
+      } catch {
+        /* fail-open: notification failures must not throw */
+      }
+    }
+  }
+
+  /**
+   * Get the current workflow bootstrap state for a specific session.
+   */
+  getWorkflowBootstrap(sessionId: string): WorkflowBootstrapState | null {
+    return this.workflowBootstraps.get(sessionId) ?? null;
+  }
+
+  /**
+   * Select exactly one phase: design gate first, then plan gate.
+   * A requested artifact counts as satisfied only when it is actually readable.
+   */
+  private async resolveBootstrapPhase(
+    request: WorkflowStartRequest,
+  ): Promise<WorkflowBootstrapPhase> {
+    if (request.designPath !== null && !(await this.isArtifactReadable(request.designPath))) {
+      return "design_required";
+    }
+
+    const planPath = this.resolveActivatablePlanPath(request.planPath);
+    if (planPath === null || !(await this.isArtifactReadable(planPath))) {
+      return "plan_required";
+    }
+
+    return "plan_ready";
+  }
+
+  /**
+   * Read-only probe for a requested artifact. Unsafe paths are never dereferenced,
+   * and any I/O failure degrades to "not satisfied yet" instead of throwing (fail-open).
+   */
+  private async isArtifactReadable(artifactPath: string): Promise<boolean> {
+    if (normalizeSafeRelativePath(artifactPath) === null) return false;
+
+    try {
+      return (await this.readPlanFile(artifactPath)) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Normalize a requested plan path through the same TriggerDetector validation
+   * that setActivePlan uses, so `plan_ready` always implies an activatable plan.
+   */
+  private resolveActivatablePlanPath(planPath: string | null): string | null {
+    if (planPath === null) return null;
+    return this.triggerDetector.detectPlanReference(planPath)?.planPath ?? null;
+  }
+
+  private formatWorkflowGuidance(
+    request: WorkflowStartRequest,
+    phase: WorkflowBootstrapPhase,
+    activePlanPath: string | null,
+  ): string {
+    const sections: string[] = [
+      "---",
+      "[JUSTICE: Workflow Bootstrap]",
+      "",
+      `**Goal**: ${request.goal}`,
+      `**Phase**: ${phase}`,
+      `**Source**: ${request.source}`,
+      `**Design**: ${request.designPath ?? "(not requested)"}`,
+      `**Plan**: ${request.planPath ?? "(not requested)"}`,
+      "",
+      "**次のアクション**:",
+      ...this.formatWorkflowActions(phase, activePlanPath),
+      "---",
+    ];
+
+    return sections.join("\n");
+  }
+
+  private formatWorkflowActions(
+    phase: WorkflowBootstrapPhase,
+    activePlanPath: string | null,
+  ): readonly string[] {
+    switch (phase) {
+      case "design_required":
+        return [
+          "> 設計が未整備です。`brainstorming` スキルで要件と設計を固めてください。",
+          "> 設計が固まったら `writing-plans` で計画書を作成し、再度 workflow を開始してください。",
+          "",
+          NO_WRITE_NOTICE,
+        ];
+      case "plan_required":
+        return [
+          "> 実行可能な計画書がありません。`writing-plans` スキルで計画書を作成してください。",
+          "> 計画書ができたら再度 workflow を開始すると、task() 委譲時にタスクコンテキストが注入されます。",
+          "",
+          NO_WRITE_NOTICE,
+        ];
+      case "plan_ready":
+        return [
+          `> 既存の計画書 (${activePlanPath ?? "unknown"}) で実行を開始できます。`,
+          "> brainstorming / writing-plans は不要です。次の未完了タスクを task() に委譲してください。",
+        ];
     }
   }
 

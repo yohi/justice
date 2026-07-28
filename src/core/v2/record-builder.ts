@@ -5,7 +5,10 @@ import type {
   ResolutionMarker,
   ReviewItem,
   ToolOutputEvidence,
+  WorkflowBootstrapAudit,
+  WorkflowBootstrapRecordKind,
 } from "./observation-model";
+import type { WorkflowBootstrapPhase, WorkflowStartRequest } from "../types";
 import type { DeclaredClaim } from "./declared-claim-extractor";
 import type { DetectedSkillInvocation } from "./skill-invoked-detector";
 import { hashString } from "./hash";
@@ -152,6 +155,78 @@ export function buildReviewResolutionRecord(
     reviewScope,
     items: [],
     resolutionMarkers,
+  };
+}
+
+/**
+ * Phase → lifecycle record kind. The phase is the single source of truth at the
+ * call site, so a transition can never be logged under a mismatching kind. An
+ * out-of-contract phase throws so the caller's fail-open boundary degrades
+ * instead of persisting a record with an unknown kind.
+ */
+function phaseRecordKind(phase: WorkflowBootstrapPhase): WorkflowBootstrapRecordKind {
+  switch (phase) {
+    case "design_required":
+      return "design_requested";
+    case "plan_required":
+      return "plan_requested";
+    case "plan_ready":
+      return "plan_activated";
+    default:
+      throw new TypeError(`Unknown workflow bootstrap phase: ${String(phase)}`);
+  }
+}
+
+export type WorkflowBootstrapRecordInput = {
+  readonly envelope: PendingEnvelope;
+  readonly request: WorkflowStartRequest;
+  readonly phase: WorkflowBootstrapPhase;
+};
+
+function buildWorkflowBootstrapAudit(input: WorkflowBootstrapRecordInput): WorkflowBootstrapAudit {
+  const { request } = input;
+  return {
+    phase: input.phase,
+    source: request.source,
+    goalHash: hashString(request.goal),
+    goalSnippet: sliceCodeUnitsSafe(redactMessageSnippet(request.goal), 200),
+    ...(request.designPath === null
+      ? {}
+      : { designPath: redactForPersistence(redactAbsolutePaths(request.designPath)) }),
+    ...(request.planPath === null
+      ? {}
+      : { planPath: redactForPersistence(redactAbsolutePaths(request.planPath)) }),
+  };
+}
+
+/**
+ * `workflow_started`: the bootstrap request itself, recorded with the phase it
+ * resolved to. Audit-only — carries no Evidence, so it is invisible to Gate
+ * evaluation (FF-008).
+ */
+export function buildWorkflowStartedRecord(
+  input: WorkflowBootstrapRecordInput,
+): PendingObservationRecord {
+  return {
+    ...input.envelope,
+    recordType: "observation",
+    kind: "workflow_started",
+    workflow: buildWorkflowBootstrapAudit(input),
+  };
+}
+
+/**
+ * The lifecycle transition matching `input.phase`: `design_requested`,
+ * `plan_requested`, or `plan_activated`. Audit-only, like `workflow_started`.
+ */
+export function buildWorkflowPhaseRecord(
+  input: WorkflowBootstrapRecordInput,
+): PendingObservationRecord {
+  return {
+    ...input.envelope,
+    recordType: "observation",
+    kind: phaseRecordKind(input.phase),
+    workflow: buildWorkflowBootstrapAudit(input),
   };
 }
 

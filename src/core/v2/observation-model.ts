@@ -1,5 +1,10 @@
 // src/core/v2/observation-model.ts
-import type { ObservationAgentId, EvidenceRef } from "../types";
+import type {
+  EvidenceRef,
+  ObservationAgentId,
+  WorkflowBootstrapPhase,
+  WorkflowStartSource,
+} from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
 import type { DeclaredClaim } from "./declared-claim-extractor";
@@ -134,13 +139,68 @@ export type ReviewObservedRecord = {
   readonly resolutionMarkers?: readonly ResolutionMarker[];
 };
 
+/**
+ * Audit payload shared by every `workflow_*` bootstrap record below.
+ *
+ * `goalHash`/`goalSnippet` mirror MessageRecord's D34 treatment: the goal text is
+ * never persisted verbatim — only a deterministic hash plus a redacted, truncated
+ * snippet. `designPath`/`planPath` are omitted (not null) when the request carries
+ * none, so the persisted JSON stays sparse.
+ */
+export type WorkflowBootstrapAudit = {
+  readonly phase: WorkflowBootstrapPhase;
+  readonly source: WorkflowStartSource;
+  readonly goalHash: string;
+  readonly goalSnippet: string;
+  readonly designPath?: string;
+  readonly planPath?: string;
+};
+
+// Workflow bootstrap lifecycle records. These are NON-AUTHORITATIVE audit records:
+// they carry no Evidence at all, so they can never be counted toward a Gate PASS
+// (FF-008 holds trivially — there is nothing for `rule-evaluation-engine` to read).
+// `state-projection` skips them explicitly so they neither open a projected task nor
+// contribute evidence; `workflow-bootstrap-projection` exposes them as a separate
+// read-only audit stream.
+export type WorkflowStartedRecord = {
+  readonly kind: "workflow_started";
+  readonly workflow: WorkflowBootstrapAudit;
+};
+
+export type DesignRequestedRecord = {
+  readonly kind: "design_requested";
+  readonly workflow: WorkflowBootstrapAudit;
+};
+
+export type PlanRequestedRecord = {
+  readonly kind: "plan_requested";
+  readonly workflow: WorkflowBootstrapAudit;
+};
+
+export type PlanActivatedRecord = {
+  readonly kind: "plan_activated";
+  readonly workflow: WorkflowBootstrapAudit;
+};
+
+export type WorkflowBootstrapRecord =
+  | WorkflowStartedRecord
+  | DesignRequestedRecord
+  | PlanRequestedRecord
+  | PlanActivatedRecord;
+
+export type WorkflowBootstrapRecordKind = WorkflowBootstrapRecord["kind"];
+
 export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & ToolExecutedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & MessageRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & SkillInvokedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & ReviewObservedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & SessionErrorRecord)
-  | (PendingEnvelope & { readonly recordType: "observation" } & ReflectionRecord);
+  | (PendingEnvelope & { readonly recordType: "observation" } & ReflectionRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & WorkflowStartedRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & DesignRequestedRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & PlanRequestedRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & PlanActivatedRecord);
 
 export type ObservationRecord = PendingObservationRecord & { readonly sequence: number };
 export type PendingLogRecord = PendingObservationRecord | PendingDecisionRecord;
