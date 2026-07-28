@@ -358,7 +358,7 @@ command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` �
 4. `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
    a. `resolveBootstrapPhase(request)` — **design → plan → 実行可能の順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
-   c. `workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を、`ObservationHandler.emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（片方が失敗しても他方・ガイダンス生成は継続、fail-open）。
+   c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
    d. `phase === "plan_ready"` の場合のみ `setActivePlan()` でプランを活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。
 5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。
 
