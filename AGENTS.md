@@ -22,6 +22,8 @@ These are architectural, not stylistic — breaking them corrupts the design, no
 - **No external DBs**: persistence is JSON flat files only (`WisdomPersistence`, `ObservationLogStore`), written atomically (temp file + rename).
 - **Single public tool**: only `justice_review` is registered via `OpenCodeAdapter.getTools()`. Never register internal dry-run helpers (`justice_status`/`justice_gate`) as tools — they must stay unreachable from outside the trust boundary (design decision D50).
 - **`declared` evidence never satisfies a Gate PASS**: only `observed`/`derived` provenance can (`src/core/v2/rule-evaluation-engine.ts`, fitness function FF-008).
+- **Workflow bootstrap stays advisory, not executive**: `PlanBridge.handleWorkflowStart()` (triggered by the OpenCode `command.execute.before` hook, `/justice-start`) must never call `task()` or invoke a skill itself — it only returns guidance text for the agent's next action.
+- **Fallback marker is deliberately unwired**: `parseWorkflowStartFallbackMarker()` exists but is not called from `PlanBridge.handleMessage()`. Don't "fix" this by wiring it in — it's reserved for future cross-harness integration and needs explicit user sign-off first.
 
 ## Testing
 

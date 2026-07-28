@@ -209,7 +209,7 @@ interface ProtectedContext {
 
 ### 4.0 イベントルーティング概要（`JusticePlugin.handleEvent()`）
 
-すべての Hook イベントは `JusticePlugin.handleEvent()` を経由し、以下のとおりルーティングされる（v1 + v2 合流済み）。各ハンドリングの詳細は §4.1〜4.4（v1）と §15.2（v2 ObservationHandler）を参照。
+すべての Hook イベントは `JusticePlugin.handleEvent()` を経由し、以下のとおりルーティングされる（v1 + v2 合流済み）。各ハンドリングの詳細は §4.1〜4.4（v1）と §15.2（v2 ObservationHandler）を参照。ただし OpenCode `command.execute.before`（`/justice-start`）のみ例外で、`JusticePlugin.handleEvent()` を経由せず `OpenCodeAdapter` が `PlanBridge.handleWorkflowStart()` を直接呼び出す（詳細は §4.1a）。
 
 ```text
 Message          → PlanBridge.handleMessage() (user message) / ObservationHandler.handleMessage() (declared claim payload)
@@ -224,6 +224,8 @@ Event:compaction → CompactionProtector
 Event:loop-*     → LoopDetectionHandler
 Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
                     → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
+
+command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` コマンドのみ。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
 ```
 
 
@@ -337,6 +339,32 @@ Event:session.error → ObservationHandler.handleSessionError()  (all session.er
 
 `delegate`, `next task`, `execute task`, `run task`, `start task`,
 `次のタスク`, `タスクを実行`, `タスクを委譲`, `タスクを開始`
+
+---
+
+### 4.1a `/justice-start` — ワークフロー・ブートストラップ (OpenCode コマンドフック)
+
+| プロパティ | 設定値 |
+|----------|-------|
+| OpenCode フック | `command.execute.before`（`JusticePlugin.handleEvent()` を経由しない直接ディスパッチ） |
+| トリガー | コマンド名が `justice-start`（先頭スラッシュの有無は許容、それ以外は完全一致）の場合のみ。他コマンドは初期化すら発生しない完全ノーオペ。 |
+| クロスハーネス fallback | チャットメッセージ中の `Justice: start workflow`（行頭・完全一致・大文字小文字区別）を `parseWorkflowStartFallbackMarker()` でパース可能だが、**現状 `PlanBridge.handleMessage()` からは呼び出されておらず未接続**（将来のクロスハーネス統合のための予約形式）。 |
+
+**フロー:**
+
+1. `isJusticeStartCommand(input.command)`（`src/core/trigger-detector.ts`）でコマンド名を判定。`false` なら初期化も行わず即 return。
+2. `parseWorkflowStartCommandArguments(input.arguments)` — 純粋パーサーが goal と `--design`/`--plan` の安全な相対パスを抽出する。未知のフラグ、値のないフラグ、重複フラグ、安全でないパス（絶対パス・バックスラッシュ・`..`）、goal 欠落はすべて `null` として扱われ、例外は投げない（生引数は非echo）。
+3. `null` の場合は warn ログのみ出して return（fail-open）。パースに成功した場合のみ `ensureInitialized()` を実行する。
+4. `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
+   a. `resolveBootstrapPhase(request)` — **design → plan → 実行可能の順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。
+   b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
+   c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
+   d. `phase === "plan_ready"` の場合のみ `setActivePlan()` でプランを活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。
+5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。
+
+**実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の `task()` 呼び出しは常にエージェント自身の後続アクションに委ねる — Justice はここでも「神経系」であり「手足」ではない。
+
+**Gate との関係:** `workflow_started`/`design_requested`/`plan_requested`/`plan_activated` レコードは `evidence` フィールドを一切持たない audit-only レコードであり（§15.3）、`state-projection.ts` が `ProjectedState.tasks[].evidence` への投影対象から明示的に除外する。したがって Gate の PASS 判定にこれらのレコードが算入される経路は構造的に存在しない（FF-008 が自明に成立）。
 
 ---
 
@@ -465,6 +493,10 @@ Event:session.error → ObservationHandler.handleSessionError()  (all session.er
 **`detectDelegationIntent(message)`** — 委譲に必要なキーワード（英語・日本語）にマッチング。
 
 **`shouldTrigger(message)`** — 上記の両方が `true` の場合のみ起動。
+
+**`parseWorkflowStartCommandArguments(rawArguments)`** / **`isJusticeStartCommand(commandName)`** — `/justice-start` コマンドの引数文字列を `WorkflowStartRequest`（goal・安全な相対パスに正規化された `designPath`/`planPath`）へ変換する純粋パーサー。未知フラグ・重複フラグ・値なしフラグ・安全でないパス・goal 欠落はすべて `null` として扱う（例外を投げない）。
+
+**`parseWorkflowStartFallbackMarker(message)`** — クロスハーネス向けの `Justice: start workflow` マーカー（行頭・完全一致）をパースする。現状 `PlanBridge.handleMessage()` からは未接続（予約形式、§4.1a 参照）。
 
 ---
 
@@ -939,6 +971,7 @@ bun add justice-plugin
 | `experimental.session.compacting` | `EventEvent` (compaction) | コンパクション時にプランのスナップショットを保護。 |
 | `event` (message.updated) | `MessageEvent` | ユーザーメッセージから委譲の意図を検出。 |
 | `event` (session.error) | `EventEvent` (loop-detector) | `LOOP_ERROR_PATTERNS` に一致するエラーのみ転送。 |
+| `command.execute.before` | (変換なし・直接ディスパッチ) | `justice-start` コマンドのみ処理（§4.1a）。`PlanBridge.handleWorkflowStart()` を直接呼び出し `output.parts` へガイダンスを追記。他コマンドは完全ノーオペ。 |
 
 ### 追加ファイル
 - `src/runtime/opencode-adapter.ts` — 変換ブリッジ本体
@@ -961,7 +994,7 @@ justice/
 │   │   ├── error-classifier.ts       — エラー分類およびリトライロジック
 │   │   ├── feedback-formatter.ts     — task() の出力解析
 │   │   ├── plan-bridge-core.ts       — プランと委譲を繋ぐ中核の純粋ロジック
-│   │   ├── trigger-detector.ts       — 委譲キーワードの検出・識別
+│   │   ├── trigger-detector.ts       — 委譲キーワードの検出・識別、`/justice-start` ワークフロー起動リクエストのパース
 │   │   ├── smart-retry-policy.ts     — 指数バックオフおよびコンテキスト縮減処理
 │   │   ├── task-splitter.ts          — タスクが失敗した際の分割提案生成
 │   │   ├── wisdom-store.ts           — 学習内容のオンメモリ格納
@@ -987,7 +1020,7 @@ justice/
 │   │   │     record-builder.ts・redaction.ts・persistence-redaction.ts・safe-segment.ts・shard-layout.ts
 │   │   │     writer-id-validation.ts・observation-agent-id-validation.ts・state-projection.ts・integrity.ts
 │   │   │     review-aggregator.ts・review-scope.ts・review-severity.ts・review-types.ts・reflection-event.ts
-│   │   │     message-payload.ts・evidence-list.ts・hash.ts・references.ts
+│   │   │     message-payload.ts・evidence-list.ts・hash.ts・references.ts・workflow-bootstrap-projection.ts
 │   │   └── justice-notifier.ts         — トースト相当の通知処理のための最小限のインターフェース
 │   ├── hooks/
 │   │   ├── plan-bridge.ts            — Message/PreToolUse にバインドされるフック
@@ -1108,6 +1141,11 @@ export { TaskPackager } from "./core/task-packager";
 export { ErrorClassifier } from "./core/error-classifier";
 export { FeedbackFormatter } from "./core/feedback-formatter";
 export { TriggerDetector } from "./core/trigger-detector";
+export {
+  JUSTICE_START_COMMAND, WORKFLOW_START_FALLBACK_MARKER,
+  isJusticeStartCommand, normalizeSafeRelativePath,
+  parseWorkflowStartCommandArguments, parseWorkflowStartFallbackMarker,
+} from "./core/trigger-detector";
 export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
@@ -1151,6 +1189,7 @@ export type {
   RetryDecision, ContextReduction,
   AddOptions, BuildDelegationOptions,
   PlanReference, TriggerAnalysis,
+  WorkflowStartRequest, WorkflowStartSource, WorkflowBootstrapPhase,
 } from "./core/types";
 ```
 
