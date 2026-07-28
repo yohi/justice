@@ -57,6 +57,6 @@ export function formatWorkflowDirective(input: WorkflowDirectiveInput): string {
   }
 }
 
-function assertNever(value: never): never {
+export function assertNever(value: never): never {
   throw new Error(`Unsupported workflow directive stage: ${value}`);
 }

@@ -71,6 +71,7 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Setup project structure");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
       expect(bridge.getActivePlan("s-1")).toBe("docs/plans/sample-plan.md");
     });
 

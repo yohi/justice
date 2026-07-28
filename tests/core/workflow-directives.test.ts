@@ -19,4 +19,13 @@ describe("formatWorkflowDirective", () => {
     // Then
     expect(directive).toContain(marker);
   });
+  it("assertNever throws for an unexpected stage value", () => {
+    // Given
+    const invalidStage = "invalid_stage" as unknown as Parameters<typeof formatWorkflowDirective>[0]["stage"];
+
+    // When / Then
+    expect(() => formatWorkflowDirective({ stage: invalidStage })).toThrow(
+      "Unsupported workflow directive stage: invalid_stage",
+    );
+  });
 });
