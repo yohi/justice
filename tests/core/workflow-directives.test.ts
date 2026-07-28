@@ -52,7 +52,7 @@ describe("formatWorkflowDirective", () => {
 
     // Then
     expect(directive).toContain("Justiceは外部での承認やマージ状態を検証できません");
-    expect(directive).toContain("外部で承認が確認できた場合にのみ");
+    expect(directive).toContain("外部の人間による承認・マージ完了の確認後にのみ継続");
   });
 
   it("warns that implementation tasks before human approval/merge are unauthorized", () => {

@@ -40,6 +40,7 @@ import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope"
 import type { PendingDecisionRecord } from "../core/v2/decision-model";
 import type { PendingObservationRecord } from "../core/v2/observation-model";
 import type { GateLoader } from "../runtime/gate-loader";
+import type { WorkflowDirectiveStage } from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -60,6 +61,7 @@ type ProjectionCacheAccess = {
 export type WorkflowBootstrapEventInput = {
   readonly request: WorkflowStartRequest;
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage?: WorkflowDirectiveStage;
   readonly sessionId: string;
 };
 
@@ -230,6 +232,7 @@ export class ObservationHandler {
         },
         request: input.request,
         phase: input.phase,
+        ...(input.directiveStage === undefined ? {} : { directiveStage: input.directiveStage }),
       });
 
       await this.options.logStore.append(

@@ -206,9 +206,10 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     const phase = await this.resolveBootstrapPhase(request);
+    const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
 
-    await this.emitWorkflowBootstrapObservations(sessionId, request, phase);
+    await this.emitWorkflowBootstrapObservations(sessionId, request, phase, directiveStage);
 
     if (phase === "plan_ready") {
       this.setActivePlan(sessionId, request.planPath);
@@ -218,7 +219,6 @@ export class PlanBridge {
     }
 
     const activePlanPath = this.getActivePlan(sessionId);
-    const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     const directive = resolveWorkflowDirective({
       stage: directiveStage,
       goal: request.goal,
@@ -259,13 +259,14 @@ export class PlanBridge {
     sessionId: string,
     request: WorkflowStartRequest,
     phase: WorkflowBootstrapPhase,
+    directiveStage: WorkflowDirectiveStage,
   ): Promise<void> {
     const handler = this.observationHandler;
     if (handler === null) return;
 
     const results = await Promise.allSettled([
-      handler.emitWorkflowStartedEvent({ request, phase, sessionId }),
-      handler.emitWorkflowPhaseEvent({ request, phase, sessionId }),
+      handler.emitWorkflowStartedEvent({ request, phase, directiveStage, sessionId }),
+      handler.emitWorkflowPhaseEvent({ request, phase, directiveStage, sessionId }),
     ]);
 
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
@@ -343,7 +344,7 @@ export class PlanBridge {
       "---",
       "[JUSTICE: Workflow Bootstrap]",
       "",
-      `**Goal**: ${request.goal}`,
+      `**Goal (untrusted user input)**: ${JSON.stringify(request.goal)}`,
       `**Phase**: ${phase}`,
       `**Source**: ${request.source}`,
       `**Design**: ${request.designPath ?? "(not requested)"}`,

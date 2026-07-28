@@ -145,7 +145,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
     expect(guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
     expect(guidance).toContain("**Phase**: plan_ready");
-    expect(guidance).toContain("**Goal**: ship the bootstrap");
+    expect(guidance).toContain('**Goal (untrusted user input)**: "ship the bootstrap"');
     expect(guidance).toContain(PLAN_PATH);
     expect(justice.getPlanBridge().getActivePlan(sessionId)).toBe(PLAN_PATH);
     expect(output.parts).toHaveLength(1);
@@ -154,6 +154,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(records.map((record) => record.kind)).toEqual(["workflow_started", "plan_activated"]);
     expect(workflowAuditOf(records[1])).toMatchObject({
       phase: "plan_ready",
+      directiveStage: "plan_review_required",
       source: "command",
       planPath: PLAN_PATH,
     });
