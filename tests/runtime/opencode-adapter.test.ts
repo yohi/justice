@@ -606,3 +606,24 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts).toEqual([]);
   });
 });
+
+  it("leaves output.parts empty when PlanBridge returns no guidance", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart").mockResolvedValue({
+      phase: "plan_required",
+      goal: "ship it",
+      nextSkill: "writing-plans",
+      activePlanPath: null,
+      guidance: "",
+    });
+
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      { command: "/justice-start", sessionID: "sess-empty", arguments: "ship it" },
+      output,
+    );
+
+    expect(output.parts).toEqual([]);
+  });
