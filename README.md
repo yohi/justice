@@ -305,7 +305,7 @@ Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate E
 | `PlanParser` | Core | `plan.md` を解析して `PlanTask[]` を生成、チェックボックスの更新 |
 | `AgentRouter` | Core | タスクのカテゴリやスキルに基づいて最適なエージェントへ委譲をルーティングする |
 | `TaskPackager` | Core | `PlanTask` から構造化された `DelegationRequest` に変換し、`AGENT` ヘッダを埋め込む |
-| `TriggerDetector` | Core | プランの参照と委譲の意図を検出 |
+| `TriggerDetector` | Core | プランの参照と委譲の意図を検出、および `/justice-start` ワークフロー起動リクエストのパース |
 | `ErrorClassifier` | Core | エラーを分類し、リトライの可否を判定 |
 | `FeedbackFormatter` | Core | `task()` の生の出力を解析して `TaskFeedback` に変換 |
 | `DependencyAnalyzer` | Core | `(depends: task-N)` マーカーの解析、トポロジカルソート |
@@ -318,7 +318,7 @@ Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate E
 | `WisdomPersistence` | Core | `WisdomStore` と `.justice/wisdom.json` 間の永続化・復元 |
 | `StatusCommand` | Core | プログラムから利用可能なプランステータス API |
 | `JusticePlugin` | Core | オーケストレーター — イベントをルーティングし、`WisdomStore` を共有 |
-| `PlanBridge` | Hook | `Message`/`PreToolUse` 時の委譲ブリッジおよびエージェント状態の同期 |
+| `PlanBridge` | Hook | `Message`/`PreToolUse` 時の委譲ブリッジおよびエージェント状態の同期、`/justice-start` ワークフロー・ブートストラップ状態の管理 |
 | `TaskFeedbackHandler` | Hook | `PostToolUse` 時のフィードバックループ |
 | `CompactionProtector` | Hook | コンパクション発生時にプランの状態をスナップショット化 |
 | `LoopDetectionHandler` | Hook | ループ検出時に強制中断、試行履歴の追跡、および `sisyphus` 等へのエスカレーションを行う |
