@@ -753,20 +753,9 @@ export class OpenCodeAdapter {
 
       const result = await justice.getPlanBridge().handleWorkflowStart(input.sessionID, request);
 
-      // Audit-only lifecycle observations, in their own try/catch so a rejected log write can
-      // never withhold the guidance the command was invoked for.
-      try {
-        const observationInput = {
-          request,
-          phase: result.phase,
-          sessionId: input.sessionID,
-        };
-        const observation = justice.getObservationHandler();
-        await observation.emitWorkflowStartedEvent(observationInput);
-        await observation.emitWorkflowPhaseEvent(observationInput);
-      } catch (err) {
-        await this.log("warn", "[Justice] workflow bootstrap observation failed", err);
-      }
+      // Observation audit records are emitted by PlanBridge.handleWorkflowStart, not here,
+      // to avoid double-writing the same workflow lifecycle events (workflow_started +
+      // plan_activated/design_requested/plan_requested) into the observation log.
 
       if (result.guidance.length === 0) return;
       output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));

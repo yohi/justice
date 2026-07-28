@@ -470,7 +470,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     },
   );
 
-  it("observes both workflow bootstrap lifecycle events before appending the part", async () => {
+  it("does not emit workflow observations from the adapter; PlanBridge owns them", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -482,12 +482,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       guidance: "plan_required guidance",
     });
     const observation = justice.getObservationHandler();
-    const started = vi
-      .spyOn(observation, "emitWorkflowStartedEvent")
-      .mockResolvedValue({ action: "proceed" });
-    const phase = vi
-      .spyOn(observation, "emitWorkflowPhaseEvent")
-      .mockResolvedValue({ action: "proceed" });
+    const started = vi.spyOn(observation, "emitWorkflowStartedEvent");
+    const phase = vi.spyOn(observation, "emitWorkflowPhaseEvent");
 
     const output: CommandExecuteBeforeOutput = { parts: [] };
     await adapter.onCommandExecuteBefore(
@@ -495,17 +491,12 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       output,
     );
 
-    const expectedEvent = {
-      request: { source: "command", goal: "ship it", designPath: null, planPath: null },
-      phase: "plan_required",
-      sessionId: "sess-obs",
-    };
-    expect(started).toHaveBeenCalledWith(expectedEvent);
-    expect(phase).toHaveBeenCalledWith(expectedEvent);
+    expect(started).not.toHaveBeenCalled();
+    expect(phase).not.toHaveBeenCalled();
     expect(output.parts).toHaveLength(1);
   });
 
-  it("still appends the guidance part when observation logging fails", async () => {
+  it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -516,9 +507,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       activePlanPath: null,
       guidance: "design_required guidance",
     });
-    vi.spyOn(justice.getObservationHandler(), "emitWorkflowStartedEvent").mockRejectedValue(
-      new Error("log shard unavailable"),
-    );
+    const observation = justice.getObservationHandler();
+    const started = vi.spyOn(observation, "emitWorkflowStartedEvent");
 
     const output: CommandExecuteBeforeOutput = { parts: [] };
     await expect(
@@ -528,6 +518,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       ),
     ).resolves.toBeUndefined();
 
+    expect(started).not.toHaveBeenCalled();
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).toMatchObject({ text: "design_required guidance" });
   });
