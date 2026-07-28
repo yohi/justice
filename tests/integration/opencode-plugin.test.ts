@@ -8,6 +8,7 @@ function createMockAdapter(): OpenCodeAdapter {
   return {
     onEvent: vi.fn().mockResolvedValue(undefined),
     onToolExecuteBefore: vi.fn().mockResolvedValue(undefined),
+    onCommandExecuteBefore: vi.fn().mockResolvedValue(undefined),
     onToolExecuteAfter: vi.fn().mockResolvedValue(undefined),
     onSessionCompacting: vi.fn().mockResolvedValue(undefined),
     onTextComplete: vi.fn().mockResolvedValue(undefined),
@@ -39,6 +40,7 @@ describe("OpenCodePlugin (integration)", () => {
         "chat.message",
         "chat.params",
         "tool.execute.before",
+        "command.execute.before",
         "tool.execute.after",
         "experimental.session.compacting",
         "experimental.text.complete",
@@ -147,5 +149,40 @@ describe("OpenCodePlugin (integration)", () => {
     ]?.({ sessionID: "s", messageID: "m", partID: "p", text: "hello" }, {});
 
     expect(true).toBe(true);
+  });
+
+  it("routes command.execute.before to the adapter and appends the workflow directive", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = { parts: [] as unknown[] };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.(
+      { command: "/justice-start", sessionID: "s-cmd", arguments: "--plan plan.md ship it" },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ type: "text", sessionID: "s-cmd" });
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
+  });
+
+  it("leaves command.execute.before output untouched for a non-Justice command", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = { parts: [] as unknown[] };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.({ command: "other-command", sessionID: "s-cmd", arguments: "ship it" }, output);
+
+    expect(output.parts).toEqual([]);
+  });
+
+  it("registers no public tool beyond justice_review", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+
+    expect(Object.keys(handlers.tool ?? {})).toEqual(["justice_review"]);
   });
 });

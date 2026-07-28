@@ -1,7 +1,12 @@
-import type { ToolDefinition } from "@opencode-ai/plugin";
+import { randomUUID } from "node:crypto";
+import type { Hooks, ToolDefinition } from "@opencode-ai/plugin";
 import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
+import {
+  isJusticeStartCommand,
+  parseWorkflowStartCommandArguments,
+} from "../core/trigger-detector";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
@@ -46,6 +51,18 @@ const TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS: readonly string[] = Object.freez
 const TRUSTED_REVIEW_SNAPSHOT_ARTIFACT_TOOLS: readonly string[] = Object.freeze([
   "code_review",
 ] as const);
+
+type CommandExecuteBeforeHook = NonNullable<Hooks["command.execute.before"]>;
+
+/**
+ * `command.execute.before` argument types, read straight back off the SDK `Hooks` map so an
+ * upstream rename or reshape fails at compile time. The exact contract (`command`,
+ * `sessionID`, raw `arguments` string; mutable `output.parts`; `Promise<void>` with no deny
+ * channel) is pinned by `tests/types/command-execute-before.contract-fixture.ts`.
+ */
+export type CommandExecuteBeforeInput = Parameters<CommandExecuteBeforeHook>[0];
+export type CommandExecuteBeforeOutput = Parameters<CommandExecuteBeforeHook>[1];
+type CommandExecuteBeforePart = CommandExecuteBeforeOutput["parts"][number];
 
 interface GenericEventInput {
   readonly event: {
@@ -697,6 +714,71 @@ export class OpenCodeAdapter {
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);
     }
+  }
+
+  /**
+   * Handle the `/justice-start` slash command and hand the caller Justice's bootstrap
+   * guidance as an appended directive part.
+   *
+   * Fail-open is structural here, not a style choice: the SDK handler resolves to
+   * `Promise<void>` and `output` exposes only `parts`, so there is no channel by which a
+   * plugin could deny or abort a command. Every failure therefore degrades to PROCEED with
+   * `output.parts` left untouched.
+   *
+   * `input.command` is accepted with or without its leading slash — the SDK does not
+   * document which spelling it delivers, and `isJusticeStartCommand` tolerates both.
+   */
+  async onCommandExecuteBefore(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    if (this.#noOp) return;
+
+    try {
+      // Every other command is a strict no-op: not even lazy initialization is triggered.
+      if (!isJusticeStartCommand(input.command)) return;
+
+      // The parser already rejects unknown flags, valueless/duplicated flags, unsafe paths
+      // and a missing goal. Justice stays silent rather than guessing an intent, and the raw
+      // arguments are never echoed into the log.
+      const request = parseWorkflowStartCommandArguments(input.arguments);
+      if (request === null) {
+        await this.log("warn", "[Justice] /justice-start arguments rejected by parser; ignoring");
+        return;
+      }
+
+      await this.ensureInitialized();
+      const justice = this.#justice;
+      if (!justice) return;
+
+      const result = await justice.getPlanBridge().handleWorkflowStart(input.sessionID, request);
+
+      // Observation audit records are emitted by PlanBridge.handleWorkflowStart, not here,
+      // to avoid double-writing the same workflow lifecycle events (workflow_started +
+      // plan_activated/design_requested/plan_requested) into the observation log.
+
+      if (result.guidance.length === 0) return;
+      output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+    } catch (err) {
+      await this.log("error", "[Justice] onCommandExecuteBefore failure", err);
+    }
+  }
+
+  /**
+   * Build the synthetic text part carrying the bootstrap guidance. `command.execute.before`
+   * supplies neither `id` nor `messageID`, so both are generated here following the
+   * `writer-id` precedent (`randomUUID`). `synthetic: true` marks the part as plugin-authored
+   * rather than user-typed.
+   */
+  #buildWorkflowDirectivePart(sessionId: string, guidance: string): CommandExecuteBeforePart {
+    return {
+      id: `prt_justice_workflow_${randomUUID()}`,
+      sessionID: sessionId,
+      messageID: `msg_justice_workflow_${randomUUID()}`,
+      type: "text",
+      text: guidance,
+      synthetic: true,
+    };
   }
 
   async onSessionCompacting(

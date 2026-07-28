@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import {
+  OpenCodeAdapter,
+  type CommandExecuteBeforeOutput,
+} from "../../src/runtime/opencode-adapter";
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { fakeInit } from "../helpers/fake-opencode-init";
@@ -405,5 +408,222 @@ describe("OpenCodeAdapter.getTools", () => {
     expect(Object.keys(tools)).toEqual(["justice_review"]);
     expect(tools.justice_review?.description).toContain("Review Summary Artifact");
     expect(typeof tools.justice_review?.execute).toBe("function");
+  });
+
+  it("never registers an additional public tool for the workflow start command (D50)", () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const toolNames = Object.keys(adapter.getTools());
+
+    expect(toolNames).toHaveLength(1);
+    expect(toolNames).not.toContain("justice_status");
+    expect(toolNames).not.toContain("justice_gate");
+    expect(toolNames.filter((name) => name !== "justice_review")).toEqual([]);
+  });
+});
+
+describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The SDK does not document whether `input.command` carries a leading slash, so both
+  // spellings must activate the workflow (matching isJusticeStartCommand in Todo1).
+  it.each(["justice-start", "/justice-start"])(
+    "appends the bootstrap guidance as a synthetic text part for %s",
+    async (command) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const handleWorkflowStart = vi
+        .spyOn(justice.getPlanBridge(), "handleWorkflowStart")
+        .mockResolvedValue({
+          phase: "plan_ready",
+          goal: "ship the feature",
+          nextSkill: null,
+          activePlanPath: "plan.md",
+          guidance: "[JUSTICE: Workflow Bootstrap] plan_ready",
+        });
+
+      const output: CommandExecuteBeforeOutput = { parts: [] };
+      await adapter.onCommandExecuteBefore(
+        { command, sessionID: "sess-cmd", arguments: "--plan plan.md ship the feature" },
+        output,
+      );
+
+      expect(handleWorkflowStart).toHaveBeenCalledWith("sess-cmd", {
+        source: "command",
+        goal: "ship the feature",
+        designPath: null,
+        planPath: "plan.md",
+      });
+      expect(output.parts).toHaveLength(1);
+      expect(output.parts[0]).toMatchObject({
+        sessionID: "sess-cmd",
+        type: "text",
+        text: "[JUSTICE: Workflow Bootstrap] plan_ready",
+        synthetic: true,
+      });
+      const [part] = output.parts;
+      expect(typeof part?.id).toBe("string");
+      expect(part?.id.length).toBeGreaterThan(0);
+      expect(typeof (part as { messageID?: unknown }).messageID).toBe("string");
+    },
+  );
+
+  it("does not emit workflow observations from the adapter; PlanBridge owns them", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart").mockResolvedValue({
+      phase: "plan_required",
+      goal: "ship it",
+      nextSkill: "writing-plans",
+      activePlanPath: null,
+      guidance: "plan_required guidance",
+    });
+    const observation = justice.getObservationHandler();
+    const started = vi.spyOn(observation, "emitWorkflowStartedEvent");
+    const phase = vi.spyOn(observation, "emitWorkflowPhaseEvent");
+
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-start", sessionID: "sess-obs", arguments: "ship it" },
+      output,
+    );
+
+    expect(started).not.toHaveBeenCalled();
+    expect(phase).not.toHaveBeenCalled();
+    expect(output.parts).toHaveLength(1);
+  });
+
+  it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart").mockResolvedValue({
+      phase: "design_required",
+      goal: "ship it",
+      nextSkill: "brainstorming",
+      activePlanPath: null,
+      guidance: "design_required guidance",
+    });
+    const observation = justice.getObservationHandler();
+    const started = vi.spyOn(observation, "emitWorkflowStartedEvent");
+
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+    await expect(
+      adapter.onCommandExecuteBefore(
+        { command: "justice-start", sessionID: "sess-obs-fail", arguments: "ship it" },
+        output,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(started).not.toHaveBeenCalled();
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ text: "design_required guidance" });
+  });
+
+  it("leaves output.parts untouched for a non-Justice command", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      { command: "other-command", sessionID: "sess-other", arguments: "--plan plan.md goal" },
+      output,
+    );
+
+    expect(output.parts).toEqual([]);
+    // A non-Justice command must not even trigger lazy initialization.
+    expect(adapter.getJustice()).toBeNull();
+  });
+
+  it.each(["--plan", "--plan /etc/passwd goal", "--unknown-flag goal", ""])(
+    "fails open without throwing or mutating state for malformed arguments %j",
+    async (rawArguments) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const handleWorkflowStart = vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart");
+      const output: CommandExecuteBeforeOutput = { parts: [] };
+
+      await expect(
+        adapter.onCommandExecuteBefore(
+          { command: "/justice-start", sessionID: "sess-bad", arguments: rawArguments },
+          output,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(handleWorkflowStart).not.toHaveBeenCalled();
+      expect(output.parts).toEqual([]);
+      expect(justice.getPlanBridge().getActivePlan("sess-bad")).toBeNull();
+    },
+  );
+
+  it("fails open when the plan bridge throws", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart").mockRejectedValue(
+      new Error("bridge exploded"),
+    );
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await expect(
+      adapter.onCommandExecuteBefore(
+        { command: "justice-start", sessionID: "sess-throw", arguments: "ship it" },
+        output,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(output.parts).toEqual([]);
+  });
+
+  it("appends guidance through the real plan bridge without any stubbing", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      { command: "/justice-start", sessionID: "sess-real", arguments: "--plan plan.md ship it" },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ type: "text", sessionID: "sess-real" });
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
+  });
+
+  it("stays a no-op when the adapter has no workspace root", async () => {
+    const adapter = new OpenCodeAdapter(
+      fakeInit({ worktree: undefined, directory: undefined, project: { root: undefined } }),
+    );
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-start", sessionID: "sess-noop", arguments: "ship it" },
+      output,
+    );
+
+    expect(output.parts).toEqual([]);
+  });
+
+  it("leaves output.parts empty when PlanBridge returns no guidance", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart").mockResolvedValue({
+      phase: "plan_required",
+      goal: "ship it",
+      nextSkill: "writing-plans",
+      activePlanPath: null,
+      guidance: "",
+    });
+
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      { command: "/justice-start", sessionID: "sess-empty", arguments: "ship it" },
+      output,
+    );
+
+    expect(output.parts).toEqual([]);
   });
 });
