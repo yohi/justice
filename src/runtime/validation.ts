@@ -23,7 +23,7 @@ function isValidBootstrapPath(value: unknown): boolean {
   if (value === undefined) return true;
   if (typeof value !== "string" || value.length === 0) return false;
   if (value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/u.test(value)) return false;
-  return !value.split(/[\\/]/u).some((segment) => segment === "..");
+  return !value.split(/[\\/]/u).includes("..");
 }
 
 function isValidWorkflowBootstrapAudit(value: unknown): boolean {
@@ -150,11 +150,11 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
     for (const item of r.items) {
       if (
-          !isObject(item) ||
-          typeof item.itemKey !== "string" ||
-          typeof item.evidenceId !== "string" ||
-          item.evidenceId !== item.itemKey ||
-          typeof item.summary !== "string" ||
+        !isObject(item) ||
+        typeof item.itemKey !== "string" ||
+        typeof item.evidenceId !== "string" ||
+        item.evidenceId !== item.itemKey ||
+        typeof item.summary !== "string" ||
         typeof item.location !== "string" ||
         !isOneOf(item.severity, ["critical", "major", "minor"]) ||
         !isOneOf(item.status, ["open", "resolved"])
@@ -202,7 +202,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       r.reflection.planRef.path.startsWith("/") ||
       r.reflection.planRef.path.startsWith("\\") ||
       /^[A-Za-z]:/u.test(r.reflection.planRef.path) ||
-      r.reflection.planRef.path.split(/[\\/]/u).some((seg) => seg === "..") ||
+      r.reflection.planRef.path.split(/[\\/]/u).includes("..") ||
       typeof r.reflection.planRef.taskId !== "string" ||
       !isOneOf(r.reflection.intent, ["check_complete", "append_error_note"]) ||
       (r.reflection.note !== undefined && typeof r.reflection.note !== "string")

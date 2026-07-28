@@ -30,18 +30,19 @@ export type WorkflowBootstrapAuditEntry = {
  * lifecycle. `state-projection` and the persisted-schema validator both consult
  * it so the "audit-only" boundary is defined in exactly one place.
  */
-export const WORKFLOW_BOOTSTRAP_RECORD_KINDS: readonly WorkflowBootstrapRecordKind[] = [
-  "workflow_started",
-  "design_requested",
-  "plan_requested",
-  "plan_activated",
-];
+const WORKFLOW_BOOTSTRAP_RECORD_KIND_SET: Readonly<Record<WorkflowBootstrapRecordKind, true>> = {
+  workflow_started: true,
+  design_requested: true,
+  plan_requested: true,
+  plan_activated: true,
+};
+
+export const WORKFLOW_BOOTSTRAP_RECORD_KINDS: readonly WorkflowBootstrapRecordKind[] = Object.keys(
+  WORKFLOW_BOOTSTRAP_RECORD_KIND_SET,
+) as WorkflowBootstrapRecordKind[];
 
 export function isWorkflowBootstrapRecordKind(kind: unknown): kind is WorkflowBootstrapRecordKind {
-  return (
-    typeof kind === "string" &&
-    (WORKFLOW_BOOTSTRAP_RECORD_KINDS as readonly string[]).includes(kind)
-  );
+  return typeof kind === "string" && Object.hasOwn(WORKFLOW_BOOTSTRAP_RECORD_KIND_SET, kind);
 }
 
 export function isWorkflowBootstrapRecord(
