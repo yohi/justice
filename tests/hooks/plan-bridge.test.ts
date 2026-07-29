@@ -61,7 +61,7 @@ function createObservationHandler(): ObservationHandler & {
 
 describe("PlanBridge", () => {
   describe("handleMessage", () => {
-    it("should detect plan reference and return delegation request", async () => {
+    it("should mark plan-reference-only delegation as unauthorized", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -81,13 +81,14 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
       expect(response.injectedContext).toContain(
-        "Justiceは外部での承認やマージ状態を検証できません",
+        "まだ外部で人間による承認・マージが確認されていません",
       );
+      expect(response.injectedContext).toContain("task() をキャンセル");
     });
 
-    it("warns that delegation is unauthorized when workflow bootstrap reached plan_ready", async () => {
+    it("uses the standard implementation directive when workflow bootstrap reached plan_ready", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -114,11 +115,11 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Setup project structure");
-      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
       expect(response.injectedContext).toContain(
-        "まだ外部で人間による承認・マージが確認されていません",
+        "Justiceは外部での承認やマージ状態を検証できません",
       );
-      expect(response.injectedContext).toContain("task() をキャンセル");
+      expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
     });
 
     it("should return PROCEED when file read fails", async () => {
@@ -190,7 +191,7 @@ describe("PlanBridge", () => {
   });
 
   describe("handlePreToolUse", () => {
-    it("should inject plan context when task() is about to be called", async () => {
+    it("should inject unauthorized plan context for a manually activated plan", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -214,10 +215,11 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Task ID");
-      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
       expect(response.injectedContext).toContain(
-        "Justiceは外部での承認やマージ状態を検証できません",
+        "まだ外部で人間による承認・マージが確認されていません",
       );
+      expect(response.injectedContext).toContain("task() をキャンセル");
     });
 
     it("preserves caller loadSkills and appends implementation directive skills", async () => {
@@ -255,7 +257,7 @@ describe("PlanBridge", () => {
       });
     });
 
-    it("uses the standard implementation directive when no workflow bootstrap state exists", async () => {
+    it("warns that task() is unauthorized when an active plan has no workflow bootstrap", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -278,13 +280,13 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
       expect(response.injectedContext).toContain(
-        "Justiceは外部での承認やマージ状態を検証できません",
+        "まだ外部で人間による承認・マージが確認されていません",
       );
-      expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).toContain("task() をキャンセル");
     });
-    it("warns that task() is unauthorized when workflow bootstrap reached plan_ready", async () => {
+    it("uses the standard implementation directive when workflow bootstrap reached plan_ready", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -311,11 +313,11 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("Task ID");
-      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
       expect(response.injectedContext).toContain(
-        "まだ外部で人間による承認・マージが確認されていません",
+        "Justiceは外部での承認やマージ状態を検証できません",
       );
-      expect(response.injectedContext).toContain("task() をキャンセル");
+      expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
     });
 
     it("should not inject context for a different session", async () => {

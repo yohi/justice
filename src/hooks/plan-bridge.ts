@@ -401,7 +401,7 @@ export class PlanBridge {
   private withImplementationDirective(context: string, sessionId: string): string {
     const bootstrap = this.getWorkflowBootstrap(sessionId);
     const stage =
-      bootstrap?.phase === "plan_ready" ? "implementation_unauthorized" : "implementation";
+      bootstrap?.phase === "plan_ready" ? "implementation" : "implementation_unauthorized";
     return `${context}\n\n${formatWorkflowDirective({ stage })}`;
   }
 

@@ -120,6 +120,14 @@ describe("ObservationHandler review observations", () => {
     // When
     const first = await handler.handlePostToolUse(event);
     const duplicate = await handler.handlePostToolUse(event);
+    const differentTool = await handler.handlePostToolUse({
+      ...event,
+      payload: {
+        ...event.payload,
+        toolName: "task",
+        toolInput: { taskId: "task-dedup" },
+      },
+    });
     const corrected = await handler.handlePostToolUse({
       ...event,
       payload: {
@@ -139,6 +147,7 @@ describe("ObservationHandler review observations", () => {
     // Then
     expect(first.action).toBe("inject");
     expect(duplicate).toEqual({ action: "proceed" });
+    expect(differentTool.action).toBe("inject");
     expect(corrected.action).toBe("inject");
     expect(afterDestroy.action).toBe("inject");
   });
@@ -177,7 +186,7 @@ describe("ObservationHandler review observations", () => {
       kind: "review_observed",
       taskId: "task-6.3",
       reviewScope: "task-6.3",
-      isCompleteSnapshot: false,
+      isCompleteSnapshot: true,
       items: [
         {
           severity: "critical",
@@ -196,7 +205,7 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("does not append an empty review observation from untrusted complete snapshot metadata", async () => {
+  it("injects review clear from backward-compatible complete snapshot metadata", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
@@ -215,14 +224,20 @@ describe("ObservationHandler review observations", () => {
     });
 
     // Then
-    expect(response).toEqual({ action: "proceed" });
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review clear injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
     const events = await logStore.readAll();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "tool_executed" });
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({
+      kind: "review_observed",
+      isCompleteSnapshot: true,
+      items: [],
+    });
   });
 
-  it.each(["bash", "task", "arbitrary_custom_tool"])(
-    "keeps observed review items open when generic %s metadata claims a complete snapshot",
+  it.each(["bash", "arbitrary_custom_tool"])(
+    "keeps observed review items open when non-review %s metadata claims a complete snapshot",
     async (toolName) => {
       // Given
       const { handler, logStore, sessionState } = createHandler();
@@ -268,6 +283,44 @@ describe("ObservationHandler review observations", () => {
       expect(state.reviewSummary.resolved).toEqual([]);
     },
   );
+
+  it("resolves task review items from backward-compatible complete snapshot metadata", async () => {
+    // Given
+    const { handler, logStore, sessionState } = createHandler();
+    const callId = "call-task-snapshot";
+    sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId,
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    });
+
+    // When
+    sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId,
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
+        toolResult: "Review complete with no findings",
+        error: false,
+        metadata: { isCompleteSnapshot: true },
+      },
+    });
+
+    // Then
+    const state = project(await logStore.readAll(), "2026-07-18T00:00:00.000Z");
+    expect(state.reviewSummary.open).toEqual([]);
+    expect(state.reviewSummary.resolved).toHaveLength(1);
+  });
 
   it("does not append a review observation without a finding or complete snapshot", async () => {
     // Given

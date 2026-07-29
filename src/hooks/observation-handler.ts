@@ -450,7 +450,8 @@ export class ObservationHandler {
           event.payload.toolName,
           event.payload.toolResult,
           event.payload.metadata,
-          event.payload.reviewSnapshotArtifact?.complete === true,
+          event.payload.reviewSnapshotArtifact?.complete === true ||
+            event.payload.metadata?.isCompleteSnapshot === true,
         );
       }
       let response: HookResponse;
@@ -630,6 +631,7 @@ export class ObservationHandler {
     isCompleteSnapshot = false,
   ): Promise<ReviewObservationOutcome> {
     const deliveryKey = JSON.stringify([
+      toolName,
       callId,
       hashString(toolResult),
       isCompleteSnapshot === true,
