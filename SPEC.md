@@ -356,13 +356,14 @@ command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` �
 2. `parseWorkflowStartCommandArguments(input.arguments)` — 純粋パーサーが goal と `--design`/`--plan` の安全な相対パスを抽出する。未知のフラグ、値のないフラグ、重複フラグ、安全でないパス（絶対パス・バックスラッシュ・`..`）、goal 欠落はすべて `null` として扱われ、例外は投げない（生引数は非echo）。
 3. `null` の場合は warn ログのみ出して return（fail-open）。パースに成功した場合のみ `ensureInitialized()` を実行する。
 4. `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
-   a. `resolveBootstrapPhase(request)` — **design → plan → 実行可能の順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。
+   a. `resolveBootstrapPhase(request)` — **design → plan → 成果物準備済みの順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。`"plan_ready"` は計画成果物が読み取り可能であることだけを表し、レビュー、承認、マージ、実装認可を表さない。
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
-   c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
-   d. `phase === "plan_ready"` の場合のみ `setActivePlan()` でプランを活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。
-5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。
+   c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
+   d. `phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキストとして活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
+5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。`design_required` / `plan_required` / `plan_ready` はそれぞれ設計、計画、設計・計画 PR の自動レビューへ進む指示であり、利用者に定型 PR・レビュープロンプトの入力を要求しない。
+6. 指示ポリシーは canonical Superpowers スキル名を `requiredSkills` として返す。後続の `task()` 委譲では実装段階の `test-driven-development` と `verification-before-completion` を既存指定とマージし、OmO の `loadSkills` に接続する。
 
-**実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の `task()` 呼び出しは常にエージェント自身の後続アクションに委ねる — Justice はここでも「神経系」であり「手足」ではない。
+**実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の PR・レビュー機能と `task()` 呼び出しはエージェントが既存の権限で実行する。Justice は PR を作成せず、レビューを承認せず、PR をマージせず、PR 作成・承認・マージ状態を推測しない。人間が承認・マージ判断を保持する — Justice はここでも「神経系」であり「手足」ではない。
 
 **Gate との関係:** `workflow_started`/`design_requested`/`plan_requested`/`plan_activated` レコードは `evidence` フィールドを一切持たない audit-only レコードであり（§15.3）、`state-projection.ts` が `ProjectedState.tasks[].evidence` への投影対象から明示的に除外する。したがって Gate の PASS 判定にこれらのレコードが算入される経路は構造的に存在しない（FF-008 が自明に成立）。
 
@@ -1239,7 +1240,8 @@ bun run build
 | Phase 7: 実環境への統合オーケストレーター構築 (Plugin Orchestrator & Runtime) | ✅ 完了 |
 | Phase 8: 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
 | **v2.0: Quality Control Plane 基盤** (Observation Log / State Projection / Gate Engine / Review Aggregator / `justice_review` ツール、§15 参照) | 🟡 実装完了・ガバナンス未完了（L0 Advisory。§15.12 参照 — C1未実証・CODEOWNERS追認未取得） |
-| v2.5: Handoff（サブエージェント実行結果の直接相関）/ Final Verifier / Acceptance Criteria 判定 | 🔲 計画中 |
+| v2.5: Handoff（サブエージェント実行結果の直接相関）/ trusted approval artifacts / `implementation_authorized` 導出 | 🔲 計画中 |
+| v2.5+: Final Verifier / Acceptance Criteria 判定（Feature Gate） | 🔲 将来対応 |
 | v2.5+: L1 deny（強制ブロック）等のエンフォースメント強化 / 物理 prune | 🔲 計画中 |
 | 拡張 CLI 用途のサポート (`justice init`, `justice status` など) | 🔲 計画中 |
 | VSCode 拡張機能などへのアダプタ | 🔲 計画中 |
@@ -1304,11 +1306,13 @@ type ObservationRecord = PendingEnvelope & { readonly sequence: number } & (
   | { kind: "review_observed"; reviewScope: string; isCompleteSnapshot?: boolean; items: ReviewItem[]; resolutionMarkers?: ResolutionMarker[] }
   | { kind: "session_error"; errorKind: string; message: string }
   | { kind: "reflection"; reflection: { trigger: "task_succeeded" | "task_error"; planRef: { path: string; taskId: string }; intent: string; note?: string } }
-  // workflow bootstrap lifecycle（`/justice-start`）: 監査専用の非権威レコード。Evidence を一切持たないため
+  // workflow bootstrap lifecycle（`/justice-start`）: 監査専用の非権威レコード。directiveStage も audit-only。
+  // Evidence を一切持たないため
   // Gate の PASS 判定に算入され得ず（FF-008 が自明に成立）、`project()` は `ensureTask()` の前に skip する。
   // 読み取りは `workflow-bootstrap-projection.ts` の `projectWorkflowBootstrapAudit()` が別系統で提供する。
   | { kind: "workflow_started" | "design_requested" | "plan_requested" | "plan_activated";
-      workflow: { phase: "design_required" | "plan_required" | "plan_ready"; source: "command" | "fallback_marker";
+      workflow: { phase: "design_required" | "plan_required" | "plan_ready";
+        directiveStage?: WorkflowDirectiveStage; source: "command" | "fallback_marker";
         goalHash: string; goalSnippet: string; designPath?: string; planPath?: string } }
 );
 
@@ -1397,7 +1401,7 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 以下は v2.0 では意図的に対象外（deferred）とされており、将来フェーズでの拡張対象です:
 
-- **Handoff（FR-003）**: サブエージェント実行結果の `observed` 相関。v2.0 では task summary 経由の合否主張は transcript を含んでいても `declared` 据置（PASS 非算入）。
+- **Handoff（FR-003）と trusted approval artifacts**: サブエージェント実行結果の `observed` 相関と、外部の人間による承認・マージを信頼済み成果物として関連付ける。v2.0 では task summary 経由の合否主張は transcript を含んでいても `declared` 据置（PASS 非算入）であり、`plan_activated` から認可を推測しない。Handoff と trusted approval artifacts の導入後にのみ `implementation_authorized` を導出する。
 - **Final Verifier（FR-007）**: v2.5 以降。
 - **Acceptance Criteria 判定（FR-005）**: `plan.md` 由来の feature 級基準は外部 SoT に属するため v2.5+（Feature Gate）で対応。
 - **OmO agents awareness（FR-002 の一部）**: v2.0 は skill awareness（`skill_invoked` 観測）のみに対応。どの OmO agent が起動したかの把握は v2.5 Handoff へ。

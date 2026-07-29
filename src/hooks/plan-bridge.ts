@@ -570,24 +570,18 @@ export class PlanBridge {
     }
 
     // 2) ペルソナを解決
-    let persona: AgentId = "hephaestus";
     const inputPersona = inferPersonaFromToolInput(event.payload.toolInput);
 
     // dominant_override が発生するかどうかを確認
     let dominantAgentId: AgentId | undefined;
-    const routingResult = this.agentRouter.route(initialDelegation.category, mergedLoadSkills);
+    const routingResult = this.agentRouter.route(initialDelegation.category, toolInputSkills);
     if (routingResult.reason === "dominant_override") {
       dominantAgentId = routingResult.agentId;
     }
 
-    if (dominantAgentId) {
-      // dominant_override が有効な場合は、明示的な入力ペルソナより優先
-      persona = dominantAgentId;
-    } else if (this.isResolvableAgentId(inputPersona)) {
-      persona = inputPersona;
-    } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
-      persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
-    }
+    const persona: AgentId =
+      dominantAgentId ??
+      (this.isResolvableAgentId(inputPersona) ? inputPersona : routingResult.agentId);
 
     const previousLearnings = this.getRelevantLearnings(persona);
 

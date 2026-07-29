@@ -114,8 +114,11 @@ describe("ObservationHandler tool observation", () => {
 
     expect(response).toEqual({ action: "proceed" });
     const events = await logStore.readAll();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "tool_executed", taskId: "task-1" });
+    const toolEvents = events.filter(
+      (event) => event.recordType === "observation" && event.kind === "tool_executed",
+    );
+    expect(toolEvents).toHaveLength(1);
+    expect(toolEvents[0]).toMatchObject({ kind: "tool_executed", taskId: "task-1" });
     expect(project(events, "2026-07-11T00:00:00.000Z").tasks.has("task-1")).toBe(true);
     expect(projectionCache.write).toHaveBeenCalledOnce();
     expect(gateSpy).toHaveBeenNthCalledWith(

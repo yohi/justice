@@ -4,17 +4,18 @@
 
 ## 1. 現在の開発フロー
 
-現状は、次の流れで開発を回している。
+現状は、次の prompt-free・レビュー製品非依存の流れで開発を回す。
 
-1. `superpowers/brainstorming` で設計書を作る
-2. 設計 PR を CodeRabbit / Greptile でレビューする
-3. `実装計画作成プロンプト` で計画を書く
-4. 計画 PR をレビューする
-5. `実装用プロンプト` で Phase 単位に実装する
-6. Task 単位で PR を切ってレビューする
-7. `乖離確認用プロンプト` で設計・計画・実装の差分を確認する
-8. 必要なら修正して再レビューする
-9. これを全 Phase で繰り返す
+1. 利用者が `/justice-start` に目標と設計・計画の成果物パスを渡す
+2. Justice の synthetic directive に従い、`brainstorming` と `writing-plans` で設計・計画を準備する
+3. `plan_ready` では成果物の読み取り準備ができたものとして、設計・計画だけの PR と利用可能な AI レビューを進める
+4. エージェントが既存の権限で PR・レビュー機能を実行し、指摘を修正して同じレビューを再実行する
+5. 人間が設計・計画を明示的に承認してマージする
+6. 外部での承認・マージ確認後にエージェントが `task()` へ委譲し、Justice がプランコンテキスト、実装用 `loadSkills`、実装 PR・レビュー指示を追加する
+7. Task 単位の実装 PR でも利用可能な AI レビューを行い、必要なら修正して再レビューする
+8. 人間が実装 PR の承認・マージを判断し、全 Phase で繰り返す
+
+利用者は PR 作成やレビュー依頼の定型プロンプトをコピーしたり入力したりしない。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、それらの状態を推測しない。
 
 ## 2. うまくいっている点
 
@@ -69,10 +70,13 @@ justice は実装や設計を奪うのではなく、次を担う。
 ## 5. Roadmap の見え方
 
 - **v2**: Quality Coordination Layer
-  - Task / Phase / Feature の品質を揃える
-  - 証跡とレビューを扱う
-- **v2.5**: Evidence / Wisdom の強化
-  - 失敗とレビュー指摘を学習に使う
+  - Task / Phase の品質、証跡、レビューを L0 Advisory として扱う
+  - prompt-free な段階別 directive を注入する
+- **v2.5**: Handoff / Trusted Approval Artifacts
+  - サブエージェント実行結果と、外部の人間による承認・マージ成果物を相関する
+  - Handoff と信頼済み承認成果物が揃った後にだけ `implementation_authorized` を導出する
+- **v2.5+**: Final Verifier / Acceptance Criteria
+  - Feature-level Final Verification と Acceptance Criteria 判定は引き続き将来対応とする
 - **v3**: Traceability / Coverage
   - 要求から設計・計画・実装・テストまで追跡する
 - **v3.5**: Adaptive Gate
@@ -82,6 +86,8 @@ justice は実装や設計を奪うのではなく、次を担う。
 ## 6. まだ未解決の前提
 
 - v2 では Gate を強制せず、助言に留める。強制が必要かは将来の Policy Engine で再検討する。
+- `plan_ready` / `plan_activated` は成果物準備・監査状態であり、実装認可ではない。
+- PR の作成・承認・マージ状態を、どの trusted approval artifact から確定するか。
 - どのイベントを実際に観測できるのか
 - 証跡を誰がどう集めるのか
 - 追記型の状態管理をどう安全に保つか
