@@ -26,6 +26,32 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.6.0](https://github.com/yohi/justice/compare/v2.5.0...v2.6.0) (2026-07-29)
+
+
+### Features
+
+* Automated Workflow Directives（prompt-free・vendor-neutral ワークフロー誘導） ([6f292bb](https://github.com/yohi/justice/commit/6f292bb0892703b04279055af8ea998ddaf1e4e0))
+* implementation directiveを外部承認不可検証に沿う文言に修正 ([84ab034](https://github.com/yohi/justice/commit/84ab034727ce748ef620c237d525d28639d826af))
+* **plan-bridge:** 未承認実装タスクへの警告ディレクティブを注入 ([d224174](https://github.com/yohi/justice/commit/d2241744e9fcd9897573fae7d7099cbddc0c8e57))
+* workflow directive連携を追加 ([5f2437a](https://github.com/yohi/justice/commit/5f2437ab876d3b8dc5bead0babe196b1531569ee))
+* workflow directive連携を追加 ([74b4995](https://github.com/yohi/justice/commit/74b4995f81fc0641ebea242e0338803e55189735))
+* レビュー指摘とクリア通知のベンダー中立 directive 注入 ([fe729c3](https://github.com/yohi/justice/commit/fe729c3195b742f9406adba87f722931fc2a8cc8))
+* ワークフロー指示ポリシーを型付け ([d868aed](https://github.com/yohi/justice/commit/d868aed101c50355a9c4a25cc9cefd1d7a3e07e8))
+* ワークフロー指示を構造化 ([3bdf7c5](https://github.com/yohi/justice/commit/3bdf7c538a776bc9dd367e32a84b5f66921d5c9c))
+* ワークフロー指示を構造化 ([5d8f26b](https://github.com/yohi/justice/commit/5d8f26b3fd0aac48e2fdc66e0706f0444ad16214))
+* ワークフロー監査・ライフサイクルの誠実な境界を追加 ([1a9e4c3](https://github.com/yohi/justice/commit/1a9e4c323e4124fac359a7af908cfebe9b9bfe8a))
+
+
+### Bug Fixes
+
+* canonical skill 追加時の agent ルーティング副作用を修正 ([9f7ab01](https://github.com/yohi/justice/commit/9f7ab01e1f7e108e590c633f2115c7dbad40c05d))
+* CodeRabbit レビュー指摘に対応 ([4fa8050](https://github.com/yohi/justice/commit/4fa80503b27c905e81b1f35dcebf3f2d40c99389))
+* plan-bridgeのskills配列をdelegationとmodifiedPayloadで統合 ([84ab034](https://github.com/yohi/justice/commit/84ab034727ce748ef620c237d525d28639d826af))
+* ルーティング条件の不整合を修正 - toolInputSkills から mergedLoadSkills に変更 ([1c236c5](https://github.com/yohi/justice/commit/1c236c5d19336b0080875afa33ae6307cf8a3306))
+* ワークフロー認可とレビュー観測を修正 ([e042046](https://github.com/yohi/justice/commit/e0420461a5a8da7a9a27606a898284b679f9e37e))
+* 未検証の metadata.isCompleteSnapshot による完全スナップショット昇格を禁止 ([563bb48](https://github.com/yohi/justice/commit/563bb488e14a86ba64a443c92953aa4a7156c5cf))
+
 ## [2.5.0](https://github.com/yohi/justice/compare/v2.0.0...v2.5.0) (2026-07-28)
 
 
