@@ -33,7 +33,8 @@ If a change appears to require breaking an invariant, stop and ask first.
   Keep `justice_status` and `justice_gate` behind the trust boundary.
 - **Evidence trust**: `declared` provenance never satisfies a Gate PASS; only
   `observed` and `derived` evidence can.
-- **Advisory bootstrap**: `/justice-start` guidance never invokes a skill or `task()`.
+- **Advisory bootstrap**: `/justice-start` and `/justice-implement` guidance never invokes a skill or `task()`.
+- **Implementation arm**: `handlePreToolUse` enriches `task()` only when the session is explicitly armed via `/justice-implement` or equivalent trusted trigger; otherwise it emits `implementation_unauthorized`.
 - **Reserved fallback**: do not wire `parseWorkflowStartFallbackMarker()` into
   `PlanBridge.handleMessage()` without explicit approval.
 

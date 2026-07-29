@@ -318,6 +318,44 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 7. 実装 PR でも利用可能な AI レビューを行い、最終的な承認・マージ判断は人間が行う。
 8. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認する。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにする。
 
+## `/justice-implement` コマンド
+
+アクティブな計画に対して、次の 1 回の `task()` で実装委譲を開始することを明示的に許可するコマンドです。
+
+```bash
+/justice-implement --plan <planPath> --approved
+```
+
+**例:**
+
+```
+/justice-implement --plan docs/plans/feature.md --approved
+```
+
+### 引数文法
+
+- **`--plan <path>`** (必須): 計画ファイルの相対パス。
+- **`--approved`** (任意): 人間による承認・マージが確認済みであることを宣言します。Justice はこの状態を検証できません; これは単に実装委譲を強化するための合図です。
+
+### 動作
+
+- コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
+- 未アーム状態で active plan に対して `task()` や plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory が注入されます。
+- 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、必要に応じて再度 `/justice-implement` を実行してください。
+
+### 有効化（OpenCode側の設定）
+
+`/justice-start` と同様に、`/justice-implement` は OpenCode の組み込みコマンドではありません。利用者がコマンドを登録する必要があります。
+
+**`.opencode/commands/justice-implement.md`**:
+
+```markdown
+---
+description: Arm the next Justice-managed implementation delegation
+---
+$ARGUMENTS
+```
+
 ## Quality Control Plane (v2.0)
 
 Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。

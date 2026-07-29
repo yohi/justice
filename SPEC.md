@@ -342,7 +342,16 @@ command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` �
 
 ---
 
-### 4.1a `/justice-start` — ワークフロー・ブートストラップ (OpenCode コマンドフック)
+### 4.1a `command.execute.before` — `/justice-start` と `/justice-implement`
+
+`OpenCodeAdapter.onCommandExecuteBefore` は以下の 2 つのコマンドを処理する:
+
+- `justice-start`: ワークフロー・ブートストラップを開始し、design/plan/レビュー段階の guidance を注入する。
+- `justice-implement`: active plan に対して次の `task()` での実装委譲を 1 回だけ許可し、`[JUSTICE: IMPLEMENTATION ARMED]` guidance を注入する。
+
+どちらのコマンドも skill や `task()` を起動せず、純粋に synthetic text part を注入するのみである。
+
+`/justice-start` はワークフロー・ブートストラップを開始する OpenCode コマンドフックである。
 
 | プロパティ | 設定値 |
 |----------|-------|
@@ -400,6 +409,8 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 | `review_clear` | なし | `await_human_approval` | `external_unverified` | 完全な指摘なしスナップショットの観測 |
 | `implementation` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | 読み取り可能な plan context での実装委譲 |
 | `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | `/justice-start` の `plan_ready` を経ない既存委譲への安全側通知 |
+| `implementation_arm` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | `/justice-implement` による次回の実装委譲の許可 |
+| `implementation_arm_required` | なし | `await_human_approval` | `external_unverified` | 未アーム状態での実装委譲への安全側通知 |
 
 `plan_ready`、`plan_activated`、`review_clear` は、承認・マージ・実装認可を意味
 しない。`implementation_unauthorized` も L0 advisory であり、実行を物理的に
