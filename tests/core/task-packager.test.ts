@@ -84,11 +84,7 @@ describe("TaskPackager", () => {
     expect(enriched).toEqual({
       prompt: "run",
       taskId: "task-generated",
-      loadSkills: [
-        "domain-skill",
-        "test-driven-development",
-        "verification-before-completion",
-      ],
+      loadSkills: ["domain-skill", "test-driven-development", "verification-before-completion"],
     });
     expect(original).toEqual({
       prompt: "run",

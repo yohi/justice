@@ -74,6 +74,19 @@ async function createHarness(): Promise<Harness> {
   return { adapter, justice, handleMessage };
 }
 
+async function armImplementation(
+  adapter: OpenCodeAdapter,
+  sessionID: string,
+  planPath: string,
+): Promise<CommandExecuteBeforeOutput> {
+  const output: CommandExecuteBeforeOutput = { parts: [] };
+  await adapter.onCommandExecuteBefore(
+    { command: "/justice-implement", sessionID, arguments: `--plan ${planPath} --approved` },
+    output,
+  );
+  return output;
+}
+
 async function startWorkflow(
   adapter: OpenCodeAdapter,
   sessionID: string,
@@ -163,6 +176,9 @@ describe("Justice workflow bootstrap integration flow", () => {
     });
     // Audit-only: a bootstrap record must never open a task window (FF-008).
     expect(records.every((record) => record.taskId === undefined)).toBe(true);
+    expect(justice.getPlanBridge().isImplementationArmed(sessionId)).toBe(false);
+    // Arm the session explicitly before the first implementation task.
+    await armImplementation(adapter, sessionId, PLAN_PATH);
 
     const task = await callTaskTool(adapter, sessionId, "c-plan-ready", "実装を進めてください");
     const prompt = task.args.prompt as string;
@@ -281,6 +297,8 @@ describe("Justice workflow bootstrap integration flow", () => {
 
     expect(justice.getPlanBridge().getActivePlan("s-ready")).toBe(PLAN_PATH);
     expect(justice.getPlanBridge().getActivePlan("s-blocked")).toBeNull();
+    // Only the ready session is explicitly armed; blocked stays unauthorized.
+    await armImplementation(adapter, "s-ready", PLAN_PATH);
 
     const blocked = await callTaskTool(adapter, "s-blocked", "c-blocked", "実装を進めてください");
     const ready = await callTaskTool(adapter, "s-ready", "c-ready", "実装を進めてください");

@@ -15,18 +15,39 @@ export function parseJusticeImplementCommandArguments(
 ): ImplementationArmRequest | null {
   const args = argumentsString.trim().split(/\s+/).filter(Boolean);
 
-  const planFlagIndex = args.indexOf("--plan");
-  if (planFlagIndex === -1) {
+  let planPath: string | null = null;
+  let approved = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args.at(i);
+    if (arg === undefined) break;
+
+    if (arg === "--plan") {
+      if (planPath !== null) return null; // duplicate flag
+      const next = args.at(i + 1);
+      if (next === undefined) return null; // missing value
+      if (next.startsWith("--")) return null;
+      planPath = normalizeSafeRelativePath(next);
+      if (planPath === null) return null; // unsafe path
+      i++; // consume value
+      continue;
+    }
+
+    if (arg.startsWith("--plan=")) {
+      return null; // unsupported value-attached form
+    }
+
+    if (arg === "--approved") {
+      if (approved) return null; // duplicate flag
+      approved = true;
+      continue;
+    }
+
+    // Unknown flag or positional argument: reject strictly.
     return null;
   }
 
-  const planPathRaw = args[planFlagIndex + 1];
-  if (planPathRaw === undefined) return null;
-
-  const planPath = normalizeSafeRelativePath(planPathRaw);
   if (planPath === null) return null;
-
-  const approved = args.includes("--approved");
 
   return {
     source: "command",

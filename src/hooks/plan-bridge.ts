@@ -214,22 +214,18 @@ export class PlanBridge {
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
-
     await this.emitWorkflowBootstrapObservations(sessionId, request, phase, directiveStage);
 
     if (phase === "plan_ready") {
+      // Set active plan so the following /justice-implement command can arm
+      // against it. plan_ready itself does NOT arm the session (explicit
+      // /justice-implement approval is required per the implementation-arm
+      // invariant).
       this.setActivePlan(sessionId, request.planPath);
-      // Legacy compatibility: the first task() after /justice-start plan_ready
-      // is implicitly armed so existing bootstrap flows keep working.
-      const armedPlanPath = this.getActivePlan(sessionId);
-      if (armedPlanPath !== null) {
-        this.implementationArmedSessions.set(sessionId, { planPath: armedPlanPath });
-      }
     } else {
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);
     }
-
     const activePlanPath = this.getActivePlan(sessionId);
     const directive = resolveWorkflowDirective({
       stage: directiveStage,
