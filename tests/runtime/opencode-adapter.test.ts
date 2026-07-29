@@ -496,6 +496,58 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts).toHaveLength(1);
   });
 
+  it("injects implementation arm guidance for /justice-implement", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi
+      .spyOn(justice.getPlanBridge(), "handleImplementationArm")
+      .mockResolvedValue({
+        armed: true,
+        planPath: "plan.md",
+        directiveStage: "implementation_arm",
+        guidance: "[JUSTICE: IMPLEMENTATION ARMED]",
+      });
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-implement",
+        arguments: "--plan plan.md --approved",
+        sessionID: "session-1",
+      },
+      output,
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("session-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ text: "[JUSTICE: IMPLEMENTATION ARMED]" });
+  });
+
+  it("ignores malformed /justice-implement arguments", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi.spyOn(justice.getPlanBridge(), "handleImplementationArm");
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-implement",
+        arguments: "--approved",
+        sessionID: "session-1",
+      },
+      output,
+    );
+
+    expect(handleImplementationArm).not.toHaveBeenCalled();
+    expect(output.parts).toHaveLength(0);
+  });
+
   it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
