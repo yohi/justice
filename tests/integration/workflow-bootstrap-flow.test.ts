@@ -196,6 +196,40 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(handleMessage).not.toHaveBeenCalled();
   });
 
+  it("preserves task arguments and exposes only the unauthorized advisory when not armed", async () => {
+    const { adapter, justice } = await createHarness();
+    const sessionId = "s-plan-ready-unarmed";
+    await startWorkflow(adapter, sessionId, `--plan ${PLAN_PATH} ship the bootstrap`);
+    let injectedContext = "";
+    const bridge = justice.getPlanBridge();
+    const handlePreToolUse = bridge.handlePreToolUse.bind(bridge);
+    vi.spyOn(bridge, "handlePreToolUse").mockImplementation(async (event) => {
+      const response = await handlePreToolUse(event);
+      if (response.action === "inject") injectedContext = response.injectedContext;
+      return response;
+    });
+    const originalArgs = {
+      prompt: "実装を進めてください",
+      loadSkills: ["caller-skill"],
+      metadata: { source: "caller" },
+    };
+    const output: { args: Record<string, unknown> } = { args: originalArgs };
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: sessionId, callID: "c-plan-ready-unarmed" },
+      output,
+    );
+
+    expect(injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+    expect(injectedContext).not.toContain("Task Delegation Context");
+    expect(output.args).toEqual({
+      prompt: "実装を進めてください",
+      loadSkills: ["caller-skill"],
+      metadata: { source: "caller" },
+    });
+    expect(output.args).not.toHaveProperty("taskId");
+  });
+
   it("stops at design_required and hands task() no plan context even when the plan is readable", async () => {
     const { adapter, justice, handleMessage } = await createHarness();
     const sessionId = "s-design-missing";

@@ -107,13 +107,18 @@ describe("PlanBridge.handlePostToolUse", () => {
   });
 
   it("injects completed-plan notification when no next task is available", async () => {
-    const reader = createMockFileReader({
-      "plan.md": ["## Task 1: Write docs", "- [x] Document the new workflow"].join("\n"),
-    });
+    const files = {
+      "plan.md": ["## Task 1: Write docs", "- [ ] Document the new workflow"].join("\n"),
+    };
+    const reader = createMockFileReader(files);
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
-    bridge.setActivePlan("s-completed", "plan.md");
-    bridge.handlePreToolUse({
+    await bridge.handleImplementationArm("s-completed", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    await bridge.handlePreToolUse({
       type: "PreToolUse",
       payload: {
         toolName: "task",
@@ -124,6 +129,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       sessionId: "s-completed",
       callId: "c-completed",
     });
+    files["plan.md"] = ["## Task 1: Write docs", "- [x] Document the new workflow"].join("\n");
 
     const response = await bridge.handlePostToolUse({
       type: "PostToolUse",
@@ -151,8 +157,12 @@ describe("PlanBridge.handlePostToolUse", () => {
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
-    bridge.setActivePlan("s-skills", "plan.md");
-    bridge.handlePreToolUse({
+    await bridge.handleImplementationArm("s-skills", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    await bridge.handlePreToolUse({
       type: "PreToolUse",
       payload: {
         toolName: "task",
@@ -205,9 +215,13 @@ describe("PlanBridge.handlePostToolUse", () => {
       mockWisdomStore satisfies WisdomStoreInterface,
     );
 
-    bridge.setActivePlan("s-debug-wisdom", "plan.md");
+    await bridge.handleImplementationArm("s-debug-wisdom", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
 
-    bridge.handlePreToolUse({
+    await bridge.handlePreToolUse({
       type: "PreToolUse",
       payload: {
         toolName: "task",

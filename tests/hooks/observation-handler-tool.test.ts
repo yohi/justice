@@ -18,7 +18,11 @@ describe("ObservationHandler tool observation", () => {
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["### Task 1: Observe tools", "- [ ] Run tests"].join("\n"));
     const plugin = new JusticePlugin(reader, writer, { writerId: "w-handler" });
-    plugin.getPlanBridge().setActivePlan("session-plugin", "plan.md");
+    await plugin.getPlanBridge().handleImplementationArm("session-plugin", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     plugin.getSessionStateProvider().setAgentMapping("session-plugin", "hephaestus");
 
     const preResponse = await plugin.handleEvent({
@@ -57,7 +61,11 @@ describe("ObservationHandler tool observation", () => {
   it("correlates the PlanBridge-injected taskId and evaluates task gates after projection", async () => {
     const plan = ["### Task 1: Observe tools", "- [ ] Run tests"].join("\n");
     const bridge = new PlanBridge(createMockFileReader({ "plan.md": plan }));
-    bridge.setActivePlan("session-1", "plan.md");
+    await bridge.handleImplementationArm("session-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     const bridgeResponse = await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "session-1",

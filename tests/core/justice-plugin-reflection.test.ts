@@ -40,7 +40,11 @@ describe("JusticePlugin reflection event integration", () => {
       writerId: "w-reflection",
       workspaceRoot: "/workspace",
     });
-    plugin.getPlanBridge().setActivePlan("session-1", "plan.md");
+    await plugin.getPlanBridge().handleImplementationArm("session-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
 
     // When
     await plugin.handleEvent({

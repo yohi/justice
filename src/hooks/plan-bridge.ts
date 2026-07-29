@@ -158,17 +158,22 @@ export class PlanBridge {
   setActivePlan(sessionId: string, planPath: string | null): void {
     if (!planPath) {
       this.activePlanPaths.delete(sessionId);
+      this.implementationArmedSessions.delete(sessionId);
       return;
     }
 
     // Reuse TriggerDetector logic to ensure the path is safe
     const validatedRef = this.triggerDetector.detectPlanReference(planPath);
     if (validatedRef) {
+      if (this.getActivePlan(sessionId) !== validatedRef.planPath) {
+        this.implementationArmedSessions.delete(sessionId);
+      }
       // Trust the validated and normalized path
       this.activePlanPaths.set(sessionId, validatedRef.planPath);
     } else {
       // If invalid, clear it to be safe
       this.activePlanPaths.delete(sessionId);
+      this.implementationArmedSessions.delete(sessionId);
     }
   }
 
@@ -211,6 +216,7 @@ export class PlanBridge {
     sessionId: string,
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
+    this.implementationArmedSessions.delete(sessionId);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
@@ -389,11 +395,15 @@ export class PlanBridge {
     const armed = this.implementationArmedSessions.get(sessionId) ?? null;
     if (armed === null) return null;
     this.implementationArmedSessions.delete(sessionId);
-    return armed;
+    return armed.planPath === this.getActivePlan(sessionId) ? armed : null;
   }
 
   isImplementationArmed(sessionId: string): boolean {
-    return this.implementationArmedSessions.has(sessionId);
+    const armed = this.implementationArmedSessions.get(sessionId) ?? null;
+    if (armed === null) return false;
+    if (armed.planPath === this.getActivePlan(sessionId)) return true;
+    this.implementationArmedSessions.delete(sessionId);
+    return false;
   }
 
   private formatWorkflowGuidance(
@@ -437,9 +447,10 @@ export class PlanBridge {
   }
 
   private withImplementationDirective(context: string, sessionId: string): string {
-    const armed = this.isImplementationArmed(sessionId);
-    const stage: WorkflowDirectiveStage = armed ? "implementation" : "implementation_unauthorized";
-    return `${context}\n\n${formatWorkflowDirective({ stage })}`;
+    if (!this.isImplementationArmed(sessionId)) {
+      return formatWorkflowDirective({ stage: "implementation_unauthorized" });
+    }
+    return `${context}\n\n${formatWorkflowDirective({ stage: "implementation" })}`;
   }
 
   /**
@@ -554,20 +565,23 @@ export class PlanBridge {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    // B phase: record skill invocation for A+B completion detection
-    this.completionDetector.recordPreToolUseInvocation(
-      event.sessionId,
-      event.payload.toolName,
-      event.payload.toolInput,
-    );
-
     // Need an active plan to provide context for this session
     const activePlanPath = this.getActivePlan(event.sessionId);
     if (!activePlanPath) return PROCEED;
 
     const armed = this.consumeImplementationArm(event.sessionId);
-    const implementationStage: WorkflowDirectiveStage =
-      armed !== null ? "implementation" : "implementation_unauthorized";
+    if (armed === null) {
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    this.completionDetector.recordPreToolUseInvocation(
+      event.sessionId,
+      event.payload.toolName,
+      event.payload.toolInput,
+    );
 
     // Fail-open ONLY on I/O error
     let planContent: string;
@@ -590,7 +604,7 @@ export class PlanBridge {
 
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
-    const implementationDirective = resolveWorkflowDirective({ stage: implementationStage });
+    const implementationDirective = resolveWorkflowDirective({ stage: "implementation" });
     const mergedLoadSkills = mergeTaskLoadSkills(
       toolInputSkills,
       implementationDirective.requiredSkills,
@@ -650,7 +664,7 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: `${this.buildInjectedContext(planContent, delegation)}\n\n${formatWorkflowDirective({ stage: implementationStage })}`,
+      injectedContext: `${this.buildInjectedContext(planContent, delegation)}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
         args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
           loadSkills: mergedLoadSkills,

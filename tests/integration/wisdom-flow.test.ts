@@ -56,7 +56,11 @@ describe("Wisdom Flow Integration", () => {
 
     // 3. PlanBridge uses sharedWisdomStore → previousLearnings injected into delegation
     const planBridge = new PlanBridge(reader, loopHandler, sharedWisdomStore);
-    planBridge.setActivePlan("s-2", "plan.md");
+    await planBridge.handleImplementationArm("s-2", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
 
     const preToolEvent = {
       type: "PreToolUse" as const,

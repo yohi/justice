@@ -31,7 +31,11 @@ describe("Role-based wisdom integration flow", () => {
     expect(atlasEntries).toHaveLength(2);
     expect(atlasEntries.every((entry) => entry.persona === "atlas")).toBe(true);
 
-    bridge.setActivePlan("s-role", "plan.md");
+    await bridge.handleImplementationArm("s-role", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     const response = await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "s-role",
@@ -102,7 +106,11 @@ describe("Role-based wisdom integration flow", () => {
       persona: "hephaestus",
     });
 
-    bridge.setActivePlan("s-override", "plan.md");
+    await bridge.handleImplementationArm("s-override", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     const response = await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "s-override",
@@ -137,7 +145,11 @@ describe("Role-based wisdom integration flow", () => {
       persona: "hephaestus",
     });
 
-    bridge.setActivePlan("s-fallback", "plan.md");
+    await bridge.handleImplementationArm("s-fallback", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     const response = await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "s-fallback",

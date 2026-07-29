@@ -48,11 +48,16 @@ describe("Plan Bridge Integration Flow", () => {
     if (messageResponse.action !== "inject") {
       throw new Error("expected inject response");
     }
-    expect(messageResponse.injectedContext).toContain("Task Delegation Context");
-    expect(messageResponse.injectedContext).toContain("Setup project structure");
+    expect(messageResponse.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+    expect(messageResponse.injectedContext).not.toContain("Task Delegation Context");
 
     // Step 2: Verify active plan was set
     expect(bridge.getActivePlan(messageEvent.sessionId)).toBe(planPath);
+    await bridge.handleImplementationArm(messageEvent.sessionId, {
+      source: "command",
+      planPath,
+      approved: true,
+    });
 
     // Step 3: task() is about to be called, inject context
     const toolEvent: HookEvent = {

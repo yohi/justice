@@ -59,7 +59,7 @@ const GUIDANCE = {
   implementation_arm:
     "次の task() 呼び出しで、計画に基づく実装委譲を 1 回だけ許可します。\n承認済みと宣言していますが、Justice は外部の承認・マージ状態を検証できません。実行は人間による明示的な承認・マージ確認後にのみ継続してください。",
   implementation_arm_required:
-    "実装委譲を開始するには `/justice-implement <planPath> --approved` を実行してください。\nJustice は外部の承認・マージを観測できないため、実装タスクの task() を強化する前に明示的な開始合図を必要としています。",
+    "実装委譲を開始するには `/justice-implement --plan <planPath> --approved` を実行してください。\nJustice は外部の承認・マージを観測できないため、実装タスクの task() を強化する前に明示的な開始合図を必要としています。",
 } as const satisfies Readonly<Record<WorkflowDirectiveStage, string>>;
 
 export function resolveWorkflowDirective(input: WorkflowDirectiveInput): WorkflowDirective {

@@ -50,7 +50,11 @@ async function runDebuggingFlow(toolResult: string): Promise<{
   const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
   const bridge = new PlanBridge(reader, loopHandler, wisdomStore, notifier);
 
-  bridge.setActivePlan("s-debug", "plan.md");
+  await bridge.handleImplementationArm("s-debug", {
+    source: "command",
+    planPath: "plan.md",
+    approved: true,
+  });
   await bridge.handlePreToolUse({
     type: "PreToolUse",
     sessionId: "s-debug",

@@ -580,11 +580,11 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") return;
 
-      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
-      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
-
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
       if (!modified?.args) return;
+
+      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
+      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
 
       for (const [key, value] of Object.entries(modified.args)) {
         if (key === "prompt") continue;

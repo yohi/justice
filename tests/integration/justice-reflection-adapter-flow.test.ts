@@ -1,32 +1,28 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import { fakeInit } from "../helpers/fake-opencode-init";
+import { createMockFileSystem, type MockFileSystem } from "../helpers/mock-file-system";
 
-const workspaces: string[] = [];
+let mockFs: MockFileSystem;
 
-afterEach(async () => {
-  await Promise.all(
-    workspaces.splice(0).map(async (workspace) => rm(workspace, { recursive: true })),
-  );
+vi.mock("../../src/runtime/node-file-system", () => ({
+  NodeFileSystem: function NodeFileSystemMock(): MockFileSystem {
+    return mockFs;
+  },
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdir: vi.fn(async () => undefined) };
 });
 
 describe("OpenCodeAdapter reflection flow", () => {
   it("records a success reflection after adapter-origin task execution without manual feedback setup", async () => {
     // Given
-    const workspace = await mkdtemp(join(tmpdir(), "justice-reflection-adapter-"));
-    workspaces.push(workspace);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- workspace is created by mkdtemp.
-    await writeFile(join(workspace, "plan.md"), ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
-    const adapter = new OpenCodeAdapter(
-      fakeInit({
-        project: { root: workspace },
-        directory: workspace,
-        worktree: workspace,
-      }),
-    );
+    mockFs = createMockFileSystem({
+      "plan.md": ["## Task 1: Setup", "- [ ] Init", ""].join("\n"),
+    });
+    const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     await adapter.onEvent({
       event: {
@@ -55,6 +51,14 @@ describe("OpenCodeAdapter reflection flow", () => {
         },
       },
     });
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "/justice-implement",
+        sessionID: "session-adapter",
+        arguments: "--plan plan.md --approved",
+      },
+      { parts: [] },
+    );
     const before: { args: Record<string, unknown> } = { args: { prompt: "run" } };
 
     // When
@@ -69,8 +73,7 @@ describe("OpenCodeAdapter reflection flow", () => {
 
     // Then
     expect(before.args.taskId).toBe("task-1");
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- workspace is created by mkdtemp.
-    expect(await readFile(join(workspace, "plan.md"), "utf8")).toContain("- [x] Init");
+    expect(mockFs.writtenFiles["plan.md"]).toContain("- [x] Init");
     const events = await adapter.getJustice()?.getObservationHandler().getLogStore().readAll();
     const reflection = events?.find(
       (event) => event.recordType === "observation" && event.kind === "reflection",
