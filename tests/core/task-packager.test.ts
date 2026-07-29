@@ -71,6 +71,31 @@ describe("TaskPackager", () => {
     });
   });
 
+  it("normalizes legacy load_skills into the canonical task skill field", () => {
+    const original = {
+      prompt: "run",
+      load_skills: ["domain-skill", "test-driven-development"],
+    };
+
+    const enriched = enrichTaskToolInput(original, "task-generated", {
+      loadSkills: ["test-driven-development", "verification-before-completion"],
+    });
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      taskId: "task-generated",
+      loadSkills: [
+        "domain-skill",
+        "test-driven-development",
+        "verification-before-completion",
+      ],
+    });
+    expect(original).toEqual({
+      prompt: "run",
+      load_skills: ["domain-skill", "test-driven-development"],
+    });
+  });
+
   it("deduplicates loadSkills when merging into task tool input", () => {
     const original = { prompt: "run", skills: ["writing-plans"] };
 

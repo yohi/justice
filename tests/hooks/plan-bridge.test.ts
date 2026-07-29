@@ -11,6 +11,7 @@ import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { createMockFileWriter } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
+import type { JusticeNotifier } from "../../src/core/justice-notifier";
 
 import type { ObservationHandler } from "../../src/hooks/observation-handler";
 
@@ -590,6 +591,30 @@ describe("PlanBridge", () => {
         directiveStage: "plan_review_required",
         sessionId: "s-wf-obs",
       });
+    });
+
+    it("absorbs asynchronous notifier rejection after a bootstrap observation failure", async () => {
+      // Given
+      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+      const handler = createObservationHandler();
+      handler.emitWorkflowStartedEvent.mockRejectedValueOnce(new Error("append failed"));
+      const rejection = Promise.reject(new Error("notification failed"));
+      const rejectionCatch = vi.spyOn(rejection, "catch");
+      const notifier: JusticeNotifier = {
+        notify: vi.fn(() => rejection),
+        formatBanner: vi.fn(() => ""),
+      };
+      const bridge = new PlanBridge(reader, createLoopHandler(reader), undefined, notifier);
+      bridge.setObservationHandler(handler);
+
+      // When / Then
+      await expect(
+        bridge.handleWorkflowStart(
+          "s-wf-notifier-rejection",
+          createWorkflowStartRequest({ planPath: "docs/plan.md" }),
+        ),
+      ).resolves.toMatchObject({ phase: "plan_ready" });
+      expect(rejectionCatch).toHaveBeenCalledTimes(1);
     });
 
     it("should return design_required when the requested design file cannot be read", async () => {

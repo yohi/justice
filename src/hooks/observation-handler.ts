@@ -627,7 +627,6 @@ let cachedState: ProjectedState | undefined;
     isCompleteSnapshot = false,
   ): Promise<ReviewObservationOutcome> {
     const deliveryKey = JSON.stringify([
-      toolName,
       callId,
       hashString(toolResult),
       isCompleteSnapshot === true,

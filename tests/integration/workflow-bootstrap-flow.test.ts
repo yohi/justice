@@ -172,6 +172,10 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(prompt).toContain(`**Plan File**: ${PLAN_PATH}`);
     expect(prompt).toContain("Setup project structure");
     expect(prompt).toContain("実装を進めてください");
+    expect(task.args.loadSkills).toEqual([
+      "test-driven-development",
+      "verification-before-completion",
+    ]);
     // The whole activation happened through the command hook only.
     expect(handleMessage).not.toHaveBeenCalled();
   });

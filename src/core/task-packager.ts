@@ -42,9 +42,9 @@ export function enrichTaskToolInput(
     ...toolInput,
     taskId: existingTaskId ?? taskId,
   };
-  // skills/loadSkills は resolveSkillsFromToolInput で読み込み、統合済みなので元のフィールドは不要
   delete result.skills;
   delete result.loadSkills;
+  delete result.load_skills;
 
   if (mergedSkills.length > 0) {
     result.loadSkills = mergedSkills;
@@ -56,13 +56,17 @@ export function enrichTaskToolInput(
 export function resolveSkillsFromToolInput(toolInput: Readonly<Record<string, unknown>>): string[] {
   const rawSkills = toolInput.skills;
   const rawLoadSkills = toolInput.loadSkills;
+  const rawLegacyLoadSkills = toolInput.load_skills;
   const skills = Array.isArray(rawSkills)
     ? rawSkills.filter((v): v is string => typeof v === "string")
     : [];
   const loadSkills = Array.isArray(rawLoadSkills)
     ? rawLoadSkills.filter((v): v is string => typeof v === "string")
     : [];
-  return mergeSkillArrays(skills, loadSkills);
+  const legacyLoadSkills = Array.isArray(rawLegacyLoadSkills)
+    ? rawLegacyLoadSkills.filter((v): v is string => typeof v === "string")
+    : [];
+  return mergeSkillArrays(skills, loadSkills, legacyLoadSkills);
 }
 
 export function mergeSkillArrays(...arrays: readonly (readonly string[])[]): string[] {

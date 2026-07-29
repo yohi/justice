@@ -363,9 +363,61 @@ command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` �
 5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。`design_required` / `plan_required` / `plan_ready` はそれぞれ設計、計画、設計・計画 PR の自動レビューへ進む指示であり、利用者に定型 PR・レビュープロンプトの入力を要求しない。
 6. 指示ポリシーは canonical Superpowers スキル名を `requiredSkills` として返す。後続の `task()` 委譲では実装段階の `test-driven-development` と `verification-before-completion` を既存指定とマージし、OmO の `loadSkills` に接続する。
 
+`WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
+注入した policy の `directiveStage`、その policy が推奨する
+`recommendedSkills` を返す。`nextSkill`、`activePlanPath`、`guidance` は既存の
+実行コンテキスト・表示用フィールドであり、いずれも PR 承認・マージ・実装認可を
+表現しない。
+
 **実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の PR・レビュー機能と `task()` 呼び出しはエージェントが既存の権限で実行する。Justice は PR を作成せず、レビューを承認せず、PR をマージせず、PR 作成・承認・マージ状態を推測しない。人間が承認・マージ判断を保持する — Justice はここでも「神経系」であり「手足」ではない。
 
 **Gate との関係:** `workflow_started`/`design_requested`/`plan_requested`/`plan_activated` レコードは `evidence` フィールドを一切持たない audit-only レコードであり（§15.3）、`state-projection.ts` が `ProjectedState.tasks[].evidence` への投影対象から明示的に除外する。したがって Gate の PASS 判定にこれらのレコードが算入される経路は構造的に存在しない（FF-008 が自明に成立）。
+
+---
+
+### 4.1b Workflow Directive Policy
+
+`src/core/workflow-directives.ts` は OpenCode 依存を持たない pure core である。
+`resolveWorkflowDirective()` は固定 allowlist の Superpowers スキル、次の行動、
+権限状態を含む `WorkflowDirective` を返し、`formatWorkflowDirective()` はその
+構造化結果だけを表示用の stable marker とガイダンスへ変換する。goal、plan 本文、
+レビュー本文からスキル名を導出しない。
+
+`formatWorkflowDirective()` の出力は、stage marker の直後に required skills が
+空でない場合だけ `[JUSTICE: REQUIRED SKILLS: <skill>, ...]` を1行で付加する。
+この行も synthetic guidance の表示用 marker であり、実際のスキル起動を意味しない。
+
+directive 本文は HookResponse の synthetic guidance としてのみ扱い、Observation Log
+または Evidence として保存・評価しない。保存できるのは bootstrap lifecycle record の
+`directiveStage` のみであり、これは audit-only metadata である。
+
+| stage | required skills | next action | authority | 用途 |
+|---|---|---|---|---|
+| `design_required` | `brainstorming` | `invoke_skill` | `artifact_ready` | 設計成果物の作成 |
+| `plan_required` | `writing-plans` | `invoke_skill` | `artifact_ready` | 計画成果物の作成 |
+| `plan_review_required` | `requesting-code-review` | `request_review` | `artifact_ready` | 設計・計画 PR のレビューと人間承認待ち |
+| `review_remediation` | `receiving-code-review` | `invoke_skill` | `artifact_ready` | 指摘修正と同一レビューの再実行 |
+| `review_clear` | なし | `await_human_approval` | `external_unverified` | 完全な指摘なしスナップショットの観測 |
+| `implementation` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | 読み取り可能な plan context での実装委譲 |
+| `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | `/justice-start` の `plan_ready` を経ない既存委譲への安全側通知 |
+
+`plan_ready`、`plan_activated`、`review_clear` は、承認・マージ・実装認可を意味
+しない。`implementation_unauthorized` も L0 advisory であり、実行を物理的に
+停止しない。将来、信頼済みの人間承認 artifact を導入した場合にのみ
+`implementation_authorized` を導出できる。
+
+`PlanBridge.handlePreToolUse()` は active plan を持つ `task()` に対し、呼び出し元の
+`skills`、`loadSkills`、legacy `load_skills` を一つの `loadSkills` 配列へ正規化する。
+呼び出し元の順序を維持しつつ、`implementation` policy の固定スキルだけを重複なく
+末尾に加え、`modifiedPayload.args` と委譲 context の両方へ渡す。出力 payload からは
+入力時の `skills`、`loadSkills`、`load_skills` を除去し、canonical な
+`loadSkills` だけを生成する。adapter はその `modifiedPayload.args` を実際の OmO
+tool 引数に適用し、PostToolUse の
+`skill_invoked` 観測も同じ canonical field を読む。active plan がない `task()` は
+この拡張対象外であり、元の payload のまま通過する。
+
+`/justice-start` の goal は非信頼入力として JSON 文字列化して synthetic guidance に
+埋め込む。改行や `[JUSTICE: ...]` 風の文字列は directive marker として解釈しない。
 
 ---
 
@@ -1098,16 +1150,11 @@ justice/
 
 ## 11. テストカバレッジ・状態 (Test Coverage)
 
-### 11.1 テスト件数の内訳 (*Invisible Advisor 実装完了時に基づく*)
+### 11.1 現行テスト件数
 
-| 解析層 | 対象となるファイル数 | 概要 |
-|-------|-------|-------|
-| コアロジック部 (`src/core/` + `src/core/v2/`) | 69 ファイル | v1 純粋ロジック（PlanParser 等）＋ v2 Observation/Gate/Review 純粋関数群 |
-| フック・ハンドラ群 (`src/hooks/`) | 12 ファイル | `observation-handler.ts`（v2）を含む全 Hook |
-| ランタイム処理 (`src/runtime/`) | 20 ファイル | `observation-log-store`/`write-queue`/`gate-loader`/`justice-tools` 等（v2）を含む I/O 層 |
-| アーキテクチャ制約検証 (`tests/arch/`) | 2 ファイル | FF-001（Core は `@opencode-ai/*` を import しない）等の静的検証 |
-| 実環境・結合検証 (統合テスト) | 15 ファイル | フェーズ横断のエンドツーエンド検証 |
-| **合計総数** | **119 テストファイル** | **1,339 件**（v1 Phase 1-9 + v2.0 Quality Control Plane 基盤） |
+2026-07-29 に Devcontainer 内で実行した `bun run test` は、125 test files と
+1,469 tests を完走した。件数はテスト追加で変化するため、最新値は同コマンドの出力を
+正とする。
 
 ### 11.2 テスト戦略と方針
 
@@ -1115,6 +1162,8 @@ justice/
 - **フック層における連携**: I/Oには `FileReader`・`FileWriter` モックオブジェクトを流し込んだ統合的なテストを実施。
 - **実行・ランタイムベースのテスト**: 組み込みの `mkdtemp` を用いた一時ディレクトリの生成による実際のファイルアクセス。
 - **全体における統合テスト**: フェーズで区切られた要件に対するエンドツーエンドでのライフサイクル。
+- **Workflow directive**: pure policy の `requiredSkills`、`nextAction`、`authority` と exhaustive matching を検証する。formatter は stable marker と非信頼 goal の境界を検証し、本文そのものを snapshot 固定しない。
+- **Bootstrap・委譲・レビュー**: PlanBridge の artifact phase、`directiveStage`、caller skills を保持した `loadSkills` 統合、synthetic command part、review 結果の重複抑止、完全な指摘なし snapshot、fail-open を unit/integration の両方で検証する。
 
 ---
 
@@ -1371,6 +1420,9 @@ type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 ### 15.8 Review Aggregator と解決規則
 
 - `review_observed` レコード（`reviewScope` 付き）を scope 別に集約し、severity（`critical`/`major`/`minor`）は凍結語彙の決定論的正規表現分類器（`review-severity.ts`）で導出する。`itemKey` は severity・ruleId・location ハッシュ・evidence ハッシュから決定的に合成される。
+- `task` と runtime の汎用 `code_review` capability の出力を review observation の入口とする。core policy はレビュー製品名を持たず、完全スナップショットは `code_review` から受け取る信頼済み typed artifact に限って認める。別の直接 review tool を統合する場合は runtime adapter を拡張し、core policy や Gate contract は変更しない。
+- 観測結果に指摘があれば `review_remediation`、完全スナップショットに指摘がなければ `review_clear` directive を L0 advisory として Gate advice と合成する。不完全なレビューで指摘がないだけの場合は `review_clear` を発行しない。directive は Evidence ではなく、人間承認・PR 作成・マージの事実を主張しない。
+- 再配送の抑止 key は session ごとの `Map<sessionId, Set<string>>` に、`callId`、結果 hash、完全スナップショットフラグを JSON tuple として保存する。同一 tuple は再注入しないが、結果 hash が変わった再レビューは新規観測とする。`destroySession()` はこの状態を破棄する。
 - **`open → resolved` の遷移が許される経路は次の 3 つのみ**（D32）。単なる指摘の消失（範囲差・検出漏れ・出力形式変化）では **`open` のまま据置**する:
   1. 明示的解決マーカー（`resolutionMarkers[]`）
   2. 同一 `reviewScope` の完全スナップショット（`isCompleteSnapshot: true`）における当該指摘の不在
@@ -1410,6 +1462,7 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 - **Artifact の authorship**: v2.0 の Artifact（`gate.yaml`/Review Summary）は `authority`（`human_approved` 等）のみを保持し、`authorship`（from→to）は持たない。Handoff（v2.5）導入時に拡張。
 - **`exit_code` の直接観測不可（限界-2）**: `tool.execute.after` には `exit_code`/`stderr` フィールドが無いため、Evidence は独立の `exit_code` フィールドを持たず、出力テキストの解析または `metadata.error` から導出した `interpretation.outcome`（`provenance: derived`）で代替する。`stderr` は `rawOutput` に統合される。将来的な OpenCode API 拡張の要望として記録。
 - **KPI-1/KPI-3 は v2.0 で未測定（限界-3）**: 憲章の KPI-1（設計乖離率）・KPI-3（Handoff 連続性）は v2.5+ のコンポーネント（Feature Gate/Handoff）に依存するため v2.0 では測定できない。v2.0 は「観測カバレッジ率」「Gate verdict 分布と provenance 分布」「replay 決定性（FF-004 pass）」を先行指標として代替する。
+- **直接 review tool の統合範囲**: 現行 runtime が完全スナップショット artifact を信頼するのは `code_review` capability のみである。他の tool を使う場合、task 経由の観測は可能だが、直接 tool として完全スナップショットを扱うには runtime adapter の明示的な信頼境界を追加する必要がある。
 
 ### 15.12 既知の未解決事項・ガバナンス状況（重要）
 

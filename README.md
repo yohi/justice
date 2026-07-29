@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-1453%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1469%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 
@@ -244,6 +244,26 @@ justice-start add retry logic --plan plan.md
 | `plan_required` | 設計は OK だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
 | `plan_ready` | 計画ファイルが読める | 設計・計画だけの PR を準備して自動レビューを依頼し、人間による明示的な承認・マージを待つ | `activePlanPath` は後続の `task()` 用コンテキストを準備するだけで、実装の認可を意味しない |
 
+### Directive と委譲の接続
+
+Justice は stage ごとに純粋な `WorkflowDirective` を解決します。directive は
+`stage`、固定 allowlist の `requiredSkills`、`nextAction`、`authority` を持ち、
+自然言語の表示文だけに依存しません。`plan_ready` は
+`[JUSTICE: PLAN REVIEW REQUIRED]` を注入し、外部の承認・マージを確認できない
+ことを明示します。
+
+後続の `task()` が有効な plan context を持つ場合、Justice は既存の `skills`、
+`loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく
+`loadSkills` へ正規化します。そのうえで
+`test-driven-development` と `verification-before-completion` を追加し、
+`[JUSTICE: IMPLEMENTATION]` と plan context を渡します。Justice 自身はスキルや
+`task()` を起動しません。
+
+`/justice-start` による `plan_ready` を経ない既存のメッセージ起点の委譲では、
+`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` を注入します。これは外部の人間承認・
+マージが未確認であることを伝える安全側の advisory であり、実行を物理的に
+停止するものではありません。
+
 ### フォールバックマーカー
 
 OpenCode のチャットメッセージ内で以下のマーカーを行頭に記述することで、コマンド形式と同じ引数をパースできます。
@@ -276,6 +296,12 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 - **`plan_ready`**: 設計・計画だけの PR を利用可能な連携で準備して AI レビューを依頼し、指摘の修正と同じレビューの再実行を経て、人間による明示的な承認・マージを待つよう自動指示する。確認されるまで `task()` は呼び出さない。
 
 これらの指示はレビュー製品やベンダーを指定しません。エージェントは既存の権限の範囲で利用可能な PR・レビュー機能を実行します。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、PR の作成・承認・マージ状態を推測しません。承認とマージの判断は人間が保持します。
+
+レビュー出力で指摘を観測すると `[JUSTICE: REVIEW REMEDIATION]` を、信頼済みの
+完全スナップショットで指摘がない場合は `[JUSTICE: REVIEW CLEAR]` を注入します。
+同じレビュー結果の再配送は session・call・結果 hash・完全性フラグで抑止し、
+結果が変わった再レビューは新しい観測として扱います。いずれの directive も
+人間承認やマージの証拠にはなりません。
 
 ### 実行後の `justice_review` 使用法
 
