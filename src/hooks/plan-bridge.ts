@@ -228,7 +228,7 @@ export class PlanBridge {
 
     return {
       phase,
-      directiveStage: directive.stage,
+      directiveStage,
       recommendedSkills: directive.requiredSkills,
       goal: request.goal,
       nextSkill: NEXT_SKILL_BY_PHASE.get(phase) ?? null,
@@ -363,39 +363,16 @@ export class PlanBridge {
     phase: WorkflowBootstrapPhase,
     activePlanPath: string | null,
   ): readonly string[] {
-    switch (phase) {
-      case "design_required":
-        return [
-          formatWorkflowDirective({
-            stage: "design_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: request.planPath,
-          }),
-          "",
-          NO_WRITE_NOTICE,
-        ];
-      case "plan_required":
-        return [
-          formatWorkflowDirective({
-            stage: "plan_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: request.planPath,
-          }),
-          "",
-          NO_WRITE_NOTICE,
-        ];
-      case "plan_ready":
-        return [
-          formatWorkflowDirective({
-            stage: "plan_review_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: activePlanPath,
-          }),
-        ];
-    }
+    const stage = this.resolveBootstrapDirectiveStage(phase);
+    return [
+      formatWorkflowDirective({
+        stage,
+        goal: request.goal,
+        designPath: request.designPath,
+        planPath: activePlanPath ?? request.planPath,
+      }),
+      ...(phase === "plan_ready" ? [] : ["", NO_WRITE_NOTICE]),
+    ];
   }
 
   private withImplementationDirective(context: string, sessionId: string): string {

@@ -43,7 +43,6 @@ import type { GateLoader } from "../runtime/gate-loader";
 import {
   assertNever,
   formatWorkflowDirective,
-  resolveWorkflowDirective,
   type WorkflowDirectiveStage,
 } from "../core/workflow-directives";
 
@@ -459,27 +458,25 @@ export class ObservationHandler {
           response = PROCEED;
           break;
         case "findings": {
-          const policy = resolveWorkflowDirective({ stage: "review_remediation" });
           response = {
             action: "inject",
-            injectedContext: formatWorkflowDirective(policy),
+            injectedContext: formatWorkflowDirective({ stage: "review_remediation" }),
           };
           break;
         }
         case "clear_snapshot": {
-          const policy = resolveWorkflowDirective({ stage: "review_clear" });
           response = {
             action: "inject",
-            injectedContext: formatWorkflowDirective(policy),
+            injectedContext: formatWorkflowDirective({ stage: "review_clear" }),
           };
           break;
         }
-        case "failed":
-          return PROCEED;
-        default:
+case "failed":
+return PROCEED;
+default:
           return assertNever(reviewOutcome);
       }
-      let cachedState: ProjectedState | undefined;
+let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
       } catch (error) {

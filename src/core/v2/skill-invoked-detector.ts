@@ -27,8 +27,14 @@ export function detectSkillInvoked(
   }
 
   if (toolName === "task") {
-    const rawSkills =
-      "loadSkills" in args ? args.loadSkills : "load_skills" in args ? args.load_skills : undefined;
+    let rawSkills: unknown;
+    if ("loadSkills" in args) {
+      rawSkills = args.loadSkills;
+    } else if ("load_skills" in args) {
+      rawSkills = args.load_skills;
+    } else {
+      rawSkills = undefined;
+    }
     if (!Array.isArray(rawSkills)) return [];
 
     const normalizedSkills = new Set(
