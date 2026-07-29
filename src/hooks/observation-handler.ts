@@ -40,8 +40,19 @@ import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope"
 import type { PendingDecisionRecord } from "../core/v2/decision-model";
 import type { PendingObservationRecord } from "../core/v2/observation-model";
 import type { GateLoader } from "../runtime/gate-loader";
+import {
+  assertNever,
+  formatWorkflowDirective,
+  type WorkflowDirectiveStage,
+} from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
+
+type ReviewObservationOutcome =
+  | { readonly kind: "not_review" }
+  | { readonly kind: "findings" }
+  | { readonly kind: "clear_snapshot" }
+  | { readonly kind: "failed" };
 
 // D65: messageRoleBuffer memory bounds. A finalized message is short-lived;
 // parts that never finalize (e.g. streaming truncation) must not grow forever.
@@ -60,6 +71,7 @@ type ProjectionCacheAccess = {
 export type WorkflowBootstrapEventInput = {
   readonly request: WorkflowStartRequest;
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage?: WorkflowDirectiveStage;
   readonly sessionId: string;
 };
 
@@ -80,6 +92,7 @@ export class ObservationHandler {
   private readonly messageRoleBuffer = new MessageRoleBuffer();
   private readonly reviewRejectionDetector = new ReviewRejectionDetector();
   private readonly persistedMessageHashes = new Map<string, Map<string, string>>();
+  private readonly reviewDeliveriesBySession = new Map<string, Set<string>>();
   private projectionRefresh: Promise<void> = Promise.resolve();
 
   constructor(
@@ -230,6 +243,7 @@ export class ObservationHandler {
         },
         request: input.request,
         phase: input.phase,
+        ...(input.directiveStage === undefined ? {} : { directiveStage: input.directiveStage }),
       });
 
       await this.options.logStore.append(
@@ -327,6 +341,7 @@ export class ObservationHandler {
 
   destroySession(sessionId: string): void {
     this.persistedMessageHashes.delete(sessionId);
+    this.reviewDeliveriesBySession.delete(sessionId);
     this.messageRoleBuffer.removeSession(sessionId);
     // Propagate cleanup to the log store so this session's per-shard write-queue
     // caches are released, bounding memory across sessions. Optional chaining keeps
@@ -424,23 +439,44 @@ export class ObservationHandler {
           continue;
         }
       }
+      let reviewOutcome: ReviewObservationOutcome = { kind: "not_review" };
       if (isReviewObservationTool(event.payload.toolName)) {
-        if (
-          !(await this.appendReviewObservationsIfDetected(
-            shardId,
-            taskId,
-            event.sessionId,
-            callId,
-            event.payload.toolName,
-            event.payload.toolResult,
-            event.payload.metadata,
-            event.payload.reviewSnapshotArtifact?.complete === true,
-          ))
-        ) {
-          return PROCEED;
-        }
+        reviewOutcome = await this.appendReviewObservationsIfDetected(
+          shardId,
+          taskId,
+          event.sessionId,
+          callId,
+          event.payload.toolName,
+          event.payload.toolResult,
+          event.payload.metadata,
+          event.payload.reviewSnapshotArtifact?.complete === true,
+        );
       }
-      let cachedState: ProjectedState | undefined;
+      let response: HookResponse;
+      switch (reviewOutcome.kind) {
+        case "not_review":
+          response = PROCEED;
+          break;
+        case "findings": {
+          response = {
+            action: "inject",
+            injectedContext: formatWorkflowDirective({ stage: "review_remediation" }),
+          };
+          break;
+        }
+        case "clear_snapshot": {
+          response = {
+            action: "inject",
+            injectedContext: formatWorkflowDirective({ stage: "review_clear" }),
+          };
+          break;
+        }
+case "failed":
+return PROCEED;
+default:
+          return assertNever(reviewOutcome);
+      }
+let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
       } catch (error) {
@@ -449,8 +485,6 @@ export class ObservationHandler {
           error,
         );
       }
-
-      let response = PROCEED;
       // Both gate evaluations below fold the same not-yet-decision-appended
       // event log into a ProjectedState. When a projectionCache is configured,
       // refreshProjectionCache() above already performed the readAll()+project()
@@ -591,39 +625,53 @@ export class ObservationHandler {
     toolResult: string,
     metadata?: Readonly<Record<string, unknown>>,
     isCompleteSnapshot = false,
-  ): Promise<boolean> {
-    let items: readonly ReviewItem[];
+  ): Promise<ReviewObservationOutcome> {
+    const deliveryKey = JSON.stringify([
+      toolName,
+      callId,
+      hashString(toolResult),
+      isCompleteSnapshot === true,
+    ]);
+    if (this.reviewDeliveriesBySession.get(sessionId)?.has(deliveryKey) === true) {
+      return { kind: "not_review" };
+    }
+
     try {
-      items = this.reviewRejectionDetector.detectMultiple(
+      const items: readonly ReviewItem[] = this.reviewRejectionDetector.detectMultiple(
         toolResult,
         metadata,
         this.options.workspaceRoot ?? process.cwd(),
       );
+      if (items.length === 0 && !isCompleteSnapshot) return { kind: "not_review" };
+
+      const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
+      await this.options.logStore.append(
+        shardId,
+        buildReviewObservedRecord(
+          {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId: shardId.agentId,
+            sessionId,
+            writerId: this.options.writerId,
+            ...(taskId === undefined ? {} : { taskId }),
+            recordType: "observation",
+          },
+          reviewScope,
+          items,
+          isCompleteSnapshot,
+        ),
+      );
+
+      const sessionDeliveries =
+        this.reviewDeliveriesBySession.get(sessionId) ?? new Set<string>();
+      sessionDeliveries.add(deliveryKey);
+      this.reviewDeliveriesBySession.set(sessionId, sessionDeliveries);
+      return items.length > 0 ? { kind: "findings" } : { kind: "clear_snapshot" };
     } catch (error) {
       this.options.logger?.warn("observation-handler: review_observed generation failed", error);
-      return false;
+      return { kind: "failed" };
     }
-    if (items.length === 0 && !isCompleteSnapshot) return true;
-
-    const reviewScope = deriveReviewScope({ taskId, sessionId, callId, toolName });
-    await this.options.logStore.append(
-      shardId,
-      buildReviewObservedRecord(
-        {
-          schemaVersion: 1,
-          timestamp: new Date().toISOString(),
-          agentId: shardId.agentId,
-          sessionId,
-          writerId: this.options.writerId,
-          ...(taskId === undefined ? {} : { taskId }),
-          recordType: "observation",
-        },
-        reviewScope,
-        items,
-        isCompleteSnapshot,
-      ),
-    );
-    return true;
   }
 
   async handleReviewResolutionArtifact(payload: {

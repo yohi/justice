@@ -67,6 +67,24 @@ describe("projectWorkflowBootstrapAudit", () => {
     });
   });
 
+  it("preserves directiveStage as audit-only metadata separate from phase", () => {
+    const events: readonly PersistedLogRecord[] = [
+      bootstrapRecord("plan_activated", 1, {
+        workflow: audit({
+          phase: "plan_ready",
+          directiveStage: "plan_review_required",
+        }),
+      }),
+    ];
+
+    const entries = projectWorkflowBootstrapAudit(events);
+    const state = project(events, "2026-07-27T01:00:00.000Z");
+
+    expect(entries[0]?.workflow.phase).toBe("plan_ready");
+    expect(entries[0]?.workflow.directiveStage).toBe("plan_review_required");
+    expect(state.tasks.size).toBe(0);
+  });
+
   it("ignores every non-bootstrap record", () => {
     const events: readonly PersistedLogRecord[] = [
       {

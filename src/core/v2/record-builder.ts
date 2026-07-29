@@ -9,6 +9,7 @@ import type {
   WorkflowBootstrapRecordKind,
 } from "./observation-model";
 import type { WorkflowBootstrapPhase, WorkflowStartRequest } from "../types";
+import type { WorkflowDirectiveStage } from "../workflow-directives";
 import type { DeclaredClaim } from "./declared-claim-extractor";
 import type { DetectedSkillInvocation } from "./skill-invoked-detector";
 import { hashString } from "./hash";
@@ -181,12 +182,14 @@ export type WorkflowBootstrapRecordInput = {
   readonly envelope: PendingEnvelope;
   readonly request: WorkflowStartRequest;
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage?: WorkflowDirectiveStage;
 };
 
 function buildWorkflowBootstrapAudit(input: WorkflowBootstrapRecordInput): WorkflowBootstrapAudit {
   const { request } = input;
   return {
     phase: input.phase,
+    ...(input.directiveStage === undefined ? {} : { directiveStage: input.directiveStage }),
     source: request.source,
     goalHash: hashString(request.goal),
     goalSnippet: sliceCodeUnitsSafe(redactMessageSnippet(request.goal), 200),
@@ -217,7 +220,9 @@ export function buildWorkflowStartedRecord(
 
 /**
  * The lifecycle transition matching `input.phase`: `design_requested`,
- * `plan_requested`, or `plan_activated`. Audit-only, like `workflow_started`.
+ * `plan_requested`, or `plan_activated`. `plan_activated` only selects a
+ * readable plan for future task context; it does not attest review or
+ * authorization. Audit-only, like `workflow_started`.
  */
 export function buildWorkflowPhaseRecord(
   input: WorkflowBootstrapRecordInput,

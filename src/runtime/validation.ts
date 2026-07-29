@@ -30,6 +30,16 @@ function isValidWorkflowBootstrapAudit(value: unknown): boolean {
   if (!isObject(value)) return false;
   return (
     isOneOf(value.phase, ["design_required", "plan_required", "plan_ready"]) &&
+    (value.directiveStage === undefined ||
+      isOneOf(value.directiveStage, [
+        "design_required",
+        "plan_required",
+        "plan_review_required",
+        "review_remediation",
+        "review_clear",
+        "implementation",
+        "implementation_unauthorized",
+      ])) &&
     isOneOf(value.source, ["command", "fallback_marker"]) &&
     typeof value.goalHash === "string" &&
     value.goalHash.length > 0 &&

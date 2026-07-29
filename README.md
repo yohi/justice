@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-1300%2B%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1453%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 
@@ -164,7 +164,7 @@ export default { plugins: [OpenCodePlugin] };
 
 ## `/justice-start` コマンド
 
-ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、次のアクション（`brainstorming` または `writing-plans` スキルの実行、または直接タスク委譲）を案内します。
+ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、設計・計画 PR の自動レビュー、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を自動注入します。利用者が入力するのは目標と成果物パスだけで、PR 作成やレビュー依頼の定型プロンプトをコピーしたり入力したりする必要はありません。
 
 ### 有効化（OpenCode側の設定）
 
@@ -242,7 +242,7 @@ justice-start add retry logic --plan plan.md
 |------|------|----------------|------|
 | `design_required` | `--design` で指定されたファイルが読めない | `brainstorming` スキルで設計を作成 | 計画ファイルが読める場合でも、設計が優先される |
 | `plan_required` | 設計は OK だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
-| `plan_ready` | 計画ファイルが読める | 直接 `task()` で次のタスクを委譲可能 | `activePlanPath` が設定され、後続の `task()` 呼び出しがプランコンテキストを受け取る |
+| `plan_ready` | 計画ファイルが読める | 設計・計画だけの PR を準備して自動レビューを依頼し、人間による明示的な承認・マージを待つ | `activePlanPath` は後続の `task()` 用コンテキストを準備するだけで、実装の認可を意味しない |
 
 ### フォールバックマーカー
 
@@ -271,9 +271,11 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 コマンド実行後、`output.parts` に synthetic なテキストパートが追記されます。内容は状態に応じて異なります。
 
-- **`design_required`**: 「設計が未整備です。`brainstorming` スキルで要件と設計を固めてください。」
-- **`plan_required`**: 「実行可能な計画書がありません。`writing-plans` スキルで計画書を作成してください。」
-- **`plan_ready`**: 「既存の計画書で実行を開始できます。次の未完了タスクを `task()` に委譲してください。」
+- **`design_required`**: `brainstorming` を使って要件、境界、テスト方針、未確定事項を設計するよう自動指示する。
+- **`plan_required`**: `writing-plans` を使って設計を検証可能なタスク、依存関係、完了条件へ分解するよう自動指示する。
+- **`plan_ready`**: 設計・計画だけの PR を利用可能な連携で準備して AI レビューを依頼し、指摘の修正と同じレビューの再実行を経て、人間による明示的な承認・マージを待つよう自動指示する。確認されるまで `task()` は呼び出さない。
+
+これらの指示はレビュー製品やベンダーを指定しません。エージェントは既存の権限の範囲で利用可能な PR・レビュー機能を実行します。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、PR の作成・承認・マージ状態を推測しません。承認とマージの判断は人間が保持します。
 
 ### 実行後の `justice_review` 使用法
 
@@ -281,10 +283,14 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 **典型的なフロー:**
 
-1. `/justice-start` でワークフローを開始し、計画を有効化（`plan_ready`）
-2. `task()` で複数のタスクを委譲・実行
-3. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認
-4. 必要に応じて `justice_review` の `resolve` パラメータで指摘を解決済みにマーク
+1. 利用者が `/justice-start` に目標と必要な成果物パスだけを渡す。
+2. Justice が `design_required` / `plan_required` に応じて設計・計画準備の指示を自動注入する。
+3. `plan_ready` になると、Justice が設計・計画だけの PR と自動レビューを進める指示を自動注入する。利用者が PR・レビュー用の定型プロンプトをコピーしたり入力したりする必要はない。
+4. エージェントが既存の権限で利用可能な PR・レビュー機能を実行し、指摘を修正してレビューを再実行する。
+5. 人間が設計・計画を明示的に承認してマージする。Justice はこの状態を推測しないため、外部での確認が必要になる。
+6. 承認・マージの確認後、エージェントが `task()` で次のタスクを委譲する。Justice はプランコンテキスト、TDD・検証スキル、実装 PR のレビュー指示を委譲へ追加する。
+7. 実装 PR でも利用可能な AI レビューを行い、最終的な承認・マージ判断は人間が行う。
+8. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認する。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにする。
 
 ## Quality Control Plane (v2.0)
 

@@ -5,14 +5,14 @@ import { DependencyAnalyzer } from "./dependency-analyzer";
 import type { DelegationRequest, TaskCategory, AgentId } from "./types";
 
 export interface BuildDelegationOptions {
-  planFilePath: string;
-  referenceFiles: string[];
-  rolePrompt?: string;
-  previousLearnings?: string;
-  runInBackground?: boolean;
-  category?: TaskCategory;
-  loadSkills?: string[];
-  agentId?: AgentId;
+  readonly planFilePath: string;
+  readonly referenceFiles: readonly string[];
+  readonly rolePrompt?: string;
+  readonly previousLearnings?: string;
+  readonly runInBackground?: boolean;
+  readonly category?: TaskCategory;
+  readonly loadSkills?: readonly string[];
+  readonly agentId?: AgentId;
 }
 
 export class PlanBridgeCore {

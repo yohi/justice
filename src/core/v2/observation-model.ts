@@ -8,6 +8,7 @@ import type {
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
 import type { DeclaredClaim } from "./declared-claim-extractor";
+import type { WorkflowDirectiveStage } from "../workflow-directives";
 
 export type PendingEnvelope = {
   readonly schemaVersion: 1;
@@ -149,6 +150,7 @@ export type ReviewObservedRecord = {
  */
 export type WorkflowBootstrapAudit = {
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage?: WorkflowDirectiveStage;
   readonly source: WorkflowStartSource;
   readonly goalHash: string;
   readonly goalSnippet: string;
@@ -177,6 +179,10 @@ export type PlanRequestedRecord = {
   readonly workflow: WorkflowBootstrapAudit;
 };
 
+/**
+ * A readable plan selected for future task context. This does not mean the
+ * plan was reviewed, authorized, approved, or merged.
+ */
 export type PlanActivatedRecord = {
   readonly kind: "plan_activated";
   readonly workflow: WorkflowBootstrapAudit;

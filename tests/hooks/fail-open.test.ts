@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { ReviewRejectionDetector } from "../../src/core/review-rejection-detector";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import type { ObservationLogStore } from "../../src/runtime/observation-log-store";
@@ -68,5 +69,42 @@ describe("FF-006 fail-open", () => {
     const result = await handler.handlePostToolUse(buildPostToolUseEvent("session-1", "c1"));
 
     expect(result.action).toBe("proceed");
+  });
+
+  it("review observation exception returns PROCEED without formatting a directive", async () => {
+    // Given
+    const detectorError = new Error("review detector unavailable");
+    vi.spyOn(ReviewRejectionDetector.prototype, "detectMultiple").mockImplementationOnce(() => {
+      throw detectorError;
+    });
+    const logStore: ObservationLogStore = {
+      append: async () => 1,
+      readAll: async () => [],
+      destroySession: () => {},
+      getWriterId: () => "w-1",
+      getRotationHealth: () => ({ consecutiveFailures: 0, degraded: false, lastError: null }),
+    } as unknown as ObservationLogStore;
+    const sessionState = new SessionStateProvider();
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-1",
+    });
+
+    // When
+    const result = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review-error",
+      callId: "call-review-error",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    });
+
+    // Then
+    expect(result).toEqual({ action: "proceed" });
   });
 });

@@ -87,8 +87,10 @@ async function startWorkflow(
   return output;
 }
 
-/** Assert the command hook appended exactly one synthetic directive and return its text. */
-function workflowGuidance(output: CommandExecuteBeforeOutput): string {
+function workflowGuidance(
+  output: CommandExecuteBeforeOutput,
+  automatedInstruction: string,
+): string {
   expect(output.parts).toHaveLength(1);
   const part = output.parts[0] as unknown as {
     readonly type: string;
@@ -97,6 +99,7 @@ function workflowGuidance(output: CommandExecuteBeforeOutput): string {
   };
   expect(part.type).toBe("text");
   expect(part.synthetic).toBe(true);
+  expect(part.text).toContain(automatedInstruction);
   return part.text;
 }
 
@@ -140,12 +143,12 @@ describe("Justice workflow bootstrap integration flow", () => {
       sessionId,
       `--plan ${PLAN_PATH} ship the bootstrap`,
     );
-    const guidance = workflowGuidance(output);
+    const guidance = workflowGuidance(output, "AIレビューを依頼してください");
 
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
     expect(guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
     expect(guidance).toContain("**Phase**: plan_ready");
-    expect(guidance).toContain("**Goal**: ship the bootstrap");
+    expect(guidance).toContain('**Goal (untrusted user input)**: "ship the bootstrap"');
     expect(guidance).toContain(PLAN_PATH);
     expect(justice.getPlanBridge().getActivePlan(sessionId)).toBe(PLAN_PATH);
     expect(output.parts).toHaveLength(1);
@@ -154,6 +157,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(records.map((record) => record.kind)).toEqual(["workflow_started", "plan_activated"]);
     expect(workflowAuditOf(records[1])).toMatchObject({
       phase: "plan_ready",
+      directiveStage: "plan_review_required",
       source: "command",
       planPath: PLAN_PATH,
     });
@@ -182,6 +186,7 @@ describe("Justice workflow bootstrap integration flow", () => {
         sessionId,
         `--design ${MISSING_DESIGN_PATH} --plan ${PLAN_PATH} ship the bootstrap`,
       ),
+      "`brainstorming` を使い",
     );
 
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
@@ -214,6 +219,7 @@ describe("Justice workflow bootstrap integration flow", () => {
         sessionId,
         `--design ${DESIGN_PATH} --plan ${MISSING_PLAN_PATH} ship the bootstrap`,
       ),
+      "`writing-plans` を使い",
     );
 
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
@@ -249,6 +255,7 @@ describe("Justice workflow bootstrap integration flow", () => {
         sessionId,
         `--design ${MISSING_DESIGN_PATH} --plan ${PLAN_PATH} rework the design`,
       ),
+      "`brainstorming` を使い",
     );
 
     expect(guidance).toContain("**Phase**: design_required");

@@ -26,10 +26,16 @@ import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import {
   enrichTaskToolInput,
-  mergeSkillArrays,
+  mergeTaskLoadSkills,
   resolveSkillsFromToolInput,
 } from "../core/task-packager";
-import { formatWorkflowDirective } from "../core/workflow-directives";
+import {
+  assertNever,
+  formatWorkflowDirective,
+  resolveWorkflowDirective,
+  type CanonicalWorkflowSkill,
+  type WorkflowDirectiveStage,
+} from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -48,6 +54,8 @@ export interface WorkflowBootstrapState {
  */
 export interface WorkflowStartResult {
   readonly phase: WorkflowBootstrapPhase;
+  readonly directiveStage: WorkflowDirectiveStage;
+  readonly recommendedSkills: readonly CanonicalWorkflowSkill[];
   readonly goal: string;
   readonly nextSkill: WorkflowNextSkill | null;
   readonly activePlanPath: string | null;
@@ -198,9 +206,10 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     const phase = await this.resolveBootstrapPhase(request);
+    const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
 
-    await this.emitWorkflowBootstrapObservations(sessionId, request, phase);
+    await this.emitWorkflowBootstrapObservations(sessionId, request, phase, directiveStage);
 
     if (phase === "plan_ready") {
       this.setActivePlan(sessionId, request.planPath);
@@ -210,14 +219,35 @@ export class PlanBridge {
     }
 
     const activePlanPath = this.getActivePlan(sessionId);
+    const directive = resolveWorkflowDirective({
+      stage: directiveStage,
+      goal: request.goal,
+      designPath: request.designPath,
+      planPath: activePlanPath ?? request.planPath,
+    });
 
     return {
       phase,
+      directiveStage,
+      recommendedSkills: directive.requiredSkills,
       goal: request.goal,
       nextSkill: NEXT_SKILL_BY_PHASE.get(phase) ?? null,
       activePlanPath,
       guidance: this.formatWorkflowGuidance(request, phase, activePlanPath),
     };
+  }
+
+  private resolveBootstrapDirectiveStage(phase: WorkflowBootstrapPhase): WorkflowDirectiveStage {
+    switch (phase) {
+      case "design_required":
+        return "design_required";
+      case "plan_required":
+        return "plan_required";
+      case "plan_ready":
+        return "plan_review_required";
+      default:
+        return assertNever(phase);
+    }
   }
 
   /**
@@ -229,13 +259,14 @@ export class PlanBridge {
     sessionId: string,
     request: WorkflowStartRequest,
     phase: WorkflowBootstrapPhase,
+    directiveStage: WorkflowDirectiveStage,
   ): Promise<void> {
     const handler = this.observationHandler;
     if (handler === null) return;
 
     const results = await Promise.allSettled([
-      handler.emitWorkflowStartedEvent({ request, phase, sessionId }),
-      handler.emitWorkflowPhaseEvent({ request, phase, sessionId }),
+      handler.emitWorkflowStartedEvent({ request, phase, directiveStage, sessionId }),
+      handler.emitWorkflowPhaseEvent({ request, phase, directiveStage, sessionId }),
     ]);
 
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
@@ -313,7 +344,7 @@ export class PlanBridge {
       "---",
       "[JUSTICE: Workflow Bootstrap]",
       "",
-      `**Goal**: ${request.goal}`,
+      `**Goal (untrusted user input)**: ${JSON.stringify(request.goal)}`,
       `**Phase**: ${phase}`,
       `**Source**: ${request.source}`,
       `**Design**: ${request.designPath ?? "(not requested)"}`,
@@ -332,45 +363,22 @@ export class PlanBridge {
     phase: WorkflowBootstrapPhase,
     activePlanPath: string | null,
   ): readonly string[] {
-    switch (phase) {
-      case "design_required":
-        return [
-          formatWorkflowDirective({
-            stage: "design_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: request.planPath,
-          }),
-          "",
-          NO_WRITE_NOTICE,
-        ];
-      case "plan_required":
-        return [
-          formatWorkflowDirective({
-            stage: "plan_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: request.planPath,
-          }),
-          "",
-          NO_WRITE_NOTICE,
-        ];
-      case "plan_ready":
-        return [
-          formatWorkflowDirective({
-            stage: "plan_review_required",
-            goal: request.goal,
-            designPath: request.designPath,
-            planPath: activePlanPath,
-          }),
-        ];
-    }
+    const stage = this.resolveBootstrapDirectiveStage(phase);
+    return [
+      formatWorkflowDirective({
+        stage,
+        goal: request.goal,
+        designPath: request.designPath,
+        planPath: activePlanPath ?? request.planPath,
+      }),
+      ...(phase === "plan_ready" ? [] : ["", NO_WRITE_NOTICE]),
+    ];
   }
 
   private withImplementationDirective(context: string, sessionId: string): string {
     const bootstrap = this.getWorkflowBootstrap(sessionId);
     const stage =
-      bootstrap?.phase === "plan_ready" ? "implementation_unauthorized" : "implementation";
+      bootstrap?.phase === "plan_ready" ? "implementation" : "implementation_unauthorized";
     return `${context}\n\n${formatWorkflowDirective({ stage })}`;
   }
 
@@ -518,16 +526,17 @@ export class PlanBridge {
 
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
-    const mergedLoadSkills = mergeSkillArrays(toolInputSkills, [
-      "test-driven-development",
-      "verification-before-completion",
-    ]);
+    const implementationDirective = resolveWorkflowDirective({ stage: "implementation" });
+    const mergedLoadSkills = mergeTaskLoadSkills(
+      toolInputSkills,
+      implementationDirective.requiredSkills,
+    );
 
     // 1) delegation を仮生成して推奨エージェントを決定
     const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
       planFilePath: activePlanPath,
       referenceFiles: [],
-      loadSkills: toolInputSkills,
+      loadSkills: mergedLoadSkills,
     });
 
     if (!initialDelegation) {
@@ -538,7 +547,6 @@ export class PlanBridge {
     }
 
     // 2) ペルソナを解決
-    let persona: AgentId = "hephaestus";
     const inputPersona = inferPersonaFromToolInput(event.payload.toolInput);
 
     // dominant_override が発生するかどうかを確認
@@ -548,14 +556,9 @@ export class PlanBridge {
       dominantAgentId = routingResult.agentId;
     }
 
-    if (dominantAgentId) {
-      // dominant_override が有効な場合は、明示的な入力ペルソナより優先
-      persona = dominantAgentId;
-    } else if (this.isResolvableAgentId(inputPersona)) {
-      persona = inputPersona;
-    } else if (this.isResolvableAgentId(initialDelegation.context.agentId)) {
-      persona = initialDelegation.context.agentId.toLowerCase() as AgentId;
-    }
+    const persona: AgentId =
+      dominantAgentId ??
+      (this.isResolvableAgentId(inputPersona) ? inputPersona : routingResult.agentId);
 
     const previousLearnings = this.getRelevantLearnings(persona);
 

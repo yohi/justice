@@ -1,5 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { formatWorkflowDirective } from "../../src/core/workflow-directives";
+import {
+  formatWorkflowDirective,
+  resolveWorkflowDirective,
+} from "../../src/core/workflow-directives";
+
+describe("resolveWorkflowDirective", () => {
+  it("routes implementation through canonical TDD and verification skills", () => {
+    // When
+    const directive = resolveWorkflowDirective({ stage: "implementation" });
+
+    // Then
+    expect(directive.requiredSkills).toEqual([
+      "test-driven-development",
+      "verification-before-completion",
+    ]);
+    expect(directive.nextAction).toBe("delegate_task");
+    expect(directive.authority).toBe("external_unverified");
+  });
+
+  it("keeps review policy vendor-neutral", () => {
+    // When
+    const directive = resolveWorkflowDirective({ stage: "plan_review_required" });
+
+    // Then
+    expect(directive.requiredSkills).toEqual(["requesting-code-review"]);
+    expect(directive.nextAction).toBe("request_review");
+  });
+});
 
 describe("formatWorkflowDirective", () => {
   it.each([
@@ -25,7 +52,7 @@ describe("formatWorkflowDirective", () => {
 
     // Then
     expect(directive).toContain("Justiceは外部での承認やマージ状態を検証できません");
-    expect(directive).toContain("外部で承認が確認できた場合にのみ");
+    expect(directive).toContain("外部の人間による承認・マージ完了の確認後にのみ継続");
   });
 
   it("warns that implementation tasks before human approval/merge are unauthorized", () => {

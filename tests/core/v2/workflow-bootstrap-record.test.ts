@@ -36,6 +36,7 @@ describe("buildWorkflowStartedRecord", () => {
       envelope: createEnvelope(),
       request: createRequest({ designPath: "docs/design.md", planPath: "docs/plan.md" }),
       phase: "plan_ready",
+      directiveStage: "plan_review_required",
     });
 
     expect(record.recordType).toBe("observation");
@@ -43,6 +44,7 @@ describe("buildWorkflowStartedRecord", () => {
     if (record.kind !== "workflow_started") throw new Error("expected workflow_started");
     expect(record.workflow).toEqual({
       phase: "plan_ready",
+      directiveStage: "plan_review_required",
       source: "command",
       goalHash: hashString("ship the workflow activation feature"),
       goalSnippet: "ship the workflow activation feature",
@@ -189,6 +191,24 @@ describe("workflow bootstrap records at the persistence boundary", () => {
         expect(() => validateRecordSchema({ ...record, sequence })).not.toThrow();
       }
     }
+  });
+
+  it("accepts legacy records without directiveStage and rejects unknown directive stages", () => {
+    const legacyRecord = buildWorkflowStartedRecord({
+      envelope: createEnvelope(),
+      request: createRequest(),
+      phase: "plan_ready",
+    });
+    if (legacyRecord.kind !== "workflow_started") throw new Error("expected workflow_started");
+
+    expect(() => validateRecordSchema({ ...legacyRecord, sequence: 1 })).not.toThrow();
+    expect(() =>
+      validateRecordSchema({
+        ...legacyRecord,
+        sequence: 1,
+        workflow: { ...legacyRecord.workflow, directiveStage: "implementation_authorized" },
+      }),
+    ).toThrow("Invalid workflow bootstrap record");
   });
 
   it("rejects a bootstrap record with a malformed audit payload", () => {

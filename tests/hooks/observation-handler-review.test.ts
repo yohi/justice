@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
+import type { PostToolUseEvent } from "../../src/core/types";
+import type { GateRule } from "../../src/core/v2/gate-definition";
 import type { PendingLogRecord } from "../../src/core/v2/observation-model";
 import { project } from "../../src/core/v2/state-projection";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
@@ -34,13 +36,129 @@ function createHandler(
 }
 
 describe("ObservationHandler review observations", () => {
+  it("injects review remediation and preserves tool-observed gate advice when findings exist", async () => {
+    // Given
+    const gate: GateRule = {
+      id: "review-clean",
+      gateType: "task",
+      trigger: { on: "tool_observed" },
+      check: { type: "review_open_items", minimumSeverity: "major" },
+      onViolation: "warn",
+      onMissingEvidence: "warn",
+      enabled: true,
+    };
+    const { handler, sessionState } = createHandler({
+      gateLoader: { load: vi.fn(async () => [gate]) },
+    });
+    sessionState.setActiveTaskWindow("call-directive", "task-5", "session-directive");
+
+    // When
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-directive",
+      callId: "call-directive",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    });
+
+    // Then
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review directive injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
+    expect(response.injectedContext).toContain("review-clean=WARN");
+    expect(response.normalInjectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
+    expect(response.gateAdvisoryContext).toContain("review-clean=WARN");
+  });
+
+  it("injects review clear only for a trusted complete snapshot without findings", async () => {
+    // Given
+    const { handler } = createHandler();
+
+    // When
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-clear",
+      callId: "call-clear",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "Review complete with no findings",
+        error: false,
+        reviewSnapshotArtifact: {
+          authority: "review_tool",
+          schemaVersion: 1,
+          complete: true,
+        },
+      },
+    });
+
+    // Then
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review clear injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
+  });
+
+  it("deduplicates exact review deliveries while allowing corrections and session reuse", async () => {
+    // Given
+    const { handler } = createHandler();
+    const event: PostToolUseEvent = {
+      type: "PostToolUse",
+      sessionId: "session-dedup",
+      callId: "call-dedup",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    };
+
+    // When
+    const first = await handler.handlePostToolUse(event);
+    const duplicate = await handler.handlePostToolUse(event);
+    const differentTool = await handler.handlePostToolUse({
+      ...event,
+      payload: {
+        ...event.payload,
+        toolName: "task",
+        toolInput: { taskId: "task-dedup" },
+      },
+    });
+    const corrected = await handler.handlePostToolUse({
+      ...event,
+      payload: {
+        ...event.payload,
+        toolResult: "MUST FIX: corrected parser finding at src/parser.ts:20",
+      },
+    });
+    handler.destroySession(event.sessionId);
+    const afterDestroy = await handler.handlePostToolUse({
+      ...event,
+      payload: {
+        ...event.payload,
+        toolResult: "MUST FIX: corrected parser finding at src/parser.ts:20",
+      },
+    });
+
+    // Then
+    expect(first.action).toBe("inject");
+    expect(duplicate).toEqual({ action: "proceed" });
+    expect(differentTool.action).toBe("inject");
+    expect(corrected.action).toBe("inject");
+    expect(afterDestroy.action).toBe("inject");
+  });
+
   it("appends every detected review item before projection and redacts persisted text", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
     sessionState.setActiveTaskWindow("call-review", "task-6.3", "session-review");
 
     // When
-    await handler.handlePostToolUse({
+    const response = await handler.handlePostToolUse({
       type: "PostToolUse",
       sessionId: "session-review",
       callId: "call-review",
@@ -52,11 +170,14 @@ describe("ObservationHandler review observations", () => {
           "MUST FIX: parser regression at src/parser.ts:10",
         ].join("\n"),
         error: false,
-        metadata: { isCompleteSnapshot: true },
+        reviewSnapshotArtifact: { authority: "review_tool", schemaVersion: 1, complete: true },
       },
     });
 
     // Then
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review remediation injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
     const events = await logStore.readAll();
     expect(
       events.map((event) => (event.recordType === "observation" ? event.kind : "decision")),
@@ -65,7 +186,7 @@ describe("ObservationHandler review observations", () => {
       kind: "review_observed",
       taskId: "task-6.3",
       reviewScope: "task-6.3",
-      isCompleteSnapshot: false,
+      isCompleteSnapshot: true,
       items: [
         {
           severity: "critical",
@@ -84,12 +205,12 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("does not append an empty review observation from untrusted complete snapshot metadata", async () => {
+  it("ignores raw metadata.isCompleteSnapshot and does not inject review clear", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
     // When
-    await handler.handlePostToolUse({
+    const response = await handler.handlePostToolUse({
       type: "PostToolUse",
       sessionId: "session-review",
       callId: "call-complete",
@@ -103,13 +224,15 @@ describe("ObservationHandler review observations", () => {
     });
 
     // Then
+    expect(response.action).toBe("proceed");
     const events = await logStore.readAll();
     expect(events).toHaveLength(1);
+    expect(events[0].recordType).toBe("observation");
     expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
-  it.each(["bash", "task", "arbitrary_custom_tool"])(
-    "keeps observed review items open when generic %s metadata claims a complete snapshot",
+  it.each(["bash", "arbitrary_custom_tool"])(
+    "keeps observed review items open when non-review %s metadata claims a complete snapshot",
     async (toolName) => {
       // Given
       const { handler, logStore, sessionState } = createHandler();
@@ -156,12 +279,50 @@ describe("ObservationHandler review observations", () => {
     },
   );
 
+  it("resolves task review items from trusted review snapshot artifact", async () => {
+    // Given
+    const { handler, logStore, sessionState } = createHandler();
+    const callId = "call-task-snapshot";
+    sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId,
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
+        toolResult: "MUST FIX: parser regression at src/parser.ts:10",
+        error: false,
+      },
+    });
+
+    // When
+    sessionState.setActiveTaskWindow(callId, "task-6.3", "session-review");
+    await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-review",
+      callId,
+      payload: {
+        toolName: "task",
+        toolInput: { taskId: "task-6.3" },
+        toolResult: "Review complete with no findings",
+        error: false,
+        reviewSnapshotArtifact: { authority: "review_tool", schemaVersion: 1, complete: true },
+      },
+    });
+
+    // Then
+    const state = project(await logStore.readAll(), "2026-07-18T00:00:00.000Z");
+    expect(state.reviewSummary.open).toEqual([]);
+    expect(state.reviewSummary.resolved).toHaveLength(1);
+  });
+
   it("does not append a review observation without a finding or complete snapshot", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
     // When
-    await handler.handlePostToolUse({
+    const response = await handler.handlePostToolUse({
       type: "PostToolUse",
       sessionId: "session-review",
       callId: "call-clean",
@@ -174,6 +335,7 @@ describe("ObservationHandler review observations", () => {
     });
 
     // Then
+    expect(response).toEqual({ action: "proceed" });
     const events = await logStore.readAll();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ kind: "tool_executed" });
@@ -212,7 +374,9 @@ describe("ObservationHandler review observations", () => {
         error: false,
       },
     });
-    expect(initial).toEqual({ action: "proceed" });
+    expect(initial.action).toBe("inject");
+    if (initial.action !== "inject") throw new Error("expected review remediation injection");
+    expect(initial.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
 
     await handler.handlePostToolUse({
       type: "PostToolUse",
@@ -420,7 +584,7 @@ describe("ObservationHandler review observations", () => {
     expect(projectionCache.write).not.toHaveBeenCalled();
     expect(gateLoader.load).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: tool observation failed, degrading to PROCEED",
+      "observation-handler: review_observed generation failed",
       appendError,
     );
   });
