@@ -434,7 +434,7 @@ export class ObservationHandler {
             event.payload.toolName,
             event.payload.toolResult,
             event.payload.metadata,
-            event.payload.reviewSnapshotArtifact !== undefined,
+            event.payload.reviewSnapshotArtifact?.complete === true,
           ))
         ) {
           return PROCEED;
