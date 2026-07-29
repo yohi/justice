@@ -219,6 +219,12 @@ export class PlanBridge {
 
     if (phase === "plan_ready") {
       this.setActivePlan(sessionId, request.planPath);
+      // Legacy compatibility: the first task() after /justice-start plan_ready
+      // is implicitly armed so existing bootstrap flows keep working.
+      const armedPlanPath = this.getActivePlan(sessionId);
+      if (armedPlanPath !== null) {
+        this.implementationArmedSessions.set(sessionId, { planPath: armedPlanPath });
+      }
     } else {
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);

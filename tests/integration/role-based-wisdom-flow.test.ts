@@ -69,6 +69,12 @@ describe("Role-based wisdom integration flow", () => {
       payload: { toolName: "task", toolInput: { agent: "atlas", prompt: "design it" } },
     });
 
+    await bridge.handleImplementationArm("s-stale", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
     const response = await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "s-stale",

@@ -839,10 +839,16 @@ describe("PlanBridge", () => {
         "s-wf-unauth",
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
-      // Force a plan_required bootstrap while keeping a manually activated plan.
-      (
-        bridge as unknown as { workflowBootstraps: Map<string, { phase: string }> }
+// Force a plan_required bootstrap while keeping a manually activated plan.
+(
+bridge as unknown as { workflowBootstraps: Map<string, { phase: string }> }
       ).workflowBootstraps.set("s-wf-unauth", { phase: "plan_required" });
+      // Clear the implicit arm state so the unarmed path is exercised.
+      (
+        bridge as unknown as {
+          implementationArmedSessions: Map<string, unknown>;
+        }
+      ).implementationArmedSessions.delete("s-wf-unauth");
 
       const response = await bridge.handlePreToolUse({
         type: "PreToolUse",
