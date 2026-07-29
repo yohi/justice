@@ -100,6 +100,11 @@ describe("PlanBridge", () => {
         "s-msg-ready",
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
+      await bridge.handleImplementationArm("s-msg-ready", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       const event: HookEvent = {
         type: "Message",
@@ -229,7 +234,11 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-skills", "docs/plans/sample-plan.md");
+      await bridge.handleImplementationArm("s-skills", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       // When
       const response = await bridge.handlePreToolUse({
@@ -264,7 +273,11 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-tdd", "docs/plans/sample-plan.md");
+      await bridge.handleImplementationArm("s-tdd", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       // When: caller does not request TDD, but implementation stage appends it
       const response = await bridge.handlePreToolUse({
@@ -352,6 +365,11 @@ describe("PlanBridge", () => {
         "s-ready",
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
+      await bridge.handleImplementationArm("s-ready", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       const event: HookEvent = {
         type: "PreToolUse",
