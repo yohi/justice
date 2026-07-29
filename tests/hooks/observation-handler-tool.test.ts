@@ -639,4 +639,85 @@ describe("ObservationHandler tool observation", () => {
     // guard for the refreshProjectionCache()/getGateState() double read).
     expect(readAllSpy).toHaveBeenCalledTimes(1);
   });
+  it("deduplicates repeated review observations for the same session and call", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+    });
+
+    const reviewResult = "MUST FIX: missing edge-case test";
+    const payload = {
+      toolName: "code_review",
+      toolResult: reviewResult,
+      error: false,
+    } as const;
+
+    const firstResponse = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-dup",
+      payload,
+    });
+
+    const secondResponse = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-dup",
+      payload,
+    });
+
+    const events = await logStore.readAll();
+    const reviewObserved = events.filter(
+      (event) => event.recordType === "observation" && event.kind === "review_observed",
+    );
+    expect(reviewObserved).toHaveLength(1);
+    expect(firstResponse.action).toBe("inject");
+    expect(secondResponse.action).toBe("proceed");
+    if (firstResponse.action === "inject") {
+      expect(firstResponse.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
+    }
+  });
+
+  it("degrades to PROCEED when review detection throws", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-handler");
+    const sessionState = new SessionStateProvider();
+    sessionState.setAgentMapping("session-1", "hephaestus");
+    const logger = { warn: vi.fn() };
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+      logger,
+    });
+
+    const detectTarget = handler as unknown as {
+      reviewRejectionDetector: { detectMultiple: () => readonly unknown[] };
+    };
+    vi.spyOn(detectTarget.reviewRejectionDetector, "detectMultiple").mockImplementation(() => {
+      throw new Error("detector failure");
+    });
+
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-1",
+      callId: "call-review-fail",
+      payload: {
+        toolName: "code_review",
+        toolResult: "MUST FIX: something",
+        error: false,
+      },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler: review_observed generation failed",
+      expect.any(Error),
+    );
+  });
 });
