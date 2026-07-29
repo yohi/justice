@@ -574,7 +574,7 @@ export class PlanBridge {
 
     // dominant_override が発生するかどうかを確認
     let dominantAgentId: AgentId | undefined;
-    const routingResult = this.agentRouter.route(initialDelegation.category, toolInputSkills);
+    const routingResult = this.agentRouter.route(initialDelegation.category, mergedLoadSkills);
     if (routingResult.reason === "dominant_override") {
       dominantAgentId = routingResult.agentId;
     }

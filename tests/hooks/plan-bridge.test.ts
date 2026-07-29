@@ -257,6 +257,60 @@ describe("PlanBridge", () => {
       });
     });
 
+    it("routes to sisyphus when implementation directive adds test-driven-development affinity", async () => {
+      // Given
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setActivePlan("s-tdd", "docs/plans/sample-plan.md");
+
+      // When: caller does not request TDD, but implementation stage appends it
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do something" },
+        },
+        sessionId: "s-tdd",
+      });
+
+      // Then
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      const injectedContext = response.injectedContext;
+      expect(injectedContext).toContain("**AGENT**: sisyphus");
+      expect(injectedContext).not.toContain("**AGENT**: hephaestus");
+      expect(injectedContext).toContain("**Category**: deep");
+    });
+
+    it("respects dominant override from implementation directive skills", async () => {
+      // Given
+      const planContent = ["## Task 1: Code review", "- [ ] Review code"].join("\n");
+      const reader = createMockFileReader({ "docs/plans/review-plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setActivePlan("s-review", "docs/plans/review-plan.md");
+
+      // When: caller lists code-quality-reviewer (implementation stage appends it too)
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do review", loadSkills: ["code-quality-reviewer"] },
+        },
+        sessionId: "s-review",
+      });
+
+      // Then
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    });
+
     it("warns that task() is unauthorized when an active plan has no workflow bootstrap", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
@@ -743,10 +797,9 @@ describe("PlanBridge", () => {
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
       // Force a plan_required bootstrap while keeping a manually activated plan.
-      (bridge as unknown as { workflowBootstraps: Map<string, { phase: string }> }).workflowBootstraps.set(
-        "s-wf-unauth",
-        { phase: "plan_required" },
-      );
+      (
+        bridge as unknown as { workflowBootstraps: Map<string, { phase: string }> }
+      ).workflowBootstraps.set("s-wf-unauth", { phase: "plan_required" });
 
       const response = await bridge.handlePreToolUse({
         type: "PreToolUse",
@@ -759,7 +812,9 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
-      expect(response.injectedContext).toContain("まだ外部で人間による承認・マージが確認されていません");
+      expect(response.injectedContext).toContain(
+        "まだ外部で人間による承認・マージが確認されていません",
+      );
     });
   });
 });
