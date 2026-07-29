@@ -5,27 +5,31 @@ import {
 } from "../../src/core/workflow-directives";
 
 describe("resolveWorkflowDirective", () => {
-  it("routes implementation through canonical TDD and verification skills", () => {
-    // When
-    const directive = resolveWorkflowDirective({ stage: "implementation" });
+  it.each([
+    ["design_required", ["brainstorming"], "invoke_skill", "artifact_ready"],
+    ["plan_required", ["writing-plans"], "invoke_skill", "artifact_ready"],
+    ["plan_review_required", ["requesting-code-review"], "request_review", "artifact_ready"],
+    ["review_remediation", ["receiving-code-review"], "invoke_skill", "artifact_ready"],
+    ["review_clear", [], "await_human_approval", "external_unverified"],
+    [
+      "implementation",
+      ["test-driven-development", "verification-before-completion"],
+      "delegate_task",
+      "external_unverified",
+    ],
+    ["implementation_unauthorized", [], "await_human_approval", "external_unverified"],
+  ] as const)(
+    "returns the full policy contract for %s",
+    (stage, requiredSkills, nextAction, authority) => {
+      // When
+      const directive = resolveWorkflowDirective({ stage });
 
-    // Then
-    expect(directive.requiredSkills).toEqual([
-      "test-driven-development",
-      "verification-before-completion",
-    ]);
-    expect(directive.nextAction).toBe("delegate_task");
-    expect(directive.authority).toBe("external_unverified");
-  });
-
-  it("keeps review policy vendor-neutral", () => {
-    // When
-    const directive = resolveWorkflowDirective({ stage: "plan_review_required" });
-
-    // Then
-    expect(directive.requiredSkills).toEqual(["requesting-code-review"]);
-    expect(directive.nextAction).toBe("request_review");
-  });
+      // Then
+      expect(directive.requiredSkills).toEqual(requiredSkills);
+      expect(directive.nextAction).toBe(nextAction);
+      expect(directive.authority).toBe(authority);
+    },
+  );
 });
 
 describe("formatWorkflowDirective", () => {
@@ -35,6 +39,7 @@ describe("formatWorkflowDirective", () => {
     ["plan_review_required", "[JUSTICE: PLAN REVIEW REQUIRED]"],
     ["review_remediation", "[JUSTICE: REVIEW REMEDIATION]"],
     ["review_clear", "[JUSTICE: REVIEW CLEAR]"],
+    ["implementation", "[JUSTICE: IMPLEMENTATION]"],
     ["implementation_unauthorized", "[JUSTICE: IMPLEMENTATION UNAUTHORIZED]"],
   ] as const)("returns %s structural marker", (stage, marker) => {
     // Given
@@ -44,6 +49,17 @@ describe("formatWorkflowDirective", () => {
     const directive = formatWorkflowDirective(input);
 
     expect(directive).toContain(marker);
+  });
+
+  it.each([
+    ["plan_review_required", "requesting-code-review"],
+    ["review_remediation", "receiving-code-review"],
+  ] as const)("exposes %s as a required skill marker", (stage, requiredSkill) => {
+    // When
+    const directive = formatWorkflowDirective({ stage });
+
+    // Then
+    expect(directive).toContain(`[JUSTICE: REQUIRED SKILLS: ${requiredSkill}]`);
   });
 
   it("states that Justice cannot verify external approval or merge status for implementation", () => {

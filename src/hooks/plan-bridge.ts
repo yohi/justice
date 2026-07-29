@@ -271,18 +271,14 @@ export class PlanBridge {
 
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
-      try {
-        this.notifier?.notify({
-          sessionId,
-          taskId: undefined,
-          level: "warning",
-          variant: "escalation",
-          title: "Workflow bootstrap observation failed",
-          message: `Failed to emit workflow bootstrap observations: ${failures.map((f) => String(f.reason)).join(", ")}`,
-        });
-      } catch {
-        /* fail-open: notification failures must not throw */
-      }
+      this.safeNotify(
+        sessionId,
+        undefined,
+        "warning",
+        "escalation",
+        "Workflow bootstrap observation failed",
+        `Failed to emit workflow bootstrap observations: ${failures.map((f) => String(f.reason)).join(", ")}`,
+      );
     }
   }
 

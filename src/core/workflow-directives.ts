@@ -128,7 +128,11 @@ export function resolveWorkflowDirective(input: WorkflowDirectiveInput): Workflo
 
 export function formatWorkflowDirective(input: WorkflowDirectiveInput): string {
   const directive = resolveWorkflowDirective(input);
-  return `${directive.marker}\n${directive.guidance}`;
+  const requiredSkillsMarker =
+    directive.requiredSkills.length === 0
+      ? ""
+      : `\n[JUSTICE: REQUIRED SKILLS: ${directive.requiredSkills.join(", ")}]`;
+  return `${directive.marker}${requiredSkillsMarker}\n${directive.guidance}`;
 }
 
 export function assertNever(value: never): never {

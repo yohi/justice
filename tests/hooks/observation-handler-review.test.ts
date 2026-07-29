@@ -102,7 +102,7 @@ describe("ObservationHandler review observations", () => {
     expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
   });
 
-  it("deduplicates exact review deliveries while allowing corrections and session reuse", async () => {
+  it("deduplicates review deliveries by call, result, and snapshot while allowing corrections", async () => {
     // Given
     const { handler } = createHandler();
     const event: PostToolUseEvent = {
@@ -147,7 +147,7 @@ describe("ObservationHandler review observations", () => {
     // Then
     expect(first.action).toBe("inject");
     expect(duplicate).toEqual({ action: "proceed" });
-    expect(differentTool.action).toBe("inject");
+    expect(differentTool).toEqual({ action: "proceed" });
     expect(corrected.action).toBe("inject");
     expect(afterDestroy.action).toBe("inject");
   });
