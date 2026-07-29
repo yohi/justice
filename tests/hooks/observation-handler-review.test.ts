@@ -170,7 +170,7 @@ describe("ObservationHandler review observations", () => {
           "MUST FIX: parser regression at src/parser.ts:10",
         ].join("\n"),
         error: false,
-        metadata: { isCompleteSnapshot: true },
+        reviewSnapshotArtifact: { authority: "review_tool", schemaVersion: 1, complete: true },
       },
     });
 
@@ -205,7 +205,7 @@ describe("ObservationHandler review observations", () => {
     expect(serializedReview).not.toContain("ghp_exampleSecret1234567890");
   });
 
-  it("injects review clear from backward-compatible complete snapshot metadata", async () => {
+  it("ignores raw metadata.isCompleteSnapshot and does not inject review clear", async () => {
     // Given
     const { handler, logStore } = createHandler();
 
@@ -224,16 +224,11 @@ describe("ObservationHandler review observations", () => {
     });
 
     // Then
-    expect(response.action).toBe("inject");
-    if (response.action !== "inject") throw new Error("expected review clear injection");
-    expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
+    expect(response.action).toBe("proceed");
     const events = await logStore.readAll();
-    expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      kind: "review_observed",
-      isCompleteSnapshot: true,
-      items: [],
-    });
+    expect(events).toHaveLength(1);
+    expect(events[0].recordType).toBe("observation");
+    expect(events[0]).toMatchObject({ kind: "tool_executed" });
   });
 
   it.each(["bash", "arbitrary_custom_tool"])(
@@ -284,7 +279,7 @@ describe("ObservationHandler review observations", () => {
     },
   );
 
-  it("resolves task review items from backward-compatible complete snapshot metadata", async () => {
+  it("resolves task review items from trusted review snapshot artifact", async () => {
     // Given
     const { handler, logStore, sessionState } = createHandler();
     const callId = "call-task-snapshot";
@@ -312,7 +307,7 @@ describe("ObservationHandler review observations", () => {
         toolInput: { taskId: "task-6.3" },
         toolResult: "Review complete with no findings",
         error: false,
-        metadata: { isCompleteSnapshot: true },
+        reviewSnapshotArtifact: { authority: "review_tool", schemaVersion: 1, complete: true },
       },
     });
 

@@ -450,8 +450,7 @@ export class ObservationHandler {
           event.payload.toolName,
           event.payload.toolResult,
           event.payload.metadata,
-          event.payload.reviewSnapshotArtifact?.complete === true ||
-            event.payload.metadata?.isCompleteSnapshot === true,
+          event.payload.reviewSnapshotArtifact?.complete === true,
         );
       }
       let response: HookResponse;
