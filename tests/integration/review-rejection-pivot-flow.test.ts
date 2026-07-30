@@ -18,6 +18,11 @@ describe("Review rejection pivot integration flow", () => {
 
     const results = [];
     for (const callId of ["c-1", "c-2", "c-3"]) {
+      await bridge.handleImplementationArm("s-pivot", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
       await bridge.handlePreToolUse({
         type: "PreToolUse",
         sessionId: "s-pivot",

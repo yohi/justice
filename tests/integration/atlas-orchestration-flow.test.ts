@@ -17,7 +17,11 @@ describe("Atlas orchestration integration flow", () => {
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore, notifier);
 
-    bridge.setActivePlan("s-atlas", "plan.md");
+    await bridge.handleImplementationArm("s-atlas", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     await bridge.handlePreToolUse({
       type: "PreToolUse",
       sessionId: "s-atlas",
@@ -57,6 +61,11 @@ describe("Atlas orchestration integration flow", () => {
       },
       { persona: "atlas" },
     );
+    await bridge.handleImplementationArm("s-atlas", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
 
     const next = await bridge.handlePreToolUse({
       type: "PreToolUse",

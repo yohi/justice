@@ -74,6 +74,19 @@ async function createHarness(): Promise<Harness> {
   return { adapter, justice, handleMessage };
 }
 
+async function armImplementation(
+  adapter: OpenCodeAdapter,
+  sessionID: string,
+  planPath: string,
+): Promise<CommandExecuteBeforeOutput> {
+  const output: CommandExecuteBeforeOutput = { parts: [] };
+  await adapter.onCommandExecuteBefore(
+    { command: "/justice-implement", sessionID, arguments: `--plan ${planPath} --approved` },
+    output,
+  );
+  return output;
+}
+
 async function startWorkflow(
   adapter: OpenCodeAdapter,
   sessionID: string,
@@ -163,6 +176,9 @@ describe("Justice workflow bootstrap integration flow", () => {
     });
     // Audit-only: a bootstrap record must never open a task window (FF-008).
     expect(records.every((record) => record.taskId === undefined)).toBe(true);
+    expect(justice.getPlanBridge().isImplementationArmed(sessionId)).toBe(false);
+    // Arm the session explicitly before the first implementation task.
+    await armImplementation(adapter, sessionId, PLAN_PATH);
 
     const task = await callTaskTool(adapter, sessionId, "c-plan-ready", "実装を進めてください");
     const prompt = task.args.prompt as string;
@@ -178,6 +194,41 @@ describe("Justice workflow bootstrap integration flow", () => {
     ]);
     // The whole activation happened through the command hook only.
     expect(handleMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves task arguments and exposes only the unauthorized advisory when not armed", async () => {
+    const { adapter, justice } = await createHarness();
+    const sessionId = "s-plan-ready-unarmed";
+    await startWorkflow(adapter, sessionId, `--plan ${PLAN_PATH} ship the bootstrap`);
+    let injectedContext = "";
+    const bridge = justice.getPlanBridge();
+    const handlePreToolUse = bridge.handlePreToolUse.bind(bridge);
+    vi.spyOn(bridge, "handlePreToolUse").mockImplementation(async (event) => {
+      const response = await handlePreToolUse(event);
+      if (response.action === "inject") injectedContext = response.injectedContext;
+      return response;
+    });
+    const originalPrompt = "実装を進めてください";
+    const originalArgs = {
+      prompt: originalPrompt,
+      loadSkills: ["caller-skill"],
+      metadata: { source: "caller" },
+    };
+    const output: { args: Record<string, unknown> } = { args: originalArgs };
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: sessionId, callID: "c-plan-ready-unarmed" },
+      output,
+    );
+
+    expect(injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+    expect(injectedContext).not.toContain("Task Delegation Context");
+    expect(output.args).toEqual({
+      prompt: `${injectedContext}\n\n${originalPrompt}`,
+      loadSkills: ["caller-skill"],
+      metadata: { source: "caller" },
+    });
+    expect(output.args).not.toHaveProperty("taskId");
   });
 
   it("stops at design_required and hands task() no plan context even when the plan is readable", async () => {
@@ -281,6 +332,8 @@ describe("Justice workflow bootstrap integration flow", () => {
 
     expect(justice.getPlanBridge().getActivePlan("s-ready")).toBe(PLAN_PATH);
     expect(justice.getPlanBridge().getActivePlan("s-blocked")).toBeNull();
+    // Only the ready session is explicitly armed; blocked stays unauthorized.
+    await armImplementation(adapter, "s-ready", PLAN_PATH);
 
     const blocked = await callTaskTool(adapter, "s-blocked", "c-blocked", "実装を進めてください");
     const ready = await callTaskTool(adapter, "s-ready", "c-ready", "実装を進めてください");

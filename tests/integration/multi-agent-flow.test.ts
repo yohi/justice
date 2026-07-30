@@ -45,6 +45,11 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       payload: { role: "assistant", content: "Delegate the next task from plan.md" },
       sessionId: "integration-session",
     });
+    await planBridge.handleImplementationArm("integration-session", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
 
     // 2. Simulate task delegation (PreToolUse)
     const event: PreToolUseEvent = {
@@ -120,6 +125,11 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       type: "Message",
       payload: { role: "assistant", content: "Delegate from plan.md" },
       sessionId: "dag-session",
+    });
+    await bridge.handleImplementationArm("dag-session", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
     });
 
     // 2. Delegation

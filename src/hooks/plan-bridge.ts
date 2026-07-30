@@ -6,6 +6,8 @@ import type {
   WisdomStoreInterface,
   PlanTask,
   AgentId,
+  ImplementationArmRequest,
+  ImplementationArmResult,
   WorkflowBootstrapPhase,
   WorkflowStartRequest,
 } from "../core/types";
@@ -84,6 +86,8 @@ export class PlanBridge {
   private readonly dependencyAnalyzer: DependencyAnalyzer;
   private readonly completionDetector: PlanCompletionDetector;
   private readonly activePlanPaths: Map<string, string> = new Map();
+  private readonly implementationArmedSessions: Map<string, { readonly planPath: string }> =
+    new Map();
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
   private readonly lastCompletionInputs: Map<
@@ -154,17 +158,22 @@ export class PlanBridge {
   setActivePlan(sessionId: string, planPath: string | null): void {
     if (!planPath) {
       this.activePlanPaths.delete(sessionId);
+      this.implementationArmedSessions.delete(sessionId);
       return;
     }
 
     // Reuse TriggerDetector logic to ensure the path is safe
     const validatedRef = this.triggerDetector.detectPlanReference(planPath);
     if (validatedRef) {
+      if (this.getActivePlan(sessionId) !== validatedRef.planPath) {
+        this.implementationArmedSessions.delete(sessionId);
+      }
       // Trust the validated and normalized path
       this.activePlanPaths.set(sessionId, validatedRef.planPath);
     } else {
       // If invalid, clear it to be safe
       this.activePlanPaths.delete(sessionId);
+      this.implementationArmedSessions.delete(sessionId);
     }
   }
 
@@ -180,12 +189,14 @@ export class PlanBridge {
    */
   destroySession(sessionId: string): void {
     this.activePlanPaths.delete(sessionId);
+    this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
     this.clearSessionCompletionInputs(sessionId);
   }
 
   private clearSessionCompletionInputs(sessionId: string): void {
+    this.implementationArmedSessions.delete(sessionId);
     for (const key of this.lastCompletionInputs.keys()) {
       if (key.startsWith(`${sessionId}:`)) {
         this.lastCompletionInputs.delete(key);
@@ -205,19 +216,22 @@ export class PlanBridge {
     sessionId: string,
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
+    this.implementationArmedSessions.delete(sessionId);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
-
     await this.emitWorkflowBootstrapObservations(sessionId, request, phase, directiveStage);
 
     if (phase === "plan_ready") {
+      // Set active plan so the following /justice-implement command can arm
+      // against it. plan_ready itself does NOT arm the session (explicit
+      // /justice-implement approval is required per the implementation-arm
+      // invariant).
       this.setActivePlan(sessionId, request.planPath);
     } else {
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);
     }
-
     const activePlanPath = this.getActivePlan(sessionId);
     const directive = resolveWorkflowDirective({
       stage: directiveStage,
@@ -331,6 +345,67 @@ export class PlanBridge {
     return this.triggerDetector.detectPlanReference(planPath)?.planPath ?? null;
   }
 
+  async handleImplementationArm(
+    sessionId: string,
+    request: ImplementationArmRequest,
+  ): Promise<ImplementationArmResult> {
+    const planPath = this.resolveActivatablePlanPath(request.planPath);
+    if (planPath === null || !(await this.isArtifactReadable(planPath))) {
+      return {
+        armed: false,
+        planPath: null,
+        directiveStage: "implementation_arm_required",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+      };
+    }
+
+    const activePlanPath = this.getActivePlan(sessionId);
+    if (activePlanPath !== null && activePlanPath !== planPath) {
+      this.safeNotify(
+        sessionId,
+        undefined,
+        "warning",
+        "escalation",
+        "Plan mismatch",
+        `Active plan ${activePlanPath} differs from requested ${planPath}.`,
+      );
+    }
+
+    if (!request.approved) {
+      return {
+        armed: false,
+        planPath,
+        directiveStage: "implementation_arm_required",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+      };
+    }
+
+    this.setActivePlan(sessionId, planPath);
+    this.implementationArmedSessions.set(sessionId, { planPath });
+
+    return {
+      armed: true,
+      planPath,
+      directiveStage: "implementation_arm",
+      guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath }),
+    };
+  }
+
+  consumeImplementationArm(sessionId: string): { readonly planPath: string } | null {
+    const armed = this.implementationArmedSessions.get(sessionId) ?? null;
+    if (armed === null) return null;
+    this.implementationArmedSessions.delete(sessionId);
+    return armed.planPath === this.getActivePlan(sessionId) ? armed : null;
+  }
+
+  isImplementationArmed(sessionId: string): boolean {
+    const armed = this.implementationArmedSessions.get(sessionId) ?? null;
+    if (armed === null) return false;
+    if (armed.planPath === this.getActivePlan(sessionId)) return true;
+    this.implementationArmedSessions.delete(sessionId);
+    return false;
+  }
+
   private formatWorkflowGuidance(
     request: WorkflowStartRequest,
     phase: WorkflowBootstrapPhase,
@@ -372,10 +447,10 @@ export class PlanBridge {
   }
 
   private withImplementationDirective(context: string, sessionId: string): string {
-    const bootstrap = this.getWorkflowBootstrap(sessionId);
-    const stage =
-      bootstrap?.phase === "plan_ready" ? "implementation" : "implementation_unauthorized";
-    return `${context}\n\n${formatWorkflowDirective({ stage })}`;
+    if (!this.isImplementationArmed(sessionId)) {
+      return formatWorkflowDirective({ stage: "implementation_unauthorized" });
+    }
+    return `${context}\n\n${formatWorkflowDirective({ stage: "implementation" })}`;
   }
 
   /**
@@ -490,16 +565,23 @@ export class PlanBridge {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
-    // B phase: record skill invocation for A+B completion detection
+    // Need an active plan to provide context for this session
+    const activePlanPath = this.getActivePlan(event.sessionId);
+    if (!activePlanPath) return PROCEED;
+
+    const armed = this.consumeImplementationArm(event.sessionId);
+    if (armed === null) {
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
     this.completionDetector.recordPreToolUseInvocation(
       event.sessionId,
       event.payload.toolName,
       event.payload.toolInput,
     );
-
-    // Need an active plan to provide context for this session
-    const activePlanPath = this.getActivePlan(event.sessionId);
-    if (!activePlanPath) return PROCEED;
 
     // Fail-open ONLY on I/O error
     let planContent: string;
@@ -582,10 +664,7 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: this.withImplementationDirective(
-        this.buildInjectedContext(planContent, delegation),
-        event.sessionId,
-      ),
+      injectedContext: `${this.buildInjectedContext(planContent, delegation)}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
         args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
           loadSkills: mergedLoadSkills,

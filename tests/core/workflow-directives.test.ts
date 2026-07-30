@@ -18,6 +18,13 @@ describe("resolveWorkflowDirective", () => {
       "external_unverified",
     ],
     ["implementation_unauthorized", [], "await_human_approval", "external_unverified"],
+    [
+      "implementation_arm",
+      ["test-driven-development", "verification-before-completion"],
+      "delegate_task",
+      "external_unverified",
+    ],
+    ["implementation_arm_required", [], "await_human_approval", "external_unverified"],
   ] as const)(
     "returns the full policy contract for %s",
     (stage, requiredSkills, nextAction, authority) => {
@@ -41,6 +48,8 @@ describe("formatWorkflowDirective", () => {
     ["review_clear", "[JUSTICE: REVIEW CLEAR]"],
     ["implementation", "[JUSTICE: IMPLEMENTATION]"],
     ["implementation_unauthorized", "[JUSTICE: IMPLEMENTATION UNAUTHORIZED]"],
+    ["implementation_arm", "[JUSTICE: IMPLEMENTATION ARMED]"],
+    ["implementation_arm_required", "[JUSTICE: IMPLEMENTATION ARM REQUIRED]"],
   ] as const)("returns %s structural marker", (stage, marker) => {
     // Given
     const input = { stage };

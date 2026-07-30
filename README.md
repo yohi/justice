@@ -252,17 +252,20 @@ Justice は stage ごとに純粋な `WorkflowDirective` を解決します。di
 `[JUSTICE: PLAN REVIEW REQUIRED]` を注入し、外部の承認・マージを確認できない
 ことを明示します。
 
-後続の `task()` が有効な plan context を持つ場合、Justice は既存の `skills`、
-`loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく
-`loadSkills` へ正規化します。そのうえで
-`test-driven-development` と `verification-before-completion` を追加し、
-`[JUSTICE: IMPLEMENTATION]` と plan context を渡します。Justice 自身はスキルや
-`task()` を起動しません。
+`plan_ready` は active plan を設定するだけで、実装 enrichment をアームしません。
+後続の `task()` に plan context を渡すには、人間による承認・マージを確認した後、
+`/justice-implement --plan <planPath> --approved` を実行する必要があります。
 
-`/justice-start` による `plan_ready` を経ない既存のメッセージ起点の委譲では、
-`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` を注入します。これは外部の人間承認・
-マージが未確認であることを伝える安全側の advisory であり、実行を物理的に
-停止するものではありません。
+明示的にアームされた次の1回の `task()` に限り、Justice は既存の `skills`、
+`loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく
+`loadSkills` へ正規化します。そのうえで `test-driven-development` と
+`verification-before-completion` を追加し、`[JUSTICE: IMPLEMENTATION]` と plan
+context を渡します。Justice 自身はスキルや `task()` を起動しません。
+
+未アーム、または active plan と異なる plan 用の stale arm で `task()` が呼ばれた
+場合、Justice は `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけを返します。
+plan context、delegation metadata、`taskId`、追加スキルは注入せず、呼び出し元の
+prompt 以外の引数を変更しません。advisory は実行を物理的に停止するものではありません。
 
 ### フォールバックマーカー
 
@@ -314,9 +317,52 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 3. `plan_ready` になると、Justice が設計・計画だけの PR と自動レビューを進める指示を自動注入する。利用者が PR・レビュー用の定型プロンプトをコピーしたり入力したりする必要はない。
 4. エージェントが既存の権限で利用可能な PR・レビュー機能を実行し、指摘を修正してレビューを再実行する。
 5. 人間が設計・計画を明示的に承認してマージする。Justice はこの状態を推測しないため、外部での確認が必要になる。
-6. 承認・マージの確認後、エージェントが `task()` で次のタスクを委譲する。Justice はプランコンテキスト、TDD・検証スキル、実装 PR のレビュー指示を委譲へ追加する。
-7. 実装 PR でも利用可能な AI レビューを行い、最終的な承認・マージ判断は人間が行う。
-8. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認する。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにする。
+6. 承認・マージの確認後、エージェントが `/justice-implement --plan <planPath> --approved` を実行し、次の1回の実装委譲を明示的にアームする。
+7. エージェントが `task()` で次のタスクを委譲する。Justice はアームされた呼び出しだけにプランコンテキスト、TDD・検証スキル、実装 PR のレビュー指示を追加する。
+8. 実装 PR でも利用可能な AI レビューを行い、最終的な承認・マージ判断は人間が行う。
+9. 任意のタイミングで `justice_review` を呼び出し、テスト・ビルド・レビュー指摘の状態を確認する。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにする。
+
+## `/justice-implement` コマンド
+
+アクティブな計画に対して、次の 1 回の `task()` で実装委譲を開始することを明示的に許可するコマンドです。
+
+```bash
+/justice-implement --plan <planPath> --approved
+```
+
+**例:**
+
+```bash
+/justice-implement --plan docs/plans/feature.md --approved
+```
+
+### 引数文法
+
+- **`--plan <path>`** (必須): 計画ファイルの相対パス。
+- **`--approved`** (アーム成立には必須): 人間による承認・マージが確認済みであることを宣言します。省略時も引数は解析されますが、実装はアームされません。Justice 自身は外部状態を検証できません。
+
+### 動作
+
+- コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
+- 未アーム状態で active plan に対して `task()` が呼ばれた場合、または plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけが注入されます。plan context、delegation metadata、`taskId`、追加スキルは渡されません。`task()` 呼び出しの場合、advisory は prompt に注入されますが、それ以外の引数は変更されません。
+- 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
+- active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。
+
+> [!IMPORTANT]
+> これは、過去の文書にあった `plan_ready` 到達時の暗黙的な実装 enrichment からの動作変更です。現在は active plan の存在だけでは `task()` を強化しません。
+
+### 有効化（OpenCode側の設定）
+
+`/justice-start` と同様に、`/justice-implement` は OpenCode の組み込みコマンドではありません。利用者がコマンドを登録する必要があります。
+
+**`.opencode/commands/justice-implement.md`**:
+
+```markdown
+---
+description: Arm the next Justice-managed implementation delegation
+---
+$ARGUMENTS
+```
 
 ## Quality Control Plane (v2.0)
 

@@ -1,4 +1,5 @@
 import type { ObservationMessagePayload } from "./v2/message-payload";
+import type { WorkflowDirectiveStage } from "./workflow-directives";
 
 /** plan.mdから抽出されたタスク */
 export interface PlanTask {
@@ -49,6 +50,21 @@ export interface WorkflowStartRequest {
   readonly goal: string;
   readonly designPath: string | null;
   readonly planPath: string | null;
+}
+
+/** `/justice-implement` コマンドで生成される実装許可リクエスト */
+export interface ImplementationArmRequest {
+  readonly source: WorkflowStartSource;
+  readonly planPath: string;
+  readonly approved: boolean;
+}
+
+/** `/justice-implement` 実行結果 */
+export interface ImplementationArmResult {
+  readonly armed: boolean;
+  readonly planPath: string | null;
+  readonly directiveStage: WorkflowDirectiveStage;
+  readonly guidance: string;
 }
 
 /**

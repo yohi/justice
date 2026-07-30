@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Hooks, ToolDefinition } from "@opencode-ai/plugin";
 import type { EventSessionDeleted } from "@opencode-ai/sdk";
+import {
+  isJusticeImplementCommand,
+  parseJusticeImplementCommandArguments,
+} from "../core/implement-command";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import {
@@ -714,8 +718,8 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * Handle the `/justice-start` slash command and hand the caller Justice's bootstrap
-   * guidance as an appended directive part.
+   * Handle Justice slash commands and hand the caller's synthetic guidance as an
+   * appended directive part.
    *
    * Fail-open is structural here, not a style choice: the SDK handler resolves to
    * `Promise<void>` and `output` exposes only `parts`, so there is no channel by which a
@@ -732,33 +736,65 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      // Every other command is a strict no-op: not even lazy initialization is triggered.
-      if (!isJusticeStartCommand(input.command)) return;
-
-      // The parser already rejects unknown flags, valueless/duplicated flags, unsafe paths
-      // and a missing goal. Justice stays silent rather than guessing an intent, and the raw
-      // arguments are never echoed into the log.
-      const request = parseWorkflowStartCommandArguments(input.arguments);
-      if (request === null) {
-        await this.log("warn", "[Justice] /justice-start arguments rejected by parser; ignoring");
+      if (isJusticeStartCommand(input.command)) {
+        await this.#handleWorkflowStart(input, output);
         return;
       }
 
-      await this.ensureInitialized();
-      const justice = this.#justice;
-      if (!justice) return;
-
-      const result = await justice.getPlanBridge().handleWorkflowStart(input.sessionID, request);
-
-      // Observation audit records are emitted by PlanBridge.handleWorkflowStart, not here,
-      // to avoid double-writing the same workflow lifecycle events (workflow_started +
-      // plan_activated/design_requested/plan_requested) into the observation log.
-
-      if (result.guidance.length === 0) return;
-      output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+      if (isJusticeImplementCommand(input.command)) {
+        await this.#handleImplementationArm(input, output);
+        return;
+      }
     } catch (err) {
       await this.log("error", "[Justice] onCommandExecuteBefore failure", err);
     }
+  }
+
+  async #handleWorkflowStart(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    // The parser already rejects unknown flags, valueless/duplicated flags, unsafe paths
+    // and a missing goal. Justice stays silent rather than guessing an intent, and the raw
+    // arguments are never echoed into the log.
+    const request = parseWorkflowStartCommandArguments(input.arguments);
+    if (request === null) {
+      await this.log("warn", "[Justice] /justice-start arguments rejected by parser; ignoring");
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+
+    const result = await justice.getPlanBridge().handleWorkflowStart(input.sessionID, request);
+
+    // Observation audit records are emitted by PlanBridge.handleWorkflowStart, not here,
+    // to avoid double-writing the same workflow lifecycle events (workflow_started +
+    // plan_activated/design_requested/plan_requested) into the observation log.
+
+    if (result.guidance.length === 0) return;
+    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+  }
+
+  async #handleImplementationArm(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    const request = parseJusticeImplementCommandArguments(input.arguments);
+    if (request === null) {
+      await this.log("warn", "[Justice] /justice-implement arguments rejected by parser; ignoring");
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+
+    const result = await justice.getPlanBridge().handleImplementationArm(input.sessionID, request);
+
+    if (result.guidance.length === 0) return;
+    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
   }
 
   /**

@@ -317,6 +317,27 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args.prompt.endsWith("original")).toBe(true);
     expect(output.args.loadSkills).toEqual(["a", "b"]);
   });
+
+  it("prepends unauthorized advisory without modifying other output args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required",
+    });
+
+    const output = { args: { prompt: "original", existing: "unchanged" } };
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
+
+    expect(output.args.prompt).toBe(
+      "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required\n\noriginal",
+    );
+    expect(output.args).toEqual({
+      prompt: "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required\n\noriginal",
+      existing: "unchanged",
+    });
+  });
 });
 
 describe("OpenCodeAdapter.onToolExecuteAfter", () => {
@@ -494,6 +515,90 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(started).not.toHaveBeenCalled();
     expect(phase).not.toHaveBeenCalled();
     expect(output.parts).toHaveLength(1);
+  });
+
+  it("injects implementation arm guidance for /justice-implement", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi
+      .spyOn(justice.getPlanBridge(), "handleImplementationArm")
+      .mockResolvedValue({
+        armed: true,
+        planPath: "plan.md",
+        directiveStage: "implementation_arm",
+        guidance: "[JUSTICE: IMPLEMENTATION ARMED]",
+      });
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-implement",
+        arguments: "--plan plan.md --approved",
+        sessionID: "session-1",
+      },
+      output,
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("session-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ text: "[JUSTICE: IMPLEMENTATION ARMED]" });
+  });
+
+  it("fails open for /justice-implement when lazy initialization leaves justice unavailable", async () => {
+    const init = fakeInit();
+    const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    const initialize = vi
+      .spyOn(JusticePlugin.prototype, "initialize")
+      .mockRejectedValueOnce(new Error("initialization failed"));
+    const adapter = new OpenCodeAdapter(init);
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await expect(
+      adapter.onCommandExecuteBefore(
+        {
+          command: "justice-implement",
+          arguments: "--plan plan.md --approved",
+          sessionID: "session-init-failure",
+        },
+        output,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(adapter.getJustice()).toBeNull();
+    expect(output.parts).toEqual([]);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "error", message: "[Justice] lazy init failed" }),
+    );
+    expect(logSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "[Justice] onCommandExecuteBefore failure" }),
+    );
+    initialize.mockRestore();
+  });
+
+  it("ignores malformed /justice-implement arguments", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi.spyOn(justice.getPlanBridge(), "handleImplementationArm");
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-implement",
+        arguments: "--approved",
+        sessionID: "session-1",
+      },
+      output,
+    );
+
+    expect(handleImplementationArm).not.toHaveBeenCalled();
+    expect(output.parts).toHaveLength(0);
   });
 
   it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {

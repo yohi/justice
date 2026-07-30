@@ -471,12 +471,12 @@ export class ObservationHandler {
           };
           break;
         }
-case "failed":
-return PROCEED;
-default:
+        case "failed":
+          return PROCEED;
+        default:
           return assertNever(reviewOutcome);
       }
-let cachedState: ProjectedState | undefined;
+      let cachedState: ProjectedState | undefined;
       try {
         cachedState = await this.refreshProjectionCache();
       } catch (error) {
@@ -662,8 +662,7 @@ let cachedState: ProjectedState | undefined;
         ),
       );
 
-      const sessionDeliveries =
-        this.reviewDeliveriesBySession.get(sessionId) ?? new Set<string>();
+      const sessionDeliveries = this.reviewDeliveriesBySession.get(sessionId) ?? new Set<string>();
       sessionDeliveries.add(deliveryKey);
       this.reviewDeliveriesBySession.set(sessionId, sessionDeliveries);
       return items.length > 0 ? { kind: "findings" } : { kind: "clear_snapshot" };

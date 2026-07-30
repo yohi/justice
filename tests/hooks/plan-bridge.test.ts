@@ -83,6 +83,8 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).not.toContain("Task Delegation Context");
+      expect(response.injectedContext).not.toContain("Task ID");
       expect(response.injectedContext).toContain(
         "まだ外部で人間による承認・マージが確認されていません",
       );
@@ -100,6 +102,11 @@ describe("PlanBridge", () => {
         "s-msg-ready",
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
+      await bridge.handleImplementationArm("s-msg-ready", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       const event: HookEvent = {
         type: "Message",
@@ -192,7 +199,7 @@ describe("PlanBridge", () => {
   });
 
   describe("handlePreToolUse", () => {
-    it("should inject unauthorized plan context for a manually activated plan", async () => {
+    it("should inject only an unauthorized advisory for a manually activated plan", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
       });
@@ -201,11 +208,12 @@ describe("PlanBridge", () => {
       // Set the active plan for this session
       bridge.setActivePlan("s-6", "docs/plans/sample-plan.md");
 
+      const toolInput = { prompt: "do something", loadSkills: ["caller-skill"] };
       const event: HookEvent = {
         type: "PreToolUse",
         payload: {
           toolName: "task",
-          toolInput: { prompt: "do something" },
+          toolInput,
         },
         sessionId: "s-6",
       };
@@ -215,8 +223,12 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("Task ID");
       expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+      expect(response.injectedContext).not.toContain("Task Delegation Context");
+      expect(response.injectedContext).not.toContain("Task ID");
+      expect(response.injectedContext).not.toContain("Setup project structure");
+      expect(response.modifiedPayload).toBeUndefined();
+      expect(toolInput).toEqual({ prompt: "do something", loadSkills: ["caller-skill"] });
       expect(response.injectedContext).toContain(
         "まだ外部で人間による承認・マージが確認されていません",
       );
@@ -229,7 +241,11 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-skills", "docs/plans/sample-plan.md");
+      await bridge.handleImplementationArm("s-skills", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       // When
       const response = await bridge.handlePreToolUse({
@@ -264,7 +280,11 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-tdd", "docs/plans/sample-plan.md");
+      await bridge.handleImplementationArm("s-tdd", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       // When: caller does not request TDD, but implementation stage appends it
       const response = await bridge.handlePreToolUse({
@@ -292,7 +312,11 @@ describe("PlanBridge", () => {
       const planContent = ["## Task 1: Code review", "- [ ] Review code"].join("\n");
       const reader = createMockFileReader({ "docs/plans/review-plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-review", "docs/plans/review-plan.md");
+      await bridge.handleImplementationArm("s-review", {
+        source: "command",
+        planPath: "docs/plans/review-plan.md",
+        approved: true,
+      });
 
       // When: caller lists code-quality-reviewer (implementation stage appends it too)
       const response = await bridge.handlePreToolUse({
@@ -352,6 +376,11 @@ describe("PlanBridge", () => {
         "s-ready",
         createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
       );
+      await bridge.handleImplementationArm("s-ready", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
 
       const event: HookEvent = {
         type: "PreToolUse",
@@ -406,7 +435,11 @@ describe("PlanBridge", () => {
       );
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-1", "plan.md");
+      await bridge.handleImplementationArm("s-1", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
 
       const event: PreToolUseEvent = {
         type: "PreToolUse",
@@ -429,7 +462,11 @@ describe("PlanBridge", () => {
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-1", "plan.md");
+      await bridge.handleImplementationArm("s-1", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
 
       const event: PreToolUseEvent = {
         type: "PreToolUse",
@@ -455,7 +492,11 @@ describe("PlanBridge", () => {
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-1", "plan.md");
+      await bridge.handleImplementationArm("s-1", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
 
       const event: PreToolUseEvent = {
         type: "PreToolUse",
@@ -475,7 +516,11 @@ describe("PlanBridge", () => {
       const planContent = ["### Task 1: Setup", "- [/] Init project"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setActivePlan("s-1", "plan.md");
+      await bridge.handleImplementationArm("s-1", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
 
       // 1. Simulate PreToolUse to store delegation context with taskId
       const preEvent: HookEvent = {
