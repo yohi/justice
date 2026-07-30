@@ -549,6 +549,38 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts[0]).toMatchObject({ text: "[JUSTICE: IMPLEMENTATION ARMED]" });
   });
 
+  it("fails open for /justice-implement when lazy initialization leaves justice unavailable", async () => {
+    const init = fakeInit();
+    const logSpy = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    const initialize = vi
+      .spyOn(JusticePlugin.prototype, "initialize")
+      .mockRejectedValueOnce(new Error("initialization failed"));
+    const adapter = new OpenCodeAdapter(init);
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await expect(
+      adapter.onCommandExecuteBefore(
+        {
+          command: "justice-implement",
+          arguments: "--plan plan.md --approved",
+          sessionID: "session-init-failure",
+        },
+        output,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(adapter.getJustice()).toBeNull();
+    expect(output.parts).toEqual([]);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "error", message: "[Justice] lazy init failed" }),
+    );
+    expect(logSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "[Justice] onCommandExecuteBefore failure" }),
+    );
+    initialize.mockRestore();
+  });
+
   it("ignores malformed /justice-implement arguments", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

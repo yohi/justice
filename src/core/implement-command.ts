@@ -3,6 +3,28 @@ import { normalizeSafeRelativePath } from "./trigger-detector";
 
 export const JUSTICE_IMPLEMENT_COMMAND = "justice-implement";
 
+interface ParsedPlanFlag {
+  readonly planPath: string;
+  readonly nextIndex: number;
+}
+
+function parsePlanFlag(
+  args: readonly string[],
+  flagIndex: number,
+  currentPlanPath: string | null,
+): ParsedPlanFlag | null {
+  if (currentPlanPath !== null) return null;
+
+  const value = args.at(flagIndex + 1);
+  if (value === undefined) return null;
+  if (value.startsWith("--")) return null;
+
+  const planPath = normalizeSafeRelativePath(value);
+  if (planPath === null) return null;
+
+  return { planPath, nextIndex: flagIndex + 1 };
+}
+
 export function isJusticeImplementCommand(commandName: string | undefined): boolean {
   if (commandName === undefined) return false;
   const trimmed = commandName.trim();
@@ -22,29 +44,21 @@ export function parseJusticeImplementCommandArguments(
     const arg = args.at(i);
     if (arg === undefined) break;
 
-    if (arg === "--plan") {
-      if (planPath !== null) return null; // duplicate flag
-      const next = args.at(i + 1);
-      if (next === undefined) return null; // missing value
-      if (next.startsWith("--")) return null;
-      planPath = normalizeSafeRelativePath(next);
-      if (planPath === null) return null; // unsafe path
-      i++; // consume value
-      continue;
+    switch (arg) {
+      case "--plan": {
+        const parsedPlan = parsePlanFlag(args, i, planPath);
+        if (parsedPlan === null) return null;
+        planPath = parsedPlan.planPath;
+        i = parsedPlan.nextIndex;
+        continue;
+      }
+      case "--approved":
+        if (approved) return null;
+        approved = true;
+        continue;
+      default:
+        return null;
     }
-
-    if (arg.startsWith("--plan=")) {
-      return null; // unsupported value-attached form
-    }
-
-    if (arg === "--approved") {
-      if (approved) return null; // duplicate flag
-      approved = true;
-      continue;
-    }
-
-    // Unknown flag or positional argument: reject strictly.
-    return null;
   }
 
   if (planPath === null) return null;

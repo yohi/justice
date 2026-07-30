@@ -33,6 +33,34 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(bridge.isImplementationArmed("session-1")).toBe(true);
   });
 
+  it("warns about an active plan mismatch and arms the requested readable plan", async () => {
+    const reader = createMockFileReader({
+      "plan-a.md": planContent,
+      "plan-b.md": planContent.replace("Implement", "Implement B"),
+    });
+    const notifier = createMockNotifier();
+    const bridge = new PlanBridge(reader, createLoopHandler(reader), undefined, notifier);
+    bridge.setActivePlan("session-mismatch", "plan-a.md");
+
+    const result = await bridge.handleImplementationArm("session-mismatch", {
+      source: "command",
+      planPath: "plan-b.md",
+      approved: true,
+    });
+
+    expect(notifier.calls).toContainEqual({
+      sessionId: "session-mismatch",
+      taskId: undefined,
+      level: "warning",
+      variant: "escalation",
+      title: "Plan mismatch",
+      message: "Active plan plan-a.md differs from requested plan-b.md.",
+    });
+    expect(result.armed).toBe(true);
+    expect(bridge.getActivePlan("session-mismatch")).toBe("plan-b.md");
+    expect(bridge.isImplementationArmed("session-mismatch")).toBe(true);
+  });
+
   it("refuses to arm a session when approval is absent", async () => {
     const bridge = createBridge({ "plan.md": planContent });
 
@@ -181,6 +209,29 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
     expect(response.injectedContext).not.toContain("Task Delegation Context");
     expect(response.modifiedPayload).toBeUndefined();
+  });
+
+  it("deletes a stale arm when isImplementationArmed detects a plan change", async () => {
+    const bridge = createBridge({
+      "plan-a.md": planContent,
+      "plan-b.md": planContent.replace("Implement", "Implement B"),
+    });
+    await bridge.handleImplementationArm("session-stale-probe", {
+      source: "command",
+      planPath: "plan-a.md",
+      approved: true,
+    });
+    bridge.setActivePlan("session-stale-probe", "plan-b.md");
+    const armedSessions = (
+      bridge as unknown as {
+        implementationArmedSessions: Map<string, { readonly planPath: string }>;
+      }
+    ).implementationArmedSessions;
+    armedSessions.set("session-stale-probe", { planPath: "plan-a.md" });
+
+    expect(bridge.isImplementationArmed("session-stale-probe")).toBe(false);
+    expect(armedSessions.has("session-stale-probe")).toBe(false);
+    expect(bridge.consumeImplementationArm("session-stale-probe")).toBeNull();
   });
 
   it("invalidates an arm when the active plan is cleared", async () => {
