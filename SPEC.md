@@ -412,7 +412,7 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 | `implementation` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | 読み取り可能な plan context での実装委譲 |
 | `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | active plan に対する未アームまたは stale arm の委譲への安全側通知 |
 | `implementation_arm` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | `/justice-implement` による次回の実装委譲の許可 |
-| `implementation_arm_required` | なし | `await_human_approval` | `external_unverified` | 未アーム状態での実装委譲への安全側通知 |
+| `implementation_arm_required` | なし | `await_human_approval` | `external_unverified` | 未アーム状態、または要求された plan が読めないなど不完全・失敗した arm リクエストへの安全側通知 |
 
 `plan_ready`、`plan_activated`、`review_clear` は、承認・マージ・実装認可を意味
 しない。`implementation_unauthorized` も L0 advisory であり、実行を物理的に
@@ -424,7 +424,7 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 arm を破棄する。未アームまたは stale arm の呼び出しは
 `implementation_unauthorized` advisory だけを返し、plan 読み込み、delegation 構築、
 wisdom/persona 解決、loop 状態更新、completion 入力記録、`modifiedPayload` 生成を
-行わない。adapter も元の tool 引数を変更しない。
+行わない。adapter は `injectedContext` を `args.prompt` へ注入するが、`skills`・`loadSkills`・plan context など prompt 以外の tool 引数は変更しない。
 
 一致する arm がある場合のみ、呼び出し元の `skills`、`loadSkills`、legacy
 `load_skills` を一つの `loadSkills` 配列へ正規化する。呼び出し元の順序を維持しつつ、

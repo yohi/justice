@@ -646,7 +646,7 @@ git commit -m "feat(adapter): wire /justice-implement command into command.execu
 
 既存の `/justice-start` セクションの直後に追加:
 
-```markdown
+````markdown
 ## `/justice-implement` コマンド
 
 アクティブな計画に対して、次の 1 回の `task()` で実装委譲を開始することを明示的に許可するコマンドです。
@@ -664,7 +664,7 @@ git commit -m "feat(adapter): wire /justice-implement command into command.execu
 ### 引数文法
 
 - **`--plan <path>`** (必須): 計画ファイルの相対パス。
-- **`--approved`** (任意): 人間による承認・マージが確認済みであることを宣言します。Justice はこの状態を検証できません; これは単に実装委譲を強化するための合図です。
+- **`--approved`** (アーム成立には必須): 人間による承認・マージが確認済みであることを宣言します。省略時も引数解析自体は成功しますが、`armed: false` かつ `directiveStage: "implementation_arm_required"` が返り、実装委譲はアームされません。Justice はこの状態を検証できません; これは単に実装委譲を強化するための合図です。
 
 ### 動作
 
@@ -684,7 +684,7 @@ description: Arm the next Justice-managed implementation delegation
 ---
 $ARGUMENTS
 ```
-```
+````
 
 - [ ] **Step 2: AGENTS.md の invariant セクションを更新する**
 

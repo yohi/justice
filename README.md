@@ -265,7 +265,7 @@ context を渡します。Justice 自身はスキルや `task()` を起動しま
 未アーム、または active plan と異なる plan 用の stale arm で `task()` が呼ばれた
 場合、Justice は `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけを返します。
 plan context、delegation metadata、`taskId`、追加スキルは注入せず、呼び出し元の
-引数も変更しません。advisory は実行を物理的に停止するものではありません。
+prompt 以外の引数を変更しません。advisory は実行を物理的に停止するものではありません。
 
 ### フォールバックマーカー
 
@@ -332,7 +332,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 **例:**
 
-```
+```bash
 /justice-implement --plan docs/plans/feature.md --approved
 ```
 
@@ -344,7 +344,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 ### 動作
 
 - コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
-- 未アーム状態で active plan に対して `task()` や plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけが注入されます。plan context、delegation metadata、`taskId`、追加スキルは渡されず、元の `task()` 引数も変更されません。
+- 未アーム状態で active plan に対して `task()` が呼ばれた場合、または plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけが注入されます。plan context、delegation metadata、`taskId`、追加スキルは渡されません。`task()` 呼び出しの場合、advisory は prompt に注入されますが、それ以外の引数は変更されません。
 - 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
 - active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。
 
