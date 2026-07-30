@@ -26,6 +26,23 @@
 - Existing local entries are **not** migrated automatically. New writes follow the category heuristic.
 - Global store initialization is fail-open: when `HOME` is unavailable or `mkdir` fails, the plugin starts with an in-memory NoOp global persistence and logs a warning. Local wisdom behavior is unaffected.
 
+## [2.7.0](https://github.com/yohi/justice/compare/v2.6.0...v2.7.0) (2026-07-30)
+
+
+### Features
+
+* /justice-implement コマンドで実装委譲の明示アームを必須化 ([f54f3e8](https://github.com/yohi/justice/commit/f54f3e82345452e4ced0899195934f20f8df6e7e))
+* **adapter:** wire /justice-implement command into command.execute.before ([b2cb9a8](https://github.com/yohi/justice/commit/b2cb9a8952e96e05a3bb1de9af87f7d0623d3404))
+* **core:** add /justice-implement command parser and directive stages ([2de44a6](https://github.com/yohi/justice/commit/2de44a6ef68422a9c3a200fc424af8169c4d57b9))
+* **plan-bridge:** add implementation arm state and consumption ([170d160](https://github.com/yohi/justice/commit/170d160f29e9d456118919900ce31e3c03157dd8))
+
+
+### Bug Fixes
+
+* **adapter:** 未認可advisoryのprompt注入をmodifiedPayload有無に関わらず実行する ([ff2db83](https://github.com/yohi/justice/commit/ff2db83bb41e9caf164b98abb60279f04caf10ed))
+* **plan-bridge:** 実装アームをプランへ束縛する ([4b15135](https://github.com/yohi/justice/commit/4b15135ed8ffb961228a6c02861699993101a312))
+* **plan-bridge:** 暗黙的な実装アームを廃止し明示承認を必須化 ([6eed0b5](https://github.com/yohi/justice/commit/6eed0b5f2f222563aa418a040f16cf28ad33c1df))
+
 ## [2.6.0](https://github.com/yohi/justice/compare/v2.5.0...v2.6.0) (2026-07-29)
 
 
