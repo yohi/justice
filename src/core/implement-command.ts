@@ -39,8 +39,9 @@ export function parseJusticeImplementCommandArguments(
 
   let planPath: string | null = null;
   let approved = false;
+  let i = 0;
 
-  for (let i = 0; i < args.length; i++) {
+  while (i < args.length) {
     const arg = args.at(i);
     if (arg === undefined) break;
 
@@ -49,12 +50,13 @@ export function parseJusticeImplementCommandArguments(
         const parsedPlan = parsePlanFlag(args, i, planPath);
         if (parsedPlan === null) return null;
         planPath = parsedPlan.planPath;
-        i = parsedPlan.nextIndex;
+        i = parsedPlan.nextIndex + 1;
         continue;
       }
       case "--approved":
         if (approved) return null;
         approved = true;
+        i += 1;
         continue;
       default:
         return null;
