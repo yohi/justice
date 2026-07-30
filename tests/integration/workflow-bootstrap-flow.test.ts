@@ -208,8 +208,9 @@ describe("Justice workflow bootstrap integration flow", () => {
       if (response.action === "inject") injectedContext = response.injectedContext;
       return response;
     });
+    const originalPrompt = "実装を進めてください";
     const originalArgs = {
-      prompt: "実装を進めてください",
+      prompt: originalPrompt,
       loadSkills: ["caller-skill"],
       metadata: { source: "caller" },
     };
@@ -223,7 +224,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
     expect(injectedContext).not.toContain("Task Delegation Context");
     expect(output.args).toEqual({
-      prompt: "実装を進めてください",
+      prompt: `${injectedContext}\n\n${originalPrompt}`,
       loadSkills: ["caller-skill"],
       metadata: { source: "caller" },
     });

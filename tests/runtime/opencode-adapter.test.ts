@@ -317,6 +317,27 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args.prompt.endsWith("original")).toBe(true);
     expect(output.args.loadSkills).toEqual(["a", "b"]);
   });
+
+  it("prepends unauthorized advisory without modifying other output args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required",
+    });
+
+    const output = { args: { prompt: "original", existing: "unchanged" } };
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
+
+    expect(output.args.prompt).toBe(
+      "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required\n\noriginal",
+    );
+    expect(output.args).toEqual({
+      prompt: "[JUSTICE: IMPLEMENTATION UNAUTHORIZED] approval required\n\noriginal",
+      existing: "unchanged",
+    });
+  });
 });
 
 describe("OpenCodeAdapter.onToolExecuteAfter", () => {

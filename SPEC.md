@@ -209,7 +209,7 @@ interface ProtectedContext {
 
 ### 4.0 イベントルーティング概要（`JusticePlugin.handleEvent()`）
 
-すべての Hook イベントは `JusticePlugin.handleEvent()` を経由し、以下のとおりルーティングされる（v1 + v2 合流済み）。各ハンドリングの詳細は §4.1〜4.4（v1）と §15.2（v2 ObservationHandler）を参照。ただし OpenCode `command.execute.before`（`/justice-start`）のみ例外で、`JusticePlugin.handleEvent()` を経由せず `OpenCodeAdapter` が `PlanBridge.handleWorkflowStart()` を直接呼び出す（詳細は §4.1a）。
+すべての Hook イベントは `JusticePlugin.handleEvent()` を経由し、以下のとおりルーティングされる（v1 + v2 合流済み）。各ハンドリングの詳細は §4.1〜4.4（v1）と §15.2（v2 ObservationHandler）を参照。ただし OpenCode `command.execute.before`（`/justice-start` / `/justice-implement`）のみ例外で、`JusticePlugin.handleEvent()` を経由せず `OpenCodeAdapter` が対応する `PlanBridge` メソッドを直接呼び出す（詳細は §4.1a）。
 
 ```text
 Message          → PlanBridge.handleMessage() (user message) / ObservationHandler.handleMessage() (declared claim payload)
@@ -225,7 +225,7 @@ Event:loop-*     → LoopDetectionHandler
 Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
                     → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
 
-command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` コマンドのみ。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
+command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (`justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
 ```
 
 
@@ -352,26 +352,27 @@ command.execute.before  → PlanBridge.handleWorkflowStart()  (`justice-start` �
 
 どちらのコマンドも skill や `task()` を起動せず、純粋に synthetic text part を注入するのみである。
 
-`/justice-start` はワークフロー・ブートストラップを開始する OpenCode コマンドフックである。
+`/justice-start` はワークフロー・ブートストラップを開始し、`/justice-implement` は次の実装委譲をアームする OpenCode コマンドフックである。
 
 | プロパティ | 設定値 |
 |----------|-------|
 | OpenCode フック | `command.execute.before`（`JusticePlugin.handleEvent()` を経由しない直接ディスパッチ） |
-| トリガー | コマンド名が `justice-start`（先頭スラッシュの有無は許容、それ以外は完全一致）の場合のみ。他コマンドは初期化すら発生しない完全ノーオペ。 |
+| トリガー | コマンド名が `justice-start` または `justice-implement`（先頭スラッシュの有無は許容）の場合のみ。それ以外のコマンドは初期化すら発生しない完全ノーオペ。 |
 | クロスハーネス fallback | チャットメッセージ中の `Justice: start workflow`（行頭・完全一致・大文字小文字区別）を `parseWorkflowStartFallbackMarker()` でパース可能だが、**現状 `PlanBridge.handleMessage()` からは呼び出されておらず未接続**（将来のクロスハーネス統合のための予約形式）。 |
 
 **フロー:**
 
-1. `isJusticeStartCommand(input.command)`（`src/core/trigger-detector.ts`）でコマンド名を判定。`false` なら初期化も行わず即 return。
-2. `parseWorkflowStartCommandArguments(input.arguments)` — 純粋パーサーが goal と `--design`/`--plan` の安全な相対パスを抽出する。未知のフラグ、値のないフラグ、重複フラグ、安全でないパス（絶対パス・バックスラッシュ・`..`）、goal 欠落はすべて `null` として扱われ、例外は投げない（生引数は非echo）。
+1. `isJusticeStartCommand(input.command)` または `isJusticeImplementCommand(input.command)`（`src/core/trigger-detector.ts`）でコマンド名を判定。どちらでもなければ初期化も行わず即 return。
+2. `justice-start` の場合は `parseWorkflowStartCommandArguments(input.arguments)`、`justice-implement` の場合は `parseJusticeImplementCommandArguments(input.arguments)` を呼び出す。いずれも純粋パーサーであり、安全でない入力は `null` として扱われ例外を投げない（生引数は非echo）。
 3. `null` の場合は warn ログのみ出して return（fail-open）。パースに成功した場合のみ `ensureInitialized()` を実行する。
-4. `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
+4. `justice-start` の場合は `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
    a. `resolveBootstrapPhase(request)` — **design → plan → 成果物準備済みの順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。`"plan_ready"` は計画成果物が読み取り可能であることだけを表し、レビュー、承認、マージ、実装認可を表さない。
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
    c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
    d. workflow-start のたびに既存の実装 arm を失効させる。同じ plan パスでの再開も例外ではない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
-5. `result.guidance` が空でなければ、フェーズ別ガイダンス文字列を synthetic な `output.parts` テキストパートとして追記する。`design_required` / `plan_required` / `plan_ready` はそれぞれ設計、計画、設計・計画 PR の自動レビューへ進む指示であり、利用者に定型 PR・レビュープロンプトの入力を要求しない。
-6. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` が active plan と同じパスを明示的にアームした場合だけ、次の1回の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、OmO の `loadSkills` に接続する。
+5. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、次の `task()` 委譲に対する実装 arm の guidance を返す。
+6. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は次の実装委譲の許可を示す。
+7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` が active plan と同じパスを明示的にアームした場合だけ、次の1回の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、OmO の `loadSkills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
 注入した policy の `directiveStage`、その policy が推奨する
@@ -1046,7 +1047,7 @@ bun add justice-plugin
 | `experimental.session.compacting` | `EventEvent` (compaction) | コンパクション時にプランのスナップショットを保護。 |
 | `event` (message.updated) | `MessageEvent` | ユーザーメッセージから委譲の意図を検出。 |
 | `event` (session.error) | `EventEvent` (loop-detector) | `LOOP_ERROR_PATTERNS` に一致するエラーのみ転送。 |
-| `command.execute.before` | (変換なし・直接ディスパッチ) | `justice-start` コマンドのみ処理（§4.1a）。`PlanBridge.handleWorkflowStart()` を直接呼び出し `output.parts` へガイダンスを追記。他コマンドは完全ノーオペ。 |
+| `command.execute.before` | (変換なし・直接ディスパッチ) | `justice-start` と `justice-implement` を処理（§4.1a）。それぞれ `PlanBridge.handleWorkflowStart()` / `PlanBridge.handleImplementationArm()` を直接呼び出し `output.parts` へガイダンスを追記。他コマンドは完全ノーオペ。 |
 
 ### 追加ファイル
 - `src/runtime/opencode-adapter.ts` — 変換ブリッジ本体
