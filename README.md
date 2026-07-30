@@ -476,8 +476,6 @@ Justice は 3層構造のエラー戦略を実装しています：
 
 以下は構想段階のロードマップです。個別の実装計画、API、完了条件にはまだ分解していません。Justice は `plan.md` を計画の唯一の真実源として尊重し、既存の Superpowers と oh-my-openagent の責務を置き換えずに品質保証を拡張します。
 
-詳細な整理版は [docs/future/tdd-develop-flow-refined.md](docs/future/tdd-develop-flow-refined.md) にまとめています。
-
 ### Feature 品質の検証
 
 現在の Gate は観測したツール実行とタスク完了を対象とする L0 Advisory です。将来は、設計・計画・実装・レビュー・E2E データフロー・回帰を横断して確認する Feature-level Final Verification を追加し、Task 成功と Feature 成功の差異を早期に可視化します。
