@@ -234,8 +234,21 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 ## 6. Phase 2 — 実機での観測実証（P0）
 
-ビルドした `dist/opencode-plugin.js` を絶対パスで OpenCode 設定に登録（README パターン3）し、実際に OpenCode を起動してツールを実行する。
+ビルドした `dist/opencode-plugin.js` を絶対パスで OpenCode 設定に登録する実機 smoke test（README パターン3）に加え、**root specifier 経由で OpenCode パッケージキャッシュを経由する実機検証**を実施する。Phase 1 の真因が root specifier 経由のロード失敗であるため、Phase 2 の完了には root specifier 経由の検証が不可欠である。絶対パス検証は後方互換・開発用パターンの継続動作を担保するため維持する。
 
+### 6.0 Phase 2 検証手順
+
+1. **絶対パス smoke test（維持）**: README パターン3と同様に、ビルドした `dist/opencode-plugin.js` の絶対パスを `opencode.jsonc` の `plugin` 配列に登録し、OpenCode を起動する。`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて任意ツールを 1 回実行し、`.justice/events/` へ JSONL が生成されることを確認する。
+
+2. **root specifier 検証（追加）**: `~/.cache/opencode/packages/@yohi/justice@<version>/` 等の既存パッケージキャッシュをクリーンにし、`opencode plugin @yohi/justice` を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice` または `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
+
+   - `failed to load plugin` が発生しないこと。
+   - `Justice initialized via opencode-adapter` が出力されること。
+   - `plugin` 配列の tuple 形式 `[["@yohi/justice", { "enableAdvisoryOutputAppend": true }]]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
+   - 任意のツールを 1 回実行し、`.justice/events/` へ JSONL が生成されること。
+   - `justice_review` を `scope` 未指定で呼び出し、レビュー要約が返ること。
+
+3. **検査 1-7（§6.1）** は、手順 1 の絶対パス経路と手順 2 の root specifier 経路の**両方**で満たされることを確認する。いずれかの経路で失敗した場合、その時点で Phase 2 は完了していない。
 ### 6.1 確認する事実（すべて観測ベース）
 
 | # | 確認内容 | 確認方法 |
@@ -320,13 +333,13 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 判定と対応:
 
-| 観測結果 | 対応 |
-|---|---|
-| バナーがユーザー表示・推論文脈の双方に現れる | 既定値 `true` 化を検討する。判断根拠を SPEC に記録 |
-| 一方にのみ現れる | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載 |
-| いずれにも現れない | 既定値 `false` 据置を「**実証に基づく決定**」として記録。保証チャネルは `JusticeNotifier`（`client.app.log`）のみ |
+| 観測結果 | C1 判定 | 対応 |
+|---|---|---|
+| バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed` | 既定値 `true` 化を検討する。判断根拠を SPEC §15.12 に記録する |
+| 一方にのみ現れる | `C1 passed`（部分的） | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載する |
+| いずれにも現れない | `C1 observed-negative` | 既定値は `false` 据置とするが、これを最終状態としては**扱わない**。`output.output` 追記経路が機能していないとみなし、以下を実施する。<br>1. 既存の `enableAdvisoryOutputAppend` オプションを非推奨化し、README / SPEC に「保証チャネルは `JusticeNotifier` のみ」と明記する。<br>2. 切替不可能な場合、`OpenCodeAdapter` から `output.output` 追記ロジックを削除し、コードとドキュメントで機能不在を一致させる。<br>3. 修正後は C1 検証を再度実施し、`C1 passed` または `C1 observed-negative` を再判定する。修正後の再検証が完了するまでは SPEC §15.12 の C1 状態を「**実装修正待ち（Fix Pending）**」として更新する |
 
-いずれの分岐でも SPEC §15.12 の C1 は「未実証（Not Verified）」から脱する。
+いずれの分岐でも「活動が未実施（Not Verified）」ではなくなるが、`C1 observed-negative` は「追記機能が動作しない」という否定的事実である。`C1 observed-negative` を最終状態として出荷完了や合格として記録してはならない。
 
 ## 8. Phase 4 — 書込レイテンシの再計測と方針確定
 
@@ -347,6 +360,16 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 - 同一 shard への連続 append と、複数 shard への並行 append の両方を測る。
 - p50 / p95 / p99 を記録する。
 
+**固定計測プロトコル**: 再現性を持たせるため、以下を事前に確定する。
+
+1. **サンプル数・反復回数**: 各条件ごとに warm-up 5 回を廃棄し、計測対象 100 回の append を連続実行する。warm-up 前の shard は空または事前投入済みのいずれかを明記する。
+2. **shard 事前投入**: 各サイズ条件で shard サイズを `0 B` / `1 KB` / `100 KB` / `1 MB` / `5 MB` に揃える。事前投入は複数回 `atomicAppend` を発行し、warm-up 前に完了させる。
+3. **同一 shard 条件**: 単一 writerId、単一 JSONL ファイルへの連続 append。事前投入により `contents` キャッシュを温め、計測中は 1 回目の append でもキャッシュヒットする状態を作る。キャッシュ未ヒット状態を別条件として追加計測する。
+4. **複数 shard 条件**: writerId 毎に別 JSONL ファイルを持つ 4 つの writer を並行（Promise.all）で同一ディレクトリに append させる。各 writer の shard サイズは同一とする。
+5. **実行環境の固定**: Bun ランタイム（OpenCode と同じ）、`NodeFileSystem`、ローカルファイルシステム（tmpfs ではなく実ディスク）。OS、Bun バージョン、ファイルシステム種別を計測レポートに記録する。
+6. **percentile 集計**: Nearest-rank method（`ceil(p/100 * n)`）で p50 / p95 / p99 を算出する。生サンプルも昇順ソート済みで保存する。
+7. **レポート保存**: 各条件の raw samples（ミリ秒、double 精度）、実行環境情報、測定日時を `docs/reports/2026-07-31-v2-latency-measurement.json` に保存する。可視化のためヒストグラム区間も 10ms 刻みで保存する。
+
 ### 8.3 判定基準（事前固定）
 
 **後出しの判断を避けるため、実測前に閾値を確定する。**
@@ -354,7 +377,7 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 | 実測 p95 | 判断 | 対応 |
 |---|---|---|
 | < 5ms | 許容 | SPEC を「再計測済み・目標達成」に更新して完了 |
-| 5ms 以上 50ms 未満 | 条件付き許容 | SPEC に実測値・計測条件・shard サイズ依存性を明記し、改善は v2.5 の Issue に登録 |
+| 5ms 以上 50ms 未満 | 条件付き許容 | SPEC に実測値、計測条件（§8.2 固定プロトコル）、shard サイズ依存性を明記し、改善は v2.5 の Issue に登録 |
 | 50ms 以上 | 要改善 | 本設計のスコープで改善実装（§8.4） |
 
 ### 8.4 改善方針（p95 ≥ 50ms の場合のみ）
@@ -400,6 +423,24 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 | 3 | OpenCode ログを走査し `failed to load plugin` / `Justice initialized` の有無を報告 | 直近の該当行と発生回数 |
 | 4 | 対象プロジェクトの `.justice/` の有無、`events` の shard 数・レコード数・最終書込時刻 | サマリ表 |
 | 5 | `.justice/gate.yaml` の妥当性（存在する場合） | `GateLoader` の検証結果 |
+
+#### 9.1.0 設定探索・解析仕様
+
+検査 1 は OpenCode の実形式に合わせて以下の仕様を満たす。
+
+- **対象ファイル**: グローバル設定 `~/.config/opencode/opencode.jsonc`、プロジェクト設定 `.opencode/opencode.json` / `.opencode/opencode.jsonc` / `opencode.json` / `opencode.jsonc`。上記の順で探索し、最初に見つかったファイルを報告する。
+- **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
+- **`plugin` 配列の抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合は各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
+  - 文字列エントリ: `"@yohi/justice"`、`"@yohi/justice@3.0.0"`、`"@yohi/justice/opencode"` 等。
+  - tuple エントリ: `[string, PluginOptions]` 形式。第 1 要素が `@yohi/justice` 系の文字列であれば specifier として採用し、第 2 要素は `enableAdvisoryOutputAppend` 等の検証には使用しないが、検出済み specifier の隣接情報として表示に含める。
+  - 上記以外の形式（`null`、`number`、長さ 3 以上の配列等）は `invalid_plugin_entry` として検査結果に記録する。該当エントリからは specifier を抽出しない。
+  - tuple の第 1 要素が文字列でない場合も `invalid_plugin_entry` とする。
+- **対応戦略**: 抽出した specifier は §9.1.1 の解決規則に従って解決する。抽出できなかった場合は `justice_not_found_in_config` として報告する。
+- **fixture とテスト**: `tests/core/justice-doctor-config.test.ts`（新設）に以下の fixture を追加する。
+  - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
+  - 壊れた JSONC を受け取り `parse_error` として扱う。
+  - `plugin` 配列に無効エントリ（`null`、数値、配列長 3、非文字列第 1 要素の tuple）を含む設定を受け取り、`invalid_plugin_entry` として扱いつつ有効なエントリからは specifier を抽出する。
+
 
 #### 9.1.1 specifier 解決の規則
 
