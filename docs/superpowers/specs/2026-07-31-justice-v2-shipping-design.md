@@ -2,15 +2,15 @@
 
 ## 0. メタ情報
 
-| 項目 | 値 |
-|------|----|
-| 作成日 | 2026-07-31 |
-| 対象バージョン | `@yohi/justice` 2.7.0 → 3.0.0（破壊的変更） |
-| 起点 | [Issue #192](https://github.com/yohi/justice/issues/192)（Nexus プロジェクトからのレポート） |
-| 想定ロール | Justice Core Maintainer |
-| 対象ブランチ | `master` を起点とする `feature/justice-v2-shipping-*` |
-| 関連スキル | `brainstorming`（本書作成）→ `writing-plans`（次工程） |
-| 関連文書 | [SPEC.md §15](../../../SPEC.md)、[ADR-2026-06-26-v2-charter-drift.md](./ADR-2026-06-26-v2-charter-drift.md)、[2026-06-26-v2-phase0-spikes.md](../spikes/2026-06-26-v2-phase0-spikes.md) |
+| 項目           | 値                                                                                                                                                                                      |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 作成日         | 2026-07-31                                                                                                                                                                              |
+| 対象バージョン | `@yohi/justice` 2.7.0 → 3.0.0（破壊的変更）                                                                                                                                             |
+| 起点           | [Issue #192](https://github.com/yohi/justice/issues/192)（Nexus プロジェクトからのレポート）                                                                                            |
+| 想定ロール     | Justice Core Maintainer                                                                                                                                                                 |
+| 対象ブランチ   | `master` を起点とする `feature/justice-v2-shipping-*`                                                                                                                                   |
+| 関連スキル     | `brainstorming`（本書作成）→ `writing-plans`（次工程）                                                                                                                                  |
+| 関連文書       | [SPEC.md §15](../../../SPEC.md)、[ADR-2026-06-26-v2-charter-drift.md](./ADR-2026-06-26-v2-charter-drift.md)、[2026-06-26-v2-phase0-spikes.md](../spikes/2026-06-26-v2-phase0-spikes.md) |
 
 ## 1. 目的とスコープ
 
@@ -20,14 +20,14 @@ Justice v2.0 Quality Control Plane を、**実機で動作することが観測�
 
 ### 1.1 スコープ内
 
-| Phase | 主題 | 優先度 |
-|-------|------|--------|
-| Phase 1 | 配布エントリポイントの再構成 + ローダ契約回帰テスト（FF-009） | P0 |
-| Phase 2 | 実機での観測実証（Observation Log / Gate / `justice_review`） | P0 |
-| Phase 3 | `PluginOptions` 配線と C1（advisory 表示面）の実証・既定値確定 | P1 |
-| Phase 4 | 書込レイテンシの再計測と改善方針の確定 | P1 |
-| Phase 5 | 診断手段の2層構成（診断 CLI + `justice_review` health） | P1 |
-| Phase 6 | ADR 承認要件の改訂と SPEC / README の整合 | P2 |
+| Phase   | 主題                                                           | 優先度 |
+| ------- | -------------------------------------------------------------- | ------ |
+| Phase 1 | 配布エントリポイントの再構成 + ローダ契約回帰テスト（FF-009）  | P0     |
+| Phase 2 | 実機での観測実証（Observation Log / Gate / `justice_review`）  | P0     |
+| Phase 3 | `PluginOptions` 配線と C1（advisory 表示面）の実証・既定値確定 | P1     |
+| Phase 4 | 書込レイテンシの再計測と改善方針の確定                         | P1     |
+| Phase 5 | 診断手段の2層構成（診断 CLI + `justice_review` health）        | P1     |
+| Phase 6 | ADR 承認要件の改訂と SPEC / README の整合                      | P2     |
 
 ### 1.2 スコープ外
 
@@ -39,18 +39,18 @@ Justice v2.0 Quality Control Plane を、**実機で動作することが観測�
 
 ### 2.1 観測された事実
 
-| 確認項目 | 実測結果 |
-|---|---|
-| `~/.config/opencode/opencode.jsonc` の `plugin` 配列 | `"@yohi/justice@2.7.0"` が登録済み |
-| パッケージ実体 | `~/.cache/opencode/packages/@yohi/justice@2.7.0/node_modules/@yohi/justice/` に存在 |
-| publish 済み `dist` への v2 コード同梱 | 同梱済み（`dist/runtime/observation-log-store.js` 等） |
-| `~/program` 配下の `.justice/` ディレクトリ | **0 件**（nexus・justice 自身とも不存在） |
-| `.justice/events/` | ファイルシステム上に **0 件** |
-| `~/.justice/`（グローバル wisdom） | ディレクトリは存在するが**空** |
-| OpenCode ログ（140,147 行）の `service=justice` | **0 件** |
-| 同ログの `Justice initialized via opencode-adapter` | **0 件** |
-| 同ログの `[Justice]` プレフィックス | **0 件** |
-| 同ログの `failed to load plugin` | **全起動で毎回発生** |
+| 確認項目                                             | 実測結果                                                                            |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `~/.config/opencode/opencode.jsonc` の `plugin` 配列 | `"@yohi/justice@2.7.0"` が登録済み                                                  |
+| パッケージ実体                                       | `~/.cache/opencode/packages/@yohi/justice@2.7.0/node_modules/@yohi/justice/` に存在 |
+| publish 済み `dist` への v2 コード同梱               | 同梱済み（`dist/runtime/observation-log-store.js` 等）                              |
+| `~/program` 配下の `.justice/` ディレクトリ          | **0 件**（nexus・justice 自身とも不存在）                                           |
+| `.justice/events/`                                   | ファイルシステム上に **0 件**                                                       |
+| `~/.justice/`（グローバル wisdom）                   | ディレクトリは存在するが**空**                                                      |
+| OpenCode ログ（140,147 行）の `service=justice`      | **0 件**                                                                            |
+| 同ログの `Justice initialized via opencode-adapter`  | **0 件**                                                                            |
+| 同ログの `[Justice]` プレフィックス                  | **0 件**                                                                            |
+| 同ログの `failed to load plugin`                     | **全起動で毎回発生**                                                                |
 
 決定的なログ行:
 
@@ -64,22 +64,27 @@ level=ERROR message="failed to load plugin" path=@yohi/justice@2.7.0
 OpenCode バイナリ（`~/.opencode/bin/opencode`）から抽出したローダ実装:
 
 ```js
-function nV($){ return typeof $ === "function" }
-
-function Yy($){
-  if (nV($)) return $;                                           // 関数ならそのままプラグイン
-  if (!$ || typeof $ !== "object" || !("server" in $)) return;    // PluginModule でもない
-  if (!nV($.server)) return;
-  return $.server;                                               // { server: fn } を許容
+function nV($) {
+  return typeof $ === "function";
 }
 
-function Xy($){                          // $ = モジュール名前空間オブジェクト
-  let Z = new Set, Q = [];
-  for (let Y of Object.values($)) {      // 全 export を走査
-    if (Z.has(Y)) continue;              // 同一関数は dedup
+function Yy($) {
+  if (nV($)) return $; // 関数ならそのままプラグイン
+  if (!$ || typeof $ !== "object" || !("server" in $)) return; // PluginModule でもない
+  if (!nV($.server)) return;
+  return $.server; // { server: fn } を許容
+}
+
+function Xy($) {
+  // $ = モジュール名前空間オブジェクト
+  let Z = new Set(),
+    Q = [];
+  for (let Y of Object.values($)) {
+    // 全 export を走査
+    if (Z.has(Y)) continue; // 同一関数は dedup
     Z.add(Y);
     let J = Yy(Y);
-    if (!J) throw TypeError("Plugin export is not a function");   // 1件でも不適合なら全体が throw
+    if (!J) throw TypeError("Plugin export is not a function"); // 1件でも不適合なら全体が throw
     Q.push(J);
   }
   return Q;
@@ -95,11 +100,11 @@ function Xy($){                          // $ = モジュール名前空間オ�
 
 `"@yohi/justice@2.7.0"` は `exports["."]` → `dist/index.js`（barrel）に解決される。実測した barrel の形状:
 
-| 項目 | 実測値 |
-|---|---|
-| `dist/index.js` の総 export 数 | 49 |
-| うち非関数 export | **8 件** — `AGENT_IDS` / `DEFAULT_PERSONA` / `DEFAULT_RETRY_POLICY` / `JUSTICE_START_COMMAND` / `LOOP_ERROR_PATTERNS` / `PersonaClassifier` / `REVIEW_REJECTION_PATTERNS` / `WORKFLOW_START_FALLBACK_MARKER` |
-| `dist/opencode-plugin.js` の export | `OpenCodePlugin: function` / `default: function`（同一関数オブジェクト → dedup 後 1 プラグイン） |
+| 項目                                | 実測値                                                                                                                                                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dist/index.js` の総 export 数      | 49                                                                                                                                                                                                           |
+| うち非関数 export                   | **8 件** — `AGENT_IDS` / `DEFAULT_PERSONA` / `DEFAULT_RETRY_POLICY` / `JUSTICE_START_COMMAND` / `LOOP_ERROR_PATTERNS` / `PersonaClassifier` / `REVIEW_REJECTION_PATTERNS` / `WORKFLOW_START_FALLBACK_MARKER` |
+| `dist/opencode-plugin.js` の export | `OpenCodePlugin: function` / `default: function`（同一関数オブジェクト → dedup 後 1 プラグイン）                                                                                                             |
 
 契約1に違反するため `TypeError` が投げられ、**プラグインは 1 行も実行されない**。さらに契約2により、**仮に非関数 export を全廃しても root 登録は誤りである** — `PlanParser` 等のクラスがプラグインファクトリとして呼び出されてしまう。すなわち **barrel と plugin entry は `exports["."]` 上で共存できない**。
 
@@ -114,12 +119,12 @@ function Xy($){                          // $ = モジュール名前空間オ�
 
 調査中に検討し、証拠によって否定した仮説を記録する。
 
-| 仮説 | 判定 | 根拠 |
-|---|---|---|
+| 仮説                                                                               | 判定     | 根拠                                                                                                            |
+| ---------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
 | H2: `#noOp`（`worktree ?? directory ?? project.root` が全て null）で初期化されない | **否定** | `PluginInput.worktree` / `directory` は `@opencode-ai/plugin` 1.14.21・1.18.4 の双方で非オプショナルな `string` |
-| H3: publish 物に v2 コードが同梱されていない | **否定** | `dist/runtime/observation-log-store.js` 等が同梱済み |
-| H4: `dist/index.js` がプラグインを export していない | **否定** | `export { OpenCodePlugin as default, OpenCodePlugin }` を含み、`typeof default === "function"` |
-| H1: ロードは成功するが観測経路が黙って失敗する | **保留** | ロード自体が失敗しているため未検証。Phase 2 で判定する |
+| H3: publish 物に v2 コードが同梱されていない                                       | **否定** | `dist/runtime/observation-log-store.js` 等が同梱済み                                                            |
+| H4: `dist/index.js` がプラグインを export していない                               | **否定** | `export { OpenCodePlugin as default, OpenCodePlugin }` を含み、`typeof default === "function"`                  |
+| H1: ロードは成功するが観測経路が黙って失敗する                                     | **保留** | ロード自体が失敗しているため未検証。Phase 2 で判定する                                                          |
 
 ## 3. 設計原則と制約
 
@@ -157,28 +162,32 @@ Phase 1 配布契約修正（真因）
 
 ```jsonc
 {
-  "main":    "dist/opencode-plugin.js",   // was: dist/index.js
-  "module":  "dist/opencode-plugin.js",   // was: dist/index.js
-  "types":   "dist/opencode-plugin.d.ts", // was: dist/index.d.ts
-  "version": "3.0.0",                     // was: 2.7.0（破壊的変更）
+  "main": "dist/opencode-plugin.js", // was: dist/index.js
+  "module": "dist/opencode-plugin.js", // was: dist/index.js
+  "types": "dist/opencode-plugin.d.ts", // was: dist/index.d.ts
+  "version": "3.0.0", // was: 2.7.0（破壊的変更）
   "exports": {
-    ".": {                                // plugin 専用エントリへ変更（真因の修正）
+    ".": {
+      // plugin 専用エントリへ変更（真因の修正）
       "import": "./dist/opencode-plugin.js",
-      "types":  "./dist/opencode-plugin.d.ts"
+      "types": "./dist/opencode-plugin.d.ts",
     },
-    "./opencode": {                       // 変更なし（後方互換のため維持）
+    "./opencode": {
+      // 変更なし（後方互換のため維持）
       "import": "./dist/opencode-plugin.js",
-      "types":  "./dist/opencode-plugin.d.ts"
+      "types": "./dist/opencode-plugin.d.ts",
     },
-    "./core": {                           // 新設：ライブラリ named export の退避先
+    "./core": {
+      // 新設：ライブラリ named export の退避先
       "import": "./dist/index.js",
-      "types":  "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
     },
-    "./runtime": {                        // 変更なし
+    "./runtime": {
+      // 変更なし
       "import": "./dist/runtime/node-file-system.js",
-      "types":  "./dist/runtime/node-file-system.d.ts"
-    }
-  }
+      "types": "./dist/runtime/node-file-system.d.ts",
+    },
+  },
 }
 ```
 
@@ -240,8 +249,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 1. **絶対パス smoke test（維持）**: README パターン3と同様に、ビルドした `dist/opencode-plugin.js` の絶対パスを `opencode.jsonc` の `plugin` 配列に登録し、OpenCode を起動する。`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて任意ツールを 1 回実行し、`.justice/events/` へ JSONL が生成されることを確認する。
 
-2. **root specifier 検証（追加）**: `~/.cache/opencode/packages/@yohi/justice@<version>/` 等の既存パッケージキャッシュをクリーンにし、`opencode plugin @yohi/justice` を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice` または `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
-
+2. **root specifier 検証（追加）**: `~/.cache/opencode/packages/@yohi/justice@3.0.0/` 等の既存パッケージキャッシュをクリーンにし、**`opencode plugin @yohi/justice@3.0.0`** を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
    - `failed to load plugin` が発生しないこと。
    - `Justice initialized via opencode-adapter` が出力されること。
    - `plugin` 配列の tuple 形式 `[["@yohi/justice", { "enableAdvisoryOutputAppend": true }]]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
@@ -249,17 +257,18 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
    - `justice_review` を `scope` 未指定で呼び出し、レビュー要約が返ること。
 
 3. **検査 1-7（§6.1）** は、手順 1 の絶対パス経路と手順 2 の root specifier 経路の**両方**で満たされることを確認する。いずれかの経路で失敗した場合、その時点で Phase 2 は完了していない。
+
 ### 6.1 確認する事実（すべて観測ベース）
 
-| # | 確認内容 | 確認方法 |
-|---|---|---|
-| 1 | `failed to load plugin` が発生しない | OpenCode ログ |
-| 2 | `Justice initialized via opencode-adapter` が出力される | OpenCode ログ（`service=justice`） |
-| 3 | `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` が実際に生成される | 任意のツール（例: `bash` で `bun run test`）を 1 回実行し、ファイルシステムを確認 |
-| 4 | レコードが `ObservationRecord` schema を満たす | 生成された JSONL の内容確認（`kind`、`evidence`、redaction 適用、`sequence` 単調性） |
-| 5 | `justice_review` がツールとして呼び出せる | セッション内から `scope` 未指定で実行し、レビュー要約が返ることを確認 |
-| 6 | `.justice/gate.yaml` 不在時に `DEFAULT_GATES` へ fail-open する | `gate.yaml` を置かない状態で 7 を実施し、警告ログと DecisionRecord の `ruleResults` に既定 3 gate（`required-tests` / `build-green` / `review-clean`）が現れることを確認 |
-| 7 | task 窓内で `task_complete` の DecisionRecord が生成される | `task()` を 1 回呼ぶ（`PreToolUse` が `callId` 単位の task 窓を開き、対応する `PostToolUse` で閉じる）。`.justice/events/` に `recordType: "decision"` レコードが生成されることを確認 |
+| #   | 確認内容                                                                    | 確認方法                                                                                                                                                                              |
+| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `failed to load plugin` が発生しない                                        | OpenCode ログ                                                                                                                                                                         |
+| 2   | `Justice initialized via opencode-adapter` が出力される                     | OpenCode ログ（`service=justice`）                                                                                                                                                    |
+| 3   | `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` が実際に生成される | 任意のツール（例: `bash` で `bun run test`）を 1 回実行し、ファイルシステムを確認                                                                                                     |
+| 4   | レコードが `ObservationRecord` schema を満たす                              | 生成された JSONL の内容確認（`kind`、`evidence`、redaction 適用、`sequence` 単調性）                                                                                                  |
+| 5   | `justice_review` がツールとして呼び出せる                                   | セッション内から `scope` 未指定で実行し、レビュー要約が返ることを確認                                                                                                                 |
+| 6   | `.justice/gate.yaml` 不在時に `DEFAULT_GATES` へ fail-open する             | `gate.yaml` を置かない状態で 7 を実施し、警告ログと DecisionRecord の `ruleResults` に既定 3 gate（`required-tests` / `build-green` / `review-clean`）が現れることを確認              |
+| 7   | task 窓内で `task_complete` の DecisionRecord が生成される                  | `task()` を 1 回呼ぶ（`PreToolUse` が `callId` 単位の task 窓を開き、対応する `PostToolUse` で閉じる）。`.justice/events/` に `recordType: "decision"` レコードが生成されることを確認 |
 
 ### 6.2 完了条件
 
@@ -295,9 +304,7 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 ```jsonc
 {
-  "plugin": [
-    ["@yohi/justice", { "enableAdvisoryOutputAppend": true }]
-  ]
+  "plugin": [["@yohi/justice", { "enableAdvisoryOutputAppend": true }]],
 }
 ```
 
@@ -315,6 +322,7 @@ export type Config = Omit<SDKConfig, "plugin"> & {
   ```
 
   `ValidatedPluginOptions` は `src/core/` 側で定義する。`OpenCodeAdapterOptions`（`src/runtime/`）を core から型 import すると不変条件1のアーキテクチャテスト（`tests/arch/core-no-opencode-imports.test.ts`）に触れるため、core の返り値を runtime 側で `OpenCodeAdapterOptions` へ写す。
+
 - **警告の出力は runtime 境界の責務とする。** `src/core/` は `@opencode-ai/*` を import できない（不変条件1）ため、core から `init.client.app.log` を呼ぶことは構造的に不可能である。`src/opencode-plugin.ts` が返された `warnings` を受け取り、`init.client.app.log`（`service=justice`）へ出力する。**core 内で `console.warn` に逃げてはならない** — 不変条件1の骨抜きになり、かつ OpenCode のログ経路に乗らないため利用者から観測できない。
 - **環境変数は追加しない。** 設定経路を OpenCode の `PluginOptions` 1 本に集約する。
 
@@ -333,11 +341,11 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 判定と対応:
 
-| 観測結果 | C1 判定 | 対応 |
-|---|---|---|
-| バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed` | 既定値 `true` 化を検討する。判断根拠を SPEC §15.12 に記録する |
-| 一方にのみ現れる | `C1 passed`（部分的） | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載する |
-| いずれにも現れない | `C1 observed-negative` | 既定値は `false` 据置とするが、これを最終状態としては**扱わない**。`output.output` 追記経路が機能していないとみなし、以下を実施する。<br>1. 既存の `enableAdvisoryOutputAppend` オプションを非推奨化し、README / SPEC に「保証チャネルは `JusticeNotifier` のみ」と明記する。<br>2. 切替不可能な場合、`OpenCodeAdapter` から `output.output` 追記ロジックを削除し、コードとドキュメントで機能不在を一致させる。<br>3. 修正後は C1 検証を再度実施し、`C1 passed` または `C1 observed-negative` を再判定する。修正後の再検証が完了するまでは SPEC §15.12 の C1 状態を「**実装修正待ち（Fix Pending）**」として更新する |
+| 観測結果                                     | C1 判定                               | 対応                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed`                           | 既定値 `true` 化を検討する。判断根拠を SPEC §15.12 に記録する                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 一方にのみ現れる                             | `C1 partial`（または `Not Verified`） | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載する。`C1 passed` は両表示面が確認できた場合のみ使用する                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| いずれにも現れない                           | `C1 observed-negative`                | 既定値は `false` 据置とするが、これを最終状態としては**扱わない**。`output.output` 追記経路が機能していないとみなし、以下を実施する。<br>1. 既存の `enableAdvisoryOutputAppend` オプションを非推奨化し、README / SPEC に「保証チャネルは `JusticeNotifier` のみ」と明記する。<br>2. 切替不可能な場合、`OpenCodeAdapter` から `output.output` 追記ロジックを削除し、コードとドキュメントで機能不在を一致させる。<br>3. 修正後は C1 検証を再度実施し、`C1 passed` または `C1 observed-negative` を再判定する。修正後の再検証が完了するまでは SPEC §15.12 の C1 状態を「**実装修正待ち（Fix Pending）**」として更新する |
 
 いずれの分岐でも「活動が未実施（Not Verified）」ではなくなるが、`C1 observed-negative` は「追記機能が動作しない」という否定的事実である。`C1 observed-negative` を最終状態として出荷完了や合格として記録してはならない。
 
@@ -362,23 +370,29 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 **固定計測プロトコル**: 再現性を持たせるため、以下を事前に確定する。
 
-1. **サンプル数・反復回数**: 各条件ごとに warm-up 5 回を廃棄し、計測対象 100 回の append を連続実行する。warm-up 前の shard は空または事前投入済みのいずれかを明記する。
-2. **shard 事前投入**: 各サイズ条件で shard サイズを `0 B` / `1 KB` / `100 KB` / `1 MB` / `5 MB` に揃える。事前投入は複数回 `atomicAppend` を発行し、warm-up 前に完了させる。
-3. **同一 shard 条件**: 単一 writerId、単一 JSONL ファイルへの連続 append。事前投入により `contents` キャッシュを温め、計測中は 1 回目の append でもキャッシュヒットする状態を作る。キャッシュ未ヒット状態を別条件として追加計測する。
-4. **複数 shard 条件**: writerId 毎に別 JSONL ファイルを持つ 4 つの writer を並行（Promise.all）で同一ディレクトリに append させる。各 writer の shard サイズは同一とする。
-5. **実行環境の固定**: Bun ランタイム（OpenCode と同じ）、`NodeFileSystem`、ローカルファイルシステム（tmpfs ではなく実ディスク）。OS、Bun バージョン、ファイルシステム種別を計測レポートに記録する。
-6. **percentile 集計**: Nearest-rank method（`ceil(p/100 * n)`）で p50 / p95 / p99 を算出する。生サンプルも昇順ソート済みで保存する。
-7. **レポート保存**: 各条件の raw samples（ミリ秒、double 精度）、実行環境情報、測定日時を `docs/reports/2026-07-31-v2-latency-measurement.json` に保存する。可視化のためヒストグラム区間も 10ms 刻みで保存する。
+1. **測定対象経路**: `ObservationHandler.handlePostToolUse()` を呼び出す hook 経路 end-to-end とする。`spikes/observation-latency/measure.ts` のような `ObservationLogStore.append()` 直接呼出は primitive 参考値として位置づけ、本 Phase 4 の判定には使用しない。
+2. **固定 workload**: `handlePostToolUse()` へ渡す入力を以下で固定する。
+   - `toolName`: `"bash"`
+   - `toolInput`: `{ "command": "bun run test" }`
+   - `toolResult`: `"1 passed"`
+   - これらから生成される `ObservationRecord` の JSON シリアライズ後サイズは約 400 B（±50 B）を目標とし、実測値はレポートに記載する。
+3. **サンプル数・反復回数**: 各条件ごとに warm-up 5 回を廃棄し、計測対象 100 回の append を連続実行する。warm-up 前の shard は空または事前投入済みのいずれかを明記する。
+4. **shard 事前投入**: 各サイズ条件で shard サイズを `0 B` / `1 KB` / `100 KB` / `1 MB` / `5 MB` に揃える。事前投入は複数回 `atomicAppend` を発行し、warm-up 前に完了させる。
+5. **同一 shard 条件**: 単一 writerId、単一 JSONL ファイルへの連続 append。事前投入により `contents` キャッシュを温め、計測中は 1 回目の append でもキャッシュヒットする状態を作る。キャッシュ未ヒット状態を別条件として追加計測する。
+6. **複数 shard 条件**: writerId 毎に別 JSONL ファイルを持つ 4 つの writer を並行（`Promise.all` 単位）で同一ディレクトリに append させる。**100 回の反復は writer ごとに適用し、合計サンプル数は 400（4 writer × 100 回）とする**。`Promise.all` 1 回あたりの 4 件の個別 append を 1 サイクルとし、100 サイクル計測する。各 writer の shard サイズは同一とする。
+7. **実行環境の固定**: Bun ランタイム（OpenCode と同じ）、`NodeFileSystem`、ローカルファイルシステム（tmpfs ではなく実ディスク）。OS、Bun バージョン、ファイルシステム種別を計測レポートに記録する。
+8. **percentile 集計**: Nearest-rank method（`ceil(p/100 * n)`）で p50 / p95 / p99 を算出する。生サンプルも昇順ソート済みで保存する。
+9. **レポート保存**: 各条件の raw samples（ミリ秒、double 精度）、実行環境情報、測定日時を `docs/reports/2026-07-31-v2-latency-measurement.json` に保存する。可視化のためヒストグラム区間も 10ms 刻みで保存する。
 
 ### 8.3 判定基準（事前固定）
 
 **後出しの判断を避けるため、実測前に閾値を確定する。**
 
-| 実測 p95 | 判断 | 対応 |
-|---|---|---|
-| < 5ms | 許容 | SPEC を「再計測済み・目標達成」に更新して完了 |
+| 実測 p95           | 判断         | 対応                                                                                                    |
+| ------------------ | ------------ | ------------------------------------------------------------------------------------------------------- |
+| < 5ms              | 許容         | SPEC を「再計測済み・目標達成」に更新して完了                                                           |
 | 5ms 以上 50ms 未満 | 条件付き許容 | SPEC に実測値、計測条件（§8.2 固定プロトコル）、shard サイズ依存性を明記し、改善は v2.5 の Issue に登録 |
-| 50ms 以上 | 要改善 | 本設計のスコープで改善実装（§8.4） |
+| 50ms 以上          | 要改善       | 本設計のスコープで改善実装（§8.4）                                                                      |
 
 ### 8.4 改善方針（p95 ≥ 50ms の場合のみ）
 
@@ -416,13 +430,13 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 検査項目:
 
-| # | 検査 | 出力 |
-|---|---|---|
-| 1 | OpenCode 設定ファイル群（グローバル / プロジェクト）を探索し、`plugin` 配列から justice specifier を抽出 | 検出した設定ファイルパスと specifier |
-| 2 | specifier を §9.1.1 の規則で解決し、解決先モジュールを import してローダ契約（FF-009 と同一判定）を適用 | 解決結果（バージョンと実体パス）、および契約違反時は違反した export 名と修正手順（§9.2） |
-| 3 | OpenCode ログを走査し `failed to load plugin` / `Justice initialized` の有無を報告 | 直近の該当行と発生回数 |
-| 4 | 対象プロジェクトの `.justice/` の有無、`events` の shard 数・レコード数・最終書込時刻 | サマリ表 |
-| 5 | `.justice/gate.yaml` の妥当性（存在する場合） | `GateLoader` の検証結果 |
+| #   | 検査                                                                                                     | 出力                                                                                                                                                                      |
+| --- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | OpenCode 設定ファイル群（グローバル / プロジェクト）を探索し、`plugin` 配列から justice specifier を抽出 | 検出した設定ファイルパスと specifier                                                                                                                                      |
+| 2   | specifier を §9.1.1 の規則で解決し、解決先モジュールを import してローダ契約（FF-009 と同一判定）を適用  | 解決結果（解決後バージョン、キャッシュ内の実体パス、パッケージ成果物）、現在のビルド成果物（`dist/`）との一致結果、および契約違反時は違反した export 名と修正手順（§9.2） |
+| 3   | OpenCode ログを走査し `failed to load plugin` / `Justice initialized` の有無を報告                       | 直近の該当行と発生回数                                                                                                                                                    |
+| 4   | 対象プロジェクトの `.justice/` の有無、`events` の shard 数・レコード数・最終書込時刻                    | サマリ表                                                                                                                                                                  |
+| 5   | `.justice/gate.yaml` の妥当性（存在する場合）                                                            | `GateLoader` の検証結果                                                                                                                                                   |
 
 #### 9.1.0 設定探索・解析仕様
 
@@ -430,17 +444,15 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 - **対象ファイル**: グローバル設定 `~/.config/opencode/opencode.jsonc`、プロジェクト設定 `.opencode/opencode.json` / `.opencode/opencode.jsonc` / `opencode.json` / `opencode.jsonc`。上記の順で探索し、最初に見つかったファイルを報告する。
 - **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
-- **`plugin` 配列の抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合は各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
+- **`plugin` フィールドの検出と抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合、**値が配列であることを最初に検証**し、配列でない場合は `plugin_not_array`（または `invalid_plugin_field`）として記録して例外を投げずに処理を継続する。配列の各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
   - 文字列エントリ: `"@yohi/justice"`、`"@yohi/justice@3.0.0"`、`"@yohi/justice/opencode"` 等。
-  - tuple エントリ: `[string, PluginOptions]` 形式。第 1 要素が `@yohi/justice` 系の文字列であれば specifier として採用し、第 2 要素は `enableAdvisoryOutputAppend` 等の検証には使用しないが、検出済み specifier の隣接情報として表示に含める。
-  - 上記以外の形式（`null`、`number`、長さ 3 以上の配列等）は `invalid_plugin_entry` として検査結果に記録する。該当エントリからは specifier を抽出しない。
-  - tuple の第 1 要素が文字列でない場合も `invalid_plugin_entry` とする。
+  - tuple エントリ: `[string, PluginOptions]` 形式。**第 1 要素が `@yohi/justice` 系の文字列であり、かつ第 2 要素が有効な `PluginOptions`（`Record<string, unknown>`）である場合のみ** specifier として採用する。採用時は第 2 要素の生データを出力せず、`optionsPresent: true` または allowlisted なオプションキー名の集合に置き換えてから診断出力に含める。値を残す必要がある場合は `SecretPatternDetector` による明示的 redaction を適用する。
+  - 上記以外の形式（`null`、`number`、長さ 3 以上の配列等）、または tuple の第 1 要素が文字列でない場合、または tuple の第 2 要素が `PluginOptions` として妥当でない場合は、いずれも `invalid_plugin_entry` として検査結果に記録する。該当エントリからは specifier を抽出しない。
 - **対応戦略**: 抽出した specifier は §9.1.1 の解決規則に従って解決する。抽出できなかった場合は `justice_not_found_in_config` として報告する。
 - **fixture とテスト**: `tests/core/justice-doctor-config.test.ts`（新設）に以下の fixture を追加する。
   - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
   - 壊れた JSONC を受け取り `parse_error` として扱う。
-  - `plugin` 配列に無効エントリ（`null`、数値、配列長 3、非文字列第 1 要素の tuple）を含む設定を受け取り、`invalid_plugin_entry` として扱いつつ有効なエントリからは specifier を抽出する。
-
+  - `plugin` 配列に無効エントリ（`null`、数値、配列長 3、非文字列第 1 要素の tuple、第 2 要素が非オブジェクトの tuple）、ならびに `plugin` フィールド自体が配列でない設定を受け取り、それぞれ `invalid_plugin_entry` / `plugin_not_array` として扱いつつ有効なエントリからは specifier を抽出する。
 
 #### 9.1.1 specifier 解決の規則
 
@@ -453,12 +465,12 @@ Cannot find module '@yohi/justice@2.7.0'
 
 診断 CLI がここで誤診すると、**ロード失敗を検知できる唯一の経路（§9.1）そのものが機能しなくなる** — 今回の事故と同型の false negative を生む。したがって解決手順を Justice 側の明示仕様として定義する。
 
-| 種別 | specifier 例 | 解決先 |
-|---|---|---|
-| root | `@yohi/justice` | パッケージキャッシュ内の該当バージョン → `exports["."]` |
-| サブパス | `@yohi/justice/opencode` | 同上 → `exports["./opencode"]` |
-| バージョン付き（legacy） | `@yohi/justice@2.7.0` | 名前とバージョンに分解し、当該バージョンのキャッシュディレクトリ → `exports["."]` |
-| 絶対パス | `/path/to/justice/dist/opencode-plugin.js` | パスをそのまま解決（`exports` を経由しない） |
+| 種別                     | specifier 例                               | 解決先                                                                            |
+| ------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------- |
+| root                     | `@yohi/justice`                            | パッケージキャッシュ内の該当バージョン → `exports["."]`                           |
+| サブパス                 | `@yohi/justice/opencode`                   | 同上 → `exports["./opencode"]`                                                    |
+| バージョン付き（legacy） | `@yohi/justice@2.7.0`                      | 名前とバージョンに分解し、当該バージョンのキャッシュディレクトリ → `exports["."]` |
+| 絶対パス                 | `/path/to/justice/dist/opencode-plugin.js` | パスをそのまま解決（`exports` を経由しない）                                      |
 
 - **正規化**: specifier を `{ name, version?, subpath? }` に分解する。スコープ付きパッケージ名の先頭 `@` とバージョン区切りの `@` を区別する（`@yohi/justice@2.7.0` → name=`@yohi/justice` / version=`2.7.0`）。
 - **キャッシュ配置**: OpenCode はバージョン付きパッケージを `<cacheRoot>/packages/<name>@<version>/node_modules/<name>/` に配置する（`cacheRoot` は `~/.cache/opencode`、環境により `$XDG_CACHE_HOME` 配下。実測確認済み）。診断 CLI はこのレイアウトを再現して実体を特定する。
@@ -507,13 +519,13 @@ Cannot find module '@yohi/justice@2.7.0'
 
 `justice_review` の view 出力に `health` セクションを追加する。
 
-| フィールド | 出所 |
-|---|---|
-| observation log のレコード件数 | `ObservationLogStore.readAll()` の件数 |
-| shard 数 | 同上の shard 集合サイズ |
-| 最終書込時刻 | 最新レコードの `timestamp` |
-| rotation health | `ObservationLogStore.getRotationHealth()` |
-| read integrity | `ObservationLogStore.getLastReadIntegrity()` |
+| フィールド                     | 出所                                         |
+| ------------------------------ | -------------------------------------------- |
+| observation log のレコード件数 | `ObservationLogStore.readAll()` の件数       |
+| shard 数                       | 同上の shard 集合サイズ                      |
+| 最終書込時刻                   | 最新レコードの `timestamp`                   |
+| rotation health                | `ObservationLogStore.getRotationHealth()`    |
+| read integrity                 | `ObservationLogStore.getLastReadIntegrity()` |
 
 制約:
 
@@ -569,15 +581,15 @@ publish 済み `dist` の相対 import に拡張子が付いていない。
 
 ```js
 // dist/opencode-plugin.js
-import { OpenCodeAdapter } from "./runtime/opencode-adapter";  // 拡張子なし
+import { OpenCodeAdapter } from "./runtime/opencode-adapter"; // 拡張子なし
 ```
 
 `package.json` は `"type": "module"` を宣言しているため、これは**正当な Node ESM ではない**。実測結果:
 
-| ランタイム | 結果 |
-|---|---|
-| Node | **失敗** — `ERR_MODULE_NOT_FOUND: Cannot find module '.../dist/core/error-classifier'` |
-| Bun | 成功（`typeof default === "function"`） |
+| ランタイム | 結果                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------- |
+| Node       | **失敗** — `ERR_MODULE_NOT_FOUND: Cannot find module '.../dist/core/error-classifier'` |
+| Bun        | 成功（`typeof default === "function"`）                                                |
 
 原因は `tsconfig.json` の `"moduleResolution": "bundler"` であり、`tsc` はソースの拡張子なし import をそのまま出力する。OpenCode は Bun 上で動作するため実害は発生していないが、`main` / `module` / `exports` が主張する契約に違反している。
 
@@ -589,17 +601,17 @@ import { OpenCodeAdapter } from "./runtime/opencode-adapter";  // 拡張子な�
 
 ## 12. テスト戦略
 
-| 対象 | 種別 | 方針 |
-|---|---|---|
-| `PluginOptions` 検証ロジック | ユニット | 純粋関数として `src/core/` に置き、既知キー / 未知キー / 型不一致 / 未指定の各ケースを検証 |
-| 診断 CLI の純粋ロジック | ユニット | 設定パース・ローダ契約判定・ログ解析を `tests/helpers/mock-file-system.ts` で検証。実ディスクにアクセスしない |
-| 診断 CLI の I/O 境界 | ユニット | モック FS + モック notifier。終了コードの分岐を検証 |
-| `justice_review` の health | ユニット | `ObservationLogStore` をモックし、health 取得失敗時に view 本体が返ることを検証 |
-| 配布エントリのローダ契約 | 統合（FF-009） | ビルド後 `dist` を **self-reference specifier 経由**で対象とする（パス直 import は禁止）。`tests/dist/` に配置し、`bun run test:dist`（ビルドを内包）で実行 |
-| Phase 2 / Phase 3 の実機動作 | 手動検証 | 検証レポートを `docs/reports/` に記録し SPEC から参照 |
-| Phase 4 のレイテンシ | 計測スクリプト | `spikes/observation-latency/measure.ts` を拡張。CI では実行しない |
-| 診断 CLI の specifier 解決 | ユニット（§9.1.1） | root / サブパス / バージョン付き / 絶対パスの 4 種別を fixture で網羅。キャッシュレイアウトをモック FS 上に再現し、実ディスクにアクセスしない |
-| 追記専用 I/O の末尾切断復旧 | ユニット（§8.4.1-5） | 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証。追記専用 I/O へ切替える場合のみ実施 |
+| 対象                         | 種別                 | 方針                                                                                                                                                        |
+| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PluginOptions` 検証ロジック | ユニット             | 純粋関数として `src/core/` に置き、既知キー / 未知キー / 型不一致 / 未指定の各ケースを検証                                                                  |
+| 診断 CLI の純粋ロジック      | ユニット             | 設定パース・ローダ契約判定・ログ解析を `tests/helpers/mock-file-system.ts` で検証。実ディスクにアクセスしない                                               |
+| 診断 CLI の I/O 境界         | ユニット             | モック FS + モック notifier。終了コードの分岐を検証                                                                                                         |
+| `justice_review` の health   | ユニット             | `ObservationLogStore` をモックし、health 取得失敗時に view 本体が返ることを検証                                                                             |
+| 配布エントリのローダ契約     | 統合（FF-009）       | ビルド後 `dist` を **self-reference specifier 経由**で対象とする（パス直 import は禁止）。`tests/dist/` に配置し、`bun run test:dist`（ビルドを内包）で実行 |
+| Phase 2 / Phase 3 の実機動作 | 手動検証             | 検証レポートを `docs/reports/` に記録し SPEC から参照                                                                                                       |
+| Phase 4 のレイテンシ         | 計測スクリプト       | `spikes/observation-latency/measure.ts` を拡張。CI では実行しない                                                                                           |
+| 診断 CLI の specifier 解決   | ユニット（§9.1.1）   | root / サブパス / バージョン付き / 絶対パスの 4 種別を fixture で網羅。キャッシュレイアウトをモック FS 上に再現し、実ディスクにアクセスしない               |
+| 追記専用 I/O の末尾切断復旧  | ユニット（§8.4.1-5） | 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証。追記専用 I/O へ切替える場合のみ実施             |
 
 既存テストスイートは全て緑を維持する。テストにおける private フィールド参照は `unknown` 経由のキャストを用い、`any` は使用しない。
 
