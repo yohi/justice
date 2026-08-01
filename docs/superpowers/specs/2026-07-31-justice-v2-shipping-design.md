@@ -195,9 +195,9 @@ Phase 1 配布契約修正（真因）
 
 ### 5.2 効果
 
-- `"@yohi/justice"` / `"@yohi/justice@3.0.0"` / `"@yohi/justice/opencode"` の**いずれの specifier でも正しくロードされる**。
-- 既存の壊れた設定（root specifier 登録）は、パッケージ更新のみで**利用者側の設定変更なしに復旧する**。
-- `opencode plugin @yohi/justice` という README の推奨手順がそのまま機能するようになる。
+- **バージョン無し root specifier**（`"@yohi/justice"`）で登録されている既存の壊れた設定は、パッケージ更新のみで**利用者側の設定変更なしに復旧する**。これにより `opencode plugin @yohi/justice` という README の推奨手順がそのまま機能するようになる。
+- **バージョン固定の root specifier**（例: `"@yohi/justice@2.7.0"`）で登録されている場合、`exports["."]` は依然として `dist/index.js`（barrel）に解決されるため、**パッケージ更新だけでは復旧しない**。利用者は specifier を `@yohi/justice@3.0.0` に更新するか、`@yohi/justice/opencode` への変更が必要。
+- いずれの specifier 形式でも、正しく解決されればロード後の動作は同一である。
 
 ### 5.3 破壊的変更と移行
 
@@ -249,7 +249,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 1. **絶対パス smoke test（維持）**: 新規の一時ディレクトリ `tmp/phase2-absolute-<uuid>/` を作成し、そこをカレントディレクトリとして OpenCode を起動する。`opencode.jsonc` の `plugin` 配列に、ビルドした `dist/opencode-plugin.js` の**絶対パス**を登録する。この一時ディレクトリ内に `.justice/` と `events/` が新規作成され、`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて当該一時プロジェクト内で任意ツールを 1 回実行し、`.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` が**新規 sessionId / callId** のレコードを含んで生成されることを確認する。他の検証経路と `.justice/` を共有してはならない。
 
-2. **root specifier 検証（追加）**: 新規の一時ディレクトリ `tmp/phase2-root-<uuid>/` を作成し、直下に `home/`、`config/`、`cache/` サブディレクトリを用意する。検証実行時は **`HOME=<tmp>/home`、`XDG_CONFIG_HOME=<tmp>/config`、`XDG_CACHE_HOME=<tmp>/cache`、`OPENCODE_CONFIG_DIR=<tmp>/config/opencode`** を環境変数として設定し、既定の `~/.config/opencode` および `~/.cache/opencode` は一切使用しない。`opencode plugin @yohi/justice@3.0.0` を実行して root specifier 経由でインストール・設定を行う（キャッシュは `<tmp>/cache/opencode/packages/@yohi/justice@3.0.0/` 以下に生成される）。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
+2. **root specifier 検証（追加）**: 新規の一時ディレクトリ `tmp/phase2-root-<uuid>/` を作成し、直下に `home/`、`config/`、`cache/` サブディレクトリを用意する。検証実行時は **`HOME=<tmp>/home`、`XDG_CONFIG_HOME=<tmp>/config`、`XDG_CACHE_HOME=<tmp>/cache`、`OPENCODE_CONFIG_DIR=<tmp>/config/opencode`** を環境変数として設定し、既定の `~/.config/opencode` および `~/.cache/opencode` は一切使用しない。**Phase 1 の現在のビルド成果物を使用するため、事前に `bun run build` を実行し、生成された `dist/` および `package.json` を `<tmp>/cache/opencode/packages/@yohi/justice@3.0.0/node_modules/@yohi/justice/` へコピー（package.json には `version: "3.0.0"` と §5.1 の `exports` マップが含まれること）する。OpenCode 実行後に生成されたキャッシュ内の `@yohi/justice@3.0.0` と元の `dist/` の各ファイルのチェックサムが一致することを確認し、一致しない場合は root specifier 経由の検証を `fail` とする。** そのうえで `opencode plugin @yohi/justice@3.0.0` を実行して root specifier 経由でインストール・設定を行う（キャッシュは `<tmp>/cache/opencode/packages/@yohi/justice@3.0.0/` 以下に生成される）。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
 
    - `failed to load plugin` が発生しないこと。
    - `Justice initialized via opencode-adapter` が出力されること。
@@ -455,15 +455,19 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 検査 1 は OpenCode の実形式に合わせて以下の仕様を満たす。
 
-- **対象ファイルとマージ**: OpenCode と同じ優先順位で以下の設定ソースを読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
-  1. **remote config**: 組織・リモート管理設定（OpenCode 管理画面等）
-  2. **global config**: `~/.config/opencode/config.json`（旧形式） / `~/.config/opencode/opencode.json` / `~/.config/opencode/opencode.jsonc`
-  3. **`OPENCODE_CONFIG` 環境変数**: 単一の設定ファイルパスを指す
-  4. **project config**: カレントディレクトリから Git worktree まで親方向に探索した `opencode.json` / `opencode.jsonc`
-  5. **`.opencode` directory config**: `.opencode/opencode.json` / `.opencode/opencode.jsonc`
-  6. **`OPENCODE_CONFIG_DIR` 環境変数**: 指定ディレクトリ内の設定ファイル群
-  7. **`OPENCODE_CONFIG_CONTENT` 環境変数**: インライン JSONC コンテンツ
-  8. **managed config / managed preferences**: OpenCode 管理設定
+- **設定ソースの分類**: OpenCode と同じ優先順位で以下の設定ソースを扱う。各ソースについて、「マージ」「検出のみ（`unsupported_config_source`）」「未対応」のいずれかを明確にする。最初に見つかった 1 ファイルだけで判定してはならない。
+
+  | 優先順位 | 設定ソース | 分類 | 説明 |
+  | --- | --- | --- | --- |
+  | 1 | **remote config** | 未対応 | 組織・リモート管理設定（OpenCode 管理画面等）。doctor から読み込めない。Justice 系 plugin 検出時は `unsupported_config_source` とする。 |
+  | 2 | **global config** | マージ対象 | `~/.config/opencode/config.json`（旧形式） / `~/.config/opencode/opencode.json` / `~/.config/opencode/opencode.jsonc` |
+  | 3 | **`OPENCODE_CONFIG` 環境変数** | マージ対象 | 単一の設定ファイルパスを指す |
+  | 4 | **project config** | マージ対象 | カレントディレクトリから Git worktree まで親方向に探索した `opencode.json` / `opencode.jsonc` |
+  | 5 | **`.opencode` directory config** | マージ対象 | `.opencode/opencode.json` / `.opencode/opencode.jsonc` |
+  | 6 | **`OPENCODE_CONFIG_DIR` 環境変数** | マージ対象 | 指定ディレクトリ内の設定ファイル群 |
+  | 7 | **`OPENCODE_CONFIG_CONTENT` 環境変数** | 検出のみ | インライン JSONC コンテンツ。doctor はまだ読み込めない。Justice 系 plugin 検出時は `unsupported_config_source` とする。 |
+  | 8 | **managed config / managed preferences** | 検出のみ | OpenCode 管理設定。doctor はまだ読み込めない。Justice 系 plugin 検出時は `unsupported_config_source` とする。 |
+
 - **優先順位と重複除去**: 上記の昇順（低→高）とし、後から読まれた高優先度側が競合キーで上書きする。`plugin` 配列を統合する際は、同一 npm パッケージ名または同一ローカルファイルパスは高優先度側で重複除去し、異なる plugin は優先順位に関わらず保持する。
 - **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
 - **`plugin` フィールドの検出と抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合、**値が配列であることを最初に検証**し、配列でない場合は `plugin_not_array`（または `invalid_plugin_field`）として記録して例外を投げずに処理を継続する。配列の各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
@@ -472,7 +476,7 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
   - 上記以外の形式（`null`、`number`、長さ 3 以上の配列等）、または tuple の第 1 要素が文字列でない場合、または tuple の第 2 要素が `PluginOptions` として妥当でない場合は、いずれも `invalid_plugin_entry` として検査結果に記録する。該当エントリからは specifier を抽出しない。
 - **対応戦略**: 抽出した specifier は §9.1.1 の解決規則に従って解決する。抽出できなかった場合は `justice_not_found_in_config` として報告する。
 
-- **未対応ソースの診断**: `OPENCODE_CONFIG_CONTENT` や managed config / managed preferences 等、doctor がまだ読み込めない設定ソースに `@yohi/justice` 系の `plugin` エントリが存在する場合、`justice_not_found_in_config` ではなく `unsupported_config_source` を報告する。出力には未対応ソース名、当該ソースで検出された specifier の有無（options は allowlisted キーのみ）、および手動確認を促すメッセージを含める。
+- **未対応・検出のみソースの診断**: 上記表で「検出のみ（`unsupported_config_source`）」または「未対応」と分類されたソース（remote config、`OPENCODE_CONFIG_CONTENT`、managed config / managed preferences 等）に `@yohi/justice` 系の `plugin` エントリが存在する場合、`justice_not_found_in_config` ではなく `unsupported_config_source` を報告する。出力には未対応ソース名、当該ソースで検出された specifier の有無（options は allowlisted キーのみ）、および手動確認を促すメッセージを含める。
 - **fixture とテスト**: `tests/core/justice-doctor-config.test.ts`（新設）に以下の fixture を追加する。
   - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
   - 壊れた JSONC を受け取り `parse_error` として扱う。
@@ -648,7 +652,7 @@ import { OpenCodeAdapter } from "./runtime/opencode-adapter"; // 拡張子なし
 | Phase 4 のレイテンシ         | 計測スクリプト       | `spikes/observation-latency/measure.ts` を拡張。CI では実行しない                                                                                           |
 | 診断 CLI の specifier 解決   | 統合 + ユニット（§9.1.1） | root / サブパス / バージョン付き / 絶対パスの 4 種別の解決ロジックはモック FS で単体テストする。実行時検証では、配布エントリの FF-009 と同様に Bun 上で self-reference specifier 経由で実モジュールを import し、loader 契約判定を診断 CLI の解決経路でも適用する。モック FS は解決ロジックの単体テストに限定する。 |
 | 実モジュール経路のローダ契約 | 統合                 | §9.1.1 の 4 種別（root / サブパス / バージョン付き / 絶対パス）を、一時 package cache fixture および absolute path fixture 経由で実モジュール import し、`justice doctor` resolver と FF-009 が同一の契約判定を返すことを検証。`bun run test:integration` で実行する。                                                                                                                                                                               |
-| 追記専用 I/O の末尾切断復旧  | 統合（§8.4.1-5）     | 実 FS 上で EOF 切断・不正な完全 JSON・改行なし有効レコードの 3 ケースを検証し、`readAll()` が EOF 切断のみ救済し、他は shard 除外として扱うことを確認。追記専用 I/O へ切替える場合のみ実施。`bun run test:integration`（仮称）で実行する。                                                                                                                                                                              |
+| 追記専用 I/O の末尾切断復旧  | 統合（§8.4.1-5）     | 実 FS 上の一時 temp ファイルを使い、EOF 切断・不正な完全 JSON・改行なし有効レコード・**append 直前 crash recovery** の 4 ケースを検証する。`readAll()` は EOF 切断のみ救済し、他は shard 除外または新規 writerId 採番で扱うことを確認。追記専用 I/O へ切替える場合のみ実施。すべてのケースが `bun run test:integration` の完了条件として合格する。 |
 
 既存テストスイートは全て緑を維持する。テストにおける private フィールド参照は `unknown` 経由のキャストを用い、`any` は使用しない。
 
