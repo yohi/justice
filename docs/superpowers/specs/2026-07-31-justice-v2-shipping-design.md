@@ -252,7 +252,8 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 2. **root specifier 検証（追加）**: `~/.cache/opencode/packages/@yohi/justice@3.0.0/` 等の既存パッケージキャッシュをクリーンにし、**`opencode plugin @yohi/justice@3.0.0`** を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
    - `failed to load plugin` が発生しないこと。
    - `Justice initialized via opencode-adapter` が出力されること。
-   - `plugin` 配列の tuple 形式 `[["@yohi/justice", { "enableAdvisoryOutputAppend": true }]]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
+   - `plugin` 配列の tuple 形式 `["@yohi/justice@3.0.0", { "enableAdvisoryOutputAppend": true }]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
+   - 検証対象の specifier が正規化・解決された後のバージョンが `3.0.0` でない場合は、root specifier 経由の検証を `fail` とする。3.0.0 未満では root specifier が壊れている（§11.2 参照）ため、tuple 第 1 要素はバージョン付きの `@yohi/justice@3.0.0` とするか、解決後バージョンを記録して 3.0.0 であることを検証する。
    - 任意のツールを 1 回実行し、`.justice/events/` へ JSONL が生成されること。
    - `justice_review` を `scope` 未指定で呼び出し、レビュー要約が返ること。
 
@@ -415,10 +416,10 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 3. **耐久性（fsync）の方針を明記する。** 追記後に fsync するか否か、しない場合に失われ得る範囲（直近 N レコード）を設計に記載する。観測ログは advisory であるため fsync 無しを選ぶことは許容されるが、**選択と理由を明示せず暗黙にしてはならない。**
 4. **`FileWriter` の拡張を伴うことを明記する。** 現行の `FileWriter`（`src/core/types.ts`）は `writeFile` / `rename` / `deleteFile` のみで append プリミティブを持たない。追記専用 I/O は公開インターフェースの拡張と `tests/helpers/mock-file-system.ts` の追随を必要とする。
 5. **末尾切断からの復旧テストを追加する。** 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証する。
+6. **writerId のプロセス間衝突防止を確立する。** `allocateWriterId()` は現在「物理パスが存在しない候補を採番」するのみで、独立プロセス間での原子性を持たない。追記専用 I/O に切り替える前は、以下のいずれかを満たすこと。(a) `JusticePluginOptions` への明示的な `writerId` 指定を禁止する。(b) `allocateWriterId()` を原子的な予約・重複検出に変更する。(c) `append` と `rotation` の両方にプロセス間ロックを適用する。同一 `agentId` / `sessionId` / `writerId` を使う独立プロセスの衝突テストを追加し、レコード欠落・JSONL 破損・sequence 重複が発生しないことを検証する。
+**単一 writer の不変条件は、上記 1-6 の前提が満たされた場合にのみ成立する。** それまでは、`writerId = "w-" + crypto.randomUUID()` はプロセス内で一意に採番されるが、プロセス間での重複は `allocateWriterId()` の `fileExists` ベストエフォート・プローブだけでは防止できない。したがって本節では上記 6 の実装と検証を完了させ、それに基づいて単一 writer 不変条件を再確立する。`allocateWriterId` は物理パスが存在しない候補のみを採番するため、切り捨てられたファイルが再 append されることはなく、破棄した最終 1 行の sequence が欠番として残る経路は存在しない。この前提はテストで固定する。
 
-**単一 writer の不変条件は既に構造保証済みであり、本節で再証明しない。** `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` は **1 物理ファイル = 1 writer**（`writerId = "w-" + crypto.randomUUID()`、plugin インスタンス起動時に採番）であり、複数プロセスが同一ファイルへ並行 append する経路は排除されている（SPEC §15.4）。同一プロセス内の同一 shard への並行 append は `write-queue.ts` が FIFO 直列化し、既存の `tests/runtime/observation-log-queue.test.ts` で検証済みである。したがって本節で新規に必要なのは上記 5 の**クラッシュ切断からの復旧テスト**であり、並行追記テストの追加ではない。
-
-**通常の append でも temp + rename を維持する案は採らない。** それは本節の目的（O(1) 化）を完全に無効化し、§8.3 で p95 ≥ 50ms と判定された場合の改善手段が残らない。安全性は上記 1-5 の前提条件と、直前に定めた設計レビューゲートで担保する。
+**通常の append でも temp + rename を維持する案は採らない。** それは本節の目的（O(1) 化）を完全に無効化し、§8.3 で p95 ≥ 50ms と判定された場合の改善手段が残らない。安全性は上記 1-6 の前提条件と、直前に定めた設計レビューゲートで担保する。
 
 ## 9. Phase 5 — 診断手段の2層構成
 
@@ -442,7 +443,7 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 検査 1 は OpenCode の実形式に合わせて以下の仕様を満たす。
 
-- **対象ファイル**: グローバル設定 `~/.config/opencode/opencode.jsonc`、プロジェクト設定 `.opencode/opencode.json` / `.opencode/opencode.jsonc` / `opencode.json` / `opencode.jsonc`。上記の順で探索し、最初に見つかったファイルを報告する。
+- **対象ファイルとマージ**: グローバル設定 `~/.config/opencode/opencode.jsonc`、プロジェクト設定 `.opencode/opencode.json` / `.opencode/opencode.jsonc` / `opencode.json` / `opencode.jsonc` を OpenCode と同じ優先順位で読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
 - **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
 - **`plugin` フィールドの検出と抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合、**値が配列であることを最初に検証**し、配列でない場合は `plugin_not_array`（または `invalid_plugin_field`）として記録して例外を投げずに処理を継続する。配列の各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
   - 文字列エントリ: `"@yohi/justice"`、`"@yohi/justice@3.0.0"`、`"@yohi/justice/opencode"` 等。
@@ -453,6 +454,8 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
   - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
   - 壊れた JSONC を受け取り `parse_error` として扱う。
   - `plugin` 配列に無効エントリ（`null`、数値、配列長 3、非文字列第 1 要素の tuple、第 2 要素が非オブジェクトの tuple）、ならびに `plugin` フィールド自体が配列でない設定を受け取り、それぞれ `invalid_plugin_entry` / `plugin_not_array` として扱いつつ有効なエントリからは specifier を抽出する。
+  - グローバル設定のみ・プロジェクト設定のみ・両方に Justice がある場合・両方に異なる Justice エントリがあって競合する場合の 4 パターンを網羅する。競合時は OpenCode のマージルールに従い、優先順位の高い側の値を採用して報告する。
+  - 設定マージ後に `plugin` 配列が空・未指定の場合は `justice_not_found_in_config` として報告する。
 
 #### 9.1.1 specifier 解決の規則
 
@@ -523,9 +526,11 @@ Cannot find module '@yohi/justice@2.7.0'
 | ------------------------------ | -------------------------------------------- |
 | observation log のレコード件数 | `ObservationLogStore.readAll()` の件数       |
 | shard 数                       | 同上の shard 集合サイズ                      |
-| 最終書込時刻                   | 最新レコードの `timestamp`                   |
+| 最終書込時刻                   | `ObservationLogStore` が管理する `lastSuccessfulWriteAt` |
 | rotation health                | `ObservationLogStore.getRotationHealth()`    |
 | read integrity                 | `ObservationLogStore.getLastReadIntegrity()` |
+
+`lastSuccessfulWriteAt` は `ObservationLogStore.append()` が成功した直後に更新する。`append()` の完了時刻を正確に取得できない実装の場合、本フィールド名を `latestRecordTimestamp` に変更し、最新レコードの `timestamp` を出所とする。
 
 制約:
 
@@ -610,7 +615,7 @@ import { OpenCodeAdapter } from "./runtime/opencode-adapter"; // 拡張子なし
 | 配布エントリのローダ契約     | 統合（FF-009）       | ビルド後 `dist` を **self-reference specifier 経由**で対象とする（パス直 import は禁止）。`tests/dist/` に配置し、`bun run test:dist`（ビルドを内包）で実行 |
 | Phase 2 / Phase 3 の実機動作 | 手動検証             | 検証レポートを `docs/reports/` に記録し SPEC から参照                                                                                                       |
 | Phase 4 のレイテンシ         | 計測スクリプト       | `spikes/observation-latency/measure.ts` を拡張。CI では実行しない                                                                                           |
-| 診断 CLI の specifier 解決   | ユニット（§9.1.1）   | root / サブパス / バージョン付き / 絶対パスの 4 種別を fixture で網羅。キャッシュレイアウトをモック FS 上に再現し、実ディスクにアクセスしない               |
+| 診断 CLI の specifier 解決   | 統合 + ユニット（§9.1.1） | root / サブパス / バージョン付き / 絶対パスの 4 種別の解決ロジックはモック FS で単体テストする。実行時検証では、配布エントリの FF-009 と同様に Bun 上で self-reference specifier 経由で実モジュールを import し、loader 契約判定を診断 CLI の解決経路でも適用する。モック FS は解決ロジックの単体テストに限定する。 |
 | 追記専用 I/O の末尾切断復旧  | ユニット（§8.4.1-5） | 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証。追記専用 I/O へ切替える場合のみ実施             |
 
 既存テストスイートは全て緑を維持する。テストにおける private フィールド参照は `unknown` 経由のキャストを用い、`any` は使用しない。
