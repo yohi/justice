@@ -224,9 +224,9 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 検証内容:
 
 1. **plugin エントリ**（`.` と `./opencode`）— `Object.values(module)` の全要素が `typeof === "function"` または `{ server: function }` を満たす。
-2. **plugin エントリの一意性** — dedup 後に解決されるプラグインが**正確に 1 個**である（barrel 回帰および意図しない多重登録の再発防止）。
+2. **plugin エントリの一意性** — `Object.values(module)` の各 export を関数 identity で dedup した上で、解決されるプラグインが**正確に 1 個**である（barrel 回帰および意図しない多重登録の再発防止）。`default` と named export が同一関数オブジェクトの場合、dedup 後 1 回のみ検証対象となる。
 3. **全エントリの解決可能性** — `exports` に宣言された各サブパス specifier（`@yohi/justice` / `@yohi/justice/opencode` / `@yohi/justice/core` / `@yohi/justice/runtime`）が self-reference で解決でき、**テストランタイム（Bun）から** import 可能である。
-4. **plugin export の実行可能性** — plugin エントリの各 export を**実際に 1 回呼び出し**、例外を投げずに `Hooks`（`tool` / `event` 等のフックを持つオブジェクト）を返す。§2.2 の契約2「適合した export はすべてプラグインファクトリとして呼び出される」は `typeof` 検査だけでは検証されないため、呼出しまで到達させる。呼出しには `PluginInput` のスタブ（`project` / `client.app.log` / `$` / `directory` / `worktree`）を渡す。plugin factory は adapter 生成と `getTools()` のみを行い `#runInit()` は `ensureInitialized()` 経由の遅延実行であるため、この呼出しはディスク I/O を発生させない。
+4. **plugin export の実行可能性** — 不適合な export を拒否した後、残った export を関数 identity で dedup し、**dedup 後の各 factory を 1 回ずつ呼び出して** `Hooks`（`tool` / `event` 等のフックを持つオブジェクト）を返すことを検証する。§2.2 の契約2「適合した export はすべてプラグインファクトリとして呼び出される」は `typeof` 検査だけでは検証されないため、呼出しまで到達させる。呼出しには `PluginInput` のスタブ（`project` / `client.app.log` / `$` / `directory` / `worktree`）を渡す。plugin factory は adapter 生成と `getTools()` のみを行い `#runInit()` は `ensureInitialized()` 経由の遅延実行であるため、この呼出しはディスク I/O を発生させない。
 
 検証 3 を Bun 上に限定するのは意図的である。`./core` は現状 Node ESM からは import できないが（拡張子なし相対 import。§11.1 参照）、その修正は本設計のスコープ外であり、FF-009 は「OpenCode が実際に使うランタイム（Bun）でロード可能か」を担保する目的に絞る。Node 互換の検証は §11.1 の別 Issue で扱う。
 
@@ -247,17 +247,18 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 ### 6.0 Phase 2 検証手順
 
-1. **絶対パス smoke test（維持）**: README パターン3と同様に、ビルドした `dist/opencode-plugin.js` の絶対パスを `opencode.jsonc` の `plugin` 配列に登録し、OpenCode を起動する。`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて任意ツールを 1 回実行し、`.justice/events/` へ JSONL が生成されることを確認する。
+1. **絶対パス smoke test（維持）**: 新規の一時ディレクトリ `tmp/phase2-absolute-<uuid>/` を作成し、そこをカレントディレクトリとして OpenCode を起動する。`opencode.jsonc` の `plugin` 配列に、ビルドした `dist/opencode-plugin.js` の**絶対パス**を登録する。この一時ディレクトリ内に `.justice/` と `events/` が新規作成され、`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて当該一時プロジェクト内で任意ツールを 1 回実行し、`.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` が**新規 sessionId / callId** のレコードを含んで生成されることを確認する。他の検証経路と `.justice/` を共有してはならない。
 
-2. **root specifier 検証（追加）**: `~/.cache/opencode/packages/@yohi/justice@3.0.0/` 等の既存パッケージキャッシュをクリーンにし、**`opencode plugin @yohi/justice@3.0.0`** を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
+2. **root specifier 検証（追加）**: 新規の一時ディレクトリ `tmp/phase2-root-<uuid>/` を作成し、絶対パス経路とは独立した状態で検証する。`~/.cache/opencode/packages/@yohi/justice@3.0.0/` 等の既存パッケージキャッシュをクリーンにし、**`opencode plugin @yohi/justice@3.0.0`** を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
+
    - `failed to load plugin` が発生しないこと。
    - `Justice initialized via opencode-adapter` が出力されること。
-   - `plugin` 配列の tuple 形式 `["@yohi/justice@3.0.0", { "enableAdvisoryOutputAppend": true }]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
-   - 検証対象の specifier が正規化・解決された後のバージョンが `3.0.0` でない場合は、root specifier 経由の検証を `fail` とする。3.0.0 未満では root specifier が壊れている（§11.2 参照）ため、tuple 第 1 要素はバージョン付きの `@yohi/justice@3.0.0` とするか、解決後バージョンを記録して 3.0.0 であることを検証する。
-   - 任意のツールを 1 回実行し、`.justice/events/` へ JSONL が生成されること。
+   - `plugin` 配列の tuple 形式 `[["@yohi/justice@3.0.0", { "enableAdvisoryOutputAppend": true }]]` を設定した場合も、root specifier 経由で同様にロード・初期化されること。
+   - 検証対象の specifier が正規化・解決された後のバージョンが `3.0.0` でない場合は、root specifier 経由の検証を `fail` とする。3.0.0 未満では root specifier が壊れている（§2.3 および §5.1 参照）ため、tuple 第 1 要素はバージョン付きの `@yohi/justice@3.0.0` とするか、解決後バージョンを記録して 3.0.0 であることを検証する。
+   - 任意のツールを 1 回実行し、`.justice/events/` へ**当該一時プロジェクト固有の** JSONL が生成されること。この際の `sessionId` / `callId` は絶対パス経路および他の既存成果物のものと重複してはならない。
    - `justice_review` を `scope` 未指定で呼び出し、レビュー要約が返ること。
 
-3. **検査 1-7（§6.1）** は、手順 1 の絶対パス経路と手順 2 の root specifier 経路の**両方**で満たされることを確認する。いずれかの経路で失敗した場合、その時点で Phase 2 は完了していない。
+3. **検査 1-7（§6.1）** は、手順 1 の絶対パス経路と手順 2 の root specifier 経路の**両方**で満たされることを確認する。いずれかの経路で失敗した場合、その時点で Phase 2 は完了していない。検査 2〜4 は「.justice/ ディレクトリが存在する」「ファイルが生成されている」ことだけで合格とせず、**その経路固有の新規 sessionId / callId を持つレコードが実際に生成されたこと**を確認する。
 
 ### 6.1 確認する事実（すべて観測ベース）
 
@@ -345,10 +346,10 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 | 観測結果                                     | C1 判定                               | 対応                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed`                           | 既定値 `true` 化を検討する。判断根拠を SPEC §15.12 に記録する                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 一方にのみ現れる                             | `C1 partial`（または `Not Verified`） | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載する。`C1 passed` は両表示面が確認できた場合のみ使用する                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| いずれにも現れない                           | `C1 observed-negative`                | 既定値は `false` 据置とするが、これを最終状態としては**扱わない**。`output.output` 追記経路が機能していないとみなし、以下を実施する。<br>1. 既存の `enableAdvisoryOutputAppend` オプションを非推奨化し、README / SPEC に「保証チャネルは `JusticeNotifier` のみ」と明記する。<br>2. 切替不可能な場合、`OpenCodeAdapter` から `output.output` 追記ロジックを削除し、コードとドキュメントで機能不在を一致させる。<br>3. 修正後は C1 検証を再度実施し、`C1 passed` または `C1 observed-negative` を再判定する。修正後の再検証が完了するまでは SPEC §15.12 の C1 状態を「**実装修正待ち（Fix Pending）**」として更新する |
+| 一方にのみ現れる                             | `C1 partial`                          | 現れる側を保証チャネルとして記録し、既定値は `false` 据置。条件付き有効化の指針を README に記載する。`C1 passed` は両表示面が確認できた場合のみ使用する。                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| いずれにも現れない                           | `C1 observed-negative`（修正完了までは `Fix Pending`） | 既定値は `false` 据置とするが、これを最終状態としては**扱わない**。`output.output` 追記経路が機能していないとみなし、以下を実施する。<br>1. 既存の `enableAdvisoryOutputAppend` オプションを非推奨化し、README / SPEC に「保証チャネルは `JusticeNotifier` のみ」と明記する。<br>2. 切替不可能な場合、`OpenCodeAdapter` から `output.output` 追記ロジックを削除し、コードとドキュメントで機能不在を一致させる。<br>3. 修正後は C1 検証を再度実施し、`C1 passed` または `C1 observed-negative` を再判定する。修正後の再検証が完了するまでは SPEC §15.12 の C1 状態を「**実装修正待ち（Fix Pending）**」として更新する。 |
 
-いずれの分岐でも「活動が未実施（Not Verified）」ではなくなるが、`C1 observed-negative` は「追記機能が動作しない」という否定的事実である。`C1 observed-negative` を最終状態として出荷完了や合格として記録してはならない。
+いずれの分岐でも「活動が未実施（Not Verified）」ではなくなるが、`C1 partial` / `C1 observed-negative` / `Fix Pending` はいずれも合格ではない。これらの非合格状態では **Phase 3 を完了・出荷完了として記録できない**。`C1 passed` は両表示面（ユーザー表示・推論文脈）に advisory が届いた場合にのみ使用し、それ以外の状態で README / SPEC の「未完了」表記を削除してはならない。
 
 ## 8. Phase 4 — 書込レイテンシの再計測と方針確定
 
@@ -399,9 +400,9 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 第一候補は **追記専用 append（O(1)）への切替**である。現行の「全文 temp 書込 + rename」は、1 レコード追記に対して shard 全体を書き直すため、shard 成長に比例してコストが増える。
 
-- 通常の append は追記専用 I/O とし、O(1) にする。
+- 通常の append は、§8.4.1 の前提条件 1〜6 および直前の設計レビューゲートが**すべて満たされた後**に追記専用 I/O（O(1)）に切り替える。満たされるまでは temp + rename を維持する。
 - atomicity の担保は「レコード単位の行境界保証 + 読取時の整合性検証」に委ねる。**ただし現行の `readAll()` の検証だけでは破損を防げないため、§8.4.1 の前提条件をすべて満たすまで切替を実施しない。**
-- temp + rename は **rotation 時のみ**に縮退させる。
+- temp + rename は **rotation 時のみならず、前提未達時の通常 append のフォールバックとしても**維持する。
 - JSON-only persistence（不変条件4）は維持する。外部 DB は導入しない。
 - fail-open（不変条件2）は維持する。
 
@@ -411,15 +412,18 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 追記専用 I/O は、以下を設計・実装・テストで満たすことを**切替の前提条件**とする。1 つでも欠ける場合は現行の temp + rename を維持する。
 
-1. **末尾不完全レコードの扱いを定義する。** 現行の `readAll()` は 1 行でもパース／検証に失敗すると `fileCorrupted` として **その shard 全体を結果から除外する**（`src/runtime/observation-log-store.ts` の `ingest()` と `invalidPhysicalShardKeys`）。したがって append 中のクラッシュで最終行が途中まで書かれただけで、**その shard の全レコードが読めなくなる**。切替に先立ち、「JSONL の**最終行のみ**が不完全な場合は当該 1 行を破棄して残りを有効として扱い、`hasIntegrityViolation` は立てるが shard は除外しない」緩和を `readAll()` に実装する。中間行の破損は現行どおり shard 除外を維持する（切り捨て以外の破損を救済してはならない）。
+1. **末尾不完全レコードの扱いを定義する。** 現行の `readAll()` は 1 行でもパース／検証に失敗すると `fileCorrupted` として **その shard 全体を結果から除外する**（`src/runtime/observation-log-store.ts` の `ingest()` と `invalidPhysicalShardKeys`）。したがって append 中のクラッシュで最終行が途中まで書かれただけで、**その shard の全レコードが読めなくなる**。切替に先立ち、`readAll()` に以下の緩和を実装する：**最終行が EOF で JSON の途中までしか書かれていない場合に限り**、当該 1 行を破棄して残りを有効として扱い、`hasIntegrityViolation` は立てるが shard は除外しない。完全だが内容不正な最終レコードは現行どおり shard 除外として扱う。改行なしで終わる有効な最終レコードは正常に読み取る。判定できない parse failure は救済せず、temp + rename を維持する。中間行の破損は現行どおり shard 除外を維持する（切り捨て以外の破損を救済してはならない）。
 2. **クラッシュ復旧手順を定義する。** 復旧は上記の読取側緩和のみで完結させ、起動時リカバリ処理や別ファイルのジャーナルは導入しない（不変条件4）。切り捨てが `validateShardSequences` の gap 検出に触れないことを設計に明記する — `allocateWriterId` は物理パスが存在しない候補のみを採番するため、切り捨てられたファイルが再 append されることはなく、破棄した最終 1 行の sequence が欠番として残る経路は存在しない。この前提はテストで固定する。
 3. **耐久性（fsync）の方針を明記する。** 追記後に fsync するか否か、しない場合に失われ得る範囲（直近 N レコード）を設計に記載する。観測ログは advisory であるため fsync 無しを選ぶことは許容されるが、**選択と理由を明示せず暗黙にしてはならない。**
 4. **`FileWriter` の拡張を伴うことを明記する。** 現行の `FileWriter`（`src/core/types.ts`）は `writeFile` / `rename` / `deleteFile` のみで append プリミティブを持たない。追記専用 I/O は公開インターフェースの拡張と `tests/helpers/mock-file-system.ts` の追随を必要とする。
-5. **末尾切断からの復旧テストを追加する。** 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証する。
-6. **writerId のプロセス間衝突防止を確立する。** `allocateWriterId()` は現在「物理パスが存在しない候補を採番」するのみで、独立プロセス間での原子性を持たない。追記専用 I/O に切り替える前は、以下のいずれかを満たすこと。(a) `JusticePluginOptions` への明示的な `writerId` 指定を禁止する。(b) `allocateWriterId()` を原子的な予約・重複検出に変更する。(c) `append` と `rotation` の両方にプロセス間ロックを適用する。同一 `agentId` / `sessionId` / `writerId` を使う独立プロセスの衝突テストを追加し、レコード欠落・JSONL 破損・sequence 重複が発生しないことを検証する。
+5. **末尾切断からの復旧テストを追加する。** 実 FS 上で以下の 3 ケースを検証する。
+   - **EOF 切断**: 有効レコード群の直後に JSON が途中まで書かれた最終行を持つ shard を作成し、`readAll()` が有効レコード群を返し shard を除外しないこと。
+   - **不正な完全 JSON**: 最終行が構文的に完全だが schema 違反（例: `sequence` 欠如）である shard を作成し、`readAll()` が当該 shard 全体を除外すること。
+   - **改行なしの有効レコード**: 最終レコードが改行無しで終わる有効 JSONL を作成し、`readAll()` が当該レコードを正常に読み取ること。
+6. **writerId のプロセス間衝突防止を確立する。** `allocateWriterId()` は現在「物理パスが存在しない候補を採番」するのみで、独立プロセス間での原子性を持たない。追記専用 I/O に切り替える前は、sequence allocation 全体（読取・更新・永続化）をプロセス間ロックの対象に含めるか、以下のいずれかを満たすこと。(a) `JusticePluginOptions` への明示的な `writerId` 指定を禁止する。(b) `allocateWriterId()` を原子的な予約・重複検出に変更する。(c) `append` と `rotation` の両方に加えて **sequence allocation 全体**にプロセス間ロックを適用する。`writerId` を予約方式で採用する場合は、予約済み `writerId` の明示的な重複を禁止する。同一 `agentId` / `sessionId` / `writerId` を使う独立プロセスの衝突テストを追加し、レコード欠落・JSONL 破損・**sequence 重複**が発生しないことを検証する。
 **単一 writer の不変条件は、上記 1-6 の前提が満たされた場合にのみ成立する。** それまでは、`writerId = "w-" + crypto.randomUUID()` はプロセス内で一意に採番されるが、プロセス間での重複は `allocateWriterId()` の `fileExists` ベストエフォート・プローブだけでは防止できない。したがって本節では上記 6 の実装と検証を完了させ、それに基づいて単一 writer 不変条件を再確立する。`allocateWriterId` は物理パスが存在しない候補のみを採番するため、切り捨てられたファイルが再 append されることはなく、破棄した最終 1 行の sequence が欠番として残る経路は存在しない。この前提はテストで固定する。
 
-**通常の append でも temp + rename を維持する案は採らない。** それは本節の目的（O(1) 化）を完全に無効化し、§8.3 で p95 ≥ 50ms と判定された場合の改善手段が残らない。安全性は上記 1-6 の前提条件と、直前に定めた設計レビューゲートで担保する。
+**通常の append でも temp + rename を維持する案は、§8.4.1 の前提条件 1〜6 および設計レビューゲートが満たされるまでは採用する。** 前提が満たされた後は O(1) の追記専用 I/O に切り替え、temp + rename は rotation 時のみに縮退させる。前提未達時に通常 append から temp + rename を外すと、shard 成長に伴うコスト増と破損リスクが残るため、フォールバックとして維持する。
 
 ## 9. Phase 5 — 診断手段の2層構成
 
@@ -443,7 +447,10 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 検査 1 は OpenCode の実形式に合わせて以下の仕様を満たす。
 
-- **対象ファイルとマージ**: グローバル設定 `~/.config/opencode/opencode.jsonc`、プロジェクト設定 `.opencode/opencode.json` / `.opencode/opencode.jsonc` / `opencode.json` / `opencode.jsonc` を OpenCode と同じ優先順位で読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
+- **対象ファイルとマージ**: OpenCode と同じ優先順位で以下を読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
+  - グローバル設定: `~/.config/opencode/config.json`（旧形式、移行処理対象）/ `~/.config/opencode/opencode.json` / `~/.config/opencode/opencode.jsonc`
+  - プロジェクト設定: カレントディレクトリから Git worktree まで親方向に探索した `opencode.json` / `opencode.jsonc` / `.opencode/opencode.json` / `.opencode/opencode.jsonc`
+  - 優先順位は **グローバル < プロジェクト < `.opencode` ディレクトリ** とし、後から読まれた高優先度側が競合キーで上書きする。`plugin` 配列については、同一 npm パッケージ名または同一ローカルファイルは高優先度側で重複除去し、異なる plugin は連結して保持する。
 - **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
 - **`plugin` フィールドの検出と抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合、**値が配列であることを最初に検証**し、配列でない場合は `plugin_not_array`（または `invalid_plugin_field`）として記録して例外を投げずに処理を継続する。配列の各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
   - 文字列エントリ: `"@yohi/justice"`、`"@yohi/justice@3.0.0"`、`"@yohi/justice/opencode"` 等。
@@ -454,6 +461,7 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
   - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
   - 壊れた JSONC を受け取り `parse_error` として扱う。
   - `plugin` 配列に無効エントリ（`null`、数値、配列長 3、非文字列第 1 要素の tuple、第 2 要素が非オブジェクトの tuple）、ならびに `plugin` フィールド自体が配列でない設定を受け取り、それぞれ `invalid_plugin_entry` / `plugin_not_array` として扱いつつ有効なエントリからは specifier を抽出する。
+  - **グローバル設定のみ `~/.config/opencode/opencode.json`（plain JSON）に Justice がある場合**も検出できる fixture を追加する。
   - グローバル設定のみ・プロジェクト設定のみ・両方に Justice がある場合・両方に異なる Justice エントリがあって競合する場合の 4 パターンを網羅する。競合時は OpenCode のマージルールに従い、優先順位の高い側の値を採用して報告する。
   - 設定マージ後に `plugin` 配列が空・未指定の場合は `justice_not_found_in_config` として報告する。
 
@@ -481,7 +489,9 @@ Cannot find module '@yohi/justice@2.7.0'
 - **解決不能時**: 「specifier が解決できない」ことを検査結果として出力する（例外で落とさない）。パッケージ未インストール・キャッシュ不在は、ローダ契約違反とは**別種の失敗**として区別して報告する。
 - **契約適用**: 解決したモジュールに対して FF-009 と**同一の判定ロジック**（§5.4 の検証 1・2・4）を適用する。判定ロジックは純粋関数として `src/core/` に置き、FF-009 のテストと診断 CLI の双方から共有する（実装の二重化を避ける）。
 - **OpenCode 内部実装への依存範囲**: 本規則は OpenCode ローダの**観測された振る舞い**（キャッシュレイアウトと specifier 形式）に基づく仕様であり、非公開実装の複製ではない。OpenCode 側の変更で乖離し得るため、検査 3（ログ走査）の結果と矛盾した場合は本規則を見直す旨を出力に含める。
-- **fixtures とテスト**: 上記 4 種別それぞれについて、モック FS 上にキャッシュレイアウトと `package.json` を再現した fixture を用意し、解決結果と契約判定の両方を検証する。実ディスクへはアクセスしない（§12）。
+- **fixtures とテスト**: 上記 4 種別それぞれについて、以下の 2 段階で検証する。
+  1. **モック FS 単体テスト**: モック FS 上にキャッシュレイアウトと `package.json` を再現した fixture を用意し、解決結果と契約判定の両方を検証する。実ディスクへはアクセスしない（§12）。
+  2. **実モジュール統合テスト**: 一時 package cache fixture（`~/.cache/opencode/packages/@yohi/justice@<version>/node_modules/@yohi/justice/` 相当のディレクトリツリーを実ディスク上に構築）および absolute path fixture（`dist/opencode-plugin.js` への絶対パス）を用意し、`justice doctor` の診断 CLI resolver を実際に実行する。root / サブパス / バージョン付き / 絶対パス の各経路で、OpenCode/Bun 版で実行可能な `import()` またはファイル読込を用いて versioned cache 選択と absolute path import を確認し、§5.4 の FF-009 と同一の契約判定を適用する。対象の OpenCode/Bun 版で実行可能な方法（`bun run` 経由の self-reference import または絶対パス `import()`）を仕様に明記する。
 
 ### 9.2 診断 CLI の出力例（検査 2 が違反を検出した場合）
 
@@ -616,7 +626,8 @@ import { OpenCodeAdapter } from "./runtime/opencode-adapter"; // 拡張子なし
 | Phase 2 / Phase 3 の実機動作 | 手動検証             | 検証レポートを `docs/reports/` に記録し SPEC から参照                                                                                                       |
 | Phase 4 のレイテンシ         | 計測スクリプト       | `spikes/observation-latency/measure.ts` を拡張。CI では実行しない                                                                                           |
 | 診断 CLI の specifier 解決   | 統合 + ユニット（§9.1.1） | root / サブパス / バージョン付き / 絶対パスの 4 種別の解決ロジックはモック FS で単体テストする。実行時検証では、配布エントリの FF-009 と同様に Bun 上で self-reference specifier 経由で実モジュールを import し、loader 契約判定を診断 CLI の解決経路でも適用する。モック FS は解決ロジックの単体テストに限定する。 |
-| 追記専用 I/O の末尾切断復旧  | ユニット（§8.4.1-5） | 実 FS 上で「有効レコード群 + 不完全な最終行」を作り、`readAll()` が残りを返し shard を除外しないことを検証。追記専用 I/O へ切替える場合のみ実施             |
+| 実モジュール経路のローダ契約 | 統合                 | §9.1.1 の 4 種別（root / サブパス / バージョン付き / 絶対パス）を、一時 package cache fixture および absolute path fixture 経由で実モジュール import し、`justice doctor` resolver と FF-009 が同一の契約判定を返すことを検証。`bun run test:integration` で実行する。                                                                                                                                                                               |
+| 追記専用 I/O の末尾切断復旧  | 統合（§8.4.1-5）     | 実 FS 上で EOF 切断・不正な完全 JSON・改行なし有効レコードの 3 ケースを検証し、`readAll()` が EOF 切断のみ救済し、他は shard 除外として扱うことを確認。追記専用 I/O へ切替える場合のみ実施。`bun run test:integration`（仮称）で実行する。                                                                                                                                                                              |
 
 既存テストスイートは全て緑を維持する。テストにおける private フィールド参照は `unknown` 経由のキャストを用い、`any` は使用しない。
 
@@ -626,10 +637,10 @@ import { OpenCodeAdapter } from "./runtime/opencode-adapter"; // 拡張子なし
 
 1. Phase 1 完了 — `exports` 再構成が済み、FF-009（`bun run test:dist`）が緑である。
 2. Phase 2 完了 — §6.1 の 7 項目すべてが実機で観測され、検証レポートが記録されている。
-3. Phase 3 完了 — `PluginOptions` が配線され、C1 の実機検証結果に基づいて `enableAdvisoryOutputAppend` の既定値が確定・記録されている。
+3. Phase 3 完了 — `PluginOptions` が配線され、C1 の実機検証が **`C1 passed`** に到達し、`enableAdvisoryOutputAppend` の既定値が確定・記録されている。`C1 partial` / `C1 observed-negative` / `Fix Pending` のいずれかの場合は Phase 3 は未完了とする。
 4. Phase 4 完了 — hook 経路 end-to-end のレイテンシが再計測され、§8.3 の判定基準に従って方針が確定・記録されている。追記専用 I/O へ切替える場合は §8.4.1 の前提条件をすべて満たしている。
 5. Phase 5 完了 — 診断 CLI が動作し、`justice_review` に health が統合されている。
 6. Phase 6 完了 — ADR が `APPROVED` であり、SPEC §15.12 と README が実証結果と整合している。
-7. `bun run typecheck` / `bun run lint` / `bun run test` / `bun run build` / `bun run test:dist` がすべて成功する（`test:dist` はビルド成果物を対象とするため、ビルド後に実行する）。
+7. `bun run typecheck` / `bun run lint` / `bun run test` / `bun run build` / `bun run test:dist` / **`bun run test:integration`** がすべて成功する（`test:dist` / `test:integration` はビルド成果物・実 FS を対象とするため、ビルド後に実行する）。
 
 **7 項目すべてが揃うまで、README / SPEC の「未完了」表記を削除しない。**
