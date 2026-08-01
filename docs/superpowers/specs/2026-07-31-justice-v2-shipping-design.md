@@ -249,7 +249,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 1. **絶対パス smoke test（維持）**: 新規の一時ディレクトリ `tmp/phase2-absolute-<uuid>/` を作成し、そこをカレントディレクトリとして OpenCode を起動する。`opencode.jsonc` の `plugin` 配列に、ビルドした `dist/opencode-plugin.js` の**絶対パス**を登録する。この一時ディレクトリ内に `.justice/` と `events/` が新規作成され、`failed to load plugin` が発生せず、`Justice initialized via opencode-adapter` が出力されることを確認する。続けて当該一時プロジェクト内で任意ツールを 1 回実行し、`.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` が**新規 sessionId / callId** のレコードを含んで生成されることを確認する。他の検証経路と `.justice/` を共有してはならない。
 
-2. **root specifier 検証（追加）**: 新規の一時ディレクトリ `tmp/phase2-root-<uuid>/` を作成し、絶対パス経路とは独立した状態で検証する。`~/.cache/opencode/packages/@yohi/justice@3.0.0/` 等の既存パッケージキャッシュをクリーンにし、**`opencode plugin @yohi/justice@3.0.0`** を実行して `@yohi/justice@3.0.0` の root specifier 経由でインストール・設定を行う。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
+2. **root specifier 検証（追加）**: 新規の一時ディレクトリ `tmp/phase2-root-<uuid>/` を作成し、直下に `home/`、`config/`、`cache/` サブディレクトリを用意する。検証実行時は **`HOME=<tmp>/home`、`XDG_CONFIG_HOME=<tmp>/config`、`XDG_CACHE_HOME=<tmp>/cache`、`OPENCODE_CONFIG_DIR=<tmp>/config/opencode`** を環境変数として設定し、既定の `~/.config/opencode` および `~/.cache/opencode` は一切使用しない。`opencode plugin @yohi/justice@3.0.0` を実行して root specifier 経由でインストール・設定を行う（キャッシュは `<tmp>/cache/opencode/packages/@yohi/justice@3.0.0/` 以下に生成される）。設定に登録された specifier が `@yohi/justice@3.0.0` であることを確認したうえで、OpenCode を起動する。以下を確認する。
 
    - `failed to load plugin` が発生しないこと。
    - `Justice initialized via opencode-adapter` が出力されること。
@@ -258,6 +258,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
    - 任意のツールを 1 回実行し、`.justice/events/` へ**当該一時プロジェクト固有の** JSONL が生成されること。この際の `sessionId` / `callId` は絶対パス経路および他の既存成果物のものと重複してはならない。
    - `justice_review` を `scope` 未指定で呼び出し、レビュー要約が返ること。
 
+   - 検証レポートには、使用した各一時ディレクトリ（`<tmp>/home`、`<tmp>/config`、`<tmp>/cache`）のパス、解決済み package version、および本検証で生成された固有の `sessionId` / `callId` を記録する。
 3. **検査 1-7（§6.1）** は、手順 1 の絶対パス経路と手順 2 の root specifier 経路の**両方**で満たされることを確認する。いずれかの経路で失敗した場合、その時点で Phase 2 は完了していない。検査 2〜4 は「.justice/ ディレクトリが存在する」「ファイルが生成されている」ことだけで合格とせず、**その経路固有の新規 sessionId / callId を持つレコードが実際に生成されたこと**を確認する。
 
 ### 6.1 確認する事実（すべて観測ベース）
@@ -414,14 +415,21 @@ export type Config = Omit<SDKConfig, "plugin"> & {
 
 1. **末尾不完全レコードの扱いを定義する。** 現行の `readAll()` は 1 行でもパース／検証に失敗すると `fileCorrupted` として **その shard 全体を結果から除外する**（`src/runtime/observation-log-store.ts` の `ingest()` と `invalidPhysicalShardKeys`）。したがって append 中のクラッシュで最終行が途中まで書かれただけで、**その shard の全レコードが読めなくなる**。切替に先立ち、`readAll()` に以下の緩和を実装する：**最終行が EOF で JSON の途中までしか書かれていない場合に限り**、当該 1 行を破棄して残りを有効として扱い、`hasIntegrityViolation` は立てるが shard は除外しない。完全だが内容不正な最終レコードは現行どおり shard 除外として扱う。改行なしで終わる有効な最終レコードは正常に読み取る。判定できない parse failure は救済せず、temp + rename を維持する。中間行の破損は現行どおり shard 除外を維持する（切り捨て以外の破損を救済してはならない）。
 2. **クラッシュ復旧手順を定義する。** 復旧は上記の読取側緩和のみで完結させ、起動時リカバリ処理や別ファイルのジャーナルは導入しない（不変条件4）。切り捨てが `validateShardSequences` の gap 検出に触れないことを設計に明記する — `allocateWriterId` は物理パスが存在しない候補のみを採番するため、切り捨てられたファイルが再 append されることはなく、破棄した最終 1 行の sequence が欠番として残る経路は存在しない。この前提はテストで固定する。
+
+   writerId は **セッション（プロセス）単位で新規採番**する。`allocateWriterId()` が「物理パスが存在しない候補のみ採番」するのは、新規 shard 作成時の偶然の衝突を避けるためであり、クラッシュ後の同 writerId 再利用を認める根拠ではない。`JusticePluginOptions` への `writerId` 上書き指定はテスト・デバッグ以外では使用せず、使用する場合は当該物理パスが既存の場合、前回 shard を開いて継続するのではなく、明示的に新規 writerId を再採番するか、手動でアーカイブを完了させてから指定する。現行の `computeInitialSequence()` は同一プロセス内の rotation 継続を想定しており、**クラッシュ後の同 writerId 再利用による復旧はサポートしない**。
 3. **耐久性（fsync）の方針を明記する。** 追記後に fsync するか否か、しない場合に失われ得る範囲（直近 N レコード）を設計に記載する。観測ログは advisory であるため fsync 無しを選ぶことは許容されるが、**選択と理由を明示せず暗黙にしてはならない。**
+
+   ここで「失われ得る範囲」は、原子性の単位である 1 レコードを超えないことを目標とする。`atomicAppend` は temp ファイルへの書込と rename でレコード単位の整合性を担保するが、rename 後のディレクトリメタデータを fsync しないため、OS クラッシュ時に直近 1 レコードが失われる可能性がある。観測ログは L0 advisory なのでこの範囲の損失は許容するが、DecisionRecord（特に `task_complete` による Gate 評価結果）はその直前の `observed` evidence に基づく。evidence append から DecisionRecord append までにクラッシュすると、verdict の根拠が監査不能になるため、**DecisionRecord 生成前には対応する evidence が少なくとも同一プロセス内で永続化されたことを前提とする**。復旧後、`readAll()` は不完全 shard を fail-open で除外するため、失われた evidence に基づく DecisionRecord は再評価されず、当該 shard の後続レコードのみが Gate 評価の対象となる。
 4. **`FileWriter` の拡張を伴うことを明記する。** 現行の `FileWriter`（`src/core/types.ts`）は `writeFile` / `rename` / `deleteFile` のみで append プリミティブを持たない。追記専用 I/O は公開インターフェースの拡張と `tests/helpers/mock-file-system.ts` の追随を必要とする。
 5. **末尾切断からの復旧テストを追加する。** 実 FS 上で以下の 3 ケースを検証する。
    - **EOF 切断**: 有効レコード群の直後に JSON が途中まで書かれた最終行を持つ shard を作成し、`readAll()` が有効レコード群を返し shard を除外しないこと。
    - **不正な完全 JSON**: 最終行が構文的に完全だが schema 違反（例: `sequence` 欠如）である shard を作成し、`readAll()` が当該 shard 全体を除外すること。
    - **改行なしの有効レコード**: 最終レコードが改行無しで終わる有効 JSONL を作成し、`readAll()` が当該レコードを正常に読み取ること。
+   - **append 直前の crash と復旧**: 実 FS 上で有効レコード群の直後に `atomicAppend` の temp ファイルが残存する状態を作り、プロセス再起動後に `readAll()` が有効レコード群を返し、破損した temp ファイルや不完全な行を結果に含めないことを検証する。`NodeFileSystem` 上で一時ディレクトリを用い、OS レベルの fsync 有無には依存しない（Justice の fsync 方針をテストで固定するため）。
 6. **writerId のプロセス間衝突防止を確立する。** `allocateWriterId()` は現在「物理パスが存在しない候補を採番」するのみで、独立プロセス間での原子性を持たない。追記専用 I/O に切り替える前は、sequence allocation 全体（読取・更新・永続化）をプロセス間ロックの対象に含めるか、以下のいずれかを満たすこと。(a) `JusticePluginOptions` への明示的な `writerId` 指定を禁止する。(b) `allocateWriterId()` を原子的な予約・重複検出に変更する。(c) `append` と `rotation` の両方に加えて **sequence allocation 全体**にプロセス間ロックを適用する。`writerId` を予約方式で採用する場合は、予約済み `writerId` の明示的な重複を禁止する。同一 `agentId` / `sessionId` / `writerId` を使う独立プロセスの衝突テストを追加し、レコード欠落・JSONL 破損・**sequence 重複**が発生しないことを検証する。
 **単一 writer の不変条件は、上記 1-6 の前提が満たされた場合にのみ成立する。** それまでは、`writerId = "w-" + crypto.randomUUID()` はプロセス内で一意に採番されるが、プロセス間での重複は `allocateWriterId()` の `fileExists` ベストエフォート・プローブだけでは防止できない。したがって本節では上記 6 の実装と検証を完了させ、それに基づいて単一 writer 不変条件を再確立する。`allocateWriterId` は物理パスが存在しない候補のみを採番するため、切り捨てられたファイルが再 append されることはなく、破棄した最終 1 行の sequence が欠番として残る経路は存在しない。この前提はテストで固定する。
+
+**同一 writerId での再起動テスト**: テスト目的で `writerId` を固定し、shard にレコードを append した直後にプロセスを再起動する。再起動後に同じ `writerId` を使おうとした場合、既存 shard を開いて append せず、新規 writerId を採番する（または `ObservationLogStore.append()` が writerId 不一致で拒否する）動作を確認する。sequence gap、重複、JSONL 破損が発生しないことを検証する。
 
 **通常の append でも temp + rename を維持する案は、§8.4.1 の前提条件 1〜6 および設計レビューゲートが満たされるまでは採用する。** 前提が満たされた後は O(1) の追記専用 I/O に切り替え、temp + rename は rotation 時のみに縮退させる。前提未達時に通常 append から temp + rename を外すと、shard 成長に伴うコスト増と破損リスクが残るため、フォールバックとして維持する。
 
@@ -447,16 +455,24 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
 
 検査 1 は OpenCode の実形式に合わせて以下の仕様を満たす。
 
-- **対象ファイルとマージ**: OpenCode と同じ優先順位で以下を読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
-  - グローバル設定: `~/.config/opencode/config.json`（旧形式、移行処理対象）/ `~/.config/opencode/opencode.json` / `~/.config/opencode/opencode.jsonc`
-  - プロジェクト設定: カレントディレクトリから Git worktree まで親方向に探索した `opencode.json` / `opencode.jsonc` / `.opencode/opencode.json` / `.opencode/opencode.jsonc`
-  - 優先順位は **グローバル < プロジェクト < `.opencode` ディレクトリ** とし、後から読まれた高優先度側が競合キーで上書きする。`plugin` 配列については、同一 npm パッケージ名または同一ローカルファイルは高優先度側で重複除去し、異なる plugin は連結して保持する。
+- **対象ファイルとマージ**: OpenCode と同じ優先順位で以下の設定ソースを読み込み、`plugin` 配列をマージしたうえで `@yohi/justice` 系 specifier を抽出する。最初に見つかった 1 ファイルだけで判定してはならない。
+  1. **remote config**: 組織・リモート管理設定（OpenCode 管理画面等）
+  2. **global config**: `~/.config/opencode/config.json`（旧形式） / `~/.config/opencode/opencode.json` / `~/.config/opencode/opencode.jsonc`
+  3. **`OPENCODE_CONFIG` 環境変数**: 単一の設定ファイルパスを指す
+  4. **project config**: カレントディレクトリから Git worktree まで親方向に探索した `opencode.json` / `opencode.jsonc`
+  5. **`.opencode` directory config**: `.opencode/opencode.json` / `.opencode/opencode.jsonc`
+  6. **`OPENCODE_CONFIG_DIR` 環境変数**: 指定ディレクトリ内の設定ファイル群
+  7. **`OPENCODE_CONFIG_CONTENT` 環境変数**: インライン JSONC コンテンツ
+  8. **managed config / managed preferences**: OpenCode 管理設定
+- **優先順位と重複除去**: 上記の昇順（低→高）とし、後から読まれた高優先度側が競合キーで上書きする。`plugin` 配列を統合する際は、同一 npm パッケージ名または同一ローカルファイルパスは高優先度側で重複除去し、異なる plugin は優先順位に関わらず保持する。
 - **パース**: JSONC（コメント `//` / `/* */` および末尾カンマを許容）としてパースする。壊れた JSONC は `parse_error` として検査結果に記録し、CLI は例外で落ちない。
 - **`plugin` フィールドの検出と抽出**: `plugin` フィールドが存在しない場合は `plugin_missing` を記録する。存在する場合、**値が配列であることを最初に検証**し、配列でない場合は `plugin_not_array`（または `invalid_plugin_field`）として記録して例外を投げずに処理を継続する。配列の各エントリを走査し、以下の形式から `@yohi/justice` 系の specifier を抽出する。
   - 文字列エントリ: `"@yohi/justice"`、`"@yohi/justice@3.0.0"`、`"@yohi/justice/opencode"` 等。
   - tuple エントリ: `[string, PluginOptions]` 形式。**第 1 要素が `@yohi/justice` 系の文字列であり、かつ第 2 要素が有効な `PluginOptions`（`Record<string, unknown>`）である場合のみ** specifier として採用する。採用時は第 2 要素の生データを出力せず、`optionsPresent: true` または allowlisted なオプションキー名の集合に置き換えてから診断出力に含める。値を残す必要がある場合は `SecretPatternDetector` による明示的 redaction を適用する。
   - 上記以外の形式（`null`、`number`、長さ 3 以上の配列等）、または tuple の第 1 要素が文字列でない場合、または tuple の第 2 要素が `PluginOptions` として妥当でない場合は、いずれも `invalid_plugin_entry` として検査結果に記録する。該当エントリからは specifier を抽出しない。
 - **対応戦略**: 抽出した specifier は §9.1.1 の解決規則に従って解決する。抽出できなかった場合は `justice_not_found_in_config` として報告する。
+
+- **未対応ソースの診断**: `OPENCODE_CONFIG_CONTENT` や managed config / managed preferences 等、doctor がまだ読み込めない設定ソースに `@yohi/justice` 系の `plugin` エントリが存在する場合、`justice_not_found_in_config` ではなく `unsupported_config_source` を報告する。出力には未対応ソース名、当該ソースで検出された specifier の有無（options は allowlisted キーのみ）、および手動確認を促すメッセージを含める。
 - **fixture とテスト**: `tests/core/justice-doctor-config.test.ts`（新設）に以下の fixture を追加する。
   - コメント・末尾カンマを含む有効な JSONC から string / tuple 両方の specifier を検出する。
   - 壊れた JSONC を受け取り `parse_error` として扱う。
@@ -464,6 +480,11 @@ OpenCode の外から実行する。`package.json` に `bin` エントリを追�
   - **グローバル設定のみ `~/.config/opencode/opencode.json`（plain JSON）に Justice がある場合**も検出できる fixture を追加する。
   - グローバル設定のみ・プロジェクト設定のみ・両方に Justice がある場合・両方に異なる Justice エントリがあって競合する場合の 4 パターンを網羅する。競合時は OpenCode のマージルールに従い、優先順位の高い側の値を採用して報告する。
   - 設定マージ後に `plugin` 配列が空・未指定の場合は `justice_not_found_in_config` として報告する。
+  - `OPENCODE_CONFIG` で指定されたファイルに Justice がある場合
+  - `OPENCODE_CONFIG_DIR` 配下に Justice がある場合
+  - `OPENCODE_CONFIG_CONTENT` に Justice がある場合
+  - global に `@yohi/justice@2.7.0`、`.opencode` に `@yohi/justice@3.0.0` があり、`.opencode` 側が優先される場合
+  - 未対応ソース（`OPENCODE_CONFIG_CONTENT` 等）に plugin があり、`unsupported_config_source` が報告される場合
 
 #### 9.1.1 specifier 解決の規則
 
