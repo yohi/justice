@@ -41,57 +41,60 @@ git switch -c feature/justice-v2-shipping-01-distribution-contract
 
 ## ファイル構成
 
-| ファイル | 責務 | タスク |
-| --- | --- | --- |
-| `package.json` | version 3.0.0、`exports` 再構成（`.`→plugin、`./core` 新設）、`bin` 追加、`test:dist` / `test:integration` script | 1, 3, 7, 8 |
-| `vitest.config.ts` | `tests/dist/**`・`tests/real-fs/**` を既定テストから exclude | 3, 8 |
-| `vitest.dist.config.ts` | FF-009 専用 config（ビルド前提） | 3 |
-| `vitest.integration.config.ts` | 実 FS / 実モジュール統合テスト専用 config | 8 |
-| `.github/workflows/ci.yml` | `test:dist`・`test:integration` ステップ追加 | 3, 8 |
-| `src/core/loader-contract.ts` | OpenCode ローダ契約判定の純粋関数（FF-009 と doctor で共有） | 2 |
-| `src/core/plugin-options.ts` | `validatePluginOptions` 純粋関数 | 11 |
-| `src/core/doctor-config.ts` | JSONC パース・設定ソース走査・マージの純粋関数 | 4 |
-| `src/core/doctor-specifier.ts` | specifier 正規化・キャッシュ解決 | 5 |
-| `src/core/doctor-logs.ts` | OpenCode ログ走査の純粋関数 | 6 |
-| `src/opencode-plugin.ts` | 第 2 引数 `options` の受取・委譲・警告ログ | 12 |
-| `src/runtime/doctor-cli.ts` | `justice doctor` CLI（I/O 境界・終了コード） | 7 |
-| `src/runtime/observation-log-store.ts` | `lastSuccessfulWriteAt` 追跡、`ReadOnlyObservationLog` 拡張 | 9 |
-| `src/runtime/justice-tools.ts` | `justice_review` view への `health` セクション追加 | 9 |
-| `spikes/observation-latency/measure.ts` | hook 経路 end-to-end 計測への拡張 | 14 |
-| `CHANGELOG.md` | 3.0.0 breaking change + 移行表 | 1 |
-| `README.md` | 移行表（Task 1）、doctor/PluginOptions/ステータス更新（Task 18） | 1, 18 |
-| `SPEC.md` | §15.10 FF-009 追加、§15.9 health 追記、§15.12 全面改訂 | 13, 15, 17 |
-| `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` | ratification 再定義・`APPROVED` 化 | 16 |
-| `docs/reports/2026-07-31-v2-runtime-verification.md` | Phase 2 実機検証レポート | 10 |
-| `docs/reports/2026-07-31-v2-latency-measurement.json` | Phase 4 計測 raw data | 14 |
-| `tests/core/loader-contract.test.ts` | 契約判定のユニットテスト | 2 |
-| `tests/dist/loader-contract.test.ts` | FF-009 回帰テスト | 3 |
-| `tests/core/justice-doctor-config.test.ts` | 設定解析 fixture テスト（設計書 §9.1.0 指定名） | 4 |
-| `tests/core/doctor-specifier.test.ts` | specifier 解決のモック FS テスト | 5 |
-| `tests/core/doctor-logs.test.ts` | ログ走査テスト | 6 |
-| `tests/runtime/doctor-cli.test.ts` | CLI 境界・終了コード・出力形式テスト | 7 |
-| `tests/real-fs/doctor-resolver.test.ts` | 一時 package cache fixture 経由の実モジュール統合テスト | 8 |
-| `tests/core/plugin-options.test.ts` | `validatePluginOptions` テスト | 11 |
-| `tests/runtime/opencode-plugin-options.test.ts` | プラグインファクトリの options 配線テスト | 12 |
-| `tests/runtime/justice-review-tool.test.ts` | health セクションの fail-open テスト（既存ファイルに追加） | 9 |
-| `tests/runtime/observation-log-store.test.ts` | `getLastSuccessfulWriteAt` テスト（既存ファイルに追加） | 9 |
+| ファイル                                                    | 責務                                                                                                              | タスク     |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------- |
+| `package.json`                                              | version 3.0.0、`exports` 再構成（`.`→plugin、`./core` 新設）、`bin` 追加、`test:dist` / `test:integration` script | 1, 3, 7, 8 |
+| `vitest.config.ts`                                          | `tests/dist/**`・`tests/real-fs/**` を既定テストから exclude                                                      | 3, 8       |
+| `vitest.dist.config.ts`                                     | FF-009 専用 config（ビルド前提）                                                                                  | 3          |
+| `vitest.integration.config.ts`                              | 実 FS / 実モジュール統合テスト専用 config                                                                         | 8          |
+| `.github/workflows/ci.yml`                                  | `test:dist`・`test:integration` ステップ追加                                                                      | 3, 8       |
+| `src/core/loader-contract.ts`                               | OpenCode ローダ契約判定の純粋関数（FF-009 と doctor で共有）                                                      | 2          |
+| `src/core/plugin-options.ts`                                | `validatePluginOptions` 純粋関数                                                                                  | 11         |
+| `src/core/doctor-config.ts`                                 | JSONC パース・設定ソース走査・マージの純粋関数                                                                    | 4          |
+| `src/core/doctor-specifier.ts`                              | specifier 正規化・キャッシュ解決                                                                                  | 5          |
+| `src/core/doctor-logs.ts`                                   | OpenCode ログ走査の純粋関数                                                                                       | 6          |
+| `src/opencode-plugin.ts`                                    | 第 2 引数 `options` の受取・委譲・警告ログ                                                                        | 12         |
+| `src/runtime/doctor-cli.ts`                                 | `justice doctor` CLI（I/O 境界・終了コード）                                                                      | 7          |
+| `src/runtime/observation-log-store.ts`                      | `lastSuccessfulWriteAt` 追跡、`ReadOnlyObservationLog` 拡張                                                       | 9          |
+| `src/runtime/justice-tools.ts`                              | `justice_review` view への `health` セクション追加                                                                | 9          |
+| `spikes/observation-latency/measure.ts`                     | hook 経路 end-to-end 計測への拡張                                                                                 | 14         |
+| `CHANGELOG.md`                                              | 3.0.0 breaking change + 移行表                                                                                    | 1          |
+| `README.md`                                                 | 移行表（Task 1）、doctor/PluginOptions/ステータス更新（Task 18）                                                  | 1, 18      |
+| `SPEC.md`                                                   | §15.10 FF-009 追加、§15.9 health 追記、§15.12 全面改訂                                                            | 13, 15, 17 |
+| `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` | ratification 再定義・`APPROVED` 化                                                                                | 16         |
+| `docs/reports/2026-07-31-v2-runtime-verification.md`        | Phase 2 実機検証レポート                                                                                          | 10         |
+| `docs/reports/2026-07-31-v2-latency-measurement.json`       | Phase 4 計測 raw data                                                                                             | 14         |
+| `tests/core/loader-contract.test.ts`                        | 契約判定のユニットテスト                                                                                          | 2          |
+| `tests/dist/loader-contract.test.ts`                        | FF-009 回帰テスト                                                                                                 | 3          |
+| `tests/core/justice-doctor-config.test.ts`                  | 設定解析 fixture テスト（設計書 §9.1.0 指定名）                                                                   | 4          |
+| `tests/core/doctor-specifier.test.ts`                       | specifier 解決のモック FS テスト                                                                                  | 5          |
+| `tests/core/doctor-logs.test.ts`                            | ログ走査テスト                                                                                                    | 6          |
+| `tests/runtime/doctor-cli.test.ts`                          | CLI 境界・終了コード・出力形式テスト                                                                              | 7          |
+| `tests/real-fs/doctor-resolver.test.ts`                     | 一時 package cache fixture 経由の実モジュール統合テスト                                                           | 8          |
+| `tests/core/plugin-options.test.ts`                         | `validatePluginOptions` テスト                                                                                    | 11         |
+| `tests/runtime/opencode-plugin-options.test.ts`             | プラグインファクトリの options 配線テスト                                                                         | 12         |
+| `tests/runtime/justice-review-tool.test.ts`                 | health セクションの fail-open テスト（既存ファイルに追加）                                                        | 9          |
+| `tests/runtime/observation-log-store.test.ts`               | `getLastSuccessfulWriteAt` テスト（既存ファイルに追加）                                                           | 9          |
 
 ---
 
 ### Task 1: [Phase 1] package.json exports 再構成（v3.0.0）+ CHANGELOG / README 移行表
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `CHANGELOG.md`
 - Modify: `README.md`（インストール節に移行表を追加）
 
 **Interfaces:**
+
 - Consumes: なし（最初のタスク）
 - Produces: `exports["."]` → `./dist/opencode-plugin.js`、`exports["./core"]` → `./dist/index.js`、version `3.0.0`。Task 3 の FF-009・Task 8 の統合テスト・Task 10 の root specifier 検証がこの `exports` マップを前提とする。
 
 - [ ] **Step 1: package.json を設計書 §5.1 の確定形に編集する**
 
 変更点:
+
 - `"version": "2.7.0"` → `"3.0.0"`
 - `"main": "dist/index.js"` → `"dist/opencode-plugin.js"`
 - `"module": "dist/index.js"` → `"dist/opencode-plugin.js"`
@@ -130,12 +133,12 @@ git switch -c feature/justice-v2-shipping-01-distribution-contract
 
 ### ⚠ BREAKING CHANGES
 
-* **distribution:** `exports["."]`（root specifier）の解決先を barrel（`dist/index.js`）から plugin 専用エントリ（`dist/opencode-plugin.js`）へ変更。OpenCode のプラグインローダはモジュールの全 export が「関数」または `{ server: 関数 }` であることを要求するため、barrel を指す root specifier は `TypeError: Plugin export is not a function` でロードに失敗していた（v2.7.0 以前は Justice が一度もロードされていなかった）。
-* **core:** ライブラリ named export（`PlanParser` / `TaskPackager` 等）の import 元は `@yohi/justice/core` へ移動。移行表は README を参照。
+- **distribution:** `exports["."]`（root specifier）の解決先を barrel（`dist/index.js`）から plugin 専用エントリ（`dist/opencode-plugin.js`）へ変更。OpenCode のプラグインローダはモジュールの全 export が「関数」または `{ server: 関数 }` であることを要求するため、barrel を指す root specifier は `TypeError: Plugin export is not a function` でロードに失敗していた（v2.7.0 以前は Justice が一度もロードされていなかった）。
+- **core:** ライブラリ named export（`PlanParser` / `TaskPackager` 等）の import 元は `@yohi/justice/core` へ移動。移行表は README を参照。
 
 ### Bug Fixes
 
-* **distribution:** root specifier（`@yohi/justice`）経由でプラグインがロードされない致命的問題を修正（Issue #192 の真因）。
+- **distribution:** root specifier（`@yohi/justice`）経由でプラグインがロードされない致命的問題を修正（Issue #192 の真因）。
 ```
 
 - [ ] **Step 3: README.md にライブラリ利用者向け移行表を追加する**
@@ -155,11 +158,11 @@ import { PlanParser, TaskPackager } from "@yohi/justice";
 import { PlanParser, TaskPackager } from "@yohi/justice/core";
 ```
 
-| 用途 | specifier | 破壊的変更 |
-| --- | --- | --- |
-| OpenCode プラグイン | `@yohi/justice`（3.0.0 以降）または `@yohi/justice/opencode` | なし（3.0.0 で修正済み） |
-| ライブラリ（core） | `@yohi/justice/core` | **あり**（2.x の root から移動） |
-| ランタイム（NodeFileSystem） | `@yohi/justice/runtime` | なし |
+| 用途                         | specifier                                                    | 破壊的変更                       |
+| ---------------------------- | ------------------------------------------------------------ | -------------------------------- |
+| OpenCode プラグイン          | `@yohi/justice`（3.0.0 以降）または `@yohi/justice/opencode` | なし（3.0.0 で修正済み）         |
+| ライブラリ（core）           | `@yohi/justice/core`                                         | **あり**（2.x の root から移動） |
+| ランタイム（NodeFileSystem） | `@yohi/justice/runtime`                                      | なし                             |
 ````
 
 - [ ] **Step 4: ビルドと既存検証が緑であることを確認する**
@@ -186,10 +189,12 @@ git commit -m "feat!: 配布エントリポイントを plugin 専用に再構�
 ### Task 2: [Phase 1] ローダ契約判定の純粋関数（src/core/loader-contract.ts）
 
 **Files:**
+
 - Create: `src/core/loader-contract.ts`
 - Test: `tests/core/loader-contract.test.ts`
 
 **Interfaces:**
+
 - Consumes: なし
 - Produces: `checkLoaderContract(moduleExports: Readonly<Record<string, unknown>>): LoaderContractResult`。`LoaderContractResult = { ok, violations, pluginFactories }`。Task 3（FF-009）と Task 7（doctor CLI）の双方がこの関数を使う（設計書 §9.1.1「実装の二重化を避ける」）。
 
@@ -333,6 +338,7 @@ git commit -m "feat(core): OpenCode ローダ契約の判定純粋関数を追�
 ### Task 3: [Phase 1] FF-009 回帰テスト基盤（tests/dist/ + test:dist + CI）
 
 **Files:**
+
 - Create: `tests/dist/loader-contract.test.ts`
 - Create: `vitest.dist.config.ts`
 - Modify: `vitest.config.ts`
@@ -340,6 +346,7 @@ git commit -m "feat(core): OpenCode ローダ契約の判定純粋関数を追�
 - Modify: `.github/workflows/ci.yml`
 
 **Interfaces:**
+
 - Consumes: Task 1 の `exports` マップ、Task 2 の `checkLoaderContract`。
 - Produces: `bun run test:dist`（ビルドを内包）。CI の `test` ジョブで実行される。**このテストは今回の事故を検出できる唯一のテストである**（設計書 §5.4）。Task 1 適用前の 2.7.0 形状では FAIL する（red の根拠）。
 
@@ -467,7 +474,7 @@ Run: `bun run test`（`tests/dist/` は exclude され、dist 不在でも成立
 Expected: 全件 PASS。
 
 Run: `bun run test:dist`
-Expected: ビルド後に FF-009 計 8 件 PASS。
+Expected: ビルド後に FF-009 計 9 件 PASS。
 
 補足（red の確認、任意だが推奨）: `git stash` で Task 1 の package.json 変更を一時退避して `bun run test:dist` を実行すると、旧 barrel 形状で violations 8 件が報告され FAIL する。これがこのテストの回帰検出力の証拠である。確認後 `git stash pop` で戻す。
 
@@ -476,7 +483,7 @@ Expected: ビルド後に FF-009 計 8 件 PASS。
 `.github/workflows/ci.yml` の `- run: bun run build` の直後に追加:
 
 ```yaml
-      - run: bun run test:dist
+- run: bun run test:dist
 ```
 
 （`test:dist` はビルドを内包するが、既存の `bun run build` ステップは成果物アップロードのため残す。）
@@ -493,10 +500,12 @@ git commit -m "test(dist): FF-009 配布エントリのローダ契約回帰テ�
 ### Task 4: [Phase 5] doctor 設定探索・解析の純粋関数（src/core/doctor-config.ts）
 
 **Files:**
+
 - Create: `src/core/doctor-config.ts`
 - Test: `tests/core/justice-doctor-config.test.ts`（設計書 §9.1.0 が指定する名前）
 
 **Interfaces:**
+
 - Consumes: なし
 - Produces: `parseJsonc(content)`、`scanConfigContent(source, content)`、`scanUnreadableSource(source, rawContent?)`、`mergeSourceScans(scans)`、型 `ConfigSourceId` / `JusticePluginSpecifier` / `ConfigDiagnostic` / `SourceScanResult`、定数 `SOURCE_PRIORITY`。Task 7（doctor CLI）が利用する。
 
@@ -872,7 +881,10 @@ function dedupeKey(specifier: string): string {
   if (specifier.startsWith("/")) return specifier;
   // スコープ先頭の @ を除外したうえで、バージョン区切りの @ とサブパス区切りの / の早い方で切る
   const versionAt = specifier.indexOf("@", 1);
-  const subpathSlash = specifier.indexOf("/", specifier.startsWith("@") ? specifier.indexOf("/", 1) + 1 : 0);
+  const subpathSlash = specifier.indexOf(
+    "/",
+    specifier.startsWith("@") ? specifier.indexOf("/", 1) + 1 : 0,
+  );
   const cut = [versionAt, subpathSlash].filter((i) => i > 0).sort((a, b) => a - b)[0];
   return cut === undefined ? specifier : specifier.slice(0, cut);
 }
@@ -917,10 +929,12 @@ git commit -m "feat(core): justice doctor の設定探索・解析純粋関数�
 ### Task 5: [Phase 5] specifier 正規化・解決（src/core/doctor-specifier.ts）
 
 **Files:**
+
 - Create: `src/core/doctor-specifier.ts`
 - Test: `tests/core/doctor-specifier.test.ts`
 
 **Interfaces:**
+
 - Consumes: `FileReader`（`src/core/types.ts`）。
 - Produces: `normalizeSpecifier(specifier: string): NormalizedSpecifier`、`resolveSpecifier(spec, deps): Promise<SpecifierResolution>`。Task 7・Task 8 が利用する。設計書 §9.1.1 の 4 種別（root / サブパス / バージョン付き / 絶対パス）を扱う。
 
@@ -1121,7 +1135,10 @@ function packageDirOf(cacheRoot: string, name: string, version: string): string 
   return `${cacheRoot}/packages/${name}@${version}/node_modules/${name}`;
 }
 
-function resolveExportsTarget(exportsMap: unknown, subpath: string | undefined): string | undefined {
+function resolveExportsTarget(
+  exportsMap: unknown,
+  subpath: string | undefined,
+): string | undefined {
   if (typeof exportsMap !== "object" || exportsMap === null) return undefined;
   const target = (exportsMap as Record<string, unknown>)[subpath ?? "."];
   if (typeof target !== "object" || target === null) return undefined;
@@ -1212,10 +1229,12 @@ git commit -m "feat(core): justice doctor の specifier 解決を追加"
 ### Task 6: [Phase 5] OpenCode ログ走査の純粋関数（src/core/doctor-logs.ts）
 
 **Files:**
+
 - Create: `src/core/doctor-logs.ts`
 - Test: `tests/core/doctor-logs.test.ts`
 
 **Interfaces:**
+
 - Consumes: なし
 - Produces: `scanOpenCodeLogText(text: string): OpenCodeLogScan`。Task 7 が利用する（設計書 §9.1 検査 3）。
 
@@ -1324,11 +1343,13 @@ git commit -m "feat(core): justice doctor のログ走査純粋関数を追加"
 ### Task 7: [Phase 5] justice doctor CLI ランタイム（src/runtime/doctor-cli.ts + bin）
 
 **Files:**
+
 - Create: `src/runtime/doctor-cli.ts`
 - Modify: `package.json`（`bin` エントリ）
 - Test: `tests/runtime/doctor-cli.test.ts`
 
 **Interfaces:**
+
 - Consumes: `mergeSourceScans` / `scanConfigContent` / `scanUnreadableSource`（Task 4）、`normalizeSpecifier` / `resolveSpecifier`（Task 5）、`scanOpenCodeLogText`（Task 6）、`checkLoaderContract`（Task 2）、`loadGates`（`src/runtime/gate-loader.ts`）、`SecretPatternDetector.redact()`（`src/core/secret-pattern-detector.ts`）。
 - Produces: `runDoctor(deps: DoctorDeps): Promise<DoctorReport>`（`{ exitCode: 0 | 1; text: string }`）、`main(argv: readonly string[]): Promise<number>`。`bin` 名は `justice`（`justice doctor` として実行）。
 
@@ -1611,7 +1632,9 @@ async function scanAllSources(deps: DoctorDeps): Promise<readonly SourceScanResu
     }
     if (candidate.path === undefined) continue;
     try {
-      scans.push(scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path)));
+      scans.push(
+        scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path)),
+      );
     } catch {
       // 読めない設定ファイルは存在しないものとして扱う（例外で落とさない）。
     }
@@ -1627,8 +1650,9 @@ async function summarizeObservationData(deps: DoctorDeps): Promise<string> {
   let lastWriteMs = 0;
   for (const shard of shards) {
     try {
-      recordCount += (await deps.fileReader.readFile(shard)).split("\n").filter((l) => l.trim())
-        .length;
+      recordCount += (await deps.fileReader.readFile(shard))
+        .split("\n")
+        .filter((l) => l.trim()).length;
     } catch {
       // 読めない shard は件数から除外（診断は best-effort）。
     }
@@ -1690,7 +1714,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         `  ✗ ${resolution.code}: ${resolution.detail}` +
           (resolution.candidates ? `（候補: ${resolution.candidates.join(", ")}）` : ""),
       );
-      lines.push("  ※ パッケージ未インストール・キャッシュ不在はローダ契約違反とは別種の失敗です。");
+      lines.push(
+        "  ※ パッケージ未インストール・キャッシュ不在はローダ契約違反とは別種の失敗です。",
+      );
       failed = true;
       continue;
     }
@@ -1703,14 +1729,20 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         failed = true;
         lines.push("  ✗ plugin エントリが OpenCode のローダ契約を満たしていません");
         lines.push("");
-        lines.push("    原因: OpenCode はモジュールの全 export が関数または { server: 関数 } であることを");
-        lines.push(`          要求しますが、以下 ${contract.violations.length} 件の export が非関数です:`);
+        lines.push(
+          "    原因: OpenCode はモジュールの全 export が関数または { server: 関数 } であることを",
+        );
+        lines.push(
+          `          要求しますが、以下 ${contract.violations.length} 件の export が非関数です:`,
+        );
         lines.push(`            ${contract.violations.map((v) => v.exportName).join(", ")}`);
         lines.push("          このため Justice は一行も実行されていません（v1 / v2 とも未稼働）。");
         lines.push("");
         lines.push("    修正: @yohi/justice を 3.0.0 以上に更新してください。");
         lines.push("            opencode plugin @yohi/justice");
-        lines.push("          更新できない場合は specifier を plugin 専用サブパスに変更してください:");
+        lines.push(
+          "          更新できない場合は specifier を plugin 専用サブパスに変更してください:",
+        );
         lines.push('            "plugin": ["@yohi/justice/opencode"]');
       } else {
         lines.push(`  ✓ ローダ契約 OK（plugin factory: ${contract.pluginFactories.length} 件）`);
@@ -1788,10 +1820,7 @@ export function createCliFileReader(): FileReader {
   };
 }
 
-async function discoverLogPaths(
-  env: NodeJS.ProcessEnv,
-  home?: string,
-): Promise<readonly string[]> {
+async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<readonly string[]> {
   const dataHome = env.XDG_DATA_HOME ?? (home === undefined ? undefined : `${home}/.local/share`);
   if (dataHome === undefined) return [];
   const logDir = `${dataHome}/opencode/log`;
@@ -1864,12 +1893,14 @@ git commit -m "feat(cli): justice doctor 診断 CLI を追加"
 ### Task 8: [Phase 5] doctor 実モジュール統合テスト（tests/real-fs/ + test:integration）
 
 **Files:**
+
 - Create: `tests/real-fs/doctor-resolver.test.ts`
 - Create: `vitest.integration.config.ts`
 - Modify: `package.json`（`scripts.test:integration`）
 - Modify: `.github/workflows/ci.yml`
 
 **Interfaces:**
+
 - Consumes: Task 3 の vitest 設定変更（`tests/real-fs/**` は既定 exclude 済み）、Task 5 の `resolveSpecifier`、Task 7 の `runDoctor` / `createCliFileReader`、Task 1 のビルド成果物。
 - Produces: `bun run test:integration`（ビルドを内包）。設計書 §9.1.1「実モジュール統合テスト」と §13 完了条件 7。`tests/integration/`（モックベース・既定テストに含まれる）とは別ディレクトリとし、ビルド成果物と実 FS を必要とするテストを `tests/real-fs/` に隔離する。
 
@@ -1900,7 +1931,7 @@ export default defineConfig({
 `.github/workflows/ci.yml` の `- run: bun run test:dist` の直後に追加:
 
 ```yaml
-      - run: bun run test:integration
+- run: bun run test:integration
 ```
 
 - [ ] **Step 2: 統合テストを書く**
@@ -2015,12 +2046,14 @@ git commit -m "test(integration): doctor resolver の実モジュール統合テ
 ### Task 9: [Phase 5] justice_review health セクション + ObservationLogStore lastSuccessfulWriteAt
 
 **Files:**
+
 - Modify: `src/runtime/observation-log-store.ts`（`lastSuccessfulWriteAt` 追跡、`ReadOnlyObservationLog` 拡張）
 - Modify: `src/runtime/justice-tools.ts`（view への `health` セクション）
 - Test: `tests/runtime/observation-log-store.test.ts`（既存ファイルに describe 追加）
 - Test: `tests/runtime/justice-review-tool.test.ts`（既存ファイルに describe 追加）
 
 **Interfaces:**
+
 - Consumes: 既存の `ObservationLogStore.append()` / `getRotationHealth()` / `getLastReadIntegrity()`、`executeJusticeReviewTool`。
 - Produces: `ObservationLogStore.getLastSuccessfulWriteAt(): string | undefined`。`ReadOnlyObservationLog` の optional メソッド `getRotationHealth?()` / `getLastReadIntegrity?()` / `getLastSuccessfulWriteAt?()`。`justice_review` の scope 未指定 view に `health` キー（設計書 §9.3）。
 
@@ -2230,18 +2263,18 @@ async function collectHealth(
 3. `executeJusticeReviewTool` の view 分岐で readAll の結果を再利用して health を付与（冒頭の `const state = project(await input.logReader.readAll(), ...)` を以下に置き換え）:
 
 ```ts
-    const records = await input.logReader.readAll();
-    const state = project(records, new Date().toISOString());
-    const normalizedScope = input.args.scope?.trim() || undefined;
-    if (input.args.resolve === undefined) {
-      if (normalizedScope !== undefined) {
-        return serializeReviewSummary(state.reviewSummary, normalizedScope);
-      }
-      const health = await collectHealth(input.logReader, records);
-      const summaryJson = serializeReviewSummary(state.reviewSummary, undefined);
-      if (health === undefined) return summaryJson;
-      return JSON.stringify({ ...JSON.parse(summaryJson), health }, null, 2);
-    }
+const records = await input.logReader.readAll();
+const state = project(records, new Date().toISOString());
+const normalizedScope = input.args.scope?.trim() || undefined;
+if (input.args.resolve === undefined) {
+  if (normalizedScope !== undefined) {
+    return serializeReviewSummary(state.reviewSummary, normalizedScope);
+  }
+  const health = await collectHealth(input.logReader, records);
+  const summaryJson = serializeReviewSummary(state.reviewSummary, undefined);
+  if (health === undefined) return summaryJson;
+  return JSON.stringify({ ...JSON.parse(summaryJson), health }, null, 2);
+}
 ```
 
 （`resolve` の挙動と `TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS` の信頼境界は一切変更しない。`justice_review` 自身の実行は `justice_` プレフィックス除外により canonical な Observation Log を汚染しない（D50 維持）。）
@@ -2263,9 +2296,11 @@ git commit -m "feat(review): justice_review に health セクションを追加"
 ### Task 10: [Phase 2] 実機での観測実証（絶対パス + root specifier）と検証レポート
 
 **Files:**
+
 - Create: `docs/reports/2026-07-31-v2-runtime-verification.md`
 
 **Interfaces:**
+
 - Consumes: Task 1 の `exports` / ビルド成果物、Task 3 の FF-009。Task 7 の `justice doctor` を診断補助として使用可。
 - Produces: 設計書 §6.1 の検査 1-7 が **絶対パス経路（A）と root specifier 経路（B）の両方**で観測された証跡。**このタスクが成功しない限り Task 11 以降に進んではならない**（設計書 §4）。検査 1-2 が満たされるが 3 以降が満たされない場合は H1（ロードは成功するが観測経路が黙って失敗する）が確定するため、設計書 §6.3 に従い `ObservationLogStore.append()` / `ObservationHandler` / `SessionStateProvider` の各境界に一時的な診断ログを追加して原因を切り分け、本計画の続行を停止して報告する。
 
@@ -2297,13 +2332,13 @@ opencode run "bash ツールで echo justice-phase2-a を 1 回だけ実行し�
 
 確認（すべて grep / ls で観測）:
 
-| # | コマンド | 期待 |
-| --- | --- | --- |
-| 1 | `grep -R "failed to load plugin" "$TMP_A" || echo "OK: なし"` | `OK: なし` |
-| 2 | `grep -R "Justice initialized via opencode-adapter" "$TMP_A"` | 1 件以上 |
-| 3 | `ls "$TMP_A/proj/.justice/events"/*/*/*.jsonl` | 新規 sessionId / callId の JSONL が存在 |
-| 4 | `head -3 <3 の JSONL>` | `kind` / `evidence` / `sequence` を含む ObservationRecord。秘密情報が redact されていること |
-| 5 | 同環境で `opencode run "justice_review ツールを scope 未指定で呼び出して"` | レビュー要約 JSON（`health` セクション含む）が返る |
+| #   | コマンド                                                                    | 期待                                                                                        |
+| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 1   | `grep -R "failed to load plugin" "$TMP_A"; [ $? -ne 0 ] && echo "OK: なし"` | `OK: なし`                                                                                  |
+| 2   | `grep -R "Justice initialized via opencode-adapter" "$TMP_A"`               | 1 件以上                                                                                    |
+| 3   | `ls "$TMP_A/proj/.justice/events"/*/*/*.jsonl`                              | 新規 sessionId / callId の JSONL が存在                                                     |
+| 4   | `head -3 <3 の JSONL>`                                                      | `kind` / `evidence` / `sequence` を含む ObservationRecord。秘密情報が redact されていること |
+| 5   | 同環境で `opencode run "justice_review ツールを scope 未指定で呼び出して"`  | レビュー要約 JSON（`health` セクション含む）が返る                                          |
 
 （headless の `opencode run` がツール呼出しに応答しない場合は、同一環境変数で `opencode` を TUI 起動し、手動で同等の操作を行う。）
 
@@ -2367,10 +2402,10 @@ opencode run "task() を 1 回呼んでごく小さな作業（例: echo hello�
 
 確認:
 
-| # | コマンド | 期待 |
-| --- | --- | --- |
-| 6 | `grep -l '"recordType":"decision"' .justice/events/*/*/*.jsonl` 後に `grep -o '"id":"required-tests"\|"id":"build-green"\|"id":"review-clean"' <file>` | DecisionRecord の `ruleResults` に既定 3 gate が現れる。`gate.yaml` 不在の警告ログも確認 |
-| 7 | 同上 | `task_complete` トリガの DecisionRecord が生成されている（PreToolUse が callId 単位の task 窓を開き、対応する PostToolUse で閉じた証跡） |
+| #   | コマンド                                                                                                                                               | 期待                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 6   | `grep -l '"recordType":"decision"' .justice/events/*/*/*.jsonl` 後に `grep -o '"id":"required-tests"\|"id":"build-green"\|"id":"review-clean"' <file>` | DecisionRecord の `ruleResults` に既定 3 gate が現れる。`gate.yaml` 不在の警告ログも確認                                                 |
+| 7   | 同上                                                                                                                                                   | `task_complete` トリガの DecisionRecord が生成されている（PreToolUse が callId 単位の task 窓を開き、対応する PostToolUse で閉じた証跡） |
 
 検査 2-4 についても、`.justice/events/` の JSONL が**本経路固有の新規 sessionId / callId** を持つことを確認する（経路 A/B の成果物と共有しない）。
 
@@ -2398,10 +2433,12 @@ git commit -m "docs(reports): v2 実機検証レポートを記録"
 ### Task 11: [Phase 3] validatePluginOptions 純粋関数（src/core/plugin-options.ts）
 
 **Files:**
+
 - Create: `src/core/plugin-options.ts`
 - Test: `tests/core/plugin-options.test.ts`
 
 **Interfaces:**
+
 - Consumes: なし
 - Produces: `validatePluginOptions(raw: unknown): { readonly options: ValidatedPluginOptions; readonly warnings: readonly string[] }`、`ValidatedPluginOptions = { readonly enableAdvisoryOutputAppend?: boolean }`。Task 12 が利用する（設計書 §7.2）。**`OpenCodeAdapterOptions`（runtime）を core から型 import すると不変条件 1 のアーキテクチャテストに触れるため、core 側は独自型を返し、runtime 側で写す。**
 
@@ -2491,7 +2528,9 @@ export function validatePluginOptions(raw: unknown): PluginOptionsValidation {
     const kind = Array.isArray(raw) ? "array" : typeof raw;
     return {
       options: {},
-      warnings: [`[Justice] plugin options must be an object; received ${kind}. Ignoring all options.`],
+      warnings: [
+        `[Justice] plugin options must be an object; received ${kind}. Ignoring all options.`,
+      ],
     };
   }
   const record = raw as Record<string, unknown>;
@@ -2528,10 +2567,12 @@ git commit -m "feat(core): PluginOptions 検証純粋関数を追加"
 ### Task 12: [Phase 3] opencode-plugin.ts への PluginOptions 配線
 
 **Files:**
+
 - Modify: `src/opencode-plugin.ts`
 - Test: `tests/runtime/opencode-plugin-options.test.ts`（新設）
 
 **Interfaces:**
+
 - Consumes: Task 11 の `validatePluginOptions` / `ValidatedPluginOptions`。`Plugin` 型は `(input: PluginInput, options?: PluginOptions) => Promise<Hooks>`（`@opencode-ai/plugin` 1.14.21 / 1.18.4 で一致確認済み、設計書 §7.2）。
 - Produces: ファクトリ第 2 引数の受取、`ValidatedPluginOptions` → `OpenCodeAdapterOptions` の写し（runtime 側責務）、警告の `init.client.app.log`（`service=justice`）出力。Task 13 の C1 実機検証で `[specifier, { "enableAdvisoryOutputAppend": true }]` の tuple 設定が物理的に可能になる。
 
@@ -2567,9 +2608,12 @@ describe("OpenCodePlugin PluginOptions wiring", () => {
 
   it("logs a warning via client.app.log for a type-mismatched option", async () => {
     const { init, log } = fakeInit();
-    const hooks = await OpenCodePlugin(init as never, {
-      enableAdvisoryOutputAppend: "yes",
-    } as never);
+    const hooks = await OpenCodePlugin(
+      init as never,
+      {
+        enableAdvisoryOutputAppend: "yes",
+      } as never,
+    );
     expect(hooks).toHaveProperty("tool");
     expect(log).toHaveBeenCalledTimes(1);
     const entry = log.mock.calls[0]![0] as { level: string; service: string; message: string };
@@ -2657,9 +2701,11 @@ git commit -m "feat(plugin): PluginOptions 経由の設定経路を配線"
 ### Task 13: [Phase 3] C1 実機検証（advisory 表示面）と既定値確定
 
 **Files:**
+
 - Modify: `SPEC.md`（§15.12 の C1 項目を実証結果で置換）
 
 **Interfaces:**
+
 - Consumes: Task 10（実機で v2.0 が動作する証拠）、Task 12（PluginOptions 配線）。
 - Produces: C1 判定（`C1 passed` / `C1 partial` / `C1 observed-negative`）と `enableAdvisoryOutputAppend` 既定値の確定・記録。**`C1 passed` 以外の状態では Phase 3 を完了・出荷完了として記録できない**（設計書 §7.3・§13.3）。
 
@@ -2692,11 +2738,11 @@ opencode run "task() を 1 回呼んで echo hello だけの小さな作業を�
 
 advisory は `JusticeNotifier`（保証チャネル = app log / toast 相当）と `output.output` 末尾（best-effort チャネル）の両方に送出される。**後者の可視性を前者と対比して判定する**:
 
-| 観測結果 | C1 判定 | 対応 |
-| --- | --- | --- |
-| バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed` | 既定値 `true` 化を検討。判断根拠を SPEC §15.12 に記録 |
-| 一方にのみ現れる | `C1 partial` | 現れる側を保証チャネルとして記録。既定値は `false` 据置。条件付き有効化の指針を README に記載（Task 18 で実施）。Phase 3 は未完了 |
-| いずれにも現れない | `C1 observed-negative` | 設計書 §7.3 の修正手順（オプション非推奨化 → `output.output` 追記ロジック削除 → 再検証）に従う。SPEC §15.12 の C1 状態を「実装修正待ち（Fix Pending）」とする。Phase 3 は未完了 |
+| 観測結果                                     | C1 判定                | 対応                                                                                                                                                                            |
+| -------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| バナーがユーザー表示・推論文脈の双方に現れる | `C1 passed`            | 既定値 `true` 化を検討。判断根拠を SPEC §15.12 に記録                                                                                                                           |
+| 一方にのみ現れる                             | `C1 partial`           | 現れる側を保証チャネルとして記録。既定値は `false` 据置。条件付き有効化の指針を README に記載（Task 18 で実施）。Phase 3 は未完了                                               |
+| いずれにも現れない                           | `C1 observed-negative` | 設計書 §7.3 の修正手順（オプション非推奨化 → `output.output` 追記ロジック削除 → 再検証）に従う。SPEC §15.12 の C1 状態を「実装修正待ち（Fix Pending）」とする。Phase 3 は未完了 |
 
 判定には FAIL を待つ必要はない。C1 が問うのは advisory の**表示面が届くか**であり、verdict の重さではない。
 
@@ -2719,10 +2765,12 @@ git commit -m "docs(spec): C1 実機検証結果と advisory 既定値を記録"
 ### Task 14: [Phase 4] hook 経路 end-to-end レイテンシ計測（spikes/observation-latency/measure.ts 拡張）
 
 **Files:**
+
 - Modify: `spikes/observation-latency/measure.ts`
 - Create: `docs/reports/2026-07-31-v2-latency-measurement.json`（スクリプト実行で生成）
 
 **Interfaces:**
+
 - Consumes: `ObservationHandler`（`src/hooks/observation-handler.ts`）、`SessionStateProvider`（`src/core/session-state-provider.ts`）、`ObservationLogStore` / `StateProjectionCache` / `FileGateLoader`（runtime）、`NodeFileSystem`。
 - Produces: 設計書 §8.2 の固定計測プロトコルに従う p50/p95/p99 と raw samples（`docs/reports/2026-07-31-v2-latency-measurement.json`）。Task 15 の判定入力。
 
@@ -2914,7 +2962,13 @@ async function main(): Promise<void> {
     "docs/reports/2026-07-31-v2-latency-measurement.json",
     JSON.stringify(results, null, 2),
   );
-  for (const c of conditions as { name: string; shardPreFillBytes: number; p50: number; p95: number; p99: number }[]) {
+  for (const c of conditions as {
+    name: string;
+    shardPreFillBytes: number;
+    p50: number;
+    p95: number;
+    p99: number;
+  }[]) {
     console.log(
       `${c.name} prefill=${c.shardPreFillBytes}: p50=${c.p50.toFixed(3)}ms p95=${c.p95.toFixed(3)}ms p99=${c.p99.toFixed(3)}ms`,
     );
@@ -2923,6 +2977,7 @@ async function main(): Promise<void> {
 ```
 
 補足:
+
 - キャッシュ未ヒット条件（設計書 §8.2-5 後段）は、prefill 後に**新しい** `NodeFileSystem` / store / handler インスタンスを作り直して 1 回目の append を計測する条件として追加する（`contents` キャッシュが冷えた状態）。
 - 複数 shard 条件の合計サンプル数は 4 writer × 100 回 = 400（設計書 §8.2-6）。
 
@@ -2945,17 +3000,19 @@ git commit -m "test(spike): hook 経路 end-to-end レイテンシ計測を追�
 ### Task 15: [Phase 4] レイテンシ判定と方針確定（SPEC §15.12 更新）
 
 **Files:**
+
 - Modify: `SPEC.md`（§15.12 のレイテンシ項目を再計測結果と確定方針で置換）
 
 **Interfaces:**
+
 - Consumes: Task 14 の計測レポート。
 - Produces: 設計書 §8.3 の判定基準に従う確定方針。**実測前に閾値は固定済み（後出し禁止）**:
 
-| 実測 p95 | 判断 | 対応 |
-| --- | --- | --- |
-| < 5ms | 許容 | SPEC を「再計測済み・目標達成」に更新して完了 |
+| 実測 p95           | 判断         | 対応                                                                                                    |
+| ------------------ | ------------ | ------------------------------------------------------------------------------------------------------- |
+| < 5ms              | 許容         | SPEC を「再計測済み・目標達成」に更新して完了                                                           |
 | 5ms 以上 50ms 未満 | 条件付き許容 | SPEC に実測値・計測条件（§8.2 固定プロトコル）・shard サイズ依存性を明記し、改善は v2.5 の Issue に登録 |
-| 50ms 以上 | 要改善 | 設計書 §8.4 の改善実装へ（ただし下記の設計レビューゲートを経る） |
+| 50ms 以上          | 要改善       | 設計書 §8.4 の改善実装へ（ただし下記の設計レビューゲートを経る）                                        |
 
 - [ ] **Step 1: 判定を記録する**
 
@@ -2978,9 +3035,11 @@ git commit -m "docs(spec): レイテンシ再計測結果と確定方針を記�
 ### Task 16: [Phase 6] ADR 改訂（ratification 再定義 → APPROVED）
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`
 
 **Interfaces:**
+
 - Consumes: なし（文書のみ）。
 - Produces: `Status: APPROVED` の ADR。**ratification コミット自体が証跡となる**（設計書 §10.1）。ADR が承認対象としている Charter 逸脱 5 項目（hook bindings / storage paths / exit code degraded verdict / artifact authorship reduction / declared evidence limitation）は一切変更しない。
 
@@ -2991,9 +3050,9 @@ git commit -m "docs(spec): レイテンシ再計測結果と確定方針を記�
 1. ヘッダの Status を変更:
 
 ```markdown
-* **Status:** APPROVED
-* **Date:** 2026-06-26（ratified 2026-08-02）
-* **Decided By:** `@yohi` (Repository Owner)
+- **Status:** APPROVED
+- **Date:** 2026-06-26（ratified 2026-08-02）
+- **Decided By:** `@yohi` (Repository Owner)
 ```
 
 2. 末尾の「Approval Evidence and Remaining Requirement」セクションを以下で置換:
@@ -3001,22 +3060,22 @@ git commit -m "docs(spec): レイテンシ再計測結果と確定方針を記�
 ```markdown
 ## Ratification (2026-08-02)
 
-* **Structural constraint discovered:** `.github/CODEOWNERS` is `* @yohi` and the repository
+- **Structural constraint discovered:** `.github/CODEOWNERS` is `* @yohi` and the repository
   collaborator is `@yohi` alone (admin). The human CODEOWNERS required by the original
   ratification clause is therefore `@yohi` themself, and GitHub structurally forbids
   self-`APPROVED` reviews on one's own PRs. The original requirement — "obtain an explicit
   human CODEOWNERS `APPROVED` review" — was **structurally unachievable**.
-* **Evidence:** PR #116's `reviewDecision=APPROVED` was driven solely by the automated
+- **Evidence:** PR #116's `reviewDecision=APPROVED` was driven solely by the automated
   `coderabbitai` bot review; all of `@yohi`'s review submissions were `state=COMMENTED`
   (verified 2026-07-06 via `gh pr view 116 --json reviewDecision,reviews,author,mergedBy`).
-* **Re-definition of ratification evidence:** the ratification evidence is re-defined as
+- **Re-definition of ratification evidence:** the ratification evidence is re-defined as
   "**a commit to this ADR by the CODEOWNER themself, stating the date, the ratified subject,
   and the rationale**". This commit (dated 2026-08-02, ratifying the five Charter deviations
   listed in Context: hook bindings / storage paths / exit code degraded verdict /
   artifact authorship reduction / declared evidence limitation) constitutes that evidence.
-* **This is not a removal of the requirement but its re-definition into an achievable form.**
+- **This is not a removal of the requirement but its re-definition into an achievable form.**
   The five Charter deviations themselves are unchanged and remain the ratified subject.
-* **Status change:** `PENDING HUMAN CODEOWNERS RATIFICATION` → `APPROVED`.
+- **Status change:** `PENDING HUMAN CODEOWNERS RATIFICATION` → `APPROVED`.
 ```
 
 - [ ] **Step 2: ratification コミットを作成する**
@@ -3038,9 +3097,11 @@ git commit -m "docs(adr): ratification 要件を達成可能な形へ再定義�
 ### Task 17: [Phase 6] SPEC.md 改訂（§15.12 全面改訂・§15.10 FF-009・§15.9 health）
 
 **Files:**
+
 - Modify: `SPEC.md`
 
 **Interfaces:**
+
 - Consumes: Task 10（Phase 2 結果）、Task 13（C1 結果）、Task 15（レイテンシ方針）、Task 16（ADR APPROVED）。
 - Produces: 実証結果と整合した SPEC。
 
@@ -3071,8 +3132,8 @@ v2.0 出荷完了時点（2026-08-02・v3.0.0）の状況を記録する。
 
 - **v2.0 は 2.7.0 以前、一度もロードされていなかった（一次証拠済み・修正済み）**: 配布パッケージの `exports["."]` が barrel（`dist/index.js`）を指しており、OpenCode ローダ契約に違反して `TypeError: Plugin export is not a function` で全起動が失敗していた。v1 機能を含めプラグインは 1 行も実行されておらず、Issue #192 の「v1 フロー完全準拠」という記述は報告エージェントの自己申告（`declared`）だった — FF-008（declared は PASS に算入しない）の正当性を裏付ける事例。詳細は `docs/superpowers/specs/2026-07-31-justice-v2-shipping-design.md` §2 と `docs/reports/2026-07-31-v2-runtime-verification.md` を参照。**v3.0.0 で `exports["."]` を plugin 専用エントリに再構成し、FF-009（`bun run test:dist`）で回帰を固定した。**
 - **実機実証（完了）**: `docs/reports/2026-07-31-v2-runtime-verification.md` に記録のとおり、絶対パス経路・root specifier 経路の双方で検査 1-7（ロード成功・初期化ログ・Observation Log 生成・schema 適合・justice_review 呼出・gate.yaml fail-open・task_complete DecisionRecord）を観測済み。
-- **C1（L0 advisory 表示面）**: <Task 13 の判定と日付、既定値と根拠を転記>。
-- **レイテンシ**: <Task 15 の実測値・判定・確定方針を転記。計測データは docs/reports/2026-07-31-v2-latency-measurement.json>。
+- **C1（L0 advisory 表示面）**: Task 13 の実機検証で確定した判定・日付・既定値と根拠を転記（本計画書 Task 13 参照）。
+- **レイテンシ**: Task 15 の再計測で確定した実測値・判定・確定方針を転記（本計画書 Task 15 参照。計測データは docs/reports/2026-07-31-v2-latency-measurement.json）。
 - **診断手段**: 2 層構成を導入済み。層1: `justice doctor` CLI（ロード失敗を検知できる唯一の経路。fail-open 不変条件の唯一の例外として非ゼロ終了コードを返す）。層2: `justice_review` の `health` セクション（§15.9）。
 - **ADR**: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` は 2026-08-02 に APPROVED（ratification 証跡形式の再定義については ADR 本文を参照）。
 - **スコープ外の既知課題**: Node ESM 非互換（dist の相対 import が拡張子なし。OpenCode は Bun 上で動作するため実害なし。将来 Node ベースのローダや Node 環境からのライブラリ利用で顕在化するリスク。別 Issue 参照）と `@opencode-ai/plugin` バージョンドリフト（開発時 1.14.21 / 実機 1.18.4。使用型は両版で一致確認済み）。
@@ -3090,9 +3151,11 @@ git commit -m "docs(spec): §15.12 を実証結果で全面改訂し FF-009 と 
 ### Task 18: [Phase 6] README 改訂 + 最終完了検証（設計書 §13 全項目）
 
 **Files:**
+
 - Modify: `README.md`
 
 **Interfaces:**
+
 - Consumes: 全タスクの完了。
 - Produces: v3.0.0 として整合した README と、設計書 §13 の 7 項目すべての検証記録。
 
@@ -3129,13 +3192,13 @@ bunx @yohi/justice doctor
 
 ```jsonc
 {
-  "plugin": [["@yohi/justice", { "enableAdvisoryOutputAppend": true }]]
+  "plugin": [["@yohi/justice", { "enableAdvisoryOutputAppend": true }]],
 }
 ```
 
-| キー | 型 | 既定 | 説明 |
-| --- | --- | --- | --- |
-| `enableAdvisoryOutputAppend` | boolean | <Task 13 で確定した既定値> | gate advisory をツール出力（`output.output`）末尾にも追記する（best-effort チャネル）。保証チャネルは `JusticeNotifier`（app log）。<C1 判定の根拠への参照: SPEC.md §15.12> |
+| キー                         | 型      | 既定                                                                        | 説明                                                                                                                                                                        |
+| ---------------------------- | ------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enableAdvisoryOutputAppend` | boolean | false（Task 13 の C1 判定に基づき確定。変更時は Task 13 Step 4 でコミット） | gate advisory をツール出力（`output.output`）末尾にも追記する（best-effort チャネル）。保証チャネルは `JusticeNotifier`（app log）。<C1 判定の根拠への参照: SPEC.md §15.12> |
 
 未知キーは無視され、型不一致は既定値にフォールバックして警告が `service=justice` のログに出力されます。
 ````
@@ -3164,6 +3227,7 @@ Expected: すべて成功。
 - [ ] Phase 5 完了 — `justice doctor` が動作し `justice_review` に health が統合済み（Task 4-9）
 - [ ] Phase 6 完了 — ADR が APPROVED、SPEC §15.12 と README が実証結果と整合（Task 16-18）
 - [ ] 全コマンド成功（上記 Run の結果）
+- [ ] SPEC.md / README.md に `<Task ...` / TBD / TODO プレースホルダーが残存していない（`rg '<Task\s+\d+|TBD|TODO' SPEC.md README.md` が 0 件）
 
 - [ ] **Step 3: Commit**
 
