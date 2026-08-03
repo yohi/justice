@@ -10,6 +10,7 @@ import { collectReviewScopes } from "../core/v2/review-scope";
 import { evaluate } from "../core/v2/rule-evaluation-engine";
 import { project, toSerializableProjectedState } from "../core/v2/state-projection";
 import type { ReviewSummary, ScopeReviewSummary } from "../core/v2/review-types";
+import type { ReadOnlyObservationLog } from "./observation-log-store";
 import type { OpenCodeAdapter } from "./opencode-adapter";
 
 function formatError(reason: string): string {
@@ -120,9 +121,17 @@ export type JusticeReviewToolResult =
     };
 
 export type JusticeReviewToolInput = {
-  readonly logReader: { readonly readAll: () => Promise<readonly PersistedLogRecord[]> };
+  readonly logReader: ReadOnlyObservationLog;
   readonly args: JusticeReviewToolArgs;
   readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
+};
+
+export type JusticeReviewHealth = {
+  readonly recordCount: number;
+  readonly shardCount: number;
+  readonly lastSuccessfulWriteAt?: string;
+  readonly rotationHealth: { readonly consecutiveFailures: number; readonly degraded: boolean };
+  readonly readIntegrity: { readonly hasIntegrityViolation: boolean };
 };
 
 function serializeReviewSummary(summary: ReviewSummary, scope: string | undefined): string {
@@ -148,6 +157,35 @@ function serializeReviewSummary(summary: ReviewSummary, scope: string | undefine
   );
 }
 
+async function collectHealth(
+  logReader: ReadOnlyObservationLog,
+  records: readonly PersistedLogRecord[],
+): Promise<JusticeReviewHealth | undefined> {
+  try {
+    const shardKeys = new Set(
+      records.map((record) => `${record.agentId}/${record.sessionId}/${record.writerId}`),
+    );
+    const rotation = logReader.getRotationHealth?.() ?? {
+      consecutiveFailures: 0,
+      degraded: false,
+    };
+    const integrity = logReader.getLastReadIntegrity?.() ?? { hasIntegrityViolation: false };
+    const lastWrite = logReader.getLastSuccessfulWriteAt?.();
+    return {
+      recordCount: records.length,
+      shardCount: shardKeys.size,
+      ...(lastWrite === undefined ? {} : { lastSuccessfulWriteAt: lastWrite }),
+      rotationHealth: {
+        consecutiveFailures: rotation.consecutiveFailures,
+        degraded: rotation.degraded,
+      },
+      readIntegrity: { hasIntegrityViolation: integrity.hasIntegrityViolation },
+    };
+  } catch {
+    return undefined; // fail-open: health 取得失敗時はフィールドを省略して view 本体を返す
+  }
+}
+
 function containsOpenItems(summary: ScopeReviewSummary, itemKeys: readonly string[]): boolean {
   const openItemKeys = new Set(summary.open.map((item) => item.itemKey));
   return itemKeys.every((itemKey) => openItemKeys.has(itemKey));
@@ -157,10 +195,17 @@ export async function executeJusticeReviewTool(
   input: JusticeReviewToolInput,
 ): Promise<JusticeReviewToolResult> {
   try {
-    const state = project(await input.logReader.readAll(), new Date().toISOString());
+    const records = await input.logReader.readAll();
+    const state = project(records, new Date().toISOString());
     const normalizedScope = input.args.scope?.trim() || undefined;
     if (input.args.resolve === undefined) {
-      return serializeReviewSummary(state.reviewSummary, normalizedScope);
+      if (normalizedScope !== undefined) {
+        return serializeReviewSummary(state.reviewSummary, normalizedScope);
+      }
+      const health = await collectHealth(input.logReader, records);
+      const summaryJson = serializeReviewSummary(state.reviewSummary, undefined);
+      if (health === undefined) return summaryJson;
+      return JSON.stringify({ ...JSON.parse(summaryJson), health }, null, 2);
     }
     if (normalizedScope === undefined) {
       return formatError(
