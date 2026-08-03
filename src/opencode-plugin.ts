@@ -1,11 +1,35 @@
 import type { Plugin } from "@opencode-ai/plugin";
-import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-adapter";
+import { validatePluginOptions } from "./core/plugin-options";
+import {
+  OpenCodeAdapter,
+  type OpenCodeAdapterOptions,
+  type OpenCodePluginInit,
+} from "./runtime/opencode-adapter";
 import { debugLog } from "./runtime/debug";
 
-export const OpenCodePlugin: Plugin = async (init) => {
+export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
+  const { options, warnings } = validatePluginOptions(pluginOptions);
+  // 警告の出力は runtime 境界の責務（core は @opencode-ai/* を import できない）。
+  for (const message of warnings) {
+    try {
+      await (init as unknown as OpenCodePluginInit).client.app.log({
+        level: "warn",
+        service: "justice",
+        message,
+      });
+    } catch {
+      /* fail-open: 警告出力の失敗でプラグインロードを壊さない */
+    }
+  }
+  // core の返り値を runtime 側で OpenCodeAdapterOptions へ写す（不変条件 1 を維持）。
+  const adapterOptions: OpenCodeAdapterOptions = {
+    ...(options.enableAdvisoryOutputAppend === undefined
+      ? {}
+      : { enableAdvisoryOutputAppend: options.enableAdvisoryOutputAppend }),
+  };
   const adapter =
     (init as unknown as { __justiceTestAdapter?: OpenCodeAdapter }).__justiceTestAdapter ??
-    new OpenCodeAdapter(init as unknown as OpenCodePluginInit);
+    new OpenCodeAdapter(init as unknown as OpenCodePluginInit, adapterOptions);
 
   debugLog("Plugin factory invoked, adapter created.");
   return {
