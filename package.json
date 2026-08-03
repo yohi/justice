@@ -36,8 +36,11 @@
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "justice": "./dist/runtime/doctor-cli.js"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/runtime/doctor-cli.js",
     "test": "bun run vitest run",
     "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
     "test:watch": "bun run vitest",
