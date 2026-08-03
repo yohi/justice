@@ -9,6 +9,7 @@
 // CLI はプラグイン本体ではなくセッションを落とさないため、この例外は安全である。
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   mergeSourceScans,
   scanConfigContent,
@@ -275,10 +276,17 @@ export function createCliFileReader(): FileReader {
     },
     listFiles: async (prefix) => {
       try {
-        const entries = await readdir(prefix, { recursive: true, withFileTypes: true });
+        const prefixIsDirectory = await stat(prefix)
+          .then((entry) => entry.isDirectory())
+          .catch(() => false);
+        const entries = await readdir(prefixIsDirectory ? prefix : dirname(prefix), {
+          recursive: true,
+          withFileTypes: true,
+        });
         return entries
           .filter((entry) => entry.isFile())
-          .map((entry) => `${entry.parentPath}/${entry.name}`);
+          .map((entry) => join(entry.parentPath, entry.name))
+          .filter((path) => path.startsWith(prefix));
       } catch {
         return [];
       }

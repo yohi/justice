@@ -40,9 +40,10 @@
     "justice": "./dist/runtime/doctor-cli.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/runtime/doctor-cli.js",
+    "build": "tsc && bun build src/opencode-plugin.ts --outfile dist/opencode-plugin.js --target node --format esm && chmod +x dist/runtime/doctor-cli.js",
     "test": "bun run vitest run",
     "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
+    "test:integration": "bun run build && bun run vitest run --config vitest.integration.config.ts",
     "test:watch": "bun run vitest",
     "test:coverage": "bun run vitest run --coverage",
     "lint": "eslint src/ tests/",
