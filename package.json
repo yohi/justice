@@ -39,6 +39,7 @@
   "scripts": {
     "build": "tsc",
     "test": "bun run vitest run",
+    "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
     "test:watch": "bun run vitest",
     "test:coverage": "bun run vitest run --coverage",
     "lint": "eslint src/ tests/",
