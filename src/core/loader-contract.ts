@@ -36,8 +36,7 @@ function describeKind(value: unknown): string {
 
 function isClassFunction(value: unknown): boolean {
   return (
-    typeof value === "function" &&
-    Function.prototype.toString.call(value).startsWith("class ")
+    typeof value === "function" && Function.prototype.toString.call(value).startsWith("class ")
   );
 }
 

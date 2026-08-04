@@ -62,7 +62,7 @@ type JsoncState = {
   inString: boolean;
 };
 
-/** Append ch to out; if it is a backslash, also append the next character and skip it. */
+/** Process the next character while inside a JSON string literal. */
 function appendStringChar(state: JsoncState, content: string, i: number): number {
   const ch = content[i]!;
   state.out += ch;
@@ -96,7 +96,7 @@ function skipBlockComment(content: string, start: number): number {
   return i + 1;
 }
 
-/** Read whitespace and comments, returning the index of the first non-junk character. */
+/** Classify the character at index `i` for the strip parser. */
 function skipJunk(content: string, start: number): number {
   let j = start;
   while (j < content.length) {
@@ -122,42 +122,59 @@ function skipJunk(content: string, start: number): number {
   return j;
 }
 
-/** 文字列リテラル内を壊さないよう、文字列を認識してコメントと末尾カンマを除去する。 */
+type JsoncToken =
+  | { kind: "append"; ch: string }
+  | { kind: "stringStart" }
+  | { kind: "lineComment" }
+  | { kind: "blockComment" }
+  | { kind: "trailingComma"; nextIndex: number }
+  | { kind: "skip" };
+
+function classifyToken(state: JsoncState, content: string, i: number): JsoncToken {
+  const ch = content[i]!;
+  const next = content[i + 1];
+  if (state.inString) return { kind: "append", ch };
+  if (ch === '"') return { kind: "stringStart" };
+  if (ch === "/" && next === "/") return { kind: "lineComment" };
+  if (ch === "/" && next === "*") return { kind: "blockComment" };
+  if (ch === ",") {
+    const j = skipJunk(content, i + 1);
+    if (content[j] === "}" || content[j] === "]") return { kind: "trailingComma", nextIndex: j };
+  }
+  return { kind: "append", ch };
+}
+
+function applyToken(state: JsoncState, content: string, i: number, token: JsoncToken): number {
+  switch (token.kind) {
+    case "append":
+      state.out += token.ch;
+      return i + 1;
+    case "stringStart":
+      state.inString = true;
+      state.out += '"';
+      return i + 1;
+    case "lineComment":
+      return skipLineComment(content, i);
+    case "blockComment":
+      return skipBlockComment(content, i);
+    case "trailingComma":
+      return token.nextIndex;
+    case "skip":
+      return i + 1;
+  }
+}
+
 function stripJsoncComments(content: string): string {
   const state: JsoncState = { out: "", inString: false };
   let i = 0;
   while (i < content.length) {
-    const ch = content[i]!;
-    const next = content[i + 1];
-    if (state.inString) {
-      i = appendStringChar(state, content, i);
-      continue;
-    }
-    if (ch === '"') {
-      state.inString = true;
-      state.out += ch;
-      i++;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
+    const token = classifyToken(state, content, i);
+    if (token.kind === "lineComment") {
       i = skipLineComment(content, i);
       state.out += "\n";
       continue;
     }
-    if (ch === "/" && next === "*") {
-      i = skipBlockComment(content, i);
-      continue;
-    }
-    // 文字列外の末尾カンマのみ除去する（空白・コメントを飛ばした直後が `}` または `]`）。
-    if (ch === ",") {
-      const j = skipJunk(content, i + 1);
-      if (content[j] === "}" || content[j] === "]") {
-        i = j;
-        continue;
-      }
-    }
-    state.out += ch;
-    i++;
+    i = state.inString ? appendStringChar(state, content, i) : applyToken(state, content, i, token);
   }
   return state.out;
 }
@@ -180,6 +197,33 @@ function isJusticeSpecifier(value: string): boolean {
     value.startsWith("@yohi/justice/") ||
     (value.startsWith("/") && value.includes("justice"))
   );
+}
+
+function extractSpecifier(
+  entry: unknown,
+  source: ConfigSourceId,
+  diagnostics: ConfigDiagnostic[],
+): JusticePluginSpecifier | null {
+  if (typeof entry === "string") {
+    return isJusticeSpecifier(entry)
+      ? { specifier: entry, optionsPresent: false, optionKeys: [] }
+      : null;
+  }
+  if (
+    Array.isArray(entry) &&
+    entry.length === 2 &&
+    typeof entry[0] === "string" &&
+    isRecord(entry[1])
+  ) {
+    if (!isJusticeSpecifier(entry[0])) return null;
+    return {
+      specifier: entry[0],
+      optionsPresent: true,
+      optionKeys: Object.keys(entry[1]).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+  diagnostics.push({ code: "invalid_plugin_entry", source, detail: JSON.stringify(entry) });
+  return null;
 }
 
 export function scanConfigContent(source: ConfigSourceId, content: string): SourceScanResult {
@@ -212,28 +256,8 @@ export function scanConfigContent(source: ConfigSourceId, content: string): Sour
   const specifiers: JusticePluginSpecifier[] = [];
   const diagnostics: ConfigDiagnostic[] = [];
   for (const entry of plugin as unknown[]) {
-    if (typeof entry === "string") {
-      if (isJusticeSpecifier(entry)) {
-        specifiers.push({ specifier: entry, optionsPresent: false, optionKeys: [] });
-      }
-      continue;
-    }
-    if (
-      Array.isArray(entry) &&
-      entry.length === 2 &&
-      typeof entry[0] === "string" &&
-      isRecord(entry[1])
-    ) {
-      if (isJusticeSpecifier(entry[0])) {
-        specifiers.push({
-          specifier: entry[0],
-          optionsPresent: true,
-          optionKeys: Object.keys(entry[1]).sort((a, b) => a.localeCompare(b)),
-        });
-      }
-      continue;
-    }
-    diagnostics.push({ code: "invalid_plugin_entry", source, detail: JSON.stringify(entry) });
+    const extracted = extractSpecifier(entry, source, diagnostics);
+    if (extracted !== null) specifiers.push(extracted);
   }
   return { source, readable: true, specifiers, diagnostics };
 }
@@ -243,10 +267,9 @@ export function scanUnreadableSource(
   source: ConfigSourceId,
   rawContent?: string,
 ): SourceScanResult {
-  const diagnostics: ConfigDiagnostic[] =
-    rawContent?.includes("@yohi/justice")
-      ? [{ code: "unsupported_config_source", source }]
-      : [];
+  const diagnostics: ConfigDiagnostic[] = rawContent?.includes("@yohi/justice")
+    ? [{ code: "unsupported_config_source", source }]
+    : [];
   return { source, readable: false, specifiers: [], diagnostics };
 }
 

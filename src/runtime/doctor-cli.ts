@@ -145,14 +145,11 @@ async function checkGateYaml(deps: DoctorDeps, lines: string[]): Promise<string>
   }
   const logger = new CollectingGateLoaderLogger();
   const gates = await loadGates(deps.fileReader, `${deps.cwd}/.justice/gate.yaml`, logger);
-  for (const message of logger.collect()) {
-    lines.push(`  ! gate.yaml 読込警告: ${message}`);
-  }
+  const warnings = logger.collect().map((message) => `  ! gate.yaml 読込警告: ${message}`);
+  lines.push(...warnings);
   const gateIds = gates.map((g) => g.id);
   return `  .justice/gate.yaml: 有効（実効 gate: ${gateIds.join(", ")}）`;
 }
-
-
 
 export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const detector = new SecretPatternDetector();
@@ -162,8 +159,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   // 検査 1: 設定探索と justice specifier 抽出
   const scans = await scanAllSources(deps);
   const merged = mergeSourceScans(scans);
-  lines.push("■ 検査 1: OpenCode 設定の justice エントリ");
-  lines.push(...formatConfigDiagnostics(merged.diagnostics));
+  const diagnostics = formatConfigDiagnostics(merged.diagnostics);
+  lines.push("■ 検査 1: OpenCode 設定の justice エントリ", ...diagnostics);
   failed ||= merged.diagnostics.some((d) => d.code === "justice_not_found_in_config");
 
   // 検査 2: specifier 解決とローダ契約判定
@@ -175,22 +172,22 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   }
 
   // 検査 3: OpenCode ログ走査
-  lines.push("■ 検査 3: OpenCode ログ");
-  lines.push(...await formatLogScanLines(deps));
+  const logLines = await formatLogScanLines(deps);
+  lines.push("■ 検査 3: OpenCode ログ", ...logLines);
 
   // 検査 4: .justice/ サマリ
-  lines.push("■ 検査 4: 観測データ");
-  lines.push(await summarizeObservationData(deps));
+  lines.push("■ 検査 4: 観測データ", await summarizeObservationData(deps));
 
   // 検査 5: gate.yaml 妥当性
-  lines.push("■ 検査 5: gate.yaml");
-  lines.push(await checkGateYaml(deps, lines));
+  lines.push("■ 検査 5: gate.yaml", await checkGateYaml(deps, lines));
 
   return { exitCode: failed ? 1 : 0, text: detector.redact(lines.join("\n")) };
 }
 
-
-/** CLI 専用の非閉域 FileReader（~/.config や ~/.cache を横断読取するため root 制限を持たない）。 */
+/** CLI 専用の非閉域 FileReader（~/.config や ~/.cache を横断読取するため root 制限を持たない）。
+ * 実ディスク I/O のみを行うため、単体テストではモック置換が難しく、実 FS 統合テストでカバーする。
+ */
+/* istanbul ignore next -- real-fs CLI adapter; covered by tests/real-fs/doctor-resolver.test.ts */
 export function createCliFileReader(): FileReader {
   return {
     readFile: (path) => readFile(path, "utf-8"),
@@ -230,6 +227,7 @@ export function createCliFileReader(): FileReader {
   };
 }
 
+/* istanbul ignore next -- real-fs path discovery; covered by tests/real-fs/doctor-resolver.test.ts */
 async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<readonly string[]> {
   const dataHome = env.XDG_DATA_HOME ?? (home === undefined ? undefined : `${home}/.local/share`);
   if (dataHome === undefined) return [];
@@ -244,6 +242,7 @@ async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<
   }
 }
 
+/* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
 export async function main(argv: readonly string[]): Promise<number> {
   if (argv[0] !== "doctor") {
     process.stderr.write("usage: justice doctor\n");
@@ -251,7 +250,9 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   const env = process.env;
   const home = env.HOME ?? homedir();
-  const cacheRoot = `${env.XDG_CACHE_HOME ?? `${home}/.cache`}/opencode`;
+  const xdgCache = env.XDG_CACHE_HOME;
+  const cacheBase = xdgCache === undefined ? `${home}/.cache` : xdgCache;
+  const cacheRoot = `${cacheBase}/opencode`;
   const report = await runDoctor({
     fileReader: createCliFileReader(),
     env,
@@ -265,7 +266,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   return report.exitCode;
 }
 
-/* istanbul ignore next -- CLI エントリポイント */
+/* istanbul ignore next -- CLI entry point */
 if (import.meta.main) {
   process.exit(await main(process.argv.slice(2)));
 }

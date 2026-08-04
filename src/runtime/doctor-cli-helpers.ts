@@ -25,14 +25,16 @@ export async function resolveAndCheckSpecifier(
     cacheRoot: deps.cacheRoot,
   });
   if (!resolution.ok) {
-    lines.push(
-      `  ✗ ${resolution.code}: ${resolution.detail}` +
-        (resolution.candidates ? `（候補: ${resolution.candidates.join(", ")}）` : ""),
-    );
-    lines.push(
-      "  ※ パッケージ未インストール・キャッシュ不在はローダ契約違反とは別種の失敗です。",
-    );
-    return { failed: true, lines };
+    const candidateHint = resolution.candidates
+      ? `（候補: ${resolution.candidates.join(", ")}）`
+      : "";
+    return {
+      failed: true,
+      lines: [
+        `  ✗ ${resolution.code}: ${resolution.detail}${candidateHint}`,
+        "  ※ パッケージ未インストール・キャッシュ不在はローダ契約違反とは別種の失敗です。",
+      ],
+    };
   }
   const entryFile = resolution.entry.entryFile;
   lines.push(`  解決先: ${entryFile}`);
@@ -44,26 +46,31 @@ export async function resolveAndCheckSpecifier(
     lines.push(...contractLines);
     return { failed, lines };
   } catch (error) {
-    lines.push(
-      `  ✗ import 失敗: ${error instanceof Error ? error.message : String(error)}（契約判定とは別種の失敗）`,
-    );
-    return { failed: true, lines };
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      failed: true,
+      lines: [...lines, `  ✗ import 失敗: ${message}（契約判定とは別種の失敗）`],
+    };
   }
 }
 
-export function formatConfigDiagnostics(diagnostics: readonly ConfigDiagnostic[]): readonly string[] {
+export function formatConfigDiagnostics(
+  diagnostics: readonly ConfigDiagnostic[],
+): readonly string[] {
   return diagnostics
     .map((diagnostic) => {
-      if (diagnostic.code === "unsupported_config_source") {
-        return `  ! ${diagnostic.code}: ${diagnostic.source} に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。`;
+      switch (diagnostic.code) {
+        case "unsupported_config_source":
+          return `  ! ${diagnostic.code}: ${diagnostic.source} に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。`;
+        case "justice_not_found_in_config":
+          return `  ✗ ${diagnostic.code}: 設定に @yohi/justice が見つかりません`;
+        case "plugin_missing":
+          return "";
+        default: {
+          const detail = diagnostic.detail ? ` (${diagnostic.detail})` : "";
+          return `  ! ${diagnostic.code}: ${diagnostic.source}${detail}`;
+        }
       }
-      if (diagnostic.code === "justice_not_found_in_config") {
-        return `  ✗ ${diagnostic.code}: 設定に @yohi/justice が見つかりません`;
-      }
-      if (diagnostic.code === "plugin_missing") {
-        return "";
-      }
-      return `  ! ${diagnostic.code}: ${diagnostic.source}${diagnostic.detail ? ` (${diagnostic.detail})` : ""}`;
     })
     .filter((line) => line !== "");
 }
@@ -72,7 +79,7 @@ export function formatContractResult(contract: LoaderContractResult): readonly s
   if (contract.ok) {
     return [`  ✓ ローダ契約 OK（plugin factory: ${contract.pluginFactories.length} 件）`];
   }
-    const violationNames = contract.violations.map((v) => v.exportName).join(", ");
+  const violationNames = contract.violations.map((v) => v.exportName).join(", ");
   return [
     "  ✗ plugin エントリが OpenCode のローダ契約を満たしていません",
     "",
@@ -93,15 +100,15 @@ export async function formatLogScanLines(deps: DoctorDeps): Promise<readonly str
   for (const logPath of deps.logPaths) {
     try {
       const scan = scanOpenCodeLogText(await deps.fileReader.readFile(logPath));
-      lines.push(
-        `  ${logPath}: failed_to_load=${scan.failedToLoadPluginCount} 件 / initialized=${scan.justiceInitializedCount} 件`,
-      );
+      const summary = `  ${logPath}: failed_to_load=${scan.failedToLoadPluginCount} 件 / initialized=${scan.justiceInitializedCount} 件`;
+      const details: string[] = [];
       if (scan.lastFailedToLoadPlugin !== undefined) {
-        lines.push(`    直近の失敗: ${scan.lastFailedToLoadPlugin}`);
+        details.push(`    直近の失敗: ${scan.lastFailedToLoadPlugin}`);
       }
       if (scan.lastJusticeInitialized !== undefined) {
-        lines.push(`    直近の初期化: ${scan.lastJusticeInitialized}`);
+        details.push(`    直近の初期化: ${scan.lastJusticeInitialized}`);
       }
+      lines.push(summary, ...details);
     } catch {
       lines.push(`  ${logPath}: 読み込めません`);
     }
@@ -117,4 +124,3 @@ export function isJusticeSpecifier(specifier: string): boolean {
     (specifier.startsWith("/") && specifier.includes("justice"))
   );
 }
-

@@ -107,11 +107,12 @@ describe("resolveSpecifier()", () => {
     // and listFiles must return every matching file (not only .jsonl). NodeFileSystem is not
     // used here; the real CLI will provide createCliFileReader (Task 7).
     const fixture: Record<string, string> = {
-      [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/package.json`]: JSON.stringify({
-        name: "@yohi/justice",
-        version: "1.0.0",
-        exports: { ".": { import: "./dist/index.js" } },
-      }),
+      [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/package.json`]:
+        JSON.stringify({
+          name: "@yohi/justice",
+          version: "1.0.0",
+          exports: { ".": { import: "./dist/index.js" } },
+        }),
       [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/dist/index.js`]: "//",
       // A non-.jsonl file under the prefix must still be returned by listFiles so the
       // candidate version extraction works. This guards against sandboxing readers that

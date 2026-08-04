@@ -47,9 +47,7 @@ describe("checkLoaderContract()", () => {
     const arr = Object.assign([], { server: async () => ({}) });
     const result = checkLoaderContract({ plugin: arr });
     expect(result.ok).toBe(false);
-    expect(result.violations).toEqual([
-      { exportName: "plugin", actualKind: "array" },
-    ]);
+    expect(result.violations).toEqual([{ exportName: "plugin", actualKind: "array" }]);
   });
 
   it("reports null and object exports as violations", () => {

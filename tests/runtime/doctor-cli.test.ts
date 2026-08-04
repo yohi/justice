@@ -259,7 +259,9 @@ describe("runDoctor()", () => {
       formatConfigDiagnostics([{ code: "justice_not_found_in_config", source: "project" }]),
     ).toEqual(["  ✗ justice_not_found_in_config: 設定に @yohi/justice が見つかりません"]);
     expect(
-      formatConfigDiagnostics([{ code: "unsupported_config_source", source: "env_config_content" }]),
+      formatConfigDiagnostics([
+        { code: "unsupported_config_source", source: "env_config_content" },
+      ]),
     ).toEqual([
       "  ! unsupported_config_source: env_config_content に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。",
     ]);
@@ -267,7 +269,11 @@ describe("runDoctor()", () => {
       formatConfigDiagnostics([{ code: "invalid_plugin_entry", source: "project", detail: "x" }]),
     ).toEqual(["  ! invalid_plugin_entry: project (x)"]);
 
-    const okContract = formatContractResult({ ok: true, violations: [], pluginFactories: [async () => ({})] });
+    const okContract = formatContractResult({
+      ok: true,
+      violations: [],
+      pluginFactories: [async () => ({})],
+    });
     expect(okContract).toEqual(["  ✓ ローダ契約 OK（plugin factory: 1 件）"]);
     const ngContract = formatContractResult({
       ok: false,
@@ -275,7 +281,11 @@ describe("runDoctor()", () => {
       pluginFactories: [],
     });
     expect(ngContract.some((l) => l.includes("AGENT_IDS"))).toBe(true);
-    expect(ngContract.some((l) => l.includes("plugin エントリが OpenCode のローダ契約を満たしていません"))).toBe(true);
+    expect(
+      ngContract.some((l) =>
+        l.includes("plugin エントリが OpenCode のローダ契約を満たしていません"),
+      ),
+    ).toBe(true);
 
     const logLines = await formatLogScanLines(baseDeps({ logPaths: ["/missing.log"] }));
     expect(logLines).toContain("  /missing.log: 読み込めません");

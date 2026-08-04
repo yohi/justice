@@ -40,7 +40,6 @@ describe("parseJsonc()", () => {
       expect(result.error).toContain("Unterminated block comment");
     }
   });
-
 });
 
 describe("scanConfigContent()", () => {
@@ -165,7 +164,7 @@ describe("scanUnreadableSource()", () => {
   it("reports unsupported_config_source when OPENCODE_CONFIG_CONTENT contains justice", () => {
     const result = scanUnreadableSource(
       "env_config_content",
-      `{"plugin": ["@yohi/justice@3.0.0"]}`
+      `{"plugin": ["@yohi/justice@3.0.0"]}`,
     );
     expect(result.diagnostics).toEqual([
       { code: "unsupported_config_source", source: "env_config_content" },
