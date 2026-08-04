@@ -19,6 +19,17 @@ describe("checkLoaderContract()", () => {
     expect(result.pluginFactories).toEqual([server]);
   });
 
+  it("dedups the same function wrapped in multiple { server } objects", () => {
+    const server = async () => ({});
+    const result = checkLoaderContract({
+      a: { server },
+      b: { server },
+      c: { server },
+    });
+    expect(result.pluginFactories).toHaveLength(1);
+    expect(result.pluginFactories).toEqual([server]);
+  });
+
   it("rejects non-function exports with their names and kinds", () => {
     const result = checkLoaderContract({
       AGENT_IDS: ["a"],
@@ -29,6 +40,15 @@ describe("checkLoaderContract()", () => {
     expect(result.violations).toEqual([
       { exportName: "AGENT_IDS", actualKind: "array" },
       { exportName: "DEFAULT_PERSONA", actualKind: "string" },
+    ]);
+  });
+
+  it("rejects array exports even if they have a server property", () => {
+    const arr = Object.assign([], { server: async () => ({}) });
+    const result = checkLoaderContract({ plugin: arr });
+    expect(result.ok).toBe(false);
+    expect(result.violations).toEqual([
+      { exportName: "plugin", actualKind: "array" },
     ]);
   });
 
