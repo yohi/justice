@@ -33,9 +33,17 @@ describe("parseJsonc()", () => {
     expect(result).toEqual({ ok: true, value: { plugin: ["text, ]", "more, }"] } });
   });
 
-  it("returns ok:false for unterminated block comments", () => {
-    expect(parseJsonc(`{ "plugin": [ /* unfinished `).ok).toBe(false);
+  it("rejects an unterminated block comment with a clear error", () => {
+    const result = parseJsonc(`{ "plugin": [ /* unfinished `);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Unterminated block comment");
+    }
   });
+
+});
+
+describe("scanConfigContent()", () => {
   it("extracts string and tuple specifiers", () => {
     const result = scanConfigContent(
       "project",

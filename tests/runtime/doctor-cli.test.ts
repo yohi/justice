@@ -1,6 +1,13 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
 import { runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import {
+  formatConfigDiagnostics,
+  formatContractResult,
+  formatLogScanLines,
+  isJusticeSpecifier,
+  resolveAndCheckSpecifier,
+} from "../../src/runtime/doctor-cli-helpers";
 import type { FileReader } from "../../src/core/types";
 
 function mockReader(files: Record<string, string>): FileReader {
@@ -223,5 +230,67 @@ describe("runDoctor()", () => {
       }),
     );
     expect(result.text).not.toContain(token);
+  });
+
+  it("covers configCandidates enumeration paths", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        env: {
+          OPENCODE_CONFIG: "/env/opencode.json",
+          OPENCODE_CONFIG_DIR: "/env/dir",
+          OPENCODE_CONFIG_CONTENT: `{"plugin":["@yohi/justice"]}`,
+        },
+        homeDir: undefined,
+        fileReader: mockReader({}),
+      }),
+    );
+    expect(result.text).toContain("unsupported_config_source");
+  });
+
+  it("covers helper functions directly", async () => {
+    expect(isJusticeSpecifier("@yohi/justice")).toBe(true);
+    expect(isJusticeSpecifier("@yohi/justice@3.0.0")).toBe(true);
+    expect(isJusticeSpecifier("@yohi/justice/core")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice/dist/opencode-plugin.js")).toBe(true);
+    expect(isJusticeSpecifier("other-plugin")).toBe(false);
+
+    expect(formatConfigDiagnostics([{ code: "plugin_missing", source: "project" }])).toEqual([]);
+    expect(
+      formatConfigDiagnostics([{ code: "justice_not_found_in_config", source: "project" }]),
+    ).toEqual(["  ✗ justice_not_found_in_config: 設定に @yohi/justice が見つかりません"]);
+    expect(
+      formatConfigDiagnostics([{ code: "unsupported_config_source", source: "env_config_content" }]),
+    ).toEqual([
+      "  ! unsupported_config_source: env_config_content に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。",
+    ]);
+    expect(
+      formatConfigDiagnostics([{ code: "invalid_plugin_entry", source: "project", detail: "x" }]),
+    ).toEqual(["  ! invalid_plugin_entry: project (x)"]);
+
+    const okContract = formatContractResult({ ok: true, violations: [], pluginFactories: [async () => ({})] });
+    expect(okContract).toEqual(["  ✓ ローダ契約 OK（plugin factory: 1 件）"]);
+    const ngContract = formatContractResult({
+      ok: false,
+      violations: [{ exportName: "AGENT_IDS", actualKind: "object" }],
+      pluginFactories: [],
+    });
+    expect(ngContract.some((l) => l.includes("AGENT_IDS"))).toBe(true);
+    expect(ngContract.some((l) => l.includes("plugin エントリが OpenCode のローダ契約を満たしていません"))).toBe(true);
+
+    const logLines = await formatLogScanLines(baseDeps({ logPaths: ["/missing.log"] }));
+    expect(logLines).toContain("  /missing.log: 読み込めません");
+  });
+
+  it("resolves a healthy specifier through resolveAndCheckSpecifier", async () => {
+    const plugin = async () => ({});
+    const section = await resolveAndCheckSpecifier(
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => ({ default: plugin, OpenCodePlugin: plugin }),
+      }),
+    );
+    expect(section.failed).toBe(false);
+    expect(section.lines).toContain("  ✓ ローダ契約 OK（plugin factory: 1 件）");
   });
 });

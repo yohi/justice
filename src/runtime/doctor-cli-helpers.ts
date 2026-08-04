@@ -4,7 +4,7 @@
 // runDoctor から分離し、認知複雑度を抑える。
 
 import type { ConfigDiagnostic, JusticePluginSpecifier } from "../core/doctor-config";
-import type { LoaderContractResult, LoaderContractViolation } from "../core/loader-contract";
+import type { LoaderContractResult } from "../core/loader-contract";
 import type { DoctorDeps } from "./doctor-cli";
 import { normalizeSpecifier, resolveSpecifier } from "../core/doctor-specifier";
 import { checkLoaderContract } from "../core/loader-contract";
@@ -50,6 +50,7 @@ export async function resolveAndCheckSpecifier(
     return { failed: true, lines };
   }
 }
+
 export function formatConfigDiagnostics(diagnostics: readonly ConfigDiagnostic[]): readonly string[] {
   return diagnostics
     .map((diagnostic) => {
@@ -71,7 +72,7 @@ export function formatContractResult(contract: LoaderContractResult): readonly s
   if (contract.ok) {
     return [`  ✓ ローダ契約 OK（plugin factory: ${contract.pluginFactories.length} 件）`];
   }
-    const violationNames = contract.violations.map((v: LoaderContractViolation) => v.exportName).join(", ");
+    const violationNames = contract.violations.map((v) => v.exportName).join(", ");
   return [
     "  ✗ plugin エントリが OpenCode のローダ契約を満たしていません",
     "",
