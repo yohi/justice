@@ -34,6 +34,13 @@ function describeKind(value: unknown): string {
   return typeof value;
 }
 
+function isClassFunction(value: unknown): boolean {
+  return (
+    typeof value === "function" &&
+    Function.prototype.toString.call(value).startsWith("class ")
+  );
+}
+
 export function checkLoaderContract(
   moduleExports: Readonly<Record<string, unknown>>,
 ): LoaderContractResult {
@@ -43,17 +50,27 @@ export function checkLoaderContract(
   for (const [exportName, value] of Object.entries(moduleExports)) {
     if (seen.has(value)) continue;
     if (typeof value === "function") {
+      if (isClassFunction(value)) {
+        violations.push({ exportName, actualKind: "class" });
+        continue;
+      }
       seen.add(value);
       pluginFactories.push(value as PluginFactory);
       continue;
     }
-    if (isRecord(value) && typeof value.server === "function") {
-      const server = value.server as PluginFactory;
-      if (!seen.has(server)) {
-        seen.add(server);
-        pluginFactories.push(server);
+    if (isRecord(value)) {
+      const server = value.server;
+      if (typeof server === "function") {
+        if (isClassFunction(server)) {
+          violations.push({ exportName, actualKind: "class" });
+          continue;
+        }
+        if (!seen.has(server)) {
+          seen.add(server);
+          pluginFactories.push(server as PluginFactory);
+        }
+        continue;
       }
-      continue;
     }
     violations.push({ exportName, actualKind: describeKind(value) });
   }

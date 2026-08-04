@@ -66,4 +66,20 @@ describe("checkLoaderContract()", () => {
     const result = checkLoaderContract({ a: fn, b: fn, c: fn });
     expect(result.pluginFactories).toHaveLength(1);
   });
+
+  it("rejects class exports", () => {
+    class Plugin {}
+    const result = checkLoaderContract({ default: Plugin });
+    expect(result.ok).toBe(false);
+    expect(result.violations).toEqual([{ exportName: "default", actualKind: "class" }]);
+    expect(result.pluginFactories).toEqual([]);
+  });
+
+  it("rejects { server: class } exports", () => {
+    class Server {}
+    const result = checkLoaderContract({ default: { server: Server } });
+    expect(result.ok).toBe(false);
+    expect(result.violations).toEqual([{ exportName: "default", actualKind: "class" }]);
+    expect(result.pluginFactories).toEqual([]);
+  });
 });
