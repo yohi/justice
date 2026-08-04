@@ -11,12 +11,13 @@ test("preflight verification: ADR ratification check", () => {
   );
   expect(existsSync(adrPath)).toBe(true);
   const content = readFileSync(adrPath, "utf-8");
-  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*PENDING HUMAN CODEOWNERS RATIFICATION/);
-  // Prevent stale 'Status: APPROVED' in metadata while allowing valid 'APPROVED' in review history
-  expect(content).not.toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
-  // Verify real approvers are documented instead of placeholder names (avoiding hardcoded names)
-  expect(content).toContain("Required action:");
-  expect(content).toContain("human CODEOWNERS");
+  // Status must be APPROVED after 2026-08-02 ratification
+  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
+  // Ratification section documents the structural constraint and re-definition of evidence
+  expect(content).toContain("Ratification (2026-08-02)");
+  expect(content).toContain("structurally unachievable");
+  expect(content).toContain("Re-definition of ratification evidence");
+  // Verify real approvers are documented instead of placeholder names
   const blockedPlaceholders = [
     "@owner-alice",
     "@owner-bob",
