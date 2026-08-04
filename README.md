@@ -156,6 +156,24 @@ export default { plugins: [OpenCodePlugin] };
     }
     ```
 
+### ライブラリとして利用する場合（v3.0.0 以降）
+
+`@yohi/justice` の root specifier は v3.0.0 で **OpenCode プラグイン専用エントリ** に変更されました。ライブラリとして named export を利用する場合は `@yohi/justice/core` から import してください。
+
+```ts
+// Before (2.x)
+import { PlanParser, TaskPackager } from "@yohi/justice";
+
+// After (3.0)
+import { PlanParser, TaskPackager } from "@yohi/justice/core";
+```
+
+| 用途                         | specifier                                                    | 破壊的変更                       |
+| ---------------------------- | ------------------------------------------------------------ | -------------------------------- |
+| OpenCode プラグイン          | `@yohi/justice`（3.0.0 以降）または `@yohi/justice/opencode` | なし（3.0.0 で修正済み）         |
+| ライブラリ（core）           | `@yohi/justice/core`                                         | **あり**（2.x の root から移動） |
+| ランタイム（NodeFileSystem） | `@yohi/justice/runtime`                                      | なし                             |
+
 ## 使い方
 
 インストール後、AI エージェントがメッセージ内でプランファイルを参照し、かつ委譲を表すキーワード（例: "plan.md から次のタスクを委譲して"）を含めた場合に、Justice は自動的にアクティブになります。

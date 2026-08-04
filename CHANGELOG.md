@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [3.0.0](https://github.com/yohi/justice/compare/v2.7.0...v3.0.0) (2026-08-02)
+
+### ⚠ BREAKING CHANGES
+
+- **distribution:** `exports["."]`（root specifier）の解決先を barrel（`dist/index.js`）から plugin 専用エントリ（`dist/opencode-plugin.js`）へ変更。OpenCode のプラグインローダはモジュールの全 export が「関数」または `{ server: 関数 }` であることを要求するため、barrel を指す root specifier は `TypeError: Plugin export is not a function` でロードに失敗していた（v2.7.0 以前は Justice が一度もロードされていなかった）。
+- **core:** ライブラリ named export（`PlanParser` / `TaskPackager` 等）の import 元は `@yohi/justice/core` へ移動。移行表は README を参照。
+
+### Bug Fixes
+
+- **distribution:** root specifier（`@yohi/justice`）経由でプラグインがロードされない致命的問題を修正（Issue #192 の真因）。
+
 ### ⚠ BREAKING CHANGES
 
 * **core:** The `createGlobalFs()` API in `src/index.ts` has been changed from synchronous to asynchronous. Its return type is now `Promise<CreateGlobalFsResult | null>` instead of `{ justiceDir: string; wisdomPath: string } | null`.
