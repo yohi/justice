@@ -26,15 +26,21 @@ jobs:
         run: bun run build
 
       - name: Run unit tests with coverage
-        run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --coverage.outputDir=./coverage/unit
+        run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
+
+      - name: Save unit coverage
+        run: mv coverage/lcov.info coverage/unit-lcov.info
 
       - name: Run integration tests with coverage
-        run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --config vitest.integration.config.ts --coverage.outputDir=./coverage/integration
+        run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --config vitest.integration.config.ts
+
+      - name: Save integration coverage
+        run: mv coverage/lcov.info coverage/integration-lcov.info
 
       - name: Merge coverage reports
         run: |
           mkdir -p coverage
-          cat ./coverage/unit/lcov.info ./coverage/integration/lcov.info > ./coverage/lcov.info
+          cat coverage/unit-lcov.info coverage/integration-lcov.info > coverage/lcov.info
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
