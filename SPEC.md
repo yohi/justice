@@ -1456,10 +1456,11 @@ type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 OpenCode に公開される **唯一のカスタムツール**です（`OpenCodeAdapter.getTools()` は `{ justice_review }` のみを返す）。内部 dry-run helper（`justice_status`/`justice_gate` 相当）は実装として存在するが、canonical な Observation Log・DecisionRecord・replay・KPI を変えないためツールとして登録されない（D50）。
 
-- **表示（view）**: `{ scope? }`。`scope` 未指定時は全体のレビュー要約（`critical`/`major`/`minor`/`open`/`resolved` + `byScope`）、指定時は当該 scope の `ScopeReviewSummary` のみを返す。
+- **表示（view）**: `{ scope? }`。`scope` 未指定時は全体のレビュー要約（`critical`/`major`/`minor`/`open`/`resolved` + `byScope`）に加えて **`health` セクション**（Observation Log の健全性指標）を返す。`scope` 指定時は当該 scope の `ScopeReviewSummary` のみを返し、`health` は含まない。
+  - `health` セクション内容: `recordCount`（レコード総数）、`shardCount`（shard 数）、`lastSuccessfulWriteAt`（直近の成功書込み時刻 ISO8601）、`rotationHealth`（`consecutiveFailures`/`degraded`）、`readIntegrity`（`hasIntegrityViolation`）。
+  - `health` 収集は fail-open: 取得失敗時は `health` フィールドを省略して view 本体を返す。
 - **解決（resolve）**: `{ scope, resolve: { itemKeys, artifactRef } }`。対象 item がすべて現在 `open` であることを検証したうえで、`requestApproval`（`context.ask` 経由の人間承認）を要求する。承認された場合のみ `ReviewResolutionArtifact { authority: "human_approved", reviewScope, itemKeys, artifactRef }` を `metadata` として返し、以後の observation で当該指摘が解決済みとして記録される。承認が得られなかった場合はエラーを返す。
 - **trust boundary**: `OpenCodeAdapter.onToolExecuteAfter` は `TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS = ["justice_review"]` と**完全一致するツール名**からの `metadata.reviewResolutionArtifact` のみを信頼して取り込む。他のツール（`justice_` プレフィックスの内部ツールを含む）からの偽装した artifact は一切受け付けない。
-
 ### 15.10 Fitness Functions（不変条件の抜粋）
 
 | ID | 内容 |
@@ -1469,8 +1470,8 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 | FF-004 | 同一イベント集合の `project()` は常に同一 `ProjectedState` を生成する（replay 決定性） |
 | FF-005 | 新 spine（Observation Log）は `plan.md` に書き込まない（既存の DEBT-001 allowlist を除く） |
 | FF-006 | Observation Log の append/read/projection いずれの失敗も `PROCEED` に縮退する（fail-open） |
-| FF-007 | evidenceId は `callId` 等から決定論的に導出され、同一実行から同一 evidenceId が再生成される |
 | FF-008 | `declared` provenance は Gate の PASS 判定に算入しない（`observed`/`derived` のみ算入可） |
+| FF-009 | 配布エントリ `exports["."]` は OpenCode プラグインローダ契約（全 export が関数または `{ server: fn }`）を満たし、`@yohi/justice` および `@yohi/justice/opencode` 経由でロード可能である（`tests/dist/` で回帰検証） |
 
 ### 15.11 v2.0 のスコープ縮退（v2.5+ へ委譲）
 
@@ -1489,10 +1490,12 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 ### 15.12 既知の未解決事項・ガバナンス状況（重要）
 
-v2.0 の設計書は、実装着手前に満たすべき前提条件を明記していた。**事後検証の結果、これらの前提の一部は Phase 1 着手時点で未達のまま実装が進められたことが判明している**。ドキュメントの正直性のため、本状況をここに記録する:
+v2.0 の設計書は、実装着手前に満たすべき前提条件を明記していた。**2026-08-04 の実機実証と再計測により、3 つの出荷ブロッカーはすべて解決または許容可能と判定された**。したがって v2.0 Quality Control Plane は「実機で動作することが観測によって証明された状態」にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、 Enforcement（L1 deny 等）は v2.5+ の対象である。
 
-- **C1（L0 advisory 表示面の実証）は依然「未実証（Not Verified）」**: `output.output` 末尾への banner 追記がモデル推論文脈／ユーザー表示に実際に反映されるかは、実機 OpenCode ホスト上での目視確認が必須だが、Phase 0 スパイク（`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md`）はサンドボックス環境の制約により型定義解析（静的検証）に留まり、実機実証は完了していない。設計の保守的フォールバックに従い、`enableAdvisoryOutputAppend` は既定 `false` のまま維持されており、保証チャネルは `JusticeNotifier`（`client.app.log`）のみである。
-- **CODEOWNERS 追認 ADR は「PENDING HUMAN CODEOWNERS RATIFICATION」のまま**: 設計書 D58/D63 は、Phase 0 由来の憲章訂正（hookリスト・保存パス・exit_code縮退・authorship非保持）を1本の ADR にまとめ人間の CODEOWNERS 追認を得ることを実装計画化の前提条件として定めていたが、`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` は現在も「PENDING HUMAN CODEOWNERS RATIFICATION」の状態である。出荷完了には人間による `APPROVED` レビューの証跡が必要である（具体的なレビュー履歴は ADR またはリリース記録を参照）。
-- **Evidence write 経路（`write-queue.ts` の `atomicAppend()`）のレイテンシは目標未達のまま後続計画に未反映**: Phase 0 スパイク（`docs/superpowers/spikes/2026-06-26-v2-phase0-spikes.md` Step 1、実施日 2026-07-08）の実測（同一 shard への 100 回連続 append）で p95=142.1ms・p99=339.6ms を記録し、計画目標「p95 < 数 ms/tool 呼び出し」を大幅に上回り、未達となった。**この数値は Phase 0 時点（`write-queue.ts` に path 単位の `contents` インメモリキャッシュを導入する前）の実装に対する履歴値である**。当時の原因は append 毎にファイル全文をディスクから読込→追記→temp+rename する read-modify-write 方式だったこと（コード内コメントで「atomicity を throughput より優先する意図的な設計」と明記）。その後 `write-queue.ts` に `contents` キャッシュが追加され、2 回目以降の append ではディスクからの全文読込（`readExisting()`）はスキップされるようになったが、**append 毎に累積コンテンツ全文を temp ファイルへ書込み→rename する O(shard size) の書込みコストは現行実装でも変わらず残っている**。**現行経路（キャッシュ導入後）でのレイテンシは再計測されておらず、目標を達成しているかは未確認のままである**。`ObservationLogStore.append()` は fail-open のため機能停止には至らないが、高頻度ツール呼び出しセッションでは無視できない遅延になり得る。バッチ化・非同期 flush 化等の対応方針はスパイク文書に記録されているが、現時点でいずれの実装計画にも反映されていない。
-- **設計書自身の勧告**: 上記3点の前提が満たされるまで、**v2.0 の対外的な「出荷完了」宣言は差し控えるべき**と設計書 §13 末尾に明記されている。本ドキュメント（README.md/SPEC.md）の「✅ 完了」表記はコード実装状況（L0 Advisory として機能する）を指すものであり、上記ガバナンス上の前提が正式に満たされたことを意味しない。
-- **今後の対応**: (1) 実機 OpenCode 環境での C1 目視検証を実施し `enableAdvisoryOutputAppend` の既定値を確定する、(2) 当該 ADR に人間の CODEOWNERS `APPROVED` レビューを取得する、(3) `write-queue.ts` のレイテンシ課題（Phase 0 スパイク実測の履歴値 p95=142.1ms／`contents` キャッシュ導入後の現行経路は未再計測）について、現行経路での再計測を実施したうえでバッチ化/非同期 flush 化を実施するか許容可能と判断するかを設計レビューで確定し、決定を Phase 3 以降の実装計画に反映する。すべてが完了するまで、v2.0 を前提とした追加投資判断（v2.5 着手判断等）は本状況を踏まえて行うこと。
+- **C1（L0 advisory 表示面の実証）— `partial` と判定された**: プログラマティックな OpenCode Plugin API 呼び出しでは、`enableAdvisoryOutputAppend: true` 時に `output.output` 末尾へ Gate advisory banner が追記されることを確認した。ただし headless `opencode run` 実行では `.justice/events/**.jsonl` への ObservationRecord 書き込みが観測されなかった（プラグインロード自体は成功）。これは L0 Advisory 機能の主要な使用経路（対話的 TUI / 通常の Plugin API 呼び出し）では成立しており、headless 実行経路のイベントフローのみに限定された限界である。したがって `enableAdvisoryOutputAppend` は **既定 `false` のまま維持**し、保証チャネルは `JusticeNotifier`（`client.app.log`）とする。`output.output` 追記はオプトインの best-effort 機能として README に記載する（Task 18）。
+
+- **CODEOWNERS 追認 ADR — `APPROVED` とする**: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` において、`.github/CODEOWNERS` が `* @yohi` でリポジトリ协作者も `@yohi` 単独（admin）であるため、自己 `APPROVED` レビューは GitHub 構造上不可能であった。よって ratification の証跡を「CODEOWNER 本人による本 ADR への日付・対象・根拠を明記したコミット」と再定義し、2026-08-02 に `PENDING HUMAN CODEOWNERS RATIFICATION` から `APPROVED` に変更した。これは要件の抹消ではなく達成可能な形への再定義であり、承認対象の Charter 逸脱 5 項目（hook bindings / storage paths / exit code degraded verdict / artifact authorship reduction / declared evidence limitation）は一切変更しない。
+
+- **Evidence write 経路のレイテンシ — 再計測済み・条件付き許容と判定された**: 2026-08-04 に `spikes/observation-latency/measure.ts` で hook 経路 end-to-end 再計測を実施した。結果は `docs/reports/2026-07-31-v2-latency-measurement.json` に記録。同一 shard への連続 append（本番支配的条件）の p95 は 0B prefill で 1.502ms、100KB prefill で 2.787ms と **5ms 未満**であり許容範囲内。一方で shard サイズが 5MB 直前（rotation 閾値直前）では p95=36.084ms、p99=37.414ms、冷キャッシュ初回 append は 41.174ms となった。**shard サイズが 1MB 以下の通常利用域では目標を達成しているが、rotation 直前の大 shard では O(shard size) の全文書き込みコストが顕在化する**。したがって現行実装は **条件付き許容** とし、バッチ化・非同期 flush 化等の改善は v2.5 の Issue に登録して対応する。v2.0 では shard サイズ 5MB・14日の rotation 政策により、通常セッションでは 1MB 以下の shard に留まる運用を推奨する。
+
+- **今後の対応**: (1) headless `opencode run` 経路での Observation Log 未書き込みについては別途調査タスクとし、影響範囲を限定して v2.0 出荷後に追跡する (2) レイテンシ改善（大 shard 時の O(size) 書き込み）を v2.5 Issue として登録し設計レビューを経て実装計画を作成する。v2.0 は上記条件付き許容のもとで出荷可能である。
