@@ -57,73 +57,109 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** 文字列リテラル内を壊さないよう、文字列を認識してコメントと末尾カンマを除去する。 */
+type JsoncState = {
+  out: string;
+  inString: boolean;
+};
+
+/** Append ch to out; if it is a backslash, also append the next character and skip it. */
+function appendStringChar(state: JsoncState, content: string, i: number): number {
+  const ch = content[i]!;
+  state.out += ch;
+  if (ch === "\\") {
+    const next = content[i + 1];
+    if (next !== undefined) {
+      state.out += next;
+      return i + 2;
+    }
+  }
+  if (ch === '"') {
+    state.inString = false;
+  }
+  return i + 1;
+}
+
+/** Skip to the end of a line comment and preserve a newline in the output. */
+function skipLineComment(content: string, start: number): number {
+  let i = start;
+  while (i < content.length && content[i] !== "\n") i++;
+  return i;
+}
+
+/** Skip to the end of a block comment, throwing if it is unterminated. */
+function skipBlockComment(content: string, start: number): number {
+  let i = start + 2;
+  while (i < content.length && !(content[i] === "*" && content[i + 1] === "/")) i++;
+  if (i >= content.length) {
+    throw new Error(`Unterminated block comment starting at position ${start}`);
+  }
+  return i + 1;
+}
+
+/** Read whitespace and comments, returning the index of the first non-junk character. */
+function skipJunk(content: string, start: number): number {
+  let j = start;
+  while (j < content.length) {
+    const peek = content[j]!;
+    const peekNext = content[j + 1];
+    if (/\s/.test(peek)) {
+      j++;
+      continue;
+    }
+    if (peek === "/" && peekNext === "/") {
+      while (j < content.length && content[j] !== "\n") j++;
+      continue;
+    }
+    if (peek === "/" && peekNext === "*") {
+      j += 2;
+      while (j < content.length && !(content[j] === "*" && content[j + 1] === "/")) j++;
+      if (j >= content.length) break;
+      j += 2;
+      continue;
+    }
+    break;
+  }
+  return j;
+}
+
+/** 文字列リテラル内を壊さないよう、文字列を認識してコメントと末尾カンマを除去する。 */
 function stripJsoncComments(content: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < content.length; i++) {
+  const state: JsoncState = { out: "", inString: false };
+  let i = 0;
+  while (i < content.length) {
     const ch = content[i]!;
     const next = content[i + 1];
-    if (inString) {
-      out += ch;
-      if (ch === "\\" && next !== undefined) {
-        out += next;
-        i++;
-        continue;
-      }
-      if (ch === '"') inString = false;
+    if (state.inString) {
+      i = appendStringChar(state, content, i);
       continue;
     }
     if (ch === '"') {
-      inString = true;
-      out += ch;
+      state.inString = true;
+      state.out += ch;
+      i++;
       continue;
     }
     if (ch === "/" && next === "/") {
-      while (i < content.length && content[i] !== "\n") i++;
-      out += "\n";
+      i = skipLineComment(content, i);
+      state.out += "\n";
       continue;
     }
     if (ch === "/" && next === "*") {
-      const start = i;
-      i += 2;
-      while (i < content.length && !(content[i] === "*" && content[i + 1] === "/")) i++;
-      if (i >= content.length) {
-        throw new Error(`Unterminated block comment starting at position ${start}`);
-      }
-      i++;
+      i = skipBlockComment(content, i);
       continue;
     }
     // 文字列外の末尾カンマのみ除去する（空白・コメントを飛ばした直後が `}` または `]`）。
     if (ch === ",") {
-      let j = i + 1;
-      while (j < content.length) {
-        const peek = content[j]!;
-        const peekNext = content[j + 1];
-        if (/\s/.test(peek)) {
-          j++;
-          continue;
-        }
-        if (peek === "/" && peekNext === "/") {
-          while (j < content.length && content[j] !== "\n") j++;
-          continue;
-        }
-        if (peek === "/" && peekNext === "*") {
-          j += 2;
-          while (j < content.length && !(content[j] === "*" && content[j + 1] === "/")) j++;
-          if (j >= content.length) break;
-          j += 2;
-          continue;
-        }
-        break;
-      }
+      const j = skipJunk(content, i + 1);
       if (content[j] === "}" || content[j] === "]") {
-        i = j - 1;
+        i = j;
         continue;
       }
     }
-    out += ch;
+    state.out += ch;
+    i++;
   }
-  return out;
+  return state.out;
 }
 
 export function parseJsonc(
@@ -192,7 +228,7 @@ export function scanConfigContent(source: ConfigSourceId, content: string): Sour
         specifiers.push({
           specifier: entry[0],
           optionsPresent: true,
-          optionKeys: Object.keys(entry[1]).sort(),
+          optionKeys: Object.keys(entry[1]).sort((a, b) => a.localeCompare(b)),
         });
       }
       continue;
@@ -208,7 +244,7 @@ export function scanUnreadableSource(
   rawContent?: string,
 ): SourceScanResult {
   const diagnostics: ConfigDiagnostic[] =
-    rawContent !== undefined && rawContent.includes("@yohi/justice")
+    rawContent?.includes("@yohi/justice")
       ? [{ code: "unsupported_config_source", source }]
       : [];
   return { source, readable: false, specifiers: [], diagnostics };
@@ -223,7 +259,8 @@ function dedupeKey(specifier: string): string {
     "/",
     specifier.startsWith("@") ? specifier.indexOf("/", 1) + 1 : 0,
   );
-  const cut = [versionAt, subpathSlash].filter((i) => i > 0).sort((a, b) => a - b)[0];
+  const candidates = [versionAt, subpathSlash].filter((i) => i > 0);
+  const cut = candidates.length === 0 ? undefined : Math.min(...candidates);
   return cut === undefined ? specifier : specifier.slice(0, cut);
 }
 
