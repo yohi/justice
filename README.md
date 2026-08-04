@@ -592,9 +592,9 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 | 7 | プラグインオーケストレーターとランタイム | ✅ 完了 |
 | 8 | OpenCode Plugin 統合 (`@yohi/justice/opencode` エントリ) | ✅ 完了 (v1.2.0) |
 | 9 | 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
-| 10 | v2.0 Quality Control Plane 基盤 (Observation Log / Gate Engine / Review Aggregator) | 🟡 実装完了・ガバナンス未完了（※1） |
+| 10 | v2.0 Quality Control Plane 基盤 (Observation Log / Gate Engine / Review Aggregator) | ✅ 完了 (v3.0.0) |
 
-※1: L0 Advisoryとしてコードは実装・動作していますが、(a) `output.output` への advisory 反映の実機検証（C1）が未完了、(b) 憲章乖離 ADR（`docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md`）の人間 CODEOWNERS 承認が未取得（現在 `PENDING HUMAN CODEOWNERS RATIFICATION`）のため、設計上の前提条件は未充足です。詳細は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要) を参照してください。
+※1: v2.0 Quality Control Plane は L0 Advisory として実装完了し、2026-08-04 の実機実証・レイテンシ再計測・ADR ratification により出荷完了条件が充足されました。ただし `enableAdvisoryOutputAppend`（`output.output` への banner 追記）はオプトインの best-effort 機能として既定 `false` のまま維持され、headless `opencode run` 経路では `.justice/events` への ObservationRecord 書き込みが観測されなかった限界があります。詳細は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要) を参照してください。
 
 ## ドキュメント
 
