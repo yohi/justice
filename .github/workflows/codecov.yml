@@ -29,18 +29,18 @@ jobs:
         run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
 
       - name: Save unit coverage
-        run: mv coverage/lcov.info coverage/unit-lcov.info
+        run: mv coverage/lcov.info /tmp/unit-lcov.info
 
       - name: Run integration tests with coverage
         run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --config vitest.integration.config.ts
 
       - name: Save integration coverage
-        run: mv coverage/lcov.info coverage/integration-lcov.info
+        run: mv coverage/lcov.info /tmp/integration-lcov.info
 
       - name: Merge coverage reports
         run: |
           mkdir -p coverage
-          cat coverage/unit-lcov.info coverage/integration-lcov.info > coverage/lcov.info
+          cat /tmp/unit-lcov.info /tmp/integration-lcov.info > coverage/lcov.info
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
