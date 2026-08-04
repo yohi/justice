@@ -140,7 +140,7 @@ describe("resolveSpecifier()", () => {
     expect(!result.ok && result.code).toBe("entry_file_missing");
   });
 
-  it("reports entry_file_missing for a missing absolute path", async () => {
+  it("reports entry_file_missing for a missing absolute path with empty mock", async () => {
     const result = await resolveSpecifier(normalizeSpecifier("/abs/missing.js"), {
       fileReader: createMockFileReader({}),
       cacheRoot: CACHE,

@@ -18,7 +18,7 @@ export function scanOpenCodeLogText(text: string): OpenCodeLogScan {
   let lastJusticeInitialized: string | undefined;
   for (const line of text.split("\n")) {
     if (line.includes("failed to load plugin")) {
-      const pathMatch = line.match(/path=([^\s]+)/);
+      const pathMatch = /path=([^\s]+)/.exec(line);
       const pathValue = pathMatch?.[1] ?? "";
       if (pathValue.toLowerCase().includes("justice")) {
         failedToLoadPluginCount++;
