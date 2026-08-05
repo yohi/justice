@@ -1,6 +1,7 @@
 // tests/core/justice-doctor-config.test.ts
 import { describe, expect, it } from "vitest";
 import {
+  isJusticeSpecifier,
   mergeSourceScans,
   parseJsonc,
   scanConfigContent,
@@ -105,6 +106,19 @@ describe("scanConfigContent()", () => {
       `{"plugin": ["/home/user/justice/dist/opencode-plugin.js"]}`,
     );
     expect(result.specifiers[0]?.specifier).toBe("/home/user/justice/dist/opencode-plugin.js");
+  });
+});
+
+describe("isJusticeSpecifier()", () => {
+  it("rejects absolute paths where 'justice' appears only as a substring in another segment", () => {
+    expect(isJusticeSpecifier("/home/user/injustice-report/index.ts")).toBe(false);
+    expect(isJusticeSpecifier("/usr/local/lib/no-justice-helper/lib.js")).toBe(false);
+  });
+
+  it("accepts absolute paths whose basename or a segment is justice or starts with justice-", () => {
+    expect(isJusticeSpecifier("/home/user/justice/dist/opencode-plugin.js")).toBe(true);
+    expect(isJusticeSpecifier("/path/to/justice-plugin/index.js")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice-v2/opencode-plugin.js")).toBe(true);
   });
 });
 

@@ -190,12 +190,15 @@ export function parseJsonc(
   }
 }
 
-function isJusticeSpecifier(value: string): boolean {
+export function isJusticeSpecifier(value: string): boolean {
   return (
     value === "@yohi/justice" ||
     value.startsWith("@yohi/justice@") ||
     value.startsWith("@yohi/justice/") ||
-    (value.startsWith("/") && value.includes("justice"))
+    (value.startsWith("/") &&
+      value.split("/").some(
+        (segment) => segment === "justice" || segment.startsWith("justice-"),
+      ))
   );
 }
 

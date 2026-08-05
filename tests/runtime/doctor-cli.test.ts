@@ -1,6 +1,10 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import { runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import {
+  resolveCacheRoot,
+  runDoctor,
+  type DoctorDeps,
+} from "../../src/runtime/doctor-cli";
 import {
   formatConfigDiagnostics,
   formatContractResult,
@@ -288,7 +292,7 @@ describe("runDoctor()", () => {
     ).toBe(true);
 
     const logLines = await formatLogScanLines(baseDeps({ logPaths: ["/missing.log"] }));
-    expect(logLines).toContain("  /missing.log: 読み込めません");
+    expect(logLines).toContain("  /missing.log: 読み込めません (ENOENT: /missing.log)");
   });
 
   it("resolves a healthy specifier through resolveAndCheckSpecifier", async () => {
@@ -302,5 +306,19 @@ describe("runDoctor()", () => {
     );
     expect(section.failed).toBe(false);
     expect(section.lines).toContain("  ✓ ローダ契約 OK（plugin factory: 1 件）");
+  });
+});
+
+describe("resolveCacheRoot()", () => {
+  it("falls back to ~/.cache when XDG_CACHE_HOME is empty", () => {
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "" }, "/home/user")).toBe("/home/user/.cache/opencode");
+  });
+
+  it("uses XDG_CACHE_HOME when set", () => {
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "/tmp/cache" }, "/home/user")).toBe("/tmp/cache/opencode");
+  });
+
+  it("falls back to ~/.cache when XDG_CACHE_HOME is undefined", () => {
+    expect(resolveCacheRoot({}, "/home/user")).toBe("/home/user/.cache/opencode");
   });
 });

@@ -4,11 +4,14 @@
 // runDoctor から分離し、認知複雑度を抑える。
 
 import type { ConfigDiagnostic, JusticePluginSpecifier } from "../core/doctor-config";
+import { isJusticeSpecifier } from "../core/doctor-config";
 import type { LoaderContractResult } from "../core/loader-contract";
 import type { DoctorDeps } from "./doctor-cli";
 import { normalizeSpecifier, resolveSpecifier } from "../core/doctor-specifier";
 import { checkLoaderContract } from "../core/loader-contract";
 import { scanOpenCodeLogText } from "../core/doctor-logs";
+
+export { isJusticeSpecifier };
 
 type SpecifierSection = {
   readonly failed: boolean;
@@ -42,7 +45,7 @@ export async function resolveAndCheckSpecifier(
     const moduleExports = await deps.importer(entryFile);
     const contract = checkLoaderContract(moduleExports);
     const contractLines = formatContractResult(contract);
-    const failed = contractLines.some((l) => l.startsWith("  ✗"));
+    const failed = !contract.ok;
     lines.push(...contractLines);
     return { failed, lines };
   } catch (error) {
@@ -96,31 +99,25 @@ export function formatContractResult(contract: LoaderContractResult): readonly s
 }
 
 export async function formatLogScanLines(deps: DoctorDeps): Promise<readonly string[]> {
-  const lines: string[] = [];
-  for (const logPath of deps.logPaths) {
-    try {
-      const scan = scanOpenCodeLogText(await deps.fileReader.readFile(logPath));
-      const summary = `  ${logPath}: failed_to_load=${scan.failedToLoadPluginCount} 件 / initialized=${scan.justiceInitializedCount} 件`;
-      const details: string[] = [];
-      if (scan.lastFailedToLoadPlugin !== undefined) {
-        details.push(`    直近の失敗: ${scan.lastFailedToLoadPlugin}`);
+  const summaries = await Promise.all(
+    deps.logPaths.map(async (logPath) => {
+      try {
+        const scan = scanOpenCodeLogText(await deps.fileReader.readFile(logPath));
+        const summary = `  ${logPath}: failed_to_load=${scan.failedToLoadPluginCount} 件 / initialized=${scan.justiceInitializedCount} 件`;
+        const details: string[] = [];
+        if (scan.lastFailedToLoadPlugin !== undefined) {
+          details.push(`    直近の失敗: ${scan.lastFailedToLoadPlugin}`);
+        }
+        if (scan.lastJusticeInitialized !== undefined) {
+          details.push(`    直近の初期化: ${scan.lastJusticeInitialized}`);
+        }
+        return [summary, ...details];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return [`  ${logPath}: 読み込めません (${message})`];
       }
-      if (scan.lastJusticeInitialized !== undefined) {
-        details.push(`    直近の初期化: ${scan.lastJusticeInitialized}`);
-      }
-      lines.push(summary, ...details);
-    } catch {
-      lines.push(`  ${logPath}: 読み込めません`);
-    }
-  }
-  return lines;
+    }),
+  );
+  return summaries.flat();
 }
 
-export function isJusticeSpecifier(specifier: string): boolean {
-  return (
-    specifier === "@yohi/justice" ||
-    specifier.startsWith("@yohi/justice@") ||
-    specifier.startsWith("@yohi/justice/") ||
-    (specifier.startsWith("/") && specifier.includes("justice"))
-  );
-}

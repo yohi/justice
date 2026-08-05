@@ -14,13 +14,13 @@ import {
   mergeSourceScans,
   scanConfigContent,
   scanUnreadableSource,
+  isJusticeSpecifier,
   type ConfigSourceId,
   type SourceScanResult,
 } from "../core/doctor-config";
 import {
   formatConfigDiagnostics,
   formatLogScanLines,
-  isJusticeSpecifier,
   resolveAndCheckSpecifier,
 } from "./doctor-cli-helpers";
 import { SecretPatternDetector } from "../core/secret-pattern-detector";
@@ -87,21 +87,23 @@ export function configCandidates(deps: DoctorDeps): readonly ConfigCandidate[] {
 }
 
 async function scanAllSources(deps: DoctorDeps): Promise<readonly SourceScanResult[]> {
-  const scans: SourceScanResult[] = [];
-  for (const candidate of configCandidates(deps)) {
-    if (!candidate.readable) {
-      scans.push(scanUnreadableSource(candidate.source, candidate.rawContent));
-      continue;
-    }
-    if (candidate.path === undefined) continue;
-    try {
-      scans.push(
-        scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path)),
-      );
-    } catch {
-      // 読めない設定ファイルは存在しないものとして扱う（例外で落とさない）。
-    }
-  }
+  const candidates = configCandidates(deps);
+  const scans = await Promise.all(
+    candidates.map(async (candidate) => {
+      if (!candidate.readable) {
+        return scanUnreadableSource(candidate.source, candidate.rawContent);
+      }
+      if (candidate.path === undefined) {
+        return { source: candidate.source, readable: true, specifiers: [], diagnostics: [] };
+      }
+      try {
+        return scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path));
+      } catch {
+        // 読めない設定ファイルは存在しないものとして扱う（例外で落とさない）。
+        return { source: candidate.source, readable: true, specifiers: [], diagnostics: [] };
+      }
+    }),
+  );
   return scans;
 }
 
@@ -109,19 +111,21 @@ async function summarizeObservationData(deps: DoctorDeps): Promise<string> {
   const eventsRoot = `${deps.cwd}/.justice/events`;
   const shards = (await deps.fileReader.listFiles(eventsRoot)).filter((p) => p.endsWith(".jsonl"));
   if (shards.length === 0) return "  .justice/events: なし（未観測）";
-  let recordCount = 0;
-  let lastWriteMs = 0;
-  for (const shard of shards) {
-    try {
-      recordCount += (await deps.fileReader.readFile(shard))
-        .split("\n")
-        .filter((l) => l.trim()).length;
-    } catch {
-      // 読めない shard は件数から除外（診断は best-effort）。
-    }
-    const stats = await deps.fileReader.readFileStats(shard);
-    if (stats !== null && stats.mtimeMs > lastWriteMs) lastWriteMs = stats.mtimeMs;
-  }
+  const results = await Promise.all(
+    shards.map(async (shard) => {
+      try {
+        const content = await deps.fileReader.readFile(shard);
+        const recordCount = content.split("\n").filter((l) => l.trim()).length;
+        const stats = await deps.fileReader.readFileStats(shard);
+        return { recordCount, mtimeMs: stats?.mtimeMs ?? 0 };
+      } catch {
+        // 読めない shard は件数・更新日時から除外（診断は best-effort）。
+        return { recordCount: 0, mtimeMs: 0 };
+      }
+    }),
+  );
+  const recordCount = results.reduce((sum, r) => sum + r.recordCount, 0);
+  const lastWriteMs = results.reduce((max, r) => Math.max(max, r.mtimeMs), 0);
   const lastWrite = lastWriteMs > 0 ? new Date(lastWriteMs).toISOString() : "不明";
   return `  .justice/events: shard ${shards.length} 件 / レコード ${recordCount} 件 / 最終書込 ${lastWrite}`;
 }
@@ -243,6 +247,16 @@ async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<
 }
 
 /* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
+export function resolveCacheRoot(
+  env: { readonly [key: string]: string | undefined },
+  home: string,
+): string {
+  const xdgCache = env.XDG_CACHE_HOME;
+  const cacheBase = xdgCache === undefined || xdgCache === "" ? `${home}/.cache` : xdgCache;
+  return `${cacheBase}/opencode`;
+}
+
+/* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
 export async function main(argv: readonly string[]): Promise<number> {
   if (argv[0] !== "doctor") {
     process.stderr.write("usage: justice doctor\n");
@@ -250,9 +264,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   const env = process.env;
   const home = env.HOME ?? homedir();
-  const xdgCache = env.XDG_CACHE_HOME;
-  const cacheBase = xdgCache === undefined ? `${home}/.cache` : xdgCache;
-  const cacheRoot = `${cacheBase}/opencode`;
+  const cacheRoot = resolveCacheRoot(env, home);
   const report = await runDoctor({
     fileReader: createCliFileReader(),
     env,

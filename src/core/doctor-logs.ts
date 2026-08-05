@@ -32,8 +32,8 @@ export function scanOpenCodeLogText(text: string): OpenCodeLogScan {
   }
   return {
     failedToLoadPluginCount,
-    ...(lastFailedToLoadPlugin === undefined ? {} : { lastFailedToLoadPlugin }),
+    lastFailedToLoadPlugin,
     justiceInitializedCount,
-    ...(lastJusticeInitialized === undefined ? {} : { lastJusticeInitialized }),
+    lastJusticeInitialized,
   };
 }
