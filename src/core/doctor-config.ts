@@ -185,6 +185,23 @@ export function parseJsonc(
   }
 }
 
+function rawContentMentionsJusticeSpecifier(rawContent: string): boolean {
+  const marker = "@yohi/justice";
+  let i = rawContent.indexOf(marker);
+  while (i !== -1) {
+    const before = rawContent.charAt(i - 1);
+    const afterIndex = i + marker.length;
+    const after = rawContent.charAt(afterIndex);
+    const quoted = before === '"' || before === "'";
+    const terminatedOrContinued = after === '"' || after === "'" || after === "/" || after === "@";
+    if (quoted && terminatedOrContinued) {
+      return true;
+    }
+    i = rawContent.indexOf(marker, afterIndex);
+  }
+  return false;
+}
+
 /**
  * ローカルパス指定の justice plugin かどうか判定する。
  * 判定対象はパスの末尾セグメント（ファイル名またはディレクトリ名）のみとし、
@@ -299,8 +316,9 @@ export function scanUnreadableSource(
     }
     return { source, readable: false, specifiers: [], diagnostics: [] };
   }
-  // parse 失敗時は文字列部分一致でフォールバック
-  const hasJustice = rawContent.includes("@yohi/justice");
+  // parse 失敗時は文字列リテラルとして出現する justice specifier のみを検出し、
+  // コメント等に含まれる '@yohi/justice' という単純な部分文字列による誤検出を防ぐ。
+  const hasJustice = rawContentMentionsJusticeSpecifier(rawContent);
   return {
     source,
     readable: false,
