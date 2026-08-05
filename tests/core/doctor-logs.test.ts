@@ -38,6 +38,20 @@ describe("scanOpenCodeLogText()", () => {
     );
     expect(result.failedToLoadPluginCount).toBe(0);
   });
+  it("ignores load failures when the path contains 'justice' as a substring but is not a justice specifier", () => {
+    const result = scanOpenCodeLogText(
+      `level=ERROR message="failed to load plugin" path=some-other-justice-tool@1.0 error="boom"`,
+    );
+    expect(result.failedToLoadPluginCount).toBe(0);
+  });
+
+  it("counts load failures for absolute paths whose directory is named 'justice' or 'justice-*'", () => {
+    const result = scanOpenCodeLogText(
+      `level=ERROR message="failed to load plugin" path=/srv/justice-monitor/index.js error="boom"`,
+    );
+    expect(result.failedToLoadPluginCount).toBe(1);
+  });
+
 
   it("ignores load failures when path= is missing", () => {
     const result = scanOpenCodeLogText(

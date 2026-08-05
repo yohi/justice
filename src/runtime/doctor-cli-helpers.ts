@@ -28,9 +28,10 @@ export async function resolveAndCheckSpecifier(
     cacheRoot: deps.cacheRoot,
   });
   if (!resolution.ok) {
-    const candidateHint = resolution.candidates
-      ? `（候補: ${resolution.candidates.join(", ")}）`
-      : "";
+    const candidateHint =
+      resolution.candidates !== undefined && resolution.candidates.length > 0
+        ? `（候補: ${resolution.candidates.join(", ")}）`
+        : "";
     return {
       failed: true,
       lines: [

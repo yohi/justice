@@ -4,6 +4,8 @@
 // OpenCode ログを走査し `failed to load plugin` / `Justice initialized` の有無・回数・
 // 直近行を報告する。
 
+import { isJusticeSpecifier } from "./doctor-config";
+
 export type OpenCodeLogScan = {
   readonly failedToLoadPluginCount: number;
   readonly lastFailedToLoadPlugin?: string;
@@ -20,7 +22,7 @@ export function scanOpenCodeLogText(text: string): OpenCodeLogScan {
     if (line.includes("failed to load plugin")) {
       const pathMatch = /path=([^\s]+)/.exec(line);
       const pathValue = pathMatch?.[1] ?? "";
-      if (pathValue.toLowerCase().includes("justice")) {
+      if (isJusticeSpecifier(pathValue)) {
         failedToLoadPluginCount++;
         lastFailedToLoadPlugin = line.trim();
       }
