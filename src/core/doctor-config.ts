@@ -12,7 +12,8 @@ export type ConfigSourceId =
   | "dot_opencode"
   | "env_config_dir"
   | "env_config_content"
-  | "managed";
+  | "managed"
+  | "merged";
 
 /** 設計書 §9.1.0 の優先順位表。昇順（低→高）にマージし、後から読まれた高優先度側が勝つ。 */
 export const SOURCE_PRIORITY: Readonly<Record<ConfigSourceId, number>> = {
@@ -24,6 +25,7 @@ export const SOURCE_PRIORITY: Readonly<Record<ConfigSourceId, number>> = {
   env_config_dir: 6,
   env_config_content: 7, // 検出のみ
   managed: 8, // 検出のみ
+  merged: 9, // マージ結果由来の診断
 };
 
 export type JusticePluginSpecifier = {
@@ -58,18 +60,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** 文字列リテラル内を壊さないよう、文字列を認識してコメントと末尾カンマを除去する。 */
 type JsoncState = {
-  out: string;
+  out: string[];
   inString: boolean;
 };
 
 /** Process the next character while inside a JSON string literal. */
 function appendStringChar(state: JsoncState, content: string, i: number): number {
   const ch = content[i]!;
-  state.out += ch;
+  state.out.push(ch);
   if (ch === "\\") {
     const next = content[i + 1];
     if (next !== undefined) {
-      state.out += next;
+      state.out.push(next);
       return i + 2;
     }
   }
@@ -125,17 +127,14 @@ function skipJunk(content: string, start: number): number {
 type JsoncToken =
   | { kind: "append"; ch: string }
   | { kind: "stringStart" }
-  | { kind: "lineComment" }
   | { kind: "blockComment" }
-  | { kind: "trailingComma"; nextIndex: number }
-  | { kind: "skip" };
+  | { kind: "trailingComma"; nextIndex: number };
 
 function classifyToken(state: JsoncState, content: string, i: number): JsoncToken {
   const ch = content[i]!;
   const next = content[i + 1];
   if (state.inString) return { kind: "append", ch };
   if (ch === '"') return { kind: "stringStart" };
-  if (ch === "/" && next === "/") return { kind: "lineComment" };
   if (ch === "/" && next === "*") return { kind: "blockComment" };
   if (ch === ",") {
     const j = skipJunk(content, i + 1);
@@ -147,36 +146,32 @@ function classifyToken(state: JsoncState, content: string, i: number): JsoncToke
 function applyToken(state: JsoncState, content: string, i: number, token: JsoncToken): number {
   switch (token.kind) {
     case "append":
-      state.out += token.ch;
+      state.out.push(token.ch);
       return i + 1;
     case "stringStart":
       state.inString = true;
-      state.out += '"';
+      state.out.push('"');
       return i + 1;
-    case "lineComment":
-      return skipLineComment(content, i);
     case "blockComment":
       return skipBlockComment(content, i);
     case "trailingComma":
       return token.nextIndex;
-    case "skip":
-      return i + 1;
   }
 }
 
 function stripJsoncComments(content: string): string {
-  const state: JsoncState = { out: "", inString: false };
+  const state: JsoncState = { out: [], inString: false };
   let i = 0;
   while (i < content.length) {
-    const token = classifyToken(state, content, i);
-    if (token.kind === "lineComment") {
+    if (!state.inString && content[i] === "/" && content[i + 1] === "/") {
       i = skipLineComment(content, i);
-      state.out += "\n";
+      state.out.push("\n");
       continue;
     }
+    const token = classifyToken(state, content, i);
     i = state.inString ? appendStringChar(state, content, i) : applyToken(state, content, i, token);
   }
-  return state.out;
+  return state.out.join("");
 }
 
 export function parseJsonc(
@@ -190,15 +185,23 @@ export function parseJsonc(
   }
 }
 
+/**
+ * ローカルパス指定の justice plugin かどうか判定する。
+ * 判定対象はパスの末尾セグメント（ファイル名またはディレクトリ名）のみとし、
+ * 途中の無関係な "justice" 文字列による誤判定を防ぐ。
+ */
+function isLocalJusticePath(value: string): boolean {
+  const segments = value.split("/").filter((segment) => segment.length > 0);
+  const lastSegment = segments[segments.length - 1];
+  return lastSegment === "justice" || (lastSegment?.startsWith("justice-") ?? false);
+}
+
 export function isJusticeSpecifier(value: string): boolean {
   return (
     value === "@yohi/justice" ||
     value.startsWith("@yohi/justice@") ||
     value.startsWith("@yohi/justice/") ||
-    (value.startsWith("/") &&
-      value.split("/").some(
-        (segment) => segment === "justice" || segment.startsWith("justice-"),
-      ))
+    (value.startsWith("/") && isLocalJusticePath(value))
   );
 }
 
@@ -222,7 +225,7 @@ function extractSpecifier(
     return {
       specifier: entry[0],
       optionsPresent: true,
-      optionKeys: Object.keys(entry[1]).sort((a, b) => a.localeCompare(b)),
+      optionKeys: Object.keys(entry[1]).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     };
   }
   diagnostics.push({ code: "invalid_plugin_entry", source, detail: JSON.stringify(entry) });
@@ -265,15 +268,45 @@ export function scanConfigContent(source: ConfigSourceId, content: string): Sour
   return { source, readable: true, specifiers, diagnostics };
 }
 
+function pluginEntryMentionsJustice(entry: unknown): boolean {
+  if (typeof entry === "string") return isJusticeSpecifier(entry);
+  if (Array.isArray(entry) && entry.length >= 1 && typeof entry[0] === "string") {
+    return isJusticeSpecifier(entry[0]);
+  }
+  return false;
+}
+
 /** remote / managed / OPENCODE_CONFIG_CONTENT 等、doctor が読み込めないソースの検出専用走査。 */
 export function scanUnreadableSource(
   source: ConfigSourceId,
   rawContent?: string,
 ): SourceScanResult {
-  const diagnostics: ConfigDiagnostic[] = rawContent?.includes("@yohi/justice")
-    ? [{ code: "unsupported_config_source", source }]
-    : [];
-  return { source, readable: false, specifiers: [], diagnostics };
+  if (rawContent === undefined) {
+    return { source, readable: false, specifiers: [], diagnostics: [] };
+  }
+  const parsed = parseJsonc(rawContent);
+  if (parsed.ok) {
+    if (isRecord(parsed.value) && Array.isArray(parsed.value.plugin)) {
+      const hasJustice = (parsed.value.plugin as unknown[]).some(pluginEntryMentionsJustice);
+      if (hasJustice) {
+        return {
+          source,
+          readable: false,
+          specifiers: [],
+          diagnostics: [{ code: "unsupported_config_source", source }],
+        };
+      }
+    }
+    return { source, readable: false, specifiers: [], diagnostics: [] };
+  }
+  // parse 失敗時は文字列部分一致でフォールバック
+  const hasJustice = rawContent.includes("@yohi/justice");
+  return {
+    source,
+    readable: false,
+    specifiers: [],
+    diagnostics: hasJustice ? [{ code: "unsupported_config_source", source }] : [],
+  };
 }
 
 /** plugin エントリの重複除去キー。同一 npm パッケージ名または同一ローカルパスで潰す。 */
@@ -305,7 +338,7 @@ export function mergeSourceScans(scans: readonly SourceScanResult[]): {
   }
   const specifiers = [...byKey.values()];
   if (!specifiers.some((s) => isJusticeSpecifier(s.specifier))) {
-    diagnostics.push({ code: "justice_not_found_in_config", source: "global" });
+    diagnostics.push({ code: "justice_not_found_in_config", source: "merged" });
   }
   return { specifiers, diagnostics };
 }
