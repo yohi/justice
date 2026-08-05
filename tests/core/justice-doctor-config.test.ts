@@ -100,12 +100,12 @@ describe("scanConfigContent()", () => {
     expect(result.specifiers).toHaveLength(1);
   });
 
-  it("detects absolute-path registrations containing justice", () => {
+  it("detects absolute-path registrations whose basename is justice or starts with justice-", () => {
     const result = scanConfigContent(
       "project",
-      `{"plugin": ["/home/user/justice/dist/opencode-plugin.js"]}`,
+      `{"plugin": ["/home/user/justice"]}`
     );
-    expect(result.specifiers[0]?.specifier).toBe("/home/user/justice/dist/opencode-plugin.js");
+    expect(result.specifiers[0]?.specifier).toBe("/home/user/justice");
   });
 });
 
@@ -115,10 +115,10 @@ describe("isJusticeSpecifier()", () => {
     expect(isJusticeSpecifier("/usr/local/lib/no-justice-helper/lib.js")).toBe(false);
   });
 
-  it("accepts absolute paths whose basename or a segment is justice or starts with justice-", () => {
-    expect(isJusticeSpecifier("/home/user/justice/dist/opencode-plugin.js")).toBe(true);
-    expect(isJusticeSpecifier("/path/to/justice-plugin/index.js")).toBe(true);
-    expect(isJusticeSpecifier("/opt/justice-v2/opencode-plugin.js")).toBe(true);
+  it("accepts absolute paths whose basename is justice or starts with justice-", () => {
+    expect(isJusticeSpecifier("/home/user/justice")).toBe(true);
+    expect(isJusticeSpecifier("/path/to/justice-plugin")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice-v2")).toBe(true);
   });
 });
 

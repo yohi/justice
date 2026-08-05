@@ -6,10 +6,12 @@ import {
   type DoctorDeps,
 } from "../../src/runtime/doctor-cli";
 import {
+  isJusticeSpecifier,
+} from "../../src/core/doctor-config";
+import {
   formatConfigDiagnostics,
   formatContractResult,
   formatLogScanLines,
-  isJusticeSpecifier,
   resolveAndCheckSpecifier,
 } from "../../src/runtime/doctor-cli-helpers";
 import type { FileReader } from "../../src/core/types";
@@ -255,7 +257,7 @@ describe("runDoctor()", () => {
     expect(isJusticeSpecifier("@yohi/justice")).toBe(true);
     expect(isJusticeSpecifier("@yohi/justice@3.0.0")).toBe(true);
     expect(isJusticeSpecifier("@yohi/justice/core")).toBe(true);
-    expect(isJusticeSpecifier("/opt/justice/dist/opencode-plugin.js")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice")).toBe(true);
     expect(isJusticeSpecifier("other-plugin")).toBe(false);
 
     expect(formatConfigDiagnostics([{ code: "plugin_missing", source: "project" }])).toEqual([]);
@@ -298,6 +300,7 @@ describe("runDoctor()", () => {
   it("resolves a healthy specifier through resolveAndCheckSpecifier", async () => {
     const plugin = async () => ({});
     const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
       { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
       baseDeps({
         fileReader: mockReader(healthyFixture()),

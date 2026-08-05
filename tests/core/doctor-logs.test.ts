@@ -45,9 +45,9 @@ describe("scanOpenCodeLogText()", () => {
     expect(result.failedToLoadPluginCount).toBe(0);
   });
 
-  it("counts load failures for absolute paths whose directory is named 'justice' or 'justice-*'", () => {
+  it("counts load failures for absolute paths whose basename is named 'justice' or 'justice-*'", () => {
     const result = scanOpenCodeLogText(
-      `level=ERROR message="failed to load plugin" path=/srv/justice-monitor/index.js error="boom"`,
+      `level=ERROR message="failed to load plugin" path=/srv/justice-monitor error="boom"`,
     );
     expect(result.failedToLoadPluginCount).toBe(1);
   });
