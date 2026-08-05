@@ -170,7 +170,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   // 検査 2: specifier 解決とローダ契約判定
   const justiceSpecifiers = merged.specifiers.filter((s) => isJusticeSpecifier(s.specifier));
   for (const entry of justiceSpecifiers) {
-    const section = await resolveAndCheckSpecifier(entry, deps);
+    const section = await resolveAndCheckSpecifier("■ 検査 2", entry, deps);
     if (section.failed) failed = true;
     lines.push(...section.lines);
   }

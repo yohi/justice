@@ -4,14 +4,14 @@
 // runDoctor から分離し、認知複雑度を抑える。
 
 import type { ConfigDiagnostic, JusticePluginSpecifier } from "../core/doctor-config";
-import { isJusticeSpecifier } from "../core/doctor-config";
 import type { LoaderContractResult } from "../core/loader-contract";
 import type { DoctorDeps } from "./doctor-cli";
+import type { SpecifierResolution } from "../core/doctor-specifier";
 import { normalizeSpecifier, resolveSpecifier } from "../core/doctor-specifier";
 import { checkLoaderContract } from "../core/loader-contract";
 import { scanOpenCodeLogText } from "../core/doctor-logs";
 
-export { isJusticeSpecifier };
+
 
 type SpecifierSection = {
   readonly failed: boolean;
@@ -19,14 +19,24 @@ type SpecifierSection = {
 };
 
 export async function resolveAndCheckSpecifier(
+  sectionLabel: string,
   entry: JusticePluginSpecifier,
   deps: DoctorDeps,
 ): Promise<SpecifierSection> {
-  const lines: string[] = [`■ 検査 2: ${entry.specifier}`];
-  const resolution = await resolveSpecifier(normalizeSpecifier(entry.specifier), {
-    fileReader: deps.fileReader,
-    cacheRoot: deps.cacheRoot,
-  });
+  const lines: string[] = [`${sectionLabel}: ${entry.specifier}`];
+  let resolution: SpecifierResolution;
+  try {
+    resolution = await resolveSpecifier(normalizeSpecifier(entry.specifier), {
+      fileReader: deps.fileReader,
+      cacheRoot: deps.cacheRoot,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      failed: true,
+      lines: [...lines, `  ✗ specifier 解決失敗: ${message}（契約判定とは別種の失敗）`],
+    };
+  }
   if (!resolution.ok) {
     const candidateHint =
       resolution.candidates !== undefined && resolution.candidates.length > 0
