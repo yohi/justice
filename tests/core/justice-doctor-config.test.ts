@@ -41,6 +41,19 @@ describe("parseJsonc()", () => {
       expect(result.error).toContain("Unterminated block comment");
     }
   });
+
+  it("handles escaped characters inside strings", () => {
+    const result = parseJsonc(`{"plugin": ["\\\\", "\\"", "@yohi/justice"]}`);
+    expect(result).toEqual({
+      ok: true,
+      value: { plugin: ["\\", '"', "@yohi/justice"] },
+    });
+  });
+
+  it("skips line comments that appear after a trailing comma", () => {
+    const result = parseJsonc(`{"plugin": ["@yohi/justice"], // trailing comment\n}`);
+    expect(result).toEqual({ ok: true, value: { plugin: ["@yohi/justice"] } });
+  });
 });
 
 describe("scanConfigContent()", () => {
@@ -106,6 +119,14 @@ describe("scanConfigContent()", () => {
       `{"plugin": ["/home/user/justice"]}`
     );
     expect(result.specifiers[0]?.specifier).toBe("/home/user/justice");
+  });
+
+  it("sorts option keys alphabetically for tuple specifiers", () => {
+    const result = scanConfigContent(
+      "project",
+      `{"plugin": [["@yohi/justice", {"b": 1, "a": 2, "c": 3}]]}`,
+    );
+    expect(result.specifiers[0]?.optionKeys).toEqual(["a", "b", "c"]);
   });
 });
 
@@ -188,5 +209,46 @@ describe("scanUnreadableSource()", () => {
   it("reports nothing when the unreadable source has no justice reference", () => {
     const result = scanUnreadableSource("env_config_content", `{"plugin": ["other"]}`);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("detects justice in unreadable source when JSONC parse fails but specifier appears as a string literal", () => {
+    const result = scanUnreadableSource("managed", `{ "plugin": ["@yohi/justice"]`);
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("detects justice tuple entries in unreadable parsed source", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["@yohi/justice",{}]]}`,
+    );
+    expect(result.diagnostics).toEqual([
+      { code: "unsupported_config_source", source: "env_config_content" },
+    ]);
+  });
+
+  it("reports nothing for unreadable source with a parse-failing but justice-free string", () => {
+    const result = scanUnreadableSource("managed", `{ "plugin": ["other-plugin"]`);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("continues scanning after the first justice specifier occurrence in parse-failing content", () => {
+    const result = scanUnreadableSource(
+      "managed",
+      `{ "plugin": ["@yohi/justice", "@yohi/justice"]`,
+    );
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("reports nothing for parsed unreadable source with non-string plugin entries", () => {
+    const result = scanUnreadableSource("managed", `{"plugin": [null, 123]}`);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("continues scanning after a justice specifier in a comment when a later string occurrence matches", () => {
+    const result = scanUnreadableSource(
+      "managed",
+      `/* @yohi/justice */ { "plugin": ["@yohi/justice"]`,
+    );
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
   });
 });

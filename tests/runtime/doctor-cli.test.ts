@@ -310,6 +310,49 @@ describe("runDoctor()", () => {
     expect(section.failed).toBe(false);
     expect(section.lines).toContain("  ✓ ローダ契約 OK（plugin factory: 1 件）");
   });
+
+  it("reports specifier resolution failure when resolveAndCheckSpecifier throws", async () => {
+    const throwingReader = mockReader({});
+    throwingReader.listFiles = async () => {
+      throw new Error("reader boom");
+    };
+    const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({ fileReader: throwingReader }),
+    );
+    expect(section.failed).toBe(true);
+    expect(section.lines.some((line) => line.includes("reader boom"))).toBe(true);
+  });
+
+  it("reports import failure when resolveAndCheckSpecifier's importer throws", async () => {
+    const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => {
+          throw new Error("import boom");
+        },
+      }),
+    );
+    expect(section.failed).toBe(true);
+    expect(section.lines.some((line) => line.includes("import boom"))).toBe(true);
+  });
+
+  it("handles unreadable .justice/events shards gracefully", async () => {
+    const reader = mockReader(healthyFixture());
+    reader.listFiles = async (prefix) =>
+      prefix === "/proj/.justice/events" ? ["/proj/.justice/events/broken.jsonl"] : [];
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: reader,
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+    expect(result.text).toContain(".justice/events:");
+    expect(result.text).toContain("shard 1 件 / レコード 0 件");
+  });
 });
 
 describe("resolveCacheRoot()", () => {

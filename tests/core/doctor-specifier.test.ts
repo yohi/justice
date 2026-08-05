@@ -43,6 +43,15 @@ describe("normalizeSpecifier()", () => {
   ])("parses %s", (input, expected) => {
     expect(normalizeSpecifier(input)).toEqual(expected);
   });
+
+  it.each([
+    ["justice", { kind: "package", name: "justice" }],
+    ["justice@1.0.0", { kind: "package", name: "justice", version: "1.0.0" }],
+    ["justice/core", { kind: "package", name: "justice", subpath: "./core" }],
+    ["@", { kind: "package", name: "@" }],
+  ])("parses plain and unparseable specifiers: %s", (input, expected) => {
+    expect(normalizeSpecifier(input)).toEqual(expected);
+  });
 });
 
 describe("resolveSpecifier()", () => {
@@ -147,5 +156,44 @@ describe("resolveSpecifier()", () => {
       cacheRoot: CACHE,
     });
     expect(!result.ok && result.code).toBe("entry_file_missing");
+  });
+
+  it("resolves a versionless specifier when only one version is cached", async () => {
+    const singleVersionFixture: Record<string, string> = {
+      [`${PKG_300}/package.json`]: JSON.stringify({
+        name: "@yohi/justice",
+        version: "3.0.0",
+        exports: { ".": { import: "./dist/opencode-plugin.js" } },
+      }),
+      [`${PKG_300}/dist/opencode-plugin.js`]: "// plugin",
+    };
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice"), {
+      fileReader: createMockFileReader(singleVersionFixture),
+      cacheRoot: CACHE,
+    });
+    expect(result).toEqual({
+      ok: true,
+      entry: {
+        packageDir: PKG_300,
+        version: "3.0.0",
+        entryFile: `${PKG_300}/dist/opencode-plugin.js`,
+      },
+    });
+  });
+
+  it("reports exports_not_resolvable when package.json is missing", async () => {
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice@3.0.0"), {
+      fileReader: createMockFileReader({ [`${PKG_300}/dist/opencode-plugin.js`]: "// plugin" }),
+      cacheRoot: CACHE,
+    });
+    expect(!result.ok && result.code).toBe("exports_not_resolvable");
+  });
+
+  it("reports exports_not_resolvable when requested subpath is not exported", async () => {
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice@3.0.0/missing"), {
+      fileReader: createMockFileReader(cacheFixture),
+      cacheRoot: CACHE,
+    });
+    expect(!result.ok && result.code).toBe("exports_not_resolvable");
   });
 });
