@@ -26,18 +26,34 @@ jobs:
         run: bun run build
 
       - name: Run unit tests with coverage
+        run: |
+          rm -rf coverage
+          bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
         run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text
 
       - name: Save unit coverage
         run: mv coverage/lcov.info /tmp/unit-lcov.info
 
       - name: Run integration tests with coverage
+        run: |
+          rm -rf coverage
+          bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --config vitest.integration.config.ts
         run: bunx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text --config vitest.integration.config.ts
 
       - name: Save integration coverage
+        run: |
+          if [ ! -f coverage/lcov.info ]; then
+            echo "Error: integration coverage report not found" >&2
+            exit 1
+          fi
+          mv coverage/lcov.info /tmp/integration-lcov.info
         run: mv coverage/lcov.info /tmp/integration-lcov.info
 
       - name: Merge coverage reports
+        run: |
+          rm -rf coverage
+          mkdir -p coverage
+          npx lcov-result-merger '/tmp/*-lcov.info' coverage/lcov.info
         run: |
           mkdir -p coverage
           cat /tmp/unit-lcov.info /tmp/integration-lcov.info > coverage/lcov.info
