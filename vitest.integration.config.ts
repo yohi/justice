@@ -7,5 +7,12 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/real-fs/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/index.ts"],
+    },
   },
 });
+

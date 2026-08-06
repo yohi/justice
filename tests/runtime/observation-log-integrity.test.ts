@@ -254,7 +254,7 @@ describe("observation log projection rebuild integration", () => {
   function pendingToolRecord(): PendingLogRecord {
     return {
       schemaVersion: 1,
-      timestamp: "2026-07-20T00:00:00.000Z",
+      timestamp: new Date().toISOString(),
       agentId: INTEGRATION_SHARD.agentId,
       sessionId: INTEGRATION_SHARD.sessionId,
       writerId: INTEGRATION_SHARD.writerId,

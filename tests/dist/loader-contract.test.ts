@@ -49,10 +49,7 @@ describe("FF-009: distribution entry loader contract", () => {
     const mod = (await import("@yohi/justice")) as Record<string, unknown>;
     const { pluginFactories } = checkLoaderContract(mod);
     expect(pluginFactories).toHaveLength(1);
-    const factory = pluginFactories[0] as (
-      init: unknown,
-      options?: unknown,
-    ) => Promise<Record<string, unknown>>;
+    const factory = pluginFactories[0];
     const stubInit = {
       project: {},
       client: { app: { log: () => {} } },

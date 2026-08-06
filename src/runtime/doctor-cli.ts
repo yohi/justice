@@ -14,12 +14,15 @@ import {
   mergeSourceScans,
   scanConfigContent,
   scanUnreadableSource,
+  isJusticeSpecifier,
   type ConfigSourceId,
   type SourceScanResult,
 } from "../core/doctor-config";
-import { scanOpenCodeLogText } from "../core/doctor-logs";
-import { normalizeSpecifier, resolveSpecifier } from "../core/doctor-specifier";
-import { checkLoaderContract } from "../core/loader-contract";
+import {
+  formatConfigDiagnostics,
+  formatLogScanLines,
+  resolveAndCheckSpecifier,
+} from "./doctor-cli-helpers";
 import { SecretPatternDetector } from "../core/secret-pattern-detector";
 import type { FileReader } from "../core/types";
 import { loadGates } from "./gate-loader";
@@ -84,21 +87,23 @@ export function configCandidates(deps: DoctorDeps): readonly ConfigCandidate[] {
 }
 
 async function scanAllSources(deps: DoctorDeps): Promise<readonly SourceScanResult[]> {
-  const scans: SourceScanResult[] = [];
-  for (const candidate of configCandidates(deps)) {
-    if (!candidate.readable) {
-      scans.push(scanUnreadableSource(candidate.source, candidate.rawContent));
-      continue;
-    }
-    if (candidate.path === undefined) continue;
-    try {
-      scans.push(
-        scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path)),
-      );
-    } catch {
-      // 読めない設定ファイルは存在しないものとして扱う（例外で落とさない）。
-    }
-  }
+  const candidates = configCandidates(deps);
+  const scans = await Promise.all(
+    candidates.map(async (candidate) => {
+      if (!candidate.readable) {
+        return scanUnreadableSource(candidate.source, candidate.rawContent);
+      }
+      if (candidate.path === undefined) {
+        return { source: candidate.source, readable: true, specifiers: [], diagnostics: [] };
+      }
+      try {
+        return scanConfigContent(candidate.source, await deps.fileReader.readFile(candidate.path));
+      } catch {
+        // 読めない設定ファイルは存在しないものとして扱う（例外で落とさない）。
+        return { source: candidate.source, readable: true, specifiers: [], diagnostics: [] };
+      }
+    }),
+  );
   return scans;
 }
 
@@ -106,19 +111,21 @@ async function summarizeObservationData(deps: DoctorDeps): Promise<string> {
   const eventsRoot = `${deps.cwd}/.justice/events`;
   const shards = (await deps.fileReader.listFiles(eventsRoot)).filter((p) => p.endsWith(".jsonl"));
   if (shards.length === 0) return "  .justice/events: なし（未観測）";
-  let recordCount = 0;
-  let lastWriteMs = 0;
-  for (const shard of shards) {
-    try {
-      recordCount += (await deps.fileReader.readFile(shard))
-        .split("\n")
-        .filter((l) => l.trim()).length;
-    } catch {
-      // 読めない shard は件数から除外（診断は best-effort）。
-    }
-    const stats = await deps.fileReader.readFileStats(shard);
-    if (stats !== null && stats.mtimeMs > lastWriteMs) lastWriteMs = stats.mtimeMs;
-  }
+  const results = await Promise.all(
+    shards.map(async (shard) => {
+      try {
+        const content = await deps.fileReader.readFile(shard);
+        const recordCount = content.split("\n").filter((l) => l.trim()).length;
+        const stats = await deps.fileReader.readFileStats(shard);
+        return { recordCount, mtimeMs: stats?.mtimeMs ?? 0 };
+      } catch {
+        // 読めない shard は件数・更新日時から除外（診断は best-effort）。
+        return { recordCount: 0, mtimeMs: 0 };
+      }
+    }),
+  );
+  const recordCount = results.reduce((sum, r) => sum + r.recordCount, 0);
+  const lastWriteMs = results.reduce((max, r) => Math.max(max, r.mtimeMs), 0);
   const lastWrite = lastWriteMs > 0 ? new Date(lastWriteMs).toISOString() : "不明";
   return `  .justice/events: shard ${shards.length} 件 / レコード ${recordCount} 件 / 最終書込 ${lastWrite}`;
 }
@@ -128,7 +135,7 @@ class CollectingGateLoaderLogger implements GateLoaderLogger {
   private readonly messages: string[] = [];
 
   warn(message: string, ...args: unknown[]): void {
-    this.messages.push(`${message} ${args.map((a) => String(a)).join(" ")}`.trim());
+    this.messages.push(`${message} ${args.map(String).join(" ")}`.trim());
   }
 
   collect(): readonly string[] {
@@ -142,10 +149,10 @@ async function checkGateYaml(deps: DoctorDeps, lines: string[]): Promise<string>
   }
   const logger = new CollectingGateLoaderLogger();
   const gates = await loadGates(deps.fileReader, `${deps.cwd}/.justice/gate.yaml`, logger);
-  for (const message of logger.collect()) {
-    lines.push(`  ! gate.yaml 読込警告: ${message}`);
-  }
-  return `  .justice/gate.yaml: 有効（実効 gate: ${gates.map((g) => g.id).join(", ")}）`;
+  const warnings = logger.collect().map((message) => `  ! gate.yaml 読込警告: ${message}`);
+  lines.push(...warnings);
+  const gateIds = gates.map((g) => g.id);
+  return `  .justice/gate.yaml: 有効（実効 gate: ${gateIds.join(", ")}）`;
 }
 
 export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
@@ -156,113 +163,35 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   // 検査 1: 設定探索と justice specifier 抽出
   const scans = await scanAllSources(deps);
   const merged = mergeSourceScans(scans);
-  lines.push("■ 検査 1: OpenCode 設定の justice エントリ");
-  for (const diagnostic of merged.diagnostics) {
-    if (diagnostic.code === "unsupported_config_source") {
-      lines.push(
-        `  ! ${diagnostic.code}: ${diagnostic.source} に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。`,
-      );
-    } else if (diagnostic.code === "justice_not_found_in_config") {
-      lines.push(`  ✗ ${diagnostic.code}: 設定に @yohi/justice が見つかりません`);
-      failed = true;
-    } else if (diagnostic.code !== "plugin_missing") {
-      lines.push(
-        `  ! ${diagnostic.code}: ${diagnostic.source}${diagnostic.detail ? ` (${diagnostic.detail})` : ""}`,
-      );
-    }
-  }
+  const diagnostics = formatConfigDiagnostics(merged.diagnostics);
+  lines.push("■ 検査 1: OpenCode 設定の justice エントリ", ...diagnostics);
+  failed ||= merged.diagnostics.some((d) => d.code === "justice_not_found_in_config");
 
   // 検査 2: specifier 解決とローダ契約判定
-  const justiceSpecifiers = merged.specifiers.filter(
-    (s) =>
-      s.specifier === "@yohi/justice" ||
-      s.specifier.startsWith("@yohi/justice@") ||
-      s.specifier.startsWith("@yohi/justice/") ||
-      (s.specifier.startsWith("/") && s.specifier.includes("justice")),
-  );
+  const justiceSpecifiers = merged.specifiers.filter((s) => isJusticeSpecifier(s.specifier));
   for (const entry of justiceSpecifiers) {
-    lines.push(`■ 検査 2: ${entry.specifier}`);
-    const resolution = await resolveSpecifier(normalizeSpecifier(entry.specifier), {
-      fileReader: deps.fileReader,
-      cacheRoot: deps.cacheRoot,
-    });
-    if (!resolution.ok) {
-      lines.push(
-        `  ✗ ${resolution.code}: ${resolution.detail}` +
-          (resolution.candidates ? `（候補: ${resolution.candidates.join(", ")}）` : ""),
-      );
-      lines.push(
-        "  ※ パッケージ未インストール・キャッシュ不在はローダ契約違反とは別種の失敗です。",
-      );
-      failed = true;
-      continue;
-    }
-    const entryFile = resolution.entry.entryFile;
-    lines.push(`  解決先: ${entryFile}`);
-    try {
-      const moduleExports = await deps.importer(entryFile);
-      const contract = checkLoaderContract(moduleExports);
-      if (!contract.ok) {
-        failed = true;
-        lines.push("  ✗ plugin エントリが OpenCode のローダ契約を満たしていません");
-        lines.push("");
-        lines.push(
-          "    原因: OpenCode はモジュールの全 export が関数または { server: 関数 } であることを",
-        );
-        lines.push(
-          `          要求しますが、以下 ${contract.violations.length} 件の export が非関数です:`,
-        );
-        lines.push(`            ${contract.violations.map((v) => v.exportName).join(", ")}`);
-        lines.push("          このため Justice は一行も実行されていません（v1 / v2 とも未稼働）。");
-        lines.push("");
-        lines.push("    修正: @yohi/justice を 3.0.0 以上に更新してください。");
-        lines.push("            opencode plugin @yohi/justice");
-        lines.push(
-          "          更新できない場合は specifier を plugin 専用サブパスに変更してください:",
-        );
-        lines.push('            "plugin": ["@yohi/justice/opencode"]');
-      } else {
-        lines.push(`  ✓ ローダ契約 OK（plugin factory: ${contract.pluginFactories.length} 件）`);
-      }
-    } catch (error) {
-      lines.push(
-        `  ✗ import 失敗: ${error instanceof Error ? error.message : String(error)}（契約判定とは別種の失敗）`,
-      );
-      failed = true;
-    }
+    const section = await resolveAndCheckSpecifier("■ 検査 2", entry, deps);
+    if (section.failed) failed = true;
+    lines.push(...section.lines);
   }
 
   // 検査 3: OpenCode ログ走査
-  lines.push("■ 検査 3: OpenCode ログ");
-  for (const logPath of deps.logPaths) {
-    try {
-      const scan = scanOpenCodeLogText(await deps.fileReader.readFile(logPath));
-      lines.push(
-        `  ${logPath}: failed_to_load=${scan.failedToLoadPluginCount} 件 / initialized=${scan.justiceInitializedCount} 件`,
-      );
-      if (scan.lastFailedToLoadPlugin !== undefined) {
-        lines.push(`    直近の失敗: ${scan.lastFailedToLoadPlugin}`);
-      }
-      if (scan.lastJusticeInitialized !== undefined) {
-        lines.push(`    直近の初期化: ${scan.lastJusticeInitialized}`);
-      }
-    } catch {
-      lines.push(`  ${logPath}: 読み込めません`);
-    }
-  }
+  const logLines = await formatLogScanLines(deps);
+  lines.push("■ 検査 3: OpenCode ログ", ...logLines);
 
   // 検査 4: .justice/ サマリ
-  lines.push("■ 検査 4: 観測データ");
-  lines.push(await summarizeObservationData(deps));
+  lines.push("■ 検査 4: 観測データ", await summarizeObservationData(deps));
 
   // 検査 5: gate.yaml 妥当性
-  lines.push("■ 検査 5: gate.yaml");
-  lines.push(await checkGateYaml(deps, lines));
+  lines.push("■ 検査 5: gate.yaml", await checkGateYaml(deps, lines));
 
   return { exitCode: failed ? 1 : 0, text: detector.redact(lines.join("\n")) };
 }
 
-/** CLI 専用の非閉域 FileReader（~/.config や ~/.cache を横断読取するため root 制限を持たない）。 */
+/** CLI 専用の非閉域 FileReader（~/.config や ~/.cache を横断読取するため root 制限を持たない）。
+ * 実ディスク I/O のみを行うため、単体テストではモック置換が難しく、実 FS 統合テストでカバーする。
+ */
+/* istanbul ignore next -- real-fs CLI adapter; covered by tests/real-fs/doctor-resolver.test.ts */
 export function createCliFileReader(): FileReader {
   return {
     readFile: (path) => readFile(path, "utf-8"),
@@ -302,6 +231,7 @@ export function createCliFileReader(): FileReader {
   };
 }
 
+/* istanbul ignore next -- real-fs path discovery; covered by tests/real-fs/doctor-resolver.test.ts */
 async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<readonly string[]> {
   const dataHome = env.XDG_DATA_HOME ?? (home === undefined ? undefined : `${home}/.local/share`);
   if (dataHome === undefined) return [];
@@ -309,13 +239,24 @@ async function discoverLogPaths(env: NodeJS.ProcessEnv, home?: string): Promise<
   try {
     return (await readdir(logDir))
       .filter((name) => name.endsWith(".log"))
-      .sort()
+      .sort((a, b) => a.localeCompare(b))
       .map((name) => `${logDir}/${name}`);
   } catch {
     return [];
   }
 }
 
+/* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
+export function resolveCacheRoot(
+  env: { readonly [key: string]: string | undefined },
+  home: string,
+): string {
+  const xdgCache = env.XDG_CACHE_HOME;
+  const cacheBase = xdgCache === undefined || xdgCache === "" ? `${home}/.cache` : xdgCache;
+  return `${cacheBase}/opencode`;
+}
+
+/* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
 export async function main(argv: readonly string[]): Promise<number> {
   if (argv[0] !== "doctor") {
     process.stderr.write("usage: justice doctor\n");
@@ -323,7 +264,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   const env = process.env;
   const home = env.HOME ?? homedir();
-  const cacheRoot = `${env.XDG_CACHE_HOME ?? `${home}/.cache`}/opencode`;
+  const cacheRoot = resolveCacheRoot(env, home);
   const report = await runDoctor({
     fileReader: createCliFileReader(),
     env,
@@ -337,7 +278,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   return report.exitCode;
 }
 
-/* istanbul ignore next -- CLI エントリポイント */
+/* istanbul ignore next -- CLI entry point */
 if (import.meta.main) {
   process.exit(await main(process.argv.slice(2)));
 }

@@ -43,6 +43,15 @@ describe("normalizeSpecifier()", () => {
   ])("parses %s", (input, expected) => {
     expect(normalizeSpecifier(input)).toEqual(expected);
   });
+
+  it.each([
+    ["justice", { kind: "package", name: "justice" }],
+    ["justice@1.0.0", { kind: "package", name: "justice", version: "1.0.0" }],
+    ["justice/core", { kind: "package", name: "justice", subpath: "./core" }],
+    ["@", { kind: "package", name: "@" }],
+  ])("parses plain and unparseable specifiers: %s", (input, expected) => {
+    expect(normalizeSpecifier(input)).toEqual(expected);
+  });
 });
 
 describe("resolveSpecifier()", () => {
@@ -107,11 +116,12 @@ describe("resolveSpecifier()", () => {
     // and listFiles must return every matching file (not only .jsonl). NodeFileSystem is not
     // used here; the real CLI will provide createCliFileReader (Task 7).
     const fixture: Record<string, string> = {
-      [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/package.json`]: JSON.stringify({
-        name: "@yohi/justice",
-        version: "1.0.0",
-        exports: { ".": { import: "./dist/index.js" } },
-      }),
+      [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/package.json`]:
+        JSON.stringify({
+          name: "@yohi/justice",
+          version: "1.0.0",
+          exports: { ".": { import: "./dist/index.js" } },
+        }),
       [`${CACHE}/packages/@yohi/justice@1.0.0/node_modules/@yohi/justice/dist/index.js`]: "//",
       // A non-.jsonl file under the prefix must still be returned by listFiles so the
       // candidate version extraction works. This guards against sandboxing readers that
@@ -140,11 +150,50 @@ describe("resolveSpecifier()", () => {
     expect(!result.ok && result.code).toBe("entry_file_missing");
   });
 
-  it("reports entry_file_missing for a missing absolute path", async () => {
+  it("reports entry_file_missing for a missing absolute path with empty mock", async () => {
     const result = await resolveSpecifier(normalizeSpecifier("/abs/missing.js"), {
       fileReader: createMockFileReader({}),
       cacheRoot: CACHE,
     });
     expect(!result.ok && result.code).toBe("entry_file_missing");
+  });
+
+  it("resolves a versionless specifier when only one version is cached", async () => {
+    const singleVersionFixture: Record<string, string> = {
+      [`${PKG_300}/package.json`]: JSON.stringify({
+        name: "@yohi/justice",
+        version: "3.0.0",
+        exports: { ".": { import: "./dist/opencode-plugin.js" } },
+      }),
+      [`${PKG_300}/dist/opencode-plugin.js`]: "// plugin",
+    };
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice"), {
+      fileReader: createMockFileReader(singleVersionFixture),
+      cacheRoot: CACHE,
+    });
+    expect(result).toEqual({
+      ok: true,
+      entry: {
+        packageDir: PKG_300,
+        version: "3.0.0",
+        entryFile: `${PKG_300}/dist/opencode-plugin.js`,
+      },
+    });
+  });
+
+  it("reports exports_not_resolvable when package.json is missing", async () => {
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice@3.0.0"), {
+      fileReader: createMockFileReader({ [`${PKG_300}/dist/opencode-plugin.js`]: "// plugin" }),
+      cacheRoot: CACHE,
+    });
+    expect(!result.ok && result.code).toBe("exports_not_resolvable");
+  });
+
+  it("reports exports_not_resolvable when requested subpath is not exported", async () => {
+    const result = await resolveSpecifier(normalizeSpecifier("@yohi/justice@3.0.0/missing"), {
+      fileReader: createMockFileReader(cacheFixture),
+      cacheRoot: CACHE,
+    });
+    expect(!result.ok && result.code).toBe("exports_not_resolvable");
   });
 });

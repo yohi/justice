@@ -1,6 +1,19 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import { runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import {
+  resolveCacheRoot,
+  runDoctor,
+  type DoctorDeps,
+} from "../../src/runtime/doctor-cli";
+import {
+  isJusticeSpecifier,
+} from "../../src/core/doctor-config";
+import {
+  formatConfigDiagnostics,
+  formatContractResult,
+  formatLogScanLines,
+  resolveAndCheckSpecifier,
+} from "../../src/runtime/doctor-cli-helpers";
 import type { FileReader } from "../../src/core/types";
 
 function mockReader(files: Record<string, string>): FileReader {
@@ -223,5 +236,135 @@ describe("runDoctor()", () => {
       }),
     );
     expect(result.text).not.toContain(token);
+  });
+
+  it("covers configCandidates enumeration paths", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        env: {
+          OPENCODE_CONFIG: "/env/opencode.json",
+          OPENCODE_CONFIG_DIR: "/env/dir",
+          OPENCODE_CONFIG_CONTENT: `{"plugin":["@yohi/justice"]}`,
+        },
+        homeDir: undefined,
+        fileReader: mockReader({}),
+      }),
+    );
+    expect(result.text).toContain("unsupported_config_source");
+  });
+
+  it("covers helper functions directly", async () => {
+    expect(isJusticeSpecifier("@yohi/justice")).toBe(true);
+    expect(isJusticeSpecifier("@yohi/justice@3.0.0")).toBe(true);
+    expect(isJusticeSpecifier("@yohi/justice/core")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice")).toBe(true);
+    expect(isJusticeSpecifier("other-plugin")).toBe(false);
+
+    expect(formatConfigDiagnostics([{ code: "plugin_missing", source: "project" }])).toEqual([]);
+    expect(
+      formatConfigDiagnostics([{ code: "justice_not_found_in_config", source: "project" }]),
+    ).toEqual(["  ✗ justice_not_found_in_config: 設定に @yohi/justice が見つかりません"]);
+    expect(
+      formatConfigDiagnostics([
+        { code: "unsupported_config_source", source: "env_config_content" },
+      ]),
+    ).toEqual([
+      "  ! unsupported_config_source: env_config_content に justice 系 plugin がありますが、このソースは doctor から読み込めません。手動で確認してください。",
+    ]);
+    expect(
+      formatConfigDiagnostics([{ code: "invalid_plugin_entry", source: "project", detail: "x" }]),
+    ).toEqual(["  ! invalid_plugin_entry: project (x)"]);
+
+    const okContract = formatContractResult({
+      ok: true,
+      violations: [],
+      pluginFactories: [async () => ({})],
+    });
+    expect(okContract).toEqual(["  ✓ ローダ契約 OK（plugin factory: 1 件）"]);
+    const ngContract = formatContractResult({
+      ok: false,
+      violations: [{ exportName: "AGENT_IDS", actualKind: "object" }],
+      pluginFactories: [],
+    });
+    expect(ngContract.some((l) => l.includes("AGENT_IDS"))).toBe(true);
+    expect(
+      ngContract.some((l) =>
+        l.includes("plugin エントリが OpenCode のローダ契約を満たしていません"),
+      ),
+    ).toBe(true);
+
+    const logLines = await formatLogScanLines(baseDeps({ logPaths: ["/missing.log"] }));
+    expect(logLines).toContain("  /missing.log: 読み込めません (ENOENT: /missing.log)");
+  });
+
+  it("resolves a healthy specifier through resolveAndCheckSpecifier", async () => {
+    const plugin = async () => ({});
+    const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => ({ default: plugin, OpenCodePlugin: plugin }),
+      }),
+    );
+    expect(section.failed).toBe(false);
+    expect(section.lines).toContain("  ✓ ローダ契約 OK（plugin factory: 1 件）");
+  });
+
+  it("reports specifier resolution failure when resolveAndCheckSpecifier throws", async () => {
+    const throwingReader = mockReader({});
+    throwingReader.listFiles = async () => {
+      throw new Error("reader boom");
+    };
+    const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({ fileReader: throwingReader }),
+    );
+    expect(section.failed).toBe(true);
+    expect(section.lines.some((line) => line.includes("reader boom"))).toBe(true);
+  });
+
+  it("reports import failure when resolveAndCheckSpecifier's importer throws", async () => {
+    const section = await resolveAndCheckSpecifier(
+      "■ 検査 2",
+      { specifier: "@yohi/justice@3.0.0", optionsPresent: false, optionKeys: [] },
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => {
+          throw new Error("import boom");
+        },
+      }),
+    );
+    expect(section.failed).toBe(true);
+    expect(section.lines.some((line) => line.includes("import boom"))).toBe(true);
+  });
+
+  it("handles unreadable .justice/events shards gracefully", async () => {
+    const reader = mockReader(healthyFixture());
+    reader.listFiles = async (prefix) =>
+      prefix === "/proj/.justice/events" ? ["/proj/.justice/events/broken.jsonl"] : [];
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: reader,
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+    expect(result.text).toContain(".justice/events:");
+    expect(result.text).toContain("shard 1 件 / レコード 0 件");
+  });
+});
+
+describe("resolveCacheRoot()", () => {
+  it("falls back to ~/.cache when XDG_CACHE_HOME is empty", () => {
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "" }, "/home/user")).toBe("/home/user/.cache/opencode");
+  });
+
+  it("uses XDG_CACHE_HOME when set", () => {
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "/tmp/cache" }, "/home/user")).toBe("/tmp/cache/opencode");
+  });
+
+  it("falls back to ~/.cache when XDG_CACHE_HOME is undefined", () => {
+    expect(resolveCacheRoot({}, "/home/user")).toBe("/home/user/.cache/opencode");
   });
 });
