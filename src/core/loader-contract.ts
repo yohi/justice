@@ -47,6 +47,17 @@ export function checkLoaderContract(
   const violations: LoaderContractViolation[] = [];
   const pluginFactories: PluginFactory[] = [];
   for (const [exportName, value] of Object.entries(moduleExports)) {
+    if (typeof value === "function") {
+      if (isClassFunction(value)) {
+        violations.push({ exportName, actualKind: "class" });
+        continue;
+      }
+      if (!seen.has(value)) {
+        seen.add(value);
+        pluginFactories.push(value as PluginFactory);
+      }
+      continue;
+    }
     if (seen.has(value)) continue;
     if (typeof value === "function") {
       if (isClassFunction(value)) {
