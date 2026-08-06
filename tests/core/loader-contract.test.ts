@@ -65,6 +65,27 @@ describe("checkLoaderContract()", () => {
     expect(result.pluginFactories).toHaveLength(1);
   });
 
+  it("reports violations for each invalid export even with identical values", () => {
+    const sameInvalid = 42;
+    const result = checkLoaderContract({ a: sameInvalid, b: sameInvalid });
+    expect(result.ok).toBe(false);
+    expect(result.violations).toEqual([
+      { exportName: "a", actualKind: "number" },
+      { exportName: "b", actualKind: "number" },
+    ]);
+  });
+
+  it("reports each class export violation separately when the same class is reused", () => {
+    class Plugin {}
+    const result = checkLoaderContract({ default: Plugin, named: Plugin });
+    expect(result.ok).toBe(false);
+    expect(result.violations).toEqual([
+      { exportName: "default", actualKind: "class" },
+      { exportName: "named", actualKind: "class" },
+    ]);
+    expect(result.pluginFactories).toEqual([]);
+  });
+
   it("rejects class exports", () => {
     class Plugin {}
     const result = checkLoaderContract({ default: Plugin });

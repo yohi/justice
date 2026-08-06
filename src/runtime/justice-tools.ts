@@ -9,7 +9,7 @@ import type { PersistedLogRecord } from "../core/v2/observation-model";
 import { collectReviewScopes } from "../core/v2/review-scope";
 import { evaluate } from "../core/v2/rule-evaluation-engine";
 import { project, toSerializableProjectedState } from "../core/v2/state-projection";
-import type { ReviewSummary, ScopeReviewSummary } from "../core/v2/review-types";
+import type { ScopeReviewSummary } from "../core/v2/review-types";
 import type { ReadOnlyObservationLog } from "./observation-log-store";
 import type { OpenCodeAdapter } from "./opencode-adapter";
 
@@ -121,9 +121,14 @@ export type JusticeReviewToolResult =
     };
 
 export type JusticeReviewToolInput = {
-  readonly logReader: ReadOnlyObservationLog;
-  readonly args: JusticeReviewToolArgs;
-  readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
+readonly logReader: ReadOnlyObservationLog;
+readonly args: JusticeReviewToolArgs;
+readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
+readonly log?: (
+level: "warn" | "error" | "info",
+message: string,
+args?: unknown[],
+) => Promise<void> | void;
 };
 
 export type JusticeReviewHealth = {
@@ -134,42 +139,37 @@ export type JusticeReviewHealth = {
   readonly readIntegrity: { readonly hasIntegrityViolation: boolean };
 };
 
-function serializeReviewSummary(summary: ReviewSummary, scope: string | undefined): string {
-  if (scope !== undefined) {
-    const scopedSummary = summary.byScope.get(scope);
-    return scopedSummary === undefined
-      ? formatError(`Unknown review scope: ${scope}`)
-      : JSON.stringify(scopedSummary, null, 2);
-  }
-
-  return JSON.stringify(
-    {
-      authority: summary.authority,
-      critical: summary.critical,
-      major: summary.major,
-      minor: summary.minor,
-      resolved: summary.resolved,
-      open: summary.open,
-      byScope: Object.fromEntries(summary.byScope),
-    },
-    null,
-    2,
-  );
-}
 
 async function collectHealth(
   logReader: ReadOnlyObservationLog,
   records: readonly PersistedLogRecord[],
+  log?: (
+    level: "warn" | "error" | "info",
+    message: string,
+    args?: unknown[],
+  ) => Promise<void> | void,
 ): Promise<JusticeReviewHealth | undefined> {
   try {
     const shardKeys = new Set(
-      records.map((record) => `${record.agentId}/${record.sessionId}/${record.writerId}`),
+      records.map((record) => {
+        const a =
+          typeof record.agentId === "string" ? record.agentId : "corrupted";
+        const s =
+          typeof record.sessionId === "string"
+            ? record.sessionId
+            : "corrupted";
+        const w =
+          typeof record.writerId === "string" ? record.writerId : "corrupted";
+        return `${a}/${s}/${w}`;
+      }),
     );
     const rotation = logReader.getRotationHealth?.() ?? {
       consecutiveFailures: 0,
       degraded: false,
     };
-    const integrity = logReader.getLastReadIntegrity?.() ?? { hasIntegrityViolation: false };
+    const integrity = logReader.getLastReadIntegrity?.() ?? {
+      hasIntegrityViolation: false,
+    };
     const lastWrite = logReader.getLastSuccessfulWriteAt?.();
     return {
       recordCount: records.length,
@@ -179,9 +179,16 @@ async function collectHealth(
         consecutiveFailures: rotation.consecutiveFailures,
         degraded: rotation.degraded,
       },
-      readIntegrity: { hasIntegrityViolation: integrity.hasIntegrityViolation },
+      readIntegrity: {
+        hasIntegrityViolation: integrity.hasIntegrityViolation,
+      },
     };
-  } catch {
+  } catch (error: unknown) {
+    try {
+      await log?.("warn", "[Justice] collectHealth failed", [error]);
+    } catch {
+      /* best-effort logging: swallowed */
+    }
     return undefined; // fail-open: health 取得失敗時はフィールドを省略して view 本体を返す
   }
 }
@@ -200,12 +207,24 @@ export async function executeJusticeReviewTool(
     const normalizedScope = input.args.scope?.trim() || undefined;
     if (input.args.resolve === undefined) {
       if (normalizedScope !== undefined) {
-        return serializeReviewSummary(state.reviewSummary, normalizedScope);
+        const scopedSummary = state.reviewSummary.byScope.get(normalizedScope);
+        if (scopedSummary === undefined) {
+          return formatError(`Unknown review scope: ${normalizedScope}`);
+        }
+        return JSON.stringify(scopedSummary, null, 2);
       }
-      const health = await collectHealth(input.logReader, records);
-      const summaryJson = serializeReviewSummary(state.reviewSummary, undefined);
-      if (health === undefined) return summaryJson;
-      return JSON.stringify({ ...JSON.parse(summaryJson), health }, null, 2);
+      const health = await collectHealth(input.logReader, records, input.log);
+      const summaryObj = {
+        authority: state.reviewSummary.authority,
+        critical: state.reviewSummary.critical,
+        major: state.reviewSummary.major,
+        minor: state.reviewSummary.minor,
+        resolved: state.reviewSummary.resolved,
+        open: state.reviewSummary.open,
+        byScope: Object.fromEntries(state.reviewSummary.byScope),
+      };
+      if (health === undefined) return JSON.stringify(summaryObj, null, 2);
+      return JSON.stringify({ ...summaryObj, health }, null, 2);
     }
     if (normalizedScope === undefined) {
       return formatError(
@@ -275,6 +294,7 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
           requestApproval: async (approval): Promise<void> => {
             await Effect.runPromise(context.ask(approval));
           },
+          log: adapter.log.bind(adapter),
         });
       } catch (error: unknown) {
         return formatError(error instanceof Error ? error.message : String(error));

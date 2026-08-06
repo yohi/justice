@@ -21,3 +21,6 @@ Thumbs.db
 # ただし人間承認済みの正本 gate 設定 .justice/gate.yaml は追跡可能にする（ISS-007）。
 .justice/*
 !.justice/gate.yaml
+
+# 一時検証・実験ディレクトリ
+/tmp/

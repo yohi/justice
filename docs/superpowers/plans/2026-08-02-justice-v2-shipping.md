@@ -91,7 +91,7 @@ git switch -c feature/justice-v2-shipping-01-distribution-contract
 - Consumes: なし（最初のタスク）
 - Produces: `exports["."]` → `./dist/opencode-plugin.js`、`exports["./core"]` → `./dist/index.js`、version `3.0.0`。Task 3 の FF-009・Task 8 の統合テスト・Task 10 の root specifier 検証がこの `exports` マップを前提とする。
 
-- [ ] **Step 1: package.json を設計書 §5.1 の確定形に編集する**
+- [x] **Step 1:** package.json を設計書 §5.1 の確定形に編集する**
 
 変更点:
 
@@ -124,7 +124,7 @@ git switch -c feature/justice-v2-shipping-01-distribution-contract
 
 `dist/index.js` 自体の中身は変更しない（`OpenCodePlugin` の re-export も残す）。`./core` は plugin エントリではないためローダ契約の対象外。
 
-- [ ] **Step 2: CHANGELOG.md に 3.0.0 エントリを追記する**
+- [x] **Step 2:** CHANGELOG.md に 3.0.0 エントリを追記する**
 
 `## Unreleased` の直後に挿入:
 
@@ -141,7 +141,7 @@ git switch -c feature/justice-v2-shipping-01-distribution-contract
 - **distribution:** root specifier（`@yohi/justice`）経由でプラグインがロードされない致命的問題を修正（Issue #192 の真因）。
 ```
 
-- [ ] **Step 3: README.md にライブラリ利用者向け移行表を追加する**
+- [x] **Step 3:** README.md にライブラリ利用者向け移行表を追加する**
 
 「インストール (詳細)」セクションの末尾（「パターン 3」の後）に以下を追加:
 
@@ -165,7 +165,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 | ランタイム（NodeFileSystem） | `@yohi/justice/runtime`                                      | なし                             |
 ````
 
-- [ ] **Step 4: ビルドと既存検証が緑であることを確認する**
+- [x] **Step 4:** ビルドと既存検証が緑であることを確認する**
 
 Run: `bun run typecheck && bun run lint && bun run test && bun run build`
 Expected: すべて成功（既存テストはソースを直接 import するため exports 変更の影響を受けない）。
@@ -177,7 +177,7 @@ bun -e 'const m = await import("@yohi/justice"); console.log(Object.keys(m))'
 # Expected: [ 'OpenCodePlugin', 'default' ]（49 export の barrel ではない）
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add package.json CHANGELOG.md README.md
@@ -198,7 +198,7 @@ git commit -m "feat!: 配布エントリポイントを plugin 専用に再構�
 - Consumes: なし
 - Produces: `checkLoaderContract(moduleExports: Readonly<Record<string, unknown>>): LoaderContractResult`。`LoaderContractResult = { ok, violations, pluginFactories }`。Task 3（FF-009）と Task 7（doctor CLI）の双方がこの関数を使う（設計書 §9.1.1「実装の二重化を避ける」）。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/core/loader-contract.test.ts`:
 
@@ -254,12 +254,12 @@ describe("checkLoaderContract()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/core/loader-contract.test.ts`
 Expected: FAIL（`Cannot find module '../../src/core/loader-contract'`）
 
-- [ ] **Step 3: 最小実装を書く**
+- [x] **Step 3:** 最小実装を書く**
 
 `src/core/loader-contract.ts`:
 
@@ -321,12 +321,12 @@ export function checkLoaderContract(
 }
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/core/loader-contract.test.ts && bun run typecheck && bun run lint && bun run test`
 Expected: 5 件 PASS、typecheck/lint エラー 0。`bun run test` で `tests/arch/core-no-opencode-imports.test.ts` が引き続き緑であることも確認する（`src/core/` 配下の新規ファイルは FF-001 の検査対象）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/core/loader-contract.ts tests/core/loader-contract.test.ts
@@ -350,7 +350,7 @@ git commit -m "feat(core): OpenCode ローダ契約の判定純粋関数を追�
 - Consumes: Task 1 の `exports` マップ、Task 2 の `checkLoaderContract`。
 - Produces: `bun run test:dist`（ビルドを内包）。CI の `test` ジョブで実行される。**このテストは今回の事故を検出できる唯一のテストである**（設計書 §5.4）。Task 1 適用前の 2.7.0 形状では FAIL する（red の根拠）。
 
-- [ ] **Step 1: 実行順序を設定で強制する（exclude → dist config → script）**
+- [x] **Step 1:** 実行順序を設定で強制する（exclude → dist config → script）**
 
 `vitest.config.ts` の `test` ブロックに `exclude` を追加:
 
@@ -393,7 +393,7 @@ export default defineConfig({
     "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
 ```
 
-- [ ] **Step 2: FF-009 回帰テストを書く**
+- [x] **Step 2:** FF-009 回帰テストを書く**
 
 `tests/dist/loader-contract.test.ts`:
 
@@ -468,7 +468,7 @@ describe("FF-009: distribution entry loader contract", () => {
 });
 ```
 
-- [ ] **Step 3: 既定テストと test:dist の双方が緑であることを確認する**
+- [x] **Step 3:** 既定テストと test:dist の双方が緑であることを確認する**
 
 Run: `bun run test`（`tests/dist/` は exclude され、dist 不在でも成立）
 Expected: 全件 PASS。
@@ -478,7 +478,7 @@ Expected: ビルド後に FF-009 計 9 件 PASS。
 
 補足（red の確認、任意だが推奨）: `git stash` で Task 1 の package.json 変更を一時退避して `bun run test:dist` を実行すると、旧 barrel 形状で violations 8 件が報告され FAIL する。これがこのテストの回帰検出力の証拠である。確認後 `git stash pop` で戻す。
 
-- [ ] **Step 4: CI に test:dist ステップを追加する**
+- [x] **Step 4:** CI に test:dist ステップを追加する**
 
 `.github/workflows/ci.yml` の `- run: bun run build` の直後に追加:
 
@@ -488,7 +488,7 @@ Expected: ビルド後に FF-009 計 9 件 PASS。
 
 （`test:dist` はビルドを内包するが、既存の `bun run build` ステップは成果物アップロードのため残す。）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add vitest.config.ts vitest.dist.config.ts package.json tests/dist/loader-contract.test.ts .github/workflows/ci.yml
@@ -509,7 +509,7 @@ git commit -m "test(dist): FF-009 配布エントリのローダ契約回帰テ�
 - Consumes: なし
 - Produces: `parseJsonc(content)`、`scanConfigContent(source, content)`、`scanUnreadableSource(source, rawContent?)`、`mergeSourceScans(scans)`、型 `ConfigSourceId` / `JusticePluginSpecifier` / `ConfigDiagnostic` / `SourceScanResult`、定数 `SOURCE_PRIORITY`。Task 7（doctor CLI）が利用する。
 
-- [ ] **Step 1: 失敗するテストを書く（設計書 §9.1.0 の fixture 網羅）**
+- [x] **Step 1:** 失敗するテストを書く（設計書 §9.1.0 の fixture 網羅）**
 
 `tests/core/justice-doctor-config.test.ts`:
 
@@ -682,12 +682,12 @@ describe("scanUnreadableSource()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/core/justice-doctor-config.test.ts`
 Expected: FAIL（`Cannot find module '../../src/core/doctor-config'`）
 
-- [ ] **Step 3: 最小実装を書く**
+- [x] **Step 3:** 最小実装を書く**
 
 `src/core/doctor-config.ts`:
 
@@ -912,12 +912,12 @@ export function mergeSourceScans(scans: readonly SourceScanResult[]): {
 
 補足: `dedupeKey("@yohi/justice@2.7.0")` と `dedupeKey("@yohi/justice@3.0.0")` はともに `@yohi/justice` を返す（`@yohi/justice/opencode` も同じキー）。これによりバージョン違い・サブパス違いの justice エントリが高優先度側で重複除去される。`dedupeKey("other-plugin")` は `other-plugin` のままで潰れない。
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/core/justice-doctor-config.test.ts && bun run typecheck && bun run lint`
 Expected: 全件 PASS、エラー 0。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/core/doctor-config.ts tests/core/justice-doctor-config.test.ts
@@ -938,7 +938,7 @@ git commit -m "feat(core): justice doctor の設定探索・解析純粋関数�
 - Consumes: `FileReader`（`src/core/types.ts`）。
 - Produces: `normalizeSpecifier(specifier: string): NormalizedSpecifier`、`resolveSpecifier(spec, deps): Promise<SpecifierResolution>`。Task 7・Task 8 が利用する。設計書 §9.1.1 の 4 種別（root / サブパス / バージョン付き / 絶対パス）を扱う。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/core/doctor-specifier.test.ts`:
 
@@ -1057,12 +1057,12 @@ describe("resolveSpecifier()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/core/doctor-specifier.test.ts`
 Expected: FAIL（`Cannot find module '../../src/core/doctor-specifier'`）
 
-- [ ] **Step 3: 最小実装を書く**
+- [x] **Step 3:** 最小実装を書く**
 
 `src/core/doctor-specifier.ts`:
 
@@ -1212,12 +1212,12 @@ export async function resolveSpecifier(
 }
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/core/doctor-specifier.test.ts && bun run typecheck && bun run lint`
 Expected: 全件 PASS、エラー 0。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/core/doctor-specifier.ts tests/core/doctor-specifier.test.ts
@@ -1238,7 +1238,7 @@ git commit -m "feat(core): justice doctor の specifier 解決を追加"
 - Consumes: なし
 - Produces: `scanOpenCodeLogText(text: string): OpenCodeLogScan`。Task 7 が利用する（設計書 §9.1 検査 3）。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/core/doctor-logs.test.ts`:
 
@@ -1279,12 +1279,12 @@ describe("scanOpenCodeLogText()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/core/doctor-logs.test.ts`
 Expected: FAIL（`Cannot find module '../../src/core/doctor-logs'`）
 
-- [ ] **Step 3: 最小実装を書く**
+- [x] **Step 3:** 最小実装を書く**
 
 `src/core/doctor-logs.ts`:
 
@@ -1326,12 +1326,12 @@ export function scanOpenCodeLogText(text: string): OpenCodeLogScan {
 }
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/core/doctor-logs.test.ts && bun run typecheck && bun run lint`
 Expected: 全件 PASS、エラー 0。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/core/doctor-logs.ts tests/core/doctor-logs.test.ts
@@ -1355,7 +1355,7 @@ git commit -m "feat(core): justice doctor のログ走査純粋関数を追加"
 
 設計上の配置（設計書 §9.2）: 純粋ロジックは Task 4-6 で `src/core/` に配置済み。本ファイルはファイル探索・ログ読取・import・終了コードのみを担う。**不変条件 2（fail-open）の唯一の例外**として、検査失敗時に非ゼロ終了コードを返す（CLI はプラグイン本体ではなくセッションを落とさないため安全）。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/runtime/doctor-cli.test.ts`:
 
@@ -1530,12 +1530,12 @@ describe("runDoctor()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/runtime/doctor-cli.test.ts`
 Expected: FAIL（`Cannot find module '../../src/runtime/doctor-cli'`）
 
-- [ ] **Step 3: 実装を書く**
+- [x] **Step 3:** 実装を書く**
 
 `src/runtime/doctor-cli.ts`:
 
@@ -1869,7 +1869,7 @@ if (import.meta.main) {
   },
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/runtime/doctor-cli.test.ts && bun run typecheck && bun run lint && bun run build`
 Expected: 全件 PASS、エラー 0、`dist/runtime/doctor-cli.js` が生成される。
@@ -1881,7 +1881,7 @@ Expected: 全件 PASS、エラー 0、`dist/runtime/doctor-cli.js` が生成さ�
 # justice がプロジェクト設定に無い環境では justice_not_found_in_config で exit=1 となるのが正しい
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/runtime/doctor-cli.ts tests/runtime/doctor-cli.test.ts package.json
@@ -1904,7 +1904,7 @@ git commit -m "feat(cli): justice doctor 診断 CLI を追加"
 - Consumes: Task 3 の vitest 設定変更（`tests/real-fs/**` は既定 exclude 済み）、Task 5 の `resolveSpecifier`、Task 7 の `runDoctor` / `createCliFileReader`、Task 1 のビルド成果物。
 - Produces: `bun run test:integration`（ビルドを内包）。設計書 §9.1.1「実モジュール統合テスト」と §13 完了条件 7。`tests/integration/`（モックベース・既定テストに含まれる）とは別ディレクトリとし、ビルド成果物と実 FS を必要とするテストを `tests/real-fs/` に隔離する。
 
-- [ ] **Step 1: vitest.integration.config.ts と script・CI を追加する**
+- [x] **Step 1:** vitest.integration.config.ts と script・CI を追加する**
 
 `vitest.integration.config.ts`:
 
@@ -1934,7 +1934,7 @@ export default defineConfig({
 - run: bun run test:integration
 ```
 
-- [ ] **Step 2: 統合テストを書く**
+- [x] **Step 2:** 統合テストを書く**
 
 `tests/real-fs/doctor-resolver.test.ts`:
 
@@ -2029,12 +2029,12 @@ describe("doctor resolver integration (real modules)", () => {
 });
 ```
 
-- [ ] **Step 3: 既定テスト・test:dist・test:integration がすべて緑であることを確認する**
+- [x] **Step 3:** 既定テスト・test:dist・test:integration がすべて緑であることを確認する**
 
 Run: `bun run test && bun run test:dist && bun run test:integration`
 Expected: すべて PASS（既定テストは tests/real-fs を exclude したまま）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4:** Commit**
 
 ```bash
 git add vitest.integration.config.ts package.json tests/real-fs/doctor-resolver.test.ts .github/workflows/ci.yml
@@ -2057,7 +2057,7 @@ git commit -m "test(integration): doctor resolver の実モジュール統合テ
 - Consumes: 既存の `ObservationLogStore.append()` / `getRotationHealth()` / `getLastReadIntegrity()`、`executeJusticeReviewTool`。
 - Produces: `ObservationLogStore.getLastSuccessfulWriteAt(): string | undefined`。`ReadOnlyObservationLog` の optional メソッド `getRotationHealth?()` / `getLastReadIntegrity?()` / `getLastSuccessfulWriteAt?()`。`justice_review` の scope 未指定 view に `health` キー（設計書 §9.3）。
 
-- [ ] **Step 1: 失敗するテストを書く（store 側）**
+- [x] **Step 1:** 失敗するテストを書く（store 側）**
 
 `tests/runtime/observation-log-store.test.ts` の末尾に describe を追加（先頭の import に `createMockFileReader` / `createMockFileWriter` が無ければ `../helpers/mock-file-system` から追加）:
 
@@ -2097,7 +2097,7 @@ describe("getLastSuccessfulWriteAt()", () => {
 });
 ```
 
-- [ ] **Step 2: 失敗するテストを書く（tool 側）**
+- [x] **Step 2:** 失敗するテストを書く（tool 側）**
 
 `tests/runtime/justice-review-tool.test.ts` の末尾に describe を追加（`executeJusticeReviewTool` を `../../src/runtime/justice-tools` から import）:
 
@@ -2155,12 +2155,12 @@ describe("health section", () => {
 });
 ```
 
-- [ ] **Step 3: テストが失敗することを確認する**
+- [x] **Step 3:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/runtime/observation-log-store.test.ts tests/runtime/justice-review-tool.test.ts`
 Expected: 新規 describe が FAIL（`getLastSuccessfulWriteAt is not a function` / `parsed.health` が undefined）。
 
-- [ ] **Step 4: 実装する**
+- [x] **Step 4:** 実装する**
 
 `src/runtime/observation-log-store.ts`:
 
@@ -2279,12 +2279,12 @@ if (input.args.resolve === undefined) {
 
 （`resolve` の挙動と `TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS` の信頼境界は一切変更しない。`justice_review` 自身の実行は `justice_` プレフィックス除外により canonical な Observation Log を汚染しない（D50 維持）。）
 
-- [ ] **Step 5: テストが通ることを確認する**
+- [x] **Step 5:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/runtime/ && bun run test && bun run typecheck && bun run lint`
 Expected: 全件 PASS、エラー 0。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6:** Commit**
 
 ```bash
 git add src/runtime/observation-log-store.ts src/runtime/justice-tools.ts tests/runtime/observation-log-store.test.ts tests/runtime/justice-review-tool.test.ts
@@ -2304,7 +2304,7 @@ git commit -m "feat(review): justice_review に health セクションを追加"
 - Consumes: Task 1 の `exports` / ビルド成果物、Task 3 の FF-009。Task 7 の `justice doctor` を診断補助として使用可。
 - Produces: 設計書 §6.1 の検査 1-7 が **絶対パス経路（A）と root specifier 経路（B）の両方**で観測された証跡。**このタスクが成功しない限り Task 11 以降に進んではならない**（設計書 §4）。検査 1-2 が満たされるが 3 以降が満たされない場合は H1（ロードは成功するが観測経路が黙って失敗する）が確定するため、設計書 §6.3 に従い `ObservationLogStore.append()` / `ObservationHandler` / `SessionStateProvider` の各境界に一時的な診断ログを追加して原因を切り分け、本計画の続行を停止して報告する。
 
-- [ ] **Step 1: ビルドと経路 A（絶対パス・環境隔離）のセットアップ**
+- [x] **Step 1:** ビルドと経路 A（絶対パス・環境隔離）のセットアップ**
 
 ```bash
 REPO="$PWD"   # 以降の cd に備えてリポジトリルートを保持
@@ -2321,7 +2321,7 @@ EOF
 
 開発機のグローバル設定に旧来の壊れた `@yohi/justice@2.7.0` 登録が残っていると検査 1 が汚染されるため、**経路 A も HOME / XDG 系を隔離して実行する**（設計書 §6.0 手順 1 に対する安全側の補強。検証対象のロード経路は変わらない）。
 
-- [ ] **Step 2: 経路 A で OpenCode を起動し検査 1-5 を実施**
+- [x] **Step 2:** 経路 A で OpenCode を起動し検査 1-5 を実施**
 
 ```bash
 cd "$TMP_A/proj"
@@ -2342,7 +2342,7 @@ opencode run "bash ツールで echo justice-phase2-a を 1 回だけ実行し�
 
 （headless の `opencode run` がツール呼出しに応答しない場合は、同一環境変数で `opencode` を TUI 起動し、手動で同等の操作を行う。）
 
-- [ ] **Step 3: 経路 B（root specifier・キャッシュ事前配置）のセットアップ**
+- [x] **Step 3:** 経路 B（root specifier・キャッシュ事前配置）のセットアップ**
 
 ```bash
 cd "$REPO"
@@ -2355,7 +2355,7 @@ cp "$REPO/package.json" "$PKG_DIR/package.json"
 grep -E '"version": "3.0.0"|"\./core"' "$PKG_DIR/package.json"
 ```
 
-- [ ] **Step 4: 経路 B で root specifier 経由のインストールと検査 1-5 を実施**
+- [x] **Step 4:** 経路 B で root specifier 経由のインストールと検査 1-5 を実施**
 
 ```bash
 cd "$TMP_B/proj"
@@ -2383,7 +2383,7 @@ diff -r "$REPO/dist" "$PKG_DIR/dist" && echo "OK: cache matches build"
 # → 検査 1-2 が再び満たされること。解決後バージョンが 3.0.0 であることを記録する
 ```
 
-- [ ] **Step 5: 検査 6-7（gate fail-open / task_complete DecisionRecord）**
+- [x] **Step 5:** 検査 6-7（gate fail-open / task_complete DecisionRecord）**
 
 `task()` ツールは OmO 環境に依存するため、検査 6-7 は実環境（HOME 隔離なし）の一時プロジェクトで実施する。実環境のグローバル設定に旧 2.7.0 登録が残っていても、壊れた方は TypeError で脱落し、絶対パスで登録した本ビルドのみが観測を担う。
 
@@ -2409,7 +2409,7 @@ opencode run "task() を 1 回呼んでごく小さな作業（例: echo hello�
 
 検査 2-4 についても、`.justice/events/` の JSONL が**本経路固有の新規 sessionId / callId** を持つことを確認する（経路 A/B の成果物と共有しない）。
 
-- [ ] **Step 6: 検証レポートを記録する**
+- [x] **Step 6:** 検証レポートを記録する**
 
 `docs/reports/2026-07-31-v2-runtime-verification.md` を作成し、以下を記載する（設計書 §6.4）:
 
@@ -2421,7 +2421,7 @@ opencode run "task() を 1 回呼んでごく小さな作業（例: echo hello�
 - 観測できた JSONL の抜粋（redaction 済み・秘密情報なし）
 - 判定: 7 項目すべて観測済みである旨、または失敗項目と H1 分岐の有無
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7:** Commit**
 
 ```bash
 git add docs/reports/2026-07-31-v2-runtime-verification.md
@@ -2442,7 +2442,7 @@ git commit -m "docs(reports): v2 実機検証レポートを記録"
 - Consumes: なし
 - Produces: `validatePluginOptions(raw: unknown): { readonly options: ValidatedPluginOptions; readonly warnings: readonly string[] }`、`ValidatedPluginOptions = { readonly enableAdvisoryOutputAppend?: boolean }`。Task 12 が利用する（設計書 §7.2）。**`OpenCodeAdapterOptions`（runtime）を core から型 import すると不変条件 1 のアーキテクチャテストに触れるため、core 側は独自型を返し、runtime 側で写す。**
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/core/plugin-options.test.ts`:
 
@@ -2492,12 +2492,12 @@ describe("validatePluginOptions()", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/core/plugin-options.test.ts`
 Expected: FAIL（`Cannot find module '../../src/core/plugin-options'`）
 
-- [ ] **Step 3: 最小実装を書く**
+- [x] **Step 3:** 最小実装を書く**
 
 `src/core/plugin-options.ts`:
 
@@ -2550,12 +2550,12 @@ export function validatePluginOptions(raw: unknown): PluginOptionsValidation {
 }
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/core/plugin-options.test.ts && bun run typecheck && bun run lint && bun run test`
 Expected: 全件 PASS、エラー 0（`tests/arch/core-no-opencode-imports.test.ts` を含む）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/core/plugin-options.ts tests/core/plugin-options.test.ts
@@ -2576,7 +2576,7 @@ git commit -m "feat(core): PluginOptions 検証純粋関数を追加"
 - Consumes: Task 11 の `validatePluginOptions` / `ValidatedPluginOptions`。`Plugin` 型は `(input: PluginInput, options?: PluginOptions) => Promise<Hooks>`（`@opencode-ai/plugin` 1.14.21 / 1.18.4 で一致確認済み、設計書 §7.2）。
 - Produces: ファクトリ第 2 引数の受取、`ValidatedPluginOptions` → `OpenCodeAdapterOptions` の写し（runtime 側責務）、警告の `init.client.app.log`（`service=justice`）出力。Task 13 の C1 実機検証で `[specifier, { "enableAdvisoryOutputAppend": true }]` の tuple 設定が物理的に可能になる。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1:** 失敗するテストを書く**
 
 `tests/runtime/opencode-plugin-options.test.ts`:
 
@@ -2637,12 +2637,12 @@ describe("OpenCodePlugin PluginOptions wiring", () => {
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認する**
+- [x] **Step 2:** テストが失敗することを確認する**
 
 Run: `bun run vitest run tests/runtime/opencode-plugin-options.test.ts`
 Expected: FAIL（型不一致のケースで `log` が呼ばれない / 現行ファクトリは第 2 引数を読まない）。
 
-- [ ] **Step 3: 実装する**
+- [x] **Step 3:** 実装する**
 
 `src/opencode-plugin.ts` のファクトリ先頭を以下に変更（残りの hooks 定義は不変）:
 
@@ -2684,12 +2684,12 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
   // ...（以降の hooks 定義は現行のまま変更しない）
 ```
 
-- [ ] **Step 4: テストが通ることを確認する**
+- [x] **Step 4:** テストが通ることを確認する**
 
 Run: `bun run vitest run tests/runtime/opencode-plugin-options.test.ts && bun run test && bun run typecheck && bun run lint && bun run test:dist`
 Expected: 全件 PASS（FF-009 の検証 4「factory 呼出しで Hooks が返る」も第 2 引数ありの形で緑のまま）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add src/opencode-plugin.ts tests/runtime/opencode-plugin-options.test.ts
@@ -2709,7 +2709,7 @@ git commit -m "feat(plugin): PluginOptions 経由の設定経路を配線"
 - Consumes: Task 10（実機で v2.0 が動作する証拠）、Task 12（PluginOptions 配線）。
 - Produces: C1 判定（`C1 passed` / `C1 partial` / `C1 observed-negative`）と `enableAdvisoryOutputAppend` 既定値の確定・記録。**`C1 passed` 以外の状態では Phase 3 を完了・出荷完了として記録できない**（設計書 §7.3・§13.3）。
 
-- [ ] **Step 1: tuple 設定で実機起動する**
+- [x] **Step 1:** tuple 設定で実機起動する**
 
 ```bash
 TMP_D="$PWD/tmp/phase3-c1-$(cat /proc/sys/kernel/random/uuid)"
@@ -2724,7 +2724,7 @@ cd "$TMP_D"
 
 `.justice/gate.yaml` は置かない（既定 3 gate はすべて `onMissingEvidence: warn` = trust-first）。
 
-- [ ] **Step 2: WARN を意図的に発生させる**
+- [x] **Step 2:** WARN を意図的に発生させる**
 
 テストもビルドも実行しないまま `task()` を 1 回呼んで完了させる:
 
@@ -2734,7 +2734,7 @@ opencode run "task() を 1 回呼んで echo hello だけの小さな作業を�
 
 これにより `required-tests`（test outcome の Evidence 不在）と `build-green`（build outcome の Evidence 不在）が `onMissingEvidence` により WARN を返し、`task_complete` トリガで DecisionRecord が生成される。
 
-- [ ] **Step 3: 両チャネルの可視性を対比して判定する**
+- [x] **Step 3:** 両チャネルの可視性を対比して判定する**
 
 advisory は `JusticeNotifier`（保証チャネル = app log / toast 相当）と `output.output` 末尾（best-effort チャネル）の両方に送出される。**後者の可視性を前者と対比して判定する**:
 
@@ -2746,12 +2746,12 @@ advisory は `JusticeNotifier`（保証チャネル = app log / toast 相当）�
 
 判定には FAIL を待つ必要はない。C1 が問うのは advisory の**表示面が届くか**であり、verdict の重さではない。
 
-- [ ] **Step 4: 既定値を確定し SPEC §15.12 に記録する**
+- [x] **Step 4:** 既定値を確定し SPEC §15.12 に記録する**
 
 - `C1 passed` の場合: 既定値 `true` 化の可否を判断する。`true` に変更する場合は `src/runtime/opencode-adapter.ts` の `OpenCodeAdapterOptions` コメント（D47 参照）と既定値解釈を更新し、対応テストを修正のうえ本タスクでコミットする。`false` 据置の場合も、その判断根拠を記録する。
 - いずれの場合も SPEC §15.12 の C1 項目を「未実証（Not Verified）」から実証結果（判定・日付・観測手順の要約・既定値と根拠）で置換する。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5:** Commit**
 
 ```bash
 git add SPEC.md
@@ -2774,7 +2774,7 @@ git commit -m "docs(spec): C1 実機検証結果と advisory 既定値を記録"
 - Consumes: `ObservationHandler`（`src/hooks/observation-handler.ts`）、`SessionStateProvider`（`src/core/session-state-provider.ts`）、`ObservationLogStore` / `StateProjectionCache` / `FileGateLoader`（runtime）、`NodeFileSystem`。
 - Produces: 設計書 §8.2 の固定計測プロトコルに従う p50/p95/p99 と raw samples（`docs/reports/2026-07-31-v2-latency-measurement.json`）。Task 15 の判定入力。
 
-- [ ] **Step 1: measure.ts を拡張する**
+- [x] **Step 1:** measure.ts を拡張する**
 
 ヘッダコメントを更新（「Phase 4（observation-handler）が存在しないため永続化プリミティブ単体を測っている」という記述は陳腐化したため、hook 経路 end-to-end が本計測の主対象である旨に書き換え）し、以下を追加実装する。既存の `ObservationLogStore.append()` 直接呼出計測は **primitive 参考値**として残し、判定には使用しない（設計書 §8.2-1）。
 
@@ -2981,14 +2981,14 @@ async function main(): Promise<void> {
 - キャッシュ未ヒット条件（設計書 §8.2-5 後段）は、prefill 後に**新しい** `NodeFileSystem` / store / handler インスタンスを作り直して 1 回目の append を計測する条件として追加する（`contents` キャッシュが冷えた状態）。
 - 複数 shard 条件の合計サンプル数は 4 writer × 100 回 = 400（設計書 §8.2-6）。
 
-- [ ] **Step 2: 計測を実行しレポートを保存する**
+- [x] **Step 2:** 計測を実行しレポートを保存する**
 
 Run: `mkdir -p docs/reports && bun run spikes/observation-latency/measure.ts`
 Expected: `docs/reports/2026-07-31-v2-latency-measurement.json` が生成され、全条件の p50/p95/p99 が標準出力に出る。実行環境（OS・Bun バージョン・ファイルシステム種別）をレポートの `environment` に追記する（`df -T /tmp` や `uname -a` で確認）。
 
 補助確認: `bun run typecheck` が緑であること（spike は lint 対象外でも型は通す）。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3:** Commit**
 
 ```bash
 git add spikes/observation-latency/measure.ts docs/reports/2026-07-31-v2-latency-measurement.json
@@ -3014,16 +3014,16 @@ git commit -m "test(spike): hook 経路 end-to-end レイテンシ計測を追�
 | 5ms 以上 50ms 未満 | 条件付き許容 | SPEC に実測値・計測条件（§8.2 固定プロトコル）・shard サイズ依存性を明記し、改善は v2.5 の Issue に登録 |
 | 50ms 以上          | 要改善       | 設計書 §8.4 の改善実装へ（ただし下記の設計レビューゲートを経る）                                        |
 
-- [ ] **Step 1: 判定を記録する**
+- [x] **Step 1:** 判定を記録する**
 
 同じ shard への連続 append（本番支配的条件）の p95 を判定基準表に照らし、判断と対応を SPEC §15.12 のレイテンシ項目に記録する。記載内容: 実測値（全条件の p50/p95/p99）、計測条件（固定プロトコル・実行環境）、shard サイズ依存性の所見、確定した方針。
 
-- [ ] **Step 2: 条件分岐**
+- [x] **Step 2:** 条件分岐**
 
 - **p95 < 50ms の場合**: §8.4 は実施しない。v2.5 改善 Issue の登録（条件付き許容帯の場合）を GitHub Issues に作成し、Issue 番号を SPEC に記す。
 - **p95 ≥ 50ms の場合**: 追記専用 append（O(1)）への切替は不変条件 4 の解釈に影響するため、**実装前に設計レビュー（Oracle 相談）を経る**（設計書 §8.4）。本計画では改善実装を行わず、計測データ・設計書 §8.4.1 の前提条件 1-6（末尾不完全レコードの扱い・クラッシュ復旧・fsync 方針・FileWriter 拡張・末尾切断復旧テスト・writerId プロセス間衝突防止）を添えて Oracle レビューを実施し、承認された設計で**別途フォローアップ計画**を作成する。§8.4.1-5 の復旧テストは `bun run test:integration`（Task 8 の基盤）に追加されることになる。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3:** Commit**
 
 ```bash
 git add SPEC.md
@@ -3043,7 +3043,7 @@ git commit -m "docs(spec): レイテンシ再計測結果と確定方針を記�
 - Consumes: なし（文書のみ）。
 - Produces: `Status: APPROVED` の ADR。**ratification コミット自体が証跡となる**（設計書 §10.1）。ADR が承認対象としている Charter 逸脱 5 項目（hook bindings / storage paths / exit code degraded verdict / artifact authorship reduction / declared evidence limitation）は一切変更しない。
 
-- [ ] **Step 1: ADR 本文を改訂する**
+- [x] **Step 1:** ADR 本文を改訂する**
 
 `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` に以下の変更を加える:
 
@@ -3078,7 +3078,7 @@ git commit -m "docs(spec): レイテンシ再計測結果と確定方針を記�
 - **Status change:** `PENDING HUMAN CODEOWNERS RATIFICATION` → `APPROVED`.
 ```
 
-- [ ] **Step 2: ratification コミットを作成する**
+- [x] **Step 2:** ratification コミットを作成する**
 
 コミットメッセージに日付・対象・根拠を明記する（このコミットが証跡そのもの）:
 
@@ -3105,7 +3105,7 @@ git commit -m "docs(adr): ratification 要件を達成可能な形へ再定義�
 - Consumes: Task 10（Phase 2 結果）、Task 13（C1 結果）、Task 15（レイテンシ方針）、Task 16（ADR APPROVED）。
 - Produces: 実証結果と整合した SPEC。
 
-- [ ] **Step 1: §15.10 に FF-009 を追加する**
+- [x] **Step 1:** §15.10 に FF-009 を追加する**
 
 Fitness Functions 表の FF-008 の次の行に追加:
 
@@ -3113,7 +3113,7 @@ Fitness Functions 表の FF-008 の次の行に追加:
 | FF-009 | 配布エントリ（`exports["."]` / `exports["./opencode"]`）の全 export は OpenCode ローダ契約（関数または `{ server: fn }`、dedup 後ちょうど 1 plugin）を満たす。`tests/dist/` で self-reference specifier 経由の回帰テスト（`bun run test:dist`） |
 ```
 
-- [ ] **Step 2: §15.9 に health セクションを追記する**
+- [x] **Step 2:** §15.9 に health セクションを追記する**
 
 「**表示（view）**」の箇条書きを以下のように拡張:
 
@@ -3121,7 +3121,7 @@ Fitness Functions 表の FF-008 の次の行に追加:
 - **表示（view）**: `{ scope? }`。`scope` 未指定時は全体のレビュー要約（`critical`/`major`/`minor`/`open`/`resolved` + `byScope`）に加えて `health` セクション（observation log のレコード件数・shard 数・最終書込時刻（`ObservationLogStore.getLastSuccessfulWriteAt()`）・rotation health（`getRotationHealth()`）・read integrity（`getLastReadIntegrity()`））を返す。health 取得は fail-open で、取得失敗時は当該フィールドを省略して view 本体を返す。指定時は当該 scope の `ScopeReviewSummary` のみを返す。
 ```
 
-- [ ] **Step 3: §15.12 を全面改訂する**
+- [x] **Step 3:** §15.12 を全面改訂する**
 
 既存の §15.12 を以下の構成で書き換える（具体的な数値・判定は Task 10/13/15 の結果を転記）:
 
@@ -3139,7 +3139,7 @@ v2.0 出荷完了時点（2026-08-02・v3.0.0）の状況を記録する。
 - **スコープ外の既知課題**: Node ESM 非互換（dist の相対 import が拡張子なし。OpenCode は Bun 上で動作するため実害なし。将来 Node ベースのローダや Node 環境からのライブラリ利用で顕在化するリスク。別 Issue 参照）と `@opencode-ai/plugin` バージョンドリフト（開発時 1.14.21 / 実機 1.18.4。使用型は両版で一致確認済み）。
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4:** Commit**
 
 ```bash
 git add SPEC.md
@@ -3159,7 +3159,7 @@ git commit -m "docs(spec): §15.12 を実証結果で全面改訂し FF-009 と 
 - Consumes: 全タスクの完了。
 - Produces: v3.0.0 として整合した README と、設計書 §13 の 7 項目すべての検証記録。
 
-- [ ] **Step 1: README を更新する**
+- [x] **Step 1:** README を更新する**
 
 1. **パターン 1（推奨）の手順に最低バージョン要件を明記**（「プラグインのインストール」コマンドの直後）:
 
@@ -3213,7 +3213,7 @@ bunx @yohi/justice doctor
 
 5. **「未完了」注記の削除**: プロジェクト・ステータス表直下の `※1` 注記と、「Quality Control Plane (v2.0)」セクション冒頭の NOTE（SPEC.md §15.12 参照の未完了注記）を削除する。**この削除は Step 2 の全検証が緑になった後でのみ行う（前倒し禁止）。**
 
-- [ ] **Step 2: 設計書 §13 の完了条件をすべて検証する**
+- [x] **Step 2:** 設計書 §13 の完了条件をすべて検証する**
 
 Run: `bun run typecheck && bun run lint && bun run test && bun run build && bun run test:dist && bun run test:integration`
 Expected: すべて成功。
@@ -3229,7 +3229,7 @@ Expected: すべて成功。
 - [ ] 全コマンド成功（上記 Run の結果）
 - [ ] SPEC.md / README.md に `<Task ...` / TBD / TODO プレースホルダーが残存していない（`rg '<Task\s+\d+|TBD|TODO' SPEC.md README.md` が 0 件）
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3:** Commit**
 
 ```bash
 git add README.md
