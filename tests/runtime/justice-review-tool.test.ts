@@ -574,4 +574,23 @@ describe("health section", () => {
       readIntegrity: { hasIntegrityViolation: false },
     });
   });
+
+  it("remains fail-open even when the warning log itself throws", async () => {
+    const logReader = {
+      readAll: async () => [],
+      getRotationHealth: () => { throw new Error("health boom"); },
+    };
+    const throwingLog = (): never => {
+      throw new Error("log boom");
+    };
+    const result = await executeJusticeReviewTool({
+      args: {},
+      requestApproval: async () => {},
+      logReader,
+      log: throwingLog,
+    });
+    const parsed = JSON.parse(result as string) as Record<string, unknown>;
+    expect(parsed.authority).toBe("observed_review_output");
+    expect(parsed.health).toBeUndefined();
+  });
 });

@@ -184,7 +184,11 @@ async function collectHealth(
       },
     };
   } catch (error: unknown) {
-    await log?.("warn", "[Justice] collectHealth failed", [error]);
+    try {
+      await log?.("warn", "[Justice] collectHealth failed", [error]);
+    } catch {
+      /* best-effort logging: swallowed */
+    }
     return undefined; // fail-open: health 取得失敗時はフィールドを省略して view 本体を返す
   }
 }
