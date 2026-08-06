@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## [3.0.0](https://github.com/yohi/justice/compare/v2.7.0...v3.0.0) (2026-08-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* 配布エントリポイントを plugin 専用に再構成し v3.0.0 へ
+
+### Features
+
+* **cli:** justice doctor 診断 CLI と設定探索・specifier 解決・ログ走査を追加 ([d96ae0b](https://github.com/yohi/justice/commit/d96ae0bcbcee84b86a2c3dd4808346df61844d79))
+* **cli:** justice doctor 診断 CLI を追加 ([de2be78](https://github.com/yohi/justice/commit/de2be7817d01a8b787fcf8e66141d741e484c43e))
+* **core:** justice doctor の specifier 解決を追加 ([d263d1c](https://github.com/yohi/justice/commit/d263d1c0d92c2967660c5391bcf8408b0347e1e5))
+* **core:** justice doctor のログ走査純粋関数を追加 ([3b51b28](https://github.com/yohi/justice/commit/3b51b281b76f6ddcfe73c07aa0c202a6f1f0b18a))
+* **core:** justice doctor の設定探索・解析純粋関数を追加 ([74cea26](https://github.com/yohi/justice/commit/74cea267a40d55385e077fbd4838923e8daabc08))
+* **core:** OpenCode ローダ契約の判定純粋関数を追加 ([ed4b607](https://github.com/yohi/justice/commit/ed4b6077cef293098e91133d74985bb1e54205d8))
+* **core:** PluginOptions 検証純粋関数を追加 ([378b4bf](https://github.com/yohi/justice/commit/378b4bf8a63abba66df18f59db1a3391ae067c92))
+* loader-contractでのclass宣言関数の除外とエラー検出処理の追加 ([4457914](https://github.com/yohi/justice/commit/445791437e8d3c60a14f94b57d892f85d8b2d80c))
+* **plugin:** PluginOptions 経由の設定経路を配線 ([ac3b450](https://github.com/yohi/justice/commit/ac3b45037a55e560d6e73c993af2e97f783533d8))
+* **review:** justice_review に health セクションを追加 ([1ac9066](https://github.com/yohi/justice/commit/1ac9066d2cc1b68291f6caf50ad90e7df80d2eca))
+* **review:** PluginOptions 設定経路と justice_review health セクションを追加 ([1f40c1d](https://github.com/yohi/justice/commit/1f40c1de298b68b1b3384850cfe9b1894541234a))
+* 配布エントリポイントを plugin 専用に再構成し v3.0.0 へ ([7b5f065](https://github.com/yohi/justice/commit/7b5f06561938d125f38f068f52741598b82da2bc))
+
+
+### Bug Fixes
+
+* **ci:** codecov.ymlの重複runキーを修正 ([0c8884b](https://github.com/yohi/justice/commit/0c8884bf86b83dd276af9e008c258730d33b9c02))
+* **core:** check loader contracts and handle health logging in justice tools ([c08a968](https://github.com/yohi/justice/commit/c08a968e53db02331bd0b8708efeab342ebc5fd6))
+* **core:** validatePluginOptionsでProxy/getter例外に対するfail-open保護を追加 ([c7c96bb](https://github.com/yohi/justice/commit/c7c96bbc77eed16832931c492e39ab50b47d0856))
+* **doctor-config:** justice_not_found_in_configのsourceをmergedに修正、isJusticeSpecifierを厳密化、scanUnreadableSourceを構造化解析、JSONCパーサのデッドコード削除とパフォーマンス改善 ([3b93b01](https://github.com/yohi/justice/commit/3b93b01c270b6b8028277e9e0cb097ed2f1976e5))
+* **doctor:** address review feedback on CLI robustness, performance, and precision ([2e7bef3](https://github.com/yohi/justice/commit/2e7bef3e5591d000e24ec4cf87a9e5ca84053a09))
+* **doctor:** JSONC parse失敗時のjustice判定を厳密化 ([0c8884b](https://github.com/yohi/justice/commit/0c8884bf86b83dd276af9e008c258730d33b9c02))
+* **runtime:** collectHealthの警告ログ失敗時もfail-open動作を保証 ([17965ea](https://github.com/yohi/justice/commit/17965ea2084a130ad4a264d58da208041c10e436))
+* **vitest:** remove duplicate export default in integration config ([46c1d0d](https://github.com/yohi/justice/commit/46c1d0d50a8fb96bea1e8a0cc2b4f0a4cfa49d60))
+* ログ読み込みエラー検出におけるJustice識別子の検証精度向上 ([040ea8a](https://github.com/yohi/justice/commit/040ea8ab51a6957b2d82273a10180670e965bc48))
+
 ## [3.0.0](https://github.com/yohi/justice/compare/v2.7.0...v3.0.0) (2026-08-02)
 
 ### ⚠ BREAKING CHANGES
