@@ -1,6 +1,7 @@
 // tests/core/justice-doctor-config.test.ts
 import { describe, expect, it } from "vitest";
 import {
+  isJusticeSpecifier,
   mergeSourceScans,
   parseJsonc,
   scanConfigContent,
@@ -33,9 +34,29 @@ describe("parseJsonc()", () => {
     expect(result).toEqual({ ok: true, value: { plugin: ["text, ]", "more, }"] } });
   });
 
-  it("returns ok:false for unterminated block comments", () => {
-    expect(parseJsonc(`{ "plugin": [ /* unfinished `).ok).toBe(false);
+  it("rejects an unterminated block comment with a clear error", () => {
+    const result = parseJsonc(`{ "plugin": [ /* unfinished `);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Unterminated block comment");
+    }
   });
+
+  it("handles escaped characters inside strings", () => {
+    const result = parseJsonc(`{"plugin": ["\\\\", "\\"", "@yohi/justice"]}`);
+    expect(result).toEqual({
+      ok: true,
+      value: { plugin: ["\\", '"', "@yohi/justice"] },
+    });
+  });
+
+  it("skips line comments that appear after a trailing comma", () => {
+    const result = parseJsonc(`{"plugin": ["@yohi/justice"], // trailing comment\n}`);
+    expect(result).toEqual({ ok: true, value: { plugin: ["@yohi/justice"] } });
+  });
+});
+
+describe("scanConfigContent()", () => {
   it("extracts string and tuple specifiers", () => {
     const result = scanConfigContent(
       "project",
@@ -92,12 +113,33 @@ describe("parseJsonc()", () => {
     expect(result.specifiers).toHaveLength(1);
   });
 
-  it("detects absolute-path registrations containing justice", () => {
+  it("detects absolute-path registrations whose basename is justice or starts with justice-", () => {
     const result = scanConfigContent(
       "project",
-      `{"plugin": ["/home/user/justice/dist/opencode-plugin.js"]}`,
+      `{"plugin": ["/home/user/justice"]}`
     );
-    expect(result.specifiers[0]?.specifier).toBe("/home/user/justice/dist/opencode-plugin.js");
+    expect(result.specifiers[0]?.specifier).toBe("/home/user/justice");
+  });
+
+  it("sorts option keys alphabetically for tuple specifiers", () => {
+    const result = scanConfigContent(
+      "project",
+      `{"plugin": [["@yohi/justice", {"b": 1, "a": 2, "c": 3}]]}`,
+    );
+    expect(result.specifiers[0]?.optionKeys).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("isJusticeSpecifier()", () => {
+  it("rejects absolute paths where 'justice' appears only as a substring in another segment", () => {
+    expect(isJusticeSpecifier("/home/user/injustice-report/index.ts")).toBe(false);
+    expect(isJusticeSpecifier("/usr/local/lib/no-justice-helper/lib.js")).toBe(false);
+  });
+
+  it("accepts absolute paths whose basename is justice or starts with justice-", () => {
+    expect(isJusticeSpecifier("/home/user/justice")).toBe(true);
+    expect(isJusticeSpecifier("/path/to/justice-plugin")).toBe(true);
+    expect(isJusticeSpecifier("/opt/justice-v2")).toBe(true);
   });
 });
 
@@ -157,7 +199,7 @@ describe("scanUnreadableSource()", () => {
   it("reports unsupported_config_source when OPENCODE_CONFIG_CONTENT contains justice", () => {
     const result = scanUnreadableSource(
       "env_config_content",
-      `{"plugin": ["@yohi/justice@3.0.0"]}`
+      `{"plugin": ["@yohi/justice@3.0.0"]}`,
     );
     expect(result.diagnostics).toEqual([
       { code: "unsupported_config_source", source: "env_config_content" },
@@ -167,5 +209,46 @@ describe("scanUnreadableSource()", () => {
   it("reports nothing when the unreadable source has no justice reference", () => {
     const result = scanUnreadableSource("env_config_content", `{"plugin": ["other"]}`);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("detects justice in unreadable source when JSONC parse fails but specifier appears as a string literal", () => {
+    const result = scanUnreadableSource("managed", `{ "plugin": ["@yohi/justice"]`);
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("detects justice tuple entries in unreadable parsed source", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["@yohi/justice",{}]]}`,
+    );
+    expect(result.diagnostics).toEqual([
+      { code: "unsupported_config_source", source: "env_config_content" },
+    ]);
+  });
+
+  it("reports nothing for unreadable source with a parse-failing but justice-free string", () => {
+    const result = scanUnreadableSource("managed", `{ "plugin": ["other-plugin"]`);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("continues scanning after the first justice specifier occurrence in parse-failing content", () => {
+    const result = scanUnreadableSource(
+      "managed",
+      `{ "plugin": ["@yohi/justice", "@yohi/justice"]`,
+    );
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("reports nothing for parsed unreadable source with non-string plugin entries", () => {
+    const result = scanUnreadableSource("managed", `{"plugin": [null, 123]}`);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("continues scanning after a justice specifier in a comment when a later string occurrence matches", () => {
+    const result = scanUnreadableSource(
+      "managed",
+      `/* @yohi/justice */ { "plugin": ["@yohi/justice"]`,
+    );
+    expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
   });
 });

@@ -41,3 +41,21 @@ describe("validatePluginOptions()", () => {
     }
   });
 });
+
+  it("returns empty options and a warning when reading enableAdvisoryOutputAppend throws", () => {
+    const throwing = new Proxy<Record<string, unknown>>({}, {
+      get(_target, prop) {
+        if (prop === "enableAdvisoryOutputAppend") {
+          throw new Error("proxy throw");
+        }
+        return undefined;
+      },
+    });
+    const result = validatePluginOptions(throwing);
+    expect(result.options).toEqual({});
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("enableAdvisoryOutputAppend");
+    expect(result.warnings[0]).toContain("proxy throw");
+    expect(result.warnings[0]).toContain("false");
+  });
+
