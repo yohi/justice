@@ -158,6 +158,22 @@ describe("defineJusticeReviewTool", () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
+  it("returns an error when requesting an unknown scope", async () => {
+    // Given
+    const store = await createReviewStore();
+    const ask = vi.fn(() => Effect.succeed(undefined));
+
+    // When
+    const result = await executeReviewTool({ store, args: { scope: "non-existent" }, ask });
+
+    // Then
+    expect(JSON.parse(outputOf(result))).toEqual({
+      status: "ERROR",
+      reason: "Unknown review scope: non-existent",
+    });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
   it("returns the full summary for a whitespace-only read-only scope", async () => {
     // Given
     const store = await createReviewStore();
@@ -528,5 +544,34 @@ describe("health section", () => {
     const parsed = JSON.parse(result as string) as Record<string, unknown>;
     expect(parsed.authority).toBe("observed_review_output");
     expect((parsed.health as Record<string, unknown> | undefined)?.recordCount).toBe(0);
+  });
+
+  it("handles corrupted record fields gracefully in health collection", async () => {
+    const logReader = {
+      readAll: async () => [
+        {
+          agentId: 123,
+          sessionId: true,
+          writerId: null,
+          schemaVersion: 1,
+          timestamp: "2026-08-01T00:00:00.000Z",
+          recordType: "observation",
+          kind: "review_observed",
+          reviewScope: "task-1",
+          items: [],
+        } as unknown as import("../../src/core/v2/observation-model").PersistedLogRecord,
+      ],
+      getRotationHealth: () => ({ consecutiveFailures: 0, degraded: false, lastError: undefined }),
+      getLastReadIntegrity: () => ({ hasIntegrityViolation: false }),
+      getLastSuccessfulWriteAt: () => undefined,
+    };
+    const result = await executeJusticeReviewTool({ args: {}, requestApproval: async () => {}, logReader });
+    const parsed = JSON.parse(result as string) as Record<string, unknown>;
+    expect(parsed.health).toEqual({
+      recordCount: 1,
+      shardCount: 1,
+      rotationHealth: { consecutiveFailures: 0, degraded: false },
+      readIntegrity: { hasIntegrityViolation: false },
+    });
   });
 });
