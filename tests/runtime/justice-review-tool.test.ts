@@ -478,3 +478,55 @@ describe("defineJusticeReviewTool via OpenCodeAdapter", () => {
     });
   });
 });
+
+describe("health section", () => {
+  const baseInput = {
+    args: {},
+    requestApproval: async () => {},
+  };
+
+  it("adds a health section to the scope-less view", async () => {
+    const logReader = {
+      readAll: async () => [],
+      getRotationHealth: () => ({
+        consecutiveFailures: 0,
+        degraded: false,
+        lastError: undefined,
+      }),
+      getLastReadIntegrity: () => ({ hasIntegrityViolation: false }),
+      getLastSuccessfulWriteAt: () => "2026-08-02T00:00:00.000Z",
+    };
+    const result = await executeJusticeReviewTool({ ...baseInput, logReader });
+    expect(typeof result).toBe("string");
+    const parsed = JSON.parse(result as string) as Record<string, unknown>;
+    expect(parsed.health).toEqual({
+      recordCount: 0,
+      shardCount: 0,
+      lastSuccessfulWriteAt: "2026-08-02T00:00:00.000Z",
+      rotationHealth: { consecutiveFailures: 0, degraded: false },
+      readIntegrity: { hasIntegrityViolation: false },
+    });
+  });
+
+  it("returns the view body without health when health collection fails (fail-open)", async () => {
+    const logReader = {
+      readAll: async () => [],
+      getRotationHealth: () => {
+        throw new Error("boom");
+      },
+    };
+    const result = await executeJusticeReviewTool({ ...baseInput, logReader });
+    expect(typeof result).toBe("string");
+    const parsed = JSON.parse(result as string) as Record<string, unknown>;
+    expect(parsed.authority).toBe("observed_review_output");
+    expect(parsed.health).toBeUndefined();
+  });
+
+  it("omits health gracefully for a legacy readAll-only logReader", async () => {
+    const logReader = { readAll: async () => [] };
+    const result = await executeJusticeReviewTool({ ...baseInput, logReader });
+    const parsed = JSON.parse(result as string) as Record<string, unknown>;
+    expect(parsed.authority).toBe("observed_review_output");
+    expect((parsed.health as Record<string, unknown> | undefined)?.recordCount).toBe(0);
+  });
+});

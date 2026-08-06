@@ -59,6 +59,13 @@ function rotationTimestamp(now: Date): string {
 /** Read-only capability exposed to query tools that must not mutate the log. */
 export interface ReadOnlyObservationLog {
   readAll(): Promise<readonly PersistedLogRecord[]>;
+  getRotationHealth?(): {
+    readonly consecutiveFailures: number;
+    readonly degraded: boolean;
+    readonly lastError: unknown;
+  };
+  getLastReadIntegrity?(): ReadIntegrityStatus;
+  getLastSuccessfulWriteAt?(): string | undefined;
 }
 
 export type ReadIntegrityStatus = {
@@ -136,6 +143,7 @@ export class ObservationLogStore {
   private readonly rotationFailuresByPath = new Map<string, number>();
   private lastRotationError: unknown = undefined;
   private lastReadIntegrity: ReadIntegrityStatus = { hasIntegrityViolation: false };
+  private lastSuccessfulWriteAt: string | undefined = undefined;
 
   constructor(
     private readonly fileWriter: FileWriter,
@@ -186,6 +194,11 @@ export class ObservationLogStore {
     return { ...this.lastReadIntegrity };
   }
 
+  /** 直近の成功した append の完了時刻（ISO）。health セクション用（設計書 §9.3）。 */
+  getLastSuccessfulWriteAt(): string | undefined {
+    return this.lastSuccessfulWriteAt;
+  }
+
   async append(shardId: ShardId, record: PendingLogRecord): Promise<number> {
     if (shardId.writerId !== this.writerId) {
       throw new Error(
@@ -201,7 +214,12 @@ export class ObservationLogStore {
     }
     const path = toPhysicalPath(shardId);
     this.shardsByPath.set(path, shardId);
-    return this.writeQueue.enqueue(path, redactPendingLogRecord(record));
+    const sequence = await this.writeQueue.enqueue(path, redactPendingLogRecord(record));
+    // enqueue の解決は直列化キュー上で当該 append の完了を意味する。
+    // （完了時刻を正確に取得できない実装だと判明した場合は、設計書 §9.3 の許容に従い
+    //   フィールド名を latestRecordTimestamp に変更し最新レコードの timestamp を出所とする）
+    this.lastSuccessfulWriteAt = new Date().toISOString();
+    return sequence;
   }
 
   /**

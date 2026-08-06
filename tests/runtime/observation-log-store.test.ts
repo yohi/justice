@@ -6,6 +6,7 @@ import { toPhysicalPath } from "../../src/core/v2/shard-layout";
 import { encodeSafeSegment } from "../../src/core/v2/safe-segment";
 import type { FileReader, FileWriter, ShardId } from "../../src/core/types";
 import type { PendingLogRecord, PersistedLogRecord } from "../../src/core/v2/observation-model";
+import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
 function createMemFs(): { files: Map<string, string>; reader: FileReader; writer: FileWriter } {
   const files = new Map<string, string>();
@@ -1062,5 +1063,39 @@ describe("ReadOnlyObservationLog interface", () => {
     const records = await readOnly.readAll();
     expect(records).toHaveLength(1);
     expect(records[0].sequence).toBe(1);
+  });
+});
+
+describe("getLastSuccessfulWriteAt()", () => {
+  it("returns undefined before any successful append", () => {
+    const store = new ObservationLogStore(
+      createMockFileWriter(),
+      createMockFileReader({}),
+      "w-test",
+    );
+    expect(store.getLastSuccessfulWriteAt()).toBeUndefined();
+  });
+
+  it("is updated after a successful append (ISO timestamp)", async () => {
+    const store = new ObservationLogStore(
+      createMockFileWriter(),
+      createMockFileReader({}),
+      "w-test",
+    );
+    const shardId = { agentId: "atlas" as const, sessionId: "s-1", writerId: "w-test" };
+    await store.append(shardId, {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      agentId: "atlas",
+      sessionId: "s-1",
+      writerId: "w-test",
+      recordType: "observation",
+      kind: "session_error",
+      errorKind: "test",
+      message: "probe",
+    });
+    const at = store.getLastSuccessfulWriteAt();
+    expect(at).toBeDefined();
+    expect(Number.isNaN(Date.parse(at!))).toBe(false);
   });
 });
