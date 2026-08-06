@@ -32,7 +32,17 @@ export function validatePluginOptions(raw: unknown): PluginOptionsValidation {
   const record = raw as Record<string, unknown>;
   const warnings: string[] = [];
   const options: { enableAdvisoryOutputAppend?: boolean } = {};
-  const value = record.enableAdvisoryOutputAppend;
+  let value: unknown;
+  try {
+    value = record.enableAdvisoryOutputAppend;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(
+      `[Justice] plugin option "enableAdvisoryOutputAppend" could not be read: ${message}. Falling back to the default (false).`,
+    );
+    return { options, warnings };
+  }
+
   if (value !== undefined) {
     if (typeof value === "boolean") {
       options.enableAdvisoryOutputAppend = value;
