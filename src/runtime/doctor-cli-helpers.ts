@@ -11,8 +11,6 @@ import { normalizeSpecifier, resolveSpecifier } from "../core/doctor-specifier";
 import { checkLoaderContract } from "../core/loader-contract";
 import { scanOpenCodeLogText } from "../core/doctor-logs";
 
-
-
 type SpecifierSection = {
   readonly failed: boolean;
   readonly lines: readonly string[];
@@ -131,4 +129,3 @@ export async function formatLogScanLines(deps: DoctorDeps): Promise<readonly str
   );
   return summaries.flat();
 }
-

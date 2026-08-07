@@ -114,10 +114,7 @@ describe("scanConfigContent()", () => {
   });
 
   it("detects absolute-path registrations whose basename is justice or starts with justice-", () => {
-    const result = scanConfigContent(
-      "project",
-      `{"plugin": ["/home/user/justice"]}`
-    );
+    const result = scanConfigContent("project", `{"plugin": ["/home/user/justice"]}`);
     expect(result.specifiers[0]?.specifier).toBe("/home/user/justice");
   });
 
@@ -217,10 +214,7 @@ describe("scanUnreadableSource()", () => {
   });
 
   it("detects justice tuple entries in unreadable parsed source", () => {
-    const result = scanUnreadableSource(
-      "env_config_content",
-      `{"plugin":[["@yohi/justice",{}]]}`,
-    );
+    const result = scanUnreadableSource("env_config_content", `{"plugin":[["@yohi/justice",{}]]}`);
     expect(result.diagnostics).toEqual([
       { code: "unsupported_config_source", source: "env_config_content" },
     ]);

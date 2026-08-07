@@ -121,14 +121,14 @@ export type JusticeReviewToolResult =
     };
 
 export type JusticeReviewToolInput = {
-readonly logReader: ReadOnlyObservationLog;
-readonly args: JusticeReviewToolArgs;
-readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
-readonly log?: (
-level: "warn" | "error" | "info",
-message: string,
-args?: unknown[],
-) => Promise<void> | void;
+  readonly logReader: ReadOnlyObservationLog;
+  readonly args: JusticeReviewToolArgs;
+  readonly requestApproval: (approval: ReviewApprovalRequest) => Promise<void>;
+  readonly log?: (
+    level: "warn" | "error" | "info",
+    message: string,
+    args?: unknown[],
+  ) => Promise<void> | void;
 };
 
 export type JusticeReviewHealth = {
@@ -138,7 +138,6 @@ export type JusticeReviewHealth = {
   readonly rotationHealth: { readonly consecutiveFailures: number; readonly degraded: boolean };
   readonly readIntegrity: { readonly hasIntegrityViolation: boolean };
 };
-
 
 async function collectHealth(
   logReader: ReadOnlyObservationLog,
@@ -152,14 +151,9 @@ async function collectHealth(
   try {
     const shardKeys = new Set(
       records.map((record) => {
-        const a =
-          typeof record.agentId === "string" ? record.agentId : "corrupted";
-        const s =
-          typeof record.sessionId === "string"
-            ? record.sessionId
-            : "corrupted";
-        const w =
-          typeof record.writerId === "string" ? record.writerId : "corrupted";
+        const a = typeof record.agentId === "string" ? record.agentId : "corrupted";
+        const s = typeof record.sessionId === "string" ? record.sessionId : "corrupted";
+        const w = typeof record.writerId === "string" ? record.writerId : "corrupted";
         return `${a}/${s}/${w}`;
       }),
     );

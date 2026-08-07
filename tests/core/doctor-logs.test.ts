@@ -52,7 +52,6 @@ describe("scanOpenCodeLogText()", () => {
     expect(result.failedToLoadPluginCount).toBe(1);
   });
 
-
   it("ignores load failures when path= is missing", () => {
     const result = scanOpenCodeLogText(
       `level=ERROR message="failed to load plugin" error="justice module failed"`,

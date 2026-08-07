@@ -1,13 +1,7 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import {
-  resolveCacheRoot,
-  runDoctor,
-  type DoctorDeps,
-} from "../../src/runtime/doctor-cli";
-import {
-  isJusticeSpecifier,
-} from "../../src/core/doctor-config";
+import { resolveCacheRoot, runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import { isJusticeSpecifier } from "../../src/core/doctor-config";
 import {
   formatConfigDiagnostics,
   formatContractResult,
@@ -357,11 +351,15 @@ describe("runDoctor()", () => {
 
 describe("resolveCacheRoot()", () => {
   it("falls back to ~/.cache when XDG_CACHE_HOME is empty", () => {
-    expect(resolveCacheRoot({ XDG_CACHE_HOME: "" }, "/home/user")).toBe("/home/user/.cache/opencode");
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "" }, "/home/user")).toBe(
+      "/home/user/.cache/opencode",
+    );
   });
 
   it("uses XDG_CACHE_HOME when set", () => {
-    expect(resolveCacheRoot({ XDG_CACHE_HOME: "/tmp/cache" }, "/home/user")).toBe("/tmp/cache/opencode");
+    expect(resolveCacheRoot({ XDG_CACHE_HOME: "/tmp/cache" }, "/home/user")).toBe(
+      "/tmp/cache/opencode",
+    );
   });
 
   it("falls back to ~/.cache when XDG_CACHE_HOME is undefined", () => {
