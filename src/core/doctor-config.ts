@@ -114,6 +114,23 @@ function processWithStringEscapes(
 }
 
 /** 文字列リテラル内を壊さないよう、行コメントとブロックコメントを除去する。 */
+function findLineCommentEnd(content: string, startIndex: number): { end: number; output: string } {
+  let end = startIndex + 2;
+  while (end < content.length && content.charAt(end) !== "\n") end++;
+  return { end, output: content.charAt(end) === "\n" ? "\n" : "" };
+}
+
+function findBlockCommentEnd(content: string, startIndex: number): number | undefined {
+  let end = startIndex + 2;
+  while (end < content.length) {
+    if (content.charAt(end) === "*" && content.charAt(end + 1) === "/") {
+      return end;
+    }
+    end++;
+  }
+  return undefined;
+}
+
 function stripComments(
   content: string,
 ): { ok: true; content: string } | { ok: false; error: string } {
@@ -121,17 +138,13 @@ function stripComments(
   const result = processWithStringEscapes(content, (ch, next, i) => {
     if (error) return undefined;
     if (ch === "/" && next === "/") {
-      let end = i + 2;
-      while (end < content.length && content.charAt(end) !== "\n") end++;
-      return { consumed: end - i - 1, output: content.charAt(end) === "\n" ? "\n" : "" };
+      const lineEnd = findLineCommentEnd(content, i);
+      return { consumed: lineEnd.end - i - 1, output: lineEnd.output };
     }
     if (ch === "/" && next === "*") {
-      let end = i + 2;
-      while (end < content.length) {
-        if (content.charAt(end) === "*" && content.charAt(end + 1) === "/") {
-          return { consumed: end - i + 1, output: "" };
-        }
-        end++;
+      const blockEnd = findBlockCommentEnd(content, i);
+      if (blockEnd !== undefined) {
+        return { consumed: blockEnd - i + 1, output: "" };
       }
       error = "Unterminated block comment";
       return undefined;
