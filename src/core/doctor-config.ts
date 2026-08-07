@@ -12,7 +12,8 @@ export type ConfigSourceId =
   | "dot_opencode"
   | "env_config_dir"
   | "env_config_content"
-  | "managed";
+  | "managed"
+  | "merged";
 
 /** 設計書 §9.1.0 の優先順位表。昇順（低→高）にマージし、後から読まれた高優先度側が勝つ。 */
 export const SOURCE_PRIORITY: Readonly<Record<ConfigSourceId, number>> = {
@@ -24,6 +25,7 @@ export const SOURCE_PRIORITY: Readonly<Record<ConfigSourceId, number>> = {
   env_config_dir: 6,
   env_config_content: 7, // 検出のみ
   managed: 8, // 検出のみ
+  merged: 9, // 集約結果の仮想ラベル（マージ順には使用しない）
 };
 
 export type JusticePluginSpecifier = {
@@ -365,7 +367,7 @@ export function mergeSourceScans(scans: readonly SourceScanResult[]): {
   const mergedSpecifiers = [...justiceSpecifiers, ...nonJusticeSpecifiers];
 
   if (justiceSpecifiers.length === 0) {
-    diagnostics.push({ code: "justice_not_found_in_config", source: "global" });
+    diagnostics.push({ code: "justice_not_found_in_config", source: "merged" });
   }
 
   return { specifiers: mergedSpecifiers, diagnostics };
