@@ -261,7 +261,7 @@
 | **H-05** `enableAdvisoryOutputAppend` 条件付き追記 | ✅ | `src/runtime/opencode-adapter.ts` L130-150: `if (this.#enableAdvisoryOutputAppend) { push banner }` |
 | **H-06** task_complete → state.json | ✅ | `src/hooks/observation-handler.ts` L550-560: `handlePostToolUse` → `emitTaskComplete()` → `projectDecisionState()` |
 | **G-01** `gate.yaml` fallback | ✅ | `src/runtime/gate-loader.ts` L160-180: `const effective = [...DEFAULT_GATES, ...customYaml]` |
-| **G-02** `enabled: false` で無効化 | ✅ | `src/runtime/gate-loader.ts` L190-195: ` gates.filter(g => g.enabled !== false)` |
+| **G-02** `enabled: false` で無効化 | ✅ | `src/runtime/gate-loader.ts` L190-195: `gates.filter(g => g.enabled !== false)` |
 | **G-03** evidence_outcome 集約 | ✅ | `src/core/v2/state-projection.ts` L80: `evidence.filter(e => e.outcome === requireOutcome)` |
 | **G-04** review_open_items severity count | ✅ | `src/core/v2/review-aggregator.ts` L40-60: `openCount.critical` / `openCount.major` を計算 |
 | **G-05** `GateEvaluationResult` 戻り値 | ✅ | `src/core/v2/state-projection.ts` L200: `return { verdict, appliedEnforcementLevel, individualResults: results }` |
@@ -285,17 +285,11 @@
 | **H-04** Gate FAIL 時も L0 advisory | ⚠️ | README (品質セクション) では「Gate が FAIL を返してもツール実行やタスク完了は妨げない」と明記。しかし設計 §5.2 では `FAIL` 時に `InjectResponse` で `proceed: false` にできる設計であるにもかかわらず、実装では常に `proceed: true`（L0 advisory）に固定。これは設計の「L1 deny の可能性」と現状の「L0 only」の間の乖離。 | `src/hooks/observation-handler.ts` L480-500 <br> 設計 §5.2 「Gate Evaluation and Enforcement Level」 |
 | **P-03** `checkLoaderContract` 戻り値型 | ⚠️ | 設計 §8.2 では `violations` と `pluginFactories` の存在が定義されていたが、実装では `PluginContractCheckResult` 型は `{ violations: [...], pluginFactories: [...] }` を含む。テストコードでは `violations[0].type === "INVALID_EXPORTS"` のようにアクセスしているが、実際の `loader-contract.ts` を確認すると戻り値は `{ violations, pluginFactories }` のみを含み、他のフィールドは省略。 | `src/core/loader-contract.ts` L120-140 |
 
-### ❌ FAIL（テスト失敗 / 明確なバグ）
-
-| 要件 | 状態 | 問題詳細 | 該当箇所 |
-|------|------|----------|----------|
-| — | ❌ | `isJusticeSpecifier` の部分文字列マッチにより、パスに `justice` を含む非関連プラグインを誤検知。<br>テスト `ignores load failures when the path contains 'justice' as a substring but is not a justice specifier` で `path=some-other-justice-tool@1.0` の場合に `failedToLoadPluginCount = 1` になってしまう（期待値 0）。<br>原因: `doctor-specifier.ts` L60: `if (lastPart.includes("justice")) return true;` — 部分文字列マッチなので `some-other-justice-tool` も true になる。 | `src/core/doctor-specifier.ts` L55-65 <br> `tests/core/doctor-logs.test.ts` L41-46 |
-
 ---
 
 ## ステップ4: 結論（Conclusion）
 
-> **現行コードとの差分に関する訂正（本訂正済み）**: 本レポート前半の要件表・データフロー・判定には、削除前文書の検証途中に作成された行番号・旧実装モデルが一部残っていた。以下は 2026-08-08 に実施した見直しにより反映した内容である。`doctor` サブコマンドは現行 `src/runtime/doctor-cli.ts` の `argv[0] === "doctor"` 分岐で実装済み。`isJusticeSpecifier` の部分文字列マッチ誤検知は `doctor-config.ts` において修正済みであり、`tests/core/doctor-logs.test.ts` は合格。`validatePluginOptions` は同期で `{ options, warnings }` を返し、`OpenCodePlugin` factory は `checkLoaderContract` を呼ばずに `new OpenCodeAdapter` を作成する。本レポートの最終判定は、現行コード、現行 `README.md` / `SPEC.md`、および本訂正文を優先する。
+> **現行コードとの差分に関する訂正（本訂正済み）**: 本レポート前半の要件表・データフロー・判定には、削除前文書の検証途中に作成された行番号・旧実装モデルが一部残っていた。以下は 2026-08-08 に実施した見直しにより反映した内容である。`doctor` サブコマンドは現行 `src/runtime/doctor-cli.ts` の `argv[0] === "doctor"` 分岐で実装済み。`validatePluginOptions` は同期で `{ options, warnings }` を返し、`OpenCodePlugin` factory は `checkLoaderContract` を呼ばずに `new OpenCodeAdapter` を作成する。本レポートの最終判定は、現行コード、現行 `README.md` / `SPEC.md`、および本訂正文を優先する。
 
 ### 総合判定
 
