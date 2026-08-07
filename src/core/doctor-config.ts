@@ -59,93 +59,111 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isJusticeSpecifier(specifier: string): boolean {
   if (specifier.startsWith("/")) {
     const filename = specifier.split("/").pop() || "";
-    return filename === "justice" || filename.startsWith("justice-") || filename.startsWith("opencode-plugin");
+    return (
+      filename === "justice" ||
+      filename.startsWith("justice-") ||
+      filename.startsWith("opencode-plugin")
+    );
   }
   // Package specifier: extract base package name without version and subpath.
-  const withoutVersion = specifier.replace(/@[^/]+$/, "");
+  const lastAt = specifier.lastIndexOf("@");
+  const withoutVersion = lastAt > 0 ? specifier.slice(0, lastAt) : specifier;
   const parts = withoutVersion.split("/");
-  const baseName =
-    parts.length >= 2 && parts[0]!.startsWith("@") ? parts[1]! : parts[0]!;
+  const baseName = parts.length >= 2 && parts[0]!.startsWith("@") ? parts[1]! : parts[0]!;
   return baseName === "justice" || baseName.startsWith("justice-");
+}
+
+/** 文字列リテラル内を壊さないよう、文字列を認識して各文字に対する処理を適用する。 */
+function processWithStringEscapes(
+  content: string,
+  onChar: (
+    ch: string,
+    next: string | undefined,
+    i: number,
+  ) => { consumed: number; output: string } | undefined,
+): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content.charAt(i);
+    const next = i + 1 < content.length ? content.charAt(i + 1) : undefined;
+    if (inString) {
+      if (ch === "\\" && next !== undefined) {
+        out += ch + next;
+        i++;
+      } else {
+        out += ch;
+        if (ch === '"') inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    const result = onChar(ch, next, i);
+    if (result) {
+      out += result.output;
+      i += result.consumed;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/** 文字列リテラル内を壊さないよう、行コメントとブロックコメントを除去する。 */
+function stripComments(
+  content: string,
+): { ok: true; content: string } | { ok: false; error: string } {
+  let error: string | undefined;
+  const result = processWithStringEscapes(content, (ch, next, i) => {
+    if (error) return undefined;
+    if (ch === "/" && next === "/") {
+      let end = i + 2;
+      while (end < content.length && content.charAt(end) !== "\n") end++;
+      return { consumed: end - i - 1, output: content.charAt(end) === "\n" ? "\n" : "" };
+    }
+    if (ch === "/" && next === "*") {
+      let end = i + 2;
+      while (end < content.length) {
+        if (content.charAt(end) === "*" && content.charAt(end + 1) === "/") {
+          return { consumed: end - i + 1, output: "" };
+        }
+        end++;
+      }
+      error = "Unterminated block comment";
+      return undefined;
+    }
+    return undefined;
+  });
+  if (error) {
+    return { ok: false, error };
+  }
+  return { ok: true, content: result };
+}
+
+/** 文字列リテラル内を壊さないよう、閉じ括弧・閉じ角括弧前の末尾カンマを除去する。 */
+function stripTrailingCommas(content: string): string {
+  return processWithStringEscapes(content, (ch, _next, i) => {
+    if (ch !== ",") return undefined;
+    let j = i + 1;
+    while (j < content.length && /\s/.test(content.charAt(j))) j++;
+    if (content.charAt(j) === "}" || content.charAt(j) === "]") {
+      return { consumed: j - i - 1, output: "" };
+    }
+    return undefined;
+  });
 }
 
 /** 文字列リテラル内を壊さないよう、文字列を認識してコメントと末尾カンマを除去する。 */
 function cleanJsonc(content: string): { ok: true; content: string } | { ok: false; error: string } {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < content.length; i++) {
-    const ch = content[i]!;
-    const next = content[i + 1];
-    if (inString) {
-      out += ch;
-      if (ch === "\\" && next !== undefined) {
-        out += next;
-        i++;
-        continue;
-      }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      while (i < content.length && content[i] !== "\n") i++;
-      out += "\n";
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      i += 2;
-      let closed = false;
-      while (i < content.length) {
-        if (content[i] === "*" && content[i + 1] === "/") {
-          closed = true;
-          i += 1;
-          break;
-        }
-        i++;
-      }
-      if (!closed) {
-        return { ok: false, error: "Unterminated block comment" };
-      }
-      continue;
-    }
-    out += ch;
+  const commentStripped = stripComments(content);
+  if (!commentStripped.ok) {
+    return commentStripped;
   }
-
-  let finalOut = "";
-  inString = false;
-  for (let i = 0; i < out.length; i++) {
-    const ch = out[i]!;
-    const next = out[i + 1];
-    if (inString) {
-      finalOut += ch;
-      if (ch === "\\" && next !== undefined) {
-        finalOut += next;
-        i++;
-        continue;
-      }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      finalOut += ch;
-      continue;
-    }
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < out.length && /\s/.test(out[j]!)) j++;
-      if (out[j] === "}" || out[j] === "]") {
-        continue;
-      }
-    }
-    finalOut += ch;
-  }
-
-  return { ok: true, content: finalOut };
+  return { ok: true, content: stripTrailingCommas(commentStripped.content) };
 }
 
 export function parseJsonc(
@@ -203,7 +221,7 @@ export function scanConfigContent(source: ConfigSourceId, content: string): Sour
         specifiers.push({
           specifier: entry[0],
           optionsPresent: true,
-          optionKeys: Object.keys(entry[1]).sort(),
+          optionKeys: Object.keys(entry[1]).sort((a, b) => a.localeCompare(b)),
         });
         continue;
       }
@@ -212,6 +230,40 @@ export function scanConfigContent(source: ConfigSourceId, content: string): Sour
   }
 
   return { source, readable: true, specifiers, diagnostics };
+}
+
+function extractPluginSpecifier(entry: unknown): string | undefined {
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (Array.isArray(entry) && entry.length > 0 && typeof entry[0] === "string") {
+    return entry[0];
+  }
+  return undefined;
+}
+
+function hasJusticeSpecifierInPlugin(plugin: unknown[]): boolean {
+  for (const entry of plugin) {
+    const specifier = extractPluginSpecifier(entry);
+    if (specifier !== undefined && isJusticeSpecifier(specifier)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasJusticeSpecifierInRawPluginArray(targetText: string): boolean {
+  const pluginMatch = /"plugin"\s*:\s*\[([^\]]*)\]/.exec(targetText);
+  if (!pluginMatch) return false;
+  const strings = pluginMatch[1]!.match(/"([^"]+)"/g);
+  if (!strings) return false;
+  for (const s of strings) {
+    const value = s.slice(1, -1);
+    if (isJusticeSpecifier(value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function scanUnreadableSource(
@@ -228,37 +280,12 @@ export function scanUnreadableSource(
   try {
     const parsed = JSON.parse(targetText) as { plugin?: unknown[] };
     if (Array.isArray(parsed.plugin)) {
-      for (const entry of parsed.plugin) {
-        const specifier =
-          typeof entry === "string"
-            ? entry
-            : Array.isArray(entry) &&
-                entry.length > 0 &&
-                typeof entry[0] === "string"
-              ? entry[0]
-              : undefined;
-        if (specifier !== undefined && isJusticeSpecifier(specifier)) {
-          hasJusticeSpecifier = true;
-          break;
-        }
-      }
+      hasJusticeSpecifier = hasJusticeSpecifierInPlugin(parsed.plugin);
     }
   } catch {
     // Fallback for broken/invalid JSON: extract quoted strings from the
     // plugin array using regex and test each one.
-    const pluginMatch = /"plugin"\s*:\s*\[([^\]]*)\]/.exec(targetText);
-    if (pluginMatch) {
-      const strings = pluginMatch[1]!.match(/"([^"]+)"/g);
-      if (strings !== null) {
-        for (const s of strings) {
-          const value = s.slice(1, -1);
-          if (isJusticeSpecifier(value)) {
-            hasJusticeSpecifier = true;
-            break;
-          }
-        }
-      }
-    }
+    hasJusticeSpecifier = hasJusticeSpecifierInRawPluginArray(targetText);
   }
   if (hasJusticeSpecifier) {
     return {
