@@ -2,8 +2,8 @@
 
 **検証日**: 2026-08-07  
 **検証対象**: `@yohi/justice` 3.0.0 (`feature/justice-v2-shipping-02-core-runtime`)  
-**設計文書**: `docs/superpowers/specs/2026-07-31-justice-v2-shipping-design.md`  
-**計画文書**: `docs/superpowers/plans/2026-08-02-justice-v2-shipping.md`  
+**設計文書**: 削除済み（内容は `SPEC.md` §15 と本検証レポートへ統合）
+**計画文書**: 削除済み（完了結果は `README.md` / `SPEC.md` へ反映）
 **実機検証レポート**: `docs/reports/2026-07-31-v2-runtime-verification.md`  
 
 ---
@@ -295,6 +295,8 @@
 ---
 
 ## ステップ4: 結論（Conclusion）
+
+> **現行コードとの差分に関する訂正**: 本レポート前半の要件表には、削除前文書の検証途中に作成された行番号・旧実装モデルが一部残っている。特に `doctor` サブコマンドは現行 `src/runtime/doctor-cli.ts` の `argv[0] === "doctor"` 分岐で実装済みであり、`isJusticeSpecifier` の誤検知も現行コードでは修正済みである。本レポートの最終判定は、現行コード、現行 `README.md` / `SPEC.md`、および本訂正文を優先する。
 
 ### 総合判定
 

@@ -430,7 +430,21 @@ $ARGUMENTS
 
 Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。
 > [!NOTE]
-> 本機能はL0 Advisoryとして実装・動作していますが、`output.output`へのadvisory反映の実機検証と、設計乖離ADRの人間CODEOWNERS承認が未完了のため、出荷完了宣言の前提は未充足です（[SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要)）。
+> Quality Control Plane (v2.0) は v3.0.0 以降、L0 Advisory（非ブロッキング）として標準稼働しています。詳細な実証結果および既知の動作仕様は [SPEC.md §15.12](./SPEC.md#1512-既知の未解決事項ガバナンス状況重要) を参照してください。
+
+### 診断（`justice doctor`）
+
+プラグインのロードに失敗すると Justice 自身は実行されないため、ロード状態はプラグイン外部の診断 CLI で確認します。
+
+```bash
+bunx @yohi/justice doctor
+# ローカルビルドの場合
+./dist/runtime/doctor-cli.js doctor
+```
+
+診断対象は、global / project / `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR` の設定ソースにある Justice エントリ、specifier の解決、OpenCode ローダ契約、OpenCode ログの `failed to load plugin` / Justice 初期化記録、`.justice/` の観測データ、`.justice/gate.yaml` です。検査失敗時は非ゼロ終了します。これはセッションを停止させない CLI に限った fail-open の例外です。
+
+v3.0.0 未満では root specifier の配布エントリがプラグイン契約に適合せずロードに失敗する問題がありました。root specifier を利用する場合は v3.0.0 以降へ更新してください。
 
 - **全ツール・メッセージ観測**: `tool.execute.*` / `message.*` イベントを `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` へ追記専用（append-only）で記録します。テスト実行結果・lint/build 出力・レビュー指摘などが対象です（コード本文やチャット全文は保持しません）。
 - **品質ゲート (`.justice/gate.yaml`)**: タスク完了時（`task_complete`）およびツール実行観測時（`tool_observed`）に、テスト・ビルド・未解決レビュー指摘を判定します。既定は3種の gate（`required-tests` / `build-green` / `review-clean`）で、それぞれテスト合格・ビルド合格・未解決レビュー指摘の不存在を判定し、すべて `warn`（advisory）始まりです。lint は既定 gate には含まれず、プロジェクトの `.justice/gate.yaml` でカスタム gate を追加した場合のみ対象となります。既定 gate を上書き・無効化（`enabled: false`）することもできます。
