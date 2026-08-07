@@ -6,6 +6,7 @@ import {
   parseJsonc,
   scanConfigContent,
   scanUnreadableSource,
+  stripComments,
   type SourceScanResult,
 } from "../../src/core/doctor-config";
 
@@ -48,6 +49,21 @@ describe("parseJsonc()", () => {
       ok: true,
       value: { plugin: ["\\", '"', "@yohi/justice"] },
     });
+  });
+
+  it("does not duplicate newlines when stripping line comments", () => {
+    const result = stripComments("// a\n");
+    expect(result).toEqual({ ok: true, content: "\n" });
+  });
+
+  it("does not duplicate newlines for consecutive line comments", () => {
+    const result = stripComments("// a\n// b\n");
+    expect(result).toEqual({ ok: true, content: "\n\n" });
+  });
+
+  it("strips a line comment at end of file without adding a newline", () => {
+    const result = stripComments("// a");
+    expect(result).toEqual({ ok: true, content: "" });
   });
 
   it("skips line comments that appear after a trailing comma", () => {

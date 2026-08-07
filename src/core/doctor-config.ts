@@ -146,7 +146,7 @@ function findBlockCommentEnd(content: string, startIndex: number): number | unde
   return undefined;
 }
 
-function stripComments(
+export function stripComments(
   content: string,
 ): { ok: true; content: string } | { ok: false; error: string } {
   let error: string | undefined;
@@ -154,7 +154,7 @@ function stripComments(
     if (error) return undefined;
     if (ch === "/" && next === "/") {
       const lineEnd = findLineCommentEnd(content, i);
-      return { consumed: lineEnd.end - i - 1, output: lineEnd.output };
+      return { consumed: lineEnd.end - i, output: lineEnd.output };
     }
     if (ch === "/" && next === "*") {
       const blockEnd = findBlockCommentEnd(content, i);
