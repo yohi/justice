@@ -330,9 +330,9 @@ function extractPackageName(specifier: string): string {
   if (specifier.startsWith("/")) return specifier;
   if (specifier.startsWith("@")) {
     const parts = specifier.slice(1).split("@");
-    return "@" + parts[0]!;
+    return "@" + parts[0]!.split("/").slice(0, 2).join("/");
   }
-  return specifier.split("@")[0]!;
+  return specifier.split("@")[0]!.split("/")[0]!;
 }
 
 export function mergeSourceScans(scans: readonly SourceScanResult[]): {

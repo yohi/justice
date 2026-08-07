@@ -206,6 +206,26 @@ describe("mergeSourceScans()", () => {
     expect(names).toContain("@yohi/justice@3.0.0");
     expect(names).not.toContain("@yohi/justice@2.7.0");
   });
+
+  it("dedupes justice specifiers that differ only by subpath", () => {
+    const result = mergeSourceScans([
+      scan("global", "@yohi/justice@2.7.0/subpath-a"),
+      scan("project", "@yohi/justice@3.0.0/subpath-b"),
+    ]);
+    expect(result.specifiers).toEqual([
+      { specifier: "@yohi/justice@3.0.0/subpath-b", optionsPresent: false, optionKeys: [] },
+    ]);
+  });
+
+  it("dedupes non-scoped specifiers that differ only by subpath", () => {
+    const result = mergeSourceScans([
+      scan("global", "other-plugin@1.0.0/sub-a"),
+      scan("project", "other-plugin@2.0.0/sub-b"),
+    ]);
+    expect(result.specifiers).toEqual([
+      { specifier: "other-plugin@2.0.0/sub-b", optionsPresent: false, optionKeys: [] },
+    ]);
+  });
 });
 
 describe("scanUnreadableSource()", () => {
