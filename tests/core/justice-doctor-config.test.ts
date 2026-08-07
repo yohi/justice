@@ -66,6 +66,16 @@ describe("parseJsonc()", () => {
     expect(result).toEqual({ ok: true, content: "" });
   });
 
+  it("replaces block comments with whitespace to avoid token concatenation", () => {
+    const result = stripComments(`{"plugin":[1/* comment */2]}`);
+    expect(result).toEqual({ ok: true, content: `{"plugin":[1 2]}` });
+  });
+
+  it("reports a parse error when numbers are only separated by a block comment", () => {
+    const result = parseJsonc(`{"plugin":[1/* comment */2]}`);
+    expect(result.ok).toBe(false);
+  });
+
   it("skips line comments that appear after a trailing comma", () => {
     const result = parseJsonc(`{"plugin": ["@yohi/justice"], // trailing comment\n}`);
     expect(result).toEqual({ ok: true, value: { plugin: ["@yohi/justice"] } });
@@ -282,5 +292,23 @@ describe("scanUnreadableSource()", () => {
       `/* @yohi/justice */ { "plugin": ["@yohi/justice"]`,
     );
     expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("does not detect justice inside tuple option values", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["other-plugin", {"note": "@yohi/justice"}]]}`,
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("detects justice tuple entries even when options contain the word justice", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["@yohi/justice", {"note": "justice settings"}]]}`,
+    );
+    expect(result.diagnostics).toEqual([
+      { code: "unsupported_config_source", source: "env_config_content" },
+    ]);
   });
 });

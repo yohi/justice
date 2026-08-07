@@ -161,7 +161,7 @@ export function stripComments(
     if (ch === "/" && next === "*") {
       const blockEnd = findBlockCommentEnd(content, i);
       if (blockEnd !== undefined) {
-        return { consumed: blockEnd - i + 1, output: "" };
+        return { consumed: blockEnd - i + 1, output: " " };
       }
       error = "Unterminated block comment";
       return undefined;
@@ -283,17 +283,103 @@ function hasJusticeSpecifierInPlugin(plugin: unknown[]): boolean {
 }
 
 function hasJusticeSpecifierInRawPluginArray(targetText: string): boolean {
-  const pluginMatch = /"plugin"\s*:\s*\[([^\]]*)\]/.exec(targetText);
-  if (!pluginMatch) return false;
-  const strings = pluginMatch[1]!.match(/"([^"]+)"/g);
-  if (!strings) return false;
-  for (const s of strings) {
-    const value = s.slice(1, -1);
-    if (isJusticeSpecifier(value)) {
-      return true;
+  // Prefer real parsing when the text is valid JSON(C).
+  try {
+    const parsed = JSON.parse(targetText);
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.plugin)) {
+      return false;
     }
+    for (const entry of parsed.plugin) {
+      if (typeof entry === "string" && isJusticeSpecifier(entry)) {
+        return true;
+      }
+      if (
+        Array.isArray(entry) &&
+        entry.length > 0 &&
+        typeof entry[0] === "string" &&
+        isJusticeSpecifier(entry[0])
+      ) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    // Fallback for malformed content: inspect only top-level string entries
+    // and the first element of top-level tuple entries. Never inspect option
+    // object values such as "note".
+    const pluginMatch = /"plugin"\s*:\s*\[/.exec(targetText);
+    if (!pluginMatch) return false;
+    const arrayStart = pluginMatch.index + pluginMatch[0].length;
+    const arrayEnd = findMatchingBracket(targetText, arrayStart, "[", "]");
+    const arrayContent = targetText.slice(arrayStart, arrayEnd);
+    const entries = splitTopLevelArrayEntries(arrayContent);
+    for (const entry of entries) {
+      const trimmed = entry.trim();
+      const stringMatch = /^"([^"]+)"$/.exec(trimmed);
+      if (stringMatch) {
+        if (isJusticeSpecifier(stringMatch[1]!)) return true;
+        continue;
+      }
+      const tupleMatch = /^\[\s*"([^"]+)"/.exec(trimmed);
+      if (tupleMatch && isJusticeSpecifier(tupleMatch[1]!)) {
+        return true;
+      }
+    }
+    return false;
   }
-  return false;
+}
+
+function findMatchingBracket(
+  content: string,
+  startIndex: number,
+  open: string,
+  close: string,
+): number {
+  let depth = 1;
+  let i = startIndex;
+  while (i < content.length) {
+    const ch = content.charAt(i);
+    if (ch === '"') {
+      i = readStringLiteral(content, i).endIndex + 1;
+      continue;
+    }
+    if (ch === open) depth++;
+    else if (ch === close) depth--;
+    if (depth === 0) return i;
+    i++;
+  }
+  return content.length;
+}
+
+function splitTopLevelArrayEntries(content: string): readonly string[] {
+  const entries: string[] = [];
+  let current = "";
+  let depth = 0;
+  let i = 0;
+  while (i < content.length) {
+    const ch = content.charAt(i);
+    if (ch === '"') {
+      const literal = readStringLiteral(content, i);
+      current += content.slice(i, literal.endIndex + 1);
+      i = literal.endIndex + 1;
+      continue;
+    }
+    if (ch === "[" || ch === "{") {
+      depth++;
+    } else if (ch === "]" || ch === "}") {
+      depth--;
+    } else if (ch === "," && depth === 0) {
+      entries.push(current);
+      current = "";
+      i++;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  const trimmed = current.trim();
+  if (trimmed !== "") entries.push(current);
+  return entries;
 }
 
 export function scanUnreadableSource(
