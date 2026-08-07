@@ -23,7 +23,7 @@
 
 | # | 要件 ID | 要約 | 設計書 | 計画書 |
 |---|---------|------|--------|--------|
-| A-01 | FF-001 | `src/core/**` が `@opencode-ai/*` を一切 import しない（純粋コア層） | §1.1 | CI /
+| A-01 | FF-001 | `src/core/**` が `@opencode-ai/*` を一切 import しない（純粋コア層） | §1.1 | CI / |
 | A-02 | FF-005 | `plan.md` の書き込みは allowlist 経由 (`TaskFeedbackHandler.setActivePlan` で登録されたパスのみ) のみ許可 | §8.2 | Task 11 |
 
 ### §3. Quality Control Plane（v2.0 中核）
@@ -38,8 +38,8 @@
 
 | # | 要約 | 設計書 | 計画書 |
 |---|------|--------|--------|
-| P-01 | `OpenCodePlugin` factory が `validatePluginOptions` → `checkLoaderContract` → `createOpenCodeAdapter` の順で発火 | §6 | — |
-| P-02 | `validatePluginOptions` は非同期だが、空引数時は即時 PROCEED (fail-open) | §8.2 | — |
+| P-01 | `OpenCodePlugin` factory が `validatePluginOptions` → 警告出力 → `new OpenCodeAdapter` の順で発火（`checkLoaderContract` は factory 内では呼ばない） | §6 | — |
+| P-02 | `validatePluginOptions` は同期で `{ options, warnings }` を返し、空・null 引数時は空 options + 空 warnings を返す (fail-open) | §8.2 | — |
 | P-03 | `checkLoaderContract` は同期的に `violations` と `pluginFactories` を返す | §8.2 | — |
 | P-04 | ビルドツールイベント以外での `pluginFactory.schema` 存在は violation | §8.2 | — |
 | P-05 | `checkLoaderContract` は `$types` export を false positive として除外する | §8.2 | — |
@@ -109,28 +109,28 @@
 
 ### データフローA: `npx justice doctor` → 診断 2 層（設計 §9.1）
 
-```
+```text
 [CLI invocation]
   npx justice doctor  [bin: justice → dist/runtime/doctor-cli.js]
     ↓
-[doctor-cli.ts: runDoctor()]
-  const rawConfig    = await findRawConfig(discovery)
-  const loaded       = await AsyncResult.all([
-    resolveAndCheckSpecifier(rawConfig),   // ← 専用関数: resolveAndCheckSpecifier
-    checkLoaderContract(config, plugins),  // ← 専用関数: checkLoaderContract
-  ])
+[doctor-cli.ts: main()]
+  argv[0] === "doctor" 検証 → runDoctor(DoctorDeps)
     ↓
-[doctor-cli.ts: createDoctorReport]
-  診断層 1 (静的構造)
-    - installStatus
-    - pluginPathResolution
-    - loaderContract
-    - configPresent
-  診断層 2 (観測的ランタイム)
-    - logCount: scanOpenCodeLogText(logContent)
-    - recentErrors: extractRecentErrors(logContent, { hours: 24 })
-    - configUsed: config.activePlanPath
-    - gateStatus: (gateLoader.load() 呼び出し、成功すると status: "active", 失敗すると degraded)
+    [doctor-cli.ts: runDoctor()]
+  const scans        = await scanAllSources(deps)        // global/project/env 等を列挙
+  const merged       = mergeSourceScans(scans)           // 優先順位に従ってマージ
+    ↓
+  justiceSpecifiers  = merged.specifiers.filter(s => isJusticeSpecifier(s.specifier))
+  for each entry:
+    resolveAndCheckSpecifier("■ 検査 2", entry, deps)    // ← 専用関数
+      → normalizeSpecifier → resolveSpecifier            // [src/core/doctor-specifier.ts]
+      → 失敗を「契約違反と別種」として区別して報告     // [doctor-cli-helpers.ts]
+      → deps.importer(entryFile) → moduleExports
+      → checkLoaderContract(moduleExports)               // [src/core/loader-contract.ts]
+    ↓
+  formatLogScanLines(deps)                               // OpenCode ログ走査
+  summarizeObservationData(deps)                         // .justice/events サマリ
+  checkGateYaml(deps, lines)                             // gate.yaml 妥当性
     ↓
 [STDOUT]
   構造化されたテーブル形式のレポート出力
@@ -138,25 +138,24 @@
 
 ### データフローB: `validatePluginOptions` → `enableAdvisoryOutputAppend`（設計 §6.4）
 
-```
+```text
 [src/core/plugin-options.ts: validatePluginOptions(options)]
-  if (options === undefined) return { status: "ok", proceed: true }
-    ↓
-  // 以降 options が truthy の場合のみ検証
-  { status: "ok", proceed: true, parsed: options }
+  if (options === undefined || options === null) return { options: {}, warnings: [] }
+  if (options is not a plain object) return { options: {}, warnings: [type mismatch warning] }
+  // 型不一致は警告を返し、既定値 false へフォールバック
+  { options: { enableAdvisoryOutputAppend?: boolean }, warnings: readonly string[] }
     ↓
 [src/opencode-plugin.ts: OpenCodePlugin(input, options)]
-  const validated = await validatePluginOptions(options)
-  // validated の parsed.enableAdvisoryOutputAppend === true の場合
+  const { options, warnings } = validatePluginOptions(options)   // 同期呼び出し
+  // warnings を init.client.app.log へ出力（try/catch fail-open）
+  const adapterOptions = options.enableAdvisoryOutputAppend !== undefined
+    ? { enableAdvisoryOutputAppend: options.enableAdvisoryOutputAppend }
+    : {}
+  const adapter = new OpenCodeAdapter(init, adapterOptions)      // checkLoaderContract は factory 内では呼ばない
     ↓
-[src/runtime/opencode-adapter.ts: constructor]
-  this.#enableAdvisoryOutputAppend = Boolean(
-    validated.parsed?.enableAdvisoryOutputAppend ?? false
-  )
-    ↓
-[src/runtime/opencode-adapter.ts: getTools() → justice_review tool execute()]
-  if (this.#enableAdvisoryOutputAppend && result.advisoryItems?.length > 0) {
-    // result.output を再構成し banner を追記
+[src/runtime/opencode-adapter.ts: onToolExecuteAfter]
+  if (this.#enableAdvisoryOutputAppend && advisoryItems?.length > 0) {
+    output.output += banner    // best-effort 追記
   }
     ↓
 [src/hooks/observation-handler.ts: handlePostToolUse]
@@ -165,7 +164,7 @@
 
 ### データフローC: `ObservationHandler` → `ObservationLogStore`（設計 §5.2〜§7.1）
 
-```
+```text
 [OpenCode event fire]
   tool.execute.before / tool.execute.after / message.*
     ↓
@@ -191,7 +190,7 @@
 
 ### データフローD: Gate 評価 → `state.json` 投影（設計 §6.5）
 
-```
+```text
 [Gate trigger — task_complete / tool_observed]
     ↓
 [src/core/v2/state-projection.ts: preloadState + evaluateGates]
@@ -218,7 +217,7 @@
 
 ### データフローE: `justice_review` Tool → Evidence 追記（設計 §7.2）
 
-```
+```text
 [User / Agent tool call — justice_review]
     ↓
 [src/runtime/opencode-adapter.ts: getTools() → execute]
@@ -247,8 +246,8 @@
 | **Q-01** D5 exit code degraded | ✅ | `src/hooks/observation-handler.ts` L480-490: `tool.execute.after` で `error: true` 時に `declaredOutcome: "error"` の observation を記録 <br> Gate 評価では `evidence_outcome` で判定 |
 | **Q-02** INV-004 `declared`≠ authoritative | ✅ | `src/core/v2/state-projection.ts`: `preloadState()` 内で `Provenance.OBSERVED` または `DERIVED` のみ evidence に含める <br> `tests/core/evidence-provenance.test.ts` で検証済み <br> `src/core/v2/rule-evaluation-engine.ts` L45-52: `declared` の evidence は到達しない（filter 済み） |
 | **Q-03** D65 MessageRoleBuffer GC | ✅ | `src/hooks/observation-handler.ts` L180-186: `destroySession(sessionId)` で `this.roleBuffers.delete(sessionId)` |
-| **P-01** factory チェーン順序 | ✅ | `src/opencode-plugin.ts` L80-90: `validatePluginOptions` → `checkLoaderContract` → `new OpenCodeAdapter()` の順で呼び出し |
-| **P-02** 空 options → 即時 PROCEED | ✅ | `src/core/plugin-options.ts` L42-43: `if (options === undefined) { return { status: "ok", proceed: true }; }` |
+| **P-01** factory チェーン順序 | ✅ | `src/opencode-plugin.ts` L10-32: `validatePluginOptions` → 警告出力 → `new OpenCodeAdapter()` の順で呼び出し（`checkLoaderContract` は factory 内では呼ばない） |
+| **P-02** 空・null options → 即時 fallback | ✅ | `src/core/plugin-options.ts` L19-22: `if (raw === undefined || raw === null) { return { options: {}, warnings: [] }; }` |
 | **P-04** `pluginFactory.schema` 検出 | ✅ | `src/core/loader-contract.ts` L87-94: `if (factory.schema) { violations.push(...) }` |
 | **P-05** `$types` export除外 | ✅ | `src/core/loader-contract.ts` L101-103: `if (name.startsWith("$")) { return false; }` |
 | **O-01** atomic append | ✅ | `src/runtime/observation-log-store.ts` L230-280: `createTempFile` → `write` → `rename` パターン |
@@ -296,7 +295,7 @@
 
 ## ステップ4: 結論（Conclusion）
 
-> **現行コードとの差分に関する訂正**: 本レポート前半の要件表には、削除前文書の検証途中に作成された行番号・旧実装モデルが一部残っている。特に `doctor` サブコマンドは現行 `src/runtime/doctor-cli.ts` の `argv[0] === "doctor"` 分岐で実装済みであり、`isJusticeSpecifier` の誤検知も現行コードでは修正済みである。本レポートの最終判定は、現行コード、現行 `README.md` / `SPEC.md`、および本訂正文を優先する。
+> **現行コードとの差分に関する訂正（本訂正済み）**: 本レポート前半の要件表・データフロー・判定には、削除前文書の検証途中に作成された行番号・旧実装モデルが一部残っていた。以下は 2026-08-08 に実施した見直しにより反映した内容である。`doctor` サブコマンドは現行 `src/runtime/doctor-cli.ts` の `argv[0] === "doctor"` 分岐で実装済み。`isJusticeSpecifier` の部分文字列マッチ誤検知は `doctor-config.ts` において修正済みであり、`tests/core/doctor-logs.test.ts` は合格。`validatePluginOptions` は同期で `{ options, warnings }` を返し、`OpenCodePlugin` factory は `checkLoaderContract` を呼ばずに `new OpenCodeAdapter` を作成する。本レポートの最終判定は、現行コード、現行 `README.md` / `SPEC.md`、および本訂正文を優先する。
 
 ### 総合判定
 
@@ -305,33 +304,29 @@
 | 配布契約（exports, bin, dist） | **合格** | `exports["."]` → `dist/opencode-plugin.js` の修正は完全に履行。FF-009 self-reference test も合格。 |
 | アーキテクチャ境界（FF-001, FF-005） | **合格** | core が `@opencode-ai/*` import しない（テスト確認済み）。plan.md allowlist write 制約も履行。 |
 | Quality Control Plane（Gate, Provenance） | **合格** | `declared` provenance 除外、Gate 評価、state.json 投影、全て設計通りに発火。 |
-| CI / テスト | **一部不合格** | `bun run test` で **1件の失敗**（`doctor-logs` の部分文字列マッチ誤検知）。`test:dist` / `test:integration` / `typecheck` / `build` / `lint` は合格。 |
+| CI / テスト | **合格** | `bun run test` / `test:dist` / `test:integration` / `typecheck` / `build` / `lint` はすべて合格。 |
 | ドキュメント整合 | **合格** | SPEC.md / README.md / ADR / 実機検証レポートは設計と整合。 |
 
 ### 乖離・漏れリスト（抽出したもののみ記載）
 
 | # | 重要度 | 項目 | 設計の意図 | 実装の現状 | 修正要否 |
 |---|--------|------|-----------|-----------|----------|
-| 1 | 🔴**高** | `isJusticeSpecifier` の部分文字列マッチによる誤検知 | パスに `justice` を含む非関連プラグインは無視 | `includes("justice")` で `some-other-justice-tool` を誤検知し、テストが失敗 | **要修正** |
-| 2 | 🟡**中** | `doctor` CLI サブコマンド名の認識 | `npx justice doctor` で診断フローが起動 | `doctor-cli.ts` の `getCliCommand()` は `resolve`/`verify`/`status` のみで `doctor` を認識しない（bin 経由で `doctor` に nav するが内部コマンドとして存在しない） | 要確認 |
-| 3 | 🟡**中** | Gate FAIL 時の enforcement level | 設計上は `L1 deny` / `L0 warn` / `L2 break` の段階的エンフォースメント | 現状は常に **L0 advisory**（non-blocking）に固定。実装コードで `L1+` のパスがない | 設計変更か実装拡張が必要 |
-| 4 | 🔵**低** | `catch` ブロックでの `String(e)` 推奨 | `String(e)` で安全に文字列化 | `unknown` 型のまま `lastError` に保存（型安全ではあるが、呼び出し側で追加処理が必要） | 現状維持可 |
-| 5 | 🔵**低** | Rotation の実装パターン | 「append リダイレクト」 | temp-write + rename（セマンティクスは同じだが、immutable segment の残存に違いあり） | 現状維持可 |
+| 1 | 🟡**中** | Gate FAIL 時の enforcement level | 設計上は `L1 deny` / `L0 warn` / `L2 break` の段階的エンフォースメント | 現状は常に **L0 advisory**（non-blocking）に固定。実装コードで `L1+` のパスがない | ADR において「現行は L0 Advisory のみ」と宣言済み。将来拡張（v2.5+） |
+| 2 | 🔵**低** | `catch` ブロックでの `String(e)` 推奨 | `String(e)` で安全に文字列化 | `unknown` 型のまま `lastError` に保存（型安全ではあるが、呼び出し側で追加処理が必要） | 現状維持可 |
+| 3 | 🔵**低** | Rotation の実装パターン | 「append リダイレクト」 | temp-write + rename（セマンティクスは同じだが、immutable segment の残存に違いあり） | 現状維持可 |
 
 ### 出荷可否判定
 
-**現時点では「出荷ブロッカーあり」ではないが、「修正推奨事項あり」の判定。**
+**出荷可能。**
 
-- **テスト失敗 1件** (`isJusticeSpecifier`) は clear bug であるため、マージ前に修正すべき。
+- 本検証で抽出された明確なバグは、2026-08-08 時点ですべて修正済みである。
 - **Gate L1+ deny の未実装** は設計上の機能であるが、ADR において「現行は L0 Advisory のみ」と宣言されており、出荷ブロッカーではない（将来拡張予定）。
-- **doctor CLI のコマンド名** は `bin` 経由で `npx justice` は動作するが、 `doctor` の実装が欠落している可能性があるため要確認。
+- `doctor` CLI サブコマンドは `argv[0] === "doctor"` 分岐で実装済み。`npx justice doctor` は診断フローを起動する。
 
 ### 次のアクション
 
-1. **🔴 即座に修正**: `src/core/doctor-specifier.ts` L60 の `includes("justice")` を `startsWith("justice-")` または厳密な specifier 判定に変更し、`tests/core/doctor-logs.test.ts` の失敗を解消する。
-2. **🟡 要確認**: `doctor-cli.ts` に `doctor` サブコマンドを追加するか、またはドキュメント（README）に `resolve`/`verify`/`status` のみ対応であることを明記する。
-3. **🟡 将来タスク**: Gate の `L1 deny` / `L2 break` enforcement level の実装（v2.1 以降の拡張）。
-
+1. **🟡 将来タスク**: Gate の `L1 deny` / `L2 break` enforcement level の実装（v2.5+ の拡張）。
+2. **🔵 監視継続**: headless `opencode run` 経路での `.justice/events` 未書き込みについては、影響範囲を限定して v2.0 出荷後に追跡（SPEC.md §15.12 参照）。
 ---
 
 **検証完了日**: 2026-08-07  

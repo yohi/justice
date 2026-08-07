@@ -40,7 +40,7 @@
 
 ### 2-A. プラグインロード → 観測・Gate → advisory 応答（本機能の主経路）
 
-```
+```text
 [OpenCode ロード] plugin entry を解決
   → OpenCodePlugin(init, pluginOptions)                          [src/opencode-plugin.ts:10]
       → validatePluginOptions(pluginOptions)                     [src/core/plugin-options.ts:19]  ★要所2
@@ -86,7 +86,7 @@
 
 ### 2-B. `justice` bin（doctor CLI）→ 診断レポート出力（Phase 5）
 
-```
+```text
 bunx @yohi/justice doctor
   → package.json bin: "./dist/runtime/doctor-cli.js"               [package.json:40]
       （build スクリプトに `chmod +x dist/runtime/doctor-cli.js` を含む [同:43]）
@@ -103,7 +103,7 @@ bunx @yohi/justice doctor
 
 ### 2-C. `justice_review` ツール → Review Summary + health セクション（Phase 5 Task 9、層2 診断）
 
-```
+```text
 セッション内で justice_review ツール呼出
   → defineJusticeReviewTool(adapter)                               [src/runtime/justice-tools.ts:272]
       （getTools() で公開されるのは justice_review のみ — justice_status/justice_gate は公開しない）
@@ -124,7 +124,7 @@ bunx @yohi/justice doctor
 
 ### 2-D. FF-009 回帰（Phase 1 Task 3、ビルド時静的検証）
 
-```
+```text
 bun run test:dist  (= build && vitest run --config vitest.dist.config.ts)
   → vitest.dist.config.ts: include tests/dist/**（build 前提は script が保証）
   → tests/dist/loader-contract.test.ts:

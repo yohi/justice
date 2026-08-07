@@ -1492,9 +1492,9 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証と再計測により、すべて解決または許容可能と判定された**。したがって v2.0 Quality Control Plane は「実機で動作することが観測によって証明された状態」にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、Enforcement（L1 deny 等）は v2.5+ の対象である。
 
-- **配布エントリの根因と修正**: v2.7.0 以前は package `exports["."]` が barrel エントリを指し、OpenCode の「全 export が plugin factory または `{ server: fn }`」というローダ契約に違反していたため、`Plugin export is not a function` で plugin が一度もロードされなかった。v3.0.0 では `exports["."]` と `exports["./opencode"]` を plugin 専用エントリへ再構成し、`./core` は library entry として分離した。FF-009（`bun run test:dist`）で root / subpath のロード契約と factory 実行可能性を回帰検証する。
+- **配布エントリの根因と修正**: v3.0.0 未満は package `exports["."]` が barrel エントリを指し、OpenCode の「全 export が plugin factory または `{ server: fn }`」というローダ契約に違反していたため、`Plugin export is not a function` で plugin が一度もロードされなかった。v3.0.0 では `exports["."]` と `exports["./opencode"]` を plugin 専用エントリへ再構成し、`./core` は library entry として分離した。FF-009（`bun run test:dist`）で root / subpath のロード契約と factory 実行可能性を回帰検証する。
 
-- **実機実証の範囲**: 絶対パス entry と root specifier entry の双方で、plugin load、初期化ログ、Observation Log、schema 適合、`justice_review`、`gate.yaml` fail-open、`task_complete` DecisionRecord を観測した。ユニットテストが緑であることだけでは runtime の証拠とせず、隔離した設定・キャッシュ・sessionId・callId による実機観測を完了条件とする。
+- **実機実証の範囲**: 実証は実行経路によって証拠が分離している。絶対パス entry と root specifier entry の headless 実行では、plugin load（`OpenCodePlugin` factory 呼出し・初期化ログ出力）が成功することを観測したにとどまる。Observation Log 書き込み、schema 適合、`justice_review` 呼出し、`gate.yaml` fail-open 動作、`task_complete` による DecisionRecord 生成は、**プログラマティックな `dist/opencode-plugin.js` 実行経路**でのみ観測した証拠である。headless 経路では `.justice/events/**.jsonl` への ObservationRecord 生成は確認されていない。ユニットテストが緑であることだけでは runtime の証拠とせず、隔離した設定・キャッシュ・sessionId・callId による実機観測を完了条件とする。
 
 - **C1（L0 advisory 表示面の実証）— `partial` と判定された**: プログラマティックな OpenCode Plugin API 呼び出しでは、`enableAdvisoryOutputAppend: true` 時に `output.output` 末尾へ Gate advisory banner が追記されることを確認した。ただし headless `opencode run` 実行では `.justice/events/**.jsonl` への ObservationRecord 書き込みが観測されなかった（プラグインロード自体は成功）。これは L0 Advisory 機能の主要な使用経路（対話的 TUI / 通常の Plugin API 呼び出し）では成立しており、headless 実行経路のイベントフローのみに限定された限界である。したがって `enableAdvisoryOutputAppend` は **既定 `false` のまま維持**し、保証チャネルは `JusticeNotifier`（`client.app.log`）とする。`output.output` 追記はオプトインの best-effort 機能として README に記載する（Task 18）。
 
