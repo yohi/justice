@@ -73,6 +73,29 @@ export function isJusticeSpecifier(specifier: string): boolean {
   return baseName === "justice" || baseName.startsWith("justice-");
 }
 
+/** 文字列リテラル（エスケープを含む）を内容を壊さずに読み進める。 */
+function readStringLiteral(
+  content: string,
+  startIndex: number,
+): { output: string; endIndex: number } {
+  let out = '"';
+  let i = startIndex + 1;
+  while (i < content.length) {
+    const ch = content.charAt(i);
+    if (ch === "\\" && i + 1 < content.length) {
+      out += ch + content.charAt(i + 1);
+      i += 2;
+      continue;
+    }
+    out += ch;
+    if (ch === '"') {
+      return { output: out, endIndex: i };
+    }
+    i++;
+  }
+  return { output: out, endIndex: i };
+}
+
 /** 文字列リテラル内を壊さないよう、文字列を認識して各文字に対する処理を適用する。 */
 function processWithStringEscapes(
   content: string,
@@ -83,31 +106,23 @@ function processWithStringEscapes(
   ) => { consumed: number; output: string } | undefined,
 ): string {
   let out = "";
-  let inString = false;
-  for (let i = 0; i < content.length; i++) {
+  let i = 0;
+  while (i < content.length) {
     const ch = content.charAt(i);
-    const next = i + 1 < content.length ? content.charAt(i + 1) : undefined;
-    if (inString) {
-      if (ch === "\\" && next !== undefined) {
-        out += ch + next;
-        i++;
-      } else {
-        out += ch;
-        if (ch === '"') inString = false;
-      }
-      continue;
-    }
     if (ch === '"') {
-      inString = true;
-      out += ch;
+      const literal = readStringLiteral(content, i);
+      out += literal.output;
+      i = literal.endIndex + 1;
       continue;
     }
+    const next = i + 1 < content.length ? content.charAt(i + 1) : undefined;
     const result = onChar(ch, next, i);
     if (result) {
       out += result.output;
-      i += result.consumed;
+      i += result.consumed + 1;
     } else {
       out += ch;
+      i++;
     }
   }
   return out;
