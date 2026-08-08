@@ -6,6 +6,7 @@ import {
   parseJsonc,
   scanConfigContent,
   scanUnreadableSource,
+  stripComments,
   type SourceScanResult,
 } from "../../src/core/doctor-config";
 
@@ -48,6 +49,31 @@ describe("parseJsonc()", () => {
       ok: true,
       value: { plugin: ["\\", '"', "@yohi/justice"] },
     });
+  });
+
+  it("does not duplicate newlines when stripping line comments", () => {
+    const result = stripComments("// a\n");
+    expect(result).toEqual({ ok: true, content: "\n" });
+  });
+
+  it("does not duplicate newlines for consecutive line comments", () => {
+    const result = stripComments("// a\n// b\n");
+    expect(result).toEqual({ ok: true, content: "\n\n" });
+  });
+
+  it("strips a line comment at end of file without adding a newline", () => {
+    const result = stripComments("// a");
+    expect(result).toEqual({ ok: true, content: "" });
+  });
+
+  it("replaces block comments with whitespace to avoid token concatenation", () => {
+    const result = stripComments(`{"plugin":[1/* comment */2]}`);
+    expect(result).toEqual({ ok: true, content: `{"plugin":[1 2]}` });
+  });
+
+  it("reports a parse error when numbers are only separated by a block comment", () => {
+    const result = parseJsonc(`{"plugin":[1/* comment */2]}`);
+    expect(result.ok).toBe(false);
   });
 
   it("skips line comments that appear after a trailing comma", () => {
@@ -114,10 +140,7 @@ describe("scanConfigContent()", () => {
   });
 
   it("detects absolute-path registrations whose basename is justice or starts with justice-", () => {
-    const result = scanConfigContent(
-      "project",
-      `{"plugin": ["/home/user/justice"]}`
-    );
+    const result = scanConfigContent("project", `{"plugin": ["/home/user/justice"]}`);
     expect(result.specifiers[0]?.specifier).toBe("/home/user/justice");
   });
 
@@ -156,7 +179,9 @@ describe("mergeSourceScans()", () => {
       { source: "global", readable: true, specifiers: [], diagnostics: [] },
     ]);
     expect(result.specifiers).toEqual([]);
-    expect(result.diagnostics.some((d) => d.code === "justice_not_found_in_config")).toBe(true);
+    expect(result.diagnostics).toEqual([
+      { code: "justice_not_found_in_config", source: "merged" },
+    ]);
   });
 
   it("higher-priority source wins on conflicting justice entries", () => {
@@ -193,6 +218,26 @@ describe("mergeSourceScans()", () => {
     expect(names).toContain("@yohi/justice@3.0.0");
     expect(names).not.toContain("@yohi/justice@2.7.0");
   });
+
+  it("dedupes justice specifiers that differ only by subpath", () => {
+    const result = mergeSourceScans([
+      scan("global", "@yohi/justice@2.7.0/subpath-a"),
+      scan("project", "@yohi/justice@3.0.0/subpath-b"),
+    ]);
+    expect(result.specifiers).toEqual([
+      { specifier: "@yohi/justice@3.0.0/subpath-b", optionsPresent: false, optionKeys: [] },
+    ]);
+  });
+
+  it("dedupes non-scoped specifiers that differ only by subpath", () => {
+    const result = mergeSourceScans([
+      scan("global", "other-plugin@1.0.0/sub-a"),
+      scan("project", "other-plugin@2.0.0/sub-b"),
+    ]);
+    expect(result.specifiers).toEqual([
+      { specifier: "other-plugin@2.0.0/sub-b", optionsPresent: false, optionKeys: [] },
+    ]);
+  });
 });
 
 describe("scanUnreadableSource()", () => {
@@ -217,10 +262,7 @@ describe("scanUnreadableSource()", () => {
   });
 
   it("detects justice tuple entries in unreadable parsed source", () => {
-    const result = scanUnreadableSource(
-      "env_config_content",
-      `{"plugin":[["@yohi/justice",{}]]}`,
-    );
+    const result = scanUnreadableSource("env_config_content", `{"plugin":[["@yohi/justice",{}]]}`);
     expect(result.diagnostics).toEqual([
       { code: "unsupported_config_source", source: "env_config_content" },
     ]);
@@ -250,5 +292,23 @@ describe("scanUnreadableSource()", () => {
       `/* @yohi/justice */ { "plugin": ["@yohi/justice"]`,
     );
     expect(result.diagnostics).toEqual([{ code: "unsupported_config_source", source: "managed" }]);
+  });
+
+  it("does not detect justice inside tuple option values", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["other-plugin", {"note": "@yohi/justice"}]]}`,
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("detects justice tuple entries even when options contain the word justice", () => {
+    const result = scanUnreadableSource(
+      "env_config_content",
+      `{"plugin":[["@yohi/justice", {"note": "justice settings"}]]}`,
+    );
+    expect(result.diagnostics).toEqual([
+      { code: "unsupported_config_source", source: "env_config_content" },
+    ]);
   });
 });

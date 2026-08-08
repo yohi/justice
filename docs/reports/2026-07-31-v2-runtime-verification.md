@@ -152,6 +152,6 @@ v2.0 Quality Control Plane は実在し、TUI セッションまたはプログ�
 
 ## 関連ファイル
 
-- `docs/superpowers/specs/2026-07-31-justice-v2-shipping-design.md` — 設計書
+- `SPEC.md` — 仕様書（§15 Quality Control Plane）
 - `src/runtime/opencode-adapter.ts` — OpenCode プラグインアダプター
 - `dist/opencode-plugin.js` — ビルド済みプラグインエントリ

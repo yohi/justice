@@ -1311,7 +1311,7 @@ bun run build
 | Phase 6: オーケストレーションによる並行協調の確立 (Multi-Agent Coordination) | ✅ 完了 |
 | Phase 7: 実環境への統合オーケストレーター構築 (Plugin Orchestrator & Runtime) | ✅ 完了 |
 | Phase 8: 不可視の参謀 (Invisible Advisor) の実装 | ✅ 完了 |
-| **v2.0: Quality Control Plane 基盤** (Observation Log / State Projection / Gate Engine / Review Aggregator / `justice_review` ツール、§15 参照) | 🟡 実装完了・ガバナンス未完了（L0 Advisory。§15.12 参照 — C1未実証・CODEOWNERS追認未取得） |
+| **v2.0: Quality Control Plane 基盤** (Observation Log / State Projection / Gate Engine / Review Aggregator / `justice_review` ツール、§15 参照) | ✅ 完了 (v3.0.0・実機実証済み。§15.12 参照) |
 | v2.5: Handoff（サブエージェント実行結果の直接相関）/ trusted approval artifacts / `implementation_authorized` 導出 | 🔲 計画中 |
 | v2.5+: Final Verifier / Acceptance Criteria 判定（Feature Gate） | 🔲 将来対応 |
 | v2.5+: L1 deny（強制ブロック）等のエンフォースメント強化 / 物理 prune | 🔲 計画中 |
@@ -1490,7 +1490,11 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 ### 15.12 既知の未解決事項・ガバナンス状況（重要）
 
-v2.0 の設計書は、実装着手前に満たすべき前提条件を明記していた。**2026-08-04 の実機実証と再計測により、3 つの出荷ブロッカーはすべて解決または許容可能と判定された**。したがって v2.0 Quality Control Plane は「実機で動作することが観測によって証明された状態」にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、 Enforcement（L1 deny 等）は v2.5+ の対象である。
+v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証と再計測により、すべて解決または許容可能と判定された**。したがって v2.0 Quality Control Plane は「実機で動作することが観測によって証明された状態」にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、Enforcement（L1 deny 等）は v2.5+ の対象である。
+
+- **配布エントリの根因と修正**: v3.0.0 未満は package `exports["."]` が barrel エントリを指し、OpenCode の「全 export が plugin factory または `{ server: fn }`」というローダ契約に違反していたため、`Plugin export is not a function` で plugin が一度もロードされなかった。v3.0.0 では `exports["."]` と `exports["./opencode"]` を plugin 専用エントリへ再構成し、`./core` は library entry として分離した。FF-009（`bun run test:dist`）で root / subpath のロード契約と factory 実行可能性を回帰検証する。
+
+- **実機実証の範囲**: 実証は実行経路によって証拠が分離している。絶対パス entry と root specifier entry の headless 実行では、plugin load（`OpenCodePlugin` factory 呼出し・初期化ログ出力）が成功することを観測したにとどまる。Observation Log 書き込み、schema 適合、`justice_review` 呼出し、`gate.yaml` fail-open 動作、`task_complete` による DecisionRecord 生成は、**プログラマティックな `dist/opencode-plugin.js` 実行経路**でのみ観測した証拠である。headless 経路では `.justice/events/**.jsonl` への ObservationRecord 生成は確認されていない。ユニットテストが緑であることだけでは runtime の証拠とせず、隔離した設定・キャッシュ・sessionId・callId による実機観測を完了条件とする。
 
 - **C1（L0 advisory 表示面の実証）— `partial` と判定された**: プログラマティックな OpenCode Plugin API 呼び出しでは、`enableAdvisoryOutputAppend: true` 時に `output.output` 末尾へ Gate advisory banner が追記されることを確認した。ただし headless `opencode run` 実行では `.justice/events/**.jsonl` への ObservationRecord 書き込みが観測されなかった（プラグインロード自体は成功）。これは L0 Advisory 機能の主要な使用経路（対話的 TUI / 通常の Plugin API 呼び出し）では成立しており、headless 実行経路のイベントフローのみに限定された限界である。したがって `enableAdvisoryOutputAppend` は **既定 `false` のまま維持**し、保証チャネルは `JusticeNotifier`（`client.app.log`）とする。`output.output` 追記はオプトインの best-effort 機能として README に記載する（Task 18）。
 
@@ -1499,3 +1503,5 @@ v2.0 の設計書は、実装着手前に満たすべき前提条件を明記し
 - **Evidence write 経路のレイテンシ — 再計測済み・条件付き許容と判定された**: 2026-08-04 に `spikes/observation-latency/measure.ts` で hook 経路 end-to-end 再計測を実施した。結果は `docs/reports/2026-07-31-v2-latency-measurement.json` に記録。同一 shard への連続 append（本番支配的条件）の p95 は 0B prefill で 1.502ms、100KB prefill で 2.787ms と **5ms 未満**であり許容範囲内。一方で shard サイズが 5MB 直前（rotation 閾値直前）では p95=36.084ms、p99=37.414ms、冷キャッシュ初回 append は 41.174ms となった。**shard サイズが 1MB 以下の通常利用域では目標を達成しているが、rotation 直前の大 shard では O(shard size) の全文書き込みコストが顕在化する**。したがって現行実装は **条件付き許容** とし、バッチ化・非同期 flush 化等の改善は v2.5 の Issue に登録して対応する。v2.0 では shard サイズ 5MB・14日の rotation 政策により、通常セッションでは 1MB 以下の shard に留まる運用を推奨する。
 
 - **今後の対応**: (1) headless `opencode run` 経路での Observation Log 未書き込みについては別途調査タスクとし、影響範囲を限定して v2.0 出荷後に追跡する (2) レイテンシ改善（大 shard 時の O(size) 書き込み）を v2.5 Issue として登録し設計レビューを経て実装計画を作成する。v2.0 は上記条件付き許容のもとで出荷可能である。
+
+- **互換性に関する既知課題**: dist の相対 import は拡張子なしのため Node ESM から直接利用できない。OpenCode の Bun 実行では影響しないが、Node ベースの loader や library 利用時には別途対応が必要である。また `@opencode-ai/plugin` の開発依存版と実機版にはバージョンドリフトがあるため、両版で利用型の一致を確認したうえで、将来は対応範囲を固定する。

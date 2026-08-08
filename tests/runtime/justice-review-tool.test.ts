@@ -565,7 +565,11 @@ describe("health section", () => {
       getLastReadIntegrity: () => ({ hasIntegrityViolation: false }),
       getLastSuccessfulWriteAt: () => undefined,
     };
-    const result = await executeJusticeReviewTool({ args: {}, requestApproval: async () => {}, logReader });
+    const result = await executeJusticeReviewTool({
+      args: {},
+      requestApproval: async () => {},
+      logReader,
+    });
     const parsed = JSON.parse(result as string) as Record<string, unknown>;
     expect(parsed.health).toEqual({
       recordCount: 1,
@@ -578,7 +582,9 @@ describe("health section", () => {
   it("remains fail-open even when the warning log itself throws", async () => {
     const logReader = {
       readAll: async () => [],
-      getRotationHealth: () => { throw new Error("health boom"); },
+      getRotationHealth: () => {
+        throw new Error("health boom");
+      },
     };
     const throwingLog = (): never => {
       throw new Error("log boom");
