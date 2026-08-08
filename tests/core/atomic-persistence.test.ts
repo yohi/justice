@@ -36,6 +36,24 @@ describe("AtomicPersistence", () => {
     expect(loaded.lockMeta.version).toBe(4);
   });
 
+  it("rejects corrupted JSON and non-ENOENT read failures", async () => {
+    const corrupted = new AtomicPersistence(
+      createMockFileReader({ "state.json": "{" }),
+      createMockFileWriter(),
+      config(),
+    );
+    await expect(corrupted.loadWithLock()).rejects.toThrow();
+
+    const reader = createMockFileReader({});
+    reader.readFile = vi.fn(async () => {
+      const error = new Error("permission denied") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    });
+    const inaccessible = new AtomicPersistence(reader, createMockFileWriter(), config());
+    await expect(inaccessible.loadWithLock()).rejects.toThrow("permission denied");
+  });
+
   it("retries after a version mismatch and then saves", async () => {
     const reader = createMockFileReader({});
     reader.readFile = vi
@@ -76,6 +94,24 @@ describe("AtomicPersistence", () => {
     const persistence = new AtomicPersistence(createMockFileReader({}), writer, config());
 
     const result = await persistence.saveAtomicWithLock(["safe"]);
+
+    expect(result.status).toBe("conflict_diverted");
+  });
+
+  it("preserves an existing conflict record when diversion cannot rename", async () => {
+    const reader = createMockFileReader({
+      "state.conflict.json": JSON.stringify({
+        version: 1,
+        conflicts: [],
+      }),
+    });
+    const writer = createMockFileWriter();
+    writer.rename = vi.fn(async () => {
+      throw new Error("rename failed");
+    });
+    const persistence = new AtomicPersistence(reader, writer, config());
+
+    const result = await persistence.saveAtomicWithLock(["conflict"]);
 
     expect(result.status).toBe("conflict_diverted");
   });

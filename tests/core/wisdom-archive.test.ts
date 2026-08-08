@@ -38,6 +38,17 @@ describe("WisdomArchive", () => {
         hitCount: 2,
       }).archive,
     ).toBe(false);
+    expect(
+      archive.shouldArchive({
+        id: "w-3",
+        taskId: "t",
+        persona: "hephaestus",
+        category: "environment_quirk",
+        content: "x",
+        timestamp: "2026-01-01T00:00:00Z",
+        hitCount: 3,
+      }).reason,
+    ).toBe("hit_count_threshold");
   });
 
   it("appends and reloads an archived entry through persistence", async () => {

@@ -83,6 +83,12 @@ describe("runDoctor()", () => {
 
     expect(parsed.analytics.failureRate).toBe(0);
   });
+
+  it("returns markdown status without analytics when the flag is omitted", async () => {
+    const output = await runStatus(".", "package.json", false, false);
+
+    expect(output).toContain("Plan Status");
+  });
   it("exits 0 when the configured plugin resolves and satisfies the loader contract", async () => {
     const plugin = async () => ({});
     const result = await runDoctor(
