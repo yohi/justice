@@ -16,6 +16,7 @@ import { TaskSplitter } from "../core/task-splitter";
 import { WisdomStore } from "../core/wisdom-store";
 import { LearningExtractor } from "../core/learning-extractor";
 import type { ObservationHandler } from "./observation-handler";
+import type { TelemetryStore } from "../core/telemetry-store";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -50,10 +51,16 @@ export class TaskFeedbackHandler {
   private readonly splitter: TaskSplitter;
   private readonly wisdomStore: WisdomStoreInterface;
   private readonly learningExtractor: LearningExtractor;
+  private readonly telemetry?: TelemetryStore;
   private readonly sessions: Map<string, SessionState> = new Map();
   private observationHandler?: ObservationHandler;
 
-  constructor(fileReader: FileReader, fileWriter: FileWriter, wisdomStore?: WisdomStoreInterface) {
+  constructor(
+    fileReader: FileReader,
+    fileWriter: FileWriter,
+    wisdomStore?: WisdomStoreInterface,
+    telemetry?: TelemetryStore,
+  ) {
     this.fileReader = fileReader;
     this.fileWriter = fileWriter;
     this.formatter = new FeedbackFormatter();
@@ -63,6 +70,7 @@ export class TaskFeedbackHandler {
     this.splitter = new TaskSplitter();
     this.wisdomStore = wisdomStore ?? new WisdomStore();
     this.learningExtractor = new LearningExtractor();
+    this.telemetry = telemetry;
   }
 
   /**
@@ -126,6 +134,11 @@ export class TaskFeedbackHandler {
 
     // Determine the action to take
     const action = this.determineAction(feedback, session, payload.toolResult);
+    this.telemetry?.recordTaskCompleted(
+      feedback.taskId,
+      feedback.status,
+      feedback.errorClassification,
+    );
 
     // Execute the action
     return this.executeAction(action, feedback, session, payload.toolResult, event.sessionId);

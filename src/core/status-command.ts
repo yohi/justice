@@ -3,6 +3,7 @@ import { PlanParser } from "./plan-parser";
 import { DependencyAnalyzer, DependencyResolutionError } from "./dependency-analyzer";
 import { ProgressReporter, type ProgressReport } from "./progress-reporter";
 import { CategoryClassifier } from "./category-classifier";
+import type { TelemetrySnapshot, TelemetryStore } from "./telemetry-store";
 
 export interface PlanStatus {
   readonly planPath: string;
@@ -14,6 +15,10 @@ export interface PlanStatus {
   readonly categoryMap: Map<string, string>;
 }
 
+export interface PlanStatusWithAnalytics extends PlanStatus {
+  readonly analytics?: TelemetrySnapshot;
+}
+
 export class StatusCommand {
   private readonly fileReader: FileReader;
   private readonly parser: PlanParser;
@@ -21,12 +26,34 @@ export class StatusCommand {
   private readonly reporter: ProgressReporter;
   private readonly classifier: CategoryClassifier;
 
-  constructor(fileReader: FileReader) {
+  constructor(
+    fileReader: FileReader,
+    private readonly telemetry?: TelemetryStore,
+  ) {
     this.fileReader = fileReader;
     this.parser = new PlanParser();
     this.analyzer = new DependencyAnalyzer();
     this.reporter = new ProgressReporter();
     this.classifier = new CategoryClassifier();
+  }
+
+  async getStatusWithAnalytics(planPath: string): Promise<PlanStatusWithAnalytics> {
+    const status = await this.getStatus(planPath);
+    const analytics = this.telemetry?.computeSnapshot(100);
+    return analytics === undefined ? status : { ...status, analytics };
+  }
+
+  formatAsJson(status: PlanStatusWithAnalytics): string {
+    return JSON.stringify(
+      {
+        planPath: status.planPath,
+        progress: status.progress,
+        tasks: status.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+        analytics: status.analytics ?? null,
+      },
+      null,
+      2,
+    );
   }
 
   /**

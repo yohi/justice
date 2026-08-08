@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { StatusCommand } from "../../src/core/status-command";
-import { createMockFileReader } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import type { FileReader } from "../../src/core/types";
+import { TelemetryStore } from "../../src/core/telemetry-store";
 
 describe("StatusCommand", () => {
   const planContent = [
@@ -61,5 +62,18 @@ describe("StatusCommand", () => {
       expect(md).toContain("Parallelizable");
       expect(md).toContain("Execution Order");
     });
+  });
+
+  it("formats analytics status as parseable JSON", async () => {
+    const telemetry = new TelemetryStore(reader, createMockFileWriter());
+    telemetry.recordTaskCompleted("task-1", "failure", "test_failure");
+    const analyticsCommand = new StatusCommand(reader, telemetry);
+
+    const json = analyticsCommand.formatAsJson(await analyticsCommand.getStatusWithAnalytics("plan.md"));
+    const parsed = JSON.parse(json) as { analytics: { failureRate: number; wisdomHitRate: number; errorDistribution: Record<string, number> } };
+
+    expect(parsed.analytics.failureRate).toBe(1);
+    expect(parsed.analytics.wisdomHitRate).toBe(0);
+    expect(parsed.analytics.errorDistribution.test_failure).toBe(1);
   });
 });

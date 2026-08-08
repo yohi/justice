@@ -12,6 +12,8 @@ import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import { PersonaClassifier } from "./persona-classifier";
+import { WisdomMetrics } from "./wisdom-metrics";
+import { WisdomArchive } from "./wisdom-archive";
 
 export interface TieredWisdomStoreLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -25,6 +27,9 @@ export interface TieredWisdomStoreOptions {
   secretDetector?: SecretPatternDetector;
   globalDisplayPath?: string;
   logger?: TieredWisdomStoreLogger;
+  metrics?: WisdomMetrics;
+  localArchive?: WisdomArchive;
+  globalArchive?: WisdomArchive;
 }
 
 const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
@@ -48,6 +53,9 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   private readonly secretDetector: SecretPatternDetector;
   private readonly globalDisplayPath: string;
   private readonly logger?: TieredWisdomStoreLogger;
+  private readonly metrics: WisdomMetrics;
+  private readonly localArchive?: WisdomArchive;
+  private readonly globalArchive?: WisdomArchive;
 
   constructor(opts: TieredWisdomStoreOptions) {
     this.localStore = opts.localStore;
@@ -57,6 +65,11 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     this.secretDetector = opts.secretDetector ?? new SecretPatternDetector();
     this.globalDisplayPath = opts.globalDisplayPath ?? "~/.justice/wisdom.json";
     this.logger = opts.logger;
+    this.metrics = opts.metrics ?? new WisdomMetrics();
+    this.localArchive = opts.localArchive;
+    this.globalArchive = opts.globalArchive;
+    this.localStore.onEvict((entry) => void this.archiveEvicted(this.localArchive, entry));
+    this.globalStore.onEvict((entry) => void this.archiveEvicted(this.globalArchive, entry));
   }
 
   getLocalStore(): WisdomStore {
@@ -160,6 +173,13 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     return this.deduplicate([...local, ...global]);
   }
 
+  recordHit(entryId: string, now = new Date()): WisdomEntry | undefined {
+    return (
+      this.metrics.recordHit(this.localStore, entryId, now) ??
+      this.metrics.recordHit(this.globalStore, entryId, now)
+    );
+  }
+
   formatForInjection(entries: readonly WisdomEntry[]): string {
     if (entries.length === 0) return "";
     const presentPersonas = new Set(entries.map((e) => e.persona));
@@ -219,9 +239,20 @@ export class TieredWisdomStore implements WisdomStoreInterface {
 
   async persistAll(): Promise<void> {
     await Promise.all([
-      this.localPersistence.saveAtomic(this.localStore),
-      this.globalPersistence.saveAtomic(this.globalStore),
+      this.localPersistence.saveAtomicWithLock(this.localStore),
+      this.globalPersistence.saveAtomicWithLock(this.globalStore),
     ]);
+  }
+
+  private async archiveEvicted(archive: WisdomArchive | undefined, entry: WisdomEntry): Promise<void> {
+    if (archive === undefined) return;
+    const decision = archive.shouldArchive(entry);
+    if (!decision.archive || decision.reason === undefined) return;
+    try {
+      await archive.append(entry, decision.reason);
+    } catch (error: unknown) {
+      this.logger?.warn("[JUSTICE] Wisdom archive append failed", error);
+    }
   }
 
   private deduplicate(entries: WisdomEntry[]): WisdomEntry[] {

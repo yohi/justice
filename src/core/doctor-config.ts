@@ -60,11 +60,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isJusticeSpecifier(specifier: string): boolean {
   if (specifier.startsWith("/")) {
-    const filename = specifier.split("/").pop() || "";
-    return (
-      filename === "justice" ||
-      filename.startsWith("justice-") ||
-      filename.startsWith("opencode-plugin")
+    const segments = specifier.split("/").filter((segment) => segment.length > 0);
+    return segments.some(
+      (segment) => segment === "justice" || segment.startsWith("justice-"),
     );
   }
   // Package specifier: extract base package name without version and subpath.

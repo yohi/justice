@@ -1,17 +1,33 @@
 import { randomBytes } from "node:crypto";
 import type { FileReader, FileWriter, WisdomEntry } from "./types";
 import { WisdomStore } from "./wisdom-store";
+import { AtomicPersistence, type LockMetadata, type SaveResult } from "./atomic-persistence";
 
 /**
  * WisdomPersistence handles reading and writing WisdomStore data
  * to the filesystem. Keeps I/O concerns separate from the pure WisdomStore logic.
  */
 export class WisdomPersistence {
+  private readonly atomic: AtomicPersistence<WisdomStore>;
+
   constructor(
     private readonly fileReader: FileReader,
     private readonly fileWriter: FileWriter,
     private readonly wisdomFilePath: string = ".justice/wisdom.json",
-  ) {}
+  ) {
+    this.atomic = new AtomicPersistence(fileReader, fileWriter, {
+      filePath: wisdomFilePath,
+      conflictPath: `${wisdomFilePath.replace(/\.json$/u, "")}.conflict.json`,
+      serialize: (store) => store.serialize(),
+      deserialize: (raw) => WisdomStore.deserialize(raw),
+      merge: (mine, theirs) =>
+        WisdomStore.fromEntries(
+          this.mergeById(theirs.getAllEntries(), mine.getAllEntries()),
+          mine.getMaxEntries(),
+        ),
+      emptyValue: () => new WisdomStore(),
+    });
+  }
 
   /**
    * Loads WisdomStore from file. Returns an empty store if the file doesn't
@@ -25,7 +41,7 @@ export class WisdomPersistence {
 
     try {
       const json = await this.fileReader.readFile(this.wisdomFilePath);
-      return WisdomStore.deserialize(json);
+      return this.deserializePersisted(json);
     } catch {
       // Fail-open: return empty store on I/O or parse errors
       return new WisdomStore();
@@ -38,6 +54,15 @@ export class WisdomPersistence {
   async save(store: WisdomStore): Promise<void> {
     const json = store.serialize();
     await this.fileWriter.writeFile(this.wisdomFilePath, json);
+  }
+
+  async loadWithLock(): Promise<{ readonly store: WisdomStore; readonly lockMeta: LockMetadata }> {
+    const result = await this.atomic.loadWithLock();
+    return { store: result.data, lockMeta: result.lockMeta };
+  }
+
+  async saveAtomicWithLock(store: WisdomStore, initialLockMeta?: LockMetadata): Promise<SaveResult> {
+    return this.atomic.saveAtomicWithLock(store, initialLockMeta);
   }
 
   /**
@@ -70,7 +95,9 @@ export class WisdomPersistence {
       throw new Error(`Failed to parse wisdom file: ${this.wisdomFilePath}`, { cause: err });
     }
 
-    const store = WisdomStore.deserialize(data);
+    const store = WisdomStore.deserialize(
+      isVersionedStoreEnvelope(data) ? data.data : data,
+    );
     // Strict validation: accept either v1 ({ entries: [] }) or v2 ({ version: 2, entriesByAgent: {} }).
     if (data && typeof data === "object") {
       const hasValidV1 = "entries" in data && Array.isArray((data as { entries: unknown }).entries);
@@ -91,6 +118,11 @@ export class WisdomPersistence {
     }
 
     return store;
+  }
+
+  private deserializePersisted(json: string): WisdomStore {
+    const parsed: unknown = JSON.parse(json);
+    return WisdomStore.deserialize(isVersionedStoreEnvelope(parsed) ? parsed.data : parsed);
   }
 
   /**
@@ -137,19 +169,32 @@ export class WisdomPersistence {
       return isNaN(ts) ? 0 : ts;
     };
 
+    const mergeEntry = (existing: WisdomEntry | undefined, incoming: WisdomEntry): WisdomEntry => {
+      if (existing === undefined) return incoming;
+      const base = getTs(incoming) >= getTs(existing) ? incoming : existing;
+      const hitCount = (existing.hitCount ?? 0) + (incoming.hitCount ?? 0);
+      const firstSeenAt = [existing.firstSeenAt, incoming.firstSeenAt]
+        .filter((value): value is string => value !== undefined)
+        .sort()[0];
+      const lastHitAt = [existing.lastHitAt, incoming.lastHitAt]
+        .filter((value): value is string => value !== undefined)
+        .sort()
+        .at(-1);
+      return {
+        ...base,
+        ...(hitCount === 0 ? {} : { hitCount }),
+        ...(firstSeenAt === undefined ? {} : { firstSeenAt }),
+        ...(lastHitAt === undefined ? {} : { lastHitAt }),
+      };
+    };
+
     // Fold disk and memory entries by the same rules
     for (const e of diskEntries) {
-      const existing = byId.get(e.id);
-      if (!existing || getTs(e) > getTs(existing)) {
-        byId.set(e.id, e);
-      }
+      byId.set(e.id, mergeEntry(byId.get(e.id), e));
     }
 
     for (const e of memoryEntries) {
-      const existing = byId.get(e.id);
-      if (!existing || getTs(e) > getTs(existing)) {
-        byId.set(e.id, e);
-      }
+      byId.set(e.id, mergeEntry(byId.get(e.id), e));
     }
     return [...byId.values()].sort((a, b) => {
       const tsA = getTs(a);
@@ -159,4 +204,15 @@ export class WisdomPersistence {
       return 0;
     });
   }
+}
+
+function isVersionedStoreEnvelope(
+  value: unknown,
+): value is { readonly version: number; readonly data: unknown } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { version?: unknown }).version === "number" &&
+    "data" in value
+  );
 }

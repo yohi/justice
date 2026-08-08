@@ -164,6 +164,15 @@ describe("isJusticeSpecifier()", () => {
     expect(isJusticeSpecifier("/path/to/justice-plugin")).toBe(true);
     expect(isJusticeSpecifier("/opt/justice-v2")).toBe(true);
   });
+
+  it("accepts Justice package entry files below a Justice directory", () => {
+    expect(isJusticeSpecifier("/path/to/justice/index.js")).toBe(true);
+    expect(isJusticeSpecifier("/path/to/justice-plugin/index.js")).toBe(true);
+  });
+
+  it("does not treat an unrelated opencode-plugin filename as Justice", () => {
+    expect(isJusticeSpecifier("/path/to/unrelated/opencode-plugin.js")).toBe(false);
+  });
 });
 
 describe("mergeSourceScans()", () => {

@@ -351,6 +351,9 @@ export interface FileWriter {
    * 実装は path traversal を拒否し、権限エラー等の致命的なエラーは再送出しなければなりません。
    */
   deleteFile(path: string): Promise<void>;
+
+  /** Creates a hard link and fails atomically when the destination exists. */
+  link?(from: string, to: string): Promise<void>;
 }
 
 /** コンテキスト削減戦略 */
@@ -392,6 +395,9 @@ export interface WisdomEntry {
   readonly content: string;
   readonly errorClass?: ErrorClass;
   readonly timestamp: string;
+  readonly hitCount?: number;
+  readonly lastHitAt?: string;
+  readonly firstSeenAt?: string;
 }
 
 export type WisdomEntryInput = Omit<WisdomEntry, "id" | "timestamp" | "persona"> & {
@@ -425,4 +431,5 @@ export interface WisdomStoreInterface {
     persona?: AgentId;
   }): readonly WisdomEntry[];
   formatForInjection(entries: readonly WisdomEntry[]): string;
+  recordHit?(entryId: string, now?: Date): WisdomEntry | undefined;
 }

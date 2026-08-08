@@ -27,6 +27,9 @@ import { SecretPatternDetector } from "../core/secret-pattern-detector";
 import type { FileReader } from "../core/types";
 import { loadGates } from "./gate-loader";
 import type { GateLoaderLogger } from "./gate-loader";
+import { NodeFileSystem } from "./node-file-system";
+import { StatusCommand } from "../core/status-command";
+import { TelemetryStore } from "../core/telemetry-store";
 
 export type DoctorDeps = {
   readonly fileReader: FileReader;
@@ -42,6 +45,22 @@ export type DoctorReport = {
   readonly exitCode: 0 | 1;
   readonly text: string;
 };
+
+export async function runStatus(
+  cwd: string,
+  planPath: string,
+  analytics: boolean,
+  json: boolean,
+): Promise<string> {
+  const fileSystem = new NodeFileSystem(cwd);
+  const telemetry = new TelemetryStore(fileSystem, fileSystem);
+  await telemetry.load();
+  const command = new StatusCommand(fileSystem, analytics ? telemetry : undefined);
+  const status = analytics
+    ? await command.getStatusWithAnalytics(planPath)
+    : await command.getStatus(planPath);
+  return json ? command.formatAsJson(status) : command.formatAsMarkdown(status);
+}
 
 type ConfigCandidate = {
   readonly source: ConfigSourceId;
@@ -258,8 +277,21 @@ export function resolveCacheRoot(
 
 /* istanbul ignore next -- CLI entry point; covered by integration tests invoking the binary */
 export async function main(argv: readonly string[]): Promise<number> {
+  if (argv[0] === "status") {
+    const planPath = argv[1] ?? "plan.md";
+    const analytics = argv.includes("--analytics");
+    const json = argv.includes("--json");
+    try {
+      process.stdout.write(`${await runStatus(process.cwd(), planPath, analytics, json)}\n`);
+      return 0;
+    } catch (error: unknown) {
+      process.stderr.write(`justice status failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
   if (argv[0] !== "doctor") {
-    process.stderr.write("usage: justice doctor\n");
+    process.stderr.write("usage: justice doctor | justice status [plan.md] [--analytics] [--json]\n");
     return 2;
   }
   const env = process.env;

@@ -15,6 +15,7 @@ import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
 import type { ObservationHandler } from "./observation-handler";
+import type { TelemetryStore } from "../core/telemetry-store";
 import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
@@ -100,6 +101,7 @@ export class PlanBridge {
   private readonly agentRouter: AgentRouter;
   private readonly categoryClassifier: CategoryClassifier;
   private readonly learningExtractor: LearningExtractor;
+  private readonly telemetry?: TelemetryStore;
   private observationHandler: ObservationHandler | null = null;
 
   constructor(
@@ -107,6 +109,7 @@ export class PlanBridge {
     loopHandlerOrWisdomStore?: LoopDetectionHandler | WisdomStoreInterface,
     wisdomStore?: WisdomStoreInterface,
     notifier?: JusticeNotifier,
+    telemetry?: TelemetryStore,
   ) {
     this.fileReader = fileReader;
     this.triggerDetector = new TriggerDetector();
@@ -128,6 +131,7 @@ export class PlanBridge {
       this.wisdomStore = wisdomStore ?? null;
     }
     this.notifier = notifier ?? null;
+    this.telemetry = telemetry;
   }
 
   /**
@@ -515,7 +519,7 @@ export class PlanBridge {
 
     // 2) 過去の知見を決定されたペルソナでロード
     const persona = initialDelegation.context.agentId ?? "hephaestus";
-    const previousLearnings = this.getRelevantLearnings(persona);
+    const previousLearnings = this.getRelevantLearnings(persona, initialDelegation.context.taskId);
 
     // 3) delegation を再構築
     const delegation =
@@ -638,7 +642,7 @@ export class PlanBridge {
       dominantAgentId ??
       (this.isResolvableAgentId(inputPersona) ? inputPersona : routingResult.agentId);
 
-    const previousLearnings = this.getRelevantLearnings(persona);
+    const previousLearnings = this.getRelevantLearnings(persona, initialDelegation.context.taskId);
 
     // 3) delegation を再構築
     const delegation =
@@ -1089,10 +1093,14 @@ export class PlanBridge {
   /**
    * Returns formatted learnings from the WisdomStore for injection into delegation context.
    */
-  private getRelevantLearnings(persona?: AgentId): string | undefined {
+  private getRelevantLearnings(persona?: AgentId, taskId?: string): string | undefined {
     if (!this.wisdomStore) return undefined;
     const entries = this.wisdomStore.getRelevant({ maxEntries: 5, persona });
     if (entries.length === 0) return undefined;
+    if (taskId !== undefined) {
+      this.telemetry?.recordWisdomInjection(entries.map((entry) => entry.id), taskId);
+      for (const entry of entries) this.wisdomStore.recordHit?.(entry.id);
+    }
     return this.wisdomStore.formatForInjection(entries);
   }
 

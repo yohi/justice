@@ -27,6 +27,7 @@ export class WisdomStore implements WisdomStoreInterface {
   private entriesByAgent: Map<AgentId, WisdomEntry[]> = new Map();
   private entryOrder: WisdomEntry[] = [];
   private _maxEntries = 0;
+  private evictionListener?: (evicted: WisdomEntry) => void;
 
   constructor(maxEntries = 100) {
     this.setMaxEntries(maxEntries);
@@ -231,6 +232,24 @@ export class WisdomStore implements WisdomStoreInterface {
     this.trimToCapacity();
   }
 
+  onEvict(listener: (evicted: WisdomEntry) => void): void {
+    this.evictionListener = listener;
+  }
+
+  updateMetrics(
+    entryId: string,
+    mutator: (entry: WisdomEntry) => WisdomEntry,
+  ): WisdomEntry | undefined {
+    const index = this.entryOrder.findIndex((entry) => entry.id === entryId);
+    const current = this.entryOrder[index];
+    if (index < 0 || current === undefined) return undefined;
+    const updated = mutator(current);
+    this.rebuildFromOrderedEntries(
+      this.entryOrder.map((entry, entryIndex) => (entryIndex === index ? updated : entry)),
+    );
+    return updated;
+  }
+
   /**
    * Replaces all entries in the store with the provided list.
    * This allows updating the store's state without replacing the instance itself,
@@ -334,12 +353,15 @@ export class WisdomStore implements WisdomStoreInterface {
 
   private trimToCapacity(): void {
     if (this._maxEntries <= 0) {
+      for (const entry of this.entryOrder) this.evictionListener?.(entry);
       this.entriesByAgent = new Map();
       this.entryOrder = [];
       return;
     }
 
     if (this.entryOrder.length > this._maxEntries) {
+      const evicted = this.entryOrder.slice(0, this.entryOrder.length - this._maxEntries);
+      for (const entry of evicted) this.evictionListener?.(entry);
       this.rebuildFromOrderedEntries(this.entryOrder.slice(-this._maxEntries));
     }
   }
