@@ -56,6 +56,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   private readonly metrics: WisdomMetrics;
   private readonly localArchive?: WisdomArchive;
   private readonly globalArchive?: WisdomArchive;
+  private readonly pendingArchives = new Set<Promise<void>>();
 
   constructor(opts: TieredWisdomStoreOptions) {
     this.localStore = opts.localStore;
@@ -68,8 +69,8 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     this.metrics = opts.metrics ?? new WisdomMetrics();
     this.localArchive = opts.localArchive;
     this.globalArchive = opts.globalArchive;
-    this.localStore.onEvict((entry) => void this.archiveEvicted(this.localArchive, entry));
-    this.globalStore.onEvict((entry) => void this.archiveEvicted(this.globalArchive, entry));
+    this.localStore.onEvict((entry) => this.trackArchive(this.localArchive, entry));
+    this.globalStore.onEvict((entry) => this.trackArchive(this.globalArchive, entry));
   }
 
   getLocalStore(): WisdomStore {
@@ -238,10 +239,17 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   }
 
   async persistAll(): Promise<void> {
+    await Promise.all(this.pendingArchives);
     await Promise.all([
       this.localPersistence.saveAtomicWithLock(this.localStore),
       this.globalPersistence.saveAtomicWithLock(this.globalStore),
     ]);
+  }
+
+  private trackArchive(archive: WisdomArchive | undefined, entry: WisdomEntry): void {
+    const pending = this.archiveEvicted(archive, entry);
+    this.pendingArchives.add(pending);
+    void pending.finally(() => this.pendingArchives.delete(pending));
   }
 
   private async archiveEvicted(archive: WisdomArchive | undefined, entry: WisdomEntry): Promise<void> {

@@ -1,4 +1,11 @@
-import type { AgentId, FileReader, FileWriter, HookEvent, HookResponse } from "../core/types";
+import type {
+  AgentId,
+  FileReader,
+  FileWriter,
+  HookEvent,
+  HookResponse,
+  PlanTask,
+} from "../core/types";
 import { TaskSplitter } from "../core/task-splitter";
 import type { PlanParser } from "../core/plan-parser";
 import { PlanParser as PlanParserImpl } from "../core/plan-parser";
@@ -8,7 +15,6 @@ import {
   RetryPolicyCalculator,
   type RetryThresholdResult,
 } from "../core/retry-policy-calculator";
-import type { PlanTask } from "../core/types";
 
 const PROCEED: HookResponse = { action: "proceed" };
 const SESSION_TTL_MS = 30 * 60 * 1000;

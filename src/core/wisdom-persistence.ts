@@ -175,10 +175,10 @@ export class WisdomPersistence {
       const hitCount = (existing.hitCount ?? 0) + (incoming.hitCount ?? 0);
       const firstSeenAt = [existing.firstSeenAt, incoming.firstSeenAt]
         .filter((value): value is string => value !== undefined)
-        .sort()[0];
+        .sort((a, b) => a.localeCompare(b))[0];
       const lastHitAt = [existing.lastHitAt, incoming.lastHitAt]
         .filter((value): value is string => value !== undefined)
-        .sort()
+        .sort((a, b) => a.localeCompare(b))
         .at(-1);
       return {
         ...base,

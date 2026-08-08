@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AtomicPersistence } from "../../src/core/atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "../../src/core/wisdom-archive";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, createMockFileSystem } from "../helpers/mock-file-system";
 
 describe("WisdomArchive", () => {
   it("archives high-priority entries and environment quirks only after three hits", () => {
@@ -38,5 +38,33 @@ describe("WisdomArchive", () => {
         hitCount: 2,
       }).archive,
     ).toBe(false);
+  });
+
+  it("appends and reloads an archived entry through persistence", async () => {
+    const files = createMockFileSystem();
+    const archive = new WisdomArchive(
+      new AtomicPersistence<readonly ArchivedWisdom[]>(files, files, {
+        filePath: "archive.json",
+        conflictPath: "archive.conflict.json",
+        serialize: (data) => JSON.stringify(data),
+        deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
+        merge: (mine, theirs) => [...theirs, ...mine],
+        emptyValue: () => [],
+        sleep: async () => {},
+      }),
+    );
+    const entry = {
+      id: "w-archive",
+      taskId: "task",
+      persona: "hephaestus" as const,
+      category: "failure_gotcha" as const,
+      content: "persisted",
+      timestamp: "2026-01-01T00:00:00Z",
+    };
+
+    const result = await archive.append(entry, "high_priority_category");
+
+    expect(result.status).toBe("saved");
+    expect((await archive.loadAll())[0]?.content).toBe("persisted");
   });
 });

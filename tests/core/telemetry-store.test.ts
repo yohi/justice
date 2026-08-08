@@ -18,4 +18,32 @@ describe("TelemetryStore", () => {
     expect(snapshot.errorDistribution.test_failure).toBe(0.5);
     expect(snapshot.errorDistribution.unknown).toBe(0.5);
   });
+
+  it("loads persisted events and ignores malformed telemetry payloads", async () => {
+    const writer = createMockFileWriter();
+    const reader = createMockFileReader({
+      ".justice/telemetry.json": JSON.stringify([
+        { type: "task_completed", taskId: "t", status: "success", timestamp: "2026-01-01T00:00:00Z" },
+      ]),
+    });
+    const telemetry = new TelemetryStore(reader, writer);
+    await telemetry.load();
+    expect(telemetry.computeSnapshot().windowSize).toBe(1);
+
+    const malformed = new TelemetryStore(
+      createMockFileReader({ ".justice/telemetry.json": "not-json" }),
+      writer,
+    );
+    await expect(malformed.load()).resolves.toBeUndefined();
+  });
+
+  it("saves telemetry through a temporary file and rename", async () => {
+    const writer = createMockFileWriter();
+    const telemetry = new TelemetryStore(createMockFileReader({}), writer);
+    telemetry.recordTaskCompleted("task", "success");
+
+    await telemetry.save();
+
+    expect(writer.writtenFiles[".justice/telemetry.json"]).toBeDefined();
+  });
 });

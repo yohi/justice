@@ -1,6 +1,6 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import { resolveCacheRoot, runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import { resolveCacheRoot, runDoctor, runStatus, type DoctorDeps } from "../../src/runtime/doctor-cli";
 import { isJusticeSpecifier } from "../../src/core/doctor-config";
 import {
   formatConfigDiagnostics,
@@ -77,6 +77,12 @@ function healthyFixture(): Record<string, string> {
 }
 
 describe("runDoctor()", () => {
+  it("returns JSON analytics from the status CLI path", async () => {
+    const output = await runStatus(".", "package.json", true, true);
+    const parsed = JSON.parse(output) as { analytics: { failureRate: number } };
+
+    expect(parsed.analytics.failureRate).toBe(0);
+  });
   it("exits 0 when the configured plugin resolves and satisfies the loader contract", async () => {
     const plugin = async () => ({});
     const result = await runDoctor(

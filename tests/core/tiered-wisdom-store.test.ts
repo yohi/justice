@@ -3,7 +3,9 @@ import { TieredWisdomStore } from "../../src/core/tiered-wisdom-store";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { SecretPatternDetector } from "../../src/core/secret-pattern-detector";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { AtomicPersistence } from "../../src/core/atomic-persistence";
+import { WisdomArchive, type ArchivedWisdom } from "../../src/core/wisdom-archive";
+import { createMockFileReader, createMockFileWriter, createMockFileSystem } from "../helpers/mock-file-system";
 
 function makeLogger(): { warn: Mock; error: Mock } {
   return {
@@ -376,6 +378,45 @@ describe("TieredWisdomStore — getByTaskId / formatForInjection", () => {
 });
 
 describe("TieredWisdomStore — persistence coordination", () => {
+  it("records hits in the store that owns the entry", () => {
+    const { tiered } = makeTiered();
+    const local = tiered.add({ taskId: "local", category: "failure_gotcha", content: "local" });
+    const global = tiered.add({ taskId: "global", category: "success_pattern", content: "global" });
+
+    expect(tiered.recordHit?.(local.id)?.hitCount).toBe(1);
+    expect(tiered.recordHit?.(global.id)?.hitCount).toBe(1);
+  });
+
+  it("archives evicted high-priority local wisdom", async () => {
+    const files = createMockFileSystem();
+    const archive = new WisdomArchive(
+      new AtomicPersistence<readonly ArchivedWisdom[]>(files, files, {
+        filePath: "archive.json",
+        conflictPath: "archive.conflict.json",
+        serialize: (data) => JSON.stringify(data),
+        deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
+        merge: (mine, theirs) => [...theirs, ...mine],
+        emptyValue: () => [],
+        sleep: async () => {},
+      }),
+    );
+    const localStore = new WisdomStore(1);
+    const { tiered } = makeTiered({ localStore });
+    const archivedTiered = new TieredWisdomStore({
+      localStore,
+      globalStore: new WisdomStore(500),
+      localPersistence: tiered.getLocalPersistence(),
+      globalPersistence: tiered.getGlobalPersistence(),
+      localArchive: archive,
+    });
+
+    archivedTiered.add({ taskId: "first", category: "failure_gotcha", content: "first" });
+    archivedTiered.add({ taskId: "second", category: "failure_gotcha", content: "second" });
+    await archivedTiered.persistAll();
+
+    expect((await archive.loadAll()).map((entry) => entry.content)).toEqual(["first"]);
+  });
+
   it("loadAll should replace both stores from their persistence backends", async () => {
     const localJson = JSON.stringify({
       entries: [

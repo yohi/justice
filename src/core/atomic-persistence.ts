@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { FileReader, FileWriter } from "./types";
 
 export interface LockMetadata {
@@ -37,6 +37,16 @@ interface ConflictFile<T> {
   readonly version: 1;
   readonly conflicts: readonly ConflictRecord<T>[];
 }
+
+type AttemptResult<T> =
+  | { readonly status: "saved"; readonly retries: number }
+  | { readonly status: "claim_failed"; readonly claimPath: string }
+  | {
+      readonly status: "version_mismatch";
+      readonly data: T;
+      readonly lockMeta: LockMetadata;
+    }
+  | { readonly status: "rename_conflict" };
 
 const MAX_RETRIES = 3;
 const STALE_CLAIM_TIMEOUT_MS = 10_000;
@@ -86,56 +96,23 @@ export class AtomicPersistence<T> {
       }
 
       for (let retry = 0; retry <= MAX_RETRIES; retry += 1) {
-        const tmpPath = `${this.config.filePath}.tmp.${randomUUID()}`;
-        const claimPath = `${this.config.filePath}.commit-pending`;
-        const envelope: VersionedEnvelope<T> = {
-          version: lockMeta.version + 1,
-          data: JSON.parse(this.config.serialize(currentData)) as T,
-        };
-        await this.fileWriter.writeFile(tmpPath, JSON.stringify(envelope, null, 2));
-
-        const claimed = await this.claim(tmpPath, claimPath);
-        if (!claimed) {
+        const attempt = await this.runAttempt(currentData, lockMeta, retry);
+        if (attempt.status === "saved") return attempt;
+        if (attempt.status === "claim_failed") {
           lastReason = "claim_acquisition_failed";
-          await this.cleanup(tmpPath);
-          if (await this.reclaimStaleClaim(claimPath)) continue;
-          if (retry < MAX_RETRIES) {
-            await this.backoff(retry);
-            continue;
-          }
-          break;
-        }
-
-        try {
-          const latest = await this.loadWithLock();
-          if (latest.lockMeta.version !== lockMeta.version) {
-            lastReason = "version_mismatch";
-            currentData = this.config.merge(currentData, latest.data);
-            lockMeta = latest.lockMeta;
-            await this.cleanup(claimPath);
-            await this.cleanup(tmpPath);
-            if (retry < MAX_RETRIES) {
-              await this.backoff(retry);
-              continue;
-            }
-            break;
-          }
-
-          await this.fileWriter.rename(claimPath, this.config.filePath);
-          await this.cleanup(tmpPath);
-          return { status: "saved", retries: retry };
-        } catch (error: unknown) {
+          if (await this.reclaimStaleClaim(attempt.claimPath)) continue;
+        } else if (attempt.status === "version_mismatch") {
+          lastReason = "version_mismatch";
+          currentData = attempt.data;
+          lockMeta = attempt.lockMeta;
+        } else {
           lastReason = "rename_conflict";
-          await this.cleanup(claimPath);
-          await this.cleanup(tmpPath);
-          if (retry >= MAX_RETRIES) {
-            break;
-          }
-          await this.backoff(retry);
-          if (!isErrno(error, "EEXIST") && !isErrno(error, "ENOENT")) {
-            continue;
-          }
         }
+        if (retry < MAX_RETRIES) {
+          await this.backoff(retry);
+          continue;
+        }
+        break;
       }
 
       const conflictPath = await this.divertToConflictFile(currentData, lastReason);
@@ -144,6 +121,45 @@ export class AtomicPersistence<T> {
       await this.divertToConflictFile(currentData, "rename_conflict").catch(() => undefined);
       console.warn("[JUSTICE] Atomic persistence failed open", error);
       return { status: "conflict_diverted", retries: MAX_RETRIES, conflictPath: this.config.conflictPath };
+    }
+  }
+
+  private async runAttempt(
+    currentData: T,
+    lockMeta: LockMetadata,
+    retry: number,
+  ): Promise<AttemptResult<T>> {
+    const tmpPath = `${this.config.filePath}.tmp.${randomUUID()}`;
+    const claimPath = `${this.config.filePath}.commit-pending`;
+    const envelope: VersionedEnvelope<T> = {
+      version: lockMeta.version + 1,
+      data: JSON.parse(this.config.serialize(currentData)) as T,
+    };
+    await this.fileWriter.writeFile(tmpPath, JSON.stringify(envelope, null, 2));
+
+    if (!(await this.claim(tmpPath, claimPath))) {
+      await this.cleanup(tmpPath);
+      return { status: "claim_failed", claimPath };
+    }
+
+    try {
+      const latest = await this.loadWithLock();
+      if (latest.lockMeta.version !== lockMeta.version) {
+        await this.cleanup(claimPath);
+        await this.cleanup(tmpPath);
+        return {
+          status: "version_mismatch",
+          data: this.config.merge(currentData, latest.data),
+          lockMeta: latest.lockMeta,
+        };
+      }
+      await this.fileWriter.rename(claimPath, this.config.filePath);
+      await this.cleanup(tmpPath);
+      return { status: "saved", retries: retry };
+    } catch {
+      await this.cleanup(claimPath);
+      await this.cleanup(tmpPath);
+      return { status: "rename_conflict" };
     }
   }
 
@@ -193,8 +209,11 @@ export class AtomicPersistence<T> {
   }
 
   private async backoff(retry: number): Promise<void> {
-    const sleep = this.config.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-    await sleep(100 * 2 ** retry + Math.floor(Math.random() * 50));
+    const sleep =
+      this.config.sleep ??
+      ((milliseconds: number): Promise<void> =>
+        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    await sleep(100 * 2 ** retry + randomInt(0, 50));
   }
 }
 
