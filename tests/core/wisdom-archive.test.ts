@@ -107,4 +107,34 @@ describe("WisdomArchive", () => {
     expect(archived?.archivedAt).toEqual(expect.any(String));
     expect(archived).not.toHaveProperty("hitCount");
   });
+
+  it("replaces an existing archived entry with the same id", async () => {
+    const files = createMockFileSystem();
+    const archive = new WisdomArchive(
+      new AtomicPersistence<readonly ArchivedWisdom[]>(files, files, {
+        filePath: "archive.json",
+        conflictPath: "archive.conflict.json",
+        serialize: (data) => JSON.stringify(data),
+        deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
+        merge: (mine, theirs) => [...theirs, ...mine],
+        emptyValue: () => [],
+        sleep: async () => {},
+      }),
+    );
+    const entry = {
+      id: "w-duplicate",
+      taskId: "task",
+      persona: "hephaestus" as const,
+      category: "failure_gotcha" as const,
+      content: "first",
+      timestamp: "2026-01-01T00:00:00Z",
+    };
+
+    await archive.append(entry, "high_priority_category");
+    await archive.append({ ...entry, content: "updated" }, "high_priority_category");
+
+    const archived = await archive.loadAll();
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.content).toBe("updated");
+  });
 });

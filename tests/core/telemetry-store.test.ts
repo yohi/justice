@@ -49,6 +49,14 @@ describe("TelemetryStore", () => {
     expect(Object.values(snapshot.errorDistribution).every((value) => value === 0)).toBe(true);
   });
 
+  it("uses an empty window when the requested window size is non-positive", () => {
+    const telemetry = new TelemetryStore(createMockFileReader({}), createMockFileWriter());
+    telemetry.recordTaskCompleted("task", "failure", "test_failure");
+
+    expect(telemetry.computeSnapshot(0).windowSize).toBe(0);
+    expect(telemetry.computeSnapshot(-1).windowSize).toBe(0);
+  });
+
   it("loads persisted events and ignores malformed telemetry payloads", async () => {
     const writer = createMockFileWriter();
     const reader = createMockFileReader({
@@ -81,6 +89,35 @@ describe("TelemetryStore", () => {
     );
     await invalidEvent.load();
     expect(invalidEvent.computeSnapshot().windowSize).toBe(0);
+  });
+
+  it("preserves events recorded while persisted telemetry is loading", async () => {
+    let releaseRead: (() => void) | undefined;
+    const readComplete = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const reader = createMockFileReader({
+      ".justice/telemetry.json": JSON.stringify([
+        {
+          type: "task_completed",
+          taskId: "persisted",
+          status: "success",
+          timestamp: "2026-01-01T00:00:00Z",
+        },
+      ]),
+    });
+    const originalReadFile = reader.readFile;
+    reader.readFile = vi.fn(async (path: string) => {
+      await readComplete;
+      return originalReadFile(path);
+    });
+    const telemetry = new TelemetryStore(reader, createMockFileWriter());
+    const loading = telemetry.load();
+    telemetry.recordTaskCompleted("in-memory", "failure", "test_failure");
+    releaseRead?.();
+    await loading;
+
+    expect(telemetry.computeSnapshot().windowSize).toBe(2);
   });
 
   it("saves telemetry through a temporary file and rename", async () => {

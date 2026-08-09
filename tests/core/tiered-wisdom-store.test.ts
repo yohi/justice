@@ -421,6 +421,46 @@ describe("TieredWisdomStore — persistence coordination", () => {
     expect((await archive.loadAll()).map((entry) => entry.content)).toEqual(["first"]);
   });
 
+  it("fails open when archive evaluation throws", async () => {
+    const localStore = new WisdomStore(1);
+    const { localPersistence, globalPersistence, logger } = makeTiered({ localStore });
+    const archive = new WisdomArchive(
+      new AtomicPersistence<readonly ArchivedWisdom[]>(
+        createMockFileReader({}),
+        createMockFileWriter(),
+        {
+          filePath: "archive.json",
+          conflictPath: "archive.conflict.json",
+          serialize: (data) => JSON.stringify(data),
+          deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
+          merge: (mine, theirs) => [...theirs, ...mine],
+          emptyValue: () => [],
+          sleep: async () => {},
+        },
+      ),
+    );
+    vi.spyOn(archive, "shouldArchive").mockImplementation(() => {
+      throw new Error("archive decision failed");
+    });
+    const tiered = new TieredWisdomStore({
+      localStore,
+      globalStore: new WisdomStore(500),
+      localPersistence,
+      globalPersistence,
+      localArchive: archive,
+      logger,
+    });
+
+    tiered.add({ taskId: "first", category: "failure_gotcha", content: "first" });
+    tiered.add({ taskId: "second", category: "failure_gotcha", content: "second" });
+
+    await expect(tiered.persistAll()).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[JUSTICE] Wisdom archive evaluation failed",
+      expect.any(Error),
+    );
+  });
+
   it("loadAll should replace both stores from their persistence backends", async () => {
     const localJson = JSON.stringify({
       entries: [

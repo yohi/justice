@@ -140,6 +140,20 @@ describe("AtomicPersistence", () => {
     expect(result.status).toBe("conflict_diverted");
   });
 
+  it("cleans up the attempt temporary file when claim raises", async () => {
+    const writer = createMockFileWriter();
+    writer.link = vi.fn(async () => {
+      throw new Error("permission denied");
+    });
+    const persistence = new AtomicPersistence(createMockFileReader({}), writer, config());
+
+    await persistence.saveAtomicWithLock(["safe"]);
+
+    expect(
+      Object.keys(writer.writtenFiles).some((path) => path.startsWith("state.json.tmp.")),
+    ).toBe(false);
+  });
+
   it("does not throw when diversion fails and still returns conflict_diverted", async () => {
     const reader = createMockFileReader({
       "state.conflict.json": JSON.stringify({
@@ -156,5 +170,8 @@ describe("AtomicPersistence", () => {
     const result = await persistence.saveAtomicWithLock(["conflict"]);
 
     expect(result.status).toBe("conflict_diverted");
+    expect(
+      Object.keys(writer.writtenFiles).some((path) => path.startsWith("state.conflict.json.tmp.")),
+    ).toBe(false);
   });
 });
