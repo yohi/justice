@@ -188,9 +188,7 @@ describe("mergeSourceScans()", () => {
       { source: "global", readable: true, specifiers: [], diagnostics: [] },
     ]);
     expect(result.specifiers).toEqual([]);
-    expect(result.diagnostics).toEqual([
-      { code: "justice_not_found_in_config", source: "merged" },
-    ]);
+    expect(result.diagnostics).toEqual([{ code: "justice_not_found_in_config", source: "merged" }]);
   });
 
   it("higher-priority source wins on conflicting justice entries", () => {

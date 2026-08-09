@@ -23,7 +23,10 @@ describe("RetryPolicyCalculator", () => {
   it("uses a neutral modifier for an unknown runtime category", () => {
     const calculator = new RetryPolicyCalculator();
 
-    const result = calculator.compute({ category: "future-category" as TaskCategory, stepCount: 0 });
+    const result = calculator.compute({
+      category: "future-category" as TaskCategory,
+      stepCount: 0,
+    });
 
     expect(result.categoryModifier).toBe(0);
     expect(result.maxRetries).toBe(3);

@@ -48,7 +48,11 @@ export class StatusCommand {
       {
         planPath: status.planPath,
         progress: status.progress,
-        tasks: status.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+        tasks: status.tasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+        })),
         analytics: status.analytics ?? null,
       },
       null,

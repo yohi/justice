@@ -61,9 +61,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isJusticeSpecifier(specifier: string): boolean {
   if (specifier.startsWith("/")) {
     const segments = specifier.split("/").filter((segment) => segment.length > 0);
-    return segments.some(
-      (segment) => segment === "justice" || segment.startsWith("justice-"),
-    );
+    return segments.some((segment) => segment === "justice" || segment.startsWith("justice-"));
   }
   // Package specifier: extract base package name without version and subpath.
   const lastAt = specifier.lastIndexOf("@");

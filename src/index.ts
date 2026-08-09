@@ -92,8 +92,16 @@ export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 
 // Phase 7 Exports
 export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core/justice-plugin";
-export { StatusCommand, type PlanStatus, type PlanStatusWithAnalytics } from "./core/status-command";
-export { TelemetryStore, type TelemetryEvent, type TelemetrySnapshot } from "./core/telemetry-store";
+export {
+  StatusCommand,
+  type PlanStatus,
+  type PlanStatusWithAnalytics,
+} from "./core/status-command";
+export {
+  TelemetryStore,
+  type TelemetryEvent,
+  type TelemetrySnapshot,
+} from "./core/telemetry-store";
 export { NodeFileSystem } from "./runtime/node-file-system";
 export { OpenCodeNotifier } from "./runtime/opencode-notifier";
 export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
