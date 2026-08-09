@@ -12,6 +12,9 @@ import { WisdomStore } from "./wisdom-store";
 import { WisdomPersistence } from "./wisdom-persistence";
 import { SecretPatternDetector } from "./secret-pattern-detector";
 import { PersonaClassifier } from "./persona-classifier";
+import { WisdomMetrics } from "./wisdom-metrics";
+import { WisdomArchive } from "./wisdom-archive";
+import type { SaveResult } from "./atomic-persistence";
 
 export interface TieredWisdomStoreLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -25,6 +28,9 @@ export interface TieredWisdomStoreOptions {
   secretDetector?: SecretPatternDetector;
   globalDisplayPath?: string;
   logger?: TieredWisdomStoreLogger;
+  metrics?: WisdomMetrics;
+  localArchive?: WisdomArchive;
+  globalArchive?: WisdomArchive;
 }
 
 const HEURISTIC_SCOPES: Record<WisdomCategory, WisdomScope> = {
@@ -48,6 +54,10 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   private readonly secretDetector: SecretPatternDetector;
   private readonly globalDisplayPath: string;
   private readonly logger?: TieredWisdomStoreLogger;
+  private readonly metrics: WisdomMetrics;
+  private readonly localArchive?: WisdomArchive;
+  private readonly globalArchive?: WisdomArchive;
+  private readonly pendingArchives = new Set<Promise<void>>();
 
   constructor(opts: TieredWisdomStoreOptions) {
     this.localStore = opts.localStore;
@@ -57,6 +67,11 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     this.secretDetector = opts.secretDetector ?? new SecretPatternDetector();
     this.globalDisplayPath = opts.globalDisplayPath ?? "~/.justice/wisdom.json";
     this.logger = opts.logger;
+    this.metrics = opts.metrics ?? new WisdomMetrics();
+    this.localArchive = opts.localArchive;
+    this.globalArchive = opts.globalArchive;
+    this.localStore.onEvict((entry) => this.trackArchive(this.localArchive, entry));
+    this.globalStore.onEvict((entry) => this.trackArchive(this.globalArchive, entry));
   }
 
   getLocalStore(): WisdomStore {
@@ -160,6 +175,13 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     return this.deduplicate([...local, ...global]);
   }
 
+  recordHit(entryId: string, now = new Date(), taskId?: string): WisdomEntry | undefined {
+    return (
+      this.metrics.recordHit(this.localStore, entryId, now, taskId) ??
+      this.metrics.recordHit(this.globalStore, entryId, now, taskId)
+    );
+  }
+
   formatForInjection(entries: readonly WisdomEntry[]): string {
     if (entries.length === 0) return "";
     const presentPersonas = new Set(entries.map((e) => e.persona));
@@ -218,10 +240,56 @@ export class TieredWisdomStore implements WisdomStoreInterface {
   }
 
   async persistAll(): Promise<void> {
-    await Promise.all([
-      this.localPersistence.saveAtomic(this.localStore),
-      this.globalPersistence.saveAtomic(this.globalStore),
+    await Promise.all(this.pendingArchives);
+    const results = await Promise.all([
+      this.localPersistence.saveAtomicWithLock(this.localStore),
+      this.globalPersistence.saveAtomicWithLock(this.globalStore),
     ]);
+    const failures: SaveResult[] = [];
+    for (const result of results) {
+      if (result.status !== "saved") {
+        failures.push(result);
+        this.warnSafely(
+          `[JUSTICE] Wisdom persistence diverted to conflict file after ${result.retries} retries: ${result.conflictPath ?? "unknown"}`,
+        );
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`Wisdom persistence failed for ${failures.length} store(s)`);
+    }
+  }
+
+  private trackArchive(archive: WisdomArchive | undefined, entry: WisdomEntry): void {
+    const pending = this.archiveEvicted(archive, entry);
+    this.pendingArchives.add(pending);
+    void pending.finally(() => this.pendingArchives.delete(pending));
+  }
+
+  private async archiveEvicted(
+    archive: WisdomArchive | undefined,
+    entry: WisdomEntry,
+  ): Promise<void> {
+    if (archive === undefined) return;
+    try {
+      const decision = archive.shouldArchive(entry);
+      if (!decision.archive) return;
+      const result = await archive.append(entry, decision.reason);
+      if (result.status !== "saved") {
+        this.warnSafely(
+          `[JUSTICE] Wisdom archive diverted to conflict file after ${result.retries} retries: ${result.conflictPath ?? "unknown"}`,
+        );
+      }
+    } catch (error: unknown) {
+      this.warnSafely("[JUSTICE] Wisdom archive evaluation failed", error);
+    }
+  }
+
+  private warnSafely(message: string, ...args: unknown[]): void {
+    try {
+      this.logger?.warn(message, ...args);
+    } catch {
+      /* ignore logging errors */
+    }
   }
 
   private deduplicate(entries: WisdomEntry[]): WisdomEntry[] {

@@ -3,7 +3,11 @@ import { describe, it, expect, vi } from "vitest";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileWriter,
+  createMockFileSystem,
+} from "../helpers/mock-file-system";
 
 const defaultPath = ".justice/wisdom.json";
 
@@ -106,6 +110,38 @@ describe("WisdomPersistence.saveAtomic", () => {
     }
   });
 
+  it("should merge wisdom hit metadata without losing either writer's counts", async () => {
+    const diskEntry = makeEntry({
+      id: "w-hit",
+      timestamp: "2026-01-02T00:00:00Z",
+      hitCount: 2,
+      firstSeenAt: "2026-01-01T00:00:00Z",
+      lastHitAt: "2026-01-02T00:00:00Z",
+    });
+    const memoryEntry = makeEntry({
+      id: "w-hit",
+      timestamp: "2026-01-03T00:00:00Z",
+      hitCount: 3,
+      firstSeenAt: "2025-12-01T00:00:00Z",
+      lastHitAt: "2026-01-03T00:00:00Z",
+    });
+    const reader = createMockFileReader({
+      [defaultPath]: JSON.stringify({ entries: [diskEntry], maxEntries: 100 }),
+    });
+    const writer = createMockFileWriter();
+    const persistence = new WisdomPersistence(reader, writer, defaultPath);
+
+    await persistence.saveAtomicWithLock(WisdomStore.fromEntries([memoryEntry], 100));
+
+    const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
+    const entry = Object.values(
+      parsed.data.entriesByAgent as Record<string, WisdomEntry[]>,
+    ).flat()[0];
+    expect(entry?.hitCount).toBe(3);
+    expect(entry?.firstSeenAt).toBe("2025-12-01T00:00:00Z");
+    expect(entry?.lastHitAt).toBe("2026-01-03T00:00:00Z");
+  });
+
   it("should propagate rename errors and remove the temp file", async () => {
     const writer = createMockFileWriter();
     writer.rename = vi.fn(async () => {
@@ -179,6 +215,52 @@ describe("WisdomPersistence.saveAtomic", () => {
       Object.values(finalData.entriesByAgent as Record<string, WisdomEntry[]>).flat(),
     ).toHaveLength(0);
     expect(finalData.maxEntries).toBe(0);
+  });
+});
+
+describe("WisdomPersistence.saveAtomicWithLock", () => {
+  it("persists a versioned envelope and returns a saved result", async () => {
+    const reader = createMockFileReader({});
+    const writer = createMockFileWriter();
+    const persistence = new WisdomPersistence(reader, writer, defaultPath);
+    const store = new WisdomStore(100);
+    store.add({ taskId: "t1", category: "success_pattern", content: "locked" });
+
+    const result = await persistence.saveAtomicWithLock(store);
+
+    expect(result.status).toBe("saved");
+    expect(JSON.parse(writer.writtenFiles[defaultPath]!).version).toBe(1);
+    expect(writer.writtenFiles[`${defaultPath}.commit-pending`]).toBeUndefined();
+  });
+
+  it("loads entries written in the versioned envelope after a new persistence instance is created", async () => {
+    const fs = createMockFileSystem();
+    const first = new WisdomPersistence(fs, fs, defaultPath);
+    const store = new WisdomStore(100);
+    store.add({ taskId: "restart-task", category: "success_pattern", content: "survives" });
+
+    await first.saveAtomicWithLock(store);
+
+    const second = new WisdomPersistence(fs, fs, defaultPath);
+    const loaded = await second.load();
+
+    expect(loaded.getByTaskId("restart-task")).toHaveLength(1);
+  });
+
+  it("loads a versioned envelope before a subsequent unlocked atomic save", async () => {
+    const fs = createMockFileSystem();
+    const persistence = new WisdomPersistence(fs, fs, defaultPath);
+    const first = new WisdomStore(100);
+    first.add({ taskId: "locked", category: "success_pattern", content: "locked" });
+    await persistence.saveAtomicWithLock(first);
+
+    const second = new WisdomStore(100);
+    second.add({ taskId: "unlocked", category: "success_pattern", content: "unlocked" });
+    await persistence.saveAtomic(second);
+
+    const loaded = await persistence.load();
+    expect(loaded.getByTaskId("locked")).toHaveLength(1);
+    expect(loaded.getByTaskId("unlocked")).toHaveLength(1);
   });
 });
 /* eslint-enable security/detect-object-injection */

@@ -72,6 +72,18 @@ describe("SecretPatternDetector", () => {
     expect(detector.scan("sk-abcd-efgh_ijklmnopqrstuv")).toContainEqual({ name: "openai_key" });
   });
 
+  it("should redact AWS access key literal shapes", () => {
+    const key = "AKIA" + "A".repeat(16);
+    expect(detector.scan(key)).toContainEqual({ name: "aws_access_key" });
+    expect(detector.redact(key)).toBe("[REDACTED_SECRET]");
+  });
+
+  it("should redact ASIA access key literal shapes", () => {
+    const key = "ASIA" + "A".repeat(16);
+    expect(detector.scan(key)).toContainEqual({ name: "aws_access_key" });
+    expect(detector.redact(key)).toBe("[REDACTED_SECRET]");
+  });
+
   it("should return multiple patterns when several match", () => {
     const matches = detector.scan("API_KEY=sk-ant-abcdefghijklmnopqrstuvwx stored at /home/yohi/");
     expect(matches).toContainEqual({ name: "api_key" });

@@ -31,8 +31,37 @@ import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
 import type { ObservationMessagePayload } from "./v2/message-payload";
+import { WisdomMetrics } from "./wisdom-metrics";
+import { TelemetryStore } from "./telemetry-store";
+import { AtomicPersistence } from "./atomic-persistence";
+import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
 
 const PROCEED: HookResponse = { action: "proceed" };
+
+function createArchive(
+  fileReader: FileReader,
+  fileWriter: FileWriter,
+  filePath: string,
+): WisdomArchive {
+  const archivePath = filePath.endsWith(".json")
+    ? `${filePath.slice(0, -".json".length)}-archive.json`
+    : `${filePath}-archive.json`;
+  return new WisdomArchive(
+    new AtomicPersistence<readonly ArchivedWisdom[]>(fileReader, fileWriter, {
+      filePath: archivePath,
+      conflictPath: archivePath.replace(/\.json$/u, ".conflict.json"),
+      serialize: (data) => JSON.stringify(data),
+      deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
+      merge: (mine, theirs) => {
+        const byKey = new Map<string, ArchivedWisdom>();
+        for (const entry of [...theirs, ...mine])
+          byKey.set(`${entry.id}:${entry.archivedAt}`, entry);
+        return [...byKey.values()].sort((a, b) => a.archivedAt.localeCompare(b.archivedAt));
+      },
+      emptyValue: () => [],
+    }),
+  );
+}
 
 function openSessionTaskWindow(provider: SessionStateProvider, event: PreToolUseEvent): void {
   const callId = event.callId;
@@ -189,6 +218,7 @@ export class NoOpPersistence extends WisdomPersistence {
       async rmdir(): Promise<void> {
         /* no-op */
       },
+      async link(): Promise<void> {},
     };
     super(noopReader, noopWriter, "wisdom.json");
     this.maxEntries = maxEntries;
@@ -238,11 +268,16 @@ export class JusticePlugin {
   private readonly sessionStateProvider: SessionStateProvider;
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
+  private readonly telemetry: TelemetryStore;
   private readonly options: JusticePluginOptions;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
     this.options = options;
+    this.telemetry = new TelemetryStore(fileReader, fileWriter);
+    const metrics = new WisdomMetrics();
+    metrics.onHit((entryId, taskId) => this.telemetry.recordWisdomHit(entryId, taskId));
+    const localArchive = createArchive(fileReader, fileWriter, ".justice/wisdom.json");
 
     this.wisdomStore = new WisdomStore(100);
     const localPersistence = new WisdomPersistence(fileReader, fileWriter, ".justice/wisdom.json");
@@ -255,6 +290,13 @@ export class JusticePlugin {
           options.globalFileSystem.relativePath,
         )
       : new NoOpPersistence(500);
+    const globalArchive = options.globalFileSystem
+      ? createArchive(
+          options.globalFileSystem.fs,
+          options.globalFileSystem.fs,
+          options.globalFileSystem.relativePath,
+        )
+      : undefined;
 
     const globalDisplayPath = options.globalFileSystem?.absolutePath || "~/.justice/wisdom.json";
 
@@ -266,6 +308,9 @@ export class JusticePlugin {
       secretDetector: new SecretPatternDetector(),
       globalDisplayPath,
       logger: options.logger,
+      metrics,
+      localArchive,
+      globalArchive,
     });
 
     // Use tieredWisdomStore for handlers that need cross-project context
@@ -275,10 +320,16 @@ export class JusticePlugin {
       this.loopHandler,
       this.tieredWisdomStore,
       options.notifier,
+      this.telemetry,
     );
 
     this.sessionStateProvider = new SessionStateProvider();
-    this.taskFeedback = new TaskFeedbackHandler(fileReader, fileWriter, this.tieredWisdomStore);
+    this.taskFeedback = new TaskFeedbackHandler(
+      fileReader,
+      fileWriter,
+      this.tieredWisdomStore,
+      this.telemetry,
+    );
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
     const writerId = options.writerId ?? generateWriterId();
     this.observationHandler = new ObservationHandler({
@@ -313,6 +364,7 @@ export class JusticePlugin {
   async initialize(): Promise<void> {
     try {
       await this.tieredWisdomStore.loadAll();
+      await this.telemetry.load();
       await this.observationHandler.initializeProjectionCache();
       try {
         await this.options.notifier?.notify({
@@ -511,7 +563,28 @@ export class JusticePlugin {
     return this.sessionStateProvider;
   }
 
-  destroySession(sessionId: string): void {
+  async destroySession(sessionId: string): Promise<void> {
+    const wisdomPersistence = this.tieredWisdomStore.persistAll().catch((error: unknown) => {
+      try {
+        this.options.logger?.warn(
+          "Justice wisdom persistence failed during session cleanup",
+          error,
+        );
+      } catch {
+        void 0;
+      }
+    });
+    const telemetryPersistence = this.telemetry.save().catch((error: unknown) => {
+      try {
+        this.options.logger?.warn(
+          "Justice telemetry persistence failed during session cleanup",
+          error,
+        );
+      } catch {
+        void 0;
+      }
+    });
+    await Promise.all([wisdomPersistence, telemetryPersistence]);
     this.loopHandler.removeSession(sessionId);
   }
 

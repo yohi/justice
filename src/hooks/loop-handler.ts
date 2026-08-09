@@ -1,7 +1,17 @@
-import type { AgentId, FileReader, FileWriter, HookEvent, HookResponse } from "../core/types";
+import type {
+  AgentId,
+  FileReader,
+  FileWriter,
+  HookEvent,
+  HookResponse,
+  PlanTask,
+} from "../core/types";
 import { TaskSplitter } from "../core/task-splitter";
-import { PlanParser } from "../core/plan-parser";
+import type { PlanParser } from "../core/plan-parser";
+import { PlanParser as PlanParserImpl } from "../core/plan-parser";
 import { ReviewRejectionDetector } from "../core/review-rejection-detector";
+import { CategoryClassifier } from "../core/category-classifier";
+import { RetryPolicyCalculator, type RetryThresholdResult } from "../core/retry-policy-calculator";
 
 const PROCEED: HookResponse = { action: "proceed" };
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -59,6 +69,7 @@ export interface EscalationDecision {
   readonly maxRetries: number;
   readonly reason?: EscalationReason;
   readonly historySummary: string;
+  readonly thresholdResult?: RetryThresholdResult;
 }
 
 export type PivotReason = "review_rejection_threshold";
@@ -81,6 +92,8 @@ export class LoopDetectionHandler {
   private readonly detector: ReviewRejectionDetector;
   private readonly maxRetries: number;
   private readonly maxRejections: number;
+  private readonly classifier: CategoryClassifier;
+  private readonly retryCalculator: RetryPolicyCalculator;
   private onSessionRemoved?: (sessionId: string) => void;
   private observationHandler?: import("./observation-handler").ObservationHandler;
 
@@ -88,11 +101,15 @@ export class LoopDetectionHandler {
     private readonly fileReader: FileReader,
     private readonly fileWriter: FileWriter,
     private readonly splitter: TaskSplitter,
+    classifier: CategoryClassifier = new CategoryClassifier(),
+    retryCalculator: RetryPolicyCalculator = new RetryPolicyCalculator(),
   ) {
-    this.parser = new PlanParser();
+    this.parser = new PlanParserImpl();
     this.detector = new ReviewRejectionDetector();
     this.maxRetries = resolveMaxRetries();
     this.maxRejections = resolveMaxRejections();
+    this.classifier = classifier;
+    this.retryCalculator = retryCalculator;
   }
 
   /**
@@ -214,19 +231,39 @@ export class LoopDetectionHandler {
   /**
    * 現時点でのエスカレーション判定を返す。
    */
-  evaluateEscalation(sessionId: string, taskId: string, primaryAgent: AgentId): EscalationDecision {
+  evaluateEscalation(
+    sessionId: string,
+    taskId: string,
+    primaryAgent: AgentId,
+    activeTask?: PlanTask,
+  ): EscalationDecision {
     const records = this.trials.get(sessionId)?.get(taskId) ?? [];
     const failures = records.filter((r) => r.result === "failure").length;
     const historySummary = this.formatTrialHistory(records);
+    const thresholdResult =
+      activeTask === undefined
+        ? undefined
+        : this.retryCalculator.compute({
+            category: this.classifier.classify(activeTask),
+            stepCount: activeTask.steps.length,
+          });
+    const maxRetries =
+      thresholdResult === undefined
+        ? this.maxRetries
+        : Math.max(
+            RetryPolicyCalculator.MIN_RETRIES,
+            this.maxRetries + thresholdResult.categoryModifier + thresholdResult.volumeModifier,
+          );
 
-    if (failures >= this.maxRetries) {
+    if (failures >= maxRetries) {
       return {
         escalated: true,
         targetAgent: ESCALATION_TARGET,
         failures,
-        maxRetries: this.maxRetries,
+        maxRetries,
         reason: "max_retries_exceeded",
         historySummary,
+        thresholdResult,
       };
     }
 
@@ -234,8 +271,9 @@ export class LoopDetectionHandler {
       escalated: false,
       targetAgent: primaryAgent,
       failures,
-      maxRetries: this.maxRetries,
+      maxRetries,
       historySummary,
+      thresholdResult,
     };
   }
 
@@ -325,6 +363,7 @@ export class LoopDetectionHandler {
           event.sessionId,
           session.activeTaskId,
           lastAgent,
+          activeTask,
         );
         const escalationBlock: string[] = escalation.escalated
           ? [

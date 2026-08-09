@@ -7,6 +7,7 @@ import {
   stat,
   realpath,
   rename as fsRename,
+  link as fsLink,
   unlink,
   rmdir as fsRmdir,
   readdir,
@@ -201,6 +202,12 @@ export class NodeFileSystem implements FileReader, FileWriter {
     const safePath = await this.resolveSafelyForWrite(path);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path validated by resolveSafelyForWrite
     await this.bestEffortDelete(() => unlink(safePath));
+  }
+
+  async link(from: string, to: string): Promise<void> {
+    const safeFrom = await this.resolveSafely(from);
+    const safeTo = await this.resolveSafelyForWrite(to);
+    await fsLink(safeFrom, safeTo);
   }
 
   /**

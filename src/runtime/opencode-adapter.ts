@@ -527,7 +527,7 @@ export class OpenCodeAdapter {
     await this.ensureInitialized();
     const justice = this.#justice;
     if (!justice) return;
-    justice.destroySession(sessionId);
+    await justice.destroySession(sessionId);
   }
 
   /**

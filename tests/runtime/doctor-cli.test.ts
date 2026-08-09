@@ -1,6 +1,11 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import { resolveCacheRoot, runDoctor, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import {
+  resolveCacheRoot,
+  runDoctor,
+  runStatus,
+  type DoctorDeps,
+} from "../../src/runtime/doctor-cli";
 import { isJusticeSpecifier } from "../../src/core/doctor-config";
 import {
   formatConfigDiagnostics,
@@ -77,6 +82,18 @@ function healthyFixture(): Record<string, string> {
 }
 
 describe("runDoctor()", () => {
+  it("returns JSON analytics from the status CLI path", async () => {
+    const output = await runStatus(".", "package.json", true, true);
+    const parsed = JSON.parse(output) as { analytics: { failureRate: number } };
+
+    expect(parsed.analytics.failureRate).toBe(0);
+  });
+
+  it("returns markdown status without analytics when the flag is omitted", async () => {
+    const output = await runStatus(".", "package.json", false, false);
+
+    expect(output).toContain("Plan Status");
+  });
   it("exits 0 when the configured plugin resolves and satisfies the loader contract", async () => {
     const plugin = async () => ({});
     const result = await runDoctor(
@@ -198,7 +215,27 @@ describe("runDoctor()", () => {
     expect(result.text).toContain("falling back to defaults");
     expect(result.text).toContain("gate.yaml 読込警告");
     expect(result.text).not.toContain(secret);
-    expect(result.text).toContain("[REDACTED_SECRET]");
+    expect(result.text).not.toContain(secret);
+  });
+
+  it("redacts AWS secret access key values from doctor diagnostics", async () => {
+    const secret = "aws-secret-value-that-must-not-leak";
+    const logPath = "/home/user/.local/share/opencode/log/doctor.log";
+    const files = {
+      ...healthyFixture(),
+      [logPath]: `level=ERROR failed to load plugin path=@yohi/justice@3.0.0 AWS_SECRET_ACCESS_KEY=${secret}`,
+    };
+
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: mockReader(files),
+        logPaths: [logPath],
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+
+    expect(result.text).not.toContain(secret);
+    expect(result.text).toContain("[REDACTED_ENV]");
   });
 
   it("summarizes a valid gate.yaml without warnings", async () => {

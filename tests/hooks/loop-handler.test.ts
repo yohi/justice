@@ -299,4 +299,30 @@ describe("LoopDetectionHandler", () => {
       }
     });
   });
+
+  it("uses the active task category and step count for escalation", () => {
+    const handler = new LoopDetectionHandler(
+      createMockFileReader({}),
+      createMockFileWriter(),
+      new TaskSplitter(),
+    );
+    handler.setActivePlan("dynamic", "plan.md", "task-1", "hephaestus");
+    for (let index = 0; index < 5; index += 1) {
+      handler.recordTrial("dynamic", "task-1", { agent: "hephaestus", result: "failure" });
+    }
+
+    const decision = handler.evaluateEscalation("dynamic", "task-1", "hephaestus", {
+      id: "task-1",
+      title: "Refactor architecture",
+      steps: [
+        { id: "s1", description: "one", checked: false, lineNumber: 1 },
+        { id: "s2", description: "two", checked: false, lineNumber: 2 },
+      ],
+      status: "pending",
+    });
+
+    expect(decision.escalated).toBe(true);
+    expect(decision.maxRetries).toBe(5);
+    expect(decision.thresholdResult?.categoryModifier).toBe(2);
+  });
 });

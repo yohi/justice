@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
+import { WisdomMetrics } from "../../src/core/wisdom-metrics";
 
 describe("WisdomStore", () => {
   describe("add", () => {
@@ -56,6 +57,50 @@ describe("WisdomStore", () => {
       expect(all.some((e) => e.taskId === "t1")).toBe(false); // First is gone
       expect(all.some((e) => e.taskId === "t2")).toBe(true);
       expect(all.some((e) => e.taskId === "t3")).toBe(true);
+    });
+
+    it("should notify when an entry is evicted", () => {
+      const store = new WisdomStore(1);
+      const evicted: WisdomEntry[] = [];
+      store.onEvict((entry) => evicted.push(entry));
+
+      const first = store.add({ taskId: "t1", category: "failure_gotcha", content: "first" });
+      store.add({ taskId: "t2", category: "success_pattern", content: "second" });
+
+      expect(evicted).toEqual([first]);
+    });
+  });
+
+  describe("metrics", () => {
+    it("updates a hit by replacing the entry without mutating the original", () => {
+      const store = new WisdomStore();
+      const entry = store.add({ taskId: "t1", category: "success_pattern", content: "learned" });
+      const metrics = new WisdomMetrics();
+      const hitAt = new Date("2026-08-09T00:00:00.000Z");
+
+      const updated = metrics.recordHit(store, entry.id, hitAt);
+
+      expect(updated?.hitCount).toBe(1);
+      expect(updated?.firstSeenAt).toBe(hitAt.toISOString());
+      expect(updated?.lastHitAt).toBe(hitAt.toISOString());
+      expect(entry.hitCount).toBeUndefined();
+      expect(store.getAllEntries()[0]).not.toBe(entry);
+    });
+
+    it("passes the injection taskId to hit listeners", () => {
+      const store = new WisdomStore();
+      const entry = store.add({
+        taskId: "injected-task",
+        category: "success_pattern",
+        content: "learned",
+      });
+      const metrics = new WisdomMetrics();
+      const listener = vi.fn();
+      metrics.onHit(listener);
+
+      metrics.recordHit(store, entry.id, new Date("2026-08-09T00:00:00.000Z"), "injected-task");
+
+      expect(listener).toHaveBeenCalledWith(entry.id, "injected-task");
     });
   });
 

@@ -12,6 +12,7 @@ const SECRET_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> = Object
   { name: "home_path_windows", pattern: /[a-zA-Z]:\\Users\\[^\\\s]+\\?/ },
   { name: "openai_key", pattern: /\bsk-(?!ant-)(?:proj-)?[a-zA-Z0-9_-]{20,}\b/ },
   { name: "anthropic_key", pattern: /\bsk-ant-[a-zA-Z0-9_-]{20,}\b/ },
+  { name: "aws_access_key", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },
 ]);
 
 export class SecretPatternDetector {

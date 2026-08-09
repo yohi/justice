@@ -266,6 +266,23 @@ describe("JusticePlugin", () => {
   });
 
   describe("session cleanup propagation", () => {
+    it("awaits persistence during explicit session destruction", async () => {
+      const tiered = plugin.getTieredWisdomStore();
+      const persist = vi.spyOn(tiered, "persistAll").mockResolvedValue();
+      const telemetry = (plugin as unknown as { telemetry: { save: () => Promise<void> } })
+        .telemetry;
+      const save = vi.spyOn(telemetry, "save").mockResolvedValue();
+      const remove = vi.spyOn(plugin.getLoopHandler(), "removeSession");
+
+      const destruction = plugin.destroySession("s-explicit");
+
+      expect(destruction).toBeInstanceOf(Promise);
+      await destruction;
+      expect(persist).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledOnce();
+      expect(remove).toHaveBeenCalledWith("s-explicit");
+    });
+
     it("propagates session removal from LoopDetectionHandler to SessionStateProvider", () => {
       const loopHandler = plugin.getLoopHandler();
       const sessionProvider = plugin.getSessionStateProvider();

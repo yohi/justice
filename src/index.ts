@@ -43,6 +43,11 @@ export { TaskFeedbackHandler } from "./hooks/task-feedback";
 
 // Phase 4 Exports
 export { SmartRetryPolicy } from "./core/smart-retry-policy";
+export {
+  RetryPolicyCalculator,
+  type RetryThresholdContext,
+  type RetryThresholdResult,
+} from "./core/retry-policy-calculator";
 export { TaskSplitter } from "./core/task-splitter";
 export { LoopDetectionHandler } from "./hooks/loop-handler";
 
@@ -56,6 +61,9 @@ export {
 export { WisdomStore } from "./core/wisdom-store";
 export { LearningExtractor } from "./core/learning-extractor";
 export { WisdomPersistence } from "./core/wisdom-persistence";
+export { AtomicPersistence, type LockMetadata, type SaveResult } from "./core/atomic-persistence";
+export { WisdomMetrics } from "./core/wisdom-metrics";
+export { WisdomArchive, type ArchivedWisdom, type ArchiveReason } from "./core/wisdom-archive";
 export { SecretPatternDetector } from "./core/secret-pattern-detector";
 export {
   TieredWisdomStore,
@@ -84,7 +92,16 @@ export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 
 // Phase 7 Exports
 export { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "./core/justice-plugin";
-export { StatusCommand, type PlanStatus } from "./core/status-command";
+export {
+  StatusCommand,
+  type PlanStatus,
+  type PlanStatusWithAnalytics,
+} from "./core/status-command";
+export {
+  TelemetryStore,
+  type TelemetryEvent,
+  type TelemetrySnapshot,
+} from "./core/telemetry-store";
 export { NodeFileSystem } from "./runtime/node-file-system";
 export { OpenCodeNotifier } from "./runtime/opencode-notifier";
 export { LOOP_ERROR_PATTERNS, matchesLoopError } from "./core/loop-error-patterns";
