@@ -155,31 +155,32 @@ export class AtomicPersistence<T> {
       version: lockMeta.version + 1,
       data: JSON.parse(this.config.serialize(currentData)) as T,
     };
-    await this.fileWriter.writeFile(tmpPath, JSON.stringify(envelope, null, 2));
-
-    if (!(await this.claim(tmpPath, claimPath))) {
-      await this.cleanup(tmpPath);
-      return { status: "claim_failed", claimPath };
-    }
 
     try {
-      const latest = await this.loadWithLock();
-      if (latest.lockMeta.version !== lockMeta.version) {
-        await this.cleanup(claimPath);
-        await this.cleanup(tmpPath);
-        return {
-          status: "version_mismatch",
-          data: this.config.merge(currentData, latest.data),
-          lockMeta: latest.lockMeta,
-        };
+      await this.fileWriter.writeFile(tmpPath, JSON.stringify(envelope, null, 2));
+
+      if (!(await this.claim(tmpPath, claimPath))) {
+        return { status: "claim_failed", claimPath };
       }
-      await this.fileWriter.rename(claimPath, this.config.filePath);
+
+      try {
+        const latest = await this.loadWithLock();
+        if (latest.lockMeta.version !== lockMeta.version) {
+          await this.cleanup(claimPath);
+          return {
+            status: "version_mismatch",
+            data: this.config.merge(currentData, latest.data),
+            lockMeta: latest.lockMeta,
+          };
+        }
+        await this.fileWriter.rename(claimPath, this.config.filePath);
+        return { status: "saved", retries: retry };
+      } catch {
+        await this.cleanup(claimPath);
+        return { status: "rename_conflict" };
+      }
+    } finally {
       await this.cleanup(tmpPath);
-      return { status: "saved", retries: retry };
-    } catch {
-      await this.cleanup(claimPath);
-      await this.cleanup(tmpPath);
-      return { status: "rename_conflict" };
     }
   }
 
@@ -207,6 +208,7 @@ export class AtomicPersistence<T> {
     data: T,
     reason: ConflictRecord<T>["reason"],
   ): Promise<string> {
+    const tmpPath = `${this.config.conflictPath}.tmp.${randomUUID()}`;
     try {
       const conflicts: ConflictRecord<T>[] = [];
       if (await this.fileReader.fileExists(this.config.conflictPath)) {
@@ -217,7 +219,6 @@ export class AtomicPersistence<T> {
       }
       conflicts.push({ version: 1, reason, data, recordedAt: new Date().toISOString() });
       const retained = conflicts.slice(-MAX_CONFLICT_RECORDS);
-      const tmpPath = `${this.config.conflictPath}.tmp.${randomUUID()}`;
       await this.fileWriter.writeFile(
         tmpPath,
         JSON.stringify({ version: 1, conflicts: retained }, null, 2),
@@ -225,6 +226,8 @@ export class AtomicPersistence<T> {
       await this.fileWriter.rename(tmpPath, this.config.conflictPath);
     } catch (error: unknown) {
       this.warn("[JUSTICE] Atomic persistence conflict diversion failed", error);
+    } finally {
+      await this.cleanup(tmpPath);
     }
     return this.config.conflictPath;
   }

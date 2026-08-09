@@ -64,7 +64,7 @@ export class WisdomArchive {
       archiveReason: reason,
       ...(entry.hitCount === undefined ? {} : { hitCount: entry.hitCount }),
     };
-    const next = [...current.data, archived];
+    const next = [...current.data.filter((existing) => existing.id !== entry.id), archived];
     return this.persistence.saveAtomicWithLock(next, current.lockMeta);
   }
 

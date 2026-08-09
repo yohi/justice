@@ -563,16 +563,28 @@ export class JusticePlugin {
     return this.sessionStateProvider;
   }
 
-  destroySession(sessionId: string): void {
-    void this.tieredWisdomStore.persistAll().catch((error: unknown) => {
-      this.options.logger?.warn("Justice wisdom persistence failed during session cleanup", error);
+  async destroySession(sessionId: string): Promise<void> {
+    const wisdomPersistence = this.tieredWisdomStore.persistAll().catch((error: unknown) => {
+      try {
+        this.options.logger?.warn(
+          "Justice wisdom persistence failed during session cleanup",
+          error,
+        );
+      } catch {
+        void 0;
+      }
     });
-    void this.telemetry.save().catch((error: unknown) => {
-      this.options.logger?.warn(
-        "Justice telemetry persistence failed during session cleanup",
-        error,
-      );
+    const telemetryPersistence = this.telemetry.save().catch((error: unknown) => {
+      try {
+        this.options.logger?.warn(
+          "Justice telemetry persistence failed during session cleanup",
+          error,
+        );
+      } catch {
+        void 0;
+      }
     });
+    await Promise.all([wisdomPersistence, telemetryPersistence]);
     this.loopHandler.removeSession(sessionId);
   }
 

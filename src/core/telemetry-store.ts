@@ -82,7 +82,7 @@ export class TelemetryStore {
   }
 
   computeSnapshot(windowSize = 100): TelemetrySnapshot {
-    const events = this.events.slice(-Math.max(0, windowSize));
+    const events = windowSize <= 0 ? [] : this.events.slice(-windowSize);
     const completed = events.filter((event) => event.type === "task_completed");
     const injected = new Set(
       events.filter((event) => event.type === "wisdom_injected").map((event) => event.taskId),
@@ -126,8 +126,10 @@ export class TelemetryStore {
     try {
       if (!(await this.fileReader.fileExists(this.telemetryPath))) return;
       const parsed: unknown = JSON.parse(await this.fileReader.readFile(this.telemetryPath));
-      if (Array.isArray(parsed))
-        this.events = parsed.filter(isTelemetryEvent).slice(-this.maxEvents);
+      if (Array.isArray(parsed)) {
+        const loadedEvents = parsed.filter(isTelemetryEvent);
+        this.events = [...loadedEvents, ...this.events].slice(-this.maxEvents);
+      }
     } catch (error: unknown) {
       console.warn("[JUSTICE] Telemetry load failed", error);
     }

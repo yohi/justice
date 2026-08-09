@@ -270,9 +270,9 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     entry: WisdomEntry,
   ): Promise<void> {
     if (archive === undefined) return;
-    const decision = archive.shouldArchive(entry);
-    if (!decision.archive) return;
     try {
+      const decision = archive.shouldArchive(entry);
+      if (!decision.archive) return;
       const result = await archive.append(entry, decision.reason);
       if (result.status !== "saved") {
         this.warnSafely(
@@ -280,7 +280,7 @@ export class TieredWisdomStore implements WisdomStoreInterface {
         );
       }
     } catch (error: unknown) {
-      this.warnSafely("[JUSTICE] Wisdom archive append failed", error);
+      this.warnSafely("[JUSTICE] Wisdom archive evaluation failed", error);
     }
   }
 
