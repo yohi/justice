@@ -204,9 +204,17 @@ export function createMemFs(): {
       files.delete(from);
     },
     link: async (from, to) => {
-      if (files.has(to)) throw new Error(`EEXIST: ${to}`);
+      if (files.has(to)) {
+        const error = new Error(`EEXIST: ${to}`) as NodeJS.ErrnoException;
+        error.code = "EEXIST";
+        throw error;
+      }
       const content = files.get(from);
-      if (content === undefined) throw new Error(`ENOENT: ${from}`);
+      if (content === undefined) {
+        const error = new Error(`ENOENT: ${from}`) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
       files.set(to, content);
     },
     mkdir: async () => {},

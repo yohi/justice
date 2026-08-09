@@ -137,7 +137,7 @@ export class TaskFeedbackHandler {
     this.telemetry?.recordTaskCompleted(
       feedback.taskId,
       feedback.status,
-      feedback.errorClassification,
+      action.type === "success" ? feedback.errorClassification : action.errorClass,
     );
 
     // Execute the action

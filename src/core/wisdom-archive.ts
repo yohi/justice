@@ -17,13 +17,19 @@ export interface ArchiveThresholds {
   readonly environmentQuirkMinHits: number;
 }
 
+export type ArchiveDecision =
+  | { readonly archive: true; readonly reason: ArchiveReason }
+  | { readonly archive: false };
+
 export class WisdomArchive {
+  private appendQueue: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly persistence: AtomicPersistence<readonly ArchivedWisdom[]>,
     private readonly thresholds: ArchiveThresholds = { environmentQuirkMinHits: 3 },
   ) {}
 
-  shouldArchive(entry: WisdomEntry): { readonly archive: boolean; readonly reason?: ArchiveReason } {
+  shouldArchive(entry: WisdomEntry): ArchiveDecision {
     if (entry.category === "failure_gotcha" || entry.category === "design_decision") {
       return { archive: true, reason: "high_priority_category" };
     }
@@ -37,6 +43,17 @@ export class WisdomArchive {
   }
 
   async append(entry: WisdomEntry, reason: ArchiveReason): Promise<SaveResult> {
+    // Serialize concurrent appends so each load/build/save sequence completes
+    // before the next append begins, avoiding lost updates under concurrency.
+    const queued = this.appendQueue.then(() => this.appendNow(entry, reason));
+    this.appendQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  private async appendNow(entry: WisdomEntry, reason: ArchiveReason): Promise<SaveResult> {
     const current = await this.persistence.loadWithLock();
     const archived: ArchivedWisdom = {
       id: entry.id,

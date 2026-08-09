@@ -352,7 +352,11 @@ export interface FileWriter {
    */
   deleteFile(path: string): Promise<void>;
 
-  /** Creates a hard link and fails atomically when the destination exists. */
+  /**
+   * Creates a hard link and fails atomically when the destination exists.
+   * The existing-destination error must expose `code: "EEXIST"`.
+   * Implementations must reject path traversal and rethrow other filesystem errors.
+   */
   link?(from: string, to: string): Promise<void>;
 }
 
@@ -431,5 +435,5 @@ export interface WisdomStoreInterface {
     persona?: AgentId;
   }): readonly WisdomEntry[];
   formatForInjection(entries: readonly WisdomEntry[]): string;
-  recordHit?(entryId: string, now?: Date): WisdomEntry | undefined;
+  recordHit?(entryId: string, now?: Date, taskId?: string): WisdomEntry | undefined;
 }

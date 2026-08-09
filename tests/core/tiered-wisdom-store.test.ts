@@ -5,7 +5,11 @@ import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { SecretPatternDetector } from "../../src/core/secret-pattern-detector";
 import { AtomicPersistence } from "../../src/core/atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "../../src/core/wisdom-archive";
-import { createMockFileReader, createMockFileWriter, createMockFileSystem } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileWriter,
+  createMockFileSystem,
+} from "../helpers/mock-file-system";
 
 function makeLogger(): { warn: Mock; error: Mock } {
   return {
@@ -401,12 +405,12 @@ describe("TieredWisdomStore — persistence coordination", () => {
       }),
     );
     const localStore = new WisdomStore(1);
-    const { tiered } = makeTiered({ localStore });
+    const { localPersistence, globalPersistence } = makeTiered({ localStore });
     const archivedTiered = new TieredWisdomStore({
-      localStore,
+      localStore: new WisdomStore(1),
       globalStore: new WisdomStore(500),
-      localPersistence: tiered.getLocalPersistence(),
-      globalPersistence: tiered.getGlobalPersistence(),
+      localPersistence,
+      globalPersistence,
       localArchive: archive,
     });
 

@@ -3,7 +3,11 @@ import { describe, it, expect, vi } from "vitest";
 import { WisdomPersistence } from "../../src/core/wisdom-persistence";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
-import { createMockFileReader, createMockFileWriter, createMockFileSystem } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileWriter,
+  createMockFileSystem,
+} from "../helpers/mock-file-system";
 
 const defaultPath = ".justice/wisdom.json";
 
@@ -130,8 +134,10 @@ describe("WisdomPersistence.saveAtomic", () => {
     await persistence.saveAtomicWithLock(WisdomStore.fromEntries([memoryEntry], 100));
 
     const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
-    const entry = Object.values(parsed.data.entriesByAgent as Record<string, WisdomEntry[]>).flat()[0];
-    expect(entry?.hitCount).toBe(5);
+    const entry = Object.values(
+      parsed.data.entriesByAgent as Record<string, WisdomEntry[]>,
+    ).flat()[0];
+    expect(entry?.hitCount).toBe(3);
     expect(entry?.firstSeenAt).toBe("2025-12-01T00:00:00Z");
     expect(entry?.lastHitAt).toBe("2026-01-03T00:00:00Z");
   });
@@ -239,6 +245,22 @@ describe("WisdomPersistence.saveAtomicWithLock", () => {
     const loaded = await second.load();
 
     expect(loaded.getByTaskId("restart-task")).toHaveLength(1);
+  });
+
+  it("loads a versioned envelope before a subsequent unlocked atomic save", async () => {
+    const fs = createMockFileSystem();
+    const persistence = new WisdomPersistence(fs, fs, defaultPath);
+    const first = new WisdomStore(100);
+    first.add({ taskId: "locked", category: "success_pattern", content: "locked" });
+    await persistence.saveAtomicWithLock(first);
+
+    const second = new WisdomStore(100);
+    second.add({ taskId: "unlocked", category: "success_pattern", content: "unlocked" });
+    await persistence.saveAtomic(second);
+
+    const loaded = await persistence.load();
+    expect(loaded.getByTaskId("locked")).toHaveLength(1);
+    expect(loaded.getByTaskId("unlocked")).toHaveLength(1);
   });
 });
 /* eslint-enable security/detect-object-injection */

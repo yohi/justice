@@ -16,7 +16,11 @@ function config() {
 
 describe("AtomicPersistence", () => {
   it("loads empty, legacy, and versioned payloads", async () => {
-    const empty = new AtomicPersistence(createMockFileReader({ "state.json": "" }), createMockFileWriter(), config());
+    const empty = new AtomicPersistence(
+      createMockFileReader({ "state.json": "" }),
+      createMockFileWriter(),
+      config(),
+    );
     expect((await empty.loadWithLock()).lockMeta.version).toBe(0);
 
     const legacy = new AtomicPersistence(
@@ -136,7 +140,7 @@ describe("AtomicPersistence", () => {
     expect(result.status).toBe("conflict_diverted");
   });
 
-  it("preserves an existing conflict record when diversion cannot rename", async () => {
+  it("does not throw when diversion fails and still returns conflict_diverted", async () => {
     const reader = createMockFileReader({
       "state.conflict.json": JSON.stringify({
         version: 1,

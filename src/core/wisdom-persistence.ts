@@ -61,7 +61,10 @@ export class WisdomPersistence {
     return { store: result.data, lockMeta: result.lockMeta };
   }
 
-  async saveAtomicWithLock(store: WisdomStore, initialLockMeta?: LockMetadata): Promise<SaveResult> {
+  async saveAtomicWithLock(
+    store: WisdomStore,
+    initialLockMeta?: LockMetadata,
+  ): Promise<SaveResult> {
     return this.atomic.saveAtomicWithLock(store, initialLockMeta);
   }
 
@@ -95,18 +98,18 @@ export class WisdomPersistence {
       throw new Error(`Failed to parse wisdom file: ${this.wisdomFilePath}`, { cause: err });
     }
 
-    const store = WisdomStore.deserialize(
-      isVersionedStoreEnvelope(data) ? data.data : data,
-    );
+    const payload: unknown = isVersionedStoreEnvelope(data) ? data.data : data;
+    const store = WisdomStore.deserialize(payload);
     // Strict validation: accept either v1 ({ entries: [] }) or v2 ({ version: 2, entriesByAgent: {} }).
-    if (data && typeof data === "object") {
-      const hasValidV1 = "entries" in data && Array.isArray((data as { entries: unknown }).entries);
+    if (payload && typeof payload === "object") {
+      const hasValidV1 =
+        "entries" in payload && Array.isArray((payload as { entries: unknown }).entries);
       const hasValidV2 =
-        "version" in data &&
-        (data as { version?: unknown }).version === 2 &&
-        "entriesByAgent" in data &&
-        typeof (data as { entriesByAgent?: unknown }).entriesByAgent === "object" &&
-        (data as { entriesByAgent: unknown }).entriesByAgent !== null;
+        "version" in payload &&
+        (payload as { version?: unknown }).version === 2 &&
+        "entriesByAgent" in payload &&
+        typeof (payload as { entriesByAgent?: unknown }).entriesByAgent === "object" &&
+        (payload as { entriesByAgent: unknown }).entriesByAgent !== null;
 
       if (!hasValidV1 && !hasValidV2) {
         throw new Error(
@@ -172,7 +175,14 @@ export class WisdomPersistence {
     const mergeEntry = (existing: WisdomEntry | undefined, incoming: WisdomEntry): WisdomEntry => {
       if (existing === undefined) return incoming;
       const base = getTs(incoming) >= getTs(existing) ? incoming : existing;
-      const hitCount = (existing.hitCount ?? 0) + (incoming.hitCount ?? 0);
+      // Cumulative semantics: the stored hitCount already reflects every hit observed so far.
+      // Prefer the entry with the newest lastHitAt (ties break toward incoming's hitCount).
+      const incomingLastHitAt = incoming.lastHitAt ?? "";
+      const existingLastHitAt = existing.lastHitAt ?? "";
+      const hitCountValue =
+        incomingLastHitAt >= existingLastHitAt
+          ? (incoming.hitCount ?? existing.hitCount)
+          : (existing.hitCount ?? incoming.hitCount);
       const firstSeenAt = [existing.firstSeenAt, incoming.firstSeenAt]
         .filter((value): value is string => value !== undefined)
         .sort((a, b) => a.localeCompare(b))[0];
@@ -182,7 +192,7 @@ export class WisdomPersistence {
         .at(-1);
       return {
         ...base,
-        ...(hitCount === 0 ? {} : { hitCount }),
+        ...(hitCountValue === undefined || hitCountValue === 0 ? {} : { hitCount: hitCountValue }),
         ...(firstSeenAt === undefined ? {} : { firstSeenAt }),
         ...(lastHitAt === undefined ? {} : { lastHitAt }),
       };

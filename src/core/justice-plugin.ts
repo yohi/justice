@@ -38,7 +38,11 @@ import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-function createArchive(fileReader: FileReader, fileWriter: FileWriter, filePath: string): WisdomArchive {
+function createArchive(
+  fileReader: FileReader,
+  fileWriter: FileWriter,
+  filePath: string,
+): WisdomArchive {
   const archivePath = filePath.endsWith(".json")
     ? `${filePath.slice(0, -".json".length)}-archive.json`
     : `${filePath}-archive.json`;
@@ -50,7 +54,8 @@ function createArchive(fileReader: FileReader, fileWriter: FileWriter, filePath:
       deserialize: (raw) => JSON.parse(raw) as readonly ArchivedWisdom[],
       merge: (mine, theirs) => {
         const byKey = new Map<string, ArchivedWisdom>();
-        for (const entry of [...theirs, ...mine]) byKey.set(`${entry.id}:${entry.archivedAt}`, entry);
+        for (const entry of [...theirs, ...mine])
+          byKey.set(`${entry.id}:${entry.archivedAt}`, entry);
         return [...byKey.values()].sort((a, b) => a.archivedAt.localeCompare(b.archivedAt));
       },
       emptyValue: () => [],
@@ -213,8 +218,7 @@ export class NoOpPersistence extends WisdomPersistence {
       async rmdir(): Promise<void> {
         /* no-op */
       },
-      async link(): Promise<void> {
-      },
+      async link(): Promise<void> {},
     };
     super(noopReader, noopWriter, "wisdom.json");
     this.maxEntries = maxEntries;
@@ -272,7 +276,7 @@ export class JusticePlugin {
     this.options = options;
     this.telemetry = new TelemetryStore(fileReader, fileWriter);
     const metrics = new WisdomMetrics();
-    metrics.onHit((entryId) => this.telemetry.recordWisdomHit(entryId));
+    metrics.onHit((entryId, taskId) => this.telemetry.recordWisdomHit(entryId, taskId));
     const localArchive = createArchive(fileReader, fileWriter, ".justice/wisdom.json");
 
     this.wisdomStore = new WisdomStore(100);
@@ -564,7 +568,10 @@ export class JusticePlugin {
       this.options.logger?.warn("Justice wisdom persistence failed during session cleanup", error);
     });
     void this.telemetry.save().catch((error: unknown) => {
-      this.options.logger?.warn("Justice telemetry persistence failed during session cleanup", error);
+      this.options.logger?.warn(
+        "Justice telemetry persistence failed during session cleanup",
+        error,
+      );
     });
     this.loopHandler.removeSession(sessionId);
   }

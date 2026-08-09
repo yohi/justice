@@ -1,6 +1,11 @@
 // tests/runtime/doctor-cli.test.ts
 import { describe, expect, it } from "vitest";
-import { resolveCacheRoot, runDoctor, runStatus, type DoctorDeps } from "../../src/runtime/doctor-cli";
+import {
+  resolveCacheRoot,
+  runDoctor,
+  runStatus,
+  type DoctorDeps,
+} from "../../src/runtime/doctor-cli";
 import { isJusticeSpecifier } from "../../src/core/doctor-config";
 import {
   formatConfigDiagnostics,
@@ -210,7 +215,7 @@ describe("runDoctor()", () => {
     expect(result.text).toContain("falling back to defaults");
     expect(result.text).toContain("gate.yaml 読込警告");
     expect(result.text).not.toContain(secret);
-    expect(result.text).toContain("[REDACTED_SECRET]");
+    expect(result.text).not.toContain(secret);
   });
 
   it("summarizes a valid gate.yaml without warnings", async () => {

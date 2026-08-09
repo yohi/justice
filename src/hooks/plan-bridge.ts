@@ -1098,8 +1098,11 @@ export class PlanBridge {
     const entries = this.wisdomStore.getRelevant({ maxEntries: 5, persona });
     if (entries.length === 0) return undefined;
     if (taskId !== undefined) {
-      this.telemetry?.recordWisdomInjection(entries.map((entry) => entry.id), taskId);
-      for (const entry of entries) this.wisdomStore.recordHit?.(entry.id);
+      this.telemetry?.recordWisdomInjection(
+        entries.map((entry) => entry.id),
+        taskId,
+      );
+      for (const entry of entries) this.wisdomStore.recordHit?.(entry.id, new Date(), taskId);
     }
     return this.wisdomStore.formatForInjection(entries);
   }

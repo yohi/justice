@@ -14,6 +14,7 @@ import { SecretPatternDetector } from "./secret-pattern-detector";
 import { PersonaClassifier } from "./persona-classifier";
 import { WisdomMetrics } from "./wisdom-metrics";
 import { WisdomArchive } from "./wisdom-archive";
+import type { SaveResult } from "./atomic-persistence";
 
 export interface TieredWisdomStoreLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -174,10 +175,10 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     return this.deduplicate([...local, ...global]);
   }
 
-  recordHit(entryId: string, now = new Date()): WisdomEntry | undefined {
+  recordHit(entryId: string, now = new Date(), taskId?: string): WisdomEntry | undefined {
     return (
-      this.metrics.recordHit(this.localStore, entryId, now) ??
-      this.metrics.recordHit(this.globalStore, entryId, now)
+      this.metrics.recordHit(this.localStore, entryId, now, taskId) ??
+      this.metrics.recordHit(this.globalStore, entryId, now, taskId)
     );
   }
 
@@ -240,10 +241,22 @@ export class TieredWisdomStore implements WisdomStoreInterface {
 
   async persistAll(): Promise<void> {
     await Promise.all(this.pendingArchives);
-    await Promise.all([
+    const results = await Promise.all([
       this.localPersistence.saveAtomicWithLock(this.localStore),
       this.globalPersistence.saveAtomicWithLock(this.globalStore),
     ]);
+    const failures: SaveResult[] = [];
+    for (const result of results) {
+      if (result.status !== "saved") {
+        failures.push(result);
+        this.warnSafely(
+          `[JUSTICE] Wisdom persistence diverted to conflict file after ${result.retries} retries: ${result.conflictPath ?? "unknown"}`,
+        );
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`Wisdom persistence failed for ${failures.length} store(s)`);
+    }
   }
 
   private trackArchive(archive: WisdomArchive | undefined, entry: WisdomEntry): void {
@@ -252,14 +265,30 @@ export class TieredWisdomStore implements WisdomStoreInterface {
     void pending.finally(() => this.pendingArchives.delete(pending));
   }
 
-  private async archiveEvicted(archive: WisdomArchive | undefined, entry: WisdomEntry): Promise<void> {
+  private async archiveEvicted(
+    archive: WisdomArchive | undefined,
+    entry: WisdomEntry,
+  ): Promise<void> {
     if (archive === undefined) return;
     const decision = archive.shouldArchive(entry);
-    if (!decision.archive || decision.reason === undefined) return;
+    if (!decision.archive) return;
     try {
-      await archive.append(entry, decision.reason);
+      const result = await archive.append(entry, decision.reason);
+      if (result.status !== "saved") {
+        this.warnSafely(
+          `[JUSTICE] Wisdom archive diverted to conflict file after ${result.retries} retries: ${result.conflictPath ?? "unknown"}`,
+        );
+      }
     } catch (error: unknown) {
-      this.logger?.warn("[JUSTICE] Wisdom archive append failed", error);
+      this.warnSafely("[JUSTICE] Wisdom archive append failed", error);
+    }
+  }
+
+  private warnSafely(message: string, ...args: unknown[]): void {
+    try {
+      this.logger?.warn(message, ...args);
+    } catch {
+      /* ignore logging errors */
     }
   }
 

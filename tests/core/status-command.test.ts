@@ -69,8 +69,16 @@ describe("StatusCommand", () => {
     telemetry.recordTaskCompleted("task-1", "failure", "test_failure");
     const analyticsCommand = new StatusCommand(reader, telemetry);
 
-    const json = analyticsCommand.formatAsJson(await analyticsCommand.getStatusWithAnalytics("plan.md"));
-    const parsed = JSON.parse(json) as { analytics: { failureRate: number; wisdomHitRate: number; errorDistribution: Record<string, number> } };
+    const json = analyticsCommand.formatAsJson(
+      await analyticsCommand.getStatusWithAnalytics("plan.md"),
+    );
+    const parsed = JSON.parse(json) as {
+      analytics: {
+        failureRate: number;
+        wisdomHitRate: number;
+        errorDistribution: Record<string, number>;
+      };
+    };
 
     expect(parsed.analytics.failureRate).toBe(1);
     expect(parsed.analytics.wisdomHitRate).toBe(0);

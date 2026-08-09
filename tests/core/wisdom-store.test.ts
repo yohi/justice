@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import type { WisdomEntry } from "../../src/core/types";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
@@ -85,6 +85,22 @@ describe("WisdomStore", () => {
       expect(updated?.lastHitAt).toBe(hitAt.toISOString());
       expect(entry.hitCount).toBeUndefined();
       expect(store.getAllEntries()[0]).not.toBe(entry);
+    });
+
+    it("passes the injection taskId to hit listeners", () => {
+      const store = new WisdomStore();
+      const entry = store.add({
+        taskId: "injected-task",
+        category: "success_pattern",
+        content: "learned",
+      });
+      const metrics = new WisdomMetrics();
+      const listener = vi.fn();
+      metrics.onHit(listener);
+
+      metrics.recordHit(store, entry.id, new Date("2026-08-09T00:00:00.000Z"), "injected-task");
+
+      expect(listener).toHaveBeenCalledWith(entry.id, "injected-task");
     });
   });
 

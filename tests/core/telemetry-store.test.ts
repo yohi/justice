@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TelemetryStore } from "../../src/core/telemetry-store";
+import { WisdomMetrics } from "../../src/core/wisdom-metrics";
+import { WisdomStore } from "../../src/core/wisdom-store";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
 describe("TelemetryStore", () => {
@@ -19,6 +21,24 @@ describe("TelemetryStore", () => {
     expect(snapshot.errorDistribution.unknown).toBe(0);
   });
 
+  it("counts an injected wisdom hit for its task", () => {
+    const telemetry = new TelemetryStore(createMockFileReader({}), createMockFileWriter());
+    const store = new WisdomStore();
+    const entry = store.add({
+      taskId: "injected-task",
+      category: "success_pattern",
+      content: "learned",
+    });
+    const metrics = new WisdomMetrics();
+    metrics.onHit((entryId, taskId) => telemetry.recordWisdomHit(entryId, taskId));
+    telemetry.recordWisdomInjection([entry.id], "injected-task");
+
+    metrics.recordHit(store, entry.id, new Date(), "injected-task");
+    telemetry.recordTaskCompleted("injected-task", "success");
+
+    expect(telemetry.computeSnapshot().wisdomHitRate).toBeGreaterThan(0);
+  });
+
   it("does not classify successful tasks as unknown errors", () => {
     const telemetry = new TelemetryStore(createMockFileReader({}), createMockFileWriter());
     telemetry.recordTaskCompleted("task", "success");
@@ -33,7 +53,12 @@ describe("TelemetryStore", () => {
     const writer = createMockFileWriter();
     const reader = createMockFileReader({
       ".justice/telemetry.json": JSON.stringify([
-        { type: "task_completed", taskId: "t", status: "success", timestamp: "2026-01-01T00:00:00Z" },
+        {
+          type: "task_completed",
+          taskId: "t",
+          status: "success",
+          timestamp: "2026-01-01T00:00:00Z",
+        },
       ]),
     });
     const telemetry = new TelemetryStore(reader, writer);

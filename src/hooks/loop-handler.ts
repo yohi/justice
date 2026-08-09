@@ -11,10 +11,7 @@ import type { PlanParser } from "../core/plan-parser";
 import { PlanParser as PlanParserImpl } from "../core/plan-parser";
 import { ReviewRejectionDetector } from "../core/review-rejection-detector";
 import { CategoryClassifier } from "../core/category-classifier";
-import {
-  RetryPolicyCalculator,
-  type RetryThresholdResult,
-} from "../core/retry-policy-calculator";
+import { RetryPolicyCalculator, type RetryThresholdResult } from "../core/retry-policy-calculator";
 
 const PROCEED: HookResponse = { action: "proceed" };
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -243,13 +240,20 @@ export class LoopDetectionHandler {
     const records = this.trials.get(sessionId)?.get(taskId) ?? [];
     const failures = records.filter((r) => r.result === "failure").length;
     const historySummary = this.formatTrialHistory(records);
-    const thresholdResult = activeTask === undefined
-      ? undefined
-      : this.retryCalculator.compute({
-          category: this.classifier.classify(activeTask),
-          stepCount: activeTask.steps.length,
-        });
-    const maxRetries = thresholdResult?.maxRetries ?? this.maxRetries;
+    const thresholdResult =
+      activeTask === undefined
+        ? undefined
+        : this.retryCalculator.compute({
+            category: this.classifier.classify(activeTask),
+            stepCount: activeTask.steps.length,
+          });
+    const maxRetries =
+      thresholdResult === undefined
+        ? this.maxRetries
+        : Math.max(
+            RetryPolicyCalculator.MIN_RETRIES,
+            this.maxRetries + thresholdResult.categoryModifier + thresholdResult.volumeModifier,
+          );
 
     if (failures >= maxRetries) {
       return {

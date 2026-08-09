@@ -14,9 +14,25 @@ const ERROR_CLASSES: readonly ErrorClass[] = [
 ];
 
 export type TelemetryEvent =
-  | { readonly type: "task_completed"; readonly taskId: string; readonly status: TaskFeedbackStatus; readonly errorClass?: ErrorClass; readonly timestamp: string }
-  | { readonly type: "wisdom_injected"; readonly taskId: string; readonly entryIds: readonly string[]; readonly timestamp: string }
-  | { readonly type: "wisdom_hit"; readonly entryId: string; readonly taskId?: string; readonly timestamp: string };
+  | {
+      readonly type: "task_completed";
+      readonly taskId: string;
+      readonly status: TaskFeedbackStatus;
+      readonly errorClass?: ErrorClass;
+      readonly timestamp: string;
+    }
+  | {
+      readonly type: "wisdom_injected";
+      readonly taskId: string;
+      readonly entryIds: readonly string[];
+      readonly timestamp: string;
+    }
+  | {
+      readonly type: "wisdom_hit";
+      readonly entryId: string;
+      readonly taskId?: string;
+      readonly timestamp: string;
+    };
 
 export interface TelemetrySnapshot {
   readonly windowSize: number;
@@ -28,6 +44,7 @@ export interface TelemetrySnapshot {
 
 export class TelemetryStore {
   private events: TelemetryEvent[] = [];
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly fileReader: FileReader,
@@ -37,15 +54,31 @@ export class TelemetryStore {
   ) {}
 
   recordTaskCompleted(taskId: string, status: TaskFeedbackStatus, errorClass?: ErrorClass): void {
-    this.push({ type: "task_completed", taskId, status, errorClass, timestamp: new Date().toISOString() });
+    this.push({
+      type: "task_completed",
+      taskId,
+      status,
+      errorClass,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   recordWisdomInjection(entryIds: readonly string[], taskId: string): void {
-    this.push({ type: "wisdom_injected", entryIds: [...entryIds], taskId, timestamp: new Date().toISOString() });
+    this.push({
+      type: "wisdom_injected",
+      entryIds: [...entryIds],
+      taskId,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   recordWisdomHit(entryId: string, taskId?: string): void {
-    this.push({ type: "wisdom_hit", entryId, ...(taskId === undefined ? {} : { taskId }), timestamp: new Date().toISOString() });
+    this.push({
+      type: "wisdom_hit",
+      entryId,
+      ...(taskId === undefined ? {} : { taskId }),
+      timestamp: new Date().toISOString(),
+    });
   }
 
   computeSnapshot(windowSize = 100): TelemetrySnapshot {
@@ -70,10 +103,9 @@ export class TelemetryStore {
         completed.length === 0
           ? 0
           : completed.filter(
-                (event) =>
-                  event.status !== "success" && (event.errorClass ?? "unknown") === errorClass,
-              ).length /
-            completed.length,
+              (event) =>
+                event.status !== "success" && (event.errorClass ?? "unknown") === errorClass,
+            ).length / completed.length,
       ]),
     ) as Record<ErrorClass, number>;
 
@@ -94,13 +126,22 @@ export class TelemetryStore {
     try {
       if (!(await this.fileReader.fileExists(this.telemetryPath))) return;
       const parsed: unknown = JSON.parse(await this.fileReader.readFile(this.telemetryPath));
-      if (Array.isArray(parsed)) this.events = parsed.filter(isTelemetryEvent).slice(-this.maxEvents);
+      if (Array.isArray(parsed))
+        this.events = parsed.filter(isTelemetryEvent).slice(-this.maxEvents);
     } catch (error: unknown) {
       console.warn("[JUSTICE] Telemetry load failed", error);
     }
   }
 
   async save(): Promise<void> {
+    // Serialize save operations so concurrent callers cannot complete out of order;
+    // each write-and-rename sequence is enqueued behind the previous one.
+    const queued = this.saveQueue.then(() => this.saveNow());
+    this.saveQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
+  private async saveNow(): Promise<void> {
     const tmpPath = `${this.telemetryPath}.tmp.${randomUUID()}`;
     try {
       await this.fileWriter.writeFile(tmpPath, JSON.stringify(this.events, null, 2));
@@ -110,15 +151,20 @@ export class TelemetryStore {
       console.warn("[JUSTICE] Telemetry save failed", error);
     }
   }
-
   private push(event: TelemetryEvent): void {
     this.events.push(event);
-    if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+    if (this.events.length > this.maxEvents)
+      this.events.splice(0, this.events.length - this.maxEvents);
   }
 }
 
 function isTelemetryEvent(value: unknown): value is TelemetryEvent {
-  if (typeof value !== "object" || value === null || !("type" in value) || !("timestamp" in value)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("type" in value) ||
+    !("timestamp" in value)
+  ) {
     return false;
   }
   const event = value as Record<string, unknown>;
@@ -128,7 +174,8 @@ function isTelemetryEvent(value: unknown): value is TelemetryEvent {
       return (
         typeof event.taskId === "string" &&
         ["success", "failure", "timeout", "compaction_risk"].includes(String(event.status)) &&
-        (event.errorClass === undefined || ERROR_CLASSES.some((errorClass) => errorClass === event.errorClass))
+        (event.errorClass === undefined ||
+          ERROR_CLASSES.some((errorClass) => errorClass === event.errorClass))
       );
     case "wisdom_injected":
       return (
@@ -137,8 +184,10 @@ function isTelemetryEvent(value: unknown): value is TelemetryEvent {
         event.entryIds.every((entryId): entryId is string => typeof entryId === "string")
       );
     case "wisdom_hit":
-      return typeof event.entryId === "string" &&
-        (event.taskId === undefined || typeof event.taskId === "string");
+      return (
+        typeof event.entryId === "string" &&
+        (event.taskId === undefined || typeof event.taskId === "string")
+      );
     default:
       return false;
   }

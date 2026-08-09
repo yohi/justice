@@ -11,6 +11,10 @@ export interface SaveResult {
   readonly conflictPath?: string;
 }
 
+export interface AtomicPersistenceLogger {
+  warn(message: string, ...args: unknown[]): void;
+}
+
 export interface AtomicPersistenceConfig<T> {
   readonly filePath: string;
   readonly conflictPath: string;
@@ -19,6 +23,7 @@ export interface AtomicPersistenceConfig<T> {
   readonly merge: (mine: T, theirs: T) => T;
   readonly emptyValue: () => T;
   readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly logger?: AtomicPersistenceLogger;
 }
 
 interface VersionedEnvelope<T> {
@@ -50,6 +55,7 @@ type AttemptResult<T> =
 
 const MAX_RETRIES = 3;
 const STALE_CLAIM_TIMEOUT_MS = 10_000;
+const MAX_CONFLICT_RECORDS = 50;
 
 export class AtomicPersistence<T> {
   constructor(
@@ -91,6 +97,7 @@ export class AtomicPersistence<T> {
     let currentData = data;
     let lockMeta = initialLockMeta;
     let lastReason: ConflictRecord<T>["reason"] = "claim_acquisition_failed";
+    let retry = 0;
 
     try {
       if (lockMeta === undefined) {
@@ -99,7 +106,6 @@ export class AtomicPersistence<T> {
         currentData = this.config.merge(currentData, current.data);
       }
 
-      let retry = 0;
       let attemptCount = 0;
       while (attemptCount <= MAX_RETRIES) {
         const attempt = await this.runAttempt(currentData, lockMeta, retry);
@@ -107,7 +113,7 @@ export class AtomicPersistence<T> {
         if (attempt.status === "saved") return attempt;
         if (attempt.status === "claim_failed") {
           lastReason = "claim_acquisition_failed";
-          if (await this.reclaimStaleClaim(attempt.claimPath) && attemptCount <= MAX_RETRIES) {
+          if ((await this.reclaimStaleClaim(attempt.claimPath)) && attemptCount <= MAX_RETRIES) {
             continue;
           }
         } else if (attempt.status === "version_mismatch") {
@@ -126,11 +132,15 @@ export class AtomicPersistence<T> {
       }
 
       const conflictPath = await this.divertToConflictFile(currentData, lastReason);
-      return { status: "conflict_diverted", retries: MAX_RETRIES, conflictPath };
+      return { status: "conflict_diverted", retries: retry, conflictPath };
     } catch (error: unknown) {
-      await this.divertToConflictFile(currentData, "rename_conflict").catch(() => undefined);
-      console.warn("[JUSTICE] Atomic persistence failed open", error);
-      return { status: "conflict_diverted", retries: MAX_RETRIES, conflictPath: this.config.conflictPath };
+      await this.divertToConflictFile(currentData, lastReason).catch(() => undefined);
+      this.warn("[JUSTICE] Atomic persistence failed open", error);
+      return {
+        status: "conflict_diverted",
+        retries: retry,
+        conflictPath: this.config.conflictPath,
+      };
     }
   }
 
@@ -200,21 +210,35 @@ export class AtomicPersistence<T> {
     try {
       const conflicts: ConflictRecord<T>[] = [];
       if (await this.fileReader.fileExists(this.config.conflictPath)) {
-        const parsed: unknown = JSON.parse(await this.fileReader.readFile(this.config.conflictPath));
+        const parsed: unknown = JSON.parse(
+          await this.fileReader.readFile(this.config.conflictPath),
+        );
         if (isConflictFile<T>(parsed)) conflicts.push(...parsed.conflicts);
       }
       conflicts.push({ version: 1, reason, data, recordedAt: new Date().toISOString() });
+      const retained = conflicts.slice(-MAX_CONFLICT_RECORDS);
       const tmpPath = `${this.config.conflictPath}.tmp.${randomUUID()}`;
-      await this.fileWriter.writeFile(tmpPath, JSON.stringify({ version: 1, conflicts }, null, 2));
+      await this.fileWriter.writeFile(
+        tmpPath,
+        JSON.stringify({ version: 1, conflicts: retained }, null, 2),
+      );
       await this.fileWriter.rename(tmpPath, this.config.conflictPath);
     } catch (error: unknown) {
-      console.warn("[JUSTICE] Atomic persistence conflict diversion failed", error);
+      this.warn("[JUSTICE] Atomic persistence conflict diversion failed", error);
     }
     return this.config.conflictPath;
   }
 
   private async cleanup(path: string): Promise<void> {
     await this.fileWriter.deleteFile(path).catch(() => undefined);
+  }
+
+  private warn(message: string, ...args: unknown[]): void {
+    try {
+      this.config.logger?.warn(message, ...args);
+    } catch {
+      void 0;
+    }
   }
 
   private async backoff(retry: number): Promise<void> {
@@ -227,7 +251,9 @@ export class AtomicPersistence<T> {
 }
 
 function isErrno(value: unknown, code: string): boolean {
-  return value instanceof Error && "code" in value && (value as NodeJS.ErrnoException).code === code;
+  return (
+    value instanceof Error && "code" in value && (value as NodeJS.ErrnoException).code === code
+  );
 }
 
 function isVersionedEnvelope<T>(value: unknown): value is VersionedEnvelope<T> {
