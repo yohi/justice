@@ -218,6 +218,26 @@ describe("runDoctor()", () => {
     expect(result.text).not.toContain(secret);
   });
 
+  it("redacts AWS secret access key values from doctor diagnostics", async () => {
+    const secret = "aws-secret-value-that-must-not-leak";
+    const logPath = "/home/user/.local/share/opencode/log/doctor.log";
+    const files = {
+      ...healthyFixture(),
+      [logPath]: `level=ERROR failed to load plugin path=@yohi/justice@3.0.0 AWS_SECRET_ACCESS_KEY=${secret}`,
+    };
+
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: mockReader(files),
+        logPaths: [logPath],
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+
+    expect(result.text).not.toContain(secret);
+    expect(result.text).toContain("[REDACTED_ENV]");
+  });
+
   it("summarizes a valid gate.yaml without warnings", async () => {
     const files = {
       ...healthyFixture(),
