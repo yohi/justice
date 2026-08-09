@@ -73,14 +73,18 @@ export class AtomicPersistence<T> {
       return { data: this.config.emptyValue(), lockMeta: { version: 0 } };
     }
 
-    const parsed: unknown = JSON.parse(raw);
-    if (isVersionedEnvelope<T>(parsed)) {
-      return {
-        data: this.config.deserialize(JSON.stringify(parsed.data)),
-        lockMeta: { version: parsed.version },
-      };
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (isVersionedEnvelope<T>(parsed)) {
+        return {
+          data: this.config.deserialize(JSON.stringify(parsed.data)),
+          lockMeta: { version: parsed.version },
+        };
+      }
+      return { data: this.config.deserialize(raw), lockMeta: { version: 0 } };
+    } catch {
+      return { data: this.config.emptyValue(), lockMeta: { version: 0 } };
     }
-    return { data: this.config.deserialize(raw), lockMeta: { version: 0 } };
   }
 
   async saveAtomicWithLock(data: T, initialLockMeta?: LockMetadata): Promise<SaveResult> {
@@ -95,12 +99,17 @@ export class AtomicPersistence<T> {
         currentData = this.config.merge(currentData, current.data);
       }
 
-      for (let retry = 0; retry <= MAX_RETRIES; retry += 1) {
+      let retry = 0;
+      let attemptCount = 0;
+      while (attemptCount <= MAX_RETRIES) {
         const attempt = await this.runAttempt(currentData, lockMeta, retry);
+        attemptCount += 1;
         if (attempt.status === "saved") return attempt;
         if (attempt.status === "claim_failed") {
           lastReason = "claim_acquisition_failed";
-          if (await this.reclaimStaleClaim(attempt.claimPath)) continue;
+          if (await this.reclaimStaleClaim(attempt.claimPath) && attemptCount <= MAX_RETRIES) {
+            continue;
+          }
         } else if (attempt.status === "version_mismatch") {
           lastReason = "version_mismatch";
           currentData = attempt.data;
@@ -110,6 +119,7 @@ export class AtomicPersistence<T> {
         }
         if (retry < MAX_RETRIES) {
           await this.backoff(retry);
+          retry += 1;
           continue;
         }
         break;
@@ -173,8 +183,7 @@ export class AtomicPersistence<T> {
         throw error instanceof Error ? error : new Error(String(error), { cause: error });
       }
     }
-    await this.fileWriter.rename(tmpPath, claimPath);
-    return true;
+    throw new Error("Atomic claim requires FileWriter.link for exclusive persistence");
   }
 
   private async reclaimStaleClaim(claimPath: string): Promise<boolean> {

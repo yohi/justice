@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RetryPolicyCalculator } from "../../src/core/retry-policy-calculator";
+import type { TaskCategory } from "../../src/core/types";
 
 describe("RetryPolicyCalculator", () => {
   it("computes category and step-count modifiers", () => {
@@ -17,5 +18,14 @@ describe("RetryPolicyCalculator", () => {
       volumeModifier: 1,
       maxRetries: 6,
     });
+  });
+
+  it("uses a neutral modifier for an unknown runtime category", () => {
+    const calculator = new RetryPolicyCalculator();
+
+    const result = calculator.compute({ category: "future-category" as TaskCategory, stepCount: 0 });
+
+    expect(result.categoryModifier).toBe(0);
+    expect(result.maxRetries).toBe(3);
   });
 });

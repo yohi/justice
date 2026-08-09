@@ -50,6 +50,19 @@ export function createMockFileWriter(): MockFileWriter {
       writtenFiles[to] = writtenFiles[from];
       delete writtenFiles[from];
     }),
+    link: vi.fn(async (from: string, to: string) => {
+      if (to in writtenFiles) {
+        const err = new Error(`EEXIST: file already exists: ${to}`) as NodeJS.ErrnoException;
+        err.code = "EEXIST";
+        throw err;
+      }
+      if (!(from in writtenFiles)) {
+        const err = new Error(`ENOENT: source not found: ${from}`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      writtenFiles[to] = writtenFiles[from]!;
+    }),
     mkdir: vi.fn(async (path: string, recursive: boolean) => {
       if (recursive) {
         const isAbsolute = path.startsWith("/");
@@ -189,6 +202,12 @@ export function createMemFs(): {
       if (c === undefined) throw new Error(`rename: missing ${from}`);
       files.set(to, c);
       files.delete(from);
+    },
+    link: async (from, to) => {
+      if (files.has(to)) throw new Error(`EEXIST: ${to}`);
+      const content = files.get(from);
+      if (content === undefined) throw new Error(`ENOENT: ${from}`);
+      files.set(to, content);
     },
     mkdir: async () => {},
     rmdir: async () => {},

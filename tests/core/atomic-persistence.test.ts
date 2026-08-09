@@ -42,7 +42,10 @@ describe("AtomicPersistence", () => {
       createMockFileWriter(),
       config(),
     );
-    await expect(corrupted.loadWithLock()).rejects.toThrow();
+    await expect(corrupted.loadWithLock()).resolves.toEqual({
+      data: [],
+      lockMeta: { version: 0 },
+    });
 
     const reader = createMockFileReader({});
     reader.readFile = vi.fn(async () => {
@@ -52,6 +55,16 @@ describe("AtomicPersistence", () => {
     });
     const inaccessible = new AtomicPersistence(reader, createMockFileWriter(), config());
     await expect(inaccessible.loadWithLock()).rejects.toThrow("permission denied");
+  });
+
+  it("does not claim success when the writer cannot provide an exclusive claim primitive", async () => {
+    const writer = createMockFileWriter();
+    writer.link = undefined;
+    const persistence = new AtomicPersistence(createMockFileReader({}), writer, config());
+
+    const result = await persistence.saveAtomicWithLock(["unsafe-fallback"]);
+
+    expect(result.status).toBe("conflict_diverted");
   });
 
   it("retries after a version mismatch and then saves", async () => {
@@ -67,6 +80,31 @@ describe("AtomicPersistence", () => {
 
     expect(result).toEqual({ status: "saved", retries: 1 });
     expect(JSON.parse(writer.writtenFiles["state.json"]!).data).toEqual(["disk", "memory"]);
+  });
+
+  it("retries immediately after reclaiming a stale claim", async () => {
+    const reader = createMockFileReader({});
+    reader.readFileStats = vi
+      .fn()
+      .mockResolvedValueOnce({ size: 1, mtimeMs: 0 })
+      .mockResolvedValue({ size: 1, mtimeMs: Date.now() });
+    const writer = createMockFileWriter();
+    let attempts = 0;
+    writer.link = vi.fn(async (from, to) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error("claim exists") as NodeJS.ErrnoException;
+        error.code = "EEXIST";
+        throw error;
+      }
+      await writer.rename(from, to);
+    });
+    const persistence = new AtomicPersistence(reader, writer, config());
+
+    const result = await persistence.saveAtomicWithLock(["after-reclaim"]);
+
+    expect(result).toEqual({ status: "saved", retries: 0 });
+    expect(attempts).toBe(2);
   });
 
   it("diverts to a conflict file after repeated claim failures", async () => {

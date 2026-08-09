@@ -29,7 +29,7 @@ export class RetryPolicyCalculator {
   static readonly VOLUME_MODIFIER = 1;
 
   compute(context: RetryThresholdContext): RetryThresholdResult {
-    const categoryModifier = CATEGORY_MODIFIERS[context.category];
+    const categoryModifier = CATEGORY_MODIFIERS[context.category] ?? 0;
     const volumeModifier =
       context.stepCount >= RetryPolicyCalculator.VOLUME_THRESHOLD
         ? RetryPolicyCalculator.VOLUME_MODIFIER

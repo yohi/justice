@@ -39,7 +39,9 @@ import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
 const PROCEED: HookResponse = { action: "proceed" };
 
 function createArchive(fileReader: FileReader, fileWriter: FileWriter, filePath: string): WisdomArchive {
-  const archivePath = filePath.replace(/wisdom\.json$/u, "wisdom-archive.json");
+  const archivePath = filePath.endsWith(".json")
+    ? `${filePath.slice(0, -".json".length)}-archive.json`
+    : `${filePath}-archive.json`;
   return new WisdomArchive(
     new AtomicPersistence<readonly ArchivedWisdom[]>(fileReader, fileWriter, {
       filePath: archivePath,
@@ -210,6 +212,8 @@ export class NoOpPersistence extends WisdomPersistence {
       },
       async rmdir(): Promise<void> {
         /* no-op */
+      },
+      async link(): Promise<void> {
       },
     };
     super(noopReader, noopWriter, "wisdom.json");
@@ -559,7 +563,9 @@ export class JusticePlugin {
     void this.tieredWisdomStore.persistAll().catch((error: unknown) => {
       this.options.logger?.warn("Justice wisdom persistence failed during session cleanup", error);
     });
-    void this.telemetry.save();
+    void this.telemetry.save().catch((error: unknown) => {
+      this.options.logger?.warn("Justice telemetry persistence failed during session cleanup", error);
+    });
     this.loopHandler.removeSession(sessionId);
   }
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ErrorClass, FileReader, FileWriter, TaskFeedbackStatus } from "./types";
 
 const ERROR_CLASSES: readonly ErrorClass[] = [
@@ -68,7 +69,10 @@ export class TelemetryStore {
         errorClass,
         completed.length === 0
           ? 0
-          : completed.filter((event) => (event.errorClass ?? "unknown") === errorClass).length /
+          : completed.filter(
+                (event) =>
+                  event.status !== "success" && (event.errorClass ?? "unknown") === errorClass,
+              ).length /
             completed.length,
       ]),
     ) as Record<ErrorClass, number>;
@@ -97,7 +101,7 @@ export class TelemetryStore {
   }
 
   async save(): Promise<void> {
-    const tmpPath = `${this.telemetryPath}.tmp.${Date.now()}`;
+    const tmpPath = `${this.telemetryPath}.tmp.${randomUUID()}`;
     try {
       await this.fileWriter.writeFile(tmpPath, JSON.stringify(this.events, null, 2));
       await this.fileWriter.rename(tmpPath, this.telemetryPath);
@@ -114,5 +118,28 @@ export class TelemetryStore {
 }
 
 function isTelemetryEvent(value: unknown): value is TelemetryEvent {
-  return typeof value === "object" && value !== null && "type" in value && "timestamp" in value;
+  if (typeof value !== "object" || value === null || !("type" in value) || !("timestamp" in value)) {
+    return false;
+  }
+  const event = value as Record<string, unknown>;
+  if (typeof event.timestamp !== "string") return false;
+  switch (event.type) {
+    case "task_completed":
+      return (
+        typeof event.taskId === "string" &&
+        ["success", "failure", "timeout", "compaction_risk"].includes(String(event.status)) &&
+        (event.errorClass === undefined || ERROR_CLASSES.some((errorClass) => errorClass === event.errorClass))
+      );
+    case "wisdom_injected":
+      return (
+        typeof event.taskId === "string" &&
+        Array.isArray(event.entryIds) &&
+        event.entryIds.every((entryId): entryId is string => typeof entryId === "string")
+      );
+    case "wisdom_hit":
+      return typeof event.entryId === "string" &&
+        (event.taskId === undefined || typeof event.taskId === "string");
+    default:
+      return false;
+  }
 }
