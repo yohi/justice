@@ -12,4 +12,9 @@ describe("AgentRouter controller routing", () => {
   it("returns undefined for unknown workflows", () => {
     expect(router.routeController("__proto__")).toBeUndefined();
   });
+
+  it("does not expose legacy worker routing APIs", () => {
+    expect("route" in router).toBe(false);
+    expect("determineOptimalAgent" in router).toBe(false);
+  });
 });
