@@ -15,6 +15,8 @@ const INTEGRATION_KEYWORDS = [
 ] as const;
 const MECHANICAL_KEYWORDS = ["rename", "typo", "constant", "boilerplate", "field", "config", "setting"] as const;
 const TEST_ONLY_KEYWORDS = ["test only", "tests only", "test-only", "tests-only", "run tests only"] as const;
+const DEEP_KEYWORDS = ["deep", "reasoning", "research", "investigate"] as const;
+const ARCHITECTURE_KEYWORDS = ["architecture", "architect", "design system"] as const;
 
 export class ExecutionRoleClassifier {
   classify(task: PlanTask): ExecutionRole {
@@ -30,6 +32,14 @@ export class ExecutionRoleClassifier {
 
     if (this.matches(text, TEST_ONLY_KEYWORDS)) {
       return "mechanical";
+    }
+
+    if (this.matches(text, DEEP_KEYWORDS)) {
+      return "deep";
+    }
+
+    if (this.matches(text, ARCHITECTURE_KEYWORDS)) {
+      return "architecture";
     }
 
     return "implementation";

@@ -37,6 +37,14 @@ describe("ExecutionRoleClassifier", () => {
     expect(classifier.classify(task)).toBe("integration");
   });
 
+  it("classifies deep tasks", () => {
+    expect(classifier.classify(makeTask({ title: "deep reasoning research" }))).toBe("deep");
+  });
+
+  it("classifies architecture tasks", () => {
+    expect(classifier.classify(makeTask({ title: "design system architecture" }))).toBe("architecture");
+  });
+
   it("falls back to implementation for normal tasks", () => {
     const task = makeTask({
       title: "implement user login feature with tests",

@@ -27,7 +27,11 @@ describe("CategoryClassifier", () => {
     expect(classifier.classify(makeTask("rename constant"))).toBe("sp-mechanical");
   });
 
-  it("classifies implementation tasks", () => {
-    expect(classifier.classify(makeTask("implement parser"))).toBe("sp-implementation");
+  it("falls back to unspecified-low for deep tasks", () => {
+    expect(classifier.classify(makeTask("deep reasoning task"))).toBe("unspecified-low");
+  });
+
+  it("falls back to unspecified-low for architecture tasks", () => {
+    expect(classifier.classify(makeTask("design system architecture"))).toBe("unspecified-low");
   });
 });
