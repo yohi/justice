@@ -43,4 +43,19 @@ describe("ExecutionRoleClassifier", () => {
     });
     expect(classifier.classify(task)).toBe("implementation");
   });
+
+  it("classifies integration from step descriptions alone", () => {
+    const task = makeTask({
+      title: "Task",
+      steps: [{ id: "s1", description: "coordinate modules", checked: false, lineNumber: 1 }],
+    });
+    expect(classifier.classify(task)).toBe("integration");
+  });
+
+  it("classifies test-only tasks as mechanical", () => {
+    const task = makeTask({
+      title: "run tests only",
+    });
+    expect(classifier.classify(task)).toBe("mechanical");
+  });
 });

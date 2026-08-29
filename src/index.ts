@@ -76,6 +76,7 @@ export type { AddOptions } from "./core/types";
 export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
+export { ExecutionRoleClassifier } from "./core/execution-role-classifier";
 
 // Agent Routing
 export {
