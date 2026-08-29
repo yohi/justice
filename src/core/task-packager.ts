@@ -87,7 +87,7 @@ export class TaskPackager {
     return {
       category,
       taskId: options.taskId,
-      loadSkills: options.loadSkills ?? [],
+      loadSkills: [...(options.loadSkills ?? [])],
       prompt: options.prompt,
       runInBackground: options.runInBackground ?? false,
       context: {

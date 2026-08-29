@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TaskPackager } from "../../src/core/task-packager";
+import {
+  enrichTaskToolInput,
+  mergeTaskLoadSkills,
+  TaskPackager,
+} from "../../src/core/task-packager";
 
 describe("TaskPackager", () => {
   const packager = new TaskPackager();
@@ -23,6 +27,19 @@ describe("TaskPackager", () => {
     });
   });
 
+  it("does not alias the caller loadSkills array", () => {
+    const loadSkills = ["domain-skill"];
+    const request = packager.package("sp-mechanical", {
+      taskId: "task-alias",
+      prompt: "fix typo",
+      loadSkills,
+    });
+
+    loadSkills.push("later-skill");
+
+    expect(request.loadSkills).toEqual(["domain-skill"]);
+  });
+
   it("uses the packaged task id when context task id is omitted", () => {
     const request = packager.package("sp-mechanical", {
       taskId: "task-2",
@@ -30,6 +47,46 @@ describe("TaskPackager", () => {
     });
 
     expect(request.context).toEqual({ taskId: "task-2" });
+  });
+
+  it("preserves helper skill merge behavior", () => {
+    expect(mergeTaskLoadSkills(
+      ["domain-skill", "test-driven-development"],
+      ["test-driven-development", "verification-before-completion"],
+    )).toEqual([
+      "domain-skill",
+      "test-driven-development",
+      "verification-before-completion",
+    ]);
+  });
+
+  it("preserves task ID and normalizes helper input skills", () => {
+    const original = {
+      prompt: "run",
+      taskId: "task-existing",
+      skills: ["domain-skill"],
+      load_skills: ["test-driven-development"],
+    };
+
+    const enriched = enrichTaskToolInput(original, "task-generated", {
+      loadSkills: ["verification-before-completion"],
+    });
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      taskId: "task-existing",
+      loadSkills: [
+        "domain-skill",
+        "test-driven-development",
+        "verification-before-completion",
+      ],
+    });
+    expect(original).toEqual({
+      prompt: "run",
+      taskId: "task-existing",
+      skills: ["domain-skill"],
+      load_skills: ["test-driven-development"],
+    });
   });
 
   it("does not include agent routing fields", () => {
