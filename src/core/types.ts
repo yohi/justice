@@ -21,11 +21,14 @@ export interface PlanStep {
 
 /** task()ツールに渡すパッケージ化されたリクエスト */
 export interface DelegationRequest {
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
+  readonly taskId: string;
+  readonly loadSkills: readonly string[];
   readonly prompt: string;
-  readonly loadSkills: string[];
   readonly runInBackground: boolean;
-  readonly context: DelegationContext;
+  readonly context: {
+    readonly taskId: string;
+  };
 }
 
 /** タスク委譲のコンテキスト情報 */
@@ -75,6 +78,8 @@ export type WorkflowBootstrapPhase = "design_required" | "plan_required" | "plan
 
 /** Oh My OpenAgent のエージェント識別子 */
 export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
+
+export const AGENT_IDS = ["hephaestus", "sisyphus", "prometheus", "atlas"] as const;
 
 export type ObservationAgentId = AgentId | "system" | "unknown";
 
