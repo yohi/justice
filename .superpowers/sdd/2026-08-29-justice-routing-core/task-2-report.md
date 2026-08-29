@@ -68,6 +68,7 @@ Result: PASS。1 test file、6 tests passed。
 - 既存の `route` / `determineOptimalAgent` 呼び出しは Task 8/9 の移行まで維持しました。
 - `WorkflowRouter` の内部 map を `ReadonlyMap` に変更し、`__proto__` などの prototype key が unknown workflow として `undefined` になるよう修正しました。
 - `tests/core/agent-router.test.ts` と `tests/unit/core/agent-router.test.ts` に Controller routing と prototype key の回帰テストを追加しました。
+- `src/core/agent-router.ts` に、`routeController` が新しい Controller routing API であり、legacy `determineOptimalAgent` / `route` は Task 3（justice-routing-controller PR stack）で削除予定であることを明記しました。
 - lint の新規 `security/detect-object-injection` warning は解消しました。
 
 ## 検証コマンドと結果
@@ -110,3 +111,7 @@ RED は production code 変更前に focused tests を実行し、`router.routeC
 ## Concern
 
 brief の「Worker 選択メソッドを削除」と「既存の `AgentRouter.route` 呼び出しを壊さない」は現時点では同時に満たせません。実際に `plan-bridge` と `task-packager` が `route` を使用しているため、Task 8/9 の呼び出し側移行まで互換 API を保持しました。レビュー指示に従い、Controller 解決 API は先行追加しています。
+
+# Task 2 追補: legacy Worker API の削除予定
+
+`routeController` が新しい Controller routing API であり、legacy の `determineOptimalAgent` / `route` は Task 3（justice-routing-controller PR stack）で削除予定であることを `src/core/agent-router.ts` にコメントとして明記しました。Task 2 では、Task 8/9 の呼び出し側移行が完了するまで既存 Worker API を保持します。

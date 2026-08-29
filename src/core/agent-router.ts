@@ -139,6 +139,11 @@ export interface RoutingResult {
 export class AgentRouter {
   private readonly workflowRouter = new WorkflowRouter();
 
+  /**
+   * New Controller routing API. The legacy Worker APIs below are scheduled for
+   * removal in Task 3 (justice-routing-controller PR stack), after callers are
+   * migrated in Tasks 8/9.
+   */
   routeController(workflow: string): ControllerAgent | undefined {
     return this.workflowRouter.resolveController(workflow);
   }
