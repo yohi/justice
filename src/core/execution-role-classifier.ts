@@ -1,0 +1,41 @@
+import type { ExecutionRole, PlanTask } from "./types";
+
+const INTEGRATION_KEYWORDS = [
+  "api",
+  "interface",
+  "module",
+  "modules",
+  "migration",
+  "integration",
+  "state",
+  "concurrency",
+  "async",
+  "coordinate",
+  "components",
+] as const;
+const MECHANICAL_KEYWORDS = ["rename", "typo", "constant", "boilerplate", "field", "config", "setting"] as const;
+const TEST_ONLY_KEYWORDS = ["test only", "tests only", "test-only", "tests-only", "run tests only"] as const;
+
+export class ExecutionRoleClassifier {
+  classify(task: PlanTask): ExecutionRole {
+    const text = `${task.title} ${task.steps.map((step) => step.description).join(" ")}`.toLowerCase();
+
+    if (this.matches(text, INTEGRATION_KEYWORDS)) {
+      return "integration";
+    }
+
+    if (this.matches(text, MECHANICAL_KEYWORDS)) {
+      return "mechanical";
+    }
+
+    if (this.matches(text, TEST_ONLY_KEYWORDS)) {
+      return "mechanical";
+    }
+
+    return "implementation";
+  }
+
+  private matches(text: string, keywords: readonly string[]): boolean {
+    return keywords.some((keyword) => text.includes(keyword));
+  }
+}
