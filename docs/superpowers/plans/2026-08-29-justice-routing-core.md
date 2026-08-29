@@ -180,13 +180,34 @@ export function createWorkerRoutingDecision(
   category: SpCategory | TaskCategory,
   reason: RoutingReason,
 ): RoutingDecision {
+  if (!isValidExecutionRoleCategoryPair(executionRole, category)) {
+    throw new Error(`Invalid routing pair: ${executionRole} cannot be routed to ${category}`);
+  }
   return { kind: "worker", executionRole, category, reason };
 }
-
-export function createUnroutedRoutingDecision(reason: RoutingReason): RoutingDecision {
-  return { kind: "unrouted", reason };
-}
 ```
+
+/**
+ * ExecutionRole と category の正当な組み合わせを検証する。
+ * mechanical は sp-mechanical のみ、integration は sp-integration のみ、など
+ * 一対一または未定義ロールのペアを許可する。
+ */
+function isValidExecutionRoleCategoryPair(
+  executionRole: ExecutionRole,
+  category: SpCategory | TaskCategory,
+): boolean {
+  const validPairs: Readonly<Record<ExecutionRole, ReadonlySet<SpCategory | TaskCategory>>> = {
+    mechanical: new Set(["sp-mechanical"]),
+    implementation: new Set(["sp-implementation"]),
+    integration: new Set(["sp-integration"]),
+    review: new Set(["sp-review"]),
+    "final-review": new Set(["sp-final-review"]),
+    deep: new Set(["deep"]),
+    architecture: new Set(["unspecified-high", "deep"]),
+  };
+  return validPairs[executionRole].has(category);
+}
+
 
 - [ ] **Step 4: テストを書く**
 
@@ -224,6 +245,12 @@ describe("routing-decision factories", () => {
     });
   });
 
+  it("rejects invalid role/category pairs", () => {
+    expect(() =>
+      createWorkerRoutingDecision("mechanical", "sp-integration", "task_classification"),
+    ).toThrow("Invalid routing pair");
+  });
+
   it("creates an unrouted decision", () => {
     const decision = createUnroutedRoutingDecision("compatibility_fallback");
     expect(decision).toEqual({
@@ -232,7 +259,6 @@ describe("routing-decision factories", () => {
     });
   });
 });
-```
 
 - [ ] **Step 5: テストを実行する**
 
@@ -324,12 +350,12 @@ export class WorkflowRouter {
 Run: `bun run test tests/unit/core/workflow-router.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
-
 ```bash
 git add src/core/workflow-router.ts tests/unit/core/workflow-router.test.ts
 git commit -m "feat(routing): add WorkflowRouter for workflow-to-controller resolution"
 ```
+
+- **Note:** `AgentRouter.route` を削除する前に、Task 8 で `plan-bridge` と `task-packager` の呼び出しを新しい Controller/Worker 解決 API へ移行する。本 PR stack では PR #2 で `AgentRouter` から Worker 選択を削除し、PR #4 で呼び出し側を切り替える。両方の利用箇所がなくなったことを PR #4 の最終検証で確認する。
 
 ---
 
@@ -419,7 +445,9 @@ function makeTask(overrides: Partial<PlanTask> = {}): PlanTask {
   return {
     id: "t1",
     description: "do something",
-    steps: ["step 1"],
+    steps: [{ id: "t1-step-1", description: "step 1", checked: false, lineNumber: 1 }],
+    title: "Task",
+    status: "pending",
     ...overrides,
   };
 }
@@ -469,17 +497,22 @@ Expected: FAIL with "ExecutionRoleClassifier is not defined"
 import type { ExecutionRole, PlanTask } from "./types";
 
 const INTEGRATION_KEYWORDS = ["api", "interface", "module", "modules", "migration", "integration", "state", "concurrency", "async", "coordinate", "components"];
-const MECHANICAL_KEYWORDS = ["rename", "typo", "constant", "boilerplate", "field", "config", "setting", "test"];
+const MECHANICAL_KEYWORDS = ["rename", "typo", "constant", "boilerplate", "field", "config", "setting"];
+const TEST_ONLY_KEYWORDS = ["test only", "tests only", "test-only", "tests-only", "run tests only"];
 
 export class ExecutionRoleClassifier {
   classify(task: PlanTask): ExecutionRole {
-    const text = `${task.description} ${task.steps.join(" ")}`.toLowerCase();
+    const text = `${task.description} ${task.steps.map((s) => s.description).join(" ")}`.toLowerCase();
 
     if (this.matches(text, INTEGRATION_KEYWORDS)) {
       return "integration";
     }
 
     if (this.matches(text, MECHANICAL_KEYWORDS)) {
+      return "mechanical";
+    }
+
+    if (this.matches(text, TEST_ONLY_KEYWORDS)) {
       return "mechanical";
     }
 
@@ -640,8 +673,18 @@ import { describe, expect, it } from "vitest";
 import { CategoryClassifier } from "../../../src/core/category-classifier";
 import type { PlanTask } from "../../../src/core/types";
 
-function makeTask(description: string, steps: string[] = []): PlanTask {
-  return { id: "t1", description, steps };
+function makeTask(title: string, steps: string[] = []): PlanTask {
+  return {
+    id: "t1",
+    title,
+    steps: steps.map((desc, i) => ({
+      id: `t1-step-${i + 1}`,
+      description: desc,
+      checked: false,
+      lineNumber: i + 5,
+    })),
+    status: "pending",
+  };
 }
 
 describe("CategoryClassifier", () => {
@@ -698,8 +741,9 @@ export interface DelegationRequest {
   readonly loadSkills: readonly string[];
   readonly prompt: string;
   readonly runInBackground: boolean;
-  readonly context?: {
-    readonly taskId?: string;
+  readonly context: {
+    readonly taskId: string;
+    readonly agentId?: AgentId;
   };
 }
 ```
@@ -713,6 +757,7 @@ export interface PackageOptions {
   readonly loadSkills?: readonly string[];
   readonly runInBackground?: boolean;
   readonly contextTaskId?: string;
+  readonly agentId?: AgentId;
 }
 
 export class TaskPackager {
@@ -725,8 +770,10 @@ export class TaskPackager {
       taskId: options.taskId,
       loadSkills: options.loadSkills ?? [],
       prompt: options.prompt,
-      runInBackground: options.runInBackground ?? false,
-      context: options.contextTaskId === undefined ? undefined : { taskId: options.contextTaskId },
+      context: {
+        taskId: options.taskId,
+        agentId: options.agentId,
+      },
     };
   }
 }
@@ -744,17 +791,6 @@ describe("TaskPackager", () => {
   it("packages category-only worker payload", () => {
     const request = packager.package("sp-implementation", {
       taskId: "task-1",
-      prompt: "implement login",
-      loadSkills: ["test-driven-development"],
-      runInBackground: true,
-      contextTaskId: "parent-1",
-    });
-    expect(request).toEqual({
-      category: "sp-implementation",
-      taskId: "task-1",
-      loadSkills: ["test-driven-development"],
-      prompt: "implement login",
-      runInBackground: true,
       context: { taskId: "parent-1" },
     });
   });
@@ -803,9 +839,18 @@ git commit -m "feat(routing): normalize TaskPackager to category-only output"
 - [ ] **Step 2: Controller path と Worker path を分離する**
 
 ```ts
+import { ExecutionRoleClassifier } from "./execution-role-classifier";
 import { OmoCategoryMapper } from "./omo-category-mapper";
 import { TaskPackager, type PackageOptions } from "./task-packager";
-import type { ControllerAgent, ExecutionRole, PlanTask, SpCategory, TaskCategory } from "./types";
+import type {
+  AgentId,
+  ControllerAgent,
+  DelegationRequest,
+  ExecutionRole,
+  PlanTask,
+  SpCategory,
+  TaskCategory,
+} from "./types";
 import { WorkflowRouter } from "./workflow-router";
 
 export interface ControllerOptions {
@@ -817,27 +862,51 @@ export interface ControllerOptions {
 
 export interface WorkerOptions extends PackageOptions {
   readonly category?: SpCategory | TaskCategory;
+  readonly role?: ExecutionRole;
 }
 
-export class PlanBridgeCore {
   private readonly workflowRouter = new WorkflowRouter();
   private readonly taskPackager = new TaskPackager();
   private readonly categoryMapper = new OmoCategoryMapper();
-
-  resolveController(workflow: string): ControllerAgent | undefined {
-    return this.workflowRouter.resolveController(workflow);
+  private readonly roleClassifier = new ExecutionRoleClassifier();
+  buildControllerRequest(
+    workflow: string,
+    options: ControllerOptions,
+  ): { readonly controller: ControllerAgent; readonly request: DelegationRequest } | undefined {
+    const controller = this.workflowRouter.resolveController(workflow);
+    if (controller === undefined) {
+      return undefined;
+    }
+    const request = this.taskPackager.package("quick", {
+      taskId: options.taskId,
+      prompt: options.prompt,
+      loadSkills: options.loadSkills ?? [],
+    });
+    return { controller, request };
   }
 
-  buildWorkerRequest(
-    role: ExecutionRole,
+  classifyAndBuildWorkerRequest(
+    planTask: PlanTask,
     options: WorkerOptions,
-  ): { readonly category: SpCategory | TaskCategory; readonly request: import("./task-packager").DelegationRequest } | undefined {
+  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+    const role = options.role ?? this.roleClassifier.classify(planTask);
     const category = options.category ?? this.categoryMapper.map(role);
     if (category === undefined) {
       return undefined;
     }
     const request = this.taskPackager.package(category, options);
     return { category, request };
+  }
+
+  buildWorkerRequest(
+    role: ExecutionRole,
+    options: WorkerOptions,
+  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+    const category = options.category ?? this.categoryMapper.map(role);
+    if (category === undefined) {
+      return undefined;
+    }
+    const request = this.taskPackager.package(category, options);
   }
 }
 ```
@@ -855,23 +924,30 @@ describe("PlanBridgeCore", () => {
     expect(core.resolveController("brainstorming")).toBe("sisyphus");
   });
 
-  it("builds a worker request with resolved category", () => {
-    const result = core.buildWorkerRequest("implementation", {
+  it("builds a controller request", () => {
+    const result = core.buildControllerRequest("brainstorming", {
+      taskId: "t1",
+      prompt: "plan the work",
+    });
+    expect(result?.controller).toBe("sisyphus");
+    expect(result?.request.category).toBe("quick");
+  });
+
+  it("classifies a PlanTask and builds a worker request", () => {
+    const task: PlanTask = {
+      id: "t1",
+      title: "implement login",
+      description: "implement user login feature with tests",
+      steps: [],
+      status: "pending",
+    };
+    const result = core.classifyAndBuildWorkerRequest(task, {
       taskId: "t1",
       prompt: "implement feature",
     });
     expect(result?.category).toBe("sp-implementation");
     expect(result?.request.category).toBe("sp-implementation");
   });
-
-  it("returns undefined for unmapped deep roles", () => {
-    const result = core.buildWorkerRequest("deep", {
-      taskId: "t1",
-      prompt: "debug",
-    });
-    expect(result).toBeUndefined();
-  });
-});
 ```
 
 - [ ] **Step 4: 型チェックとテストを実行する**
@@ -917,7 +993,7 @@ const FORBIDDEN_TASK_FIELDS = new Set([
 
 export function enrichTaskToolInput(
   toolInput: Record<string, unknown>,
-  routingDecision: Extract<RoutingDecision, { kind: "worker" }>,
+  category: SpCategory | TaskCategory,
 ): Record<string, unknown> {
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(toolInput)) {
@@ -925,7 +1001,7 @@ export function enrichTaskToolInput(
       normalized[key] = value;
     }
   }
-  normalized.category = routingDecision.category;
+  normalized.category = category;
   return normalized;
 }
 ```
@@ -933,9 +1009,17 @@ export function enrichTaskToolInput(
 - [ ] **Step 3: `handlePreToolUse` で正規化を呼び出す**
 
 ```ts
-if (decision.kind === "worker") {
-  toolInput = enrichTaskToolInput(toolInput, decision);
-}
+    const delegation = core.classifyAndBuildWorkerRequest(nextTask, {
+      planFilePath: activePlanPath,
+      referenceFiles: [],
+      previousLearnings,
+      loadSkills: mergedLoadSkills,
+    }) ?? initialDelegation;
+
+    let toolInput = event.payload.toolInput;
+    if (delegation.request.category) {
+      toolInput = enrichTaskToolInput(toolInput, delegation.request.category);
+    }
 ```
 
 - [ ] **Step 4: テストを追加する**
@@ -943,10 +1027,9 @@ if (decision.kind === "worker") {
 ```ts
 import { describe, expect, it } from "vitest";
 import { enrichTaskToolInput } from "../../../src/hooks/plan-bridge";
-import { createWorkerRoutingDecision } from "../../../src/core/routing-decision";
 
 describe("enrichTaskToolInput", () => {
-  it("injects category and removes forbidden fields", () => {
+  it("removes forbidden task fields and preserves prompt", () => {
     const input = {
       prompt: "do work",
       subagent_type: "deep",
@@ -956,44 +1039,19 @@ describe("enrichTaskToolInput", () => {
       variant: "fast",
       reasoning: true,
     };
-    const decision = createWorkerRoutingDecision(
-      "implementation",
-      "sp-implementation",
-      "task_classification",
-    );
-    const result = enrichTaskToolInput(input, decision);
+    const result = enrichTaskToolInput(input, "sp-implementation");
     expect(result).toEqual({
       prompt: "do work",
       category: "sp-implementation",
     });
   });
 
-  it("preserves an existing category", () => {
+  it("preserves an existing category when already present", () => {
     const input = { prompt: "x", category: "sp-mechanical" };
-    const decision = createWorkerRoutingDecision(
-      "mechanical",
-      "sp-mechanical",
-      "task_classification",
-    );
-    const result = enrichTaskToolInput(input, decision);
+    const result = enrichTaskToolInput(input, "sp-mechanical");
     expect(result.category).toBe("sp-mechanical");
   });
 });
-```
-
-- [ ] **Step 5: 型チェックとテストを実行する**
-
-Run: `bun run typecheck && bun run test tests/unit/hooks/plan-bridge.test.ts`
-Expected: PASS
-
-- [ ] **Step 6: Commit する**
-
-```bash
-git add src/hooks/plan-bridge.ts tests/unit/hooks/plan-bridge.test.ts
-git commit -m "feat(routing): normalize OMO task payload in PlanBridge"
-```
-
----
 
 ### Task 10: `src/index.ts` の export を更新
 
@@ -1083,14 +1141,31 @@ describe("routing core integration", () => {
     ["implement user login", "sp-implementation"],
     ["update API interface", "sp-integration"],
   ])("task '%s' -> %s", (description, expectedCategory) => {
-    const task: PlanTask = { id: "t", description, steps: [] };
+    const task: PlanTask = {
+      id: "t",
+      title: description,
+      description,
+      steps: [],
+      status: "pending",
+    };
+    const role = roleClassifier.classify(task);
+    const category = categoryMapper.map(role);
+    expect(category).toBe(expectedCategory);
+  });
     const role = roleClassifier.classify(task);
     const category = categoryMapper.map(role);
     expect(category).toBe(expectedCategory);
   });
 
   it("ensures category/subagent_type mutual exclusivity", () => {
-    const result = planBridge.buildWorkerRequest("implementation", {
+    const task: PlanTask = {
+      id: "t",
+      title: "implement feature",
+      description: "implement user login",
+      steps: [],
+      status: "pending",
+    };
+    const result = planBridge.classifyAndBuildWorkerRequest(task, {
       taskId: "t",
       prompt: "work",
     });
