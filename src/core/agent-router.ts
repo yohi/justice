@@ -1,6 +1,8 @@
 import type { ControllerAgent } from "./types";
 import { WorkflowRouter } from "./workflow-router";
 
+export { AGENT_IDS } from "./types";
+
 export class AgentRouter {
   private readonly workflowRouter = new WorkflowRouter();
 
