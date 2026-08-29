@@ -1,4 +1,5 @@
-import type { AgentId, TaskCategory } from "./types";
+import type { AgentId, ControllerAgent, TaskCategory } from "./types";
+import { WorkflowRouter } from "./workflow-router";
 
 /**
  * AgentRouter のルーティング判定で使用するカテゴリ。
@@ -136,6 +137,12 @@ export interface RoutingResult {
  *     3) すべて 0 だった場合は DEFAULT_FALLBACK（hephaestus）
  */
 export class AgentRouter {
+  private readonly workflowRouter = new WorkflowRouter();
+
+  routeController(workflow: string): ControllerAgent | undefined {
+    return this.workflowRouter.resolveController(workflow);
+  }
+
   /**
    * 最適エージェントの ID のみを返すショートハンド。
    */

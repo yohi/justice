@@ -4,6 +4,17 @@ import { AgentRouter, AGENT_IDS, inferPersonaFromToolInput } from "../../src/cor
 describe("AgentRouter", () => {
   const router = new AgentRouter();
 
+  describe("routeController", () => {
+    it("should resolve workflow controllers through WorkflowRouter", () => {
+      expect(router.routeController("brainstorming")).toBe("sisyphus");
+      expect(router.routeController("subagent-driven-development")).toBe("atlas");
+    });
+
+    it("should return undefined for unknown workflows", () => {
+      expect(router.routeController("__proto__")).toBeUndefined();
+    });
+  });
+
   describe("determineOptimalAgent", () => {
     it("should pick hephaestus for implementer-prompt skill", () => {
       const agent = router.determineOptimalAgent("deep", ["implementer-prompt"]);

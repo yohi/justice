@@ -59,3 +59,54 @@ Result: PASS。1 test file、6 tests passed。
 - `bun run lint` は成功しましたが、既存警告に加えて新規 router の computed property lookup に関する `security/detect-object-injection` 警告が1件あります。brief 指定実装の lookup であり、typecheck・tests・build は通過しています。
 - no-excuse audit の指定スクリプトはリポジトリ内に存在せず、実行できませんでした（`Module not found "scripts/typescript/check-no-excuse-rules.ts"`）。
 - 作業開始時から未追跡の `REQUIREMENTS_2026-08-19.md` と `REQUIREMENTS_2026-08-29.md` があり、コミット対象から除外しました。
+
+# Task 2 修正レポート
+
+## 変更内容
+
+- `AgentRouter` に `WorkflowRouter` を注入し、`routeController(workflow)` を追加しました。
+- 既存の `route` / `determineOptimalAgent` 呼び出しは Task 8/9 の移行まで維持しました。
+- `WorkflowRouter` の内部 map を `ReadonlyMap` に変更し、`__proto__` などの prototype key が unknown workflow として `undefined` になるよう修正しました。
+- `tests/core/agent-router.test.ts` と `tests/unit/core/agent-router.test.ts` に Controller routing と prototype key の回帰テストを追加しました。
+- lint の新規 `security/detect-object-injection` warning は解消しました。
+
+## 検証コマンドと結果
+
+```bash
+bun run test tests/unit/core/workflow-router.test.ts tests/unit/core/agent-router.test.ts
+```
+
+PASS: 2 files、8 tests passed。
+
+```bash
+bun run test tests/core/agent-router.test.ts tests/unit/core/workflow-router.test.ts tests/unit/core/agent-router.test.ts
+```
+
+PASS: 3 files、39 tests passed。
+
+```bash
+bun run typecheck
+```
+
+PASS: `tsc --noEmit` completed successfully。
+
+```bash
+bun run lint
+```
+
+PASS: exit code 0、0 errors。warning は96件で、今回の `workflow-router.ts` warning は解消済みです。
+
+## TDD evidence
+
+RED は production code 変更前に focused tests を実行し、`router.routeController is not a function` の2件失敗を確認しました。GREEN は実装後に同じ focused tests を実行し、8件すべて成功しました。
+
+## 自己レビュー
+
+- `AgentRouter` は既存の Worker routing API を壊さず、新しい Controller routing を `WorkflowRouter` 経由で提供しています。
+- `WorkflowRouter` は core 内で完結し、`@opencode-ai/*` を import していません。
+- `ReadonlyMap` により prototype chain lookup は発生しません。
+- 禁止された `any`、`as any`、`@ts-ignore`、`@ts-expect-error` はありません。
+
+## Concern
+
+brief の「Worker 選択メソッドを削除」と「既存の `AgentRouter.route` 呼び出しを壊さない」は現時点では同時に満たせません。実際に `plan-bridge` と `task-packager` が `route` を使用しているため、Task 8/9 の呼び出し側移行まで互換 API を保持しました。レビュー指示に従い、Controller 解決 API は先行追加しています。
