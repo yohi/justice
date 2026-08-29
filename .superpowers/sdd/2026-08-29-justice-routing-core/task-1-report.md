@@ -68,3 +68,26 @@ Unrelated pre-existing untracked files were not modified or staged:
 
 - The brief's requested `architecture` pairs (`unspecified-high` and `deep`) were implemented exactly, although `unspecified-high` is a `TaskCategory` and `deep` is valid in both category unions.
 - Lint reports a new generic object-injection warning for the specified `validPairs[executionRole]` lookup; this is a warning only and does not fail the lint command. Existing unrelated lint warnings remain.
+
+## Fix Report
+
+### Changes
+
+- Moved execution-role/category definitions to a module-level `ReadonlyMap`, avoiding `Set` allocation on every factory call.
+- Changed pair lookup to `get(executionRole)?.has(category) ?? false`, so unknown runtime roles are treated as invalid pairs and produce the intended `Invalid routing pair` error from the factory.
+- Added parameterized coverage for all valid pairs, including `deep → deep` and `architecture → unspecified-high/deep`.
+
+### Verification
+
+- `bun run test tests/core/routing-decision.test.ts` — PASS, 1 file / 12 tests.
+- `bun run typecheck` — PASS.
+- `bun run lint` — exit 0, 0 errors / 96 warnings. The prior routing object-injection warning is gone; remaining warnings are unrelated existing repository warnings.
+- LSP diagnostics for changed TypeScript files — no diagnostics.
+
+### TDD evidence
+
+The new parameterized cases were added before the implementation refactor and focused tests passed against the existing valid behavior. The regression fix is exercised by the existing invalid-pair test; the implementation now handles unknown runtime roles through the guarded Map lookup rather than allowing an indexing `TypeError`.
+
+### Self-review
+
+The change is limited to the reviewed routing module and its focused test. The role/category data is immutable by type, allocated once, and the lookup has an explicit fallback. No `@opencode-ai/*` imports, type escape hatches, or unrelated files were changed.

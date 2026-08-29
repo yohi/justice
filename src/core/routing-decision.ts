@@ -7,6 +7,19 @@ import type {
   TaskCategory,
 } from "./types";
 
+const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
+  ExecutionRole,
+  ReadonlySet<SpCategory | TaskCategory>
+> = new Map<ExecutionRole, ReadonlySet<SpCategory | TaskCategory>>([
+  ["mechanical", new Set(["sp-mechanical"])],
+  ["implementation", new Set(["sp-implementation"])],
+  ["integration", new Set(["sp-integration"])],
+  ["review", new Set(["sp-review"])],
+  ["final-review", new Set(["sp-final-review"])],
+  ["deep", new Set(["deep"])],
+  ["architecture", new Set(["unspecified-high", "deep"])],
+]);
+
 export function createControllerRoutingDecision(
   controller: ControllerAgent,
   reason: RoutingReason,
@@ -33,14 +46,5 @@ function isValidExecutionRoleCategoryPair(
   executionRole: ExecutionRole,
   category: SpCategory | TaskCategory,
 ): boolean {
-  const validPairs: Readonly<Record<ExecutionRole, ReadonlySet<SpCategory | TaskCategory>>> = {
-    mechanical: new Set(["sp-mechanical"]),
-    implementation: new Set(["sp-implementation"]),
-    integration: new Set(["sp-integration"]),
-    review: new Set(["sp-review"]),
-    "final-review": new Set(["sp-final-review"]),
-    deep: new Set(["deep"]),
-    architecture: new Set(["unspecified-high", "deep"]),
-  };
-  return validPairs[executionRole].has(category);
+  return VALID_EXECUTION_ROLE_CATEGORIES.get(executionRole)?.has(category) ?? false;
 }

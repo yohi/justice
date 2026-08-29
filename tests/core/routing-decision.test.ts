@@ -29,6 +29,24 @@ describe("routing-decision factories", () => {
     });
   });
 
+  it.each([
+    ["mechanical", "sp-mechanical"],
+    ["implementation", "sp-implementation"],
+    ["integration", "sp-integration"],
+    ["review", "sp-review"],
+    ["final-review", "sp-final-review"],
+    ["deep", "deep"],
+    ["architecture", "unspecified-high"],
+    ["architecture", "deep"],
+  ] as const)("accepts the valid %s/%s pair", (executionRole, category) => {
+    expect(createWorkerRoutingDecision(executionRole, category, "task_classification")).toEqual({
+      kind: "worker",
+      executionRole,
+      category,
+      reason: "task_classification",
+    });
+  });
+
   it("rejects invalid role/category pairs", () => {
     expect(() =>
       createWorkerRoutingDecision("mechanical", "sp-integration", "task_classification"),
