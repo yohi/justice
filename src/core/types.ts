@@ -140,6 +140,49 @@ export type TaskCategory =
   | "unspecified-high"
   | "writing";
 
+export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
+
+export type ExecutionRole =
+  | "mechanical"
+  | "implementation"
+  | "integration"
+  | "review"
+  | "final-review"
+  | "deep"
+  | "architecture";
+
+export type SpCategory =
+  | "sp-mechanical"
+  | "sp-implementation"
+  | "sp-integration"
+  | "sp-review"
+  | "sp-final-review";
+
+export type RoutingReason =
+  | "workflow_rule"
+  | "task_classification"
+  | "review_role"
+  | "fix_escalation"
+  | "explicit_request"
+  | "compatibility_fallback";
+
+export type RoutingDecision =
+  | {
+      readonly kind: "controller";
+      readonly controller: ControllerAgent;
+      readonly reason: RoutingReason;
+    }
+  | {
+      readonly kind: "worker";
+      readonly executionRole: ExecutionRole;
+      readonly category: SpCategory | TaskCategory;
+      readonly reason: RoutingReason;
+    }
+  | {
+      readonly kind: "unrouted";
+      readonly reason: RoutingReason;
+    };
+
 /** コンパクション時に保護すべき状態 */
 export interface ProtectedContext {
   readonly planSnapshot: string;

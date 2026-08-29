@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+import {
+  createControllerRoutingDecision,
+  createUnroutedRoutingDecision,
+  createWorkerRoutingDecision,
+} from "../../src/core/routing-decision";
+
+describe("routing-decision factories", () => {
+  it("creates a controller decision", () => {
+    const decision = createControllerRoutingDecision("sisyphus", "workflow_rule");
+    expect(decision).toEqual({
+      kind: "controller",
+      controller: "sisyphus",
+      reason: "workflow_rule",
+    });
+  });
+
+  it("creates a worker decision", () => {
+    const decision = createWorkerRoutingDecision(
+      "implementation",
+      "sp-implementation",
+      "task_classification",
+    );
+    expect(decision).toEqual({
+      kind: "worker",
+      executionRole: "implementation",
+      category: "sp-implementation",
+      reason: "task_classification",
+    });
+  });
+
+  it("rejects invalid role/category pairs", () => {
+    expect(() =>
+      createWorkerRoutingDecision("mechanical", "sp-integration", "task_classification"),
+    ).toThrow("Invalid routing pair");
+  });
+
+  it("creates an unrouted decision", () => {
+    const decision = createUnroutedRoutingDecision("compatibility_fallback");
+    expect(decision).toEqual({
+      kind: "unrouted",
+      reason: "compatibility_fallback",
+    });
+  });
+});
