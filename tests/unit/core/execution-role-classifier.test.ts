@@ -37,6 +37,18 @@ describe("ExecutionRoleClassifier", () => {
     expect(classifier.classify(task)).toBe("integration");
   });
 
+  it("prioritizes review over integration keywords", () => {
+    expect(classifier.classify(makeTask({ title: "review API changes" }))).toBe("review");
+  });
+
+  it("does not classify preview as a review task", () => {
+    expect(classifier.classify(makeTask({ title: "preview release" }))).toBe("implementation");
+  });
+
+  it("does not classify final preview as a final review task", () => {
+    expect(classifier.classify(makeTask({ title: "final preview" }))).toBe("implementation");
+  });
+
   it("classifies deep tasks", () => {
     expect(classifier.classify(makeTask({ title: "deep reasoning research" }))).toBe("deep");
   });

@@ -27,6 +27,14 @@ describe("CategoryClassifier", () => {
     expect(classifier.classify(makeTask("rename constant"))).toBe("sp-mechanical");
   });
 
+  it("classifies review tasks", () => {
+    expect(classifier.classify(makeTask("review code changes"))).toBe("sp-review");
+  });
+
+  it("classifies final-review tasks", () => {
+    expect(classifier.classify(makeTask("final review before release"))).toBe("sp-final-review");
+  });
+
   it("falls back to unspecified-low for deep tasks", () => {
     expect(classifier.classify(makeTask("deep reasoning task"))).toBe("unspecified-low");
   });
