@@ -310,12 +310,126 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
       modifiedPayload: { args: { loadSkills: ["a", "b"] } },
     });
 
-    const output = { args: { prompt: "original", loadSkills: [] as string[] } };
+    const output: { args: Record<string, unknown> } = {
+      args: { prompt: "original", loadSkills: [] as string[] },
+    };
     await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
 
-    expect(output.args.prompt.startsWith("[PLAN]")).toBe(true);
-    expect(output.args.prompt.endsWith("original")).toBe(true);
-    expect(output.args.loadSkills).toEqual(["a", "b"]);
+    expect(output.args.prompt).toEqual(expect.stringMatching(/^\[PLAN\]/));
+    expect(output.args.prompt).toEqual(expect.stringMatching(/original$/));
+    expect(output.args.load_skills).toEqual(["a", "b"]);
+    expect(output.args).not.toHaveProperty("loadSkills");
+  });
+
+  it("removes forbidden routing fields from the final task output args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[PLAN]",
+      modifiedPayload: {
+        args: {
+          category: "sp-implementation",
+          taskId: "task-1",
+          loadSkills: [],
+        },
+      },
+    });
+
+    const output: { args: Record<string, unknown> } = {
+      args: {
+        prompt: "original",
+        subagent_type: "deep",
+        agent: "atlas",
+        model: "claude",
+        provider: "anthropic",
+        variant: "fast",
+        reasoning: true,
+        fallback_models: ["fallback"],
+      },
+    };
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
+
+    expect(output.args.category).toBe("sp-implementation");
+    expect(output.args.task_id).toBe("task-1");
+    for (const field of [
+      "subagent_type",
+      "agent",
+      "model",
+      "provider",
+      "variant",
+      "reasoning",
+      "fallback_models",
+    ]) {
+      expect(output.args).not.toHaveProperty(field);
+    }
+  });
+
+  it("normalizes task args in place before a non-inject early return", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    const output = {
+      args: {
+        prompt: "original",
+        category: "sp-implementation",
+        taskId: "task-1",
+        loadSkills: ["programming"],
+        runInBackground: true,
+        subagent_type: "deep",
+        agent: "atlas",
+        model: "claude",
+        provider: "anthropic",
+        variant: "fast",
+        reasoning: true,
+        fallback_models: ["fallback"],
+      },
+    };
+    const originalArgs = output.args;
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
+
+    expect(output.args).toBe(originalArgs);
+    expect(output.args).toEqual({
+      prompt: "original",
+      category: "sp-implementation",
+      task_id: "task-1",
+      load_skills: ["programming"],
+      run_in_background: true,
+    });
+  });
+
+  it("normalizes task args in place before the no-op early return", async () => {
+    const adapter = new OpenCodeAdapter(
+      fakeInit({
+        worktree: undefined,
+        directory: undefined,
+        project: { root: undefined },
+      }),
+    );
+    const output = {
+      args: {
+        prompt: "original",
+        task_id: "task-2",
+        load_skills: ["programming"],
+        run_in_background: false,
+        subagent_type: "deep",
+      },
+    };
+    const originalArgs = output.args;
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
+
+    expect(output.args).toBe(originalArgs);
+    expect(output.args).toEqual({
+      prompt: "original",
+      task_id: "task-2",
+      load_skills: ["programming"],
+      run_in_background: false,
+    });
   });
 
   it("prepends unauthorized advisory without modifying other output args", async () => {

@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   enrichTaskToolInput,
   mergeTaskLoadSkills,
+  resolveSkillsFromToolInput,
   TaskPackager,
 } from "../../src/core/task-packager";
+import type { DelegationRequest } from "../../src/core/types";
 
 describe("TaskPackager", () => {
   const packager = new TaskPackager();
 
   it("packages a category-only worker payload", () => {
-    const request = packager.package("sp-implementation", {
+    const request: DelegationRequest = packager.package("sp-implementation", {
       taskId: "task-1",
       prompt: "implement the change",
       loadSkills: ["test-driven-development"],
@@ -60,6 +62,16 @@ describe("TaskPackager", () => {
     ]);
   });
 
+  it("merges and deduplicates all task skill aliases in caller order", () => {
+    expect(
+      resolveSkillsFromToolInput({
+        skills: ["shared-skill", "skills-only"],
+        loadSkills: ["shared-skill", "camel-only"],
+        load_skills: ["canonical-only", "shared-skill"],
+      }),
+    ).toEqual(["shared-skill", "skills-only", "camel-only", "canonical-only"]);
+  });
+
   it("preserves task ID and normalizes helper input skills", () => {
     const original = {
       prompt: "run",
@@ -74,8 +86,8 @@ describe("TaskPackager", () => {
 
     expect(enriched).toEqual({
       prompt: "run",
-      taskId: "task-existing",
-      loadSkills: [
+      task_id: "task-existing",
+      load_skills: [
         "domain-skill",
         "test-driven-development",
         "verification-before-completion",
@@ -94,7 +106,7 @@ describe("TaskPackager", () => {
       taskId: "task-3",
       prompt: "fix typo",
     });
-    const payload = request as Record<string, unknown>;
+    const payload = request as unknown as Record<string, unknown>;
 
     expect(payload).not.toHaveProperty("agent");
     expect(payload).not.toHaveProperty("agentId");
@@ -104,5 +116,28 @@ describe("TaskPackager", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("fallback_models");
     expect(payload).not.toHaveProperty("subagent_type");
+  });
+
+  it("removes forbidden routing fields from the legacy enrichment helper", () => {
+    const enriched = enrichTaskToolInput(
+      {
+        prompt: "run",
+        subagent_type: "deep",
+        agent: "atlas",
+        model: "claude",
+        provider: "anthropic",
+        variant: "fast",
+        reasoning: true,
+        fallback_models: ["fallback"],
+        skills: ["domain-skill"],
+      },
+      "task-4",
+    );
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      task_id: "task-4",
+      load_skills: ["domain-skill"],
+    });
   });
 });

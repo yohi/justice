@@ -1,75 +1,86 @@
-import { PlanParser } from "./plan-parser";
+import { ExecutionRoleClassifier } from "./execution-role-classifier";
+import { OmoCategoryMapper } from "./omo-category-mapper";
+import { createWorkerRoutingDecision } from "./routing-decision";
 import { TaskPackager, type PackageOptions } from "./task-packager";
-import { CategoryClassifier } from "./category-classifier";
-import { DependencyAnalyzer } from "./dependency-analyzer";
-import type { DelegationRequest, TaskCategory, AgentId } from "./types";
+import type {
+  ControllerAgent,
+  DelegationRequest,
+  ExecutionRole,
+  PlanTask,
+  SpCategory,
+  TaskCategory,
+} from "./types";
+import { WorkflowRouter } from "./workflow-router";
 
-export interface BuildDelegationOptions {
-  readonly planFilePath: string;
-  readonly referenceFiles: readonly string[];
-  readonly rolePrompt?: string;
-  readonly previousLearnings?: string;
-  readonly runInBackground?: boolean;
-  readonly category?: TaskCategory;
+export interface ControllerOptions {
+  readonly taskId: string;
+  readonly prompt: string;
   readonly loadSkills?: readonly string[];
-  readonly agentId?: AgentId;
+}
+
+export interface WorkerOptions extends PackageOptions {
+  readonly category?: SpCategory | TaskCategory;
+  readonly role?: ExecutionRole;
 }
 
 export class PlanBridgeCore {
-  private readonly parser: PlanParser;
-  private readonly packager: TaskPackager;
-  private readonly classifier: CategoryClassifier;
-  private readonly dependencyAnalyzer: DependencyAnalyzer;
-
-  constructor() {
-    this.parser = new PlanParser();
-    this.packager = new TaskPackager();
-    this.classifier = new CategoryClassifier();
-    this.dependencyAnalyzer = new DependencyAnalyzer();
-  }
+  private readonly workflowRouter = new WorkflowRouter();
+  private readonly taskPackager = new TaskPackager();
+  private readonly categoryMapper = new OmoCategoryMapper();
+  private readonly roleClassifier = new ExecutionRoleClassifier();
 
   /**
-   * Parse plan content and build a DelegationRequest for the next incomplete task.
-   * Returns null if all tasks are completed.
+   * Builds the Controller handoff and its quick request envelope.
+   * The request is for the Controller path and is not a Worker routing result.
    */
-  buildDelegationFromPlan(
-    planContent: string,
-    options: BuildDelegationOptions,
-  ): DelegationRequest | null {
-    const tasks = this.parser.parse(planContent);
-
-    // Select the first executable task (no unresolved dependencies)
-    const executableTasks = this.dependencyAnalyzer.getParallelizable(tasks);
-    if (executableTasks.length === 0) {
-      // If no tasks are executable, but some are incomplete, there might be a cycle
-      // or simply nothing left but blocked tasks. Fallback to parser's default if needed
-      // or return null to stop.
-      // For now, we strictly pick the first executable task.
-      const anyIncomplete = this.parser.getNextIncompleteTask(tasks);
-      if (!anyIncomplete) return null;
-
-      // If there are incomplete tasks but none are executable (e.g. all blocked),
-      // we might want to return the first incomplete one anyway to let the agent fail
-      // with a dependency error message, or just return null.
-      // Based on the test, we expect the DAG-based selection to pick the first possible one.
-      return null;
+  buildControllerRequest(
+    workflow: string,
+    options: ControllerOptions,
+  ): { readonly controller: ControllerAgent; readonly request: DelegationRequest } | undefined {
+    const controller = this.workflowRouter.resolveController(workflow);
+    if (controller === undefined) {
+      return undefined;
     }
 
-    const nextTask = executableTasks[0]!;
+    const request = this.taskPackager.package("quick", {
+      taskId: options.taskId,
+      prompt: options.prompt,
+      loadSkills: options.loadSkills ?? [],
+    });
+    return { controller, request };
+  }
 
-    const category = options.category ?? this.classifier.classify(nextTask);
+  classifyAndBuildWorkerRequest(
+    planTask: PlanTask,
+    options: WorkerOptions,
+  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+    const role = options.role ?? this.roleClassifier.classify(planTask);
+    return this.buildWorkerRequest(role, options);
+  }
 
-    const packageOptions: PackageOptions = {
-      planFilePath: options.planFilePath,
-      referenceFiles: options.referenceFiles,
-      rolePrompt: options.rolePrompt,
-      previousLearnings: options.previousLearnings,
-      runInBackground: options.runInBackground ?? false,
-      category: category,
-      loadSkills: options.loadSkills,
-      agentId: options.agentId,
-    };
+  buildWorkerRequest(
+    role: ExecutionRole,
+    options: WorkerOptions,
+  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+    const category = this.resolveWorkerCategory(role, options.category);
+    if (category === undefined) {
+      return undefined;
+    }
 
-    return this.packager.package(nextTask, packageOptions);
+    const routingDecision = createWorkerRoutingDecision(
+      role,
+      category,
+      options.category === undefined ? "task_classification" : "explicit_request",
+    );
+
+    const request = this.taskPackager.package(routingDecision.category, options);
+    return { category: routingDecision.category, request };
+  }
+
+  private resolveWorkerCategory(
+    role: ExecutionRole,
+    requestedCategory: SpCategory | TaskCategory | undefined,
+  ): SpCategory | TaskCategory | undefined {
+    return requestedCategory ?? this.categoryMapper.map(role);
   }
 }

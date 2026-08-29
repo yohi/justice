@@ -1,9 +1,41 @@
 import type { AgentId, TaskCategory } from "./types";
 import { ReviewRejectionDetector } from "./review-rejection-detector";
-import { inferPersonaFromToolInput } from "./agent-router";
+import { resolveSkillsFromToolInput } from "./task-packager";
 
 const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const MAX_PENDING_SESSIONS = 50;
+const MAX_PENDING_ENTRIES = 50;
+
+const PERSONA_IDS: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
+
+function inferPersonaFromToolInput(
+  toolInput: Readonly<Record<string, unknown>>,
+): AgentId | undefined {
+  const explicitAgent =
+    typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
+  const skills = resolveSkillsFromToolInput(toolInput);
+  const text = [toolInput.role, toolInput.prompt]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    skills.includes("code-quality-reviewer") ||
+    skills.includes("spec-reviewer") ||
+    /\b(?:code-quality-reviewer|spec-reviewer)\b/.test(text)
+  ) {
+    return "prometheus";
+  }
+  if (skills.includes("systematic-debugging") || /\bsystematic-debugging\b/.test(text)) {
+    return "sisyphus";
+  }
+  if (skills.includes("writing-plans") || /\bwriting-plans\b/.test(text)) {
+    return "atlas";
+  }
+  if (explicitAgent && PERSONA_IDS.includes(explicitAgent as AgentId)) {
+    return explicitAgent as AgentId;
+  }
+  return undefined;
+}
 
 export type SkillTarget = "writing-plans" | "systematic-debugging";
 
@@ -54,6 +86,7 @@ export class PlanCompletionDetector {
   private readonly reviewRejectionDetector = new ReviewRejectionDetector();
   private readonly pendingMap = new Map<string, PendingRecord>();
   private readonly personaMap = new Map<string, PersonaRecord>();
+  private readonly lastInvokedPersonaMap = new Map<string, PersonaRecord>();
 
   // ─── Legacy simple detection ───
 
@@ -97,41 +130,49 @@ export class PlanCompletionDetector {
   // ─── A+B hybrid detection ───
 
   /**
-   * B phase: Record that a skill invocation is pending for a session.
+   * B phase: Record that a skill invocation is pending for a task call.
    * Inspects toolInput to detect which skills are being invoked and
    * estimates the persona that will execute them.
    */
   recordPreToolUseInvocation(
     sessionId: string,
+    callId: string | undefined,
     toolName: string,
     toolInput: Record<string, unknown>,
   ): void {
     if (toolName !== "task") return;
 
     this.cleanupExpired();
+    const completionKey = this.getCompletionKey(sessionId, callId);
 
     const skills = this.extractSkills(toolInput);
     const detectedPersona = inferPersonaFromToolInput(toolInput);
 
-    if (skills.length === 0 && !detectedPersona) return;
+    if (skills.length === 0 && !detectedPersona) {
+      this.personaMap.delete(completionKey);
+      this.lastInvokedPersonaMap.delete(sessionId);
+      return;
+    }
 
     const now = Date.now();
 
     // Only create/update pendingMap when skills were detected
     if (skills.length > 0) {
-      const existing = this.pendingMap.get(sessionId);
+      const existing = this.pendingMap.get(completionKey);
       const skillTargets = existing
         ? new Set([...existing.skillTargets, ...skills])
         : new Set(skills);
 
-      this.pendingMap.set(sessionId, {
+      this.pendingMap.set(completionKey, {
         skillTargets,
         lastAccess: now,
       });
     }
 
     if (detectedPersona) {
-      this.personaMap.set(sessionId, { agentId: detectedPersona, lastAccess: now });
+      const personaRecord = { agentId: detectedPersona, lastAccess: now };
+      this.personaMap.set(completionKey, personaRecord);
+      this.lastInvokedPersonaMap.set(sessionId, personaRecord);
     }
   }
 
@@ -139,10 +180,11 @@ export class PlanCompletionDetector {
    * A phase: Evaluate whether a skill has completed.
    * If a pending flag exists → high confidence.
    * If no pending, checks result text markers → medium confidence.
-   * Clears only the (sessionId, target) pending flag after evaluation.
+   * Clears only the (sessionId, callId, target) pending flag after evaluation.
    */
   evaluateSkillCompletion(
     sessionId: string,
+    callId: string | undefined,
     toolName: string,
     toolResult: string,
     isError: boolean,
@@ -152,15 +194,16 @@ export class PlanCompletionDetector {
     if (toolName !== "task") return null;
 
     this.cleanupExpired();
+    const completionKey = this.getCompletionKey(sessionId, callId);
 
-    const pending = this.pendingMap.get(sessionId);
+    const pending = this.pendingMap.get(completionKey);
     const hasPending = pending?.skillTargets.has(target) ?? false;
 
     if (hasPending && pending) {
       // Clear only this target's pending flag
       pending.skillTargets.delete(target);
       if (pending.skillTargets.size === 0) {
-        this.pendingMap.delete(sessionId);
+        this.pendingMap.delete(completionKey);
       }
 
       return {
@@ -178,7 +221,7 @@ export class PlanCompletionDetector {
    */
   lastInvokedPersona(sessionId: string): AgentId | undefined {
     this.cleanupExpired();
-    return this.personaMap.get(sessionId)?.agentId;
+    return this.lastInvokedPersonaMap.get(sessionId)?.agentId;
   }
 
   // ─── Private helpers ───
@@ -198,34 +241,53 @@ export class PlanCompletionDetector {
       }
     }
 
+    for (const [key, record] of this.lastInvokedPersonaMap.entries()) {
+      if (now - record.lastAccess > PENDING_TTL_MS) {
+        this.lastInvokedPersonaMap.delete(key);
+      }
+    }
+
     // LRU eviction if still over limit
-    if (this.pendingMap.size > MAX_PENDING_SESSIONS) {
+    if (this.pendingMap.size > MAX_PENDING_ENTRIES) {
       const sorted = [...this.pendingMap.entries()].sort(
         (a, b) => a[1].lastAccess - b[1].lastAccess,
       );
-      const toRemove = sorted.slice(0, this.pendingMap.size - MAX_PENDING_SESSIONS);
+      const toRemove = sorted.slice(0, this.pendingMap.size - MAX_PENDING_ENTRIES);
       for (const [key] of toRemove) {
         this.pendingMap.delete(key);
       }
     }
 
-    if (this.personaMap.size > MAX_PENDING_SESSIONS) {
+    if (this.personaMap.size > MAX_PENDING_ENTRIES) {
       const sorted = [...this.personaMap.entries()].sort(
         (a, b) => a[1].lastAccess - b[1].lastAccess,
       );
-      const toRemove = sorted.slice(0, this.personaMap.size - MAX_PENDING_SESSIONS);
+      const toRemove = sorted.slice(0, this.personaMap.size - MAX_PENDING_ENTRIES);
       for (const [key] of toRemove) {
         this.personaMap.delete(key);
       }
     }
+
+    if (this.lastInvokedPersonaMap.size > MAX_PENDING_ENTRIES) {
+      const sorted = [...this.lastInvokedPersonaMap.entries()].sort(
+        (a, b) => a[1].lastAccess - b[1].lastAccess,
+      );
+      const toRemove = sorted.slice(0, this.lastInvokedPersonaMap.size - MAX_PENDING_ENTRIES);
+      for (const [key] of toRemove) {
+        this.lastInvokedPersonaMap.delete(key);
+      }
+    }
+  }
+
+  private getCompletionKey(sessionId: string, callId: string | undefined): string {
+    return `${sessionId}:${callId ?? "_"}`;
   }
 
   private extractSkills(toolInput: Record<string, unknown>): SkillTarget[] {
     const skills: SkillTarget[] = [];
 
-    const skillList =
-      this.getStringArray(toolInput.skills) ?? this.getStringArray(toolInput.loadSkills);
-    if (skillList) {
+    const skillList = resolveSkillsFromToolInput(toolInput);
+    if (skillList.length > 0) {
       if (skillList.includes("writing-plans") || skillList.includes("brainstorming")) {
         skills.push("writing-plans");
       }
@@ -291,14 +353,6 @@ export class PlanCompletionDetector {
 
   private getString(value: unknown): string | undefined {
     if (typeof value === "string") return value;
-    return undefined;
-  }
-
-  private getStringArray(value: unknown): string[] | undefined {
-    if (Array.isArray(value)) {
-      const result = value.filter((v): v is string => typeof v === "string");
-      if (result.length > 0) return result;
-    }
     return undefined;
   }
 }

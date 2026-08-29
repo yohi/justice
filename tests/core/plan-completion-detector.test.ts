@@ -89,4 +89,86 @@ describe("PlanCompletionDetector", () => {
       }),
     ).toBeNull();
   });
+
+  it("tracks canonical load_skills during pre-tool completion detection", () => {
+    const canonicalDetector = new PlanCompletionDetector();
+
+    canonicalDetector.recordPreToolUseInvocation("s-canonical", "c-canonical", "task", {
+      load_skills: ["writing-plans"],
+    });
+
+    expect(canonicalDetector.lastInvokedPersona("s-canonical")).toBe("atlas");
+    expect(
+      canonicalDetector.evaluateSkillCompletion(
+        "s-canonical",
+        "c-canonical",
+        "task",
+        "Completed the plan",
+        false,
+        "writing-plans",
+      ),
+    ).toEqual({ source: "skill_marker", confidence: "high" });
+  });
+
+  it("merges all skill aliases during pre-tool completion detection", () => {
+    const aliasDetector = new PlanCompletionDetector();
+
+    aliasDetector.recordPreToolUseInvocation("s-aliases", "c-aliases", "task", {
+      skills: ["caller-skill"],
+      loadSkills: ["caller-skill", "systematic-debugging"],
+      load_skills: ["writing-plans", "writing-plans"],
+    });
+
+    expect(aliasDetector.lastInvokedPersona("s-aliases")).toBe("sisyphus");
+    expect(
+      aliasDetector.evaluateSkillCompletion(
+        "s-aliases",
+        "c-aliases",
+        "task",
+        "Completed the plan",
+        false,
+        "writing-plans",
+      ),
+    ).toEqual({ source: "skill_marker", confidence: "high" });
+    expect(
+      aliasDetector.evaluateSkillCompletion(
+        "s-aliases",
+        "c-aliases",
+        "task",
+        "Debugging completed",
+        false,
+        "systematic-debugging",
+      ),
+    ).toEqual({ source: "skill_marker", confidence: "high" });
+  });
+
+  it("does not consume a pending skill from another task call in the same session", () => {
+    const scopedDetector = new PlanCompletionDetector();
+
+    scopedDetector.recordPreToolUseInvocation("s-scoped", "c-writing", "task", {
+      skills: ["writing-plans"],
+    });
+    scopedDetector.recordPreToolUseInvocation("s-scoped", "c-unrelated", "task", {});
+
+    expect(
+      scopedDetector.evaluateSkillCompletion(
+        "s-scoped",
+        "c-unrelated",
+        "task",
+        "Completed the plan",
+        false,
+        "writing-plans",
+      ),
+    ).toBeNull();
+    expect(
+      scopedDetector.evaluateSkillCompletion(
+        "s-scoped",
+        "c-writing",
+        "task",
+        "Completed the plan",
+        false,
+        "writing-plans",
+      ),
+    ).toEqual({ source: "skill_marker", confidence: "high" });
+  });
 });

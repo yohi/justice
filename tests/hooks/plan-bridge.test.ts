@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { describe, it, expect, vi } from "vitest";
-import { PlanBridge } from "../../src/hooks/plan-bridge";
+import { enrichTaskToolInput, PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
@@ -29,6 +29,8 @@ function createMockFileReader(files: Record<string, string>): FileReader {
       return content;
     }),
     fileExists: vi.fn(async (path: string) => path in files),
+    listFiles: vi.fn(async () => []),
+    readFileStats: vi.fn(async () => null),
   };
 }
 
@@ -59,6 +61,44 @@ function createObservationHandler(): ObservationHandler & {
     emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
   };
 }
+
+describe("enrichTaskToolInput", () => {
+  it("removes forbidden task fields and preserves prompt", () => {
+    const input = {
+      prompt: "do work",
+      subagent_type: "deep",
+      agent: "atlas",
+      model: "claude",
+      provider: "anthropic",
+      variant: "fast",
+      reasoning: true,
+      fallback_models: ["fallback"],
+    };
+
+    const result = enrichTaskToolInput(input, "sp-implementation");
+
+    expect(result).toEqual({
+      prompt: "do work",
+      category: "sp-implementation",
+    });
+  });
+
+  it("sets the normalized category when the input already has one", () => {
+    const input = { prompt: "x", category: "sp-mechanical" };
+
+    const result = enrichTaskToolInput(input, "sp-mechanical");
+
+    expect(result.category).toBe("sp-mechanical");
+  });
+
+  it("preserves a caller-provided category over the classified category", () => {
+    const input = { prompt: "x", category: "sp-mechanical" };
+
+    const result = enrichTaskToolInput(input, "sp-implementation");
+
+    expect(result.category).toBe("sp-mechanical");
+  });
+});
 
 describe("PlanBridge", () => {
   describe("handleMessage", () => {
@@ -136,6 +176,8 @@ describe("PlanBridge", () => {
         readFile: vi.fn(async () => {
           throw new Error("Read failed");
         }),
+        listFiles: vi.fn(async () => []),
+        readFileStats: vi.fn(async () => null),
       };
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
@@ -255,6 +297,13 @@ describe("PlanBridge", () => {
           toolInput: {
             prompt: "do something",
             loadSkills: ["domain-skill", "test-driven-development"],
+            subagent_type: "deep",
+            agent: "atlas",
+            model: "claude",
+            provider: "anthropic",
+            variant: "fast",
+            reasoning: true,
+            fallback_models: ["fallback"],
           },
         },
         sessionId: "s-skills",
@@ -268,13 +317,18 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toEqual({
         args: {
           prompt: "do something",
-          taskId: "task-1",
-          loadSkills: ["domain-skill", "test-driven-development", "verification-before-completion"],
+          task_id: "task-1",
+          load_skills: [
+            "domain-skill",
+            "test-driven-development",
+            "verification-before-completion",
+          ],
+          category: "sp-implementation",
         },
       });
     });
 
-    it("routes to sisyphus when implementation directive adds test-driven-development affinity", async () => {
+    it("uses category-only worker routing when implementation directive adds test-driven-development", async () => {
       // Given
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
@@ -302,9 +356,8 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       const injectedContext = response.injectedContext;
-      expect(injectedContext).toContain("**AGENT**: sisyphus");
-      expect(injectedContext).not.toContain("**AGENT**: hephaestus");
-      expect(injectedContext).toContain("**Category**: deep");
+      expect(injectedContext).not.toContain("**AGENT**:");
+      expect(injectedContext).toContain("**Category**: sp-implementation");
     });
 
     it("respects dominant override from implementation directive skills", async () => {
@@ -333,7 +386,8 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("**AGENT**: prometheus");
+      expect(response.injectedContext).not.toContain("**AGENT**:");
+      expect(response.injectedContext).toContain("**Category**: sp-review");
     });
 
     it("warns that task() is unauthorized when an active plan has no workflow bootstrap", async () => {
@@ -449,8 +503,33 @@ describe("PlanBridge", () => {
       const response = await bridge.handlePreToolUse(event);
       expect(response.action).toBe("inject");
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("writing");
+        expect(response.injectedContext).toContain("**Category**: sp-integration");
       }
+    });
+
+    it("keeps the review category consistent in context and modified payload", async () => {
+      const planContent = ["### Task 1: Review implementation", "- [ ] Review code"].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await bridge.handleImplementationArm("s-review-category", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { prompt: "delegate the review" } },
+        sessionId: "s-review-category",
+        callId: "c-review-category",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("**Category**: sp-review");
+      expect(response.modifiedPayload).toMatchObject({ args: { category: "sp-review" } });
     });
 
     it("should include progress summary in delegation context", async () => {
@@ -574,12 +653,15 @@ describe("PlanBridge", () => {
           completionDetector: {
             recordPreToolUseInvocation: (
               sessionId: string,
+              callId: string | undefined,
               toolName: string,
               toolInput: Record<string, unknown>,
             ) => void;
           };
         }
-      ).completionDetector.recordPreToolUseInvocation("s-2", "task", { agent: "prometheus" });
+      ).completionDetector.recordPreToolUseInvocation("s-2", "call-2", "task", {
+        agent: "prometheus",
+      });
 
       // Simulate a failed PostToolUse execution
       const postEvent: HookEvent = {
@@ -797,6 +879,8 @@ describe("PlanBridge", () => {
         readFile: vi.fn(async () => {
           throw new Error("EIO");
         }),
+        listFiles: vi.fn(async () => []),
+        readFileStats: vi.fn(async () => null),
       };
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 

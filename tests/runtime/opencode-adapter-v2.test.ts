@@ -487,7 +487,7 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
     expect(notifySpy.mock.calls[0][0]).toMatchObject({ taskId: "unknown" });
   });
 
-  it("(c) gate_advisory notify uses input.args.taskId when present", async () => {
+  it("(c) gate_advisory notify uses input.args.task_id when present", async () => {
     const notifySpy = vi.spyOn(OpenCodeNotifier.prototype, "notify").mockResolvedValue(undefined);
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -501,7 +501,7 @@ describe("OpenCodeAdapter v2 — gate advisory application", () => {
 
     const output: { output: string; metadata?: Record<string, unknown> } = { output: "raw" };
     await adapter.onToolExecuteAfter(
-      { tool: "bash", sessionID: "s", callID: "c1", args: { taskId: "task-42" } },
+      { tool: "task", sessionID: "s", callID: "c1", args: { task_id: "task-42" } },
       output,
     );
 

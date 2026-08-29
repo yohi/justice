@@ -44,7 +44,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected persona-scoped injection");
-    expect(response.injectedContext).toContain("**AGENT**: atlas");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("atlas-1");
     expect(response.injectedContext).toContain("atlas-2");
     expect(response.injectedContext).not.toContain("hephaestus-1");
@@ -87,7 +87,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected default persona injection");
-    expect(response.injectedContext).toContain("**AGENT**: sisyphus");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("sisyphus-only");
     expect(response.injectedContext).not.toContain("atlas-only");
   });
@@ -126,7 +126,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
-    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("prometheus-wisdom");
     expect(response.injectedContext).not.toContain("hephaestus-wisdom");
   });
@@ -166,7 +166,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
-    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("prometheus-wisdom");
     expect(response.injectedContext).not.toContain("hephaestus-wisdom");
   });

@@ -33,6 +33,8 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
     fileReader = {
       readFile: vi.fn().mockResolvedValue(planContent),
       fileExists: vi.fn().mockResolvedValue(true),
+      listFiles: vi.fn().mockResolvedValue([]),
+      readFileStats: vi.fn().mockResolvedValue(null),
     };
 
     planBridge = new PlanBridge(fileReader);
@@ -67,8 +69,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       const ctx = response.injectedContext;
 
       // Assert Category Classification
-      // Task 3 is "Implement Database Layer" with "interface", "SQL queries" - likely "deep" by default
-      expect(ctx).toContain("**Category**: deep");
+      expect(ctx).toContain("**Category**: sp-integration");
 
       // Assert Dependency-Aware Parallel Execution suggestion
       // Task 1 and 2 are completed.
@@ -116,6 +117,8 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
     const mockReader: FileReader = {
       readFile: vi.fn().mockResolvedValue(complexPlan),
       fileExists: vi.fn().mockResolvedValue(true),
+      listFiles: vi.fn().mockResolvedValue([]),
+      readFileStats: vi.fn().mockResolvedValue(null),
     };
 
     const bridge = new PlanBridge(mockReader);

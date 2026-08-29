@@ -1,75 +1,128 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PlanBridgeCore } from "../../src/core/plan-bridge-core";
+import type { PlanTask } from "../../src/core/types";
 
-const samplePlanContent = [
-  "## Task 1: Setup",
-  "- [x] Create project",
-  "- [ ] Setup project structure",
-].join("\n");
+const FORBIDDEN_WORKER_FIELDS = [
+  "model",
+  "provider",
+  "agent",
+  "subagent_type",
+  "variant",
+  "reasoning",
+  "fallback_models",
+] as const;
+
+function makeTask(overrides: Partial<PlanTask> = {}): PlanTask {
+  return {
+    id: "t1",
+    title: "implement login",
+    steps: [],
+    status: "pending",
+    ...overrides,
+  };
+}
 
 describe("PlanBridgeCore", () => {
   const core = new PlanBridgeCore();
 
-  describe("buildDelegationFromPlan", () => {
-    it("should parse plan and build DelegationRequest for next incomplete task", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "docs/plans/sample-plan.md",
-        referenceFiles: ["src/feature-x.ts"],
-      });
-
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Setup project structure");
-      expect(result!.context.planFilePath).toBe("docs/plans/sample-plan.md");
+  it("returns a controller and quick request for a known workflow", () => {
+    const result = core.buildControllerRequest("brainstorming", {
+      taskId: "t1",
+      prompt: "plan the work",
     });
 
-    it("should return null when all tasks are completed", () => {
-      const completedPlan = "## Task 1: Done\n- [x] Step 1\n- [x] Step 2\n";
-      const result = core.buildDelegationFromPlan(completedPlan, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-      });
+    expect(result?.controller).toBe("sisyphus");
+    expect(result?.request).toEqual({
+      category: "quick",
+      taskId: "t1",
+      loadSkills: [],
+      prompt: "plan the work",
+      runInBackground: false,
+      context: { taskId: "t1" },
+    });
+  });
 
-      expect(result).toBeNull();
+  it("returns undefined for an unknown controller workflow", () => {
+    expect(
+      core.buildControllerRequest("unknown-workflow", {
+        taskId: "t1",
+        prompt: "plan the work",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("classifies a PlanTask and builds a worker request", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask(), {
+      taskId: "t1",
+      prompt: "implement feature",
     });
 
-    it("should skip completed tasks and return the next incomplete one", () => {
-      const partialPlan = [
-        "## Task 1: Done",
-        "- [x] All done",
-        "## Task 2: WIP",
-        "- [ ] Do this",
-        "- [ ] And this",
-      ].join("\n");
+    expect(result?.category).toBe("sp-implementation");
+    expect(result?.request).toEqual({
+      category: "sp-implementation",
+      taskId: "t1",
+      loadSkills: [],
+      prompt: "implement feature",
+      runInBackground: false,
+      context: { taskId: "t1" },
+    });
+    for (const field of FORBIDDEN_WORKER_FIELDS) {
+      expect(result?.request).not.toHaveProperty(field);
+    }
+  });
 
-      const result = core.buildDelegationFromPlan(partialPlan, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-      });
+  it("uses an explicit category when provided", () => {
+    const result = core.classifyAndBuildWorkerRequest(
+      makeTask({ title: "deep reasoning research" }),
+      {
+        taskId: "t1",
+        prompt: "research the design",
+        category: "deep",
+      },
+    );
 
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Do this");
+    expect(result?.category).toBe("deep");
+    expect(result?.request.category).toBe("deep");
+  });
+
+  it("preserves an explicit category that differs from the execution role", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask(), {
+      taskId: "t1",
+      prompt: "implement feature",
+      category: "sp-integration",
     });
 
-    it("should include rolePrompt when provided", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-        rolePrompt: "You are a senior TypeScript engineer.",
-      });
+    expect(result?.category).toBe("sp-integration");
+    expect(result?.request.category).toBe("sp-integration");
+  });
 
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("You are a senior TypeScript engineer.");
+  it("preserves an explicit unspecified-low category for a normal role", () => {
+    const result = core.buildWorkerRequest("implementation", {
+      taskId: "t1",
+      prompt: "implement the feature",
+      category: "unspecified-low",
     });
 
-    it("should include previousLearnings when provided", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-        previousLearnings: "Always use strict mode.",
-      });
+    expect(result?.category).toBe("unspecified-low");
+    expect(result?.request.category).toBe("unspecified-low");
+  });
 
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Always use strict mode.");
+  it("returns undefined when the classified role has no OMO category", () => {
+    expect(
+      core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
+        taskId: "t1",
+        prompt: "research the design",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("builds a worker request from an explicit execution role", () => {
+    const result = core.buildWorkerRequest("integration", {
+      taskId: "t1",
+      prompt: "integrate the modules",
     });
+
+    expect(result?.category).toBe("sp-integration");
+    expect(result?.request.category).toBe("sp-integration");
   });
 });

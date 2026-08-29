@@ -72,7 +72,7 @@ describe("OpenCodeAdapter reflection flow", () => {
     );
 
     // Then
-    expect(before.args.taskId).toBe("task-1");
+    expect(before.args.task_id).toBe("task-1");
     expect(mockFs.writtenFiles["plan.md"]).toContain("- [x] Init");
     const events = await adapter.getJustice()?.getObservationHandler().getLogStore().readAll();
     const reflection = events?.find(

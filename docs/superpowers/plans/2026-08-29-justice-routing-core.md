@@ -105,11 +105,11 @@ gh stack view --json
 - Produces: `ControllerAgent`, `ExecutionRole`, `SpCategory`, `TaskCategory`, `RoutingDecision`, `RoutingReason`
 - Produces: `createControllerRoutingDecision(controller, reason)`, `createWorkerRoutingDecision(executionRole, category, reason)`, `createUnroutedRoutingDecision(reason)`
 
-- [ ] **Step 1: 既存 `src/core/types.ts` を読み込み、追加位置を特定する**
+- [x] **Step 1: 既存 `src/core/types.ts` を読み込み、追加位置を特定する**
 
 `src/core/types.ts` を開き、`TaskCategory` 等の既存型定義の直後に新しい型を追加する。
 
-- [ ] **Step 2: 新しい型を `src/core/types.ts` に追加する**
+- [x] **Step 2: 新しい型を `src/core/types.ts` に追加する**
 
 ```ts
 export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
@@ -156,7 +156,7 @@ export type RoutingDecision =
     };
 ```
 
-- [ ] **Step 3: `src/core/routing-decision.ts` を新規作成する**
+- [x] **Step 3: `src/core/routing-decision.ts` を新規作成する**
 
 ```ts
 import {
@@ -209,7 +209,7 @@ function isValidExecutionRoleCategoryPair(
 }
 
 
-- [ ] **Step 4: テストを書く**
+- [x] **Step 4: テストを書く**
 
 `tests/unit/core/routing-decision.test.ts`:
 
@@ -260,12 +260,12 @@ describe("routing-decision factories", () => {
   });
 });
 
-- [ ] **Step 5: テストを実行する**
+- [x] **Step 5: テストを実行する**
 
 Run: `bun run test tests/unit/core/routing-decision.test.ts`
 Expected: PASS
 
-- [ ] **Step 6: Commit する**
+- [x] **Step 6: Commit する**
 
 ```bash
 git add src/core/types.ts src/core/routing-decision.ts tests/unit/core/routing-decision.test.ts
@@ -286,7 +286,7 @@ git commit -m "feat(routing): add routing decision types and factories"
 - Consumes: `ControllerAgent` from `src/core/types.ts`
 - Produces: `class WorkflowRouter { resolveController(workflow: string): ControllerAgent | undefined; isKnownWorkflow(workflow: string): boolean; }`
 
-- [ ] **Step 1: テストを書く**
+- [x] **Step 1: テストを書く**
 
 `tests/unit/core/workflow-router.test.ts`:
 
@@ -317,12 +317,12 @@ describe("WorkflowRouter", () => {
 });
 ```
 
-- [ ] **Step 2: テストを実行して失敗を確認する**
+- [x] **Step 2: テストを実行して失敗を確認する**
 
 Run: `bun run test tests/unit/core/workflow-router.test.ts`
 Expected: FAIL with "WorkflowRouter is not defined"
 
-- [ ] **Step 3: `src/core/workflow-router.ts` を実装する**
+- [x] **Step 3: `src/core/workflow-router.ts` を実装する**
 
 ```ts
 import type { ControllerAgent } from "./types";
@@ -345,7 +345,7 @@ export class WorkflowRouter {
 }
 ```
 
-- [ ] **Step 4: テストを実行して成功を確認する**
+- [x] **Step 4: テストを実行して成功を確認する**
 
 Run: `bun run test tests/unit/core/workflow-router.test.ts`
 Expected: PASS
@@ -369,11 +369,11 @@ git commit -m "feat(routing): add WorkflowRouter for workflow-to-controller reso
 - Consumes: `WorkflowRouter`
 - Produces: `class AgentRouter { routeController(workflow: string): ControllerAgent | undefined; }`（または同等の Controller 解決メソッド）
 
-- [ ] **Step 1: 既存 `src/core/agent-router.ts` とそのテストを読む**
+- [x] **Step 1: 既存 `src/core/agent-router.ts` とそのテストを読む**
 
 既存の Worker Agent 選択メソッド名と依存関係を確認する。
 
-- [ ] **Step 2: Worker 選択メソッドを削除し、Controller 解決に置き換える**
+- [x] **Step 2: Worker 選択メソッドを削除し、Controller 解決に置き換える**
 
 ```ts
 import type { ControllerAgent } from "./types";
@@ -388,7 +388,7 @@ export class AgentRouter {
 }
 ```
 
-- [ ] **Step 3: 既存テストを新しい契約に更新する**
+- [x] **Step 3: 既存テストを新しい契約に更新する**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -408,12 +408,12 @@ describe("AgentRouter", () => {
 });
 ```
 
-- [ ] **Step 4: 型チェックとテストを実行する**
+- [x] **Step 4: 型チェックとテストを実行する**
 
 Run: `bun run typecheck && bun run test tests/unit/core/agent-router.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
+- [x] **Step 5: Commit する**
 
 ```bash
 git add src/core/agent-router.ts tests/unit/core/agent-router.test.ts
@@ -432,7 +432,7 @@ git commit -m "refactor(routing): remove worker agent selection from AgentRouter
 - Consumes: `ExecutionRole` type
 - Produces: `class ExecutionRoleClassifier { classify(task: PlanTask): ExecutionRole; }`
 
-- [ ] **Step 1: テストを書く**
+- [x] **Step 1: テストを書く**
 
 `tests/unit/core/execution-role-classifier.test.ts`:
 
@@ -486,12 +486,12 @@ describe("ExecutionRoleClassifier", () => {
 });
 ```
 
-- [ ] **Step 2: テストを実行して失敗を確認する**
+- [x] **Step 2: テストを実行して失敗を確認する**
 
 Run: `bun run test tests/unit/core/execution-role-classifier.test.ts`
 Expected: FAIL with "ExecutionRoleClassifier is not defined"
 
-- [ ] **Step 3: `src/core/execution-role-classifier.ts` を実装する**
+- [x] **Step 3: `src/core/execution-role-classifier.ts` を実装する**
 
 ```ts
 import type { ExecutionRole, PlanTask } from "./types";
@@ -525,12 +525,12 @@ export class ExecutionRoleClassifier {
 }
 ```
 
-- [ ] **Step 4: テストを実行して成功を確認する**
+- [x] **Step 4: テストを実行して成功を確認する**
 
 Run: `bun run test tests/unit/core/execution-role-classifier.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
+- [x] **Step 5: Commit する**
 
 ```bash
 git add src/core/execution-role-classifier.ts tests/unit/core/execution-role-classifier.test.ts
@@ -549,7 +549,7 @@ git commit -m "feat(routing): add execution role classifier"
 - Consumes: `ExecutionRole`, `SpCategory`
 - Produces: `class OmoCategoryMapper { map(role: ExecutionRole): SpCategory | undefined; isSpCategory(value: string): value is SpCategory; }`
 
-- [ ] **Step 1: テストを書く**
+- [x] **Step 1: テストを書く**
 
 `tests/unit/core/omo-category-mapper.test.ts`:
 
@@ -582,12 +582,12 @@ describe("OmoCategoryMapper", () => {
 });
 ```
 
-- [ ] **Step 2: テストを実行して失敗を確認する**
+- [x] **Step 2: テストを実行して失敗を確認する**
 
 Run: `bun run test tests/unit/core/omo-category-mapper.test.ts`
 Expected: FAIL with "OmoCategoryMapper is not defined"
 
-- [ ] **Step 3: `src/core/omo-category-mapper.ts` を実装する**
+- [x] **Step 3: `src/core/omo-category-mapper.ts` を実装する**
 
 ```ts
 import type { ExecutionRole, SpCategory } from "./types";
@@ -621,12 +621,12 @@ export class OmoCategoryMapper {
 }
 ```
 
-- [ ] **Step 4: テストを実行して成功を確認する**
+- [x] **Step 4: テストを実行して成功を確認する**
 
 Run: `bun run test tests/unit/core/omo-category-mapper.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
+- [x] **Step 5: Commit する**
 
 ```bash
 git add src/core/omo-category-mapper.ts tests/unit/core/omo-category-mapper.test.ts
@@ -645,9 +645,9 @@ git commit -m "feat(routing): add OMO category mapper"
 - Consumes: `ExecutionRoleClassifier`, `OmoCategoryMapper`
 - Produces: `class CategoryClassifier { classify(task: PlanTask): SpCategory | TaskCategory; }`（既存 API を維持）
 
-- [ ] **Step 1: 既存実装とテストを確認する**
+- [x] **Step 1: 既存実装とテストを確認する**
 
-- [ ] **Step 2: keyword ベース分類を `ExecutionRoleClassifier` + `OmoCategoryMapper` に委譲する**
+- [x] **Step 2: keyword ベース分類を `ExecutionRoleClassifier` + `OmoCategoryMapper` に委譲する**
 
 ```ts
 import { ExecutionRoleClassifier } from "./execution-role-classifier";
@@ -666,7 +666,7 @@ export class CategoryClassifier {
 }
 ```
 
-- [ ] **Step 3: テストを更新して互換性を検証する**
+- [x] **Step 3: テストを更新して互換性を検証する**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -704,12 +704,12 @@ describe("CategoryClassifier", () => {
 });
 ```
 
-- [ ] **Step 4: 型チェックとテストを実行する**
+- [x] **Step 4: 型チェックとテストを実行する**
 
 Run: `bun run typecheck && bun run test tests/unit/core/category-classifier.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
+- [x] **Step 5: Commit する**
 
 ```bash
 git add src/core/category-classifier.ts tests/unit/core/category-classifier.test.ts
@@ -728,9 +728,9 @@ git commit -m "refactor(routing): delegate CategoryClassifier to ExecutionRoleCl
 - Consumes: `RoutingDecision`, `SpCategory | TaskCategory`
 - Produces: `interface DelegationRequest { readonly category: SpCategory | TaskCategory; readonly taskId: string; readonly loadSkills: readonly string[]; readonly prompt: string; readonly runInBackground: boolean; readonly context?: { readonly taskId?: string; }; }`
 
-- [ ] **Step 1: 既存 `src/core/task-packager.ts` を読む**
+- [x] **Step 1: 既存 `src/core/task-packager.ts` を読む**
 
-- [ ] **Step 2: `DelegationRequest` 型を更新し、禁止フィールドを削除する**
+- [x] **Step 2: `DelegationRequest` 型を更新し、禁止フィールドを削除する**
 
 ```ts
 import type { SpCategory, TaskCategory } from "./types";
@@ -748,7 +748,7 @@ export interface DelegationRequest {
 }
 ```
 
-- [ ] **Step 3: `package` メソッドから `agentId`, `rolePrompt`, `routingCategory` 等を削除する**
+- [x] **Step 3: `package` メソッドから `agentId`, `rolePrompt`, `routingCategory` 等を削除する**
 
 ```ts
 export interface PackageOptions {
@@ -779,7 +779,7 @@ export class TaskPackager {
 }
 ```
 
-- [ ] **Step 4: テストを更新する**
+- [x] **Step 4: テストを更新する**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -810,12 +810,12 @@ describe("TaskPackager", () => {
 });
 ```
 
-- [ ] **Step 5: 型チェックとテストを実行する**
+- [x] **Step 5: 型チェックとテストを実行する**
 
 Run: `bun run typecheck && bun run test tests/unit/core/task-packager.test.ts`
 Expected: PASS
 
-- [ ] **Step 6: Commit する**
+- [x] **Step 6: Commit する**
 
 ```bash
 git add src/core/task-packager.ts tests/unit/core/task-packager.test.ts
@@ -828,19 +828,20 @@ git commit -m "feat(routing): normalize TaskPackager to category-only output"
 
 **Files:**
 - Modify: `src/core/plan-bridge-core.ts`
-- Test: `tests/unit/core/plan-bridge-core.test.ts`（更新）
+- Test: `tests/core/plan-bridge-core.test.ts`（更新）
 
 **Interfaces:**
 - Consumes: `WorkflowRouter`, `ExecutionRoleClassifier`, `OmoCategoryMapper`, `TaskPackager`, `RoutingDecision` factories
-- Produces: `class PlanBridgeCore { buildControllerRequest(workflow, options): DelegationRequest | undefined; buildWorkerRequest(planTask, options): DelegationRequest | undefined; }`
+- Produces: `class PlanBridgeCore { buildControllerRequest(workflow, options): { controller: ControllerAgent; request: DelegationRequest } | undefined; classifyAndBuildWorkerRequest(planTask, options): { category: SpCategory | TaskCategory; request: DelegationRequest } | undefined; buildWorkerRequest(role, options): { category: SpCategory | TaskCategory; request: DelegationRequest } | undefined; }`
 
-- [ ] **Step 1: 既存 `src/core/plan-bridge-core.ts` を読む**
+- [x] **Step 1: 既存 `src/core/plan-bridge-core.ts` を読む**
 
-- [ ] **Step 2: Controller path と Worker path を分離する**
+- [x] **Step 2: Controller path と Worker path を分離する**
 
 ```ts
 import { ExecutionRoleClassifier } from "./execution-role-classifier";
 import { OmoCategoryMapper } from "./omo-category-mapper";
+import { createWorkerRoutingDecision } from "./routing-decision";
 import { TaskPackager, type PackageOptions } from "./task-packager";
 import type {
   AgentId,
@@ -854,7 +855,6 @@ import type {
 import { WorkflowRouter } from "./workflow-router";
 
 export interface ControllerOptions {
-  readonly workflow: string;
   readonly taskId: string;
   readonly prompt: string;
   readonly loadSkills?: readonly string[];
@@ -894,8 +894,13 @@ export interface WorkerOptions extends PackageOptions {
     if (category === undefined) {
       return undefined;
     }
-    const request = this.taskPackager.package(category, options);
-    return { category, request };
+    const routingDecision = createWorkerRoutingDecision(
+      role,
+      category,
+      options.category === undefined ? "task_classification" : "explicit_request",
+    );
+    const request = this.taskPackager.package(routingDecision.category, options);
+    return { category: routingDecision.category, request };
   }
 
   buildWorkerRequest(
@@ -906,12 +911,18 @@ export interface WorkerOptions extends PackageOptions {
     if (category === undefined) {
       return undefined;
     }
-    const request = this.taskPackager.package(category, options);
+    const routingDecision = createWorkerRoutingDecision(
+      role,
+      category,
+      options.category === undefined ? "task_classification" : "explicit_request",
+    );
+    const request = this.taskPackager.package(routingDecision.category, options);
+    return { category: routingDecision.category, request };
   }
 }
 ```
 
-- [ ] **Step 3: テストを更新する**
+- [x] **Step 3: テストを更新する**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -920,8 +931,11 @@ import { PlanBridgeCore } from "../../../src/core/plan-bridge-core";
 describe("PlanBridgeCore", () => {
   const core = new PlanBridgeCore();
 
-  it("resolves controller workflow", () => {
-    expect(core.resolveController("brainstorming")).toBe("sisyphus");
+  it("returns undefined for an unknown controller workflow", () => {
+    expect(core.buildControllerRequest("unknown-workflow", {
+      taskId: "t1",
+      prompt: "plan the work",
+    })).toBeUndefined();
   });
 
   it("builds a controller request", () => {
@@ -950,15 +964,15 @@ describe("PlanBridgeCore", () => {
   });
 ```
 
-- [ ] **Step 4: 型チェックとテストを実行する**
+- [x] **Step 4: 型チェックとテストを実行する**
 
-Run: `bun run typecheck && bun run test tests/unit/core/plan-bridge-core.test.ts`
+Run: `bun run typecheck && bun run test tests/core/plan-bridge-core.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit する**
+- [x] **Step 5: Commit する**
 
 ```bash
-git add src/core/plan-bridge-core.ts tests/unit/core/plan-bridge-core.test.ts
+git add src/core/plan-bridge-core.ts tests/core/plan-bridge-core.test.ts
 git commit -m "feat(routing): update PlanBridgeCore to new routing decision model"
 ```
 
@@ -974,9 +988,9 @@ git commit -m "feat(routing): update PlanBridgeCore to new routing decision mode
 - Consumes: `RoutingDecision`, `DelegationRequest`
 - Produces: OMO wire payload に `category` のみを含み、`subagent_type` / `agent` / `model` / `provider` / `variant` / `reasoning` を除去したオブジェクト
 
-- [ ] **Step 1: 既存 `src/hooks/plan-bridge.ts` を読む**
+- [x] **Step 1: 既存 `src/hooks/plan-bridge.ts` を読む**
 
-- [ ] **Step 2: 正規化関数を追加または置き換える**
+- [x] **Step 2: 正規化関数を追加または置き換える**
 
 ```ts
 import type { RoutingDecision, SpCategory, TaskCategory } from "../core/types";
@@ -1006,7 +1020,7 @@ export function enrichTaskToolInput(
 }
 ```
 
-- [ ] **Step 3: `handlePreToolUse` で正規化を呼び出す**
+- [x] **Step 3: `handlePreToolUse` で正規化を呼び出す**
 
 ```ts
     const delegation = core.classifyAndBuildWorkerRequest(nextTask, {
@@ -1022,7 +1036,7 @@ export function enrichTaskToolInput(
     }
 ```
 
-- [ ] **Step 4: テストを追加する**
+- [x] **Step 4: テストを追加する**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1062,9 +1076,9 @@ describe("enrichTaskToolInput", () => {
 **Interfaces:**
 - Produces: public exports for new routing modules
 
-- [ ] **Step 1: 既存 `src/index.ts` を読む**
+- [x] **Step 1: 既存 `src/index.ts` を読む**
 
-- [ ] **Step 2: 新規 module を export する**
+- [x] **Step 2: 新規 module を export する**
 
 ```ts
 export { WorkflowRouter } from "./core/workflow-router";
@@ -1086,12 +1100,12 @@ export type {
 } from "./core/types";
 ```
 
-- [ ] **Step 3: 型チェックを実行する**
+- [x] **Step 3: 型チェックを実行する**
 
 Run: `bun run typecheck`
 Expected: PASS
 
-- [ ] **Step 4: Commit する**
+- [x] **Step 4: Commit する**
 
 ```bash
 git add src/index.ts
@@ -1108,7 +1122,7 @@ git commit -m "feat(routing): export new routing core modules"
 **Interfaces:**
 - Consumes: all new routing modules and `PlanBridgeCore`
 
-- [ ] **Step 1: integration test を書く**
+- [x] **Step 1: integration test を書く**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -1175,12 +1189,12 @@ describe("routing core integration", () => {
 });
 ```
 
-- [ ] **Step 2: テストを実行する**
+- [x] **Step 2: テストを実行する**
 
 Run: `bun run test tests/integration/routing-core.test.ts`
 Expected: PASS
 
-- [ ] **Step 3: Commit する**
+- [x] **Step 3: Commit する**
 
 ```bash
 git add tests/integration/routing-core.test.ts
@@ -1197,7 +1211,7 @@ git commit -m "test(routing): add integration tests for routing core"
 **Interfaces:**
 - Produces: green CI-equivalent verification
 
-- [ ] **Step 1: すべてのチェックを実行する**
+- [x] **Step 1: すべてのチェックを実行する**
 
 Run:
 ```bash
@@ -1209,7 +1223,7 @@ bun run build
 
 Expected: すべて成功
 
-- [ ] **Step 2: Commit する（修正があれば）**
+- [x] **Step 2: Commit する（修正があれば）**
 
 ```bash
 git commit -m "chore(routing): final verification fixes" || true

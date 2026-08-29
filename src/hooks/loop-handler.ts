@@ -5,12 +5,14 @@ import type {
   HookEvent,
   HookResponse,
   PlanTask,
+  TaskCategory,
 } from "../core/types";
 import { TaskSplitter } from "../core/task-splitter";
 import type { PlanParser } from "../core/plan-parser";
 import { PlanParser as PlanParserImpl } from "../core/plan-parser";
 import { ReviewRejectionDetector } from "../core/review-rejection-detector";
 import { CategoryClassifier } from "../core/category-classifier";
+import { ExecutionRoleClassifier } from "../core/execution-role-classifier";
 import { RetryPolicyCalculator, type RetryThresholdResult } from "../core/retry-policy-calculator";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -93,6 +95,7 @@ export class LoopDetectionHandler {
   private readonly maxRetries: number;
   private readonly maxRejections: number;
   private readonly classifier: CategoryClassifier;
+  private readonly executionRoleClassifier: ExecutionRoleClassifier;
   private readonly retryCalculator: RetryPolicyCalculator;
   private onSessionRemoved?: (sessionId: string) => void;
   private observationHandler?: import("./observation-handler").ObservationHandler;
@@ -109,6 +112,7 @@ export class LoopDetectionHandler {
     this.maxRetries = resolveMaxRetries();
     this.maxRejections = resolveMaxRejections();
     this.classifier = classifier;
+    this.executionRoleClassifier = new ExecutionRoleClassifier();
     this.retryCalculator = retryCalculator;
   }
 
@@ -244,7 +248,7 @@ export class LoopDetectionHandler {
       activeTask === undefined
         ? undefined
         : this.retryCalculator.compute({
-            category: this.classifier.classify(activeTask),
+            category: this.classifyRetryCategory(activeTask),
             stepCount: activeTask.steps.length,
           });
     const maxRetries =
@@ -275,6 +279,25 @@ export class LoopDetectionHandler {
       historySummary,
       thresholdResult,
     };
+  }
+
+  private classifyRetryCategory(task: PlanTask): TaskCategory {
+    const category = this.classifier.classify(task);
+    switch (category) {
+      case "sp-mechanical":
+        return "quick";
+      case "sp-implementation":
+      case "sp-integration":
+      case "sp-review":
+      case "sp-final-review":
+        return "deep";
+      case "unspecified-low":
+        return this.executionRoleClassifier.classify(task) === "architecture"
+          ? "ultrabrain"
+          : "unspecified-low";
+      default:
+        return category;
+    }
   }
 
   /**

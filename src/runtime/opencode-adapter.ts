@@ -13,6 +13,7 @@ import {
 } from "../core/trigger-detector";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
+import { normalizeTaskToolInputInPlace, resolveTaskIdFromToolInput } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
@@ -557,9 +558,10 @@ export class OpenCodeAdapter {
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<void> {
-    if (this.#noOp) return;
-
     try {
+      if (input.tool === "task") normalizeTaskToolInputInPlace(output.args);
+      if (this.#noOp) return;
+
       // Forward every tool except justice_* query tools, which must not perturb
       // the canonical Observation Log (D50).
       if (input.tool.startsWith("justice_")) return;
@@ -590,6 +592,10 @@ export class OpenCodeAdapter {
         if (key === "prompt") continue;
         // eslint-disable-next-line security/detect-object-injection
         output.args[key] = value;
+      }
+
+      if (input.tool === "task") {
+        normalizeTaskToolInputInPlace(output.args);
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
@@ -693,8 +699,7 @@ export class OpenCodeAdapter {
             title: "Task Gate",
             message: gateAdvisoryContext,
             sessionId: input.sessionID,
-            taskId:
-              (typeof input.args.taskId === "string" ? input.args.taskId : undefined) ?? "unknown",
+            taskId: resolveTaskIdFromToolInput(input.args) ?? "unknown",
           });
         } catch (err) {
           await this.log("warn", "[Justice] gate advisory notify failed", err);
