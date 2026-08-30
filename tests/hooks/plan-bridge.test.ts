@@ -122,7 +122,8 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("Setup project structure");
+      expect(response.injectedContext).toContain("**Task ID**: task-1");
+      expect(response.injectedContext).toContain("**Category**: sp-implementation");
       expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
       expect(response.injectedContext).toContain(
         "Justiceは外部での承認やマージ状態を検証できません",
@@ -270,6 +271,7 @@ describe("PlanBridge", () => {
           prompt: "do something",
           taskId: "task-1",
           loadSkills: ["domain-skill", "test-driven-development", "verification-before-completion"],
+          category: "sp-implementation",
         },
       });
     });
@@ -302,9 +304,8 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       const injectedContext = response.injectedContext;
-      expect(injectedContext).toContain("**AGENT**: sisyphus");
-      expect(injectedContext).not.toContain("**AGENT**: hephaestus");
-      expect(injectedContext).toContain("**Category**: deep");
+      expect(injectedContext).toContain("**Category**: sp-implementation");
+      expect(injectedContext).not.toContain("**AGENT**:");
     });
 
     it("respects dominant override from implementation directive skills", async () => {
@@ -333,7 +334,8 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("**AGENT**: prometheus");
+      expect(response.injectedContext).toContain("**Category**: sp-implementation");
+      expect(response.injectedContext).not.toContain("**AGENT**:");
     });
 
     it("warns that task() is unauthorized when an active plan has no workflow bootstrap", async () => {
@@ -449,7 +451,7 @@ describe("PlanBridge", () => {
       const response = await bridge.handlePreToolUse(event);
       expect(response.action).toBe("inject");
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("writing");
+        expect(response.injectedContext).toContain("sp-integration");
       }
     });
 

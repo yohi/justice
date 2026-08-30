@@ -1,4 +1,4 @@
-import { AGENT_IDS } from "./agent-router";
+import { AGENT_IDS } from "./types";
 import type { AgentId, ObservationAgentId } from "./types";
 
 /**

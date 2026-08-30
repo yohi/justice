@@ -75,7 +75,7 @@ describe("Plan Bridge Integration Flow", () => {
       throw new Error("expected inject response");
     }
     expect(toolResponse.injectedContext).toContain("**Task ID**: task-1");
-    expect(toolResponse.injectedContext).toContain("**Plan File**: docs/plans/sample-plan.md");
+    expect(toolResponse.injectedContext).toContain("**Category**: sp-implementation");
   });
 
   it("should handle completed plans correctly", async () => {

@@ -68,7 +68,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
 
       // Assert Category Classification
       // Task 3 is "Implement Database Layer" with "interface", "SQL queries" - likely "deep" by default
-      expect(ctx).toContain("**Category**: deep");
+      expect(ctx).toContain("**Category**: sp-integration");
 
       // Assert Dependency-Aware Parallel Execution suggestion
       // Task 1 and 2 are completed.

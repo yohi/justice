@@ -185,8 +185,8 @@ describe("Justice workflow bootstrap integration flow", () => {
 
     expect(prompt).toContain("Task Delegation Context");
     expect(prompt).toContain("**Task ID**: task-1");
-    expect(prompt).toContain(`**Plan File**: ${PLAN_PATH}`);
-    expect(prompt).toContain("Setup project structure");
+    expect(prompt).toContain("**Category**: sp-implementation");
+    expect(prompt).toContain("- 🔄 Setup (1/2 steps)");
     expect(prompt).toContain("実装を進めてください");
     expect(task.args.loadSkills).toEqual([
       "test-driven-development",
@@ -339,6 +339,6 @@ describe("Justice workflow bootstrap integration flow", () => {
     const ready = await callTaskTool(adapter, "s-ready", "c-ready", "実装を進めてください");
 
     expect(blocked.args.prompt).toBe("実装を進めてください");
-    expect(ready.args.prompt).toContain(`**Plan File**: ${PLAN_PATH}`);
+    expect(ready.args.prompt).toContain("**Category**: sp-implementation");
   });
 });
