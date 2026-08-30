@@ -32,6 +32,10 @@ describe("inferPersonaFromToolInput", () => {
     expect(inferPersonaFromToolInput({ prompt: "please run systematic-debugging" })).toBe("sisyphus");
   });
 
+  it("infers Atlas from brainstorming text", () => {
+    expect(inferPersonaFromToolInput({ prompt: "please use brainstorming" })).toBe("atlas");
+  });
+
   it("returns undefined for unrelated input", () => {
     expect(inferPersonaFromToolInput({ skills: ["implementer-prompt"] })).toBeUndefined();
   });

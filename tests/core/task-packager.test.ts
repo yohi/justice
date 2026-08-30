@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   enrichTaskToolInput,
   mergeTaskLoadSkills,
+  resolveTaskIdFromModifiedPayload,
   TaskPackager,
 } from "../../src/core/task-packager";
 
@@ -86,6 +87,17 @@ describe("TaskPackager", () => {
       taskId: "task-existing",
       skills: ["domain-skill"],
       load_skills: ["test-driven-development"],
+    });
+  });
+
+  it("rejects a modified payload without a task id", () => {
+    expect(resolveTaskIdFromModifiedPayload({ args: {} })).toBeUndefined();
+  });
+
+  it("omits loadSkills when no caller or required skills are provided", () => {
+    expect(enrichTaskToolInput({ prompt: "run" }, "task-generated")).toEqual({
+      prompt: "run",
+      taskId: "task-generated",
     });
   });
 

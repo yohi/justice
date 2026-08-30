@@ -26,6 +26,15 @@ describe("PlanBridgeCore", () => {
     });
   });
 
+  it("returns no controller request for an unknown workflow", () => {
+    expect(
+      core.buildControllerRequest("unknown-workflow", {
+        taskId: "task-unknown-controller",
+        prompt: "plan the work",
+      }),
+    ).toBeUndefined();
+  });
+
   it("classifies a plan task and builds a worker request", () => {
     const task: PlanTask = {
       id: "task-worker",

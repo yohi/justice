@@ -4,6 +4,7 @@ import {
   createUnroutedRoutingDecision,
   createWorkerRoutingDecision,
 } from "../../src/core/routing-decision";
+import type { ExecutionRole } from "../../src/core/types";
 
 describe("routing-decision factories", () => {
   it("creates a controller decision", () => {
@@ -50,6 +51,14 @@ describe("routing-decision factories", () => {
   it("rejects invalid role/category pairs", () => {
     expect(() =>
       createWorkerRoutingDecision("mechanical", "sp-integration", "task_classification"),
+    ).toThrow("Invalid routing pair");
+  });
+
+  it("rejects an unknown execution role", () => {
+    const unknownRole = "unknown" as unknown as ExecutionRole;
+
+    expect(() =>
+      createWorkerRoutingDecision(unknownRole, "sp-mechanical", "task_classification"),
     ).toThrow("Invalid routing pair");
   });
 
