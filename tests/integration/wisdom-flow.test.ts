@@ -70,7 +70,7 @@ describe("Wisdom Flow Integration", () => {
     const bridgeResponse = await planBridge.handlePreToolUse(preToolEvent);
     expect(bridgeResponse.action).toBe("inject");
     if (bridgeResponse.action === "inject") {
-      expect(bridgeResponse.injectedContext).toContain("PREVIOUS LEARNINGS");
+      expect(bridgeResponse.injectedContext).toContain("Past Learnings & Gotchas");
       expect(bridgeResponse.injectedContext).toContain("Success Pattern");
     }
   });

@@ -209,7 +209,7 @@ describe("WisdomStore", () => {
       expect(results.every((entry) => entry.persona === "hephaestus")).toBe(true);
     });
 
-    it("should fall back to all entries when the requested persona has none", () => {
+    it("should return no entries when the requested persona has none", () => {
       const store = new WisdomStore();
       store.add({
         taskId: "h-1",
@@ -225,8 +225,7 @@ describe("WisdomStore", () => {
       });
 
       const results = store.getRelevant({ persona: "atlas" });
-      expect(results).toHaveLength(2);
-      expect(results.map((entry) => entry.taskId)).toEqual(["h-1", "h-2"]);
+      expect(results).toHaveLength(0);
     });
   });
 

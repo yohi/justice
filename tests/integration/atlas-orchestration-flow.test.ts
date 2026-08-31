@@ -79,7 +79,7 @@ describe("Atlas orchestration integration flow", () => {
 
     expect(next.action).toBe("inject");
     if (next.action !== "inject") throw new Error("expected next task injection");
-    expect(next.injectedContext).toContain("PREVIOUS LEARNINGS");
+    expect(next.injectedContext).toContain("Past Learnings & Gotchas");
     expect(next.injectedContext).toContain("Atlas says preserve the adapter boundary.");
   });
 });

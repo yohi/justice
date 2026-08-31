@@ -1,15 +1,6 @@
-import type { SpCategory, TaskCategory } from "./types";
+import type { DelegationRequest, SpCategory, TaskCategory } from "./types";
 
-export interface DelegationRequest {
-  readonly category: SpCategory | TaskCategory;
-  readonly taskId: string;
-  readonly loadSkills: readonly string[];
-  readonly prompt: string;
-  readonly runInBackground: boolean;
-  readonly context: {
-    readonly taskId: string;
-  };
-}
+export type { DelegationRequest } from "./types";
 
 export function resolveTaskIdFromToolInput(
   toolInput: Readonly<Record<string, unknown>>,

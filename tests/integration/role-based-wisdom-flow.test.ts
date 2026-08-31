@@ -6,7 +6,7 @@ import { WisdomStore } from "../../src/core/wisdom-store";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
-const plan = ["## Task 1: Design architecture", "- [ ] Choose boundaries"].join("\n");
+const plan = ["## Task 1: Implement feature", "- [ ] Choose boundaries"].join("\n");
 
 describe("Role-based wisdom integration flow", () => {
   it("injects only wisdom matching the delegated persona", async () => {
@@ -44,7 +44,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected persona-scoped injection");
-    expect(response.injectedContext).toContain("**AGENT**: atlas");
+    expect(response.injectedContext).toContain("**Category**: sp-implementation");
     expect(response.injectedContext).toContain("atlas-1");
     expect(response.injectedContext).toContain("atlas-2");
     expect(response.injectedContext).not.toContain("hephaestus-1");
@@ -64,6 +64,9 @@ describe("Role-based wisdom integration flow", () => {
     });
     wisdomStore.add(makeWisdomDraft({ content: "sisyphus-only", persona: "sisyphus" }), {
       persona: "sisyphus",
+    });
+    wisdomStore.add(makeWisdomDraft({ content: "hephaestus-default", persona: "hephaestus" }), {
+      persona: "hephaestus",
     });
 
     bridge.setActivePlan("s-stale", "plan.md");
@@ -87,8 +90,9 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected default persona injection");
-    expect(response.injectedContext).toContain("**AGENT**: sisyphus");
-    expect(response.injectedContext).toContain("sisyphus-only");
+    expect(response.injectedContext).toContain("**Category**: sp-implementation");
+    expect(response.injectedContext).toContain("hephaestus-default");
+    expect(response.injectedContext).not.toContain("sisyphus-only");
     expect(response.injectedContext).not.toContain("atlas-only");
   });
 
@@ -126,7 +130,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
-    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).toContain("**Category**: sp-implementation");
     expect(response.injectedContext).toContain("prometheus-wisdom");
     expect(response.injectedContext).not.toContain("hephaestus-wisdom");
   });
@@ -166,7 +170,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
-    expect(response.injectedContext).toContain("**AGENT**: prometheus");
+    expect(response.injectedContext).toContain("**Category**: sp-implementation");
     expect(response.injectedContext).toContain("prometheus-wisdom");
     expect(response.injectedContext).not.toContain("hephaestus-wisdom");
   });

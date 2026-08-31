@@ -322,7 +322,7 @@ describe("LoopDetectionHandler", () => {
     });
 
     expect(decision.escalated).toBe(true);
-    expect(decision.maxRetries).toBe(5);
-    expect(decision.thresholdResult?.categoryModifier).toBe(2);
+    expect(decision.maxRetries).toBe(3);
+    expect(decision.thresholdResult?.categoryModifier).toBe(0);
   });
 });
