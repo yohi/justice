@@ -94,6 +94,12 @@ describe("TaskPackager", () => {
     expect(resolveTaskIdFromModifiedPayload({ args: {} })).toBeUndefined();
   });
 
+  it("resolves a task id from a modified payload", () => {
+    expect(
+      resolveTaskIdFromModifiedPayload({ args: { taskId: "task-modified" } }),
+    ).toBe("task-modified");
+  });
+
   it("omits loadSkills when no caller or required skills are provided", () => {
     expect(enrichTaskToolInput({ prompt: "run" }, "task-generated")).toEqual({
       prompt: "run",
@@ -106,7 +112,7 @@ describe("TaskPackager", () => {
       taskId: "task-3",
       prompt: "fix typo",
     });
-    const payload = request as Record<string, unknown>;
+    const payload = request as unknown as Record<string, unknown>;
 
     expect(payload).not.toHaveProperty("agent");
     expect(payload).not.toHaveProperty("agentId");
