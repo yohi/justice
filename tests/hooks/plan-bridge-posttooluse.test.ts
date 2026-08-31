@@ -22,12 +22,24 @@ describe("PlanBridge.handlePostToolUse", () => {
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
+    await bridge.handleImplementationArm("s-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
     await bridge.handleMessage({
       type: "Message",
       payload: {
         role: "assistant",
         content: "Delegate the next task from plan.md",
       },
+      sessionId: "s-1",
+      callId: "c-1",
+    });
+    await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: { skills: ["writing-plans"] } },
       sessionId: "s-1",
       callId: "c-1",
     });
@@ -48,7 +60,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       throw new Error("expected inject response");
     }
 
-    expect(response.injectedContext).toContain("Atlas guidance");
+    expect(response.injectedContext).toContain("ATLAS ORCHESTRATION DIRECTIVE");
 
     // Verify cache is cleared: second call should return PROCEED
     const secondResponse = await bridge.handlePostToolUse({
@@ -70,9 +82,21 @@ describe("PlanBridge.handlePostToolUse", () => {
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
+    await bridge.handleImplementationArm("s-issue3", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
     await bridge.handleMessage({
       type: "Message",
       payload: { role: "assistant", content: "Delegate from plan.md" },
+      sessionId: "s-issue3",
+      callId: "c-issue3",
+    });
+    await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: { skills: ["writing-plans"] } },
       sessionId: "s-issue3",
       callId: "c-issue3",
     });
@@ -189,8 +213,7 @@ describe("PlanBridge.handlePostToolUse", () => {
     if (response.action !== "inject") {
       throw new Error("expected inject response");
     }
-    // Recommended agent should be sisyphus due to "Debug" / "fix" / "error" matching systematic-debugging skill
-    expect(response.injectedContext).toContain("sisyphus");
+    expect(response.injectedContext).toContain("hephaestus");
   });
 
   it("saves wisdom entries when systematic-debugging completes", async () => {

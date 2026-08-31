@@ -46,6 +46,18 @@ export class ExecutionRoleClassifier {
   }
 
   private matches(text: string, keywords: readonly string[]): boolean {
-    return keywords.some((keyword) => text.includes(keyword));
+    const isWordCharacter = (character: string | undefined): boolean =>
+      character !== undefined && /[a-z0-9_]/.test(character);
+
+    return keywords.some((keyword) => {
+      let index = text.indexOf(keyword);
+      while (index !== -1) {
+        const before = text[index - 1];
+        const after = text[index + keyword.length];
+        if (!isWordCharacter(before) && !isWordCharacter(after)) return true;
+        index = text.indexOf(keyword, index + 1);
+      }
+      return false;
+    });
   }
 }

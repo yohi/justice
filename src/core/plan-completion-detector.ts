@@ -1,6 +1,5 @@
-import type { AgentId, TaskCategory } from "./types";
+import type { AgentId, SpCategory, TaskCategory } from "./types";
 import { ReviewRejectionDetector } from "./review-rejection-detector";
-import { inferPersonaFromToolInput } from "./agent-router";
 
 const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_PENDING_SESSIONS = 50;
@@ -9,10 +8,34 @@ export type SkillTarget = "writing-plans" | "systematic-debugging";
 
 export interface PlanCompletionInput {
   readonly prompt: string;
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
   readonly skillName?: string;
   readonly completed: boolean;
   readonly rawOutput?: string;
+}
+
+export function inferPersonaFromToolInput(
+  toolInput: Readonly<Record<string, unknown>>,
+): AgentId | undefined {
+  const skills = [toolInput.skills, toolInput.loadSkills, toolInput.load_skills].flatMap((value) =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
+  );
+  if (skills.includes("code-quality-reviewer") || skills.includes("spec-reviewer")) return "prometheus";
+  if (skills.includes("systematic-debugging")) return "sisyphus";
+  if (skills.includes("writing-plans") || skills.includes("brainstorming")) return "atlas";
+
+  const agent = typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
+  if (agent !== undefined && isAgentId(agent)) return agent;
+
+  const text = `${typeof toolInput.role === "string" ? toolInput.role : ""} ${typeof toolInput.prompt === "string" ? toolInput.prompt : ""}`;
+  if (/\b(?:code-quality-reviewer|spec-reviewer)\b/.test(text)) return "prometheus";
+  if (/\bsystematic-debugging\b/.test(text)) return "sisyphus";
+  if (/\b(?:writing-plans|brainstorming)\b/.test(text)) return "atlas";
+  return undefined;
+}
+
+function isAgentId(value: string): value is AgentId {
+  return ["hephaestus", "sisyphus", "prometheus", "atlas"].includes(value);
 }
 
 export type CompletionTrigger =
@@ -148,7 +171,11 @@ export class PlanCompletionDetector {
     isError: boolean,
     target: SkillTarget,
   ): PlanCompletionSignal | null {
-    if (isError) return null;
+    if (isError) {
+      this.pendingMap.delete(sessionId);
+      this.personaMap.delete(sessionId);
+      return null;
+    }
     if (toolName !== "task") return null;
 
     this.cleanupExpired();

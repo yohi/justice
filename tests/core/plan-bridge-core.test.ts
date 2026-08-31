@@ -1,75 +1,66 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PlanBridgeCore } from "../../src/core/plan-bridge-core";
-
-const samplePlanContent = [
-  "## Task 1: Setup",
-  "- [x] Create project",
-  "- [ ] Setup project structure",
-].join("\n");
+import type { PlanTask } from "../../src/core/types";
 
 describe("PlanBridgeCore", () => {
   const core = new PlanBridgeCore();
 
-  describe("buildDelegationFromPlan", () => {
-    it("should parse plan and build DelegationRequest for next incomplete task", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "docs/plans/sample-plan.md",
-        referenceFiles: ["src/feature-x.ts"],
-      });
+  it("resolves controller workflows without selecting a worker agent", () => {
+    expect(core.resolveController("brainstorming")).toBe("sisyphus");
+    expect(core.resolveController("unknown-workflow")).toBeUndefined();
+  });
 
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Setup project structure");
-      expect(result!.context.planFilePath).toBe("docs/plans/sample-plan.md");
+  it("builds a controller request with a category-only worker payload", () => {
+    const result = core.buildControllerRequest("brainstorming", {
+      taskId: "task-controller",
+      prompt: "plan the work",
     });
 
-    it("should return null when all tasks are completed", () => {
-      const completedPlan = "## Task 1: Done\n- [x] Step 1\n- [x] Step 2\n";
-      const result = core.buildDelegationFromPlan(completedPlan, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-      });
+    expect(result).toEqual({
+      controller: "sisyphus",
+      request: {
+        category: "quick",
+        loadSkills: [],
+        taskId: "task-controller",
+        prompt: "plan the work",
+        runInBackground: false,
+        context: { taskId: "task-controller" },
+      },
+    });
+  });
 
-      expect(result).toBeNull();
+  it("returns no controller request for an unknown workflow", () => {
+    expect(
+      core.buildControllerRequest("unknown-workflow", {
+        taskId: "task-unknown-controller",
+        prompt: "plan the work",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("classifies a plan task and builds a worker request", () => {
+    const task: PlanTask = {
+      id: "task-worker",
+      title: "implement user login feature",
+      steps: [],
+      status: "pending",
+    };
+
+    const result = core.classifyAndBuildWorkerRequest(task, {
+      taskId: task.id,
+      prompt: "implement feature",
     });
 
-    it("should skip completed tasks and return the next incomplete one", () => {
-      const partialPlan = [
-        "## Task 1: Done",
-        "- [x] All done",
-        "## Task 2: WIP",
-        "- [ ] Do this",
-        "- [ ] And this",
-      ].join("\n");
+    expect(result?.category).toBe("sp-implementation");
+    expect(result?.request.category).toBe("sp-implementation");
+  });
 
-      const result = core.buildDelegationFromPlan(partialPlan, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-      });
-
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Do this");
+  it("returns no worker request for unmapped execution roles", () => {
+    const result = core.buildWorkerRequest("architecture", {
+      taskId: "task-architecture",
+      prompt: "design the architecture",
     });
 
-    it("should include rolePrompt when provided", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-        rolePrompt: "You are a senior TypeScript engineer.",
-      });
-
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("You are a senior TypeScript engineer.");
-    });
-
-    it("should include previousLearnings when provided", () => {
-      const result = core.buildDelegationFromPlan(samplePlanContent, {
-        planFilePath: "plan.md",
-        referenceFiles: [],
-        previousLearnings: "Always use strict mode.",
-      });
-
-      expect(result).not.toBeNull();
-      expect(result!.prompt).toContain("Always use strict mode.");
-    });
+    expect(result).toBeUndefined();
   });
 });

@@ -6,6 +6,8 @@ import type {
   WisdomStoreInterface,
   PlanTask,
   AgentId,
+  SpCategory,
+  TaskCategory,
   ImplementationArmRequest,
   ImplementationArmResult,
   WorkflowBootstrapPhase,
@@ -21,10 +23,13 @@ import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
 import { DependencyAnalyzer } from "../core/dependency-analyzer";
-import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
+import {
+  PlanCompletionDetector,
+  inferPersonaFromToolInput,
+  type PlanCompletionInput,
+} from "../core/plan-completion-detector";
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
-import { AgentRouter, type RoutingCategory, inferPersonaFromToolInput } from "../core/agent-router";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import {
@@ -41,6 +46,28 @@ import {
 } from "../core/workflow-directives";
 
 const PROCEED: HookResponse = { action: "proceed" };
+
+const FORBIDDEN_TASK_FIELDS = new Set([
+  "subagent_type",
+  "agent",
+  "model",
+  "provider",
+  "variant",
+  "reasoning",
+  "fallback_models",
+]);
+
+export function normalizeTaskToolInput(
+  toolInput: Readonly<Record<string, unknown>>,
+  category: SpCategory | TaskCategory,
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(toolInput)) {
+    if (!FORBIDDEN_TASK_FIELDS.has(key)) normalized[key] = value;
+  }
+  normalized.category = category;
+  return normalized;
+}
 
 /** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
 export type WorkflowNextSkill = "brainstorming" | "writing-plans";
@@ -98,7 +125,6 @@ export class PlanBridge {
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
   private readonly notifier: JusticeNotifier | null;
-  private readonly agentRouter: AgentRouter;
   private readonly categoryClassifier: CategoryClassifier;
   private readonly learningExtractor: LearningExtractor;
   private readonly telemetry?: TelemetryStore;
@@ -118,7 +144,6 @@ export class PlanBridge {
     this.progressReporter = new ProgressReporter();
     this.dependencyAnalyzer = new DependencyAnalyzer();
     this.completionDetector = new PlanCompletionDetector();
-    this.agentRouter = new AgentRouter();
     this.categoryClassifier = new CategoryClassifier();
     this.learningExtractor = new LearningExtractor();
 
@@ -501,11 +526,8 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // 1) delegation を仮生成して推奨エージェントを決定
-    const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
-      planFilePath: planRef.planPath,
-      referenceFiles: [],
-    });
+    const initialResult = this.buildWorkerDelegation(planContent, content);
+    const initialDelegation = initialResult?.request;
 
     if (!initialDelegation) {
       // All tasks completed
@@ -517,17 +539,7 @@ export class PlanBridge {
       };
     }
 
-    // 2) 過去の知見を決定されたペルソナでロード
-    const persona = initialDelegation.context.agentId ?? "hephaestus";
-    const previousLearnings = this.getRelevantLearnings(persona, initialDelegation.context.taskId);
-
-    // 3) delegation を再構築
-    const delegation =
-      this.core.buildDelegationFromPlan(planContent, {
-        planFilePath: planRef.planPath,
-        referenceFiles: [],
-        previousLearnings,
-      }) ?? initialDelegation;
+    const delegation = initialDelegation;
 
     // Set as active plan for PreToolUse context injection
     this.setActivePlan(event.sessionId, planRef.planPath);
@@ -538,7 +550,7 @@ export class PlanBridge {
         event.sessionId,
         planRef.planPath,
         delegation.context.taskId,
-        delegation.context.agentId ?? "hephaestus",
+        "hephaestus",
       );
     }
 
@@ -614,12 +626,12 @@ export class PlanBridge {
       implementationDirective.requiredSkills,
     );
 
-    // 1) delegation を仮生成して推奨エージェントを決定
-    const initialDelegation = this.core.buildDelegationFromPlan(planContent, {
-      planFilePath: activePlanPath,
-      referenceFiles: [],
-      loadSkills: mergedLoadSkills,
-    });
+    const initialResult = this.buildWorkerDelegation(
+      planContent,
+      typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
+      mergedLoadSkills,
+    );
+    const initialDelegation = initialResult?.request;
 
     if (!initialDelegation) {
       // Plan is now done
@@ -628,31 +640,16 @@ export class PlanBridge {
       return PROCEED;
     }
 
-    // 2) ペルソナを解決
-    const inputPersona = inferPersonaFromToolInput(event.payload.toolInput);
-
-    // dominant_override が発生するかどうかを確認
-    let dominantAgentId: AgentId | undefined;
-    const routingResult = this.agentRouter.route(initialDelegation.category, mergedLoadSkills);
-    if (routingResult.reason === "dominant_override") {
-      dominantAgentId = routingResult.agentId;
-    }
-
-    const persona: AgentId =
-      dominantAgentId ??
-      (this.isResolvableAgentId(inputPersona) ? inputPersona : routingResult.agentId);
-
+    const persona = inferPersonaFromToolInput(event.payload.toolInput) ?? "hephaestus";
     const previousLearnings = this.getRelevantLearnings(persona, initialDelegation.context.taskId);
-
-    // 3) delegation を再構築
-    const delegation =
-      this.core.buildDelegationFromPlan(planContent, {
-        planFilePath: activePlanPath,
-        referenceFiles: [],
+    const delegation = this.buildWorkerDelegation(
+      planContent,
+      this.appendLearnings(
+        typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
         previousLearnings,
-        agentId: persona,
-        loadSkills: mergedLoadSkills,
-      }) ?? initialDelegation;
+      ),
+      mergedLoadSkills,
+    )?.request ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
     if (this.loopHandler) {
@@ -660,7 +657,7 @@ export class PlanBridge {
         event.sessionId,
         activePlanPath,
         delegation.context.taskId,
-        delegation.context.agentId ?? "hephaestus",
+        persona,
       );
     }
 
@@ -670,9 +667,12 @@ export class PlanBridge {
       action: "inject",
       injectedContext: `${this.buildInjectedContext(planContent, delegation)}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
-        args: enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
-          loadSkills: mergedLoadSkills,
-        }),
+          args: normalizeTaskToolInput(
+            enrichTaskToolInput(event.payload.toolInput, delegation.context.taskId, {
+              loadSkills: mergedLoadSkills,
+            }),
+            delegation.category,
+          ),
       },
     };
   }
@@ -711,11 +711,11 @@ export class PlanBridge {
     if (writingCompletion) {
       const planPath = this.getActivePlan(sessionId) ?? "unknown";
       let nextTask: PlanTask | undefined;
-      let recommendedAgent = "hephaestus";
+      const recommendedAgent = "hephaestus";
       let taskId = "unknown";
       let taskTitle = "Next Step";
       let parallelTasks = "";
-      let category: RoutingCategory = "quick";
+      let category: SpCategory | TaskCategory = "quick";
       let hasError = false;
 
       try {
@@ -730,38 +730,6 @@ export class PlanBridge {
             taskTitle = nextTask.title;
             category = this.categoryClassifier.classify(nextTask);
 
-            const relevantSkills: string[] = [];
-            const textToCheck = (
-              nextTask.title +
-              " " +
-              nextTask.steps.map((s) => s.description).join(" ")
-            ).toLowerCase();
-
-            if (/(?:test|テスト)/i.test(textToCheck)) {
-              relevantSkills.push("test-driven-development");
-            }
-            if (
-              /(?:debug|デバッグ|fix|修正|resolve|解決|error|エラー|bug|バグ)/i.test(textToCheck)
-            ) {
-              relevantSkills.push("systematic-debugging");
-            }
-            if (/(?:review|レビュー|refactor|リファクタ|clean|整理)/i.test(textToCheck)) {
-              relevantSkills.push("code-quality-reviewer");
-            }
-            if (/(?:spec|仕様|requirement|要件)/i.test(textToCheck)) {
-              relevantSkills.push("spec-reviewer");
-            }
-            if (/(?:plan|計画|design|設計|brainstorm|アイデア)/i.test(textToCheck)) {
-              relevantSkills.push("writing-plans");
-            }
-            if (
-              /(?:implement|実装|create|作成|write|書く|add|追加|build|構築)/i.test(textToCheck)
-            ) {
-              relevantSkills.push("implementer-prompt");
-            }
-
-            const routeResult = this.agentRouter.route(category, relevantSkills);
-            recommendedAgent = routeResult.agentId;
             const parallelizable = this.dependencyAnalyzer.getParallelizable(tasks);
             const otherParallel = parallelizable.filter((t) => t.id !== taskId);
             if (otherParallel.length > 0) {
@@ -1041,6 +1009,27 @@ export class PlanBridge {
     }
   }
 
+  private buildWorkerDelegation(
+    planContent: string,
+    prompt: string,
+    loadSkills: readonly string[] = [],
+  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+    const tasks = this.parser.parse(planContent);
+    const nextTask = this.dependencyAnalyzer.getParallelizable(tasks)[0];
+    if (nextTask === undefined) return undefined;
+
+    return this.core.classifyAndBuildWorkerRequest(nextTask, {
+      taskId: nextTask.id,
+      prompt,
+      loadSkills,
+      category: this.categoryClassifier.classify(nextTask),
+    });
+  }
+
+  private appendLearnings(prompt: string, learnings: string | undefined): string {
+    return learnings === undefined ? prompt : `${prompt}\n\n${learnings}`;
+  }
+
   /**
    * Internal helper to build injected context for task delegation.
    */
@@ -1079,7 +1068,6 @@ export class PlanBridge {
       "",
       `**Category**: ${delegation.category}`,
       `**Task ID**: ${delegation.context.taskId}`,
-      `**Plan File**: ${delegation.context.planFilePath}`,
       `**Background**: ${delegation.runInBackground}`,
       "",
       "**Delegation Prompt**:",
@@ -1105,12 +1093,6 @@ export class PlanBridge {
       for (const entry of entries) this.wisdomStore.recordHit?.(entry.id, new Date(), taskId);
     }
     return this.wisdomStore.formatForInjection(entries);
-  }
-
-  private isResolvableAgentId(agentId: unknown): agentId is AgentId {
-    if (typeof agentId !== "string") return false;
-    const lower = agentId.trim().toLowerCase();
-    return ["atlas", "hephaestus", "sisyphus", "prometheus"].includes(lower);
   }
 
   private rememberCompletionInput(

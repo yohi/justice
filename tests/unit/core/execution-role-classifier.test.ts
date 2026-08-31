@@ -22,6 +22,13 @@ describe("ExecutionRoleClassifier", () => {
     expect(classifier.classify(task)).toBe("integration");
   });
 
+  it("does not classify unrelated substrings as keywords", () => {
+    const task = makeTask({
+      title: "rapid login feature",
+    });
+    expect(classifier.classify(task)).toBe("implementation");
+  });
+
   it("classifies mechanical tasks", () => {
     const task = makeTask({
       title: "rename typo in constant",
