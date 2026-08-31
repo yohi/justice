@@ -65,6 +65,9 @@ describe("Role-based wisdom integration flow", () => {
     wisdomStore.add(makeWisdomDraft({ content: "sisyphus-only", persona: "sisyphus" }), {
       persona: "sisyphus",
     });
+    wisdomStore.add(makeWisdomDraft({ content: "hephaestus-default", persona: "hephaestus" }), {
+      persona: "hephaestus",
+    });
 
     bridge.setActivePlan("s-stale", "plan.md");
     await bridge.handlePreToolUse({
@@ -88,6 +91,7 @@ describe("Role-based wisdom integration flow", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected default persona injection");
     expect(response.injectedContext).toContain("**Category**: sp-implementation");
+    expect(response.injectedContext).toContain("hephaestus-default");
     expect(response.injectedContext).not.toContain("sisyphus-only");
     expect(response.injectedContext).not.toContain("atlas-only");
   });

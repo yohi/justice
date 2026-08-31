@@ -54,6 +54,17 @@ describe("routing-decision factories", () => {
     ).toThrow("Invalid routing pair");
   });
 
+  it("allows explicit requests to preserve caller-selected role and category", () => {
+    expect(
+      createWorkerRoutingDecision("mechanical", "sp-integration", "explicit_request"),
+    ).toEqual({
+      kind: "worker",
+      executionRole: "mechanical",
+      category: "sp-integration",
+      reason: "explicit_request",
+    });
+  });
+
   it("rejects an unknown execution role", () => {
     const unknownRole = "unknown" as unknown as ExecutionRole;
 

@@ -18,11 +18,14 @@ describe("PlanBridgeCore", () => {
 
     expect(result).toEqual({
       controller: "sisyphus",
-      request: expect.objectContaining({
+      request: {
         category: "quick",
+        loadSkills: [],
         taskId: "task-controller",
         prompt: "plan the work",
-      }),
+        runInBackground: false,
+        context: { taskId: "task-controller" },
+      },
     });
   });
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { AgentRouter } from "../../src/core/agent-router";
-import { inferPersonaFromToolInput } from "../../src/core/plan-completion-detector";
 
 describe("AgentRouter", () => {
   const router = new AgentRouter();
@@ -17,26 +16,5 @@ describe("AgentRouter", () => {
   it("does not expose legacy worker routing APIs", () => {
     expect("route" in router).toBe(false);
     expect("determineOptimalAgent" in router).toBe(false);
-  });
-});
-
-describe("inferPersonaFromToolInput", () => {
-  it("infers review and debugging personas from skills", () => {
-    expect(inferPersonaFromToolInput({ skills: ["code-quality-reviewer"] })).toBe("prometheus");
-    expect(inferPersonaFromToolInput({ loadSkills: ["systematic-debugging"] })).toBe("sisyphus");
-    expect(inferPersonaFromToolInput({ skills: ["writing-plans"] })).toBe("atlas");
-  });
-
-  it("infers personas from role or prompt text", () => {
-    expect(inferPersonaFromToolInput({ role: "spec-reviewer" })).toBe("prometheus");
-    expect(inferPersonaFromToolInput({ prompt: "please run systematic-debugging" })).toBe("sisyphus");
-  });
-
-  it("infers Atlas from brainstorming text", () => {
-    expect(inferPersonaFromToolInput({ prompt: "please use brainstorming" })).toBe("atlas");
-  });
-
-  it("returns undefined for unrelated input", () => {
-    expect(inferPersonaFromToolInput({ skills: ["implementer-prompt"] })).toBeUndefined();
   });
 });

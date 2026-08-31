@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, PreToolUseEvent } from "../../src/core/types";
+import { createMockFileReader } from "../helpers/mock-file-system";
 
 describe("Phase 6: Multi-Agent Coordination Flow", () => {
   let fileReader: FileReader;
@@ -30,10 +31,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       "- [ ] Write E2E setup (depends: task-3, task-4)",
     ].join("\n");
 
-    fileReader = {
-      readFile: vi.fn().mockResolvedValue(planContent),
-      fileExists: vi.fn().mockResolvedValue(true),
-    };
+    fileReader = createMockFileReader({ "plan.md": planContent });
 
     planBridge = new PlanBridge(fileReader);
   });
@@ -67,7 +65,6 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       const ctx = response.injectedContext;
 
       // Assert Category Classification
-      // Task 3 is "Implement Database Layer" with "interface", "SQL queries" - likely "deep" by default
       expect(ctx).toContain("**Category**: sp-integration");
 
       // Assert Dependency-Aware Parallel Execution suggestion
@@ -113,10 +110,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
       "- [ ] Step C",
     ].join("\n");
 
-    const mockReader: FileReader = {
-      readFile: vi.fn().mockResolvedValue(complexPlan),
-      fileExists: vi.fn().mockResolvedValue(true),
-    };
+    const mockReader: FileReader = createMockFileReader({ "plan.md": complexPlan });
 
     const bridge = new PlanBridge(mockReader);
 
