@@ -29,6 +29,13 @@ function createMockFileReader(files: Record<string, string>): FileReader {
       return content;
     }),
     fileExists: vi.fn(async (path: string) => path in files),
+    listFiles: vi.fn(async (prefix: string) =>
+      Object.keys(files).filter((path) => path.startsWith(prefix)),
+    ),
+    readFileStats: vi.fn(async (path: string) => {
+      const content = files[path];
+      return content === undefined ? null : { size: content.length, mtimeMs: Date.now() };
+    }),
   };
 }
 
@@ -137,6 +144,8 @@ describe("PlanBridge", () => {
         readFile: vi.fn(async () => {
           throw new Error("Read failed");
         }),
+        listFiles: vi.fn(async () => []),
+        readFileStats: vi.fn(async () => null),
       };
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
@@ -308,7 +317,7 @@ describe("PlanBridge", () => {
       expect(injectedContext).not.toContain("**AGENT**:");
     });
 
-    it("respects dominant override from implementation directive skills", async () => {
+    it("uses the task-derived review category with implementation directive skills", async () => {
       // Given
       const planContent = ["## Task 1: Code review", "- [ ] Review code"].join("\n");
       const reader = createMockFileReader({ "docs/plans/review-plan.md": planContent });
@@ -319,7 +328,7 @@ describe("PlanBridge", () => {
         approved: true,
       });
 
-      // When: caller lists code-quality-reviewer (implementation stage appends it too)
+      // When: caller lists code-quality-reviewer (implementation stage appends required skills too)
       const response = await bridge.handlePreToolUse({
         type: "PreToolUse",
         payload: {
@@ -334,7 +343,7 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("**Category**: sp-implementation");
+      expect(response.injectedContext).toContain("**Category**: sp-review");
       expect(response.injectedContext).not.toContain("**AGENT**:");
     });
 
@@ -879,6 +888,8 @@ describe("PlanBridge", () => {
         readFile: vi.fn(async () => {
           throw new Error("EIO");
         }),
+        listFiles: vi.fn(async () => []),
+        readFileStats: vi.fn(async () => null),
       };
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
