@@ -21,11 +21,14 @@ export interface PlanStep {
 
 /** task()ツールに渡すパッケージ化されたリクエスト */
 export interface DelegationRequest {
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
+  readonly taskId: string;
+  readonly loadSkills: readonly string[];
   readonly prompt: string;
-  readonly loadSkills: string[];
   readonly runInBackground: boolean;
-  readonly context: DelegationContext;
+  readonly context: {
+    readonly taskId: string;
+  };
 }
 
 /** タスク委譲のコンテキスト情報 */
@@ -75,6 +78,8 @@ export type WorkflowBootstrapPhase = "design_required" | "plan_required" | "plan
 
 /** Oh My OpenAgent のエージェント識別子 */
 export type AgentId = "hephaestus" | "sisyphus" | "prometheus" | "atlas";
+
+export const AGENT_IDS = ["hephaestus", "sisyphus", "prometheus", "atlas"] as const;
 
 export type ObservationAgentId = AgentId | "system" | "unknown";
 
@@ -139,6 +144,49 @@ export type TaskCategory =
   | "unspecified-low"
   | "unspecified-high"
   | "writing";
+
+export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
+
+export type ExecutionRole =
+  | "mechanical"
+  | "implementation"
+  | "integration"
+  | "review"
+  | "final-review"
+  | "deep"
+  | "architecture";
+
+export type SpCategory =
+  | "sp-mechanical"
+  | "sp-implementation"
+  | "sp-integration"
+  | "sp-review"
+  | "sp-final-review";
+
+export type RoutingReason =
+  | "workflow_rule"
+  | "task_classification"
+  | "review_role"
+  | "fix_escalation"
+  | "explicit_request"
+  | "compatibility_fallback";
+
+export type RoutingDecision =
+  | {
+      readonly kind: "controller";
+      readonly controller: ControllerAgent;
+      readonly reason: RoutingReason;
+    }
+  | {
+      readonly kind: "worker";
+      readonly executionRole: ExecutionRole;
+      readonly category: SpCategory | TaskCategory;
+      readonly reason: RoutingReason;
+    }
+  | {
+      readonly kind: "unrouted";
+      readonly reason: RoutingReason;
+    };
 
 /** コンパクション時に保護すべき状態 */
 export interface ProtectedContext {

@@ -80,10 +80,6 @@ export class WisdomStore implements WisdomStoreInterface {
       ? this.getEntriesForPersona(options.persona)
       : this.getOrderedEntries();
 
-    if (options?.persona && results.length === 0) {
-      results = this.getOrderedEntries();
-    }
-
     if (options?.errorClass) {
       results = results.filter((entry) => entry.errorClass === options.errorClass);
     }

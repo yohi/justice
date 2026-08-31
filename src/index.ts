@@ -76,18 +76,26 @@ export type { AddOptions } from "./core/types";
 export { DependencyAnalyzer, DependencyResolutionError } from "./core/dependency-analyzer";
 export { CategoryClassifier } from "./core/category-classifier";
 export { ProgressReporter } from "./core/progress-reporter";
+export { ExecutionRoleClassifier } from "./core/execution-role-classifier";
 
 // Agent Routing
+export { AgentRouter } from "./core/agent-router";
+export { WorkflowRouter } from "./core/workflow-router";
+export { OmoCategoryMapper } from "./core/omo-category-mapper";
 export {
-  AgentRouter,
-  AGENT_IDS,
-  type RoutingCategory,
-  type RoutingReason,
-  type RoutingResult,
-} from "./core/agent-router";
-export type { AgentId } from "./core/types";
+  createControllerRoutingDecision,
+  createWorkerRoutingDecision,
+  createUnroutedRoutingDecision,
+} from "./core/routing-decision";
+export type {
+  ControllerAgent,
+  ExecutionRole,
+  RoutingDecision,
+  RoutingReason,
+  SpCategory,
+} from "./core/types";
 
-export type { BuildDelegationOptions } from "./core/plan-bridge-core";
+export type { ControllerOptions, WorkerOptions } from "./core/plan-bridge-core";
 export type { PlanReference, TriggerAnalysis } from "./core/trigger-detector";
 
 // Phase 7 Exports
