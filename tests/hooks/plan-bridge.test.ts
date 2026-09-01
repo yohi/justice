@@ -12,6 +12,8 @@ import { createMockFileWriter } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
+import { WisdomStore } from "../../src/core/wisdom-store";
+import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 import type { ObservationHandler } from "../../src/hooks/observation-handler";
 
@@ -223,6 +225,43 @@ describe("PlanBridge", () => {
       }
       expect(response.injectedContext).toContain("already completed");
       expect(bridge.getActivePlan("s-4")).toBeNull();
+    });
+
+    it("includes empty-step guidance and previous learnings in the delegation prompt", async () => {
+      const reader = createMockFileReader({ "plan.md": "## Task 1: Deep existing task\n" });
+      const wisdomStore = new WisdomStore();
+      wisdomStore.add(
+        makeWisdomDraft({
+          taskId: "task-1",
+          persona: "hephaestus",
+          content: "Keep the existing parser contract unchanged.",
+        }),
+        { persona: "hephaestus" },
+      );
+      const bridge = new PlanBridge(reader, createLoopHandler(reader), wisdomStore);
+      await bridge.handleImplementationArm("s-learnings", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handleMessage({
+        type: "Message",
+        payload: {
+          role: "assistant",
+          content: "Delegate the next task from plan.md",
+        },
+        sessionId: "s-learnings",
+        callId: "c-learnings",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("All steps are already completed.");
+      expect(response.injectedContext).toContain("**PREVIOUS LEARNINGS**:");
+      expect(response.injectedContext).toContain("Keep the existing parser contract unchanged.");
     });
   });
 

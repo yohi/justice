@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   inferPersonaFromToolInput,
   PlanCompletionDetector,
@@ -196,5 +196,58 @@ describe("PlanCompletionDetector", () => {
         "writing-plans",
       ),
     ).toEqual({ source: "skill_marker", confidence: "high" });
+  });
+
+  it("expires persona records after the retention window", () => {
+    vi.useFakeTimers();
+    try {
+      const expiringDetector = new PlanCompletionDetector();
+      expiringDetector.recordPreToolUseInvocation("s-expiring", "c-expiring", "task", {
+        skills: ["writing-plans"],
+      });
+
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+
+      expect(expiringDetector.lastInvokedPersona("s-expiring")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts the oldest pending and persona records when the bounded maps overflow", () => {
+    vi.useFakeTimers();
+    try {
+      const boundedDetector = new PlanCompletionDetector();
+      for (let index = 0; index <= 50; index++) {
+        boundedDetector.recordPreToolUseInvocation(`s-${index}`, `c-${index}`, "task", {
+          skills: ["writing-plans"],
+        });
+      }
+
+      expect(boundedDetector.lastInvokedPersona("s-0")).toBeUndefined();
+      expect(boundedDetector.lastInvokedPersona("s-50")).toBe("atlas");
+      expect(
+        boundedDetector.evaluateSkillCompletion(
+          "s-0",
+          "c-0",
+          "task",
+          "",
+          false,
+          "writing-plans",
+        ),
+      ).toBeNull();
+      expect(
+        boundedDetector.evaluateSkillCompletion(
+          "s-50",
+          "c-50",
+          "task",
+          "",
+          false,
+          "writing-plans",
+        ),
+      ).toEqual({ source: "skill_marker", confidence: "high" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
