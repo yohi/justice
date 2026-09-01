@@ -22,6 +22,12 @@ describe("PlanBridge.handlePostToolUse", () => {
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
+    await bridge.handleImplementationArm("s-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
     await bridge.handleMessage({
       type: "Message",
       payload: {
@@ -86,9 +92,21 @@ describe("PlanBridge.handlePostToolUse", () => {
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
+    await bridge.handleImplementationArm("s-issue3", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
     await bridge.handleMessage({
       type: "Message",
       payload: { role: "assistant", content: "Delegate from plan.md" },
+      sessionId: "s-issue3",
+      callId: "c-issue3",
+    });
+    await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: { skills: ["writing-plans"] } },
       sessionId: "s-issue3",
       callId: "c-issue3",
     });

@@ -1,4 +1,4 @@
-import type { AgentId, TaskCategory } from "./types";
+import type { AgentId, SpCategory, TaskCategory } from "./types";
 import { ReviewRejectionDetector } from "./review-rejection-detector";
 import { resolveSkillsFromToolInput } from "./task-packager";
 
@@ -7,12 +7,10 @@ const MAX_PENDING_ENTRIES = 50;
 
 const PERSONA_IDS: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus", "atlas"];
 
-function inferPersonaFromToolInput(
+export function inferPersonaFromToolInput(
   toolInput: Readonly<Record<string, unknown>>,
 ): AgentId | undefined {
-  const explicitAgent =
-    typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
-  const skills = resolveSkillsFromToolInput(toolInput);
+  const skills = resolveSkillsFromToolInput(toolInput).map((skill) => skill.toLowerCase());
   const text = [toolInput.role, toolInput.prompt]
     .filter((value): value is string => typeof value === "string")
     .join(" ")
@@ -28,10 +26,16 @@ function inferPersonaFromToolInput(
   if (skills.includes("systematic-debugging") || /\bsystematic-debugging\b/.test(text)) {
     return "sisyphus";
   }
-  if (skills.includes("writing-plans") || /\bwriting-plans\b/.test(text)) {
+  if (
+    skills.includes("writing-plans") ||
+    skills.includes("brainstorming") ||
+    /\b(?:writing-plans|brainstorming)\b/.test(text)
+  ) {
     return "atlas";
   }
-  if (explicitAgent && PERSONA_IDS.includes(explicitAgent as AgentId)) {
+  const explicitAgent =
+    typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
+  if (explicitAgent !== undefined && PERSONA_IDS.includes(explicitAgent as AgentId)) {
     return explicitAgent as AgentId;
   }
   return undefined;
@@ -41,7 +45,7 @@ export type SkillTarget = "writing-plans" | "systematic-debugging";
 
 export interface PlanCompletionInput {
   readonly prompt: string;
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
   readonly skillName?: string;
   readonly completed: boolean;
   readonly rawOutput?: string;
@@ -190,11 +194,15 @@ export class PlanCompletionDetector {
     isError: boolean,
     target: SkillTarget,
   ): PlanCompletionSignal | null {
-    if (isError) return null;
+    const completionKey = this.getCompletionKey(sessionId, callId);
+    if (isError) {
+      this.pendingMap.delete(completionKey);
+      this.personaMap.delete(completionKey);
+      return null;
+    }
     if (toolName !== "task") return null;
 
     this.cleanupExpired();
-    const completionKey = this.getCompletionKey(sessionId, callId);
 
     const pending = this.pendingMap.get(completionKey);
     const hasPending = pending?.skillTargets.has(target) ?? false;

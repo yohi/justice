@@ -33,19 +33,21 @@ export class PlanBridgeCore {
    * Builds the Controller handoff and its quick request envelope.
    * The request is for the Controller path and is not a Worker routing result.
    */
+  resolveController(workflow: string): ControllerAgent | undefined {
+    return this.workflowRouter.resolveController(workflow);
+  }
+
   buildControllerRequest(
     workflow: string,
     options: ControllerOptions,
   ): { readonly controller: ControllerAgent; readonly request: DelegationRequest } | undefined {
-    const controller = this.workflowRouter.resolveController(workflow);
-    if (controller === undefined) {
-      return undefined;
-    }
+    const controller = this.resolveController(workflow);
+    if (controller === undefined) return undefined;
 
     const request = this.taskPackager.package("quick", {
       taskId: options.taskId,
       prompt: options.prompt,
-      loadSkills: options.loadSkills ?? [],
+      loadSkills: options.loadSkills,
     });
     return { controller, request };
   }
@@ -53,7 +55,9 @@ export class PlanBridgeCore {
   classifyAndBuildWorkerRequest(
     planTask: PlanTask,
     options: WorkerOptions,
-  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+  ):
+    | { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest }
+    | undefined {
     const role = options.role ?? this.roleClassifier.classify(planTask);
     return this.buildWorkerRequest(role, options);
   }
@@ -61,11 +65,11 @@ export class PlanBridgeCore {
   buildWorkerRequest(
     role: ExecutionRole,
     options: WorkerOptions,
-  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+  ):
+    | { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest }
+    | undefined {
     const category = this.resolveWorkerCategory(role, options.category);
-    if (category === undefined) {
-      return undefined;
-    }
+    if (category === undefined) return undefined;
 
     const routingDecision = createWorkerRoutingDecision(
       role,
@@ -73,8 +77,10 @@ export class PlanBridgeCore {
       options.category === undefined ? "task_classification" : "explicit_request",
     );
 
-    const request = this.taskPackager.package(routingDecision.category, options);
-    return { category: routingDecision.category, request };
+    return {
+      category: routingDecision.category,
+      request: this.taskPackager.package(routingDecision.category, options),
+    };
   }
 
   private resolveWorkerCategory(

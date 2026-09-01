@@ -25,6 +25,11 @@ function makeTask(overrides: Partial<PlanTask> = {}): PlanTask {
 describe("PlanBridgeCore", () => {
   const core = new PlanBridgeCore();
 
+  it("resolves controller workflows without selecting a worker agent", () => {
+    expect(core.resolveController("brainstorming")).toBe("sisyphus");
+    expect(core.resolveController("unknown-workflow")).toBeUndefined();
+  });
+
   it("returns a controller and quick request for a known workflow", () => {
     const result = core.buildControllerRequest("brainstorming", {
       taskId: "t1",
@@ -124,5 +129,14 @@ describe("PlanBridgeCore", () => {
 
     expect(result?.category).toBe("sp-integration");
     expect(result?.request.category).toBe("sp-integration");
+  });
+
+  it("returns no worker request for unmapped execution roles", () => {
+    const result = core.buildWorkerRequest("architecture", {
+      taskId: "task-architecture",
+      prompt: "design the architecture",
+    });
+
+    expect(result).toBeUndefined();
   });
 });

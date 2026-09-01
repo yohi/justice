@@ -1,7 +1,7 @@
-import type { TaskCategory } from "./types";
+import type { SpCategory, TaskCategory } from "./types";
 
 export interface RetryThresholdContext {
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
   readonly stepCount: number;
 }
 
@@ -29,7 +29,9 @@ export class RetryPolicyCalculator {
   static readonly VOLUME_MODIFIER = 1;
 
   compute(context: RetryThresholdContext): RetryThresholdResult {
-    const categoryModifier = CATEGORY_MODIFIERS[context.category] ?? 0;
+    const categoryModifier = isTaskCategory(context.category)
+      ? CATEGORY_MODIFIERS[context.category]
+      : 0;
     const volumeModifier =
       context.stepCount >= RetryPolicyCalculator.VOLUME_THRESHOLD
         ? RetryPolicyCalculator.VOLUME_MODIFIER
@@ -42,4 +44,8 @@ export class RetryPolicyCalculator {
       maxRetries: Math.max(RetryPolicyCalculator.MIN_RETRIES, computed),
     };
   }
+}
+
+function isTaskCategory(value: SpCategory | TaskCategory): value is TaskCategory {
+  return Object.prototype.hasOwnProperty.call(CATEGORY_MODIFIERS, value);
 }

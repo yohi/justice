@@ -3,6 +3,7 @@ import {
   enrichTaskToolInput,
   mergeTaskLoadSkills,
   resolveSkillsFromToolInput,
+  resolveTaskIdFromModifiedPayload,
   TaskPackager,
 } from "../../src/core/task-packager";
 import type { DelegationRequest } from "../../src/core/types";
@@ -52,14 +53,12 @@ describe("TaskPackager", () => {
   });
 
   it("preserves helper skill merge behavior", () => {
-    expect(mergeTaskLoadSkills(
-      ["domain-skill", "test-driven-development"],
-      ["test-driven-development", "verification-before-completion"],
-    )).toEqual([
-      "domain-skill",
-      "test-driven-development",
-      "verification-before-completion",
-    ]);
+    expect(
+      mergeTaskLoadSkills(
+        ["domain-skill", "test-driven-development"],
+        ["test-driven-development", "verification-before-completion"],
+      ),
+    ).toEqual(["domain-skill", "test-driven-development", "verification-before-completion"]);
   });
 
   it("merges and deduplicates all task skill aliases in caller order", () => {
@@ -87,17 +86,30 @@ describe("TaskPackager", () => {
     expect(enriched).toEqual({
       prompt: "run",
       task_id: "task-existing",
-      load_skills: [
-        "domain-skill",
-        "test-driven-development",
-        "verification-before-completion",
-      ],
+      load_skills: ["domain-skill", "test-driven-development", "verification-before-completion"],
     });
     expect(original).toEqual({
       prompt: "run",
       taskId: "task-existing",
       skills: ["domain-skill"],
       load_skills: ["test-driven-development"],
+    });
+  });
+
+  it("rejects a modified payload without a task id", () => {
+    expect(resolveTaskIdFromModifiedPayload({ args: {} })).toBeUndefined();
+  });
+
+  it("resolves a task id from a modified payload", () => {
+    expect(resolveTaskIdFromModifiedPayload({ args: { taskId: "task-modified" } })).toBe(
+      "task-modified",
+    );
+  });
+
+  it("omits loadSkills when no caller or required skills are provided", () => {
+    expect(enrichTaskToolInput({ prompt: "run" }, "task-generated")).toEqual({
+      prompt: "run",
+      task_id: "task-generated",
     });
   });
 

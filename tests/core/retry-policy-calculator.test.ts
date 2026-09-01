@@ -31,5 +31,4 @@ describe("RetryPolicyCalculator", () => {
     expect(result.categoryModifier).toBe(0);
     expect(result.maxRetries).toBe(3);
   });
-
 });

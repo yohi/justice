@@ -74,12 +74,21 @@ export class ExecutionRoleClassifier {
     return "implementation";
   }
 
-  private matches(
-    text: string,
-    keywords: readonly (string | RegExp)[],
-  ): boolean {
-    return keywords.some((keyword) =>
-      typeof keyword === "string" ? text.includes(keyword) : keyword.test(text),
-    );
+  private matches(text: string, keywords: readonly (string | RegExp)[]): boolean {
+    const isWordCharacter = (character: string | undefined): boolean =>
+      character !== undefined && /[a-z0-9_]/.test(character);
+
+    return keywords.some((keyword) => {
+      if (keyword instanceof RegExp) return keyword.test(text);
+
+      let index = text.indexOf(keyword);
+      while (index !== -1) {
+        const before = text[index - 1];
+        const after = text[index + keyword.length];
+        if (!isWordCharacter(before) && !isWordCharacter(after)) return true;
+        index = text.indexOf(keyword, index + 1);
+      }
+      return false;
+    });
   }
 }

@@ -6,12 +6,12 @@ import type {
   DelegationRequest,
   PlanTask,
   AgentId,
+  SpCategory,
+  TaskCategory,
   ImplementationArmRequest,
   ImplementationArmResult,
   WorkflowBootstrapPhase,
   WorkflowStartRequest,
-  SpCategory,
-  TaskCategory,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
@@ -630,36 +630,31 @@ export class PlanBridge {
       implementationDirective.requiredSkills,
     );
 
-    const tasks = this.parser.parse(planContent);
-    const nextTask = this.dependencyAnalyzer.getParallelizable(tasks)[0];
-    if (!nextTask) {
+    const initialResult = this.buildWorkerDelegation(
+      planContent,
+      typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
+      mergedLoadSkills,
+    );
+    const initialDelegation = initialResult?.request;
+
+    if (!initialDelegation) {
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
     }
 
-    const category = this.categoryClassifier.classify(nextTask);
-    const initialResult = this.core.classifyAndBuildWorkerRequest(nextTask, {
-      taskId: nextTask.id,
-      prompt: this.buildTaskPrompt(nextTask),
-      loadSkills: mergedLoadSkills,
-      category,
-    });
-    if (!initialResult) return PROCEED;
-
     const persona = this.resolveDelegationPersona(event.sessionId);
-    const previousLearnings = this.getRelevantLearnings(
-      persona,
-      initialResult.request.context.taskId,
-    );
+    const previousLearnings = this.getRelevantLearnings(persona, initialDelegation.context.taskId);
     const delegation =
-      this.core.classifyAndBuildWorkerRequest(nextTask, {
-        taskId: nextTask.id,
-        prompt: this.buildTaskPrompt(nextTask, previousLearnings),
-        loadSkills: mergedLoadSkills,
-        category,
-      })?.request ?? initialResult.request;
+      this.buildWorkerDelegation(
+        planContent,
+        this.appendLearnings(
+          typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
+          previousLearnings,
+        ),
+        mergedLoadSkills,
+      )?.request ?? initialDelegation;
 
     // Sync current task and agent to LoopDetectionHandler
     if (this.loopHandler) {
@@ -1051,6 +1046,29 @@ export class PlanBridge {
     return sections.join("\n");
   }
 
+  private buildWorkerDelegation(
+    planContent: string,
+    prompt: string,
+    loadSkills: readonly string[] = [],
+  ):
+    | { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest }
+    | undefined {
+    const tasks = this.parser.parse(planContent);
+    const nextTask = this.dependencyAnalyzer.getParallelizable(tasks)[0];
+    if (nextTask === undefined) return undefined;
+
+    return this.core.classifyAndBuildWorkerRequest(nextTask, {
+      taskId: nextTask.id,
+      prompt,
+      loadSkills,
+      category: this.categoryClassifier.classify(nextTask),
+    });
+  }
+
+  private appendLearnings(prompt: string, learnings: string | undefined): string {
+    return learnings === undefined ? prompt : `${prompt}\n\n${learnings}`;
+  }
+
   private buildInjectedContext(
     planContent: string,
     planFilePath: string,
@@ -1119,7 +1137,7 @@ export class PlanBridge {
   }
 
   private resolveDelegationPersona(sessionId: string): AgentId {
-    return this.completionDetector.lastInvokedPersona(sessionId) ?? "sisyphus";
+    return this.completionDetector.lastInvokedPersona(sessionId) ?? "hephaestus";
   }
 
   private rememberCompletionInput(

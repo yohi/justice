@@ -29,8 +29,13 @@ function createMockFileReader(files: Record<string, string>): FileReader {
       return content;
     }),
     fileExists: vi.fn(async (path: string) => path in files),
-    listFiles: vi.fn(async () => []),
-    readFileStats: vi.fn(async () => null),
+    listFiles: vi.fn(async (prefix: string) =>
+      Object.keys(files).filter((path) => path.startsWith(prefix)),
+    ),
+    readFileStats: vi.fn(async (path: string) => {
+      const content = files[path];
+      return content === undefined ? null : { size: content.length, mtimeMs: Date.now() };
+    }),
   };
 }
 
@@ -162,7 +167,8 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("Setup project structure");
+      expect(response.injectedContext).toContain("**Task ID**: task-1");
+      expect(response.injectedContext).toContain("**Category**: sp-implementation");
       expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
       expect(response.injectedContext).toContain(
         "Justiceは外部での承認やマージ状態を検証できません",
@@ -360,7 +366,7 @@ describe("PlanBridge", () => {
       expect(injectedContext).toContain("**Category**: sp-implementation");
     });
 
-    it("respects dominant override from implementation directive skills", async () => {
+    it("uses the task-derived review category with implementation directive skills", async () => {
       // Given
       const planContent = ["## Task 1: Code review", "- [ ] Review code"].join("\n");
       const reader = createMockFileReader({ "docs/plans/review-plan.md": planContent });
@@ -371,7 +377,7 @@ describe("PlanBridge", () => {
         approved: true,
       });
 
-      // When: caller lists code-quality-reviewer (implementation stage appends it too)
+      // When: caller lists code-quality-reviewer (implementation stage appends required skills too)
       const response = await bridge.handlePreToolUse({
         type: "PreToolUse",
         payload: {
@@ -388,6 +394,50 @@ describe("PlanBridge", () => {
       }
       expect(response.injectedContext).not.toContain("**AGENT**:");
       expect(response.injectedContext).toContain("**Category**: sp-review");
+    });
+
+    it("falls back to the initial delegation when the enriched rebuild is unavailable", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      const internals = bridge as unknown as {
+        buildWorkerDelegation: (...args: unknown[]) => unknown;
+      };
+      const originalBuildWorkerDelegation = internals.buildWorkerDelegation.bind(bridge);
+      const buildWorkerDelegation = vi.spyOn(internals, "buildWorkerDelegation");
+      buildWorkerDelegation
+        .mockImplementationOnce(originalBuildWorkerDelegation)
+        .mockReturnValueOnce(undefined)
+        .mockImplementation(originalBuildWorkerDelegation);
+
+      await bridge.handleImplementationArm("s-rebuild-fallback", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "do something" },
+        },
+        sessionId: "s-rebuild-fallback",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.modifiedPayload).toEqual({
+        args: {
+          prompt: "do something",
+          task_id: "task-1",
+          load_skills: ["test-driven-development", "verification-before-completion"],
+          category: "sp-implementation",
+        },
+      });
     });
 
     it("warns that task() is unauthorized when an active plan has no workflow bootstrap", async () => {
@@ -456,6 +506,42 @@ describe("PlanBridge", () => {
         "Justiceは外部での承認やマージ状態を検証できません",
       );
       expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
+    });
+
+    it("preserves code-review as a completion skill in the normalized task payload", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      await bridge.handleImplementationArm("s-code-review", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            prompt: "review the implementation",
+            loadSkills: ["code-review"],
+          },
+        },
+        sessionId: "s-code-review",
+        callId: "call-code-review",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.modifiedPayload).toMatchObject({
+        args: {
+          load_skills: expect.arrayContaining(["code-review"]),
+        },
+      });
     });
 
     it("should not inject context for a different session", async () => {

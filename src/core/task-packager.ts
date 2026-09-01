@@ -1,5 +1,7 @@
 import type { DelegationRequest, SpCategory, TaskCategory } from "./types";
 
+export type { DelegationRequest } from "./types";
+
 const FORBIDDEN_TASK_FIELDS: ReadonlySet<string> = new Set([
   "subagent_type",
   "agent",
@@ -32,9 +34,7 @@ export function resolveTaskIdFromModifiedPayload(payload: unknown): string | und
   return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
 }
 
-export function resolveSkillsFromToolInput(
-  toolInput: Readonly<Record<string, unknown>>,
-): string[] {
+export function resolveSkillsFromToolInput(toolInput: Readonly<Record<string, unknown>>): string[] {
   const values = [toolInput.skills, toolInput.loadSkills, toolInput.load_skills];
   return mergeSkillArrays(
     ...values.map((value) =>
@@ -127,10 +127,7 @@ export interface PackageOptions {
 }
 
 export class TaskPackager {
-  package(
-    category: SpCategory | TaskCategory,
-    options: PackageOptions,
-  ): DelegationRequest {
+  package(category: SpCategory | TaskCategory, options: PackageOptions): DelegationRequest {
     return {
       category,
       taskId: options.taskId,
