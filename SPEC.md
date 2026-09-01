@@ -124,6 +124,23 @@ task-scoped field であり、OMO の wire payload にはシリアライズし�
 canonical field 名で渡す。内部の `taskId`、`loadSkills`、`runInBackground` と
 legacy 入力の `skills`、`loadSkills`、`taskId` は境界で normalize される。
 
+**カテゴリ値域:**
+
+- `SpCategory`（Superpowers 専用 custom category）: `sp-mechanical` / `sp-implementation` / `sp-integration` / `sp-review` / `sp-final-review`
+- `TaskCategory`（OmO 標準）: `visual-engineering` / `ultrabrain` / `deep` / `quick` / `unspecified-low` / `unspecified-high` / `writing`
+- カテゴリ → model/provider の対応は `omo.jsonc` 側の定義が SSOT であり、Justice ソースコードに LLM model 名・provider 名をハードコードしない。
+
+**RoutingDecision（排他的判別共用体）と routing reason:**
+
+- `RoutingDecision` は `kind: "controller" | "worker" | "unrouted"` の判別共用体。`controller` は `controller` のみ、`worker` は `executionRole` + `category` のみを持ち、`unrouted` は routing 情報を持たない。専用 factory（`createControllerRoutingDecision` / `createWorkerRoutingDecision` / `createUnroutedRoutingDecision`）経由でのみ生成する。
+- `RoutingReason`: `workflow_rule` / `task_classification` / `review_role` / `fix_escalation` / `explicit_request` / `compatibility_fallback`。
+- `createWorkerRoutingDecision` は `reason` が `task_classification` の場合に限り role/category の整合性を実行時検証し、違反時は `Invalid routing pair` エラーを送出する。`explicit_request`（呼び出し元の明示指定は権威であり、既存の role/category 不一致挙動を許容）と `compatibility_fallback`（既存フォールバックの保持）では検証をスキップする。
+
+**Worker payload の相互排他（category-first routing）:**
+
+- `category` が既に存在する場合は呼び出し元の値を尊重し、存在しない場合のみ `PlanBridge` が決定した category を注入する（`normalizeTaskToolInputWithCategory`、`src/hooks/plan-bridge.ts`）。`subagent_type` / `agent` / `model` / `provider` / `variant` / `reasoning` / `fallback_models` は常に除去されるため、Worker category dispatch 時に `category != undefined` かつ `subagent_type == undefined` が保証される。
+- Adapter 層でも共通正規化が行われる: `OpenCodeAdapter.onToolExecuteBefore` は全ての `task()` 呼び出しに対し（no-op 早期 return より前）、元の `args` オブジェクトを差し替えずに `normalizeTaskToolInputInPlace` を適用する。
+
 ### 3.3 タスクフィードバック (Task Feedback)
 
 ```typescript
@@ -184,6 +201,9 @@ interface WisdomEntry {
   readonly errorClass?: ErrorClass;
   readonly timestamp: string;
   readonly persona: AgentId;        // 実行したペルソナ
+  readonly hitCount?: number;       // メタデータは entry 自身に内包（SSoT、§5.24）
+  readonly lastHitAt?: string;
+  readonly firstSeenAt?: string;
 }
 
 type WisdomEntryDraft = Omit<WisdomEntry, "id" | "timestamp" | "persona"> & {
@@ -671,16 +691,32 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
 
 ### 5.7 `CategoryClassifier`
 
-タスクの見出しや各ステップの説明文の中にあるキーワードから、OmO に必要なタスクカテゴリ
-(`SpCategory | TaskCategory`) を自動的に選択します。
+`ExecutionRoleClassifier` と `OmoCategoryMapper` へ委譲する薄いラッパーです。`PlanTask`（title と各ステップの説明文）を実行ロール（`ExecutionRole`）へ分類し、SpCategory へ写像します。写像を持たないロールは互換フォールバックとして `unspecified-low` を返します。
 
-| カテゴリ | 対象となる主なキーワード群 |
-|----------|---------|
-| `visual-engineering` | CSS, UI, UX, layout, animation, design, frontend, デザイン など |
-| `ultrabrain` | architect, design pattern, refactor, restructure, 設計, アーキテクチャ など |
-| `writing` | document, README, API doc, changelog, ドキュメント など |
-| `quick` | fix typo, rename, bump version など (ステップ数が 1 以下のもの限定) |
-| `unspecified-low`（互換フォールバック） | 直接の OMO カテゴリへマッピングできない `deep` / `architecture` role |
+**実行ロール分類の優先順位（`ExecutionRoleClassifier`、上から順に評価）:**
+
+| 優先 | ExecutionRole | 主なキーワード |
+|------|---------------|----------------|
+| 1 | `final-review` | final review / final-review |
+| 2 | `review` | review / reviewer / レビュー |
+| 3 | `integration` | api, interface, module(s), migration, integration, state, concurrency, async, coordinate, components（mechanical 条件と重複する場合は integration を優先） |
+| 4 | `deep` | deep, reasoning, research, investigate |
+| 5 | `architecture` | architecture, architect, design system |
+| 6 | `mechanical` | rename, typo, constant, boilerplate, field, config, setting、および test only 系 |
+| 7 | `implementation` | 上記いずれにも該当しない場合のフォールバック |
+
+**role → category 写像（`OmoCategoryMapper`）:**
+
+| ExecutionRole | category |
+|---------------|----------|
+| `mechanical` | `sp-mechanical` |
+| `implementation` | `sp-implementation` |
+| `integration` | `sp-integration` |
+| `review` | `sp-review` |
+| `final-review` | `sp-final-review` |
+| `deep` / `architecture` | `undefined`（`CategoryClassifier` では互換フォールバックの `unspecified-low` を返却） |
+
+英語の文字列キーワードは、英数字または `_` の内部にある部分一致を除外して照合する。したがって `preview` は `review`、`final preview` は `final-review` として分類しない。日本語の `レビュー` も同じ境界条件で照合する。
 
 ---
 
@@ -777,6 +813,7 @@ jitter = random(0, baseDelay × 0.5)
 ### 5.13 `WisdomPersistence`
 
 `WisdomStore` 内の内容をローカルファイルの `.justice/wisdom.json` へ永続化（保存）および読み込みを行います。書き込み時には、I/O処理による破損を防ぐためテンポラリファイルへ書き込んでから置換するアトミック永続化（`saveAtomic`）を使用します。
+並行書き込みの競合検出はファイルシステム属性に依存しないデータ内 `version` ベースの楽観ロック（§5.23 `AtomicPersistence`）で行われ、リトライ上限到達時は `wisdom.conflict.json` へ fail-open 退避します。
 
 **`load()`** — ファイルからの復元。ファイルが存在しない場合や内容が破損している場合は、空の `WisdomStore` を返して処理を続行します（Fail-Open設計）。
 
@@ -893,6 +930,17 @@ decision ではありません。
 2. 既知のワークフローでは対応するControllerを返します。
 3. 未知のワークフローでは`undefined`を返し、Worker実行を推測しません。
 
+**workflow → Controller 対応表:**
+
+| workflow | Controller |
+|----------|------------|
+| `brainstorming` | `sisyphus` |
+| `writing-plans` | `sisyphus` |
+| `subagent-driven-development` | `atlas` |
+| `executing-plans` | `sisyphus` |
+
+未知の workflow は `undefined` を返し、呼び出し元が fallback 方針（現状維持または `sisyphus`）を決定します。
+
 ---
 
 ### 5.18 `PersonaClassifier`
@@ -927,6 +975,7 @@ A+B ハイブリッド完了検知アプローチを実装し、タスク呼び�
 **主な機能:**
 *   **`recordPreToolUseInvocation(sessionId, callId, toolName, toolInput)`** — `PreToolUse` にて `writing-plans` や `systematic-debugging` スキルの起動が検出された場合、`sessionId` と `callId` の組み合わせごとに保留フラグをメモリに登録します（TTL: 5分、最大50エントリ）。また、`toolInput` から次に実行されるペルソナを推定・記録します。
 *   **`evaluateSkillCompletion(sessionId, callId, toolName, toolResult, isError, target)`** — `sessionId` と `callId` の組み合わせに対応する保留フラグに基づく `confidence: "high"`、または `toolResult` の成果物パス/マーカー（`## Architecture` + `## Implementation` または根本原因マーカー）一致による `confidence: "medium"` でタスクの完了を検出します。判定後、対象ターゲットの保留フラグのみを消去します（他ターゲットや他の `task()` 呼び出しの保留状態には干渉しません）。`isError: true` の場合は完了とみなしません。
+*   **`callId` 欠損時の相関** — `callId` がない呼び出しでは保留状態を作成・参照・削除しません。別の並行 `task()` 呼び出しと誤って相関させないためであり、結果マーカーだけによる `confidence: "medium"` の検出は引き続き行います。
 *   **`lastInvokedPersona(sessionId)`** — 最後に登録された推定ペルソナ（`AgentId`）を返します。
     *   **ペルソナの推定優先順位**:
         1. `toolInput.agent`（`atlas` / `hephaestus` / `sisyphus` / `prometheus` に大文字小文字無視で所属）
@@ -965,6 +1014,47 @@ A+B ハイブリッド完了検知アプローチを実装し、タスク呼び�
 
 `JusticeNotifier` を実装した runtime レイヤのクラスです。OpenCode から注入される `client.app.log` 関数をバインドし、`service: "justice"` 固定のログ出力を担当します。例外発生時はすべて握りつぶして Fail-Open を担保します。
 
+---
+
+### 5.23 `AtomicPersistence<T>` — 楽観ロック付きアトミック永続化プリミティブ
+
+`wisdom.json` / `wisdom-archive.json` など複数プロセスから並行書込されうる JSON ファイルのための汎用永続化プリミティブ（`src/core/atomic-persistence.ts`）。`WisdomPersistence`（§5.13）と `WisdomArchive`（§5.24）がこれを再利用する。
+
+- **version ベースの楽観ロック**: ファイル内容は `{ version: number, data: T }` の envelope で永続化され、書き込み毎に version を +1 する。競合検出の根拠はデータ内 `version` のみで、`mtime` 等のファイルシステム属性には依存しない（NFS / tmpfs の granularity 差・clock skew を排除）。envelope を持たないレガシー JSON は `version=0` として解釈し、初回書き込みで envelope 形式へ昇格する。
+- **atomic claim プロトコル（TOCTOU 排除）**: `fs.link()` の不可分な排他作成（既存なら `EEXIST`）により `<path>.commit-pending` スロットを獲得し、claim 保持中に version 再確認（recheck）→ `fs.rename()` で publish する。check と act の間に他 writer が介入できないため、同時 publish の直列化と stale payload の拒否が両立する。
+- **指数バックオフ + jitter 付きリトライ（上限 3 回）**。上限到達時は理由（`version_mismatch` / `claim_acquisition_failed` / `rename_conflict`）を記録して `<path>.conflict.json` へ fail-open 退避し、メイン処理は継続する。退避ファイル書込自体の失敗も `console.warn` のみで握り、プロセスを落とさない。
+- **stale-claim 回復**: `<path>.commit-pending` が既定 10 秒（`STALE_CLAIM_TIMEOUT_MS`）より古い場合はオーナレスとみなして reclaim する。誤って生きた claim を回復しても publish 側の rename が `ENOENT` で失敗してリトライループへ戻るため、データロストや version 単調性の破綻は発生しない。
+- **レイアウト**: `<path>`（公開ファイル）/ `<path>.tmp.<uuid>`（writer ローカル tmp）/ `<path>.commit-pending`（単一 claim スロット）/ `<path>.conflict.json`（退避先）。起動時に 10 分超の残存 tmp ファイルを GC する。
+
+### 5.24 `WisdomMetrics` / `WisdomArchive` — メタデータ統合（SSoT）と eviction アーカイブ
+
+メトリクス（`hitCount` / `lastHitAt` / `firstSeenAt`）は `WisdomEntry` 自身の optional フィールドとして `wisdom.json` に統合永続化される（Single Source of Truth）。`wisdom-metrics.json` 等の別ファイルは存在しない。
+
+- **`WisdomMetrics.recordHit(store, entryId, now)`** — `WisdomStore.updateMetrics(entryId, mutator)` 経由で **copy-on-write**（該当エントリを新 immutable インスタンスへ差し替え）によりメタデータを更新するステートレスなサービス。`getRelevant()` 内では呼ばれず、wisdom 注入が確定した呼び出し元（`PlanBridge` の委譲構築時）でのみ明示的に呼ぶ（status 表示等での過剰計上の防止）。`onHit` リスナー経由で `TelemetryStore.recordWisdomHit` へ疎結合に通知する。
+- **`WisdomArchive.shouldArchive(entry)`** — LRU eviction で取り除かれたエントリのアーカイブ判定。`failure_gotcha` / `design_decision` は常にアーカイブ（`high_priority_category`）、`environment_quirk` は `hitCount >= 3` でアーカイブ（`hit_count_threshold`）。
+- **アーカイブ形式と append 意味論** — `ArchivedWisdom` は `WisdomEntry` をネストせず、`id` / `taskId` / `category` / `content` / `archivedAt` / `archiveReason` / optional `hitCount` を持つ flat JSON レコードとして保存する。同一プロセスの `append()` は直列化され、同じ `id` を再アーカイブした場合は最新レコードへ置換する。複数プロセスの競合時だけ、`AtomicPersistence` の merge が `(id, archivedAt)` 複合キーで重複を除外して両方の記録を保持する。
+- **`TieredWisdomStore` との連携** — `onEvict` リスナーで eviction を受け、アーカイブ対象なら `WisdomArchive.append()` を非同期開始するため eviction 自体は待機しない。開始済みのアーカイブ Promise は追跡され、`persistAll()` はそれらの完了を待ってから Wisdom を保存する。失敗は warn のみで、アーカイブの永続化は §5.23 の `AtomicPersistence` を再利用し、退避先は tier ごとの `wisdom-archive.conflict.json`。
+
+### 5.25 `TelemetryStore` — プラン単位のテレメトリ
+
+plan 単位の集計を `.justice/telemetry.json`（project-local のみ）へ best-effort（temp + rename の atomic write。完全な楽観ロックは不適用）で永続化する（`src/core/telemetry-store.ts`）。
+
+- **記録イベント**: `task_completed`（`TaskFeedbackHandler` の PostToolUse）/ `wisdom_injected`（`PlanBridge` の注入確定時）/ `wisdom_hit`（`WisdomMetrics.onHit` 経由）。
+- **`computeSnapshot(windowSize)`**: `failureRate`（直近 N 件の `task_completed` のうち `status !== "success"` の割合）/ `wisdomHitRate`（同一 `taskId` 内で完結する判定）/ `errorDistribution`（`ErrorClass` 全種で正規化）。
+- **`StatusCommand.getStatusWithAnalytics()` / `formatAsJson()`** — analytics を含むステータスと JSON 出力を提供する（doctor CLI の `status --analytics [--json]`）。
+
+### 5.26 `RetryPolicyCalculator` — 動的リトライ閾値
+
+`LoopDetectionHandler.evaluateEscalation()` が `activeTask` を渡した場合、固定閾値の代わりに動的な `maxRetries` を算出する（`src/core/retry-policy-calculator.ts`）。
+
+```text
+maxRetries = max(1, BASE(3) + categoryModifier + volumeModifier)
+categoryModifier: quick = -1 / ultrabrain = +2 / その他 = 0
+volumeModifier:   stepCount >= 5 で +1
+```
+
+- `categoryModifier` の対象は `TaskCategory` 全種。`sp-*` category は `isTaskCategory` ガードにより modifier 0 として扱う（`SpCategory | TaskCategory` union への routing core 拡張への適合）。
+- `activeTask === undefined` の場合は従来どおり `MAX_RETRIES_BEFORE_ESCALATION` 環境変数をフォールバック値として使用する。
 ---
 
 ## 6. ファイル I/O インターフェース (File I/O Interfaces)
@@ -1126,8 +1216,17 @@ justice/
 │   │   ├── wisdom-store.ts           — 学習内容のオンメモリ格納
 │   │   ├── learning-extractor.ts     — フィードバックから学習内容を抽出する処理
 │   │   ├── wisdom-persistence.ts     — WisdomStore のファイルI/O
+│   │   ├── atomic-persistence.ts     — version ベース楽観ロック付きアトミック永続化プリミティブ
+│   │   ├── wisdom-metrics.ts         — hitCount 等メタデータの copy-on-write 更新サービス
+│   │   ├── wisdom-archive.ts         — LRU eviction エントリのアーカイブ判定と永続化
+│   │   ├── telemetry-store.ts        — プラン単位のテレメトリ集計
+│   │   ├── retry-policy-calculator.ts — category/stepCount からの動的リトライ閾値算出
 │   │   ├── dependency-analyzer.ts    — タスク依存関係と先行処理等の解析
 │   │   ├── category-classifier.ts    — タスクのカテゴリを自動判定する機能
+│   │   ├── workflow-router.ts         — workflow 名 → ControllerAgent の解決
+│   │   ├── execution-role-classifier.ts — PlanTask → ExecutionRole の分類
+│   │   ├── omo-category-mapper.ts     — ExecutionRole → SpCategory の写像
+│   │   ├── routing-decision.ts        — RoutingDecision 判別共用体と factory
 │   │   ├── progress-reporter.ts      — 各タスク進捗からの集計レポート生成
 │   │   ├── status-command.ts         — 命令からのステータス確認API
 │   │   ├── justice-plugin.ts         — これらを繋げるオーケストレーターとイベントの共有箇所
@@ -1556,15 +1655,41 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 ### 15.12 既知の未解決事項・ガバナンス状況（重要）
 
-v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証と再計測により、すべて解決または許容可能と判定された**。したがって v2.0 Quality Control Plane は「実機で動作することが観測によって証明された状態」にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、Enforcement（L1 deny 等）は v2.5+ の対象である。
+v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証と再計測により、解決済み、L0 Advisory として許容、または後述の未実証限界として記録された**。したがって v2.0 Quality Control Plane は、確認済みの実行経路では実機動作が観測された状態にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、Enforcement（L1 deny 等）は v2.5+ の対象である。
 
 - **配布エントリの根因と修正**: v3.0.0 未満は package `exports["."]` が barrel エントリを指し、OpenCode の「全 export が plugin factory または `{ server: fn }`」というローダ契約に違反していたため、`Plugin export is not a function` で plugin が一度もロードされなかった。v3.0.0 では `exports["."]` と `exports["./opencode"]` を plugin 専用エントリへ再構成し、`./core` は library entry として分離した。FF-009（`bun run test:dist`）で root / subpath のロード契約と factory 実行可能性を回帰検証する。
 
 - **実機実証の範囲**: 実証は実行経路によって証拠が分離している。絶対パス entry と root specifier entry の headless 実行では、plugin load（`OpenCodePlugin` factory 呼出し・初期化ログ出力）が成功することを観測したにとどまる。Observation Log 書き込み、schema 適合、`justice_review` 呼出し、`gate.yaml` fail-open 動作、`task_complete` による DecisionRecord 生成は、**プログラマティックな `dist/opencode-plugin.js` 実行経路**でのみ観測した証拠である。headless 経路では `.justice/events/**.jsonl` への ObservationRecord 生成は確認されていない。ユニットテストが緑であることだけでは runtime の証拠とせず、隔離した設定・キャッシュ・sessionId・callId による実機観測を完了条件とする。
 
+- **メッセージ確定順序の実証限界**: `message.updated` と `experimental.text.complete` は順序保証のない別イベント源であり、`finish` / `time.completed` の正確な完了指標も未実証である。`MessageRoleBuffer` は `message.updated` の完了を soft-finalize として扱い、後着の `text_complete` で同じ evidenceId の訂正 revision を記録する。メッセージ由来の `declared` claim は Gate PASS の権威証拠にならないため、v2.0 では L0 の監査可視性として許容するが、強制的な gate 判定へ拡張する前に実機順序を検証する。
+
 - **C1（L0 advisory 表示面の実証）— `partial` と判定された**: プログラマティックな OpenCode Plugin API 呼び出しでは、`enableAdvisoryOutputAppend: true` 時に `output.output` 末尾へ Gate advisory banner が追記されることを確認した。ただし headless `opencode run` 実行では `.justice/events/**.jsonl` への ObservationRecord 書き込みが観測されなかった（プラグインロード自体は成功）。これは L0 Advisory 機能の主要な使用経路（対話的 TUI / 通常の Plugin API 呼び出し）では成立しており、headless 実行経路のイベントフローのみに限定された限界である。したがって `enableAdvisoryOutputAppend` は **既定 `false` のまま維持**し、保証チャネルは `JusticeNotifier`（`client.app.log`）とする。`output.output` 追記はオプトインの best-effort 機能として README に記載する（Task 18）。
 
-- **CODEOWNERS 追認 ADR — `APPROVED` とする**: `docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md` において、`.github/CODEOWNERS` が `* @yohi` でリポジトリ协作者も `@yohi` 単独（admin）であるため、自己 `APPROVED` レビューは GitHub 構造上不可能であった。よって ratification の証跡を「CODEOWNER 本人による本 ADR への日付・対象・根拠を明記したコミット」と再定義し、2026-08-02 に `PENDING HUMAN CODEOWNERS RATIFICATION` から `APPROVED` に変更した。これは要件の抹消ではなく達成可能な形への再定義であり、承認対象の Charter 逸脱 5 項目（hook bindings / storage paths / exit code degraded verdict / artifact authorship reduction / declared evidence limitation）は一切変更しない。
+- **CODEOWNERS 追認 ADR — `APPROVED`（追認対象 ADR `ADR-2026-06-26-v2-charter-drift.md` は本節へ全文転記済み）**:
+
+  > **ADR: Justice V2 Charter Drift and Authorship Reduction**
+  >
+  > * **Status:** APPROVED
+  > * **Date:** 2026-06-26（ratified 2026-08-02）
+  > * **Decided By:** `@yohi` (Repository Owner)
+  >
+  > **Context**: v2 の spike Phase 0 および詳細設計の中で、元の Charter 要件からの以下の逸脱が識別された。
+  >
+  > 1. **Hook Bindings (D44)**: hook イベント一覧を実 `@opencode-ai/plugin` インターフェースに合わせて更新した。message 観測は `message.part.updated` / `experimental.text.complete`（assistant 本文）+ `message.updated`（lifecycle: role と最終確定の確認）+ `session.error` + `tool.execute` を消費する（単純な `message.updated` 依存からの変更）。
+  > 2. **Storage Paths (§4.5)**: ストレージレイアウトを per-writer 直列化（`events/<agentId>/<sessionId>/<writerId>.jsonl`）へ詳細化した。
+  > 3. **Exit Code Degraded Verdict (D5)**: fallback exit code ロジックは直接の gate verdict ではなく degraded observation として扱う。
+  > 4. **Artifact Authorship Reduction (§8.3 / D54 / D63)**: v2.0 では state projection と event log から `authorship` メタデータ（生成コンテキスト追跡）を省略し、`authority` パラメータのみを保持する。マルチエージェント handoff の動学は v2.5 へ先送り。
+  > 5. **Declared Evidence Limitation (INV-004 / §5.3 M4)**: `declared` 主張（assistant や task summary による自己申告のテスト合格等）は L0 advisory 出力にのみ使用し、gate PASS / L1+ deny 判定の権威データは `observed` または `derived` のみとする。
+  >
+  > **Decision**: 上記のとおり、更新後の hook event matrix の ratify、`.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` および `.justice/archive/events/<agentId>/<sessionId>/<writerId>.<timestamp>.jsonl` へのフォルダ永続化の再構成、v2.0 の state envelope / projection からの `authorship` 追跡の廃止、gate 評価権限の `observed` / `derived` への限定（`declared` は gate 評価では非権威、L0 advisory 等の非 gate 表示面では許容）を ratify する。
+  >
+  > **Ratification (2026-08-02)**
+  >
+  > - **構造的制約**: `.github/CODEOWNERS` は `* @yohi` でリポジトリ協作者も `@yohi` 単独（admin）であるため、追認条項が要求する human CODEOWNERS は `@yohi` 自身であり、GitHub 構造上の自己 `APPROVED` レビューは **structurally unachievable** であった。
+  > - **Evidence**: PR #116 の `reviewDecision=APPROVED` は自動 bot（coderabbitai）によるもののみで、`@yohi` のレビュー投稿はすべて `state=COMMENTED` であった（2026-07-06 に `gh pr view 116 --json reviewDecision,reviews,author,mergedBy` で検証）。
+  > - **Re-definition of ratification evidence**: 追認の証跡を「CODEOWNER 本人による本 ADR への、日付・ratify 対象・根拠を明記したコミット」と再定義する。2026-08-02 付の当該コミット（Context の 5 つの Charter 逸脱: hook bindings / storage paths / exit code degraded verdict / artifact authorship reduction / declared evidence limitation を ratify）がその証跡である。
+  > - **これは要件の抹消ではなく達成可能な形への再定義である。** 5 つの Charter 逸脱自体は不変であり、ratify 対象のまま維持される。
+  > - **Status change**: `PENDING HUMAN CODEOWNERS RATIFICATION` → `APPROVED`。
 
 - **Evidence write 経路のレイテンシ — 再計測済み・条件付き許容と判定された**: 2026-08-04 に `spikes/observation-latency/measure.ts` で hook 経路 end-to-end 再計測を実施した。結果は `docs/reports/2026-07-31-v2-latency-measurement.json` に記録。同一 shard への連続 append（本番支配的条件）の p95 は 0B prefill で 1.502ms、100KB prefill で 2.787ms と **5ms 未満**であり許容範囲内。一方で shard サイズが 5MB 直前（rotation 閾値直前）では p95=36.084ms、p99=37.414ms、冷キャッシュ初回 append は 41.174ms となった。**shard サイズが 1MB 以下の通常利用域では目標を達成しているが、rotation 直前の大 shard では O(shard size) の全文書き込みコストが顕在化する**。したがって現行実装は **条件付き許容** とし、バッチ化・非同期 flush 化等の改善は v2.5 の Issue に登録して対応する。v2.0 では shard サイズ 5MB・14日の rotation 政策により、通常セッションでは 1MB 以下の shard に留まる運用を推奨する。
 

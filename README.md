@@ -451,6 +451,8 @@ bunx @yohi/justice doctor
 
 診断対象は、global / project / `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR` の設定ソースにある Justice エントリ、specifier の解決、OpenCode ローダ契約、OpenCode ログの `failed to load plugin` / Justice 初期化記録、`.justice/` の観測データ、`.justice/gate.yaml` です。検査失敗時は非ゼロ終了します。これはセッションを停止させない CLI に限った fail-open の例外です。
 
+Justice エントリは部分文字列では判定しません。パッケージ specifier は version / subpath を除いた base name が `justice` または `justice-` で始まる場合だけ、絶対パス entry はパス segment が `justice` または `justice-` で始まる場合だけ検出します。したがって `injustice-report` や `no-justice-helper` は検出対象外です。
+
 v3.0.0 未満では root specifier の配布エントリがプラグイン契約に適合せずロードに失敗する問題がありました。root specifier を利用する場合は v3.0.0 以降へ更新してください。
 
 - **全ツール・メッセージ観測**: `tool.execute.*` / `message.*` イベントを `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` へ追記専用（append-only）で記録します。テスト実行結果・lint/build 出力・レビュー指摘などが対象です（コード本文やチャット全文は保持しません）。
@@ -477,6 +479,10 @@ v3.0.0 未満では root specifier の配布エントリがプラグイン契約
 | `WisdomStore` | Core | LRU キャッシュ削除機構付きのインメモリ学習ストア |
 | `LearningExtractor` | Core | `TaskFeedback` から学習内容を抽出 |
 | `WisdomPersistence` | Core | `WisdomStore` と `.justice/wisdom.json` 間の永続化・復元 |
+| `AtomicPersistence` | Core | version ベース楽観ロック + atomic claim による並行書込安全な JSON 永続化プリミティブ（SPEC §5.23） |
+| `WisdomMetrics` / `WisdomArchive` | Core | hit 等メタデータの copy-on-write 更新（SSoT）と LRU eviction エントリのアーカイブ（SPEC §5.24） |
+| `TelemetryStore` | Core | プラン単位のテレメトリ集計（`failureRate` / `wisdomHitRate` / `errorDistribution`、SPEC §5.25） |
+| `RetryPolicyCalculator` | Core | category/stepCount からの動的リトライ閾値算出（SPEC §5.26） |
 | `StatusCommand` | Core | プログラムから利用可能なプランステータス API |
 | `JusticePlugin` | Core | オーケストレーター — イベントをルーティングし、`WisdomStore` を共有 |
 | `PlanBridge` | Hook | `Message`/`PreToolUse` 時の委譲ブリッジおよびエージェント状態の同期、`/justice-start` ワークフロー・ブートストラップ状態の管理 |

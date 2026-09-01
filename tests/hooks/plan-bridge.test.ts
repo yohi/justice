@@ -1,9 +1,6 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { describe, it, expect, vi } from "vitest";
-import {
-  normalizeTaskToolInputWithCategory,
-  PlanBridge,
-} from "../../src/hooks/plan-bridge";
+import { normalizeTaskToolInputWithCategory, PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,

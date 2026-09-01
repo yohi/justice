@@ -1,16 +1,14 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- adrPath is a hardcoded ADR spec path resolved relative to __dirname, not user input. */
+/* eslint-disable security/detect-non-literal-fs-filename -- recordPath is a hardcoded governance record path (SPEC.md) resolved relative to __dirname, not user input. */
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
 test("preflight verification: ADR ratification check", () => {
-  const adrPath = resolve(
-    __dirname,
-    "..",
-    "docs/superpowers/specs/ADR-2026-06-26-v2-charter-drift.md",
-  );
-  expect(existsSync(adrPath)).toBe(true);
-  const content = readFileSync(adrPath, "utf-8");
+  // The ADR body is transcribed into SPEC.md §15.12 ("CODEOWNERS 追認 ADR")
+  // since docs/superpowers/ was removed.
+  const recordPath = resolve(__dirname, "..", "SPEC.md");
+  expect(existsSync(recordPath)).toBe(true);
+  const content = readFileSync(recordPath, "utf-8");
   // Status must be APPROVED after 2026-08-02 ratification
   expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
   // Ratification section documents the structural constraint and re-definition of evidence
