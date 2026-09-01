@@ -60,8 +60,20 @@ describe("ExecutionRoleClassifier", () => {
     expect(classifier.classify(makeTask({ title: "deep reasoning research" }))).toBe("deep");
   });
 
+  it("prioritizes deep over mechanical keywords", () => {
+    expect(classifier.classify(makeTask({ title: "rename deep reasoning configuration" }))).toBe(
+      "deep",
+    );
+  });
+
   it("classifies architecture tasks", () => {
     expect(classifier.classify(makeTask({ title: "design system architecture" }))).toBe(
+      "architecture",
+    );
+  });
+
+  it("prioritizes architecture over mechanical keywords", () => {
+    expect(classifier.classify(makeTask({ title: "rename architecture configuration" }))).toBe(
       "architecture",
     );
   });

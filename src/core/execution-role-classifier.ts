@@ -55,20 +55,20 @@ export class ExecutionRoleClassifier {
       return "integration";
     }
 
-    if (this.matches(text, MECHANICAL_KEYWORDS)) {
-      return "mechanical";
-    }
-
-    if (this.matches(text, TEST_ONLY_KEYWORDS)) {
-      return "mechanical";
-    }
-
     if (this.matches(text, DEEP_KEYWORDS)) {
       return "deep";
     }
 
     if (this.matches(text, ARCHITECTURE_KEYWORDS)) {
       return "architecture";
+    }
+
+    if (this.matches(text, MECHANICAL_KEYWORDS)) {
+      return "mechanical";
+    }
+
+    if (this.matches(text, TEST_ONLY_KEYWORDS)) {
+      return "mechanical";
     }
 
     return "implementation";
