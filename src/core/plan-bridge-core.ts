@@ -72,12 +72,14 @@ export class PlanBridgeCore {
     const category = this.resolveWorkerCategory(role, options.category);
     if (category === undefined) return undefined;
 
-    const reason =
-      options.categorySource === "compatibility_fallback"
-        ? "compatibility_fallback"
-        : options.categorySource === "classifier" || options.category === undefined
-          ? "task_classification"
-          : "explicit_request";
+    let reason: "task_classification" | "explicit_request" | "compatibility_fallback";
+    if (options.categorySource === "compatibility_fallback") {
+      reason = "compatibility_fallback";
+    } else if (options.categorySource === "classifier" || options.category === undefined) {
+      reason = "task_classification";
+    } else {
+      reason = "explicit_request";
+    }
     const routingDecision = createWorkerRoutingDecision(role, category, reason);
 
     return {
