@@ -89,7 +89,6 @@ interface PersonaRecord {
 export class PlanCompletionDetector {
   private readonly reviewRejectionDetector = new ReviewRejectionDetector();
   private readonly pendingMap = new Map<string, PendingRecord>();
-  private readonly personaMap = new Map<string, PersonaRecord>();
   private readonly lastInvokedPersonaMap = new Map<string, PersonaRecord>();
 
   // ─── Legacy simple detection ───
@@ -153,7 +152,6 @@ export class PlanCompletionDetector {
     const detectedPersona = inferPersonaFromToolInput(toolInput);
 
     if (skills.length === 0 && !detectedPersona) {
-      this.personaMap.delete(completionKey);
       this.lastInvokedPersonaMap.delete(sessionId);
       return;
     }
@@ -175,7 +173,6 @@ export class PlanCompletionDetector {
 
     if (detectedPersona) {
       const personaRecord = { agentId: detectedPersona, lastAccess: now };
-      this.personaMap.set(completionKey, personaRecord);
       this.lastInvokedPersonaMap.set(sessionId, personaRecord);
     }
   }
@@ -197,7 +194,6 @@ export class PlanCompletionDetector {
     const completionKey = this.getCompletionKey(sessionId, callId);
     if (isError) {
       this.pendingMap.delete(completionKey);
-      this.personaMap.delete(completionKey);
       return null;
     }
     if (toolName !== "task") return null;
@@ -243,12 +239,6 @@ export class PlanCompletionDetector {
       }
     }
 
-    for (const [key, record] of this.personaMap.entries()) {
-      if (now - record.lastAccess > PENDING_TTL_MS) {
-        this.personaMap.delete(key);
-      }
-    }
-
     for (const [key, record] of this.lastInvokedPersonaMap.entries()) {
       if (now - record.lastAccess > PENDING_TTL_MS) {
         this.lastInvokedPersonaMap.delete(key);
@@ -263,16 +253,6 @@ export class PlanCompletionDetector {
       const toRemove = sorted.slice(0, this.pendingMap.size - MAX_PENDING_ENTRIES);
       for (const [key] of toRemove) {
         this.pendingMap.delete(key);
-      }
-    }
-
-    if (this.personaMap.size > MAX_PENDING_ENTRIES) {
-      const sorted = [...this.personaMap.entries()].sort(
-        (a, b) => a[1].lastAccess - b[1].lastAccess,
-      );
-      const toRemove = sorted.slice(0, this.personaMap.size - MAX_PENDING_ENTRIES);
-      for (const [key] of toRemove) {
-        this.personaMap.delete(key);
       }
     }
 
