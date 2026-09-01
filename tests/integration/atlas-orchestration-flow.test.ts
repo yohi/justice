@@ -48,7 +48,8 @@ describe("Atlas orchestration integration flow", () => {
     if (post.action !== "inject") throw new Error("expected Atlas injection");
     expect(post.injectedContext).toContain("🎯");
     expect(post.injectedContext).toContain("Atlas Orchestration");
-    expect(post.injectedContext).toContain("hephaestus");
+    expect(post.injectedContext).toContain("sp-integration");
+    expect(post.injectedContext).not.toContain("hephaestus");
     expect(notifier.calls.filter((call) => call.variant === "atlas_orchestration")).toHaveLength(1);
     expect(post.injectedContext.startsWith(notifier.banners.at(-1)!)).toBe(true);
 

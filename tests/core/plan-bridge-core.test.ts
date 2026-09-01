@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { PlanBridgeCore } from "../../src/core/plan-bridge-core";
 import type { PlanTask } from "../../src/core/types";
 
+const FORBIDDEN_WORKER_FIELDS = [
+  "model",
+  "provider",
+  "agent",
+  "subagent_type",
+  "variant",
+  "reasoning",
+  "fallback_models",
+] as const;
+
+function makeTask(overrides: Partial<PlanTask> = {}): PlanTask {
+  return {
+    id: "t1",
+    title: "implement login",
+    steps: [],
+    status: "pending",
+    ...overrides,
+  };
+}
+
 describe("PlanBridgeCore", () => {
   const core = new PlanBridgeCore();
 
@@ -10,49 +30,128 @@ describe("PlanBridgeCore", () => {
     expect(core.resolveController("unknown-workflow")).toBeUndefined();
   });
 
-  it("builds a controller request with a category-only worker payload", () => {
+  it("returns a controller and quick request for a known workflow", () => {
     const result = core.buildControllerRequest("brainstorming", {
-      taskId: "task-controller",
+      taskId: "t1",
       prompt: "plan the work",
     });
 
-    expect(result).toEqual({
-      controller: "sisyphus",
-      request: {
-        category: "quick",
-        loadSkills: [],
-        taskId: "task-controller",
-        prompt: "plan the work",
-        runInBackground: false,
-        context: { taskId: "task-controller" },
-      },
+    expect(result?.controller).toBe("sisyphus");
+    expect(result?.request).toEqual({
+      category: "quick",
+      taskId: "t1",
+      loadSkills: [],
+      prompt: "plan the work",
+      runInBackground: false,
+      context: { taskId: "t1" },
     });
   });
 
-  it("returns no controller request for an unknown workflow", () => {
+  it("returns undefined for an unknown controller workflow", () => {
     expect(
       core.buildControllerRequest("unknown-workflow", {
-        taskId: "task-unknown-controller",
+        taskId: "t1",
         prompt: "plan the work",
       }),
     ).toBeUndefined();
   });
 
-  it("classifies a plan task and builds a worker request", () => {
-    const task: PlanTask = {
-      id: "task-worker",
-      title: "implement user login feature",
-      steps: [],
-      status: "pending",
-    };
-
-    const result = core.classifyAndBuildWorkerRequest(task, {
-      taskId: task.id,
+  it("classifies a PlanTask and builds a worker request", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask(), {
+      taskId: "t1",
       prompt: "implement feature",
     });
 
     expect(result?.category).toBe("sp-implementation");
-    expect(result?.request.category).toBe("sp-implementation");
+    expect(result?.request).toEqual({
+      category: "sp-implementation",
+      taskId: "t1",
+      loadSkills: [],
+      prompt: "implement feature",
+      runInBackground: false,
+      context: { taskId: "t1" },
+    });
+    for (const field of FORBIDDEN_WORKER_FIELDS) {
+      expect(result?.request).not.toHaveProperty(field);
+    }
+  });
+
+  it("uses an explicit category when provided", () => {
+    const result = core.classifyAndBuildWorkerRequest(
+      makeTask({ title: "deep reasoning research" }),
+      {
+        taskId: "t1",
+        prompt: "research the design",
+        category: "deep",
+      },
+    );
+
+    expect(result?.category).toBe("deep");
+    expect(result?.request.category).toBe("deep");
+  });
+
+  it("preserves an explicit category that differs from the execution role", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask(), {
+      taskId: "t1",
+      prompt: "implement feature",
+      category: "sp-integration",
+    });
+
+    expect(result?.category).toBe("sp-integration");
+    expect(result?.request.category).toBe("sp-integration");
+  });
+
+  it("validates a category supplied by the internal classifier", () => {
+    expect(() =>
+      core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
+        taskId: "t1",
+        prompt: "research the design",
+        category: "unspecified-low",
+        categorySource: "classifier",
+      }),
+    ).toThrow("Invalid routing pair");
+  });
+
+  it("preserves the category classifier compatibility fallback", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask({ title: "deep existing task" }), {
+      taskId: "t1",
+      prompt: "continue the task",
+      category: "unspecified-low",
+      categorySource: "compatibility_fallback",
+    });
+
+    expect(result?.category).toBe("unspecified-low");
+    expect(result?.request.category).toBe("unspecified-low");
+  });
+
+  it("preserves an explicit unspecified-low category for a normal role", () => {
+    const result = core.buildWorkerRequest("implementation", {
+      taskId: "t1",
+      prompt: "implement the feature",
+      category: "unspecified-low",
+    });
+
+    expect(result?.category).toBe("unspecified-low");
+    expect(result?.request.category).toBe("unspecified-low");
+  });
+
+  it("returns undefined when the classified role has no OMO category", () => {
+    expect(
+      core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
+        taskId: "t1",
+        prompt: "research the design",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("builds a worker request from an explicit execution role", () => {
+    const result = core.buildWorkerRequest("integration", {
+      taskId: "t1",
+      prompt: "integrate the modules",
+    });
+
+    expect(result?.category).toBe("sp-integration");
+    expect(result?.request.category).toBe("sp-integration");
   });
 
   it("returns no worker request for unmapped execution roles", () => {

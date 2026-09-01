@@ -1,6 +1,9 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { describe, it, expect, vi } from "vitest";
-import { PlanBridge } from "../../src/hooks/plan-bridge";
+import {
+  normalizeTaskToolInputWithCategory,
+  PlanBridge,
+} from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
@@ -12,6 +15,8 @@ import { createMockFileWriter } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
+import { WisdomStore } from "../../src/core/wisdom-store";
+import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 import type { ObservationHandler } from "../../src/hooks/observation-handler";
 
@@ -66,6 +71,44 @@ function createObservationHandler(): ObservationHandler & {
     emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
   };
 }
+
+describe("normalizeTaskToolInputWithCategory", () => {
+  it("removes forbidden task fields and preserves prompt", () => {
+    const input = {
+      prompt: "do work",
+      subagent_type: "deep",
+      agent: "atlas",
+      model: "claude",
+      provider: "anthropic",
+      variant: "fast",
+      reasoning: true,
+      fallback_models: ["fallback"],
+    };
+
+    const result = normalizeTaskToolInputWithCategory(input, "sp-implementation");
+
+    expect(result).toEqual({
+      prompt: "do work",
+      category: "sp-implementation",
+    });
+  });
+
+  it("sets the normalized category when the input already has one", () => {
+    const input = { prompt: "x", category: "sp-mechanical" };
+
+    const result = normalizeTaskToolInputWithCategory(input, "sp-mechanical");
+
+    expect(result.category).toBe("sp-mechanical");
+  });
+
+  it("preserves a caller-provided category over the classified category", () => {
+    const input = { prompt: "x", category: "sp-mechanical" };
+
+    const result = normalizeTaskToolInputWithCategory(input, "sp-implementation");
+
+    expect(result.category).toBe("sp-mechanical");
+  });
+});
 
 describe("PlanBridge", () => {
   describe("handleMessage", () => {
@@ -186,6 +229,43 @@ describe("PlanBridge", () => {
       expect(response.injectedContext).toContain("already completed");
       expect(bridge.getActivePlan("s-4")).toBeNull();
     });
+
+    it("includes empty-step guidance and previous learnings in the delegation prompt", async () => {
+      const reader = createMockFileReader({ "plan.md": "## Task 1: Deep existing task\n" });
+      const wisdomStore = new WisdomStore();
+      wisdomStore.add(
+        makeWisdomDraft({
+          taskId: "task-1",
+          persona: "hephaestus",
+          content: "Keep the existing parser contract unchanged.",
+        }),
+        { persona: "hephaestus" },
+      );
+      const bridge = new PlanBridge(reader, createLoopHandler(reader), wisdomStore);
+      await bridge.handleImplementationArm("s-learnings", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handleMessage({
+        type: "Message",
+        payload: {
+          role: "assistant",
+          content: "Delegate the next task from plan.md",
+        },
+        sessionId: "s-learnings",
+        callId: "c-learnings",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("All steps are already completed.");
+      expect(response.injectedContext).toContain("**PREVIOUS LEARNINGS**:");
+      expect(response.injectedContext).toContain("Keep the existing parser contract unchanged.");
+    });
   });
 
   it("returns PROCEED for observation-kind message payloads", async () => {
@@ -265,6 +345,13 @@ describe("PlanBridge", () => {
           toolInput: {
             prompt: "do something",
             loadSkills: ["domain-skill", "test-driven-development"],
+            subagent_type: "deep",
+            agent: "atlas",
+            model: "claude",
+            provider: "anthropic",
+            variant: "fast",
+            reasoning: true,
+            fallback_models: ["fallback"],
           },
         },
         sessionId: "s-skills",
@@ -278,14 +365,18 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toEqual({
         args: {
           prompt: "do something",
-          taskId: "task-1",
-          loadSkills: ["domain-skill", "test-driven-development", "verification-before-completion"],
+          task_id: "task-1",
+          load_skills: [
+            "domain-skill",
+            "test-driven-development",
+            "verification-before-completion",
+          ],
           category: "sp-implementation",
         },
       });
     });
 
-    it("routes to sisyphus when implementation directive adds test-driven-development affinity", async () => {
+    it("uses category-only worker routing when implementation directive adds test-driven-development", async () => {
       // Given
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,
@@ -313,8 +404,8 @@ describe("PlanBridge", () => {
         throw new Error("expected inject response");
       }
       const injectedContext = response.injectedContext;
-      expect(injectedContext).toContain("**Category**: sp-implementation");
       expect(injectedContext).not.toContain("**AGENT**:");
+      expect(injectedContext).toContain("**Category**: sp-implementation");
     });
 
     it("uses the task-derived review category with implementation directive skills", async () => {
@@ -343,8 +434,8 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("**Category**: sp-review");
       expect(response.injectedContext).not.toContain("**AGENT**:");
+      expect(response.injectedContext).toContain("**Category**: sp-review");
     });
 
     it("falls back to the initial delegation when the enriched rebuild is unavailable", async () => {
@@ -384,8 +475,8 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toEqual({
         args: {
           prompt: "do something",
-          taskId: "task-1",
-          loadSkills: ["test-driven-development", "verification-before-completion"],
+          task_id: "task-1",
+          load_skills: ["test-driven-development", "verification-before-completion"],
           category: "sp-implementation",
         },
       });
@@ -490,7 +581,7 @@ describe("PlanBridge", () => {
       }
       expect(response.modifiedPayload).toMatchObject({
         args: {
-          loadSkills: expect.arrayContaining(["code-review"]),
+          load_skills: expect.arrayContaining(["code-review"]),
         },
       });
     });
@@ -540,8 +631,33 @@ describe("PlanBridge", () => {
       const response = await bridge.handlePreToolUse(event);
       expect(response.action).toBe("inject");
       if (response.action === "inject") {
-        expect(response.injectedContext).toContain("sp-integration");
+        expect(response.injectedContext).toContain("**Category**: sp-integration");
       }
+    });
+
+    it("keeps the review category consistent in context and modified payload", async () => {
+      const planContent = ["### Task 1: Review implementation", "- [ ] Review code"].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await bridge.handleImplementationArm("s-review-category", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { prompt: "delegate the review" } },
+        sessionId: "s-review-category",
+        callId: "c-review-category",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("**Category**: sp-review");
+      expect(response.modifiedPayload).toMatchObject({ args: { category: "sp-review" } });
     });
 
     it("should include progress summary in delegation context", async () => {
@@ -665,12 +781,15 @@ describe("PlanBridge", () => {
           completionDetector: {
             recordPreToolUseInvocation: (
               sessionId: string,
+              callId: string | undefined,
               toolName: string,
               toolInput: Record<string, unknown>,
             ) => void;
           };
         }
-      ).completionDetector.recordPreToolUseInvocation("s-2", "task", { agent: "prometheus" });
+      ).completionDetector.recordPreToolUseInvocation("s-2", "call-2", "task", {
+        agent: "prometheus",
+      });
 
       // Simulate a failed PostToolUse execution
       const postEvent: HookEvent = {

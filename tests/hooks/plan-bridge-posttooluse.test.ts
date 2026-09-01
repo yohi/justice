@@ -37,9 +37,17 @@ describe("PlanBridge.handlePostToolUse", () => {
       sessionId: "s-1",
       callId: "c-1",
     });
+    await bridge.handleImplementationArm("s-1", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
     await bridge.handlePreToolUse({
       type: "PreToolUse",
-      payload: { toolName: "task", toolInput: { skills: ["writing-plans"] } },
+      payload: {
+        toolName: "task",
+        toolInput: { skills: ["writing-plans"] },
+      },
       sessionId: "s-1",
       callId: "c-1",
     });
@@ -61,6 +69,8 @@ describe("PlanBridge.handlePostToolUse", () => {
     }
 
     expect(response.injectedContext).toContain("ATLAS ORCHESTRATION DIRECTIVE");
+    expect(response.injectedContext).toContain("**推奨カテゴリ**: sp-implementation");
+    expect(response.injectedContext).not.toContain("**推奨エージェント**");
 
     // Verify cache is cleared: second call should return PROCEED
     const secondResponse = await bridge.handlePostToolUse({
@@ -213,7 +223,8 @@ describe("PlanBridge.handlePostToolUse", () => {
     if (response.action !== "inject") {
       throw new Error("expected inject response");
     }
-    expect(response.injectedContext).toContain("hephaestus");
+    expect(response.injectedContext).toContain("**推奨カテゴリ**: sp-implementation");
+    expect(response.injectedContext).not.toContain("**推奨エージェント**");
   });
 
   it("saves wisdom entries when systematic-debugging completes", async () => {
@@ -268,6 +279,9 @@ describe("PlanBridge.handlePostToolUse", () => {
     } as PostToolUseEvent);
 
     expect(response.action).toBe("inject");
+    if (response.action !== "inject") {
+      throw new Error("expected inject response");
+    }
     expect(addedEntries).toHaveLength(1);
     expect(addedEntries.some((e) => e.category === "design_decision")).toBe(true);
     expect(addedEntries.some((e) => e.category === "success_pattern")).toBe(false);

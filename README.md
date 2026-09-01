@@ -329,15 +329,22 @@ Justice は stage ごとに純粋な `WorkflowDirective` を解決します。di
 `/justice-implement --plan <planPath> --approved` を実行する必要があります。
 
 明示的にアームされた次の1回の `task()` に限り、Justice は既存の `skills`、
-`loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく
+`loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく内部の
 `loadSkills` へ正規化します。そのうえで `test-driven-development` と
-`verification-before-completion` を追加し、`[JUSTICE: IMPLEMENTATION]` と plan
-context を渡します。Justice 自身はスキルや `task()` を起動しません。
+`verification-before-completion` を追加し、OMO wire payload の `load_skills` と
+`[JUSTICE: IMPLEMENTATION]`、plan context を渡します。Justice 自身はスキルや
+`task()` を起動しません。
+
+Adapter は全ての `task()` 呼び出しで、実装委譲がinjectされない場合やAdapterがno-opへ
+早期returnする場合も、元の `output.args` objectを差し替えずにsanitize・canonicalize
+します。`taskId`、`loadSkills`、`runInBackground` はそれぞれ `task_id`、
+`load_skills`、`run_in_background` へ変換され、禁止された routing field は除去されます。
 
 未アーム、または active plan と異なる plan 用の stale arm で `task()` が呼ばれた
 場合、Justice は `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけを返します。
-plan context、delegation metadata、`taskId`、追加スキルは注入せず、呼び出し元の
-prompt 以外の引数を変更しません。advisory は実行を物理的に停止するものではありません。
+plan context、delegation metadata、`task_id`、追加スキルは注入しません。Adapterの
+共通wire正規化と禁止field除去は適用されます。advisory は実行を物理的に停止するものでは
+ありません。
 
 ### フォールバックマーカー
 
@@ -457,7 +464,7 @@ v3.0.0 未満では root specifier の配布エントリがプラグイン契約
 | コンポーネント | 層 | 目的 |
 |-----------|-------|---------|
 | `PlanParser` | Core | `plan.md` を解析して `PlanTask[]` を生成、チェックボックスの更新 |
-| `AgentRouter` | Core | タスクのカテゴリやスキルに基づいて最適なエージェントへ委譲をルーティングする |
+| `AgentRouter` | Core | ワークフロー名からControllerを解決する。Workerのrole/category判定は`ExecutionRoleClassifier`とrouting factoryが担う |
 | `TaskPackager` | Core | `PlanTask` から構造化された `DelegationRequest` に変換し、`AGENT` ヘッダを埋め込む |
 | `TriggerDetector` | Core | プランの参照と委譲の意図を検出、および `/justice-start` ワークフロー起動リクエストのパース |
 | `ErrorClassifier` | Core | エラーを分類し、リトライの可否を判定 |

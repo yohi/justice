@@ -247,13 +247,7 @@ export class LoopDetectionHandler {
             category: this.classifier.classify(activeTask),
             stepCount: activeTask.steps.length,
           });
-    const maxRetries =
-      thresholdResult === undefined
-        ? this.maxRetries
-        : Math.max(
-            RetryPolicyCalculator.MIN_RETRIES,
-            this.maxRetries + thresholdResult.categoryModifier + thresholdResult.volumeModifier,
-          );
+    const maxRetries = thresholdResult?.maxRetries ?? this.maxRetries;
 
     if (failures >= maxRetries) {
       return {

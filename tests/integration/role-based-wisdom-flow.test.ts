@@ -44,6 +44,7 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected persona-scoped injection");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("**Category**: sp-implementation");
     expect(response.injectedContext).toContain("atlas-1");
     expect(response.injectedContext).toContain("atlas-2");
@@ -96,7 +97,7 @@ describe("Role-based wisdom integration flow", () => {
     expect(response.injectedContext).not.toContain("atlas-only");
   });
 
-  it("uses the dominant_override persona over an explicit toolInput agent when a review skill is present", async () => {
+  it("uses an explicit toolInput agent over a conflicting review skill", async () => {
     const reader = createMockFileReader({ "plan.md": plan });
     const writer = createMockFileWriter();
     const wisdomStore = new WisdomStore();
@@ -130,12 +131,13 @@ describe("Role-based wisdom integration flow", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
+    expect(response.injectedContext).not.toContain("**AGENT**");
     expect(response.injectedContext).toContain("**Category**: sp-implementation");
-    expect(response.injectedContext).toContain("prometheus-wisdom");
-    expect(response.injectedContext).not.toContain("hephaestus-wisdom");
+    expect(response.injectedContext).toContain("hephaestus-wisdom");
+    expect(response.injectedContext).not.toContain("prometheus-wisdom");
   });
 
-  it("falls back to loadSkills when skills array is empty and checks dominant_override", async () => {
+  it("uses loadSkills for inference while preserving explicit agent precedence", async () => {
     const reader = createMockFileReader({ "plan.md": plan });
     const writer = createMockFileWriter();
     const wisdomStore = new WisdomStore();
@@ -171,7 +173,7 @@ describe("Role-based wisdom integration flow", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected injection");
     expect(response.injectedContext).toContain("**Category**: sp-implementation");
-    expect(response.injectedContext).toContain("prometheus-wisdom");
-    expect(response.injectedContext).not.toContain("hephaestus-wisdom");
+    expect(response.injectedContext).toContain("hephaestus-wisdom");
+    expect(response.injectedContext).not.toContain("prometheus-wisdom");
   });
 });

@@ -1,5 +1,6 @@
 import { ExecutionRoleClassifier } from "./execution-role-classifier";
 import { OmoCategoryMapper } from "./omo-category-mapper";
+import { createWorkerRoutingDecision } from "./routing-decision";
 import { TaskPackager, type PackageOptions } from "./task-packager";
 import type {
   ControllerAgent,
@@ -19,6 +20,7 @@ export interface ControllerOptions {
 
 export interface WorkerOptions extends PackageOptions {
   readonly category?: SpCategory | TaskCategory;
+  readonly categorySource?: "classifier" | "explicit" | "compatibility_fallback";
   readonly role?: ExecutionRole;
 }
 
@@ -28,6 +30,10 @@ export class PlanBridgeCore {
   private readonly categoryMapper = new OmoCategoryMapper();
   private readonly roleClassifier = new ExecutionRoleClassifier();
 
+  /**
+   * Builds the Controller handoff and its quick request envelope.
+   * The request is for the Controller path and is not a Worker routing result.
+   */
   resolveController(workflow: string): ControllerAgent | undefined {
     return this.workflowRouter.resolveController(workflow);
   }
@@ -50,7 +56,9 @@ export class PlanBridgeCore {
   classifyAndBuildWorkerRequest(
     planTask: PlanTask,
     options: WorkerOptions,
-  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
+  ):
+    | { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest }
+    | undefined {
     const role = options.role ?? this.roleClassifier.classify(planTask);
     return this.buildWorkerRequest(role, options);
   }
@@ -58,13 +66,32 @@ export class PlanBridgeCore {
   buildWorkerRequest(
     role: ExecutionRole,
     options: WorkerOptions,
-  ): { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest } | undefined {
-    const category = options.category ?? this.categoryMapper.map(role);
+  ):
+    | { readonly category: SpCategory | TaskCategory; readonly request: DelegationRequest }
+    | undefined {
+    const category = this.resolveWorkerCategory(role, options.category);
     if (category === undefined) return undefined;
 
+    let reason: "task_classification" | "explicit_request" | "compatibility_fallback";
+    if (options.categorySource === "compatibility_fallback") {
+      reason = "compatibility_fallback";
+    } else if (options.categorySource === "classifier" || options.category === undefined) {
+      reason = "task_classification";
+    } else {
+      reason = "explicit_request";
+    }
+    const routingDecision = createWorkerRoutingDecision(role, category, reason);
+
     return {
-      category,
-      request: this.taskPackager.package(category, options),
+      category: routingDecision.category,
+      request: this.taskPackager.package(routingDecision.category, options),
     };
+  }
+
+  private resolveWorkerCategory(
+    role: ExecutionRole,
+    requestedCategory: SpCategory | TaskCategory | undefined,
+  ): SpCategory | TaskCategory | undefined {
+    return requestedCategory ?? this.categoryMapper.map(role);
   }
 }

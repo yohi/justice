@@ -2,15 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   enrichTaskToolInput,
   mergeTaskLoadSkills,
+  resolveSkillsFromToolInput,
   resolveTaskIdFromModifiedPayload,
   TaskPackager,
 } from "../../src/core/task-packager";
+import type { DelegationRequest } from "../../src/core/types";
 
 describe("TaskPackager", () => {
   const packager = new TaskPackager();
 
   it("packages a category-only worker payload", () => {
-    const request = packager.package("sp-implementation", {
+    const request: DelegationRequest = packager.package("sp-implementation", {
       taskId: "task-1",
       prompt: "implement the change",
       loadSkills: ["test-driven-development"],
@@ -51,14 +53,22 @@ describe("TaskPackager", () => {
   });
 
   it("preserves helper skill merge behavior", () => {
-    expect(mergeTaskLoadSkills(
-      ["domain-skill", "test-driven-development"],
-      ["test-driven-development", "verification-before-completion"],
-    )).toEqual([
-      "domain-skill",
-      "test-driven-development",
-      "verification-before-completion",
-    ]);
+    expect(
+      mergeTaskLoadSkills(
+        ["domain-skill", "test-driven-development"],
+        ["test-driven-development", "verification-before-completion"],
+      ),
+    ).toEqual(["domain-skill", "test-driven-development", "verification-before-completion"]);
+  });
+
+  it("merges and deduplicates all task skill aliases in caller order", () => {
+    expect(
+      resolveSkillsFromToolInput({
+        skills: ["shared-skill", "skills-only"],
+        loadSkills: ["shared-skill", "camel-only"],
+        load_skills: ["canonical-only", "shared-skill"],
+      }),
+    ).toEqual(["shared-skill", "skills-only", "camel-only", "canonical-only"]);
   });
 
   it("preserves task ID and normalizes helper input skills", () => {
@@ -75,12 +85,8 @@ describe("TaskPackager", () => {
 
     expect(enriched).toEqual({
       prompt: "run",
-      taskId: "task-existing",
-      loadSkills: [
-        "domain-skill",
-        "test-driven-development",
-        "verification-before-completion",
-      ],
+      task_id: "task-existing",
+      load_skills: ["domain-skill", "test-driven-development", "verification-before-completion"],
     });
     expect(original).toEqual({
       prompt: "run",
@@ -95,15 +101,15 @@ describe("TaskPackager", () => {
   });
 
   it("resolves a task id from a modified payload", () => {
-    expect(
-      resolveTaskIdFromModifiedPayload({ args: { taskId: "task-modified" } }),
-    ).toBe("task-modified");
+    expect(resolveTaskIdFromModifiedPayload({ args: { taskId: "task-modified" } })).toBe(
+      "task-modified",
+    );
   });
 
   it("omits loadSkills when no caller or required skills are provided", () => {
     expect(enrichTaskToolInput({ prompt: "run" }, "task-generated")).toEqual({
       prompt: "run",
-      taskId: "task-generated",
+      task_id: "task-generated",
     });
   });
 
@@ -122,5 +128,28 @@ describe("TaskPackager", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("fallback_models");
     expect(payload).not.toHaveProperty("subagent_type");
+  });
+
+  it("removes forbidden routing fields from the legacy enrichment helper", () => {
+    const enriched = enrichTaskToolInput(
+      {
+        prompt: "run",
+        subagent_type: "deep",
+        agent: "atlas",
+        model: "claude",
+        provider: "anthropic",
+        variant: "fast",
+        reasoning: true,
+        fallback_models: ["fallback"],
+        skills: ["domain-skill"],
+      },
+      "task-4",
+    );
+
+    expect(enriched).toEqual({
+      prompt: "run",
+      task_id: "task-4",
+      load_skills: ["domain-skill"],
+    });
   });
 });

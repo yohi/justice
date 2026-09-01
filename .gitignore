@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!tests/dist/
+!tests/dist/**/*.test.ts
 coverage/
 .DS_Store
 *.tsbuildinfo

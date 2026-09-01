@@ -96,11 +96,14 @@ interface PlanStep {
 
 ```typescript
 interface DelegationRequest {
-  readonly category: TaskCategory;
+  readonly category: SpCategory | TaskCategory;
+  readonly taskId: string;
+  readonly loadSkills: readonly string[];
   readonly prompt: string;
-  readonly loadSkills: string[];
   readonly runInBackground: boolean;
-  readonly context: DelegationContext;
+  readonly context: {
+    readonly taskId: string;
+  };
 }
 
 interface DelegationContext {
@@ -109,9 +112,17 @@ interface DelegationContext {
   readonly referenceFiles: string[];
   readonly rolePrompt?: string;
   readonly previousLearnings?: string;  // WisdomStore から注入
-  readonly agentId?: AgentId;           // AgentRouter による割り当て
+  readonly agentId?: AgentId;           // リトライ時の実行ペルソナ
 }
 ```
+
+`DelegationRequest` は Justice 内部で扱う immutable な構造であり、OMO の tool
+引数 wire payload とは別の契約である。`context` も Justice 内部だけで利用する
+task-scoped field であり、OMO の wire payload にはシリアライズしない。`category` は
+`SpCategory | TaskCategory` のいずれかを取り、Adapter 境界では、少なくとも
+`category`、`prompt`、`task_id`、`load_skills`、`run_in_background` を OMO の
+canonical field 名で渡す。内部の `taskId`、`loadSkills`、`runInBackground` と
+legacy 入力の `skills`、`loadSkills`、`taskId` は境界で normalize される。
 
 ### 3.3 タスクフィードバック (Task Feedback)
 
@@ -251,15 +262,18 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 
 **PreToolUse イベントの流れ（フロー）:**
 
-1. `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, toolName, toolInput)` — スキル（`writing-plans`, `systematic-debugging`）の起動保留と、`toolInput` に基づく実行ペルソナ（`AgentId`）の推定と記録を行う。
+1. `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, callId, toolName, toolInput)` — スキル（`writing-plans`, `systematic-debugging`）の起動保留と、`toolInput` に基づく実行ペルソナ（`AgentId`）の推定と記録を行う。
 2. **ペルソナの特定と Wisdom 取得**:
-   以下の優先順位で Wisdom 注入対象のペルソナを特定し、`tieredWisdomStore.getRelevant({ persona })` を呼び出す。
-   *   **優先順位 1**: 委譲時に設定された `delegation.context.agentId` が**解決可能（resolvable）**であればそれを採用。
-   *   **優先順位 2**: 未解決の場合、`PlanCompletionDetector.lastInvokedPersona(sessionId)`（`toolInput` から推定されるペルソナ）を採用。
-   *   **優先順位 3**: いずれも未解決の場合は `"hephaestus"`（デフォルト）にフォールバックする。
-3. **「解決可能（resolvable）」の判定基準（predicate）**:
+   `PlanCompletionDetector.lastInvokedPersona(sessionId)`（`toolInput` から推定される
+   ペルソナ）を優先し、未解決の場合は `"hephaestus"`（デフォルト）にフォールバック
+   して、`tieredWisdomStore.getRelevant({ persona })` を呼び出す。
+3. **ペルソナ推定の優先順位**:
+   `recordPreToolUseInvocation` は `toolInput.agent` を最初に検証する。
+   大文字小文字を無視して `AgentId` に一致する明示値があればそれを採用し、値が
+   未指定または無効な場合だけ skills、`role`、`prompt` のヒューリスティックへ進む。
+4. **「解決可能（resolvable）」の判定基準（predicate）**:
    対象の値が非空文字列であり、かつ大文字小文字を無視した状態で `AgentId` リテラルユニオン（`"atlas" | "hephaestus" | "sisyphus" | "prometheus"`）のいずれかに含まれる場合に「解決可能」とみなす。`undefined`、`null`、空文字列、空白のみの文字列、`"unknown"` などのプレースホルダは**未解決**として扱う。
-4. 取得された Wisdom をプロンプトの `PREVIOUS LEARNINGS` コンテキストとして注入する。
+5. 取得された Wisdom をプロンプトの `PREVIOUS LEARNINGS` コンテキストとして注入する。
 
 **PostToolUse イベントの流れ（フロー）:**
 
@@ -282,7 +296,7 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
    > Step <task-id> "<title>" を `<recommended-agent>` に委譲してください。
 
    **推奨エージェント**: <hephaestus | sisyphus | prometheus>
-   （根拠: <カテゴリ・スキル・スコアサマリ from AgentRouter>）
+   （根拠: <役割・カテゴリ・スキルの判定結果>）
 
    **委譲用プロンプト**:
    <delegation.prompt>
@@ -372,7 +386,7 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
    d. workflow-start のたびに既存の実装 arm を失効させる。同じ plan パスでの再開も例外ではない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
 5. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、次の `task()` 委譲に対する実装 arm の guidance を返す。
 6. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は次の実装委譲の許可を示す。
-7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` が active plan と同じパスを明示的にアームした場合だけ、次の1回の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、OmO の `loadSkills` に接続する。
+7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` が active plan と同じパスを明示的にアームした場合だけ、次の1回の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
 注入した policy の `directiveStage`、その policy が推奨する
@@ -424,17 +438,24 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 arm を破棄する。未アームまたは stale arm の呼び出しは
 `implementation_unauthorized` advisory だけを返し、plan 読み込み、delegation 構築、
 wisdom/persona 解決、loop 状態更新、completion 入力記録、`modifiedPayload` 生成を
-行わない。adapter は `injectedContext` を `args.prompt` へ注入するが、`skills`・`loadSkills`・plan context など prompt 以外の tool 引数は変更しない。
+行わない。Adapter は全ての `task()` 呼び出しで、早期 return の前にも元の
+`output.args` object を差し替えずに sanitize・canonicalize する。したがって未アーム
+経路でも `taskId` / `loadSkills` / `runInBackground` はそれぞれ `task_id` /
+`load_skills` / `run_in_background` になり、禁止された routing field は除去される。
+未アーム経路で `injectedContext` 以外の plan context、delegation metadata、追加スキルを
+注入しないという境界は維持される。
 
 一致する arm がある場合のみ、呼び出し元の `skills`、`loadSkills`、legacy
-`load_skills` を一つの `loadSkills` 配列へ正規化する。呼び出し元の順序を維持しつつ、
+`load_skills` を一つの内部 `loadSkills` 配列へ正規化する。呼び出し元の順序を維持しつつ、
 `implementation` policy の固定スキルだけを重複なく末尾に加え、
-`modifiedPayload.args` と委譲 context の両方へ渡す。出力 payload からは入力時の
-`skills`、`loadSkills`、`load_skills` を除去し、canonical な `loadSkills` だけを
-生成する。adapter はその `modifiedPayload.args` を実際の OmO tool 引数に適用し、
-PostToolUse の `skill_invoked` 観測も同じ canonical field を読む。arm はこの1回で
+`modifiedPayload.args` と委譲 context の両方へ渡す。Adapter の最終 output payload
+からは入力時の `skills`、`loadSkills`、`load_skills` を除去し、canonical な
+`load_skills` だけを生成する。Adapter はその `modifiedPayload.args` を実際の OMO
+tool 引数へ同じ object identity のまま適用し、PostToolUse の `skill_invoked` 観測も
+両方の入力形式を読む。arm はこの1回で
 消費され、active plan の変更・クリア、または workflow-start の再実行でも失効する。
-active plan がない `task()` は拡張対象外であり、元の payload のまま通過する。
+active plan がない `task()` は PlanBridge の拡張対象外であり plan context は渡さないが、
+Adapter の共通 sanitize・canonicalize は適用される。
 
 この契約は、`plan_ready` だけで後続 `task()` を暗黙的に enrichment していた旧文書から
 の破壊的な動作変更である。
@@ -542,7 +563,11 @@ active plan がない `task()` は拡張対象外であり、元の payload の�
 
 ### 5.2 `TaskPackager`
 
-`PlanTask` オブジェクトを、構造化されたプロンプトを含む `DelegationRequest` に変換します。内部的に `CategoryClassifier` と `AgentRouter` を呼び出し、タスクの性質に適したエージェントへのルーティングも担当します。
+既に決定されたカテゴリとタスク実行コンテキストを、構造化された
+`DelegationRequest` に変換します。Workerのrole/category判定は
+`PlanBridgeCore`、`ExecutionRoleClassifier`、`OmoCategoryMapper`、および
+`routing-decision` factoryが担当し、`TaskPackager`はその結果をcategory-onlyの
+OMO wire payloadへパッケージ化します。
 
 **生成されるプロンプトの構成:**
 
@@ -557,6 +582,27 @@ active plan がない `task()` は拡張対象外であり、元の payload の�
 ```
 
 ※ `agentId` が未指定（`undefined`）の場合は、`**AGENT**: <agentId>` の行全体を省略する。
+
+---
+
+### 5.2.1 `PlanBridgeCore`
+
+Worker の role/category 判定と Controller の委譲リクエスト構築を束ねるコア API です。
+
+- **`buildControllerRequest(workflow, options)`** — 既知の workflow に対して
+  `{ controller: ControllerAgent; request: DelegationRequest } | undefined` を返します。
+  `request` は Controller path 用の `quick` な内部リクエスト envelope であり、Worker の
+  routing result ではありません。
+- **`classifyAndBuildWorkerRequest(planTask, options)`** — `ExecutionRoleClassifier` で
+  role を決め、`{ category: SpCategory | TaskCategory; request: DelegationRequest } |
+  undefined` を返します。
+- **`buildWorkerRequest(role, options)`** — 指定 role から Worker request を構築します。
+  `options.category` が明示されている場合は `unspecified-low` を含めてその値を保持し、
+  category 未指定時だけ `OmoCategoryMapper` の role mapping を使います。
+  内部の `categorySource` はカテゴリの出自を表し、`classifier` では role/category の
+  整合性を検証し、`explicit` では呼び出し元のカテゴリを優先します。`deep` /
+  `architecture` に対する `unspecified-low` は `compatibility_fallback` として扱い、
+  既存のフォールバックを保持します。
 
 ---
 
@@ -625,7 +671,8 @@ active plan がない `task()` は拡張対象外であり、元の payload の�
 
 ### 5.7 `CategoryClassifier`
 
-タスクの見出しや各ステップの説明文の中にあるキーワードから、OmO に必要なタスクカテゴリ (`TaskCategory`) を自動的に選択します。
+タスクの見出しや各ステップの説明文の中にあるキーワードから、OmO に必要なタスクカテゴリ
+(`SpCategory | TaskCategory`) を自動的に選択します。
 
 | カテゴリ | 対象となる主なキーワード群 |
 |----------|---------|
@@ -633,7 +680,7 @@ active plan がない `task()` は拡張対象外であり、元の payload の�
 | `ultrabrain` | architect, design pattern, refactor, restructure, 設計, アーキテクチャ など |
 | `writing` | document, README, API doc, changelog, ドキュメント など |
 | `quick` | fix typo, rename, bump version など (ステップ数が 1 以下のもの限定) |
-| `deep` | デフォルト (上記キーワードどれにも一致しない場合) |
+| `unspecified-low`（互換フォールバック） | 直接の OMO カテゴリへマッピングできない `deep` / `architecture` role |
 
 ---
 
@@ -758,7 +805,7 @@ jitter = random(0, baseDelay × 0.5)
 - `progress: ProgressReport`
 - `parallelizable: PlanTask[]`
 - `executionOrder: PlanTask[]`
-- `categoryMap: Map<taskId, TaskCategory>`
+- `categoryMap: Map<taskId, SpCategory | TaskCategory>`
 
 **`formatAsMarkdown(status)`** — `progress` を含む各種情報や並行可能タスク、依存に合わせた実行順序などを、統合的なレポート形式（Markdown で成型）にして出力。
 
@@ -830,18 +877,21 @@ new TieredWisdomStore({
 
 ### 5.17 `AgentRouter`
 
-`CategoryClassifier` で判定されたカテゴリと、要求されるスキル (Skills) に基づき、タスクを最適なエージェント (`hephaestus`, `sisyphus`, `prometheus`, `atlas`) へルーティングします。
+`AgentRouter` はController-onlyのルーターです。ワークフロー名を
+`WorkflowRouter`へ渡し、対応するController (`sisyphus`, `atlas`, `oracle`,
+`momus`, `hephaestus`) を解決します。Workerのrole/category判定やOMO payloadの
+検証は担当しません。
 
-**ルーティング判定ロジック (`AgentRouter` での実行順序):**
+Controller の委譲は `PlanBridgeCore.buildControllerRequest(workflow, options)` が担当し、
+`{ controller: ControllerAgent; request: DelegationRequest } | undefined` を返します。
+返却される `request` は Controller path 用の `quick` envelope であり、Worker の routing
+decision ではありません。
 
-1. **スコア計算 (Affinity × Context):**
-   各スキルのベーススコア (`Affinity Matrix`) に、カテゴリに応じた倍率 (`Context Multiplier`) を乗算し、すべてのエージェントの合計スコア（スコアボード）を確定させます。
-2. **Dominant Override (強制オーバーライド):**
-   スコア計算の実行後、特定の重要スキル（`code-quality-reviewer`, `spec-reviewer`）が要求されているかを確認します。これらが含まれる場合、計算されたスコアに関わらず `prometheus` へのルーティングを強制します。これは、実装担当エージェントが自身のコードをレビューする「自己レビュー競合」を物理的に防止するための設計です。
-3. **最高得点者の選定:**
-   オーバーライドが発生しなかった場合、スコアボードの中で最も高い得点を持つエージェントを選択します。
-4. **Fallback:**
-   すべてのスコアが 0 または判定不能な場合、最終的にデフォルトエージェント (`hephaestus`) が選択されます。
+**ルーティング判定ロジック (`AgentRouter.routeController`):**
+
+1. `workflow`を`WorkflowRouter.resolveController`へ委譲します。
+2. 既知のワークフローでは対応するControllerを返します。
+3. 未知のワークフローでは`undefined`を返し、Worker実行を推測しません。
 
 ---
 
@@ -872,11 +922,11 @@ Prometheus レビューコメント等から却下（Rejection）シグナルと
 
 ### 5.20 `PlanCompletionDetector`
 
-A+B ハイブリッド完了検知アプローチを実装し、セッション保留状態を用いて計画フェーズおよびデバッグタスクの完了を検出します。
+A+B ハイブリッド完了検知アプローチを実装し、タスク呼び出し単位の保留状態を用いて計画フェーズおよびデバッグタスクの完了を検出します。
 
 **主な機能:**
-*   **`recordPreToolUseInvocation(sessionId, toolName, toolInput)`** — `PreToolUse` にて `writing-plans` や `systematic-debugging` スキルの起動が検出された場合、セッションごとに保留フラグをメモリに登録します（TTL: 5分、最大50セッション）。また、`toolInput` から次に実行されるペルソナを推定・記録します。
-*   **`evaluateSkillCompletion(sessionId, toolName, toolResult, isError, target)`** — 保留フラグに基づく `confidence: "high"`、または `toolResult` の成果物パス/マーカー（`## Architecture` + `## Implementation` または根本原因マーカー）一致による `confidence: "medium"` でタスクの完了を検出します。判定後、対象ターゲットの保留フラグのみを消去します（他ターゲットの保留状態には干渉しません）。`isError: true` の場合は完了とみなしません。
+*   **`recordPreToolUseInvocation(sessionId, callId, toolName, toolInput)`** — `PreToolUse` にて `writing-plans` や `systematic-debugging` スキルの起動が検出された場合、`sessionId` と `callId` の組み合わせごとに保留フラグをメモリに登録します（TTL: 5分、最大50エントリ）。また、`toolInput` から次に実行されるペルソナを推定・記録します。
+*   **`evaluateSkillCompletion(sessionId, callId, toolName, toolResult, isError, target)`** — `sessionId` と `callId` の組み合わせに対応する保留フラグに基づく `confidence: "high"`、または `toolResult` の成果物パス/マーカー（`## Architecture` + `## Implementation` または根本原因マーカー）一致による `confidence: "medium"` でタスクの完了を検出します。判定後、対象ターゲットの保留フラグのみを消去します（他ターゲットや他の `task()` 呼び出しの保留状態には干渉しません）。`isError: true` の場合は完了とみなしません。
 *   **`lastInvokedPersona(sessionId)`** — 最後に登録された推定ペルソナ（`AgentId`）を返します。
     *   **ペルソナの推定優先順位**:
         1. `toolInput.agent`（`atlas` / `hephaestus` / `sisyphus` / `prometheus` に大文字小文字無視で所属）
@@ -1208,7 +1258,22 @@ export type { OpenCodeLogEntry } from "./runtime/opencode-adapter";
 export { OpenCodePlugin as default, OpenCodePlugin } from "./opencode-plugin";
 
 // （高度な手法での利用に向けた）全公開コアクラス
-export { AgentRouter, AGENT_IDS, type RoutingCategory, type RoutingReason, type RoutingResult } from "./core/agent-router";
+export { AgentRouter } from "./core/agent-router";
+export { PlanBridgeCore } from "./core/plan-bridge-core";
+export { WorkflowRouter } from "./core/workflow-router";
+export { OmoCategoryMapper } from "./core/omo-category-mapper";
+export {
+  createControllerRoutingDecision,
+  createWorkerRoutingDecision,
+  createUnroutedRoutingDecision,
+} from "./core/routing-decision";
+export type {
+  ControllerAgent,
+  ExecutionRole,
+  RoutingDecision,
+  RoutingReason,
+  SpCategory,
+} from "./core/types";
 export { PlanParser } from "./core/plan-parser";
 export { TaskPackager } from "./core/task-packager";
 export { ErrorClassifier } from "./core/error-classifier";
@@ -1264,6 +1329,7 @@ export type {
   PlanReference, TriggerAnalysis,
   WorkflowStartRequest, WorkflowStartSource, WorkflowBootstrapPhase,
 } from "./core/types";
+export type { ControllerOptions, WorkerOptions } from "./core/plan-bridge-core";
 ```
 
 **v2.0 に関する注記:** `src/core/v2/` および `src/runtime/observation-log-store.ts` 等の Quality Control Plane 内部モジュールは、意図的に本パッケージの公開 API（`src/index.ts`）からエクスポートされません（D50）。これは内部 dry-run helper（`justice_status`/`justice_gate`）が canonical な Observation Log や Decision Record を変更しない contract を保つためであり、v2.0 のユーザー向け公開面は OpenCode カスタムツール `justice_review`（`OpenCodeAdapter.getTools()` 経由で登録）のみに限定されます。詳細は §15 を参照してください。

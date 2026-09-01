@@ -74,10 +74,7 @@ export class ExecutionRoleClassifier {
     return "implementation";
   }
 
-  private matches(
-    text: string,
-    keywords: readonly (string | RegExp)[],
-  ): boolean {
+  private matches(text: string, keywords: readonly (string | RegExp)[]): boolean {
     const isWordCharacter = (character: string | undefined): boolean =>
       character !== undefined && /[a-z0-9_]/.test(character);
 

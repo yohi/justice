@@ -188,7 +188,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(prompt).toContain("**Category**: sp-implementation");
     expect(prompt).toContain("- 🔄 Setup (1/2 steps)");
     expect(prompt).toContain("実装を進めてください");
-    expect(task.args.loadSkills).toEqual([
+    expect(task.args.load_skills).toEqual([
       "test-driven-development",
       "verification-before-completion",
     ]);
@@ -225,7 +225,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     expect(injectedContext).not.toContain("Task Delegation Context");
     expect(output.args).toEqual({
       prompt: `${injectedContext}\n\n${originalPrompt}`,
-      loadSkills: ["caller-skill"],
+      load_skills: ["caller-skill"],
       metadata: { source: "caller" },
     });
     expect(output.args).not.toHaveProperty("taskId");

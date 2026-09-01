@@ -61,7 +61,9 @@ describe("ExecutionRoleClassifier", () => {
   });
 
   it("classifies architecture tasks", () => {
-    expect(classifier.classify(makeTask({ title: "design system architecture" }))).toBe("architecture");
+    expect(classifier.classify(makeTask({ title: "design system architecture" }))).toBe(
+      "architecture",
+    );
   });
 
   it("falls back to implementation for normal tasks", () => {
