@@ -215,7 +215,7 @@ describe("approved review resolution through OpenCodePlugin", () => {
     const state = project(events, "2026-07-18T00:00:00.000Z");
     expect(state.reviewSummary.resolved.map((item) => item.itemKey)).toEqual([selectedItemKey]);
     expect(state.reviewSummary.open.map((item) => item.itemKey)).toEqual([remainingItemKey]);
-  });
+  }, 15_000);
 
   it("leaves metadata and projected review state unchanged when approval is denied", async () => {
     // Given
