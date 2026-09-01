@@ -20,6 +20,7 @@ export interface ControllerOptions {
 
 export interface WorkerOptions extends PackageOptions {
   readonly category?: SpCategory | TaskCategory;
+  readonly categorySource?: "classifier" | "explicit" | "compatibility_fallback";
   readonly role?: ExecutionRole;
 }
 
@@ -71,11 +72,13 @@ export class PlanBridgeCore {
     const category = this.resolveWorkerCategory(role, options.category);
     if (category === undefined) return undefined;
 
-    const routingDecision = createWorkerRoutingDecision(
-      role,
-      category,
-      options.category === undefined ? "task_classification" : "explicit_request",
-    );
+    const reason =
+      options.categorySource === "compatibility_fallback"
+        ? "compatibility_fallback"
+        : options.categorySource === "classifier" || options.category === undefined
+          ? "task_classification"
+          : "explicit_request";
+    const routingDecision = createWorkerRoutingDecision(role, category, reason);
 
     return {
       category: routingDecision.category,

@@ -32,9 +32,11 @@ export function createWorkerRoutingDecision(
   category: SpCategory | TaskCategory,
   reason: RoutingReason,
 ): Extract<RoutingDecision, { readonly kind: "worker" }> {
-  // Explicit category requests are authoritative; role/category validation applies
-  // only to classifier-derived routing.
-  if (reason !== "explicit_request" && !isValidExecutionRoleCategoryPair(executionRole, category)) {
+  if (
+    reason !== "explicit_request" &&
+    reason !== "compatibility_fallback" &&
+    !isValidExecutionRoleCategoryPair(executionRole, category)
+  ) {
     throw new Error(`Invalid routing pair: ${executionRole} cannot be routed to ${category}`);
   }
   return { kind: "worker", executionRole, category, reason };

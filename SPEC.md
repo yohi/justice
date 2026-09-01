@@ -117,11 +117,12 @@ interface DelegationContext {
 ```
 
 `DelegationRequest` は Justice 内部で扱う immutable な構造であり、OMO の tool
-引数 wire payload とは別の契約である。`category` は `SpCategory | TaskCategory` の
-いずれかを取り、Adapter 境界では、少なくとも `category`、
-`prompt`、`task_id`、`load_skills`、`run_in_background` を OMO の canonical field
-名で渡す。内部の `taskId`、`loadSkills`、`runInBackground` と legacy 入力の
-`skills`、`loadSkills`、`taskId` は境界で normalize される。
+引数 wire payload とは別の契約である。`context` も Justice 内部だけで利用する
+task-scoped field であり、OMO の wire payload にはシリアライズしない。`category` は
+`SpCategory | TaskCategory` のいずれかを取り、Adapter 境界では、少なくとも
+`category`、`prompt`、`task_id`、`load_skills`、`run_in_background` を OMO の
+canonical field 名で渡す。内部の `taskId`、`loadSkills`、`runInBackground` と
+legacy 入力の `skills`、`loadSkills`、`taskId` は境界で normalize される。
 
 ### 3.3 タスクフィードバック (Task Feedback)
 
@@ -263,13 +264,16 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 
 1. `PlanCompletionDetector.recordPreToolUseInvocation(sessionId, callId, toolName, toolInput)` — スキル（`writing-plans`, `systematic-debugging`）の起動保留と、`toolInput` に基づく実行ペルソナ（`AgentId`）の推定と記録を行う。
 2. **ペルソナの特定と Wisdom 取得**:
-   以下の優先順位で Wisdom 注入対象のペルソナを特定し、`tieredWisdomStore.getRelevant({ persona })` を呼び出す。
-   *   **優先順位 1**: 委譲時に設定された `delegation.context.agentId` が**解決可能（resolvable）**であればそれを採用。
-   *   **優先順位 2**: 未解決の場合、`PlanCompletionDetector.lastInvokedPersona(sessionId)`（`toolInput` から推定されるペルソナ）を採用。
-   *   **優先順位 3**: いずれも未解決の場合は `"hephaestus"`（デフォルト）にフォールバックする。
-3. **「解決可能（resolvable）」の判定基準（predicate）**:
+   `PlanCompletionDetector.lastInvokedPersona(sessionId)`（`toolInput` から推定される
+   ペルソナ）を優先し、未解決の場合は `"hephaestus"`（デフォルト）にフォールバック
+   して、`tieredWisdomStore.getRelevant({ persona })` を呼び出す。
+3. **ペルソナ推定の優先順位**:
+   `recordPreToolUseInvocation` は `toolInput.agent` を最初に検証する。
+   大文字小文字を無視して `AgentId` に一致する明示値があればそれを採用し、値が
+   未指定または無効な場合だけ skills、`role`、`prompt` のヒューリスティックへ進む。
+4. **「解決可能（resolvable）」の判定基準（predicate）**:
    対象の値が非空文字列であり、かつ大文字小文字を無視した状態で `AgentId` リテラルユニオン（`"atlas" | "hephaestus" | "sisyphus" | "prometheus"`）のいずれかに含まれる場合に「解決可能」とみなす。`undefined`、`null`、空文字列、空白のみの文字列、`"unknown"` などのプレースホルダは**未解決**として扱う。
-4. 取得された Wisdom をプロンプトの `PREVIOUS LEARNINGS` コンテキストとして注入する。
+5. 取得された Wisdom をプロンプトの `PREVIOUS LEARNINGS` コンテキストとして注入する。
 
 **PostToolUse イベントの流れ（フロー）:**
 
@@ -595,6 +599,10 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
 - **`buildWorkerRequest(role, options)`** — 指定 role から Worker request を構築します。
   `options.category` が明示されている場合は `unspecified-low` を含めてその値を保持し、
   category 未指定時だけ `OmoCategoryMapper` の role mapping を使います。
+  内部の `categorySource` はカテゴリの出自を表し、`classifier` では role/category の
+  整合性を検証し、`explicit` では呼び出し元のカテゴリを優先します。`deep` /
+  `architecture` に対する `unspecified-low` は `compatibility_fallback` として扱い、
+  既存のフォールバックを保持します。
 
 ---
 
@@ -672,7 +680,7 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
 | `ultrabrain` | architect, design pattern, refactor, restructure, 設計, アーキテクチャ など |
 | `writing` | document, README, API doc, changelog, ドキュメント など |
 | `quick` | fix typo, rename, bump version など (ステップ数が 1 以下のもの限定) |
-| `deep` | デフォルト (上記キーワードどれにも一致しない場合) |
+| `unspecified-low`（互換フォールバック） | 直接の OMO カテゴリへマッピングできない `deep` / `architecture` role |
 
 ---
 

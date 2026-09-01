@@ -10,6 +10,14 @@ const PERSONA_IDS: readonly AgentId[] = ["hephaestus", "sisyphus", "prometheus",
 export function inferPersonaFromToolInput(
   toolInput: Readonly<Record<string, unknown>>,
 ): AgentId | undefined {
+  const explicitAgent =
+    typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
+  const validatedAgent =
+    explicitAgent === undefined
+      ? undefined
+      : PERSONA_IDS.find((persona) => persona === explicitAgent);
+  if (validatedAgent !== undefined) return validatedAgent;
+
   const skills = resolveSkillsFromToolInput(toolInput).map((skill) => skill.toLowerCase());
   const text = [toolInput.role, toolInput.prompt]
     .filter((value): value is string => typeof value === "string")
@@ -32,11 +40,6 @@ export function inferPersonaFromToolInput(
     /\b(?:writing-plans|brainstorming)\b/.test(text)
   ) {
     return "atlas";
-  }
-  const explicitAgent =
-    typeof toolInput.agent === "string" ? toolInput.agent.toLowerCase() : undefined;
-  if (explicitAgent !== undefined && PERSONA_IDS.includes(explicitAgent as AgentId)) {
-    return explicitAgent as AgentId;
   }
   return undefined;
 }
@@ -159,7 +162,7 @@ export class PlanCompletionDetector {
     const now = Date.now();
 
     // Only create/update pendingMap when skills were detected
-    if (skills.length > 0) {
+    if (skills.length > 0 && completionKey !== undefined) {
       const existing = this.pendingMap.get(completionKey);
       const skillTargets = existing
         ? new Set([...existing.skillTargets, ...skills])
@@ -193,12 +196,14 @@ export class PlanCompletionDetector {
   ): PlanCompletionSignal | null {
     const completionKey = this.getCompletionKey(sessionId, callId);
     if (isError) {
-      this.pendingMap.delete(completionKey);
+      if (completionKey !== undefined) this.pendingMap.delete(completionKey);
       return null;
     }
     if (toolName !== "task") return null;
 
     this.cleanupExpired();
+
+    if (completionKey === undefined) return this.detectFromResult(toolResult, target);
 
     const pending = this.pendingMap.get(completionKey);
     const hasPending = pending?.skillTargets.has(target) ?? false;
@@ -267,8 +272,8 @@ export class PlanCompletionDetector {
     }
   }
 
-  private getCompletionKey(sessionId: string, callId: string | undefined): string {
-    return `${sessionId}:${callId ?? "_"}`;
+  private getCompletionKey(sessionId: string, callId: string | undefined): string | undefined {
+    return callId === undefined ? undefined : `${sessionId}:${callId}`;
   }
 
   private extractSkills(toolInput: Record<string, unknown>): SkillTarget[] {

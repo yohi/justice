@@ -529,6 +529,7 @@ export class PlanBridge {
       taskId: nextTask.id,
       prompt: this.buildTaskPrompt(nextTask),
       category,
+      categorySource: category === "unspecified-low" ? "compatibility_fallback" : "classifier",
     });
     if (!initialResult) return PROCEED;
 
@@ -542,6 +543,7 @@ export class PlanBridge {
         taskId: nextTask.id,
         prompt: this.buildTaskPrompt(nextTask, previousLearnings),
         category,
+        categorySource: category === "unspecified-low" ? "compatibility_fallback" : "classifier",
       })?.request ?? initialResult.request;
 
     // Set as active plan for PreToolUse context injection
@@ -1060,11 +1062,13 @@ export class PlanBridge {
     const nextTask = this.dependencyAnalyzer.getParallelizable(tasks)[0];
     if (nextTask === undefined) return undefined;
 
+    const category = this.categoryClassifier.classify(nextTask);
     return this.core.classifyAndBuildWorkerRequest(nextTask, {
       taskId: nextTask.id,
       prompt,
       loadSkills,
-      category: this.categoryClassifier.classify(nextTask),
+      category,
+      categorySource: category === "unspecified-low" ? "compatibility_fallback" : "classifier",
     });
   }
 

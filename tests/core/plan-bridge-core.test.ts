@@ -101,6 +101,29 @@ describe("PlanBridgeCore", () => {
     expect(result?.request.category).toBe("sp-integration");
   });
 
+  it("validates a category supplied by the internal classifier", () => {
+    expect(() =>
+      core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
+        taskId: "t1",
+        prompt: "research the design",
+        category: "unspecified-low",
+        categorySource: "classifier",
+      }),
+    ).toThrow("Invalid routing pair");
+  });
+
+  it("preserves the category classifier compatibility fallback", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask({ title: "deep existing task" }), {
+      taskId: "t1",
+      prompt: "continue the task",
+      category: "unspecified-low",
+      categorySource: "compatibility_fallback",
+    });
+
+    expect(result?.category).toBe("unspecified-low");
+    expect(result?.request.category).toBe("unspecified-low");
+  });
+
   it("preserves an explicit unspecified-low category for a normal role", () => {
     const result = core.buildWorkerRequest("implementation", {
       taskId: "t1",

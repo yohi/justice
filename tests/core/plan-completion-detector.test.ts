@@ -22,6 +22,12 @@ describe("inferPersonaFromToolInput", () => {
     expect(inferPersonaFromToolInput({ prompt: "please use brainstorming" })).toBe("atlas");
   });
 
+  it("prioritizes a valid explicit agent over conflicting skill hints", () => {
+    expect(inferPersonaFromToolInput({ agent: "atlas", skills: ["systematic-debugging"] })).toBe(
+      "atlas",
+    );
+  });
+
   it("returns undefined for unrelated input", () => {
     expect(inferPersonaFromToolInput({ skills: ["implementer-prompt"] })).toBeUndefined();
   });
@@ -136,6 +142,25 @@ describe("PlanCompletionDetector", () => {
     ).toEqual({ source: "skill_marker", confidence: "high" });
   });
 
+  it("uses only a medium-confidence result marker when callId is absent", () => {
+    const detectorWithoutCallId = new PlanCompletionDetector();
+
+    detectorWithoutCallId.recordPreToolUseInvocation("s-no-call", undefined, "task", {
+      skills: ["writing-plans"],
+    });
+
+    expect(
+      detectorWithoutCallId.evaluateSkillCompletion(
+        "s-no-call",
+        undefined,
+        "task",
+        "## Architecture\n## Implementation",
+        false,
+        "writing-plans",
+      ),
+    ).toEqual({ source: "result_marker", confidence: "medium" });
+  });
+
   it("merges all skill aliases during pre-tool completion detection", () => {
     const aliasDetector = new PlanCompletionDetector();
 
@@ -227,24 +252,10 @@ describe("PlanCompletionDetector", () => {
       expect(boundedDetector.lastInvokedPersona("s-0")).toBeUndefined();
       expect(boundedDetector.lastInvokedPersona("s-50")).toBe("atlas");
       expect(
-        boundedDetector.evaluateSkillCompletion(
-          "s-0",
-          "c-0",
-          "task",
-          "",
-          false,
-          "writing-plans",
-        ),
+        boundedDetector.evaluateSkillCompletion("s-0", "c-0", "task", "", false, "writing-plans"),
       ).toBeNull();
       expect(
-        boundedDetector.evaluateSkillCompletion(
-          "s-50",
-          "c-50",
-          "task",
-          "",
-          false,
-          "writing-plans",
-        ),
+        boundedDetector.evaluateSkillCompletion("s-50", "c-50", "task", "", false, "writing-plans"),
       ).toEqual({ source: "skill_marker", confidence: "high" });
     } finally {
       vi.useRealTimers();
