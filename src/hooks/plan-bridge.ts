@@ -44,7 +44,7 @@ import {
 
 const PROCEED: HookResponse = { action: "proceed" };
 
-export function enrichTaskToolInput(
+export function normalizeTaskToolInputWithCategory(
   toolInput: Readonly<Record<string, unknown>>,
   category: SpCategory | TaskCategory,
 ): Record<string, unknown> {
@@ -668,7 +668,10 @@ export class PlanBridge {
 
     this.rememberCompletionInput(event.sessionId, event.callId, delegation);
 
-    const normalizedArgs = enrichTaskToolInput(event.payload.toolInput, delegation.category);
+    const normalizedArgs = normalizeTaskToolInputWithCategory(
+      event.payload.toolInput,
+      delegation.category,
+    );
     normalizedArgs.task_id =
       resolveTaskIdFromToolInput(event.payload.toolInput) ?? delegation.taskId;
     delete normalizedArgs.skills;

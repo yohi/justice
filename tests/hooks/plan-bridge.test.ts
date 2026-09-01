@@ -1,6 +1,9 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { describe, it, expect, vi } from "vitest";
-import { enrichTaskToolInput, PlanBridge } from "../../src/hooks/plan-bridge";
+import {
+  normalizeTaskToolInputWithCategory,
+  PlanBridge,
+} from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
   HookEvent,
@@ -69,7 +72,7 @@ function createObservationHandler(): ObservationHandler & {
   };
 }
 
-describe("enrichTaskToolInput", () => {
+describe("normalizeTaskToolInputWithCategory", () => {
   it("removes forbidden task fields and preserves prompt", () => {
     const input = {
       prompt: "do work",
@@ -82,7 +85,7 @@ describe("enrichTaskToolInput", () => {
       fallback_models: ["fallback"],
     };
 
-    const result = enrichTaskToolInput(input, "sp-implementation");
+    const result = normalizeTaskToolInputWithCategory(input, "sp-implementation");
 
     expect(result).toEqual({
       prompt: "do work",
@@ -93,7 +96,7 @@ describe("enrichTaskToolInput", () => {
   it("sets the normalized category when the input already has one", () => {
     const input = { prompt: "x", category: "sp-mechanical" };
 
-    const result = enrichTaskToolInput(input, "sp-mechanical");
+    const result = normalizeTaskToolInputWithCategory(input, "sp-mechanical");
 
     expect(result.category).toBe("sp-mechanical");
   });
@@ -101,7 +104,7 @@ describe("enrichTaskToolInput", () => {
   it("preserves a caller-provided category over the classified category", () => {
     const input = { prompt: "x", category: "sp-mechanical" };
 
-    const result = enrichTaskToolInput(input, "sp-implementation");
+    const result = normalizeTaskToolInputWithCategory(input, "sp-implementation");
 
     expect(result.category).toBe("sp-mechanical");
   });
