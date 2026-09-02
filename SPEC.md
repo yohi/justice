@@ -1696,3 +1696,20 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 - **今後の対応**: (1) headless `opencode run` 経路での Observation Log 未書き込みについては別途調査タスクとし、影響範囲を限定して v2.0 出荷後に追跡する (2) レイテンシ改善（大 shard 時の O(size) 書き込み）を v2.5 Issue として登録し設計レビューを経て実装計画を作成する。v2.0 は上記条件付き許容のもとで出荷可能である。
 
 - **互換性に関する既知課題**: dist の相対 import は拡張子なしのため Node ESM から直接利用できない。OpenCode の Bun 実行では影響しないが、Node ベースの loader や library 利用時には別途対応が必要である。また `@opencode-ai/plugin` の開発依存版と実機版にはバージョンドリフトがあるため、両版で利用型の一致を確認したうえで、将来は対応範囲を固定する。
+
+### 15.13 OMO / Superpowers 責務境界と将来要求
+
+`REQUIREMENTS_2026-08-29.md` に記載されていた routing 要件のうち、Controller と Worker の分離、category-first routing、model/provider independence、`ExecutionRole` から OMO category への写像、Worker payload からの `agent` / `subagent_type` / `model` 等の除去は、現行実装および本仕様の §3.2、§4.1b、§5.7、§14 に統合済みである。これらの要件は `REQUIREMENTS*` ファイルではなく本仕様を正とする。
+
+一方、以下は要求として保持するが、現行実装の契約ではない。
+
+| 要求 | 状態 | 現行仕様との関係 |
+|---|---|---|
+| FR-601 Plan-scoped Authorization | 保留 | 現行は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
+| FR-602 Authorization Binding | 保留 | session、plan path、plan fingerprint への binding は未導入 |
+| FR-603 Plan Mutation | 保留 | fingerprint mismatch による無効化は未導入 |
+| FR-604 Continuous Execution | 保留 | 同一承認 plan の複数 task 継続実行は将来拡張 |
+
+これらを実装済みとして扱ってはならない。導入時は authorization のライフサイクル、plan fingerprint、既存の fail-open 境界、および `implementation_unauthorized` の挙動を同時に再設計する。
+
+upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。

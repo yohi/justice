@@ -433,6 +433,45 @@ description: Arm the next Justice-managed implementation delegation
 $ARGUMENTS
 ```
 
+## 推奨 Worker モデルプロファイル
+
+以下は `sp-*` custom category 向けの非規範的な推奨です。実際に利用可能な
+モデルの解決と選択は、利用者の `omo.jsonc` に委ねられます。
+
+| Category | Primary | Reasoning | 復旧候補 | 用途 |
+| --- | --- | --- | --- | --- |
+| `sp-mechanical` | DeepSeek V4 Flash | `low` | Qwen 3.8 Flash `low` → GPT-5.6 Luna `low` | 定型的な単一変更 |
+| `sp-implementation` | GLM-5.3 Flash | `high` | DeepSeek V4 Pro `high` → GPT-5.6 Luna `max` | 通常のTDD実装 |
+| `sp-review` | Qwen 3.8 Flash | `medium` | DeepSeek V4 Flash `max` → GPT-5.6 Luna `max` | task単位のreview |
+| `sp-integration` | DeepSeek V4 Pro | `max` | GLM-5.3 `max` → Grok 4.6 `high` | 複数ファイル、統合、複雑なdebugging |
+| `sp-final-review` | GPT-5.6 Sol | `max` | GLM-5.3 `max` → Grok 4.6 `xhigh` | planまたはbranch全体の最終review |
+
+`Reasoning` 列は provider 非依存の論理レベルです。実際の provider 値への mapping は
+次のとおりです。DeepSeek は `low` / `high` / `max` に対応し、論理 `medium` と
+`xhigh` は `high` へ変換します。Grok 4.6 は `low` / `medium` / `high` / `xhigh`
+をそのまま扱います。
+
+| Provider / model | `low` | `medium` | `high` | `xhigh` | `max` | 対応能力の確認 |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek | `low` | `high` | `high` | `high` | `max` | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+| Grok 4.6 | `low` | `medium` | `high` | `xhigh` | 拒否 | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+
+表にない値、または選択モデルの対応能力を確認できない値は、プロファイル上は拒否します。
+上記の明示した変換以外の暗黙的な downgrade、別モデルへの自動切替、category escalation は行いません。
+対応能力は調査時点の `models` catalog の capability metadata または reasoning enum と
+provider 公式仕様を照合して確認し、確認日・catalog revision・対象モデルを記録します。
+
+高頻度の機械的変更、通常実装、task単位のreviewには効率重視のモデルを使い、
+低頻度の統合・最終reviewでより高い推論予算を使います。標準の `sp-*` chain には
+Claude と Kimi K3 を含めません。確認日: 2026-09-02。
+
+> [!NOTE]
+> この表は強制設定ではありません。設定時には各モデルを利用可能なモデル名または
+> `models` catalog のaliasへ対応付けてください。`models[]` は選択・実行時復旧の順序であり、
+> 能力不足を検出して上位categoryへ自動昇格させる機構ではありません。
+> `sp-implementation` を `sp-integration` として再実行する場合は、計画を更新して
+> 明示的に再委譲してください。
+
 ## Quality Control Plane (v2.0)
 
 Justice は v1 のタスク委譲支援に加えて、**Observation Log + Gate Engine** による品質管理基盤（Quality Control Plane）を並走稼働させています。これは v1 の挙動を変更しない「加算シャドウ」レイヤーであり、**L0 Advisory（非ブロッキング）** としてのみ動作します — Gate が FAIL を返してもツール実行やタスク完了は妨げません。
@@ -627,3 +666,4 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 
 - **[SPEC.md](./SPEC.md)** — 完全な仕様書 (アーキテクチャ、データモデル、コンポーネント仕様、API)
 - **[AGENTS.md](./AGENTS.md)** — このプロジェクト向けの AI エージェントのコーディングガイドライン
+- **[upstream-drift.md](./docs/agents/upstream-drift.md)** — upstream compatibility audit と再検証手順
