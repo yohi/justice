@@ -189,6 +189,32 @@ describe("AtomicPersistence", () => {
     expect(resultB.status).toBe("saved");
   });
 
+  it("cleans up an owned claim when publishing fails and retries", async () => {
+    const claimPath = "state.json.commit-pending";
+    const fs = createMockFileSystem();
+    const originalRename = fs.rename.bind(fs);
+    const originalDeleteFile = fs.deleteFile.bind(fs);
+    const deleteFile = vi.fn(async (path: string) => originalDeleteFile(path));
+    let publishAttempts = 0;
+
+    fs.deleteFile = deleteFile;
+    fs.rename = vi.fn(async (from: string, to: string) => {
+      if (from === claimPath && publishAttempts++ === 0) {
+        throw new Error("publish failed");
+      }
+      await originalRename(from, to);
+    });
+
+    const persistence = new AtomicPersistence(fs, fs, config());
+    const result = await persistence.saveAtomicWithLock(["retry-after-publish-failure"]);
+
+    expect(result).toEqual({ status: "saved", retries: 1 });
+    expect(deleteFile).toHaveBeenCalledWith(claimPath);
+    expect(JSON.parse(fs.writtenFiles["state.json"]!).data).toEqual([
+      "retry-after-publish-failure",
+    ]);
+  });
+
   it("retries immediately after reclaiming a stale claim", async () => {
     const fs = createMockFileSystem();
     fs.readFileStats = vi
