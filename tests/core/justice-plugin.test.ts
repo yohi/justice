@@ -11,11 +11,7 @@ import type {
   PostToolUseEvent,
   EventEvent,
 } from "../../src/core/types";
-import {
-  createMockFileReader,
-  createMockFileWriter,
-  createMockFileSystem,
-} from "../helpers/mock-file-system";
+import { createMockFileSystem } from "../helpers/mock-file-system";
 
 describe("JusticePlugin", () => {
   let reader: FileReader;
@@ -23,10 +19,11 @@ describe("JusticePlugin", () => {
   let plugin: JusticePlugin;
 
   beforeEach(() => {
-    reader = createMockFileReader({
+    const fs = createMockFileSystem({
       "plan.md": "## Task 1: Setup\n- [ ] Init\n",
     });
-    writer = createMockFileWriter();
+    reader = fs;
+    writer = fs;
     plugin = new JusticePlugin(reader, writer);
   });
 

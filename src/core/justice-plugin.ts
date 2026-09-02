@@ -33,7 +33,7 @@ import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./
 import type { ObservationMessagePayload } from "./v2/message-payload";
 import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
-import { AtomicPersistence } from "./atomic-persistence";
+import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -234,6 +234,10 @@ export class NoOpPersistence extends WisdomPersistence {
 
   override async saveAtomic(_store: WisdomStore): Promise<void> {
     /* no-op */
+  }
+
+  override async saveAtomicWithLock(_store: WisdomStore): Promise<SaveResult> {
+    return { status: "saved", retries: 0 };
   }
 }
 

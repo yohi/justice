@@ -29,6 +29,7 @@ export interface AtomicPersistenceConfig<T> {
 interface VersionedEnvelope<T> {
   readonly version: number;
   readonly data: T;
+  readonly claimId?: string;
 }
 
 interface ConflictRecord<T> {
@@ -51,6 +52,7 @@ type AttemptResult<T> =
       readonly data: T;
       readonly lockMeta: LockMetadata;
     }
+  | { readonly status: "claim_lost" }
   | { readonly status: "rename_conflict" };
 
 const MAX_RETRIES = 3;
@@ -120,6 +122,8 @@ export class AtomicPersistence<T> {
           lastReason = "version_mismatch";
           currentData = attempt.data;
           lockMeta = attempt.lockMeta;
+        } else if (attempt.status === "claim_lost") {
+          lastReason = "rename_conflict";
         } else {
           lastReason = "rename_conflict";
         }
@@ -151,9 +155,11 @@ export class AtomicPersistence<T> {
   ): Promise<AttemptResult<T>> {
     const tmpPath = `${this.config.filePath}.tmp.${randomUUID()}`;
     const claimPath = `${this.config.filePath}.commit-pending`;
+    const claimId = randomUUID();
     const envelope: VersionedEnvelope<T> = {
       version: lockMeta.version + 1,
       data: JSON.parse(this.config.serialize(currentData)) as T,
+      claimId,
     };
 
     try {
@@ -165,6 +171,9 @@ export class AtomicPersistence<T> {
 
       try {
         const latest = await this.loadWithLock();
+        if (!(await this.claimIsOwned(claimPath, claimId))) {
+          return { status: "claim_lost" };
+        }
         if (latest.lockMeta.version !== lockMeta.version) {
           await this.cleanup(claimPath);
           return {
@@ -176,7 +185,9 @@ export class AtomicPersistence<T> {
         await this.fileWriter.rename(claimPath, this.config.filePath);
         return { status: "saved", retries: retry };
       } catch {
-        await this.cleanup(claimPath);
+        if (await this.claimIsOwned(claimPath, claimId)) {
+          await this.cleanup(claimPath);
+        }
         return { status: "rename_conflict" };
       }
     } finally {
@@ -202,6 +213,15 @@ export class AtomicPersistence<T> {
     if (stats === null || Date.now() - stats.mtimeMs <= STALE_CLAIM_TIMEOUT_MS) return false;
     await this.cleanup(claimPath);
     return true;
+  }
+
+  private async claimIsOwned(claimPath: string, claimId: string): Promise<boolean> {
+    try {
+      const parsed: unknown = JSON.parse(await this.fileReader.readFile(claimPath));
+      return isVersionedEnvelope(parsed) && parsed.claimId === claimId;
+    } catch {
+      return false;
+    }
   }
 
   private async divertToConflictFile(
