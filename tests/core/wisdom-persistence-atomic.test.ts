@@ -125,15 +125,14 @@ describe("WisdomPersistence.saveAtomic", () => {
       firstSeenAt: "2025-12-01T00:00:00Z",
       lastHitAt: "2026-01-03T00:00:00Z",
     });
-    const reader = createMockFileReader({
+    const fs = createMockFileSystem({
       [defaultPath]: JSON.stringify({ entries: [diskEntry], maxEntries: 100 }),
     });
-    const writer = createMockFileWriter();
-    const persistence = new WisdomPersistence(reader, writer, defaultPath);
+    const persistence = new WisdomPersistence(fs, fs, defaultPath);
 
     await persistence.saveAtomicWithLock(WisdomStore.fromEntries([memoryEntry], 100));
 
-    const parsed = JSON.parse(writer.writtenFiles[defaultPath]!);
+    const parsed = JSON.parse(fs.writtenFiles[defaultPath]!);
     const entry = Object.values(
       parsed.data.entriesByAgent as Record<string, WisdomEntry[]>,
     ).flat()[0];
@@ -220,17 +219,16 @@ describe("WisdomPersistence.saveAtomic", () => {
 
 describe("WisdomPersistence.saveAtomicWithLock", () => {
   it("persists a versioned envelope and returns a saved result", async () => {
-    const reader = createMockFileReader({});
-    const writer = createMockFileWriter();
-    const persistence = new WisdomPersistence(reader, writer, defaultPath);
+    const fs = createMockFileSystem();
+    const persistence = new WisdomPersistence(fs, fs, defaultPath);
     const store = new WisdomStore(100);
     store.add({ taskId: "t1", category: "success_pattern", content: "locked" });
 
     const result = await persistence.saveAtomicWithLock(store);
 
     expect(result.status).toBe("saved");
-    expect(JSON.parse(writer.writtenFiles[defaultPath]!).version).toBe(1);
-    expect(writer.writtenFiles[`${defaultPath}.commit-pending`]).toBeUndefined();
+    expect(JSON.parse(fs.writtenFiles[defaultPath]!).version).toBe(1);
+    expect(fs.writtenFiles[`${defaultPath}.commit-pending`]).toBeUndefined();
   });
 
   it("loads entries written in the versioned envelope after a new persistence instance is created", async () => {

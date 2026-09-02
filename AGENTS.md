@@ -24,7 +24,7 @@ Before declaring any task complete, run all four commands fresh and confirm they
 - `src/core/` — pure business logic; `src/core/v2/` is the observation/evidence/gate engine
 - `src/hooks/` — OmO hook handlers that coordinate core logic with the plugin lifecycle
 - `src/runtime/` — Node/OpenCode adapters and all runtime I/O boundaries
-- `tests/` — unit and integration suites with injected mocks; no real disk access
+- `tests/` — ordinary unit tests use injected mocks; `tests/preflight-verification.test.ts` intentionally reads the committed `SPEC.md`, while designated real-fs integration suites remain explicit exceptions
 
 ## Non-Negotiable Invariants
 
@@ -42,7 +42,7 @@ If a change appears to require breaking an invariant, stop and ask first.
 
 ## Testing & Safety Rules
 
-- Inject file-system and notifier mocks (`tests/helpers/mock-file-system.ts`, `tests/helpers/mock-notifier.ts`); unit tests never access real disk.
+- Inject file-system and notifier mocks (`tests/helpers/mock-file-system.ts`, `tests/helpers/mock-notifier.ts`); ordinary unit tests never access real disk. The document preflight and existing real-fs suites under `tests/real-fs/`, `tests/integration/`, and `tests/runtime/` are explicit exceptions.
 - Inspect private fields in tests by casting through `unknown` (`(obj as unknown as { field: T }).field`), never `any`.
 - Validate every file path parameter via `normalizeSafeRelativePath` or `TriggerDetector` before dereferencing.
 - Never output absolute host paths, API keys, or credentials to logs or persisted files.

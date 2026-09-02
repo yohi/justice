@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { AtomicPersistence } from "../../src/core/atomic-persistence";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileSystem,
+  createMockFileWriter,
+} from "../helpers/mock-file-system";
 
 function config() {
   return {
@@ -72,38 +76,138 @@ describe("AtomicPersistence", () => {
   });
 
   it("retries after a version mismatch and then saves", async () => {
-    const reader = createMockFileReader({});
-    reader.readFile = vi
-      .fn()
-      .mockResolvedValueOnce(JSON.stringify({ version: 1, data: ["disk"] }))
-      .mockResolvedValue(JSON.stringify({ version: 1, data: ["disk"] }));
-    const writer = createMockFileWriter();
-    const persistence = new AtomicPersistence(reader, writer, config());
+    const fs = createMockFileSystem({
+      "state.json": JSON.stringify({ version: 1, data: ["disk"] }),
+    });
+    const persistence = new AtomicPersistence(fs, fs, config());
 
     const result = await persistence.saveAtomicWithLock(["memory"], { version: 0 });
 
     expect(result).toEqual({ status: "saved", retries: 1 });
-    expect(JSON.parse(writer.writtenFiles["state.json"]!).data).toEqual(["disk", "memory"]);
+    expect(JSON.parse(fs.writtenFiles["state.json"]!).data).toEqual(["disk", "memory"]);
+  });
+
+  it("does not mutate a replacement claim after losing ownership", async () => {
+    const claimPath = "state.json.commit-pending";
+    const fs = createMockFileSystem({
+      "state.json": JSON.stringify({ version: 1, data: ["base"] }),
+    });
+    if (fs.link === undefined) throw new Error("mock filesystem must support hard links");
+    const originalLink = fs.link.bind(fs);
+    const originalDeleteFile = fs.deleteFile.bind(fs);
+    const originalRename = fs.rename.bind(fs);
+    let successfulClaims = 0;
+    let aTmpPath: string | undefined;
+    let resolveAClaimed: (() => void) | undefined;
+    let resolveBClaimed: (() => void) | undefined;
+    let resolveAAttemptFinished: (() => void) | undefined;
+    let releaseBRecheck: (() => void) | undefined;
+    let releaseABackoff: (() => void) | undefined;
+    const aClaimed = new Promise<void>((resolve) => {
+      resolveAClaimed = resolve;
+    });
+    const bClaimed = new Promise<void>((resolve) => {
+      resolveBClaimed = resolve;
+    });
+    const aAttemptFinished = new Promise<void>((resolve) => {
+      resolveAAttemptFinished = resolve;
+    });
+    const bRecheckReleased = new Promise<void>((resolve) => {
+      releaseBRecheck = resolve;
+    });
+    const aBackoffReleased = new Promise<void>((resolve) => {
+      releaseABackoff = resolve;
+    });
+    const link = vi.fn(async (from: string, to: string) => {
+      await originalLink(from, to);
+      if (to !== claimPath) return;
+      successfulClaims += 1;
+      if (successfulClaims === 1) {
+        aTmpPath = from;
+        resolveAClaimed?.();
+      } else if (successfulClaims === 2) {
+        resolveBClaimed?.();
+      }
+    });
+    const deleteFile = vi.fn(async (path: string) => {
+      await originalDeleteFile(path);
+      if (path === aTmpPath) resolveAAttemptFinished?.();
+    });
+    const rename = vi.fn(async (from: string, to: string) => {
+      await originalRename(from, to);
+    });
+    fs.link = link;
+    fs.deleteFile = deleteFile;
+    fs.rename = rename;
+
+    const aReader = {
+      ...fs,
+      readFile: vi.fn(async (path: string) => {
+        if (path === "state.json") await bClaimed;
+        return fs.readFile(path);
+      }),
+    };
+    const bReader = {
+      ...fs,
+      readFile: vi.fn(async (path: string) => {
+        if (path === "state.json") await bRecheckReleased;
+        return fs.readFile(path);
+      }),
+      readFileStats: vi.fn(async (path: string) => {
+        if (path === claimPath) return { size: 1, mtimeMs: 0 };
+        return fs.readFileStats(path);
+      }),
+    };
+    const aConfig = {
+      ...config(),
+      sleep: async (): Promise<void> => {
+        await aBackoffReleased;
+      },
+    };
+    const persistenceA = new AtomicPersistence(aReader, fs, aConfig);
+    const persistenceB = new AtomicPersistence(bReader, fs, config());
+
+    const saveA = persistenceA.saveAtomicWithLock(["a"], { version: 0 });
+    await aClaimed;
+    const saveB = persistenceB.saveAtomicWithLock(["b"], { version: 1 });
+    await bClaimed;
+    await aAttemptFinished;
+
+    const claimDeletesBeforeBPublishes = deleteFile.mock.calls.filter(
+      ([path]) => path === claimPath,
+    );
+    const claimRenamesBeforeBPublishes = rename.mock.calls.filter(
+      ([from]) => from === claimPath,
+    );
+    expect(claimDeletesBeforeBPublishes).toHaveLength(1);
+    expect(claimRenamesBeforeBPublishes).toHaveLength(0);
+
+    releaseBRecheck?.();
+    releaseABackoff?.();
+    const [resultA, resultB] = await Promise.all([saveA, saveB]);
+    expect(resultA.status).toBe("saved");
+    expect(resultB.status).toBe("saved");
   });
 
   it("retries immediately after reclaiming a stale claim", async () => {
-    const reader = createMockFileReader({});
-    reader.readFileStats = vi
+    const fs = createMockFileSystem();
+    fs.readFileStats = vi
       .fn()
       .mockResolvedValueOnce({ size: 1, mtimeMs: 0 })
       .mockResolvedValue({ size: 1, mtimeMs: Date.now() });
-    const writer = createMockFileWriter();
+    if (fs.link === undefined) throw new Error("mock filesystem must support hard links");
+    const originalLink = fs.link.bind(fs);
     let attempts = 0;
-    writer.link = vi.fn(async (from, to) => {
+    fs.link = vi.fn(async (from: string, to: string) => {
       attempts += 1;
       if (attempts === 1) {
         const error = new Error("claim exists") as NodeJS.ErrnoException;
         error.code = "EEXIST";
         throw error;
       }
-      await writer.rename(from, to);
+      await originalLink(from, to);
     });
-    const persistence = new AtomicPersistence(reader, writer, config());
+    const persistence = new AtomicPersistence(fs, fs, config());
 
     const result = await persistence.saveAtomicWithLock(["after-reclaim"]);
 

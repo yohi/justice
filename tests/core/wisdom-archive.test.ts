@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AtomicPersistence } from "../../src/core/atomic-persistence";
+import { JusticePlugin } from "../../src/core/justice-plugin";
 import { WisdomArchive, type ArchivedWisdom } from "../../src/core/wisdom-archive";
 import {
   createMockFileReader,
@@ -106,6 +107,67 @@ describe("WisdomArchive", () => {
     });
     expect(archived?.archivedAt).toEqual(expect.any(String));
     expect(archived).not.toHaveProperty("hitCount");
+  });
+
+  it("merges concurrent production archive appends by id and archivedAt", async () => {
+    const files = createMockFileSystem();
+    const firstPlugin = new JusticePlugin(files, files);
+    const secondPlugin = new JusticePlugin(files, files);
+    type TieredStoreWithLocalArchive = { readonly localArchive?: WisdomArchive };
+    const firstArchive = (
+      firstPlugin.getTieredWisdomStore() as unknown as TieredStoreWithLocalArchive
+    ).localArchive;
+    const secondArchive = (
+      secondPlugin.getTieredWisdomStore() as unknown as TieredStoreWithLocalArchive
+    ).localArchive;
+    if (firstArchive === undefined || secondArchive === undefined) {
+      throw new Error("expected JusticePlugin to create local archives");
+    }
+
+    const toISOString = vi
+      .spyOn(Date.prototype, "toISOString")
+      .mockImplementationOnce(() => "2026-01-01T00:00:00.001Z")
+      .mockImplementationOnce(() => "2026-01-01T00:00:00.002Z");
+    try {
+      const [firstResult, secondResult] = await Promise.all([
+        firstArchive.append(
+          {
+            id: "shared-id",
+            taskId: "task-a",
+            persona: "hephaestus",
+            category: "failure_gotcha",
+            content: "first archive record",
+            timestamp: "2026-01-01T00:00:00Z",
+          },
+          "high_priority_category",
+        ),
+        secondArchive.append(
+          {
+            id: "shared-id",
+            taskId: "task-b",
+            persona: "hephaestus",
+            category: "failure_gotcha",
+            content: "second archive record",
+            timestamp: "2026-01-01T00:00:01Z",
+          },
+          "high_priority_category",
+        ),
+      ]);
+
+      expect(firstResult.status).toBe("saved");
+      expect(secondResult.status).toBe("saved");
+    } finally {
+      toISOString.mockRestore();
+    }
+
+    const archived = await firstArchive.loadAll();
+    expect(archived).toHaveLength(2);
+    expect(new Set(archived.map((entry) => `${entry.id}:${entry.archivedAt}`))).toEqual(
+      new Set([
+        "shared-id:2026-01-01T00:00:00.001Z",
+        "shared-id:2026-01-01T00:00:00.002Z",
+      ]),
+    );
   });
 
   it("replaces an existing archived entry with the same id", async () => {

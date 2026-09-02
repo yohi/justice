@@ -1020,10 +1020,10 @@ A+B ハイブリッド完了検知アプローチを実装し、タスク呼び�
 
 `wisdom.json` / `wisdom-archive.json` など複数プロセスから並行書込されうる JSON ファイルのための汎用永続化プリミティブ（`src/core/atomic-persistence.ts`）。`WisdomPersistence`（§5.13）と `WisdomArchive`（§5.24）がこれを再利用する。
 
-- **version ベースの楽観ロック**: ファイル内容は `{ version: number, data: T }` の envelope で永続化され、書き込み毎に version を +1 する。競合検出の根拠はデータ内 `version` のみで、`mtime` 等のファイルシステム属性には依存しない（NFS / tmpfs の granularity 差・clock skew を排除）。envelope を持たないレガシー JSON は `version=0` として解釈し、初回書き込みで envelope 形式へ昇格する。
-- **atomic claim プロトコル（TOCTOU 排除）**: `fs.link()` の不可分な排他作成（既存なら `EEXIST`）により `<path>.commit-pending` スロットを獲得し、claim 保持中に version 再確認（recheck）→ `fs.rename()` で publish する。check と act の間に他 writer が介入できないため、同時 publish の直列化と stale payload の拒否が両立する。
+- **version ベースの楽観ロック**: ファイル内容は `{ version: number, data: T, claimId: string }` の envelope で永続化され、書き込み毎に version を +1 する。`claimId` は attempt ごとの共有 claim 所有権確認にだけ使い、メインファイルの競合検出と version 再確認の根拠はデータ内 `version` とする。`mtime` 等のファイルシステム属性には依存しない（NFS / tmpfs の granularity 差・clock skew を排除）。envelope を持たないレガシー JSON、および旧形式の `claimId` なし envelope は読み込み時に受け入れ、初回書き込みで新形式へ昇格する。
+- **atomic claim + owner verification**: `fs.link()` の不可分な排他作成（既存なら `EEXIST`）により `<path>.commit-pending` スロットを獲得する。メインファイルの version recheck 後、writer は claim envelope の `claimId` を確認してから version mismatch 時の cleanup または `fs.rename()` による publish を行う。stale reclaim で claim が置換されていた場合は内部的な `claim_lost` としてリトライし、元 writer は他 writer の claim を rename/cleanup しない。
 - **指数バックオフ + jitter 付きリトライ（上限 3 回）**。上限到達時は理由（`version_mismatch` / `claim_acquisition_failed` / `rename_conflict`）を記録して `<path>.conflict.json` へ fail-open 退避し、メイン処理は継続する。退避ファイル書込自体の失敗も `console.warn` のみで握り、プロセスを落とさない。
-- **stale-claim 回復**: `<path>.commit-pending` が既定 10 秒（`STALE_CLAIM_TIMEOUT_MS`）より古い場合はオーナレスとみなして reclaim する。誤って生きた claim を回復しても publish 側の rename が `ENOENT` で失敗してリトライループへ戻るため、データロストや version 単調性の破綻は発生しない。
+- **stale-claim 回復**: `<path>.commit-pending` が既定 10 秒（`STALE_CLAIM_TIMEOUT_MS`）より古い場合は reclaim する。元 writer は version recheck 後に `claimId` を再確認し、claim が存在しないか別 writer のものなら `claim_lost` として共有 claim に触れずにリトライするため、stale claim replacement が別 writer の claim を消費しない。
 - **レイアウト**: `<path>`（公開ファイル）/ `<path>.tmp.<uuid>`（writer ローカル tmp）/ `<path>.commit-pending`（単一 claim スロット）/ `<path>.conflict.json`（退避先）。起動時に 10 分超の残存 tmp ファイルを GC する。
 
 ### 5.24 `WisdomMetrics` / `WisdomArchive` — メタデータ統合（SSoT）と eviction アーカイブ

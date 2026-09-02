@@ -35,14 +35,16 @@ function makeTiered(opts?: {
 } {
   const localStore = opts?.localStore ?? new WisdomStore(100);
   const globalStore = opts?.globalStore ?? new WisdomStore(500);
+  const localFs = createMockFileSystem();
+  const globalFs = createMockFileSystem();
   const localPersistence = new WisdomPersistence(
-    createMockFileReader({}),
-    createMockFileWriter(),
+    localFs,
+    localFs,
     ".justice/wisdom.json",
   );
   const globalPersistence = new WisdomPersistence(
-    createMockFileReader({}),
-    createMockFileWriter(),
+    globalFs,
+    globalFs,
     "wisdom.json",
   );
   const logger = opts?.logger ?? makeLogger();
@@ -515,15 +517,15 @@ describe("TieredWisdomStore — persistence coordination", () => {
   });
 
   it("persistAll should save both stores via their persistence backends", async () => {
-    const writer = createMockFileWriter();
+    const fs = createMockFileSystem();
     const localPersistence = new WisdomPersistence(
-      createMockFileReader({}),
-      writer,
+      fs,
+      fs,
       ".justice/wisdom.json",
     );
     const globalPersistence = new WisdomPersistence(
-      createMockFileReader({}),
-      writer,
+      fs,
+      fs,
       "wisdom.json",
     );
 
@@ -541,7 +543,7 @@ describe("TieredWisdomStore — persistence coordination", () => {
 
     await tiered.persistAll();
 
-    expect(writer.writtenFiles[".justice/wisdom.json"]).toBeDefined();
-    expect(writer.writtenFiles["wisdom.json"]).toBeDefined();
+    expect(fs.writtenFiles[".justice/wisdom.json"]).toBeDefined();
+    expect(fs.writtenFiles["wisdom.json"]).toBeDefined();
   });
 });

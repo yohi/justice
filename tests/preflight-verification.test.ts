@@ -9,12 +9,24 @@ test("preflight verification: ADR ratification check", () => {
   const recordPath = resolve(__dirname, "..", "SPEC.md");
   expect(existsSync(recordPath)).toBe(true);
   const content = readFileSync(recordPath, "utf-8");
+  const sectionHeading = /^### 15\.12\b[^\n]*$/m.exec(content);
+  expect(sectionHeading).not.toBeNull();
+  if (sectionHeading === null || sectionHeading.index === undefined) return;
+  const afterSectionHeading = content.slice(
+    sectionHeading.index + sectionHeading[0].length,
+  );
+  const nextSectionOffset = afterSectionHeading.search(/^### (?!#)/m);
+  const sectionEnd =
+    nextSectionOffset === -1
+      ? content.length
+      : sectionHeading.index + sectionHeading[0].length + nextSectionOffset;
+  const section = content.slice(sectionHeading.index, sectionEnd);
   // Status must be APPROVED after 2026-08-02 ratification
-  expect(content).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
+  expect(section).toMatch(/\*\s*\*\*Status:\*\*\s*APPROVED/);
   // Ratification section documents the structural constraint and re-definition of evidence
-  expect(content).toContain("Ratification (2026-08-02)");
-  expect(content).toContain("structurally unachievable");
-  expect(content).toContain("Re-definition of ratification evidence");
+  expect(section).toContain("Ratification (2026-08-02)");
+  expect(section).toContain("structurally unachievable");
+  expect(section).toContain("Re-definition of ratification evidence");
   // Verify real approvers are documented instead of placeholder names
   const blockedPlaceholders = [
     "@owner-alice",
@@ -27,15 +39,15 @@ test("preflight verification: ADR ratification check", () => {
   const placeholderPattern =
     /@(?:[A-Za-z0-9_-]*(?:codeowner|placeholder|example|owner|alice|bob)[A-Za-z0-9_-]*)/i;
   for (const handle of blockedPlaceholders) {
-    expect(content).not.toContain(handle);
+    expect(section).not.toContain(handle);
   }
-  expect(content).not.toMatch(placeholderPattern);
+  expect(section).not.toMatch(placeholderPattern);
   // Verify essential ADR contents (Finding 3)
-  expect(content).toMatch(/\bD44\b/);
-  expect(content).toContain("§4.5");
-  expect(content).toMatch(/\bD5\b/);
-  expect(content).toMatch(/\bD54\b/);
-  expect(content).toMatch(/\bD63\b/);
-  expect(content).toMatch(/\bINV-004\b/);
-  expect(content).toMatch(/\bM4\b/);
+  expect(section).toMatch(/\bD44\b/);
+  expect(section).toContain("§4.5");
+  expect(section).toMatch(/\bD5\b/);
+  expect(section).toMatch(/\bD54\b/);
+  expect(section).toMatch(/\bD63\b/);
+  expect(section).toMatch(/\bINV-004\b/);
+  expect(section).toMatch(/\bM4\b/);
 });

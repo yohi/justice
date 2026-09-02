@@ -479,7 +479,7 @@ v3.0.0 未満では root specifier の配布エントリがプラグイン契約
 | `WisdomStore` | Core | LRU キャッシュ削除機構付きのインメモリ学習ストア |
 | `LearningExtractor` | Core | `TaskFeedback` から学習内容を抽出 |
 | `WisdomPersistence` | Core | `WisdomStore` と `.justice/wisdom.json` 間の永続化・復元 |
-| `AtomicPersistence` | Core | version ベース楽観ロック + atomic claim による並行書込安全な JSON 永続化プリミティブ（SPEC §5.23） |
+| `AtomicPersistence` | Core | version ベース楽観ロック + owner-verified atomic claim による並行書込安全な JSON 永続化プリミティブ（SPEC §5.23） |
 | `WisdomMetrics` / `WisdomArchive` | Core | hit 等メタデータの copy-on-write 更新（SSoT）と LRU eviction エントリのアーカイブ（SPEC §5.24） |
 | `TelemetryStore` | Core | プラン単位のテレメトリ集計（`failureRate` / `wisdomHitRate` / `errorDistribution`、SPEC §5.25） |
 | `RetryPolicyCalculator` | Core | category/stepCount からの動的リトライ閾値算出（SPEC §5.26） |
