@@ -22,12 +22,13 @@
 **Files:**
 - Modify: `SPEC.md`
 - Modify: `docs/agents/upstream-drift.md`
+- Create: `docs/reports/upstream-compatibility-audit.md`
 - Modify: `README.md`
 - Create: `docs/superpowers/specs/2026-09-02-requirements-migration-design.md`
 
 **Interfaces:**
 - `SPEC.md` は現行仕様と将来要求の状態を表す。
-- `docs/agents/upstream-drift.md` は upstream audit の対象と再検証手順を表す。
+- `docs/agents/upstream-drift.md` は upstream audit の対象と再検証手順を表し、`docs/reports/upstream-compatibility-audit.md` は監査証跡の正本とする。
 - `README.md` は保守文書へリンクする。
 
 - [x] **Step 1: 現行仕様と要求の差分を分類する**
@@ -36,7 +37,7 @@
 
 - [x] **Step 2: 正式文書へ転記する**
 
-`SPEC.md` §15.13 に責務境界と FR-601〜FR-604 の保留状態を記録する。`docs/agents/upstream-drift.md` に対象 branch、歴史的 baseline、監査範囲、再検証手順を記録する。`README.md` のドキュメント一覧に保守文書へのリンクを追加する。
+`SPEC.md` §15.13 に責務境界と FR-601〜FR-604 の保留状態を記録する。`docs/agents/upstream-drift.md` に対象 branch、歴史的 baseline、監査範囲、再検証手順を記録し、監査証跡の正本を `docs/reports/upstream-compatibility-audit.md` に定める。`README.md` のドキュメント一覧に保守文書へのリンクを追加する。
 
 - [x] **Step 3: 一時文書を削除する**
 
@@ -53,6 +54,7 @@ REQUIREMENTS_2026-08-29.md
 - Verify: `SPEC.md`
 - Verify: `README.md`
 - Verify: `docs/agents/upstream-drift.md`
+- Verify: `docs/reports/upstream-compatibility-audit.md`
 - Verify: `docs/superpowers/specs/2026-09-02-requirements-migration-design.md`
 
 **Interfaces:**
