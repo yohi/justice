@@ -56,7 +56,7 @@
     "@opencode-ai/plugin": "^1.14.21",
     "@types/bun": "latest",
     "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-security": "^4.0.0",
