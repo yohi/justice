@@ -1712,4 +1712,4 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 
 これらを実装済みとして扱ってはならない。導入時は authorization のライフサイクル、plan fingerprint、既存の fail-open 境界、および `implementation_unauthorized` の挙動を同時に再設計する。
 
-upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。検証済みの upstream revision は、調査時点の full commit SHA とともに同文書へ記録する。
+upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。

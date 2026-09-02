@@ -1,6 +1,7 @@
 # Upstream Drift & Maintenance
 
-> Only relevant when the upstream `oh-my-openagent` package updates. Not needed for day-to-day work on `justice`.
+> Only relevant when either the verified upstream `Superpowers` `main` branch or
+> `oh-my-openagent` `dev` branch changes. Not needed for day-to-day work on `justice`.
 >
 > The local `src/core/provider-error-patterns.ts` was last synchronized from `oh-my-openagent@3.17.4`.
 
@@ -32,7 +33,8 @@ routing redesign:
 | Superpowers | `b36e0829c6d0140e93cfef2ca599b1b07d4a7797` / v6.3.0 |
 
 This table is historical context, not a dependency pin. Each later audit must
-record the actual upstream branch and full commit SHA used for verification.
+record the actual upstream branch and full commit SHA used for verification in the
+canonical audit record.
 
 ### Audit Scope
 
@@ -61,10 +63,10 @@ documentation as evidence.
 2. Extract Justice contract points from source, tests, prompts, Markdown, and configuration examples.
 3. Compare each contract with the recorded upstream code, tests, and documentation.
 4. Update only the affected adapter, documentation, tests, or configuration; avoid unrelated refactoring and new harness support.
-5. Run the project verification commands inside the devcontainer: `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build`.
+5. Run the project verification commands inside the devcontainer: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`, and `bun run test:dist`.
 6. Exercise the OpenCode user flow from workflow start through planning, delegation, execution, and completion, including background/continuation, compaction, loop, and completion behavior where Justice still owns that responsibility.
-7. Record the verified revisions, evidence, remaining differences, and any accepted limitations in a report under `docs/reports/`.
+7. Record the verified revisions, every verification command result (including `bun run test:dist`), evidence, remaining differences, and any accepted limitations in the canonical audit record [`docs/reports/upstream-compatibility-audit.md`](../reports/upstream-compatibility-audit.md), using a dated section.
 
 The compatibility audit is not complete when only static checks pass. The
 verified upstream revision and the observed user-flow evidence must remain
-discoverable to a future maintainer.
+discoverable to a future maintainer through the canonical audit record.

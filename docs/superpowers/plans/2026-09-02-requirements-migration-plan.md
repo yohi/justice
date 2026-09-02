@@ -13,7 +13,7 @@
 - 現行実装と未実装の将来要求を同じ契約として記載しない。
 - upstream の互換性はコード・テスト・ドキュメントを根拠に判定する。
 - 既存のプロジェクト文書構造とリンクを維持する。
-- 完了前に `bun run test`、`bun run typecheck`、`bun run lint`、`bun run build` を実行する。
+- 完了前に `bun run test`、`bun run typecheck`、`bun run lint`、`bun run build` を実行する。Devcontainer 内での実行を完了条件とし、Devcontainer が利用できない場合のホスト実行はフォールバック証跡として記録するが、Devcontainer の完了条件を満たしたものとは扱わない。
 
 ---
 
@@ -57,23 +57,25 @@ REQUIREMENTS_2026-08-29.md
 
 **Interfaces:**
 - 削除済み `REQUIREMENTS*` へのリンクや、現行仕様と矛盾する plan-scoped authorization の記述を残さない。
-- Devcontainer 内の Bun コマンドを完了条件とする。
+- Devcontainer 内の Bun コマンドを完了条件とする。Devcontainer が利用できなかった場合は、ホスト実行の結果と理由を記録し、Devcontainer 完了条件を未達として残す。
 
 - [x] **Step 1: プレースホルダーと残存参照を確認する**
 
 `TBD`、未完了の `TODO`、削除済み要件ファイルへの不要なリンクを検索し、将来要求を保留として明示した箇所だけを許容する。
 
-- [x] **Step 2: 開発コマンドを実行する**
+- [x] **Step 2: 開発コマンドを実行する（ホスト・フォールバック）**
 
 ```bash
-devcontainer exec --workspace-folder . bun run test
-devcontainer exec --workspace-folder . bun run typecheck
-devcontainer exec --workspace-folder . bun run lint
-devcontainer exec --workspace-folder . bun run build
+bun run test
+bun run typecheck
+bun run lint
+bun run build
 ```
+
+実行環境: ホスト。Devcontainer が利用できなかったため、4コマンドをホスト上で実行した。
 
 - [x] **Step 3: 検証結果を報告する**
 
-実行済みの4コマンドはすべて終了コード0で完了した。テストは143ファイル・1714件、lintは0 errors（既存warning 97件）だった。`REQUIREMENTS*` の glob は空である。
+実行済みの4コマンドはすべてホスト上で終了コード0で完了した。テストは143ファイル・1714件、lintは0 errors（既存warning 97件）だった。`REQUIREMENTS*` の glob は空である。Devcontainer が利用できなかったため、Devcontainer 内検証の完了条件は未達であり、ホスト結果を代替合格とは扱わない。
 
-各コマンドの終了結果と、`REQUIREMENTS*` が存在しないことを確認して完了とする。
+各コマンドの終了結果と、`REQUIREMENTS*` が存在しないことを確認する。Devcontainer 内で4コマンドを再実行するまで、プロジェクト検証の完了条件は満たされない。
