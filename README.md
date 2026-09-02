@@ -446,6 +446,21 @@ $ARGUMENTS
 | `sp-integration` | DeepSeek V4 Pro | `max` | GLM-5.3 `max` → Grok 4.6 `high` | 複数ファイル、統合、複雑なdebugging |
 | `sp-final-review` | GPT-5.6 Sol | `max` | GLM-5.3 `max` → Grok 4.6 `xhigh` | planまたはbranch全体の最終review |
 
+`Reasoning` 列は provider 非依存の論理レベルです。実際の provider 値への mapping は
+次のとおりです。DeepSeek は `low` / `high` / `max` に対応し、論理 `medium` と
+`xhigh` は `high` へ変換します。Grok 4.6 は `low` / `medium` / `high` / `xhigh`
+をそのまま扱います。
+
+| Provider / model | `low` | `medium` | `high` | `xhigh` | `max` | 対応能力の確認 |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek | `low` | `high` | `high` | `high` | `max` | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+| Grok 4.6 | `low` | `medium` | `high` | `xhigh` | 拒否 | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+
+表にない値、または選択モデルの対応能力を確認できない値は、プロファイル上は拒否します。
+上記の明示した変換以外の暗黙的な downgrade、別モデルへの自動切替、category escalation は行いません。
+対応能力は調査時点の `models` catalog の capability metadata または reasoning enum と
+provider 公式仕様を照合して確認し、確認日・catalog revision・対象モデルを記録します。
+
 高頻度の機械的変更、通常実装、task単位のreviewには効率重視のモデルを使い、
 低頻度の統合・最終reviewでより高い推論予算を使います。標準の `sp-*` chain には
 Claude と Kimi K3 を含めません。確認日: 2026-09-02。

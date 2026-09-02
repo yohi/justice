@@ -8,7 +8,7 @@ Justice の routing 契約、実装コード、または利用者の設定を変
 
 ## 範囲
 
-- `README.md` に provider 非依存の推奨 Worker モデルプロファイルを追加する。
+- `README.md` に provider 非依存の論理 Reasoning level と、provider 固有値への明示的な mapping を含む推奨 Worker モデルプロファイルを追加する。
 - 対象は `sp-mechanical`、`sp-implementation`、`sp-review`、
   `sp-integration`、`sp-final-review` の5カテゴリに限定する。
 - モデル名、reasoning level、選択・復旧順、用途を記載する。
@@ -18,7 +18,7 @@ Justice の routing 契約、実装コード、または利用者の設定を変
 - `SPEC.md` の実装契約の変更。
 - Justice の自動 category escalation の実装。
 - `omo.jsonc`、モデル catalog、またはモデル接続先の設定。
-- LLM provider 名、provider 固有 ID、価格、利用枠の掲載。
+- LLM 接続先、provider 固有 ID、価格、利用枠、コピー可能な設定例の掲載。
 
 ## 推奨プロファイル
 
@@ -41,6 +41,22 @@ Claude と Kimi K3 を含めない。
 README の表は人間が読めるモデル名を使い、設定にそのまま貼り付ける短縮 alias や
 接続先固有の識別子は載せない。実際の `omo.jsonc` では、各利用者が解決可能な
 モデル名または top-level `models` catalog の alias へ対応付ける。
+
+`Reasoning` 列の値は provider 非依存の論理レベルであり、実行時に provider 固有値へ
+変換される。現在の推奨対象に対する mapping は次のとおりとする。
+
+| Provider / model | `low` | `medium` | `high` | `xhigh` | `max` | 対応能力の確認 |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek | `low` | `high` | `high` | `high` | `max` | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+| Grok 4.6 | `low` | `medium` | `high` | `xhigh` | 拒否 | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+
+DeepSeek は `low` / `high` / `max` に対応し、論理 `medium` と `xhigh` は `high` へ
+変換する。Grok 4.6 は `low` / `medium` / `high` / `xhigh` をそのまま扱う。
+表にない値、または確認した catalog が選択モデルの能力を示さない値は、プロファイル上は拒否する。
+この2つの変換以外の暗黙的な downgrade、別モデルへの自動切替、category escalation は
+行わない。対応能力は、調査時点の `models` catalog の capability metadata または
+reasoning enum と provider 公式仕様を照合し、確認日・catalog revision・対象モデルを
+監査記録へ残して確認する。モデル名だけから対応能力を推測しない。
 
 `models[]` は選択・実行時復旧の順序であり、能力不足を検出して自動的に上位の
 カテゴリへ昇格させる機構ではない。現行Justiceは失敗時に advisory と分割提案を

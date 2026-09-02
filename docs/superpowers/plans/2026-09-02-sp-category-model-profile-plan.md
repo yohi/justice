@@ -11,10 +11,10 @@
 ## Global Constraints
 
 - 変更対象は `README.md` と本計画・設計文書のみとし、`SPEC.md`、ソースコード、`omo.jsonc` は変更しない。
-- LLM接続先、固有ID、価格、利用枠、コピー可能なJSONC設定例は掲載しない。
+- provider 固有の対応能力 mapping は説明目的で掲載するが、LLM 接続先、provider 固有 ID、価格、利用枠、コピー可能な JSONC 設定例は掲載しない。
 - `models[]` を能力に応じた自動category昇格として説明しない。
 - `sp-implementation` から `sp-integration` への再委譲は、計画更新後に明示的に行う必要があると記載する。
-- 完了前に devcontainer 内で `bun run test`、`bun run typecheck`、`bun run lint`、`bun run build` を実行する。
+- 完了前に devcontainer 内で `bun run test`、`bun run typecheck`、`bun run lint`、`bun run build` を実行する。Devcontainer が利用できない場合のホスト実行はフォールバック証跡として記録するが、Devcontainer の完了条件を満たしたものとは扱わない。ホスト結果を代替合格とする場合は、承認者と受入基準を同じ計画に明記する。
 - Git commit は、ユーザーから明示依頼があるまで実行しない。
 
 ---
@@ -29,11 +29,11 @@
 **Interfaces:**
 
 - Consumes: `SpCategory` の5カテゴリと、設計文書で承認済みのモデル順・reasoning level。
-- Produces: 利用者が設定を強制されずに選択できる、provider固有情報を含まないREADME節。
+- Produces: 利用者が設定を強制されずに選択でき、論理 Reasoning level と provider 固有の変換規則を区別して説明するREADME節。
 
 - [ ] **Step 1: 既存の挿入位置と設計を再確認する**
 
-`README.md` の `## /justice-implement` 節が終わる位置と、続く `## Quality Control Plane (v2.0)` 見出しを確認する。設計文書の表が `sp-mechanical`、`sp-implementation`、`sp-review`、`sp-integration`、`sp-final-review` の5行を持つことを確認する。
+`README.md` の `## /justice-implement` 節が終わる位置と、続く `## Quality Control Plane (v2.0)` 見出しを確認する。設計文書の表が `sp-mechanical`、`sp-implementation`、`sp-review`、`sp-integration`、`sp-final-review` の5行を持ち、Reasoning の論理レベルから provider 値への mapping と対応能力の確認方法を持つことを確認する。
 
 - [ ] **Step 2: 推奨プロファイル節を追加する**
 
@@ -53,6 +53,13 @@
 | `sp-integration` | DeepSeek V4 Pro | `max` | GLM-5.3 `max` → Grok 4.6 `high` | 複数ファイル、統合、複雑なdebugging |
 | `sp-final-review` | GPT-5.6 Sol | `max` | GLM-5.3 `max` → Grok 4.6 `xhigh` | planまたはbranch全体の最終review |
 
+`Reasoning` は provider 非依存の論理レベルです。DeepSeek は `low` / `high` / `max` に対応し、論理 `medium` と `xhigh` は `high` へ変換します。Grok 4.6 は `low` / `medium` / `high` / `xhigh` をそのまま扱います。表にない値はプロファイル上、対応能力を確認できない限り拒否し、別の category やモデルへ自動フォールバックしません。これは README 上の選択方針であり、Justice 本体の runtime mapping を追加するものではありません。
+
+| Provider / model | `low` | `medium` | `high` | `xhigh` | `max` | 対応能力の確認 |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek | `low` | `high` | `high` | `high` | `max` | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+| Grok 4.6 | `low` | `medium` | `high` | `xhigh` | 拒否 | 選択モデルの `models` catalog の reasoning capability と provider 仕様を確認 |
+
 高頻度の機械的変更、通常実装、task単位のreviewには効率重視のモデルを使い、
 低頻度の統合・最終reviewでより高い推論予算を使います。標準の `sp-*` chain には
 Claude と Kimi K3 を含めません。確認日: 2026-09-02。
@@ -67,11 +74,11 @@ Claude と Kimi K3 を含めません。確認日: 2026-09-02。
 
 - [ ] **Step 3: 文書境界を検証する**
 
-追加した節に接続先、固有ID、価格、利用枠、JSONCコードブロックがないことを確認する。5つの `sp-*` category が一度ずつ表にあり、`models[]` の説明が自動category昇格と区別されていることを確認する。
+追加した節に接続先、provider 固有 ID、価格、利用枠、JSONC コードブロックがないことを確認する。5つの `sp-*` category が一度ずつ表にあり、論理 Reasoning level、provider mapping、未対応値の拒否方針、対応能力の確認方法、`models[]` の説明が設計と一致していることを確認する。
 
 - [ ] **Step 4: プロジェクト検証を実行する**
 
-devcontainer 内で次を実行し、すべて終了コード0であることを確認する。
+Devcontainer 内で次を実行し、すべて終了コード0であることを確認する。Devcontainer が利用できない場合は同じ4コマンドをホストで実行し、利用不能の理由と結果を記録する。ただし、明示的な承認と受入基準がない限り、ホスト実行は Devcontainer 完了条件を満たさない。
 
 ```bash
 devcontainer exec --workspace-folder . bun run test
@@ -97,8 +104,8 @@ Markdownの空白や表の崩れがないことを目視確認する。Git commi
 
 - [ ] **Step 1: 設計との差異を確認する**
 
-READMEの表について、5カテゴリ、Primary、Reasoning、復旧候補、用途が設計文書の表と一致することを確認する。`SPEC.md`、ソースコード、`omo.jsonc` が変更対象に含まれていないことを確認する。
+READMEの表について、5カテゴリ、Primary、Reasoning、復旧候補、用途、論理 Reasoning level から provider 値への mapping、未対応値の拒否方針、対応能力の確認方法が設計文書と一致することを確認する。`SPEC.md`、ソースコード、`omo.jsonc` が変更対象に含まれていないことを確認する。
 
 - [ ] **Step 2: 完了条件を報告する**
 
-追加位置、provider固有情報を含めなかったこと、カテゴリ自動昇格を約束していないこと、実行した検証コマンドと結果を報告する。未実行または失敗した検証があれば成功と表現せず、理由を明記する。
+追加位置、論理 Reasoning level と provider mapping の対応、接続先等を含めなかったこと、カテゴリ自動昇格を約束していないこと、実行した検証コマンドと実行環境・結果を報告する。Devcontainer 未実行、ホストへのフォールバック、または失敗した検証があれば成功と表現せず、理由と完了条件の未達を明記する。
