@@ -2,7 +2,7 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Approved  
+**Status:** Design Review Pending（レビュー指摘反映済み、再レビュー待ち）  
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
 
@@ -57,6 +57,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 | `src/core/plan-fingerprint.ts` | 正規化 semantic hash、canonical plan snapshot の生成 |
 | `src/core/task-lifecycle.ts` | Task Progress State (9状態) と Plan Finalization State (5状態) の純粋 state machine |
 | `src/core/acceptance-decision.ts` | Evidence / Review / Gate 結果から `accepted` / `rework_required` / blocked を判定 |
+| `src/core/review-artifact.ts` | `ReviewArtifactV1` の検証・解析、clean review 権威付け |
 
 ### 3.2 既存モジュール拡張
 
@@ -67,6 +68,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `sp-deep` / `sp-architecture` を追加し、未マッピング role は `compatibility_fallback` 以外では例外を投げる。
 - `src/core/v2/state-projection.ts`
   - durable observation/decision log から task lifecycle と plan finalization を再構築する projector を拡張。
+- `src/core/v2/gate-definition.ts` / `src/core/v2/rule-evaluation-engine.ts`
+  - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
 - `src/core/session-state-provider.ts`
   - `chat.params` / `message.updated` の actual agent/model を記録する用途を維持し、controller routing observation への入力として使う。
 
@@ -79,6 +82,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 - `src/hooks/observation-handler.ts`
   - `chat.params` / `message.updated` の actual agent を `ControllerRoutingObservation` へ記録。
   - Worker 完了・Evidence・Review・Gate 結果を typed lifecycle events として durable log に書き出す。
+  - `task()` 呼び出しに `TaskCallPurpose` を付与し、PostToolUse で implementation / task_review / final_review を区別する。
   - **plan.md の直接書き換えは行わない。**
 - `src/hooks/task-feedback.ts`
   - Worker tool success をそのまま成功判定にせず、`WorkerReported` イベントを発行する。
@@ -86,6 +90,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 - `src/runtime/opencode-adapter.ts`
   - task() payload の正規化 (禁止 field 除去 / `taskId`/`loadSkills`/`runInBackground` の canonicalize) を維持。
   - `sp-deep` / `sp-architecture` も category として通すだけで model/agent は補正しない。
+  - `ReviewRequiredDirective` を Controller へ inject するための出力経路を追加。
 
 ### 3.4 Command 雛形 (Guaranteed Application Path)
 
@@ -141,41 +146,86 @@ export type ControllerRoutingStatus =
 
 export type ControllerRoutingUnappliedReason =
   | "application_not_configured"
-  | "actual_not_observed"
-  | "controller_mismatch"
-  | "controller_observed"
+  | "actual_not_observed";
+
+export type ControllerRoutingUnsupportedReason =
   | "runtime_capability_unsupported";
 
-export type ControllerRoutingObservation = {
-  readonly desiredController: ControllerAgent;
-  readonly actualController?: ControllerAgent;
-  readonly applicationMethod: ControllerApplicationMethod;
-  readonly observationSource: ControllerObservationSource;
-  readonly routingStatus: ControllerRoutingStatus;
-  readonly reason?: ControllerRoutingUnappliedReason;
-};
+export type ControllerRoutingObservation =
+  | {
+      readonly routingStatus: "applied";
+      readonly desiredController: ControllerAgent;
+      readonly actualController: ControllerAgent;
+      readonly applicationMethod: Exclude<
+        ControllerApplicationMethod,
+        "none"
+      >;
+      readonly observationSource: "message.updated" | "both";
+    }
+  | {
+      readonly routingStatus: "mismatch";
+      readonly desiredController: ControllerAgent;
+      readonly actualController: ObservationAgentId;
+      readonly applicationMethod: Exclude<
+        ControllerApplicationMethod,
+        "none"
+      >;
+      readonly observationSource: ControllerObservationSource;
+    }
+  | {
+      readonly routingStatus: "unapplied";
+      readonly desiredController: ControllerAgent;
+      readonly actualController?: ObservationAgentId;
+      readonly applicationMethod: ControllerApplicationMethod;
+      readonly observationSource: ControllerObservationSource;
+      readonly reason: ControllerRoutingUnappliedReason;
+    }
+  | {
+      readonly routingStatus: "unsupported";
+      readonly desiredController: ControllerAgent;
+      readonly applicationMethod: "runtime-api" | "none";
+      readonly observationSource: ControllerObservationSource;
+      readonly reason: ControllerRoutingUnsupportedReason;
+    };
 ```
 
 - `applied` とするには `message.updated` で actual controller が desired と一致している必要がある。
 - `chat.params` 一致だけでは `applied` にしない。
+- `actualController` は `ObservationAgentId`（`"unknown"` を含む）で表現し、unknown agent 観測時も `mismatch` として記録する。
 - `unsupported` は将来 OpenCode に runtime 適用 API が追加された場合の予約値。現行 API では発生しない。
+- 各 status は必須フィールドを区別する discriminated union とし、`applied` 状態で `reason` を持たせたり、`unapplied` で `actualController` を必須にしたりするような illegal state は表現できない。
 
 ### 4.2 Plan Authorization
 
 ```ts
 export type ApprovedPlanBinding = {
+  readonly authorizationId: string;
   readonly sessionId: string;
   readonly planPath: string;
   readonly planFingerprint: string;
   readonly fingerprintSchema: "justice-plan-v1";
   readonly approvedAt: string;
   readonly status: "active" | "invalidated" | "released";
+  readonly invalidatedAt?: string;
+  readonly releasedAt?: string;
+};
+
+export type AuthorizationMergeRule = {
+  readonly terminalStates: ReadonlyArray<"invalidated" | "released">;
+  readonly resolve: (
+    mine: ApprovedPlanBinding,
+    theirs: ApprovedPlanBinding,
+  ) => ApprovedPlanBinding;
 };
 ```
 
+- `authorizationId` は承認単位の不変 identity。同一 `authorizationId` では `active → invalidated|released` は不可逆とする。
+- 再承認（re-approval）は新しい `authorizationId` を発行する。古い terminal binding を `active` に戻す merge は禁止する。
 - `fingerprintSchema` は canonicalization ロジックが将来変わったときの安全装置である。
 - 承認時に `CanonicalPlanSnapshot` を必ず生成する。
+- `invalidatedAt` / `releasedAt` は監査・競合解決用タイムスタンプ。
 - `invalidated` / `released` 状態の永続化に失敗しても、その binding store を uncertain として扱い、再利用禁止とする。
+- `AtomicPersistence.merge` において、`terminalStates` に含まれる status を持つ binding を `active` で上書きしてはならない。
 
 ### 4.3 Plan Fingerprint
 
@@ -189,16 +239,26 @@ export type CanonicalTaskSnapshot = {
 
 export type CanonicalPlanSnapshot = {
   readonly schema: "justice-plan-v1";
+  readonly documentDigest: string;
+  readonly globalBodyDigest: string;
   readonly tasks: ReadonlyArray<CanonicalTaskSnapshot>;
+};
+
+export type PlanFingerprint = {
+  readonly algorithm: "sha256";
+  readonly value: string; // lowercase hex
 };
 ```
 
 - `PlanFingerprint` が canonical plan document から直接生成する。`PlanParser` の解析結果をそのまま使わない。
+- fingerprint は `sha256:<lowercase hex>` 形式で外部化する。
 - 正規化対象は以下に限定する。
-  - checkbox state (`- [ ]` / `- [x]` の差)
+  - checkbox state（fenced code block 外部の `- [ ]` / `- [x]` のみ）
   - EOL (`\r\n` → `\n`)
-  - 既存 migration 対象の Justice Error annotation (`> ⚠️ **Error**: ...`) 行
+- fenced code block 内部は一切 normalize しない。コード例の意味変更を見逃さない。
 - 一般空白・Task 本文は正規化しない。fail-closed に倒す。
+- legacy Error annotation (`> ⚠️ **Error**: ...`) は **fingerprint normalization には含めない**。承認作成前の one-time migration で既存 annotation を除去する。
+- `documentDigest` は正規化後の全文 digest、`globalBodyDigest` は task 外の plan 本文 digest。semantic mutation の診断性を高める。
 
 ### 4.4 Task Lifecycle
 
@@ -220,10 +280,32 @@ export type PlanFinalizationState =
   | "final_review_pending"
   | "final_gate_pending"
   | "complete";
+
+export type TaskLifecycleTransitionRecord = {
+  readonly recordType: "observation";
+  readonly kind: "task_lifecycle_transition";
+  readonly taskId: string;
+  readonly from: TaskProgressState;
+  readonly to: TaskProgressState;
+  readonly reason: string;
+  readonly authorizationId?: string;
+};
+
+export type PlanFinalizationTransitionRecord = {
+  readonly recordType: "observation";
+  readonly kind: "plan_finalization_transition";
+  readonly planPath: string;
+  readonly authorizationId: string;
+  readonly from: PlanFinalizationState;
+  readonly to: PlanFinalizationState;
+  readonly reason: string;
+};
 ```
 
 - `TaskLifecycle Core` は永続化に依存しない。
-- lifecycle transition は typed lifecycle event として durable observation/decision log に記録される。
+- lifecycle transition は `TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` として durable observation/decision log に記録される。
+- 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。例：同一 `taskId` の重複 `worker_reported` は無視、許可されていない `accepted → pending` 遷移は無効として記録。
+- restart / replay 時は event log を時系列で再投影する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
 - 新規 persistence file は作らない。
 
@@ -240,28 +322,122 @@ export type ReviewSource =
   | "sp-final-review"
   | "external";
 
-export type ReviewCorrelation = {
+export type TaskReviewCorrelation = {
+  readonly reviewKind: "task-review";
   readonly reviewOfTaskId: string;
   readonly reviewRound: number;
-  readonly reviewKind: "task-review" | "final-review";
+};
+
+export type FinalReviewCorrelation = {
+  readonly reviewKind: "final-review";
+  readonly planPath: string;
+  readonly authorizationId: string;
+  readonly planFingerprint: PlanFingerprint;
+};
+
+export type ReviewCorrelation =
+  | TaskReviewCorrelation
+  | FinalReviewCorrelation;
+
+export type ReviewSeverity = "critical" | "major" | "minor";
+
+export type ReviewItem = {
+  readonly itemKey: string;
+  readonly evidenceId: string;
+  readonly severity: ReviewSeverity;
+  readonly summary: string;
+  readonly location: string;
+  readonly status: "open" | "resolved";
+};
+
+export type ReviewArtifactV1 = {
+  readonly schemaVersion: 1;
+  readonly reviewKind: ReviewKind;
+  readonly reviewSource: ReviewSource;
+  readonly correlation: ReviewCorrelation;
+  readonly complete: boolean;
+  readonly findings: ReadonlyArray<ReviewItem>;
 };
 ```
 
-- `sp-review` worker の起動は Justice ではなく Controller (Atlas) が `task(category="sp-review")` として行う。
-- Justice は `ReviewPending` 状態の提示と、review worker 実行結果の観測を行う。
-- review worker と元 task との correlation は内部的に `ReviewCorrelation` で保持する。
-- CodeRabbit / Greptile 等の external review は `review-clean` gate の追加情報になりうるが、mandatory `sp-review` の完了証拠にはならない。
+- `sp-review` / `sp-final-review` worker の起動は Justice ではなく Controller (Atlas) が `task(category="sp-review" | "sp-final-review")` として行う。
+- Justice は `ReviewPending` / `FinalReviewPending` 状態の提示と、review worker 実行結果の観測を行う。
+- review worker と元 task / plan との correlation は内部的に `ReviewCorrelation` で保持する。
+- `ReviewArtifactV1` を review worker が生成する唯一の authoritative artifact とする。`complete: true + findings: []` を clean review の完了証拠とする。
+- CodeRabbit / Greptile 等の external review は `review-clean` gate の追加情報になりうるが、mandatory `sp-review` / `sp-final-review` の完了証拠にはならない。
 
 ### 4.6 Gate Verdict
 
 ```ts
+export type GateScope = "task" | "plan";
+
+export type GateTrigger =
+  | { readonly scope: "task"; readonly on: "task_complete" | "tool_observed" }
+  | { readonly scope: "plan"; readonly on: "final_review_complete" | "plan_state_reached" };
+
 export type GateVerdict = "PASS" | "WARN" | "FAIL";
+
+export type TaskGateDecision = {
+  readonly gateType: "task";
+  readonly taskId: string;
+  readonly verdict: GateVerdict;
+};
+
+export type PlanGateDecision = {
+  readonly gateType: "plan";
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly verdict: GateVerdict;
+};
+
+export type GateDecision = TaskGateDecision | PlanGateDecision;
 ```
 
-- `PASS` のみ `TaskAccepted` へ進める。
+- `GateScope` は gate が task 単位か plan 単位かを区別する。
+- task gate trigger は `task_complete` / `tool_observed` を維持するが、**lifecycle state = `gate_pending` になった場合のみ**評価する。
+- plan gate trigger は `final_review_complete` とする。Final Review の `ReviewArtifactV1.complete === true` を観測したタイミングで評価する。
+- `PASS` のみ `TaskAccepted` / `PlanComplete` へ進める。
 - `WARN` / `FAIL` は `rework_required` へ進める。
-- gate evaluation 不可・内部エラー・証拠不十分の場合は `gate_pending` のまま `accepted` にしない。
+- gate evaluation 不可・内部エラー・証拠不十分の場合は `gate_pending` / `final_gate_pending` のまま `accepted` / `complete` にしない。
 - 内部障害を `rework_required` にしてはならない。"Justice が壊れたので実装コードを書き直せ" という誤った意味を与えるため。
+
+### 4.7 Task Call Purpose
+
+```ts
+export type TaskCallPurpose =
+  | "implementation"
+  | "task_review"
+  | "final_review";
+
+export type TaskCallBinding = {
+  readonly callId: string;
+  readonly taskId: string;
+  readonly purpose: TaskCallPurpose;
+  readonly correlation?: ReviewCorrelation;
+};
+```
+
+- `task()` の PreToolUse 時に `callId` へ `TaskCallPurpose` を bind する。
+- PostToolUse では purpose に応じて分岐する。
+  - `implementation` → `WorkerReported` イベントを発行。
+  - `task_review` / `final_review` → `ReviewArtifactV1` を検証・抽出し、`review_observed` イベントを発行。
+- `sp-review` / `sp-final-review` として呼ばれた `task()` を、通常の implementation 完了と混同してはならない。
+
+### 4.8 Review Required Directive
+
+```ts
+export type ReviewRequiredDirective = {
+  readonly kind: "review_required";
+  readonly reviewKind: "task-review" | "final-review";
+  readonly correlation: ReviewCorrelation;
+  readonly revieweeTaskId?: string;
+  readonly revieweePlanPath?: string;
+};
+```
+
+- Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。
+- Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
+- PreToolUse で review task の `callId` を `TaskCallPurpose` / `ReviewCorrelation` と相関付け、PostToolUse で結果を authoritative に観測する。
 
 ---
 
@@ -299,6 +475,7 @@ Acceptance criteria:
   → PlanFingerprint 計算
   → CanonicalPlanSnapshot 保存
   → ApprovedPlanBinding {
+      authorizationId: <new UUID>,
       sessionId, planPath, planFingerprint,
       fingerprintSchema: "justice-plan-v1",
       approvedAt, status: "active"
@@ -313,11 +490,23 @@ task() PreToolUse 介入条件:
   ∧ binding.planPath === active plan
   ∧ PlanFingerprint(現 plan.md) === binding.planFingerprint
       → 不一致なら binding.status = "invalidated"
+      → invalidatedAt を記録
       → [JUSTICE: AUTHORIZATION INVALIDATED] advisory
 
 release 条件:
   PlanFinalizationState === "complete"
   ∨ ユーザー明示 cancel (/justice-implement --cancel)
+      → releasedAt を記録
+
+authorization merge rule:
+  - terminal state（"invalidated" / "released"）を "active" で上書きしてはならない。
+  - 同一 authorizationId で競合した場合、timestamp が新しい terminal state を採用する。
+  - 再承認は新しい authorizationId を発行する。
+
+restart / hydration:
+  - plugin startup / session hydration 時に、`.justice/authorizations.json` 内の active binding から `PlanBridge` の active plan を復元する。
+  - active binding が存在するが plan ファイルがない場合は binding を invalidated とする。
+  - 復元後も fingerprint 不一致チェックは継続して実行する。
 ```
 
 - Authorization は最初の Worker Task 実行後も consume しない。
@@ -347,17 +536,22 @@ VALID_EXECUTION_ROLE_CATEGORIES (全射):
 
 ```text
 task() 完了観測 (TaskFeedbackHandler)
-  → WorkerReported
+  → `TaskCallPurpose` を確認（implementation の場合のみ以下を実行）
+  → WorkerReported イベントを発行
   → EvidenceEngine: evidence 収集 (observed / derived provenance のみ)
   → EvidencePending → ReviewPending
+
+Justice
+  → ReviewPending 到達時に `ReviewRequiredDirective` を Controller (Atlas) へ inject
 
 Controller (Atlas)
   → task(category="sp-review") with ReviewCorrelation
   → review worker 観測
 
 Justice
+  → `ReviewArtifactV1` を検証・抽出
   → ReviewPending → GatePending
-  → GateEngine 評価
+  → lifecycle state = `gate_pending` になったタイミングで GateEngine 評価
       PASS  → AcceptanceDecision { accepted: true }
             → TaskProgressState = accepted
             → ProgressUpdater → PlanParser.updateCheckbox()
@@ -379,22 +573,27 @@ Justice
 ```text
 Task Review:
   Worker implementation
-    → sp-review worker (via Controller task dispatch)
-    → structured review artifact / observed review record
-    → Gate evaluation
+    → Justice injects `ReviewRequiredDirective` to Controller
+    → Controller dispatches sp-review worker
+    → sp-review worker emits `ReviewArtifactV1`
+    → Justice validates / extracts `ReviewArtifactV1` as observed review record
+    → Gate evaluation (when lifecycle state = gate_pending)
     → TaskAccepted
 
 Final Review:
   All Tasks Accepted
     → PlanFinalizationState = final_review_pending
-    → sp-final-review worker (via Controller task dispatch)
-    → Final Gate
+    → Justice injects `ReviewRequiredDirective` to Controller
+    → Controller dispatches sp-final-review worker
+    → sp-final-review worker emits `ReviewArtifactV1`
+    → Final Gate evaluation (trigger: final_review_complete)
     → PlanFinalizationState = complete
     → Authorization released
 ```
 
 - `sp-review` / `sp-final-review` の起動主体は Controller。
-- Justice は review correlation と結果観測を行う。
+- Justice は `ReviewRequiredDirective` の生成と、review correlation / `ReviewArtifactV1` の観測を行う。
+- `ReviewArtifactV1`（`complete: true + findings: []`）のみを mandatory review 完了の authoritative evidence とする。
 - external review (CodeRabbit / Greptile) は補助情報であり、mandatory review 完了の証拠にはならない。
 
 ---
@@ -417,11 +616,16 @@ Final Review:
 ### 6.2 特に追加すべきシナリオ
 
 - `AtomicPersistence` が `conflict_diverted` を返した場合、authorization が成立しないこと。
+- authorizationId を持たない / terminal state を上書きする merge rule が許可されていないこと。
 - restart / replay 後に durable log から lifecycle を復元すること。
-- external review だけでは `sp-review` 要件を満たさないこと。
-- review task と implementation task の correlation が正しく機能すること。
+- active binding から `PlanBridge` の active plan が復元されること。
+- external review だけでは `sp-review` / `sp-final-review` 要件を満たさないこと。
+- review task と implementation task の correlation / `TaskCallPurpose` が正しく機能すること。
+- `ReviewArtifactV1.complete: true + findings: []` を clean review 完了証拠として扱うこと。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
 - Controller Routing で Core が Atlas を返し Runtime が Sisyphus のままなら `routingStatus = mismatch` であること。
+- fingerprint が fenced code block 内部を正規化せず、legacy Error annotation 追加で変化すること。
+- Gate 評価が lifecycle state = `gate_pending` に一本化され、Review 前に Gate Decision が発生しないこと。
 
 ### 6.3 品質ゲート
 
@@ -446,6 +650,8 @@ bun run build
 - `deep` / `architecture` の旧 category 経路 (`deep` / `unspecified-high`) の削除
 - task 失敗時の plan.md Error 注記の廃止 (durable log へ移行)
 - Worker success からの直接 checkbox 更新の廃止
+- Gate model の task 固定から `GateScope = task | plan` への拡張
+- `task()` 完了直後の即時 Gate 評価の廃止（lifecycle state = `gate_pending` 駆動へ移行）
 
 ### 7.2 既存 1469 テストの扱い
 
@@ -473,8 +679,10 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-06 | WorkerReported ≠ TaskAccepted |
 | INV-07 | Declared evidence never satisfies required gates alone |
 | INV-08 | Gate PASS precedes progress completion |
-| INV-09 | Final Review precedes Plan Complete |
+| INV-09 | Final Review / Final Gate precedes Plan Complete |
 | INV-10 | Fail-open execution ≠ fail-open acceptance |
+| INV-11 | `TaskCallPurpose` separates implementation, task_review, final_review |
+| INV-12 | Terminal authorization states (invalidated / released) are not resurrected |
 
 ---
 
@@ -508,14 +716,18 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 13. 上記すべてについて automated test が存在する。
 14. `justice doctor` が必要 category / pinned-command configuration の不足を検出できる。
 15. Justice の内部障害時にも、未検証の Task を Accepted と誤認しない。
+16. `TaskCallPurpose` によって implementation / task_review / final_review が区別されている。
+17. `ReviewArtifactV1` により clean review を authoritative に観測できる。
+18. Authorization の terminal state が再承認なしに復活しない。
 
 ---
 
 ## 11. 決定事項メモ
 
 - **Controller Runtime Wiring**: 現行 OpenCode plugin API で in-band agent 切替は不可。config 経由の `agent:` ピン留めを guaranteed application path とし、mismatch detection を主たる観測機能とする。完全な runtime 切替は upstream API 拡張要求として分離。
-- **Plan Fingerprint**: 正規化対象を checkbox state / EOL / 旧 Error annotation のみに限定。一般空白・Task 本文は正規化しない (fail-closed)。
-- **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。typed lifecycle events を durable log へ書き、v2 state projection 拡張で復元。
+- **Plan Fingerprint**: 正規化対象を checkbox state（fenced code 外部のみ）/ EOL のみに限定。legacy Error annotation は one-time migration で除去。一般空白・Task 本文は正規化しない (fail-closed)。fingerprint は `sha256:<lowercase hex>` と仕様化。
+- **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` を durable log へ書き、v2 state projection 拡張で復元。`all_tasks_accepted` の task 集合は Approved Canonical Snapshot を SSOT とする。
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
-- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は correlation と観測のみを担当。external review を mandatory review 完了の証拠とはしない。
-- **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` のまま acceptance blocked。
+- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、correlation、`ReviewArtifactV1` 観測を担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。
+- **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま acceptance / completion blocked。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。
+- **Traceability**: 本設計書の修正に伴い、`REQUIREMENTS_2026-09-03.md` 側への反映（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化など）は別途実施する。
