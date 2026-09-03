@@ -483,23 +483,34 @@ export type ReviewRequiredDirective = {
 - Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は current `attemptId`、final-review 時は current `finalizationAttemptId` を含める。
 - Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
 - PreToolUse で review task の `callId` を `TaskCallPurpose` / `ReviewCorrelation` と相関付け、PostToolUse で `ReviewWorkerResultV1` を観測し `ReviewArtifactV1` を組み立てる。
-
 ### 4.9 Persisted Execution Binding
 
 ```ts
+export type ExecutionScope =
+  | {
+      readonly kind: "task";
+      readonly taskExecutionRef: TaskExecutionRef;
+    }
+  | {
+      readonly kind: "finalization";
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalReviewRound: number;
+    };
+
 export type DelegatedExecutionBinding = {
   readonly parentSessionId: string;
   readonly parentCallId: string;
-  readonly taskExecutionRef: TaskExecutionRef;
   readonly childSessionId: string;
+  readonly scope: ExecutionScope;
 };
 ```
 
-- OmO は `task()` 呼び出しを子セッション（child session）として実行する。Justice は `DelegatedExecutionBinding` を durable log に記録し、OmO 子セッションで発生した tool 観測を親セッションの `TaskExecutionRef` に相関付ける。
+- OmO は `task()` 呼び出しを子セッション（child session）として実行する。Justice は `DelegatedExecutionBinding` を durable log に記録し、OmO 子セッションで発生した tool 観測を親セッションの task attempt または plan finalization attempt に相関付ける。
 - `parentCallId` は `TaskCallBinding.callId` と一致する。`childSessionId` は OmO 子セッションを一意に識別する runtime 識別子である。
-- `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt に還元できる。これは JUS-P0-04 の P0 設計要件である。
 - `childSessionId` を取得するための正確な runtime イベントや API は Phase 3 の runtime spike 項目とする。spike 結果に応じて Adapter 実装を固めるが、上記 contract は変更しない。
-
+- `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt (`ExecutionScope` の `kind: "task"`) または plan finalization attempt (`ExecutionScope` の `kind: "finalization"`) に還元できる。これは JUS-P0-04 の P0 設計要件である。
 ### 4.10 Review Artifact Request
 
 ```ts
@@ -511,16 +522,8 @@ export type ReviewArtifactRequest = {
 };
 ```
 
-- Justice は review worker へ渡す `ReviewArtifactRequest` を発行する。`artifactPath` は Justice が決定する。`artifactId` / `callId` / `correlation` は `TaskCallBinding` と一致する。
-- 次の anti-replay 規則を課す。
-  - Justice は `artifactPath` を生成し、dispatch 前に当該パスが存在していれば拒否する。
-  - 受理された `artifactId` / `artifactPath` の組は `TaskCallBinding` に厳密に bind される。
-  - Justice は対応する PostToolUse 後に `artifactPath` を**ちょうど 1 回**読み取る。
-  - 読み取った内容に対し strict schema 検証を行う。`ReviewWorkerResultV1` から `ReviewArtifactV1` を組み立てる。
-  - 受理された artifact digest は observation log に記録する。
-  - 消費済み artifact はアーカイブ、移動、または削除するなどの方法で再利用不能にする。
-  - `ReviewArtifactRequest` は同一 `callId`、同一 `TaskExecutionRef`、同一 `finalizationAttemptId` を跨いで再利用できない。異なる attempt / finalization attempt での artifact 再利用は anti-replay 違反として扱う。
-
+- `ReviewArtifactRequest` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で初めて `callId` を含む `ReviewArtifactRequest` を生成する。
+- mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
 ### 4.11 Acceptance Decision
 
 ```ts
@@ -837,6 +840,8 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-11 | `TaskCallPurpose` separates implementation, task_review, final_review |
 | INV-12 | Terminal authorization states (invalidated / released) are not resurrected |
 | INV-13 | JUS-P0-04 side-effecting handlers in `PostToolUse` are not dispatched via `Promise.all` |
+| INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttempt`. |
+| INV-15 | Mandatory `sp-review` / `sp-final-review` completion must be observed before its `ReviewArtifact` is consumed. |
 
 ---
 
@@ -846,7 +851,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 |---|---|---|
 | Phase 1 | JUS-P0-03 Category Routing | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加 |
 | Phase 2 | JUS-P0-02 Plan Authorization | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装 |
-| Phase 3 | JUS-P0-04 Transactional Acceptance | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化 |
+| Phase 3 | JUS-P0-04 Transactional Acceptance | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
 | Phase 4 | JUS-P0-01 Controller Runtime Wiring | ControllerRoutingObservation 評価、pinned-command 雛形・doctor 検査、upstream 拡張要求の分離 |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
