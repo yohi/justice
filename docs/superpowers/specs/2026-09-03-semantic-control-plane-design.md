@@ -322,9 +322,10 @@ export type PlanFinalizationTransitionRecord = {
 
 - `TaskLifecycle Core` は永続化に依存しない。
 - `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行する不透明な文字列である。同一 task における異なる attempt は異なる `attemptId` を持つ。
-- `FinalizationAttemptId` / `finalReviewRound` は plan finalization の各 iteration を区別する。`final_rework_required → final_review_pending` 遷移時に新しい `finalizationAttemptId` または増分した `finalReviewRound` を発行する。
+- `FinalizationAttemptId` / `finalReviewRound` は plan finalization の各 iteration を区別する。`final_rework_required → final_review_pending` 遷移時には、**新しい `finalizationAttemptId`（新 UUID）および増分した `finalReviewRound` を両方発行・更新する**。
 - lifecycle transition は `TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` として durable observation/decision log に記録される。各 record は current `attemptId` / `finalizationAttemptId` を保持する。
-- 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。例：同一 `taskId` の重複 `worker_reported` は無視、許可されていない `accepted → pending` 遷移は無効として記録。
+- durable log に書き込まれる `PersistedEnvelope`（persisted observation/decision record envelope）は、スコープに応じた実行コンテキストを必ず含む。task-scoped レコードでは `taskExecutionRef`（`authorizationId` / `taskId` / `attemptId`）を、plan-scoped レコードでは `{ authorizationId, finalizationAttemptId }` を含める。これにより restart / replay 時に当該レコードがどの attempt に属するかを再構築できる。
+- 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。同一 `TaskExecutionRef` + 同一 transition identity の重複のみ idempotent に無視する。transition identity には必要に応じて `eventId` を含め、replay 時の冪等性を保つ。許可されていない `accepted → pending` 遷移は無効として記録。
 - restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の证据・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
 - 新規 persistence file は作らない。
@@ -344,8 +345,7 @@ export type ReviewSource = "sp-review" | "sp-final-review";
 
 export type TaskReviewCorrelation = {
   readonly reviewKind: "task-review";
-  readonly reviewOfTaskId: string;
-  readonly implementationAttemptId: TaskAttemptId;
+  readonly taskExecutionRef: TaskExecutionRef;
   readonly reviewRound: number;
 };
 
@@ -385,8 +385,8 @@ export type ReviewArtifactV1 = {
 
 - `sp-review` / `sp-final-review` worker の起動は Justice ではなく Controller (Atlas) が `task(category="sp-review" | "sp-final-review")` として行う。
 - Justice は `ReviewPending` / `FinalReviewPending` 状態の提示と、review worker 実行結果の観測を行う。
-- review worker と元 task / plan との correlation は内部的に `ReviewCorrelation` で保持する。
-- `ReviewWorkerResultV1` は review worker が生成する **untrusted reviewer output** である。Justice は `TaskCallBinding` 由来の trusted metadata と `ReviewWorkerResultV1` から権威付けされた `ReviewArtifactV1` を組み立ける。
+- review worker と元 task / plan との correlation は内部的に `ReviewCorrelation` で保持する。`TaskReviewCorrelation` は `taskExecutionRef` を用いて review と実装 attempt を一対一に紐付ける。
+- `ReviewWorkerResultV1` は review worker が生成する **untrusted reviewer output** である。Justice は `TaskCallBinding` 由来の trusted metadata と `ReviewWorkerResultV1` から権威付けされた `ReviewArtifactV1` を組み立てる。
 - `ReviewArtifactV1` を mandatory review 完了の authoritative record とする。`ReviewArtifactV1` は Justice が `ReviewWorkerResultV1` + `TaskCallBinding` 由来の trusted metadata から組み立てる。`complete: true + findings: []` を clean review の完了証拠とする。
 - CodeRabbit / Greptile 等の external review は observed-review 系（例：`.justice/reviews/external-*.jsonl` または `review_observed` event）として取り扱い、mandatory `sp-review` / `sp-final-review` の完了証拠にはならない。
 - `ReviewArtifactV1` の Justice 到達経路（transport）は、Phase 3 では **B（JSON artifact file）に固定する**。reviewer が所定の JSON artifact file を書き、Justice が `TaskCallBinding` の trusted metadata と合わせて読み取る。typed PostToolUse payload 等の alternative は Phase 3a transport spike で検証し、達成できれば段階的に導入する。
@@ -405,7 +405,7 @@ export type GateVerdict = "PASS" | "WARN" | "FAIL";
 
 export type TaskGateDecision = {
   readonly gateType: "task";
-  readonly taskId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
   readonly verdict: GateVerdict;
 };
 
@@ -413,6 +413,8 @@ export type PlanGateDecision = {
   readonly gateType: "plan";
   readonly authorizationId: string;
   readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
   readonly verdict: GateVerdict;
 };
 
@@ -420,6 +422,7 @@ export type GateDecision = TaskGateDecision | PlanGateDecision;
 ```
 
 - `GateScope` は gate が task 単位か plan 単位かを区別する。
+- task gate decision は current `TaskExecutionRef` を含み、plan gate decision は current finalization attempt（`authorizationId` / `planPath` / `finalizationAttemptId` / `finalReviewRound`）を含む。
 - task gate trigger は `task_complete` / `tool_observed` を維持するが、**lifecycle state = `gate_pending` になった場合のみ**評価する。
 - plan gate trigger は `final_review_complete` とする。Final Review の `ReviewArtifactV1.complete === true` を観測したタイミングで評価する。
 - `PASS` のみ `TaskAccepted` / `PlanComplete` へ進める。
@@ -480,6 +483,71 @@ export type ReviewRequiredDirective = {
 - Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は current `attemptId`、final-review 時は current `finalizationAttemptId` を含める。
 - Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
 - PreToolUse で review task の `callId` を `TaskCallPurpose` / `ReviewCorrelation` と相関付け、PostToolUse で `ReviewWorkerResultV1` を観測し `ReviewArtifactV1` を組み立てる。
+
+### 4.9 Persisted Execution Binding
+
+```ts
+export type DelegatedExecutionBinding = {
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly childSessionId: string;
+};
+```
+
+- OmO は `task()` 呼び出しを子セッション（child session）として実行する。Justice は `DelegatedExecutionBinding` を durable log に記録し、OmO 子セッションで発生した tool 観測を親セッションの `TaskExecutionRef` に相関付ける。
+- `parentCallId` は `TaskCallBinding.callId` と一致する。`childSessionId` は OmO 子セッションを一意に識別する runtime 識別子である。
+- `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt に還元できる。これは JUS-P0-04 の P0 設計要件である。
+- `childSessionId` を取得するための正確な runtime イベントや API は Phase 3 の runtime spike 項目とする。spike 結果に応じて Adapter 実装を固めるが、上記 contract は変更しない。
+
+### 4.10 Review Artifact Request
+
+```ts
+export type ReviewArtifactRequest = {
+  readonly artifactId: string;
+  readonly artifactPath: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+};
+```
+
+- Justice は review worker へ渡す `ReviewArtifactRequest` を発行する。`artifactPath` は Justice が決定する。`artifactId` / `callId` / `correlation` は `TaskCallBinding` と一致する。
+- 次の anti-replay 規則を課す。
+  - Justice は `artifactPath` を生成し、dispatch 前に当該パスが存在していれば拒否する。
+  - 受理された `artifactId` / `artifactPath` の組は `TaskCallBinding` に厳密に bind される。
+  - Justice は対応する PostToolUse 後に `artifactPath` を**ちょうど 1 回**読み取る。
+  - 読み取った内容に対し strict schema 検証を行う。`ReviewWorkerResultV1` から `ReviewArtifactV1` を組み立てる。
+  - 受理された artifact digest は observation log に記録する。
+  - 消費済み artifact はアーカイブ、移動、または削除するなどの方法で再利用不能にする。
+  - `ReviewArtifactRequest` は同一 `callId`、同一 `TaskExecutionRef`、同一 `finalizationAttemptId` を跨いで再利用できない。異なる attempt / finalization attempt での artifact 再利用は anti-replay 違反として扱う。
+
+### 4.11 Acceptance Decision
+
+```ts
+export type TaskAcceptanceDecision = {
+  readonly kind: "task-acceptance";
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly verdict: "accepted" | "rework-required" | "blocked";
+};
+
+export type PlanAcceptanceDecision = {
+  readonly kind: "plan-acceptance";
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+  readonly verdict: "complete" | "rework-required" | "blocked";
+};
+
+export type AcceptanceDecision =
+  | TaskAcceptanceDecision
+  | PlanAcceptanceDecision;
+```
+
+- `AcceptanceDecision` は Gate 評価結果に基づき Justice が発行する decision record である。
+- task acceptance decision は current `TaskExecutionRef` に bind される。plan acceptance decision は current finalization attempt（`authorizationId` / `planPath` / `finalizationAttemptId` / `finalReviewRound`）に bind される。
+- `accepted` / `complete` は Gate `PASS` 時のみ発行する。`rework-required` は Gate `WARN` / `FAIL` 時に発行する。`blocked` は gate evaluation 不可・内部エラー・証拠不十分時に発行する。
+- `AcceptanceDecision` は durable decision log に書き込まれ、`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` と共に restart / replay 時の状態再構築に使用される。
 
 ---
 
@@ -586,28 +654,31 @@ task() 完了観測 (TaskFeedbackHandler)
   → `TaskCallPurpose` を確認（implementation の場合のみ以下を実行）
   → WorkerReported イベントを発行
   → EvidenceEngine: evidence 収集 (observed / derived provenance のみ)
-       evidence は current `attemptId` に bind する
+       evidence は current `TaskExecutionRef` に bind する
   → EvidencePending → ReviewPending
 
 Justice
   → ReviewPending 到達時に `ReviewRequiredDirective` を Controller (Atlas) へ inject
-       directive は current `attemptId` を含む
+       directive は current `TaskExecutionRef` を含む
 
 Controller (Atlas)
-  → task(category="sp-review") with ReviewCorrelation
-       ReviewCorrelation は current `implementationAttemptId` を含む
+  → task(category="sp-review") with `TaskReviewCorrelation`
+       `TaskReviewCorrelation` は current `TaskExecutionRef` を含む
+  → この task() は OmO 子セッションとして実行される
+  → `DelegatedExecutionBinding` で親セッションの `TaskExecutionRef` と子セッションを相関付ける
+  → review worker は `ReviewArtifactRequest` に従い Justice が生成したパスへ JSON artifact を書き出す
   → review worker 観測
 
 Justice
   → `ReviewWorkerResultV1` を抽出し、`TaskCallBinding` 由来の trusted metadata と合わせて `ReviewArtifactV1` を組み立てる
-  → `ReviewArtifactV1` は current `attemptId` に bind する
+  → `ReviewArtifactV1` は current `TaskExecutionRef` に bind する
   → ReviewPending → GatePending
   → lifecycle state = `gate_pending` になったタイミングで GateEngine 評価
        評価対象は current attempt の Evidence / Review のみ
-       PASS  → AcceptanceDecision { accepted: true }
+       PASS  → `TaskAcceptanceDecision { accepted }`
              → TaskProgressState = accepted
              → ProgressUpdater → PlanParser.updateCheckbox()
-       WARN/FAIL → rework_required → 新しい `attemptId` を発行して in_progress へ
+       WARN/FAIL → rework_required → 新しい `TaskExecutionRef`（新 attemptId）を発行して in_progress へ
        unavailable/error/insufficient → gate_pending のまま acceptance blocked
 ```
 
@@ -624,24 +695,30 @@ Justice
 
 ```text
 Task Review:
-  Worker implementation (attemptId = A)
+  Worker implementation (TaskExecutionRef = R)
     → Justice injects `ReviewRequiredDirective` to Controller
+       directive includes current `TaskExecutionRef`
     → Controller dispatches sp-review worker
-    → sp-review worker emits `ReviewWorkerResultV1`
+    → `DelegatedExecutionBinding` correlates child session to parent `TaskExecutionRef`
+    → sp-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactRequest`
+    → Justice reads the artifact exactly once after matching PostToolUse
     → Justice assembles `ReviewArtifactV1` from trusted metadata + worker result
-    → `ReviewArtifactV1` is bound to attemptId A
+    → `ReviewArtifactV1` is bound to TaskExecutionRef R
     → Gate evaluation (when lifecycle state = gate_pending)
-       Evidence / Review for current attemptId A only
+       Evidence / Review for current TaskExecutionRef R only
        PASS  → TaskAccepted
-       WARN/FAIL → rework_required → new attemptId A' → in_progress
+       WARN/FAIL → rework_required → new TaskExecutionRef R' → in_progress
 
 Final Review:
   All Tasks Accepted
     → PlanFinalizationState = final_review_pending
     → finalizationAttemptId / finalReviewRound = N
     → Justice injects `ReviewRequiredDirective` to Controller
+       directive includes current `finalizationAttemptId`
     → Controller dispatches sp-final-review worker
-    → sp-final-review worker emits `ReviewWorkerResultV1`
+    → `DelegatedExecutionBinding` correlates child session to parent finalization attempt
+    → sp-final-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactRequest`
+    → Justice reads the artifact exactly once after matching PostToolUse
     → Justice assembles `ReviewArtifactV1` from trusted metadata + worker result
     → `ReviewArtifactV1` is bound to finalizationAttemptId N
     → Final Gate evaluation (trigger: final_review_complete)
@@ -652,14 +729,14 @@ Final Review:
         → PlanFinalizationState = final_rework_required
         → fixes
         → PlanFinalizationState = final_review_pending
-        → new finalizationAttemptId N' / finalReviewRound N+1
+        → new finalizationAttemptId N' (new UUID) / finalReviewRound N+1
         → Final Gate re-evaluation using only current finalization attempt evidence
       internal error / insufficient evidence
         → PlanFinalizationState = final_gate_pending (blocked)
 ```
 
 - `sp-review` / `sp-final-review` の起動主体は Controller。
-- Justice は `ReviewRequiredDirective` の生成と、review correlation / `ReviewWorkerResultV1` の観測、および `ReviewArtifactV1` の組み立てを行う。
+- Justice は `ReviewRequiredDirective` の生成と、review correlation / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactRequest` を通じた review worker 結果の観測、および `ReviewArtifactV1` の組み立てを行う。
 - `ReviewArtifactV1`（`complete: true + findings: []`）のみを mandatory review 完了の authoritative evidence とする。
 - external review (CodeRabbit / Greptile) は補助情報であり、mandatory review 完了の証拠にはならない。
 
@@ -687,9 +764,13 @@ Final Review:
 - restart / replay 後に durable log から lifecycle を復元すること。
 - active binding から `PlanBridge` の active plan が復元されること。
 - external review だけでは `sp-review` / `sp-final-review` 要件を満たさないこと。
-- review task と implementation task の correlation / `TaskCallPurpose` が正しく機能すること。
+- review task と implementation task の correlation / `TaskCallPurpose` / `TaskExecutionRef` が正しく機能すること。
 - `ReviewArtifactV1.complete: true + findings: []` を clean review 完了証拠として扱うこと。
-- attempt scoping: Gate は current attempt / current finalization attempt の证据・レビューのみを評価すること。
+- persisted evidence が attempt-scoped（`TaskExecutionRef` / `FinalizationAttemptId`）であること。
+- OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
+- review artifact anti-replay（`ReviewArtifactRequest`）が機能すること。
+- attempt-aware duplicate suppression が機能すること。
+- acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
 - Controller Routing で Core が Atlas を返し Runtime が Sisyphus のままなら `routingStatus = mismatch` であること。
 - fingerprint が fenced code block 内部を正規化せず、legacy Error annotation 追加で変化すること。
@@ -802,7 +883,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 - **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` を durable log へ書き、v2 state projection 拡張で復元。`all_tasks_accepted` の task 集合は Approved Canonical Snapshot を SSOT とする。
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
 - **Task Attempt**: `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行し、`in_progress` 遷移時に新規 attempt を作成する。Gate は current attempt の Evidence / Review のみを評価する。rework 時は新しい attemptId を発行する。
-- **Finalization Attempt**: `FinalizationAttemptId` / `finalReviewRound` を導入し、`final_rework_required → final_review_pending` 遷移時に新しい finalization attempt を作成する。Final Gate は current finalization attempt の evidence / review のみを評価する。
-- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、correlation、`ReviewWorkerResultV1` 観測、`ReviewArtifactV1` 組み立てを担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
+- **Finalization Attempt**: `FinalizationAttemptId` / `finalReviewRound` を導入し、`final_rework_required → final_review_pending` 遷移時には新しい `finalizationAttemptId`（新 UUID）と増分した `finalReviewRound` を両方更新する。Final Gate は current finalization attempt の evidence / review のみを評価する。
+- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactRequest` を通じた review worker 結果の観測、`ReviewArtifactV1` 組み立てを担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
 - **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま acceptance / completion blocked。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
 - **Traceability**: 本設計書の修正に伴い、`REQUIREMENTS_2026-09-03.md` 側への反映（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化など）は別途実施する。
