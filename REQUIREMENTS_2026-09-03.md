@@ -1,0 +1,1951 @@
+# Justice 次期優先要件定義書
+
+**Document:** Justice Next Priority Requirements  
+**Date:** 2026-09-03  
+**Status:** Design Synchronized
+**Scope:** Superpowers × Justice × Oh My OpenAgent 統合アーキテクチャ  
+**Priority:** P0
+
+---
+
+## 1. 目的
+
+Justice は、Superpowers が定義する開発方法論・ワークフロー上の意味を、Oh My OpenAgent（以下 OmO）が実行可能な Agent Runtime 上の操作へ変換し、その実行結果が Superpowers の要求する品質・プロセスを満たしていることを観測・判定する **Semantic Control Plane** とする。
+
+3システムの責務は以下のように分離する。
+
+- **Superpowers**
+  - 開発方法論の Source of Truth
+  - Brainstorming
+  - Planning
+  - SDD
+  - TDD
+  - Review
+  - Verification
+  - Completion semantics
+
+- **Justice**
+  - Workflow semantic interpretation
+  - Controller routing
+  - Worker task semantic classification
+  - Plan authorization
+  - Category mapping
+  - Execution observation
+  - Evidence evaluation
+  - Gate evaluation
+  - Task acceptance
+  - Workflow integrity
+
+- **OmO**
+  - Agent runtime
+  - Controller / Worker execution
+  - Category dispatch
+  - Model selection
+  - Provider selection
+  - Model fallback
+  - Tool execution
+
+Justice は Superpowers の方法論を再実装してはならず、OmO の Agent / Model routing を奪ってもならない。
+
+Justice の責務は、
+
+> **Superpowers の Desired State と OmO の Actual Execution の意味的一致を維持し、その成立を Evidence に基づいて証明すること**
+
+である。
+
+---
+
+# 2. 今回の最優先4要件
+
+本リリース系列では、以下の4項目を最優先要件とする。
+
+| ID | 要件 | 優先度 |
+|---|---|---|
+| JUS-P0-01 | Controller Routing の Runtime Wiring | P0 |
+| JUS-P0-02 | Plan-Scoped Authorization | P0 |
+| JUS-P0-03 | Semantic Category Routing の完全化 | P0 |
+| JUS-P0-04 | Evidence-Based Transactional Task Acceptance | P0 |
+
+これら4要件は独立した機能追加ではなく、Justice を Semantic Control Plane として成立させるための中核要件である。
+
+---
+
+# 3. 共通アーキテクチャ原則
+
+## 3.1 Desired State / Actual State
+
+Justice は常に以下の双方向変換を扱う。
+
+```text
+Top-down
+
+Superpowers workflow semantics
+        ↓
+      Justice
+        ↓
+OmO executable semantics
+
+
+Bottom-up
+
+OmO actual execution
+        ↓
+      Justice
+        ↓
+Evidence / Review / Gate
+        ↓
+Superpowers requirements satisfied?
+```
+
+Justice は単なる bridge ではなく、
+
+```text
+Desired State → Executable State
+Actual State  → Observable State
+Evidence      → Acceptance Decision
+```
+
+を担う。
+
+---
+
+## 3.2 Controller と Worker の分離
+
+Controller routing と Worker routing は異なる概念として扱わなければならない。
+
+### Controller
+
+Workflow 全体を進行・統括する Agent。
+
+例:
+
+| Superpowers workflow | Controller |
+|---|---|
+| brainstorming | sisyphus |
+| writing-plans | sisyphus |
+| subagent-driven-development | atlas |
+| executing-plans | sisyphus |
+
+### Worker
+
+Controller から渡された個別 Task を実行する Agent。
+
+Justice は Worker の Agent 名を選択してはならない。
+
+Worker に対して Justice が決定してよいのは、
+
+```text
+semantic role
+        ↓
+category
+```
+
+までとする。
+
+実際の、
+
+```text
+category
+  ↓
+agent
+  ↓
+model
+  ↓
+provider
+  ↓
+fallback
+```
+
+は OmO の責務とする。
+
+---
+
+## 3.3 Worker Payload Boundary
+
+Justice が生成または enrichment する Worker payload は原則として以下とする。
+
+```text
+task_id
+description
+category
+load_skills
+run_in_background
+context
+```
+
+以下を Worker payload に指定してはならない。
+
+```text
+agent
+subagent_type
+model
+provider
+variant
+reasoning
+fallback_models
+```
+
+これらが入力に存在した場合、Justice の Worker boundary で除去する。
+
+---
+
+## 3.4 Fail-Open と Fail-Closed の境界
+
+Justice の既存 fail-open 原則は維持するが、意味を明確化する。
+
+### Execution は Fail-Open 可能
+
+Justice 内部の telemetry、observation、optional enrichment 等の障害によって OpenCode / OmO Runtime 全体を不必要に停止させない。
+
+### Acceptance は Fail-Closed
+
+Justice が十分な根拠を取得できなかった場合、
+
+```text
+Authorized
+Accepted
+Verified
+Complete
+```
+
+という状態を生成してはならない。
+
+すなわち、
+
+> **Fail-open execution, fail-closed acceptance**
+
+を基本原則とする。
+
+---
+
+# 4. JUS-P0-01: Controller Routing の Runtime Wiring
+
+## 4.1 背景
+
+Justice Core が、
+
+```text
+workflow
+    ↓
+controller
+```
+
+を判定できるだけでは十分ではない。
+
+Controller routing decision が Domain Object として存在していても、実際の OpenCode / OmO Runtime に反映されなければ、routing は成立していない。
+
+Justice は、
+
+```text
+Desired Controller
+```
+
+を決定するだけでなく、
+
+```text
+Actual Controller
+```
+
+との対応を Runtime 上で成立させる必要がある。
+
+---
+
+## 4.2 要件
+
+### JUS-P0-01-01
+
+Justice は Superpowers workflow から Controller を決定できなければならない。
+
+最低限、以下を標準 mapping とする。
+
+```text
+brainstorming
+    → sisyphus
+
+writing-plans
+    → sisyphus
+
+subagent-driven-development
+    → atlas
+
+executing-plans
+    → sisyphus
+```
+
+`sisyphus` と `atlas` は Runtime に渡す canonical controller ID である。表示名が必要な場合だけ、
+それぞれ Sisyphus、Atlas と表記する。
+
+### JUS-P0-01-02
+
+ControllerRoutingDecision は WorkerRoutingDecision と別の型・別の処理経路として表現しなければならない。
+
+例:
+
+```text
+ControllerRoutingDecision {
+    workflow
+    controller
+    reason
+}
+```
+
+と、
+
+```text
+WorkerRoutingDecision {
+    executionRole
+    category
+    taskId
+    loadSkills
+}
+```
+
+を混同してはならない。
+
+### JUS-P0-01-03
+
+ControllerRoutingDecision が OpenCode Adapter / OmO Runtime に実際に適用される経路を保証しなければならない。
+
+現行 OpenCode plugin API では、plugin hook から同一ターンの controller agent を in-band で書き換えられない。したがって JUS-P0-01 の "applied" 経路は、agent ピン留め済みの command 定義を利用者が OpenCode 設定に登録することで成立する。
+
+Justice は以下を提供する。
+
+- `justice doctor` による pinned-command 不足の検査と雛形出力。
+- README/ドキュメントにおける推奨 command 定義例。
+- 利用者が手動で配置した場合、`chat.params` / `message.updated` の actual agent と desired controller を突き合わせて `applied` / `mismatch` / `unapplied` / `unsupported` を判定する。
+
+単なる以下のいずれかのみをもって「Controller routed」と扱ってはならない。
+
+- prompt guidance
+- synthetic message
+- advisory text
+- log
+- domain-level decision
+
+### JUS-P0-01-04
+
+Justice は Controller routing の適用結果を観測可能でなければならない。
+
+最低限、
+
+```text
+desiredController
+actualController
+routingStatus
+```
+
+を区別できること。
+
+routingStatus は少なくとも、
+
+```text
+applied
+unapplied
+unsupported
+mismatch
+```
+
+相当の状態を表現できなければならない。
+
+`message.updated` で actual controller が desired と一致した場合のみ `applied` とする。`chat.params` 一致だけでは `applied` にしない。
+
+### JUS-P0-01-05
+
+Runtime の制約により Controller を適用できない場合、Justice は routing が成功したと報告してはならない。
+
+---
+
+## 4.3 Acceptance Criteria
+
+以下を自動テストで証明する。
+
+```text
+brainstorming
+→ desiredController = sisyphus
+→ runtime routing が実際に適用される
+
+writing-plans
+→ desiredController = sisyphus
+
+subagent-driven-development
+→ desiredController = atlas
+
+executing-plans
+→ desiredController = sisyphus
+```
+
+さらに、
+
+```text
+Core が atlas を返した
+BUT
+Runtime は sisyphus のまま
+```
+
+の場合、
+
+```text
+routingStatus = applied
+```
+
+となってはならない。
+
+---
+
+# 5. JUS-P0-02: Plan-Scoped Authorization
+
+## 5.1 背景
+
+Superpowers SDD は、
+
+```text
+Approved Plan
+    ↓
+Task 1
+    ↓
+Task 2
+    ↓
+Task 3
+    ↓
+...
+    ↓
+Final Review
+```
+
+を一つの継続した実行単位として扱う。
+
+人間が承認した Plan に基づいている限り、Task ごとの再承認を要求しない。
+
+したがって Authorization を、
+
+```text
+/justice-implement --approved
+
+→ 次の task 1回だけ許可
+```
+
+という one-shot authorization として実装してはならない。
+
+Authorization の対象は Task ではなく **Approved Plan** である。
+
+---
+
+## 5.2 Authorization Model
+
+Justice は少なくとも以下の情報を保持する。
+
+```text
+ApprovedPlanBinding {
+    authorizationId
+    sessionId
+    planPath
+    planFingerprint
+    fingerprintSchema
+    approvedAt
+    status
+    invalidatedAt
+    releasedAt
+}
+```
+
+status は最低限、
+
+```text
+active
+invalidated
+released
+```
+
+を表現する。
+
+`authorizationId` は承認単位の不変 identity とする。同一 `authorizationId` の
+`active → invalidated` / `released` 遷移は不可逆であり、再承認では新しい
+`authorizationId` を発行する。`fingerprintSchema` は canonicalization の版を識別し、
+`invalidatedAt` / `releasedAt` は terminal state の監査情報として保持する。
+
+同一 Session の active な `ApprovedPlanBinding` は高々1つとする。新しい Plan を
+承認する場合、既存の active binding を atomically に `invalidated` としてから新しい
+`authorizationId` を発行する。terminal state を active で上書きしてはならない。
+
+---
+
+## 5.3 要件
+
+### JUS-P0-02-01
+
+`/justice-implement --approved` は Approved Plan に対する authorization を生成する。
+
+### JUS-P0-02-02
+
+Authorization は最初の Worker Task 実行後に consume / delete してはならない。
+
+以下を同一 authorization で実行可能でなければならない。
+
+```text
+Task 1
+Task 2
+Task 3
+...
+Final Review
+```
+
+### JUS-P0-02-03
+
+Authorization は最低限、
+
+```text
+authorizationId
+sessionId
+planPath
+planFingerprint
+fingerprintSchema
+```
+
+に bind する。
+
+### JUS-P0-02-04
+
+別 Session から Authorization を再利用してはならない。
+
+### JUS-P0-02-05
+
+承認対象 Plan の意味的内容が変更された場合、Authorization を invalidated とする。
+
+```text
+Approved
+   ↓
+Plan semantic mutation
+   ↓
+Authorization invalidated
+   ↓
+Re-approval required
+```
+
+### JUS-P0-02-06
+
+Execution progress の更新だけを Plan semantic mutation と判定してはならない。
+
+特に、
+
+```text
+task completed
+review completed
+gate passed
+```
+
+等の runtime progress と、
+
+```text
+task definition changed
+requirement changed
+implementation strategy changed
+acceptance criteria changed
+```
+
+等の Plan mutation を区別する。
+
+### JUS-P0-02-07
+
+Plan fingerprint は approval-relevant semantics を表現しなければならない。
+
+単純な raw file hash のみを採用し、checkbox 等の execution progress 更新によって毎回 authorization が失効する設計は不可とする。
+
+推奨構造は、
+
+```text
+Approved Plan Definition
+        +
+Execution Progress Ledger
+```
+
+の分離である。
+
+`PlanFingerprint` は canonical plan document から生成し、`PlanParser` の解析結果を
+そのまま hash 化してはならない。正規化するのは task execution progress として認識した
+checkbox state と EOL (`\r\n` → `\n`) に限る。fenced code block 内部、一般空白、Task 本文は
+正規化しない。task 外の global / unscoped セクションの checkbox は semantic change として
+扱う。承認時には `CanonicalPlanSnapshot` を生成し、task 集合の SSOT とする。
+
+### JUS-P0-02-08
+
+以下の場合 Authorization は release される。
+
+```text
+Plan completed
+AND
+Final Review accepted
+AND
+Final Gates passed
+```
+
+または User による明示的な cancel。
+
+---
+
+## 5.4 Authorization Failure
+
+以下の場合、Justice は Task を Authorized として扱ってはならない。
+
+```text
+authorization missing
+session mismatch
+plan path mismatch
+plan fingerprint mismatch
+authorization invalidated
+authorization released
+```
+
+内部エラーによって Agent Runtime を完全停止するか否かとは独立して、
+
+```text
+authorized = true
+```
+
+を誤って生成してはならない。
+
+Authorization の保存は atomic persistence を経由する。保存結果が conflict-diverted、
+例外、または不確実な状態になった場合は binding を再利用禁止とし、`active` として
+扱ってはならない。再起動・hydration 時には永続化された active binding を復元するが、
+Plan ファイルが存在しない場合や fingerprint が一致しない場合は invalidated とする。
+
+---
+
+## 5.5 Acceptance Criteria
+
+以下を自動テストする。
+
+```text
+Approve Plan
+→ Task 1 authorized
+→ Task 2 authorized
+→ Task 3 authorized
+```
+
+Task 1 実行後にも authorization が残ること。
+
+さらに、
+
+```text
+Approve Plan
+→ Plan task definition変更
+→ fingerprint mismatch
+→ authorization invalidated
+→ Task execution is not authorized
+```
+
+となること。
+
+Execution progress のみの更新では authorization が維持されること。
+
+---
+
+# 6. JUS-P0-03: Semantic Category Routing の完全化
+
+## 6.1 背景
+
+Justice が Worker の complexity / semantic role を認識しても、その role が category に正しく変換されなければ意味がない。
+
+特に、
+
+```text
+deep
+architecture
+```
+
+のような高難度 Task が category 未定義を理由に、
+
+```text
+unspecified-low
+```
+
+相当へ silent downgrade されることは、Semantic Control Plane として許容できない。
+
+---
+
+## 6.2 Canonical Execution Roles
+
+Justice は最低限以下を標準 role として扱う。
+
+```text
+mechanical
+implementation
+integration
+deep
+architecture
+review
+final-review
+```
+
+---
+
+## 6.3 Canonical Category Mapping
+
+標準 mapping を以下とする。
+
+| Execution Role | OmO Category |
+|---|---|
+| mechanical | `sp-mechanical` |
+| implementation | `sp-implementation` |
+| integration | `sp-integration` |
+| deep | `sp-deep` |
+| architecture | `sp-architecture` |
+| review | `sp-review` |
+| final-review | `sp-final-review` |
+
+Justice は category の意味だけを決定する。
+
+各 category が、
+
+```text
+どの Agent を使うか
+どの Model を使うか
+どの Provider を使うか
+どの fallback を使うか
+```
+
+は OmO configuration の責務とする。
+
+---
+
+## 6.4 要件
+
+### JUS-P0-03-01
+
+すべての canonical execution role は明示的な category mapping を持たなければならない。
+
+### JUS-P0-03-02
+
+未知または未定義 role を silent に低 complexity category へ downgrade してはならない。
+
+特に、
+
+```text
+deep
+architecture
+integration
+review
+final-review
+```
+
+から、
+
+```text
+unspecified-low
+quick
+```
+
+相当への暗黙 downgrade を禁止する。
+
+### JUS-P0-03-03
+
+Category が OmO 側に存在しない場合は configuration problem として検出可能でなければならない。
+
+`justice doctor` は少なくとも以下を検証する。
+
+```text
+sp-mechanical
+sp-implementation
+sp-integration
+sp-deep
+sp-architecture
+sp-review
+sp-final-review
+```
+
+### JUS-P0-03-04
+
+Justice は category 不在を理由として直接 model を選択してはならない。
+
+禁止例:
+
+```text
+architecture
+→ category missing
+→ Justice chooses Claude X
+```
+
+正しい責務分離は、
+
+```text
+architecture
+→ sp-architecture
+→ OmO
+→ configured model/provider/fallback
+```
+
+とする。
+
+### JUS-P0-03-05
+
+Fix loop における escalation も Model escalation ではなく Semantic escalation とする。
+
+例:
+
+```text
+implementation
+    ↓ repeated failure
+integration
+    ↓ repeated failure
+deep
+```
+
+Justice は、
+
+```text
+use stronger model X
+```
+
+ではなく、
+
+```text
+this task now requires deeper semantic execution
+```
+
+を表現する。
+
+実際の model escalation は OmO に委譲する。
+
+---
+
+## 6.5 Acceptance Criteria
+
+最低限以下をテストする。
+
+```text
+mechanical → sp-mechanical
+implementation → sp-implementation
+integration → sp-integration
+deep → sp-deep
+architecture → sp-architecture
+review → sp-review
+final-review → sp-final-review
+```
+
+さらに、
+
+```text
+deep → unspecified-low
+architecture → unspecified-low
+```
+
+となるコードパスが存在しないこと。
+
+Worker payload に、
+
+```text
+model
+provider
+agent
+subagent_type
+```
+
+が混入しないこと。
+
+---
+
+# 7. JUS-P0-04: Evidence-Based Transactional Task Acceptance
+
+## 7.1 背景
+
+以下は同じ意味ではない。
+
+```text
+Worker finished
+Worker says tests passed
+Task tool returned success
+Task accepted
+Plan step completed
+```
+
+Superpowers の verification semantics を維持するには、
+
+> Worker が「完了した」と報告しただけでは Task は完了していない
+
+という原則が必要である。
+
+Justice は Worker execution と Task acceptance の間に、
+
+```text
+Evidence
+Review
+Gate
+```
+
+を置かなければならない。
+
+---
+
+# 8. WorkerReported と TaskAccepted の分離
+
+永続化およびテストで使用する canonical state enum は `TaskProgressState` とする。表示名は
+`Authorized` → `authorized`、`TaskInProgress` → `in_progress`、`WorkerReported` →
+`worker_reported`、`TaskAccepted` → `accepted` に対応する。その他の状態も同じく wire value を
+使用し、表示名を persisted value として保存してはならない。
+
+```text
+authorized
+    ↓
+in_progress
+    ↓
+worker_reported
+    ↓
+evidence_pending
+    ↓
+review_pending
+    ↓
+gate_pending
+    ↓
+accepted
+```
+
+失敗時は、
+
+```text
+gate_pending
+    ↓
+rework_required
+    ↓
+in_progress
+```
+
+へ戻る。
+
+---
+
+## 8.1 要件
+
+### JUS-P0-04-01
+
+Worker の正常終了を `TaskAccepted` と同一視してはならない。
+
+### JUS-P0-04-02
+
+Worker が、
+
+```text
+tests passed
+build passed
+review clean
+done
+completed
+```
+
+と出力したことだけを Gate PASS の Evidence に使用してはならない。
+
+これは `declared evidence` としてのみ扱う。
+
+### JUS-P0-04-03
+
+Gate PASS を成立させられる Evidence は原則として、
+
+```text
+observed
+derived
+```
+
+の provenance を持つものに限定する。
+
+### JUS-P0-04-04
+
+Code-producing Task は原則として以下の順序を経る。
+
+```text
+Worker execution
+     ↓
+Evidence collection
+     ↓
+Task review
+     ↓
+Gate evaluation
+     ↓
+Task acceptance
+     ↓
+Progress update
+```
+
+### JUS-P0-04-05
+
+Gate evaluation と Plan progress update を race させてはならない。
+
+以下は禁止する。
+
+```text
+             ┌→ Gate evaluation
+Worker done ─┤
+             └→ Plan checkbox [x]
+```
+
+正しくは、
+
+```text
+Worker done
+    ↓
+Evidence
+    ↓
+Review
+    ↓
+Gate PASS
+    ↓
+TaskAccepted
+    ↓
+Plan progress update
+```
+
+とする。
+
+### JUS-P0-04-06
+
+Gate が WARN / FAIL の場合、Task を Accepted としてはならない。Gate 評価不能・内部エラー・証拠不十分の場合も、Task を Accepted としてはならない。
+
+Gate が `WARN` / `FAIL` の場合は、必要に応じて、
+
+```text
+ReworkRequired
+```
+
+へ遷移する。
+
+Gate 評価不能・内部エラー・証拠不十分の場合は `gate_pending` のまま
+`blocked` とし、`ReworkRequired` として扱ってはならない。
+
+### JUS-P0-04-07
+
+Plan progress の更新は `TaskAccepted` の結果として実行する。
+
+Worker の tool success を直接 Plan completion に接続してはならない。
+
+### JUS-P0-04-08
+
+Mandatory review dispatch は durable な `pending` / `claimed` / `terminal` state として管理し、
+restart / replay 後も同じ review identity を復元できなければならない。復元した `claimed` call
+を自動再発行してはならず、終端が不明な場合は mandatory review completion と Acceptance を
+blocked とする。
+
+## 8.2 Attempt-Scoped Evidence と Finalization
+
+各 Task の Evidence / Review / Gate / Acceptance は、以下の
+`TaskExecutionRef` 1つに厳密に bind する。
+
+```text
+TaskExecutionRef {
+    authorizationId
+    taskId
+    attemptId
+}
+```
+
+Gate が `WARN` / `FAIL` となり rework へ進む場合、新しい `attemptId` を発行して
+`in_progress` へ遷移する。過去の attempt の Evidence / Review を新しい attempt の
+Gate 評価に再利用してはならない。
+
+Plan finalization は以下の状態と識別子で管理する。
+
+```text
+tasks_pending
+all_tasks_accepted
+final_review_pending
+final_gate_pending
+final_rework_required
+complete
+```
+
+```text
+FinalizationAttempt {
+    authorizationId
+    planPath
+    finalizationAttemptId
+    finalReviewRound
+}
+```
+
+Final Review の rework 後に再試行する場合は、新しい
+`finalizationAttemptId` と増分した `finalReviewRound` を発行する。Final Gate は current
+finalization attempt の Evidence / Review のみを評価する。
+
+Task Review の dispatch は current `TaskExecutionRef` に属する `reviewRound` で区別する。
+初回 dispatch は `reviewRound = 1` とし、同一 attempt の review transport failure または
+reviewer execution failure の retry では `reviewRound` を 1 増分する。Review finding に
+よる implementation rework では新しい `attemptId` を発行し、その attempt の
+`reviewRound` は 1 に戻す。progress 更新や review 状態の投影だけでは
+`reviewRound` を変更しない。
+
+## 8.3 Task Call Purpose と Child-Session Correlation
+
+`task()` 呼び出しは目的を明示的に区別する。
+
+```text
+TaskCallPurpose = implementation | task_review | final_review
+```
+
+`task_review` / `final_review` の呼び出しは implementation 完了として扱わず、
+`TaskCallBinding` に current correlation と artifact reservation を bind する。
+OmO の child session は以下の binding で親の Task attempt または Plan finalization attempt
+へ相関付ける。
+
+```text
+DelegatedExecutionBinding {
+    parentSessionId
+    parentCallId
+    childSessionId
+    scope
+}
+```
+
+`childSessionId` が取得できない、または親 scope へ相関付けられない場合、Runtime は
+fail-open で継続できるが、authoritative child evidence を成立させず、Task acceptance /
+Plan completion は blocked とする。
+
+## 8.3.1 Review Dispatch Binding Protocol
+
+P0 では review dispatch を parent session 内で直列化し、同一 parent session の
+outstanding mandatory review dispatch は高々 1 件とする。outstanding には、directive 発行
+後で未 claim の状態と、claim 済みで matching PostToolUse を待つ状態の両方を含める。
+複数の `ReviewPending` task が存在する場合、directive は queue 順に 1 件ずつ発行する。
+
+Justice は既存の durable lifecycle / decision log から復元可能な session-scoped trusted
+pending slot を保持する。slot には Justice が発行した `ReviewCorrelation` と期待する
+review kind / category を保持し、Controller が prompt / args に再提示した correlation、
+task ID、attempt ID、round は trusted data として扱わない。
+
+PreToolUse では、同一 parent session かつ期待する kind / category に一致する pending slot
+がちょうど 1 件ある場合に限り、その slot を原子的に claim する。claim と同じ critical
+section で、slot の trusted correlation を `callId` に紐付けた `TaskCallBinding` と
+`ReviewArtifactReservation` を生成する。`sp-review` は task review、
+`sp-final-review` は final review の候補を示すが、category 自体は identity や認証情報では
+ない。
+
+pending slot が 0 件、複数件、kind / category 不一致、または atomic claim に失敗した場合、
+review binding と artifact reservation を作成しない。Runtime の `task()` 実行は fail-open
+で継続する一方、mandatory review completion と Acceptance / Plan completion は blocked とし、
+binding failure を advisory として記録する。
+
+matching PostToolUse が review task の終端を確定した後に slot を terminal にする。並列 review
+dispatch を許可する場合は、将来、Controller 境界を越えて安全に運搬し server-side で検証
+できる専用 selector（例: `dispatchId` または capability）を別途定義する。prompt の自然言語
+や worker の自己申告を selector としてはならない。
+
+## 8.3.2 Durable Review Dispatch State と Restart Recovery
+
+P0 の review dispatch state は以下の3状態に限定する。
+
+```text
+ReviewDispatchState = pending | claimed | terminal
+```
+
+durable `ReviewDispatchTransitionRecord` は少なくとも以下を保持する。
+
+```text
+recordType = observation
+kind = review_dispatch_transition
+transitionId
+parentSessionId
+correlation
+expectedCategory = sp-review | sp-final-review
+from
+to
+callId                  # claimed / terminal の場合
+artifactReservation     # claimed の場合
+artifactConsumption     # terminal の場合、consume 済み artifact の id / digest
+reviewArtifact          # 正常完了 terminal の場合、Justice が組み立てた authoritative artifact
+terminalReason          # terminal の場合
+```
+
+P0 では `ReviewDispatchId` を追加しない。slot identity は
+`parentSessionId + ReviewCorrelation` とし、`transitionId` は durable record の event identity
+に限る。`ReviewDispatchTransitionRecord` が review dispatch state の SSOT であり、
+`SessionStateProvider` などの in-memory cache は replay で再構築する projection に限る。
+`terminalReason = completed` の terminal record は、`artifactConsumption`、observed review execution、
+Justice が組み立てた `complete: true` かつ findings が空の clean `ReviewArtifactV1` を必須とする。
+findings を持つ完了 review と未完了 review は別の terminal reason にし、いずれも durable artifact を
+保持して restart 後の rework / blocked 判定を再構築する。review execution failure の terminal は
+`ReviewArtifactV1` を持たず、Acceptance を blocked とする。
+
+以下を restart / replay と claim の規範とする。
+
+1. `null → pending` transition を durable commit してから `ReviewRequiredDirective` を inject する。commit に失敗した場合は mandatory directive、binding、artifact reservation を作成せず、Runtime は fail-open で継続するが Acceptance / Plan completion は blocked とする。
+2. PreToolUse では、期待する parent session、review kind、category に一致する pending slot がちょうど1件ある場合だけ `pending → claimed` を atomic claim する。claim、`TaskCallBinding`、`ReviewArtifactReservation` は同一の durable commit とし、commit 成功前は authoritative として扱わない。
+3. matching `PostToolUse` は `TaskCallBinding` に加え、child-session 上で review worker が実行されたことを示す observed provenance を検証する。terminalization 前に、同じ `callId`、correlation、artifact ID / digest、artifact、observed provenance を持つ completion staging を durable に記録する。artifact consume marker、`review_observed`、Justice が組み立てた `ReviewArtifactV1`、`claimed → terminal` transition は一つの durable commit とする。commit 前に Review、Gate、Acceptance へ結果を渡さない。commit 失敗時は `claimed` を保持し、staging と一致する artifact だけで同じ finalization commit を idempotent に再試行する。新しい dispatch、再 claim、別 artifact の消費は行わない。
+4. restart / replay 後の処理は以下とする。
+
+| 状態 | 許可される復旧 | 禁止される復旧 |
+|---|---|---|
+| `pending` | 同じ correlation の directive を再発行する。`reviewRound` は増分しない。 | 新しい slot、binding、`callId`、review round の作成 |
+| `claimed`（staging なし） | 同じ `callId`、correlation、binding、artifact reservation を復元して matching PostToolUse を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `claimed`（completion staging あり） | staging と同じ `callId`、correlation、artifact ID / digest、observed provenance を再検証し、同じ finalization commit を idempotent に再試行する。 | 新しい dispatch / claim / reservation、別 artifact の消費、worker output の再読 |
+| `terminal` | terminal tombstone を保持し、retry 時だけ新しい correlation の `pending` slot を作る。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行 |
+
+5. `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、同一 Task attempt の retry では `reviewRound` を増分する。終端が不明な場合は `claimed` のまま Acceptance を blocked とする。
+6. current claimed slot と parent session、`callId`、purpose、trusted correlation、child-session binding のいずれかが一致しない `PostToolUse` は stale event として記録する。artifact、Review、Gate、Acceptance、current review round に影響させない。
+
+## 8.4 Review Artifact の権威付けと Transport
+
+mandatory `sp-review` / `sp-final-review` は Controller が起動し、
+`run_in_background = false` の synchronous execution に固定する。review worker が生成する
+`ReviewWorkerResultV1` は untrusted output とし、Justice が `TaskCallBinding` 由来の
+trusted metadata と独立した observed review execution provenance を組み合わせて
+`ReviewArtifactV1` を組み立てる。観測を確立できない場合、worker output は authoritative にせず
+mandatory review completion と Acceptance / Plan completion を blocked とする。
+
+observed review execution provenance を持つ `ReviewArtifactV1` のうち、`complete: true` かつ
+`findings: []` の clean artifact のみを mandatory review clean completion の authoritative evidence
+とする。CodeRabbit / Greptile 等の external review は補助情報であり、mandatory review completion
+の代替にはならない。
+
+Phase 3 の transport は JSON artifact file に固定する。Justice は PreToolUse で
+`ReviewArtifactReservation` を生成し、artifact path の衝突を検査する。安全な path を
+確立できない場合は reservation を `unusable` とし、artifact を読まず、Runtime の
+`task()` 実行は継続するが、mandatory review completion と acceptance / completion は
+blocked とする。usable artifact は matching PostToolUse 後に一度だけ読み取り、digest を
+記録し、consume 後に archive / move または delete して再利用を防止する。
+
+---
+
+# 9. Gate Profile
+
+Task の種類によって必要な Gate が異なるため、Gate は semantic task type に応じて評価可能でなければならない。
+
+Gate verdict は `PASS` / `WARN` / `FAIL` の3値とし、`UNKNOWN` は採用しない。Gate 評価
+不能、内部エラー、証拠不十分の場合は `gate_pending` または `final_gate_pending` のまま
+blocked とし、`accepted` / `complete` を発行してはならない。`WARN` / `FAIL` はそれぞれ
+task の `rework_required` または Plan の `final_rework_required` へ遷移させる。
+
+Code-producing Task の標準的な Gate は最低限、
+
+```text
+required-tests
+build-green
+review-clean
+```
+
+を含む。
+
+必要に応じて、
+
+```text
+typecheck
+lint
+security
+integration-test
+```
+
+等を追加可能とする。
+
+ただし Gate の具体的な command を Superpowers skill 内へ二重定義するのではなく、Justice は得られた Evidence と要求条件を照合する。
+
+---
+
+# 10. Review
+
+Superpowers SDD が要求する Task Review と Final Review を区別する。
+
+## Task Review
+
+```text
+Task implementation
+    ↓
+sp-review
+    ↓
+Gate evaluation
+    ↓
+TaskAccepted
+```
+
+## Final Review
+
+全 Task Acceptance 後、
+
+```text
+All Tasks Accepted
+    ↓
+sp-final-review
+    ↓
+Final Gates
+    ↓
+Plan Complete
+```
+
+とする。
+
+Final Review を通過するまで Plan 全体を Complete としてはならない。
+
+---
+
+# 11. Task Progress State
+
+最低限以下の状態を区別可能とする。
+
+```text
+pending
+authorized
+in_progress
+worker_reported
+evidence_pending
+review_pending
+gate_pending
+rework_required
+accepted
+```
+
+`completed` のような曖昧な単一状態のみで Worker completion と acceptance を表現してはならない。
+
+---
+
+# 12. SDD 全体 State Machine
+
+4要件を統合した目標 state machine を以下とする。
+
+```text
+DesignRequired
+      ↓
+DesignApproved
+      ↓
+PlanRequired
+      ↓
+PlanReady
+      ↓
+PlanApproved
+      ↓
+PlanAuthorized
+      ↓
+┌─────────────────────────────┐
+│                             │
+│ authorized                  │
+│      ↓                      │
+│ in_progress                 │
+│      ↓                      │
+│ worker_reported             │
+│      ↓                      │
+│ evidence_pending            │
+│      ↓                      │
+│ review_pending              │
+│      ↓                      │
+│ gate_pending                │
+│      ↓                      │
+│ ┌───────────────┐           │
+│ │ PASS       WARN / FAIL    │
+│ ↓               ↓           │
+│ accepted      rework_required│
+│ ↓               │           │
+│ Next Task ←─────┘           │
+│                             │
+└─────────────────────────────┘
+      ↓
+AllTasksAccepted
+      ↓
+FinalReview
+      ↓
+FinalGate
+      ↓
+PlanComplete
+      ↓
+AuthorizationReleased
+```
+
+Plan finalization の実装上の state は `tasks_pending`、`all_tasks_accepted`、
+`final_review_pending`、`final_gate_pending`、`final_rework_required`、`complete` とする。
+`all_tasks_accepted` の task 集合は現在の checkbox 状態ではなく、承認時に生成した
+`CanonicalPlanSnapshot` に含まれる task IDs を SSOT とする。
+
+---
+
+# 13. Superpowers SDD との対応
+
+Justice は Superpowers SDD lifecycle を置き換えない。
+
+対応関係は以下とする。
+
+```text
+Superpowers
+brainstorming
+      ↓
+Justice workflow semantics
+      ↓
+Controller = sisyphus
+
+
+Superpowers
+writing-plans
+      ↓
+Justice plan tracking
+      ↓
+Controller = sisyphus
+
+
+Superpowers
+subagent-driven-development
+      ↓
+Justice plan authorization
+      ↓
+Controller = atlas
+
+
+Superpowers
+fresh task worker
+      ↓
+Justice semantic classification
+      ↓
+OmO category
+      ↓
+OmO worker/model selection
+
+
+Superpowers
+TDD
+      ↓
+load_skills
+      ↓
+OmO SkillResolver
+      ↓
+Worker execution
+
+
+Superpowers
+verification-before-completion
+      ↓
+Justice Evidence
+      ↓
+Gate
+      ↓
+TaskAccepted
+
+
+Superpowers
+task review / final review
+      ↓
+sp-review / sp-final-review
+      ↓
+OmO reviewer execution
+      ↓
+Justice observation
+```
+
+---
+
+# 14. 非要件
+
+今回の4要件を実現するにあたり、Justice は以下を行わない。
+
+## Superpowers lifecycle の再実装
+
+Justice 独自の TDD engine、SDD engine、Brainstorming methodology 等を作らない。
+
+## Worker model selection
+
+Justice は、
+
+```text
+Claude
+GPT
+Gemini
+model version
+provider
+reasoning effort
+```
+
+を Worker routing decision に含めない。
+
+## OmO fallback engine の再実装
+
+Model availability / provider fallback は OmO の責務とする。
+
+## Worker の自己申告を Verification とみなすこと
+
+Agent output は Evidence の一部にはなり得るが、それだけで Gate PASS を成立させない。
+
+---
+
+# 15. 必須 Invariants
+
+実装後、以下は常に成立しなければならない。
+
+## INV-01
+
+```text
+Controller intent != Worker intent
+```
+
+Controller routing と Worker routing を混同しない。
+
+## INV-02
+
+```text
+Justice worker decision ends at category
+```
+
+Justice は Worker model/provider を決定しない。
+
+## INV-03
+
+```text
+Plan approval survives multiple tasks
+```
+
+Plan authorization は one-shot ではない。
+
+## INV-04
+
+```text
+Semantic plan mutation invalidates approval
+```
+
+承認後の Plan 意味変更を検出する。
+
+## INV-05
+
+```text
+high complexity never silently downgrades
+```
+
+deep / architecture 等が low category へ silent downgrade されない。
+
+## INV-06
+
+```text
+WorkerReported != TaskAccepted
+```
+
+Worker の完了報告だけでは Task completion としない。
+
+## INV-07
+
+```text
+Declared evidence never satisfies required gates alone
+```
+
+自己申告だけでは Gate PASS としない。
+
+## INV-08
+
+```text
+Gate PASS precedes progress completion
+```
+
+TaskAccepted より先に Plan を完了状態へ変更しない。
+
+## INV-09
+
+```text
+Final Review precedes Plan Complete
+```
+
+Final Review / Final Gate 前に Plan 全体を Complete としない。
+
+## INV-10
+
+```text
+Fail-open execution != fail-open acceptance
+```
+
+内部障害時に Runtime を継続できても、未検証状態を Accepted / Verified と偽らない。
+
+## INV-11
+
+```text
+TaskCallPurpose separates implementation, task_review, final_review
+```
+
+`sp-review` / `sp-final-review` の実行を通常の implementation 完了と混同しない。
+
+## INV-12
+
+```text
+Terminal authorization states are not resurrected
+```
+
+`invalidated` / `released` の Authorization を、同じ `authorizationId` のまま
+`active` に戻さない。
+
+## INV-13
+
+```text
+PostToolUse side effects are processed transactionally
+```
+
+Evidence、Review、Gate、Acceptance、Progress update の side-effecting handlers を
+`Promise.all` で並列実行しない。Acceptance 後にのみ Progress update へ進める。
+
+## INV-14
+
+```text
+Evidence, Review, Gate, and Acceptance are attempt-scoped
+```
+
+各判定を current `TaskExecutionRef` または current `FinalizationAttempt` に厳密に
+束縛し、過去の attempt の証拠を再利用しない。
+
+## INV-15
+
+```text
+Mandatory review completion precedes artifact consumption
+```
+
+mandatory `sp-review` / `sp-final-review` の完了を matching PostToolUse で観測する前に、
+その review artifact を authoritative record として消費しない。
+
+## INV-16
+
+```text
+Review dispatch binding is session-scoped and atomically claimed
+```
+
+同一 parent session の outstanding mandatory review dispatch は高々 1 件とし、matching
+pending slot の atomic claim なしに `TaskCallBinding` や artifact reservation を作成しない。
+
+## INV-17
+
+```text
+Review dispatch state survives restart without reissuing claimed calls
+```
+
+`pending` / `claimed` / `terminal` transition、claim 時の binding / artifact reservation、consume
+marker を durable log から復元できること。復元した `claimed` call は再発行せず、終端不明なら
+Acceptance を blocked とする。
+
+## INV-18
+
+```text
+Stale review completion cannot affect the current round
+```
+
+current claimed slot と一致しない `PostToolUse` は artifact、Review、Gate、Acceptance、current
+review round に影響させない。
+
+---
+
+# 16. 必須テストシナリオ
+
+## Controller Routing
+
+```text
+brainstorming → sisyphus
+writing-plans → sisyphus
+SDD → atlas
+executing-plans → sisyphus
+```
+
+Domain decision だけでなく Runtime 適用までテストする。
+
+---
+
+## Multi-Task Authorization
+
+```text
+Approve
+→ Task 1
+→ Task 2
+→ Task 3
+```
+
+すべて同一 authorization で実行可能であること。
+
+---
+
+## Plan Mutation
+
+```text
+Approve
+→ Plan semantic edit
+→ fingerprint mismatch
+→ invalidated
+```
+
+となること。
+
+---
+
+## Progress Mutation
+
+```text
+Approve
+→ Task Accepted
+→ progress updated
+```
+
+だけでは approval が失効しないこと。
+
+---
+
+## Category Routing
+
+```text
+deep → sp-deep
+architecture → sp-architecture
+```
+
+を保証し、low category への downgrade が存在しないこと。
+
+---
+
+## Declared Evidence
+
+Worker が、
+
+```text
+"All tests passed."
+```
+
+と返しただけでは、
+
+```text
+required-tests = PASS
+```
+
+にならないこと。
+
+---
+
+## Observed Evidence
+
+実際の test command の observed result が success であり、必要な Evidence が揃った場合のみ required-tests Gate を PASS 可能であること。
+
+---
+
+## Transactional Completion
+
+```text
+Worker success
+Gate FAIL
+```
+
+の場合、
+
+```text
+TaskAccepted = false
+Plan progress = incomplete
+```
+
+であること。
+
+---
+
+## Final Completion
+
+```text
+All tasks accepted
+BUT
+Final Review missing
+```
+
+の場合、
+
+```text
+PlanComplete = false
+```
+
+であること。
+
+---
+
+## Attempt Scoping
+
+同一 Task の rework では新しい `attemptId` を発行し、古い attempt の Evidence /
+Review / Gate を再利用しないこと。Final Review の rework では新しい
+`finalizationAttemptId` と増分した `finalReviewRound` を発行し、Final Gate が current
+finalization attempt のみを評価すること。
+
+---
+
+## Review Artifact Integrity
+
+`ReviewArtifactReservation` が `unusable` の場合、artifact を読み取らず、Runtime の
+review task 実行は継続する一方、mandatory review completion と Acceptance は blocked
+となること。usable artifact は matching PostToolUse 後に一度だけ atomic consume し、consume
+marker と dispatch terminalization を durable に記録した後、再利用できないこと。
+
+---
+
+## Child-Session Correlation
+
+OmO child session の tool/message observation が `DelegatedExecutionBinding` を通じて
+親の `TaskExecutionRef` または Plan finalization attempt に相関付けられること。相関を
+確立できない場合、Runtime は fail-open で継続しても、authoritative acceptance を発行
+しないこと。
+
+---
+
+## Review Dispatch Binding
+
+同一 parent session に複数の `ReviewRequiredDirective` を同時に outstanding にせず、review kind /
+category が一致する唯一の pending slot を PreToolUse で atomic claim してから
+`TaskCallBinding` と artifact reservation を生成すること。Controller が再提示した correlation
+や category だけを trusted identity として使用してはならない。binding を確立できない場合は
+Runtime を継続しても mandatory review completion と Acceptance / Plan completion は blocked
+となること。
+
+---
+
+## Review Dispatch Durability and Recovery
+
+以下の状態遷移と再起動ケースを自動テストすること。
+
+```text
+null → pending → claimed → terminal
+```
+
+- `pending` transition が directive inject より先に durable commit されること。commit 失敗時は mandatory directive、binding、artifact reservation を作成せず、Runtime は継続して Acceptance を blocked にすること。
+- 同一 parent session の concurrent PreToolUse では exactly one claim だけが成功し、勝者の durable claim にのみ `callId`、trusted correlation、`TaskCallBinding`、`ReviewArtifactReservation` が bind されること。
+- restart / replay 後、`pending` は同じ correlation の directive のみ再発行し、`claimed` は同じ binding / reservation を復元して directive を再発行しないこと。
+- `claimed` の終端が不明で completion staging がない場合は自動 retry せず、conclusive な lost の場合だけ terminalize 後に同一 Task attempt の `reviewRound` を増分すること。completion staging がある場合は、同じ artifact ID / digest と observed provenance を使う finalization commit の idempotent retry が成功した場合だけ Acceptance 入力へ反映すること。
+- completion staging が最終 terminalization commit より先に durable に記録されること。matching `PostToolUse` の artifact consume marker、`review_observed`、`ReviewArtifactV1`、`claimed → terminal` transition が一つの durable commit として扱われ、restart 後に Acceptance の入力を再構築できること。
+- old `callId` の stale `PostToolUse` が新しい review round の binding、artifact、Review、Gate、Acceptance に影響しないこと。
+
+---
+
+## Task Review Round
+
+同一 `TaskExecutionRef` の review retry では `reviewRound` を増分し、implementation rework で
+新しい `TaskExecutionRef` が発行された場合は `reviewRound = 1` に戻ること。restart 後の
+`pending` / `claimed` 復元だけでは `reviewRound` を変更せず、`claimed` を自動 retry の理由に
+してはならない。
+
+---
+
+# 17. 推奨実装境界
+
+Core と Adapter の責務を以下のように維持する。
+
+```text
+Core
+├── WorkflowRouter
+├── ControllerRoutingDecision
+├── ExecutionRoleClassifier
+├── CategoryMapper
+├── PlanAuthorization
+├── PlanFingerprint
+├── TaskLifecycle
+├── ReviewDispatchState
+├── EvidenceEngine
+├── ReviewArtifact
+├── GateEngine
+├── AcceptanceDecision
+└── ExecutionScope / DelegatedExecutionBinding
+
+Adapter
+├── OpenCode event translation
+├── Runtime controller application
+├── task() payload enrichment
+├── execution observation
+├── child-session correlation
+└── persistence integration
+```
+
+Core は OpenCode / OmO API に依存してはならない。
+
+---
+
+# 18. 推奨実装順序
+
+4項目すべて P0 とするが、変更リスクを抑えるため以下の順序を推奨する。
+
+### Phase 1 — Category Correctness
+
+`deep` / `architecture` を含む category mapping を完全化し、silent downgrade を除去する。
+
+### Phase 2 — Plan Authorization
+
+one-shot authorization を PlanScopedAuthorization に置換する。
+
+### Phase 3 — Transactional Acceptance
+
+WorkerReported と TaskAccepted を分離し、durable review dispatch slot の CAS claim、restart /
+replay recovery、stale-event rejection を含め、
+
+```text
+Evidence
+→ Review
+→ Gate
+→ Acceptance
+→ Progress
+```
+
+を直列化する。
+
+### Phase 4 — Controller Runtime Wiring
+
+ControllerRoutingDecision が実際の Runtime controller selection に反映されることを保証する。
+
+Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため、Core 上の routing model とは分離して実装・検証する。
+
+---
+
+# 19. Definition of Done
+
+本要件は、以下すべてを満たした場合に完了とする。
+
+1. Controller routing が Domain 上だけでなく Runtime 上でも成立している。
+2. Approved Plan authorization が複数 Task に継続する。
+3. Plan semantic mutation により authorization が失効する。
+4. Execution progress 更新では authorization が誤失効しない。
+5. 全 canonical execution role が明示的 category を持つ。
+6. deep / architecture の silent downgrade が存在しない。
+7. Justice が Worker model / provider / agent を指定しない。
+8. Worker success と Task acceptance が別状態になっている。
+9. Evidence → Review → Gate → Acceptance の順序が保証されている。
+10. Gate PASS 前に Plan progress が完了状態にならない。
+11. Declared evidence のみでは required Gate が PASS しない。
+12. Final Review / Final Gate 前に Plan が Complete にならない。
+13. 上記すべてについて automated test が存在する。
+14. `justice doctor` が必要 category / configuration の不足を検出できる。
+15. Justice の内部障害時にも、未検証の Task を Accepted と誤認しない。
+16. `TaskCallPurpose` によって implementation / task_review / final_review が区別されている。
+17. `ReviewArtifactV1` により clean review を authoritative に観測できる。
+18. Authorization の terminal state が再承認なしに復活しない。
+19. Evidence / Review / Gate / Acceptance が current attempt にのみ束縛されている。
+20. review artifact の衝突時も Runtime execution は継続し、Acceptance は blocked になる。
+21. OmO child-session observation が親の execution scope に相関付けられる。
+22. Review dispatch が parent session 単位で直列化され、matching pending slot の atomic claim なしに `TaskCallBinding` が作成されない。
+23. 同一 `TaskExecutionRef` の review retry では `reviewRound` が増分し、implementation rework では新しい `TaskExecutionRef` と `reviewRound = 1` が発行される。
+24. Review dispatch の `pending` / `claimed` / `terminal` transition、claim 時の binding / artifact reservation、consume marker、`ReviewArtifactV1` が durable log から restart / replay 後に復元でき、復元した `claimed` call が再発行されない。
+25. old `callId` の stale `PostToolUse` が artifact、Review、Gate、Acceptance、current review round に影響せず、終端不明の claim は自動 retry されない。
+
+---
+
+# 20. 最終アーキテクチャ定義
+
+本要件実装後の3層を以下のように定義する。
+
+```text
+┌─────────────────────────────────────┐
+│ Superpowers                         │
+│ Normative Development State Machine │
+│                                     │
+│ "どう開発されるべきか"              │
+└──────────────────┬──────────────────┘
+                   │ Desired semantics
+                   ▼
+┌─────────────────────────────────────┐
+│ Justice                             │
+│ Semantic Control Plane              │
+│                                     │
+│ Workflow routing                    │
+│ Plan authorization                  │
+│ Semantic category routing           │
+│ Observation                         │
+│ Evidence                            │
+│ Gate                                │
+│ Acceptance                          │
+│                                     │
+│ "正しく実行されているか"            │
+└──────────────────┬──────────────────┘
+                   │ Executable semantics
+                   ▼
+┌─────────────────────────────────────┐
+│ Oh My OpenAgent                     │
+│ Agent Execution Plane               │
+│                                     │
+│ Category dispatch                   │
+│ Agent selection                     │
+│ Model/provider routing              │
+│ Tool execution                      │
+│                                     │
+│ "実際に仕事をする"                  │
+└─────────────────────────────────────┘
+```
+
+したがって Justice の最終的な責務を以下の一文で定義する。
+
+> **Justice is the Semantic Control Plane that preserves the correspondence between Superpowers' normative development workflow and OmO's actual agent execution, and proves task acceptance through observed evidence rather than agent claims.**
+
+日本語では、
+
+> **Justice は、Superpowers が定義する「正しい開発プロセス」と OmO が実際に行った Agent Execution の対応関係を維持し、その成立を Evidence に基づいて検証・承認する Semantic Control Plane である。**
