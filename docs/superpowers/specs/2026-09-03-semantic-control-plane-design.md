@@ -529,7 +529,8 @@ export type ReviewArtifactRequest = {
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
   - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactRequest` を組み立てる。
   - `artifactPath` は `callId` と `correlation` から一意に導出される。例：`.justice/reviews/<correlation-kind>-<artifactId>.json`。
-  - dispatch 前に同 `artifactPath` のファイル存在を拒否する。存在する場合はその `task()` 呼び出しを fail-closed で block し、`review_unexpected_existing_artifact` advisory を記録する。
+  - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで再生成を試みる（最大再生成回数を設ける）。
+  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactRequest` を `unusable` 扱いとする。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は `blocked` 扱いとする。`review_unexpected_existing_artifact` advisory を記録する。
   - `ReviewArtifactRequest` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactRequest` フィールドへ bind する。
   - Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。
   - Justice は matching PostToolUse 到達後、対応する `TaskCallBinding.artifactRequest` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通す。
