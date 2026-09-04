@@ -473,16 +473,16 @@ export type TaskCallBinding =
 ```ts
 export type ReviewRequiredDirective = {
   readonly kind: "review_required";
-  readonly reviewKind: "task-review" | "final-review";
   readonly correlation: ReviewCorrelation;
-  readonly revieweeTaskId?: string;
-  readonly revieweePlanPath?: string;
-  readonly attemptId?: TaskAttemptId;
-  readonly finalizationAttemptId?: FinalizationAttemptId;
 };
 ```
 
-- Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は current `attemptId`、final-review 時は current `finalizationAttemptId` を含める。
+`ReviewRequiredDirective` の review identity は `correlation` を唯一の SSOT とする。`reviewKind` は
+`correlation.reviewKind` から導出し、task review の `taskId` / `attemptId` や final review の
+`planPath` / `finalizationAttemptId` も correlation から参照する。Directive にこれらの重複
+フィールドを持たせないことで、相互に矛盾する review identity を型上表現できないようにする。
+
+- Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は `correlation.taskExecutionRef`、final-review 時は `correlation` に含まれる current finalization identity を使用する。
 - Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
 - PreToolUse で review task の `callId` を `TaskCallPurpose` / `ReviewCorrelation` と相関付け、PostToolUse で `ReviewWorkerResultV1` を観測し `ReviewArtifactV1` を組み立てる。
 ### 4.9 Persisted Execution Binding
@@ -516,6 +516,12 @@ export type DelegatedExecutionBinding = {
 ### 4.10 Review Artifact Reservation
 
 ```ts
+export type ReviewArtifactReservationFailureReason =
+  | "artifact_path_collision_exhausted"
+  | "artifact_storage_unavailable"
+  | "artifact_path_invalid"
+  | "reservation_internal_error";
+
 export type ReviewArtifactReservation =
   | {
       readonly status: "usable";
@@ -524,11 +530,12 @@ export type ReviewArtifactReservation =
     }
   | {
       readonly status: "unusable";
-      readonly reason: "artifact_path_collision_exhausted";
+      readonly reason: ReviewArtifactReservationFailureReason;
     };
 ```
 
 - `ReviewArtifactReservation` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で `callId` を確定させたうえで `TaskCallBinding` と `ReviewArtifactReservation` を生成・bind する。
+- `artifact_path_collision_exhausted` は候補 path の衝突を上限回数まで回避できなかった場合に使用する。`artifact_storage_unavailable` は exists check、artifact directory 作成、その他の保存先 I/O が利用できない場合に使用し、`artifact_path_invalid` は安全な相対 path として検証できない場合に使用する。上記に分類できない reservation 生成障害は `reservation_internal_error` として記録する。
 - `callId` / `correlation` の SSOT は `TaskCallBinding` とする。`ReviewArtifactReservation` 自身は artifact identity / path のみを表現し、重複する metadata は持たない。
 - mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
@@ -751,9 +758,32 @@ Final Review:
         → fixes
         → PlanFinalizationState = final_review_pending
         → new finalizationAttemptId N' (new UUID) / finalReviewRound N+1
-        → Final Gate re-evaluation using only current finalization attempt evidence
+    → Final Gate re-evaluation using only current finalization attempt evidence
       internal error / insufficient evidence
         → PlanFinalizationState = final_gate_pending (blocked)
+```
+
+### Task Review の `reviewRound`
+
+`reviewRound` は current `TaskExecutionRef` に属する review dispatch の試行番号とする。
+初回 review dispatch は `reviewRound = 1` で開始し、同じ implementation attempt に対する
+review transport failure または reviewer execution failure の retry では `reviewRound` を
+1 増分する。Review finding を受けて implementation の rework を行う場合は、新しい
+`TaskExecutionRef`（新しい `attemptId`）を発行し、その attempt の `reviewRound` は 1 に
+リセットする。したがって、progress 更新や review の状態投影だけでは `reviewRound` を
+変更しない。
+
+```text
+implementation attempt A
+  review dispatch #1 → TaskExecutionRef A / reviewRound=1
+
+review transport / reviewer execution failure
+  code unchanged
+  retry review       → TaskExecutionRef A / reviewRound=2
+
+review finds issue
+  implementation rework
+  new TaskExecutionRef B → reviewRound=1
 ```
 
 - `sp-review` / `sp-final-review` の起動主体は Controller。
@@ -792,6 +822,7 @@ Final Review:
 - review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
 - attempt-aware duplicate suppression が機能すること。
 - acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
+- 同一 `TaskExecutionRef` の review transport / reviewer execution retry では `reviewRound` が増分し、implementation rework で新しい `TaskExecutionRef` が発行された場合は `reviewRound=1` に戻ること。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
 - Controller Routing で Core が Atlas を返し Runtime が Sisyphus のままなら `routingStatus = mismatch` であること。
 - fingerprint が fenced code block 内部を正規化せず、legacy Error annotation 追加で変化すること。
@@ -896,6 +927,9 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 16. `TaskCallPurpose` によって implementation / task_review / final_review が区別されている。
 17. `ReviewArtifactV1` により clean review を authoritative に観測できる。
 18. Authorization の terminal state が再承認なしに復活しない。
+19. Evidence / Review / Gate / Acceptance が current `TaskExecutionRef` / `FinalizationAttemptId` のみに束縛されている。
+20. `ReviewArtifactReservation` が unusable の場合も Runtime execution は fail-open で継続し、mandatory review completion / Acceptance は blocked になる。
+21. OmO child-session observation が `DelegatedExecutionBinding` により親 `ExecutionScope` へ相関付けられる。
 
 ---
 
