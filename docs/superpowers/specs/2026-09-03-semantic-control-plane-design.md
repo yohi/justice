@@ -343,7 +343,7 @@ export type PlanFinalizationTransitionRecord = {
 - restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の証拠・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
 - Lifecycle、review dispatch、completion staging、artifact consumption、review observation、Gate、Acceptance は既存の append-only observation/decision log を durable store とする。`state-projection.ts` と `SessionStateProvider` はこの log から再構築する projection/cache であり SSOT ではない。
-- Plan authorization だけは明示的な例外として `.justice/authorizations.json` を durable store とする。このファイルには `ApprovedPlanBinding` のみを保存し、binding 内の `canonicalSnapshot` を authorization snapshot の唯一の durable copy とする。これ以外の専用 persistence file は作らない。
+- Plan authorization だけは明示的な domain-state の例外として `.justice/authorizations.json` を durable store とする。このファイルには `ApprovedPlanBinding` のみを保存し、binding 内の `canonicalSnapshot` を authorization snapshot の唯一の durable copy とする。`AtomicPersistence` の失敗退避には `.justice/authorizations.conflict.json` を使用してよいが、これは書込み失敗時の候補だけを保持する非権威的な conflict journal である。hydrate、authorization 判定、canonical snapshot 復元は conflict journal を読んではならない。これ以外の専用 persistence file は作らない。
 
 ### 4.5 Review Artifact
 
@@ -744,6 +744,7 @@ export type DelegatedExecutionBinding = {
 - OmO は `task()` 呼び出しを子セッション（child session）として実行する。Justice は `DelegatedExecutionBinding` を durable log に記録し、OmO 子セッションで発生した tool 観測を親セッションの task attempt または plan finalization attempt に相関付ける。
 - `parentCallId` は `TaskCallBinding.callId` と一致する。`childSessionId` は OmO 子セッションを一意に識別する runtime 識別子である。
 - `childSessionId` を取得するための正確な runtime イベントや API は Phase 3 の runtime spike 項目とする。spike 結果に応じて Adapter 実装を固めるが、上記 contract は変更しない。
+- `DelegatedExecutionBinding` は、PreToolUse の claim commit には含めない。runtime が current claimed slot の `parentCallId -> childSessionId` relation を観測した後、trusted correlation から解決した `ExecutionScope` とともに append-only log へ durable に記録する。relation の未観測、unknown parent call、または stale child relation は binding を作成せず advisory とし、matching PostToolUse は current binding が durable になるまで authoritative completion として受理しない。
 - `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt (`ExecutionScope` の `kind: "task"`) または plan finalization attempt (`ExecutionScope` の `kind: "finalization"`) に還元できる。これは JUS-P0-04 の P0 設計要件である。
 ### 4.10 Review Artifact Reservation
 

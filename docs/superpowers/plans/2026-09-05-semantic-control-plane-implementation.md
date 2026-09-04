@@ -4,7 +4,7 @@
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
-**Architecture:** The append-only observation/decision log is the durable source for lifecycle, review dispatch, completion staging, artifact consumption, review observation, Gate, and Acceptance. `.justice/authorizations.json` is the sole explicit exception: it stores only `ApprovedPlanBinding`, including its `CanonicalPlanSnapshot`. Runtime code remains fail-open; an unavailable or unverified acceptance precondition remains blocked.
+**Architecture:** The append-only observation/decision log is the durable source for lifecycle, review dispatch, completion staging, artifact consumption, review observation, Gate, and Acceptance. `.justice/authorizations.json` is the sole authoritative-state exception: it stores only `ApprovedPlanBinding`, including its `CanonicalPlanSnapshot`; `.justice/authorizations.conflict.json` is an `AtomicPersistence` failure journal and never an authorization input. Runtime code remains fail-open; an unavailable or unverified acceptance precondition remains blocked.
 
 **Tech Stack:** TypeScript, Bun, Vitest, Zod, `AtomicPersistence`, `ObservationLogStore`, `StateProjectionCache`, and injected mock file systems.
 
@@ -16,6 +16,7 @@
 - Ordinary unit tests use `tests/helpers/mock-file-system.ts`; only existing designated real-fs suites access disk.
 - Persist lifecycle and review state only in the existing append-only observation/decision log.
 - Persist authorization state only in `.justice/authorizations.json`; `ApprovedPlanBinding.canonicalSnapshot` is the sole durable canonical snapshot.
+- Use `.justice/authorizations.conflict.json` only as `AtomicPersistence`'s non-authoritative failure journal; never hydrate it or use it for authorization, canonical snapshot, or active-plan restoration.
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
@@ -581,159 +582,203 @@ git commit -m "feat: Final Gateをplan scopeで評価"
 **Files:**
 - Create: `spikes/child-session-correlation/verify.ts`
 - Create: `spikes/child-session-correlation/README.md`
-- Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
 **Consumes:** OpenCode `task()` PreToolUse and PostToolUse event payloads; child-session message and tool observations emitted by the installed runtime.
 
-**Produces:** A committed spike report containing the observed event names, parent `callId`, child `sessionId`, and evidence for both `sp-review` and `sp-final-review`; a test fixture proving the adapter converts that relation into a `DelegatedExecutionBinding` input.
+**Produces:** A committed spike report containing the exact runtime event/API, field paths, parent `callId`, child `sessionId`, and evidence for both `sp-review` and `sp-final-review`. This task does not add production adapter behavior or an adapter regression test.
 
-- [ ] **Step 1: Write the failing adapter fixtures**
+- [ ] **Step 1: Implement a runtime-only correlation probe**
 
-```ts
-it.each(["sp-review", "sp-final-review"] as const)("captures child session for %s", async (category) => {
-  const events = fixtureWithParentTaskAndChildSession(category, "parent-call", "child-session");
-  await adapter.replay(events);
-  expect(adapter.getDelegatedExecutionInput("parent-call")).toMatchObject({
-    parentCallId: "parent-call", childSessionId: "child-session",
-  });
-});
-```
+Create `verify.ts` as a Bun-native TypeScript executable. It must run one `sp-review` and one `sp-final-review` dispatch against the installed runtime, collect only the runtime hook/event/API payloads needed for correlation, and fail non-zero when either trace has no non-empty runtime-provided parent call ID or child session ID. It must not infer either identity from prompt text, category, artifact path, or worker self-report.
 
-- [ ] **Step 2: Run the fixture and runtime spike**
+- [ ] **Step 2: Run the runtime spike**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts`
-
-Expected: FAIL because the adapter has no child-session relation.
-
-Run: `devcontainer exec --workspace-folder . bun run tsx spikes/child-session-correlation/verify.ts`
+Run: `devcontainer exec --workspace-folder . bun spikes/child-session-correlation/verify.ts`
 
 Expected: the report contains one task-review trace and one final-review trace, each with a non-empty parent call ID and child session ID.
 
-- [ ] **Step 3: Apply the exit condition**
+- [ ] **Step 3: Record the runtime contract and apply the exit condition**
 
-If either trace lacks a runtime-provided child session ID correlated to its parent call ID, record the raw event shape in `spikes/child-session-correlation/README.md`, mark Phase 3 as BLOCKED, and stop before Task 3.4. Do not substitute artifact-path, category, prompt, or worker self-report for child-session evidence.
+Record the observed event/API name, exact parent-call field path, exact child-session field path, and the two redacted traces in `README.md`. If either trace lacks a runtime-provided child session ID correlated to its parent call ID, record the raw event shape, mark Phase 3 as BLOCKED, and stop before Task 3.4. Do not substitute artifact-path, category, prompt, or worker self-report for child-session evidence.
 
 - [ ] **Step 4: Commit after approval**
 
 ```bash
-git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md tests/runtime/opencode-adapter-v2.test.ts
+git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md
 git commit -m "test: child session correlation runtime境界を検証"
 ```
 
-### Task 3.4: Persist review dispatch, binding, and completion staging
+### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
-**Requirement:** JUS-P0-04, INV-11, INV-15, INV-16, INV-17, INV-18, Design §4.8 through §4.10.
+**Requirement:** JUS-P0-04, INV-11, INV-16, INV-17, Design §4.8, §4.8.2, and §4.10.
 
 **Files:**
 - Create: `src/core/review-dispatch-state.ts`
 - Create: `src/core/review-artifact-reservation.ts`
+- Modify: `src/core/types.ts`
 - Modify: `src/core/v2/observation-model.ts`
 - Modify: `src/core/v2/state-projection.ts`
+- Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
-- Test: `tests/core/task-packager.test.ts`
+- Test: `tests/hooks/observation-handler-transactional.test.ts`
+- Test: `tests/core/justice-plugin-routing.test.ts`
 
-**Consumes:** `ReviewCorrelation`; `ReviewArtifactV1`; `DelegatedExecutionBinding`; `ReviewArtifactReservation`.
+**Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; review `TaskCallPurpose`; durable log append.
 
-**Produces:** durable records for `null -> pending`, `pending -> claimed`, `review_completion_staged`, `review_artifact_consumed`, `review_observed`, and `claimed -> terminal`; `projectReviewDispatchSlots(records)`; `projectDelegatedExecutionBindings(records)`.
+**Produces:** `ReviewRequiredDirective`; durable `null -> pending` and `pending -> claimed` records; `TaskCallBinding`; `ReviewArtifactReservation`; `projectReviewDispatchSlots(records)`; and an in-memory cache reconstructed only from the durable projection.
 
-- [ ] **Step 1: Write the failing protocol and recovery tests**
+- [ ] **Step 1: Write the failing dispatch, claim, and recovery tests**
 
 ```ts
+it("commits pending before injecting exactly one review directive", async () => {
+  await requestMandatoryReview(taskExecutionRef);
+  expect(trace).toEqual(["commit-pending", "inject-review-directive"]);
+});
+
 it.each(["pending", "claimed_without_staging", "claimed_with_staging", "terminal"] as const)(
   "replays %s without unsafe redispatch", (state) => {
     expect(projectReviewDispatchSlots(recordsFor(state))).toMatchSnapshot();
   },
 );
 
-it("does not modify current state for stale PostToolUse", () => {
-  for (const stale of [
-    oldCallId,
-    differentRound,
-    differentArtifactId,
-    differentChildSession,
-    differentTaskAttempt,
-    differentFinalizationAttempt,
-  ]) {
-    expect(acceptPostToolUse(currentClaim, stale)).toEqual({ kind: "stale" });
-  }
+it("claims only one matching pending slot without creating a child binding", async () => {
+  const result = await claimReviewDispatch(currentPendingSlot, reviewPreToolUse);
+  expect(result).toMatchObject({ kind: "claimed", taskCallBinding: expect.any(Object) });
+  expect(result).not.toHaveProperty("delegatedExecutionBinding");
 });
 
-it("canonicalizes mandatory reviews to synchronous execution", () => {
-  expect(normalizeTaskToolInput({ category: "sp-review", run_in_background: true }).run_in_background).toBe(false);
-  expect(normalizeTaskToolInput({ category: "sp-final-review", run_in_background: true }).run_in_background).toBe(false);
+it("rejects zero, multiple, and category-mismatched pending slots without a binding or reservation", async () => {
+  await expect(claimReviewDispatch(invalidSlots, reviewPreToolUse)).resolves.toEqual({ kind: "blocked" });
+  expect(writeDurableRecord).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "delegated_execution_binding" }));
 });
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts`
 
-Expected: FAIL because no durable review protocol exists.
+Expected: FAIL because durable dispatch, trusted call binding, and review directives do not exist.
 
-- [ ] **Step 3: Implement durable records and replay rules**
+- [ ] **Step 3: Implement durable dispatch and claim**
 
-Create one pending slot per parent session. Claim only one matching pending slot and write the
-claimed transition, `TaskCallBinding`, `ReviewArtifactReservation`, and
-`DelegatedExecutionBinding` in one durable commit. Generate a UUID artifact ID and a validated
-`.justice/reviews/<artifactId>.json` path. A terminal slot is immutable. Recover pending by
-reissuing the same directive; recover claimed without staging by waiting for matching
-PostToolUse; recover claimed with staging by terminalizing only with the staged call ID,
-correlation, artifact ID, digest, and observed execution; recover terminal as a tombstone.
-`acceptPostToolUse` must reject a `TaskReviewCorrelation.taskExecutionRef.attemptId` that
-differs from the claimed slot and a `FinalReviewCorrelation.finalizationAttemptId` that differs
-from the claimed slot before artifact I/O.
+Persist one `pending` slot per parent session before injecting its `ReviewRequiredDirective`. In the review `task()` PreToolUse path, claim only one matching pending slot and write `pending -> claimed`, `TaskCallBinding`, and `ReviewArtifactReservation` in one durable commit. Generate a UUID artifact ID and validated `.justice/reviews/<artifactId>.json` path. Do not create `DelegatedExecutionBinding` here: a child session has not yet been authoritatively observed. Canonicalize `sp-review` and `sp-final-review` to `run_in_background = false` before the claim. A terminal slot is immutable; pending recovery reissues the same directive, while recovered claimed slots wait for a matching PostToolUse.
 
 ```ts
-export type DelegatedExecutionBinding = {
-  readonly parentSessionId: string;
-  readonly parentCallId: string;
-  readonly childSessionId: string;
-  readonly scope: ExecutionScope;
-};
-
 export function canClaim(slots: readonly ReviewDispatchSlot[], input: ClaimInput): boolean {
-  return slots.filter((slot) => slot.state === "pending" && slot.key.parentSessionId === input.parentSessionId && slot.expectedCategory === input.category).length === 1;
+  return slots.filter(
+    (slot) =>
+      slot.state === "pending" &&
+      slot.key.parentSessionId === input.parentSessionId &&
+      slot.expectedCategory === input.category,
+  ).length === 1;
 }
 ```
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts
-git commit -m "feat: durable review dispatchとchild bindingを追加"
+git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts
+git commit -m "feat: durable review dispatchとclaimを追加"
 ```
 
 ---
 
 ## Phase 3c: Transactional PostToolUse — JUS-P0-04
 
-### Task 3.5: Consume a matching review artifact exactly once
+### Task 3.5: Convert observed child relations into durable execution bindings
 
-**Requirement:** JUS-P0-04, INV-13, INV-15 through INV-18, Design §4.8.1, §4.8.2, §4.10.
+**Requirement:** JUS-P0-04, INV-14, INV-15, INV-17, INV-18, Design §4.8.1, §4.8.2, and §4.9.
+
+**Files:**
+- Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/core/types.ts`
+- Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/state-projection.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
+- Test: `tests/hooks/observation-handler-transactional.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
+
+**Consumes:** the exact runtime event/API and field paths recorded by Task 3.3; projected claimed dispatch slot; `TaskCallBinding`; trusted `ReviewCorrelation`.
+
+**Produces:** `DelegatedExecutionRelationObserved` from the adapter and a durable `DelegatedExecutionBinding` whose `ExecutionScope` is derived from the claimed slot, never from worker input.
+
+- [ ] **Step 1: Write failing adapter and durable-binding tests from the spike fixtures**
+
+```ts
+it.each(["sp-review", "sp-final-review"] as const)("captures and persists %s child relation", async (category) => {
+  await adapter.replay(capturedRuntimeEvents(category, "parent-call", "child-session"));
+  expect(await projectedBinding("parent-call")).toMatchObject({
+    parentCallId: "parent-call", childSessionId: "child-session",
+  });
+});
+
+it("derives task and finalization scopes from the claimed correlation", async () => {
+  expect(await bindObservedChild(taskClaim, childRelation)).toMatchObject({ scope: { kind: "task" } });
+  expect(await bindObservedChild(finalClaim, childRelation)).toMatchObject({ scope: { kind: "finalization" } });
+});
+
+it.each([unknownParentCall, staleChildRelation])("rejects an untrusted child relation", async (relation) => {
+  await expect(bindObservedChild(currentClaim, relation)).resolves.toEqual({ kind: "stale" });
+});
+
+it("rebuilds the durable binding after restart", () => {
+  expect(projectDelegatedExecutionBindings(bindingRecords)).toEqual(expectedBindings);
+});
+```
+
+- [ ] **Step 2: Confirm RED**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts`
+
+Expected: FAIL because the adapter does not expose the spike-proven relation and no durable child binding exists.
+
+- [ ] **Step 3: Implement runtime relation extraction and durable binding append**
+
+Use only the event/API and field paths recorded by the successful Task 3.3 spike. The adapter converts that runtime relation into `DelegatedExecutionRelationObserved` and forwards it through the existing `JusticePlugin.handleEvent()` boundary. The observation handler accepts it only when `parentCallId` matches a current claimed slot, derives task or finalization `ExecutionScope` from that slot's trusted correlation, and appends `DelegatedExecutionBinding` durably. Reject unknown parent calls and stale child relations without state mutation. A matching review PostToolUse remains non-authoritative until this binding is present in the durable projection.
+
+- [ ] **Step 4: Confirm GREEN**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
+git commit -m "feat: review child bindingをdurableに記録"
+```
+
+### Task 3.6: Consume a matching review artifact exactly once
+
+**Requirement:** JUS-P0-04, INV-06, INV-13, INV-15 through INV-18, Design §4.8.1, §4.8.2, §4.10, and §4.11.
 
 **Files:**
 - Create: `src/core/review-artifact.ts`
+- Create: `src/core/acceptance-decision.ts`
 - Modify: `src/core/session-state-provider.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/justice-plugin.ts`
 - Test: `tests/core/review-artifact.test.ts`
+- Test: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/core/session-state-provider.test.ts`
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
-- Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
-**Consumes:** projected claimed dispatch slot; `TaskCallBinding`; `DelegatedExecutionBinding`; reserved artifact path.
+**Consumes:** projected claimed dispatch slot; durable `TaskCallBinding`; durable `DelegatedExecutionBinding`; reserved artifact path; current Gate decision.
 
-**Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>` where success is possible only after a matching child observation and durable terminalization.
+**Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>` and attempt-scoped `TaskAcceptanceDecision | PlanAcceptanceDecision`; success is possible only after matching child observation and durable terminalization.
 
-- [ ] **Step 1: Write the failing ordering and anti-replay tests**
+- [ ] **Step 1: Write the failing ordering, decision, and anti-replay tests**
 
 ```ts
 it("performs the review completion protocol in durable order", async () => {
@@ -744,62 +789,70 @@ it("performs the review completion protocol in durable order", async () => {
   ]);
 });
 
+it("does not accept a review without a durable child binding", async () => {
+  await expect(consumeReviewCompletion(inputWithoutBinding)).resolves.toEqual({ kind: "blocked" });
+  expect(readArtifact).not.toHaveBeenCalled();
+});
+
 it("retries terminalization from staging without rereading the artifact", async () => {
   await consumeReviewCompletion(inputWithTerminalCommitFailure);
   await recoverReviewCompletion(stagedRecord);
   expect(readArtifact).toHaveBeenCalledTimes(1);
 });
 
-it("does not dispatch task PostToolUse side effects through Promise.all", async () => {
-  expect(await runTaskPostToolUseSequentially(event)).toEqual(PROCEED);
-  expect(trace).toEqual(["observation", "lifecycle", "directive", "acceptance", "progress"]);
+it("creates an acceptance decision only from the current attempt's Gate verdict", () => {
+  expect(decideTaskAcceptance(currentPass)).toMatchObject({ verdict: "accepted" });
+  expect(decideTaskAcceptance(stalePass)).toMatchObject({ verdict: "blocked" });
 });
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts`
 
-Expected: FAIL because matching review completion is not transactional.
+Expected: FAIL because matching review completion and attempt-scoped acceptance decisions are not transactional.
 
 - [ ] **Step 3: Implement the fixed protocol**
 
-Implement this exact sequence: validate claimed parent binding; validate child-session binding; read the usable artifact once; strictly parse `ReviewWorkerResultV1`; calculate digest; commit `ReviewCompletionStagingRecord`; commit `review_artifact_consumed`, `review_observed`, assembled `ReviewArtifactV1`, and terminal transition atomically; only then evaluate acceptance; archive or delete the artifact idempotently. Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, or child session returns a stale advisory without artifact I/O or state mutation.
+Implement this exact sequence: validate claimed parent binding; validate durable child-session binding; read the usable artifact once; strictly parse `ReviewWorkerResultV1`; calculate digest; commit `ReviewCompletionStagingRecord`; commit `review_artifact_consumed`, `review_observed`, assembled `ReviewArtifactV1`, and terminal transition atomically; evaluate and durably record the current attempt's acceptance decision; then archive or delete the artifact idempotently. Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, child session, task attempt, or finalization attempt returns a stale advisory without artifact I/O or state mutation.
 
 ```ts
 const staging = await commitStaging(await validateAndReadMatchingArtifact(input));
 const terminal = await commitConsumedReviewAndTerminal(staging);
 if (terminal.kind !== "committed") return { kind: "blocked" };
+const decision = await applyAcceptance(terminal.reviewArtifact);
 await cleanupArtifact(staging.artifactConsumption.artifactId);
-return applyAcceptance(terminal.reviewArtifact);
+return decision;
 ```
 
 Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `runTaskPostToolUseSequentially`. Keep independent non-task handlers unchanged.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-artifact.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts
-git commit -m "feat: review artifact消費をtransactionalに処理"
+git add src/core/review-artifact.ts src/core/acceptance-decision.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts
+git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
 ```
 
-### Task 3.6: Update plan progress only after accepted task decisions
+### Task 3.7: Update plan progress only after accepted task decisions
 
 **Requirement:** JUS-P0-04, INV-06, INV-08.
 
 **Files:**
 - Create: `src/core/progress-updater.ts`
 - Modify: `src/hooks/task-feedback.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Test: `tests/core/progress-updater.test.ts`
 - Test: `tests/hooks/task-feedback.test.ts`
+- Test: `tests/core/justice-plugin-routing.test.ts`
 
-**Consumes:** `TaskAcceptanceDecision`; `PlanParser.updateCheckbox(content, lineNumber, checked)`.
+**Consumes:** durable accepted `TaskAcceptanceDecision`; `PlanParser.updateCheckbox(content, lineNumber, checked)`.
 
 **Produces:** `updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult`.
 
@@ -814,17 +867,22 @@ it("does not update a checkbox for rework-required or blocked", () => {
 it("updates only an accepted task", () => {
   expect(updatePlanProgress(plan, task, acceptedDecision).updated).toBe(true);
 });
+
+it("does not update progress until the acceptance decision is durably recorded", async () => {
+  await handleTaskPostToolUse(taskEvent);
+  expect(trace).toEqual(["record-acceptance", "update-progress"]);
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: FAIL because worker feedback writes progress directly.
 
 - [ ] **Step 3: Implement accepted-only progress updates**
 
-Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. Invoke the updater after the durable acceptance decision only.
+Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. `JusticePlugin` invokes the updater only after Task 3.6 has durably recorded the accepted decision; `TaskFeedbackHandler` must not infer acceptance from worker success.
 
 ```ts
 export function updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult {
@@ -835,14 +893,14 @@ export function updatePlanProgress(content: string, task: PlanTask, decision: Ta
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/progress-updater.ts src/hooks/task-feedback.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts
+git add src/core/progress-updater.ts src/hooks/task-feedback.ts src/core/justice-plugin.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts
 git commit -m "feat: accepted decision後だけplan progressを更新"
 ```
 
@@ -913,20 +971,22 @@ git commit -m "feat: controller routingにworkflow identityを保持"
 
 ### Task 4.2: Persist controller routing observations and doctor diagnostics
 
-**Requirement:** JUS-P0-01, Design §3.3 and §5.1.
+**Requirement:** JUS-P0-01, Design §3.3, §3.4, §5.1, and §7.3.
 
 **Files:**
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/doctor-categories.ts`
 - Modify: `src/runtime/doctor-cli.ts`
+- Modify: `README.md`
+- Modify: `SPEC.md`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
 **Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; parsed command configuration.
 
-**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller, actual controller, status, application method, and source; `checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult`.
+**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller, actual controller, status, application method, and source; `checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult`; `justice doctor` output containing the complete missing pinned-command templates; README and release documentation describing the required v4.0.0 configuration and its manual-install boundary.
 
 - [ ] **Step 1: Write the failing runtime and doctor tests**
 
@@ -942,6 +1002,12 @@ it("reports missing pinned command names", () => {
     missing: ["justice-implement-brainstorming", "justice-implement-writing-plans", "justice-implement-subagent-driven-development", "justice-implement-executing-plans"],
   });
 });
+
+it("renders every missing pinned command as an agent-pinned OpenCode configuration", () => {
+  expect(formatPinnedCommandTemplates(["justice-implement-brainstorming"])).toContain(
+    '"agent": "sisyphus"',
+  );
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
@@ -952,7 +1018,7 @@ Expected: FAIL because routing observations and pinned-command diagnostics are a
 
 - [ ] **Step 3: Implement observation and diagnostics**
 
-Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path. Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a routing mismatch block execution. In `doctor-categories.ts`, require `justice-implement-brainstorming`, `justice-implement-writing-plans`, `justice-implement-subagent-driven-development`, and `justice-implement-executing-plans`; doctor reports each missing name and exits non-zero.
+Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path. Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a routing mismatch block execution. In `doctor-categories.ts`, require `justice-implement-brainstorming`, `justice-implement-writing-plans`, `justice-implement-subagent-driven-development`, and `justice-implement-executing-plans`; doctor reports each missing name, renders its complete `command` object with `template`, `description`, and the required `agent`, and exits non-zero. Document the same four command definitions and the v4.0.0 migration in `README.md` and `SPEC.md`; state that users register the commands and Justice only observes the result.
 
 ```ts
 export function checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult {
@@ -971,7 +1037,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts
+git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts
 git commit -m "feat: controller routing observationとdoctor診断を追加"
 ```
 
@@ -983,7 +1049,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 
 | Requirement / Design Decision | Plan Task | Required tests |
 |---|---|---|
-| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, unapplied, pinned command presence |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, unapplied, pinned command presence, command template output, release documentation |
 | JUS-P0-02 semantic fingerprint | 2.1 | approved task progress invariant, global/unscoped/fenced mutation invalidates, duplicate approved task heading invalidates, EOL invariant |
 | JUS-P0-02 canonical snapshot | 2.1, 2.2 | snapshot persistence, hydration, all-tasks-accepted snapshot SSOT |
 | JUS-P0-02 cancel and release | 2.3 | cancel, release, subsequent authorization rejection |
@@ -992,31 +1058,31 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-04 task Gate | 3.2 | current task attempt only |
 | JUS-P0-04 Final Gate | 3.2 | current finalization attempt only, PASS complete, WARN/FAIL rework, insufficient blocked |
 | JUS-P0-04 durable review dispatch | 3.4 | pending, claimed, terminal, four restart states |
-| JUS-P0-04 child-session correlation | 3.3, 3.4 | runtime spike, task review correlation, final review correlation, durable binding |
-| JUS-P0-04 anti-replay | 3.4, 3.5 | consume once, staging recovery, stale call ID, stale round, stale artifact, stale child session |
-| JUS-P0-04 transactional PostToolUse | 3.5 | strict sequence, terminal-commit recovery, no parallel side effects |
+| JUS-P0-04 child-session correlation | 3.3, 3.5 | runtime spike, task review correlation, final review correlation, durable binding |
+| JUS-P0-04 anti-replay | 3.4, 3.5, 3.6 | consume once, staging recovery, stale call ID, stale round, stale artifact, stale child session |
+| JUS-P0-04 transactional PostToolUse | 3.6 | strict sequence, terminal-commit recovery, no parallel side effects |
 | INV-01 controller intent differs from worker intent | 4.1 | `tests/core/routing-decision.test.ts` preserves workflow on controller decisions |
 | INV-02 worker decision ends at category | 1.1 | `tests/core/routing-decision.test.ts` rejects invalid role/category pairs |
 | INV-03 approval survives multiple tasks | 2.2 | `tests/core/plan-authorization.test.ts` hydrates an active binding |
 | INV-04 semantic mutation invalidates approval | 2.1, 2.2 | `tests/core/plan-fingerprint.test.ts` checks semantic changes; `tests/hooks/plan-bridge-authorization.test.ts` rejects a changed fingerprint |
 | INV-05 high complexity does not silently downgrade | 1.1 | `tests/core/routing-decision.test.ts` rejects the architecture downgrade |
-| INV-06 WorkerReported is not TaskAccepted | 3.1, 3.6 | `tests/core/task-lifecycle.test.ts` and `tests/core/progress-updater.test.ts` require an accepted decision |
+| INV-06 WorkerReported is not TaskAccepted | 3.1, 3.6, 3.7 | `tests/core/task-lifecycle.test.ts`, `tests/core/acceptance-decision.test.ts`, and `tests/core/progress-updater.test.ts` require an accepted decision |
 | INV-07 declared evidence cannot pass alone | 3.2 | `tests/core/v2/rule-evaluation-engine.test.ts` and `tests/core/v2/gate-provenance-gating.test.ts` require observed or derived evidence |
-| INV-08 Gate PASS precedes progress completion | 3.2, 3.6 | `tests/hooks/observation-handler-gate.test.ts` and `tests/core/progress-updater.test.ts` |
-| INV-09 Final Review and Final Gate precede Plan Complete | 3.1, 3.2 | `tests/core/task-lifecycle.test.ts` and `tests/core/v2/rule-evaluation-engine.test.ts` |
+| INV-08 Gate PASS precedes progress completion | 3.2, 3.6, 3.7 | `tests/hooks/observation-handler-gate.test.ts`, `tests/core/acceptance-decision.test.ts`, and `tests/core/progress-updater.test.ts` |
+| INV-09 Final Review and Final Gate precede Plan Complete | 3.1, 3.2, 3.6 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, and `tests/core/acceptance-decision.test.ts` |
 | INV-10 fail-open execution differs from fail-open acceptance | 2.2, 3.2 | `tests/core/plan-authorization.test.ts` and `tests/hooks/observation-handler-gate.test.ts` retain blocked state on unavailable prerequisites |
-| INV-11 TaskCallPurpose separates all task call kinds | 3.4, 3.5 | `tests/core/review-dispatch-state.test.ts` and `tests/core/session-state-provider.test.ts` |
+| INV-11 TaskCallPurpose separates all task call kinds | 3.4, 3.6 | `tests/core/review-dispatch-state.test.ts` and `tests/core/session-state-provider.test.ts` |
 | INV-12 terminal authorization is not resurrected | 2.2, 2.3 | `tests/core/plan-authorization.test.ts` and `tests/hooks/plan-bridge-authorization.test.ts` |
-| INV-13 PostToolUse side effects are not parallelized | 3.5 | `tests/hooks/observation-handler-transactional.test.ts` checks the ordered trace |
-| INV-14 evidence, review, Gate, and Acceptance are attempt-scoped | 3.1, 3.2, 3.4 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, and `tests/core/review-dispatch-state.test.ts` |
-| INV-15 mandatory completion precedes artifact consumption | 3.3, 3.5 | `tests/runtime/opencode-adapter-v2.test.ts` and `tests/core/review-artifact.test.ts` |
+| INV-13 PostToolUse side effects are not parallelized | 3.6 | `tests/hooks/observation-handler-transactional.test.ts` checks the ordered trace |
+| INV-14 evidence, review, Gate, and Acceptance are attempt-scoped | 3.1, 3.2, 3.4, 3.5, 3.6 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, `tests/core/review-dispatch-state.test.ts`, and `tests/core/acceptance-decision.test.ts` |
+| INV-15 mandatory completion precedes artifact consumption | 3.3, 3.5, 3.6 | `tests/runtime/opencode-adapter-v2.test.ts` and `tests/core/review-artifact.test.ts` |
 | INV-16 one outstanding dispatch and atomic claim | 3.4 | `tests/core/review-dispatch-state.test.ts` |
 | INV-17 dispatch state survives restart without claimed redispatch | 3.4 | `tests/core/v2/state-projection.test.ts` covers pending, claimed without staging, claimed with staging, and terminal |
-| INV-18 stale review cannot affect the current round | 3.4, 3.5 | `tests/core/review-dispatch-state.test.ts` rejects call, round, artifact, child session, task attempt, and finalization attempt mismatches |
+| INV-18 stale review cannot affect the current round | 3.4, 3.5, 3.6 | `tests/core/review-dispatch-state.test.ts` rejects call, round, artifact, child session, task attempt, and finalization attempt mismatches |
 
-Every task above implements one named design decision: Tasks 1.1-1.2 implement Design §5.3; Tasks 2.1-2.3 implement §4.2, §4.3, and §5.2; Tasks 3.1-3.6 implement §4.4 through §4.11 and §5.4 through §5.5; Tasks 4.1-4.2 implement §4.1 and §5.1. No task exists solely for future reuse.
+Every task above implements one named design decision: Tasks 1.1-1.2 implement Design §5.3; Tasks 2.1-2.3 implement §4.2, §4.3, and §5.2; Tasks 3.1-3.7 implement §4.4 through §4.11 and §5.4 through §5.5; Tasks 4.1-4.2 implement §3.4, §4.1, §5.1, and §7.3. No task exists solely for future reuse.
 
-Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if synchronous mandatory review canonicalization, durable claim, staging, artifact consumption, stale-event rejection, task Gate, or Final Gate lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if synchronous mandatory review canonicalization, durable claim, durable child binding, staging, artifact consumption, stale-event rejection, attempt-scoped acceptance, task Gate, or Final Gate lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
 <!-- markdownlint-enable MD013 MD060 -->
 
