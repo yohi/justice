@@ -2,7 +2,7 @@
 
 **Document:** Justice Next Priority Requirements  
 **Date:** 2026-09-03  
-**Status:** Draft  
+**Status:** Design Synchronized
 **Scope:** Superpowers × Justice × Oh My OpenAgent 統合アーキテクチャ  
 **Priority:** P0
 
@@ -301,17 +301,23 @@ WorkerRoutingDecision {
 
 ### JUS-P0-01-03
 
-ControllerRoutingDecision は OpenCode Adapter / OmO Runtime に実際に適用されなければならない。
+ControllerRoutingDecision が OpenCode Adapter / OmO Runtime に実際に適用される経路を保証しなければならない。
 
-単なる、
+現行 OpenCode plugin API では、plugin hook から同一ターンの controller agent を in-band で書き換えられない。したがって JUS-P0-01 の "applied" 経路は、agent ピン留め済みの command 定義を利用者が OpenCode 設定に登録することで成立する。
+
+Justice は以下を提供する。
+
+- `justice doctor` による pinned-command 不足の検査と雛形出力。
+- README/ドキュメントにおける推奨 command 定義例。
+- 利用者が手動で配置した場合、`chat.params` / `message.updated` の actual agent と desired controller を突き合わせて `applied` / `mismatch` / `unapplied` / `unsupported` を判定する。
+
+単なる以下のいずれかのみをもって「Controller routed」と扱ってはならない。
 
 - prompt guidance
 - synthetic message
 - advisory text
 - log
 - domain-level decision
-
-のみをもって「Controller routed」と扱ってはならない。
 
 ### JUS-P0-01-04
 
@@ -337,6 +343,8 @@ mismatch
 ```
 
 相当の状態を表現できなければならない。
+
+`message.updated` で actual controller が desired と一致した場合のみ `applied` とする。`chat.params` 一致だけでは `applied` にしない。
 
 ### JUS-P0-01-05
 
@@ -425,11 +433,15 @@ Justice は少なくとも以下の情報を保持する。
 
 ```text
 ApprovedPlanBinding {
+    authorizationId
     sessionId
     planPath
     planFingerprint
+    fingerprintSchema
     approvedAt
     status
+    invalidatedAt
+    releasedAt
 }
 ```
 
@@ -442,6 +454,15 @@ released
 ```
 
 を表現する。
+
+`authorizationId` は承認単位の不変 identity とする。同一 `authorizationId` の
+`active → invalidated` / `released` 遷移は不可逆であり、再承認では新しい
+`authorizationId` を発行する。`fingerprintSchema` は canonicalization の版を識別し、
+`invalidatedAt` / `releasedAt` は terminal state の監査情報として保持する。
+
+同一 Session の active な `ApprovedPlanBinding` は高々1つとする。新しい Plan を
+承認する場合、既存の active binding を atomically に `invalidated` としてから新しい
+`authorizationId` を発行する。terminal state を active で上書きしてはならない。
 
 ---
 
@@ -470,9 +491,11 @@ Final Review
 Authorization は最低限、
 
 ```text
+authorizationId
 sessionId
 planPath
 planFingerprint
+fingerprintSchema
 ```
 
 に bind する。
@@ -534,6 +557,12 @@ Execution Progress Ledger
 
 の分離である。
 
+`PlanFingerprint` は canonical plan document から生成し、`PlanParser` の解析結果を
+そのまま hash 化してはならない。正規化するのは task execution progress として認識した
+checkbox state と EOL (`\r\n` → `\n`) に限る。fenced code block 内部、一般空白、Task 本文は
+正規化しない。task 外の global / unscoped セクションの checkbox は semantic change として
+扱う。承認時には `CanonicalPlanSnapshot` を生成し、task 集合の SSOT とする。
+
 ### JUS-P0-02-08
 
 以下の場合 Authorization は release される。
@@ -570,6 +599,11 @@ authorized = true
 ```
 
 を誤って生成してはならない。
+
+Authorization の保存は atomic persistence を経由する。保存結果が conflict-diverted、
+例外、または不確実な状態になった場合は binding を再利用禁止とし、`active` として
+扱ってはならない。再起動・hydration 時には永続化された active binding を復元するが、
+Plan ファイルが存在しない場合や fingerprint が一致しない場合は invalidated とする。
 
 ---
 
@@ -955,9 +989,9 @@ Plan progress update
 
 ### JUS-P0-04-06
 
-Gate が WARN / FAIL / UNKNOWN の場合、Task を Accepted としてはならない。
+Gate が WARN / FAIL の場合、Task を Accepted としてはならない。Gate 評価不能・内部エラー・証拠不十分の場合も、Task を Accepted としてはならない。
 
-必要に応じて、
+Gate が `WARN` / `FAIL` の場合は、必要に応じて、
 
 ```text
 ReworkRequired
@@ -965,17 +999,110 @@ ReworkRequired
 
 へ遷移する。
 
+Gate 評価不能・内部エラー・証拠不十分の場合は `gate_pending` のまま
+`blocked` とし、`ReworkRequired` として扱ってはならない。
+
 ### JUS-P0-04-07
 
 Plan progress の更新は `TaskAccepted` の結果として実行する。
 
 Worker の tool success を直接 Plan completion に接続してはならない。
 
+## 8.2 Attempt-Scoped Evidence と Finalization
+
+各 Task の Evidence / Review / Gate / Acceptance は、以下の
+`TaskExecutionRef` 1つに厳密に bind する。
+
+```text
+TaskExecutionRef {
+    authorizationId
+    taskId
+    attemptId
+}
+```
+
+Gate が `WARN` / `FAIL` となり rework へ進む場合、新しい `attemptId` を発行して
+`in_progress` へ遷移する。過去の attempt の Evidence / Review を新しい attempt の
+Gate 評価に再利用してはならない。
+
+Plan finalization は以下の状態と識別子で管理する。
+
+```text
+tasks_pending
+all_tasks_accepted
+final_review_pending
+final_gate_pending
+final_rework_required
+complete
+```
+
+```text
+FinalizationAttempt {
+    authorizationId
+    planPath
+    finalizationAttemptId
+    finalReviewRound
+}
+```
+
+Final Review の rework 後に再試行する場合は、新しい
+`finalizationAttemptId` と増分した `finalReviewRound` を発行する。Final Gate は current
+finalization attempt の Evidence / Review のみを評価する。
+
+## 8.3 Task Call Purpose と Child-Session Correlation
+
+`task()` 呼び出しは目的を明示的に区別する。
+
+```text
+TaskCallPurpose = implementation | task_review | final_review
+```
+
+`task_review` / `final_review` の呼び出しは implementation 完了として扱わず、
+`TaskCallBinding` に current correlation と artifact reservation を bind する。
+OmO の child session は以下の binding で親の Task attempt または Plan finalization attempt
+へ相関付ける。
+
+```text
+DelegatedExecutionBinding {
+    parentSessionId
+    parentCallId
+    childSessionId
+    scope
+}
+```
+
+`childSessionId` が取得できない、または親 scope へ相関付けられない場合、Runtime は
+fail-open で継続できるが、authoritative child evidence を成立させず、Task acceptance /
+Plan completion は blocked とする。
+
+## 8.4 Review Artifact の権威付けと Transport
+
+mandatory `sp-review` / `sp-final-review` は Controller が起動し、
+`run_in_background = false` の synchronous execution に固定する。review worker が生成する
+`ReviewWorkerResultV1` は untrusted output とし、Justice が `TaskCallBinding` 由来の
+trusted metadata と組み合わせて `ReviewArtifactV1` を組み立てる。
+
+`ReviewArtifactV1` の `complete: true` かつ `findings: []` のみを mandatory review completion
+の authoritative evidence とする。CodeRabbit / Greptile 等の external review は補助情報で
+あり、mandatory review completion の代替にはならない。
+
+Phase 3 の transport は JSON artifact file に固定する。Justice は PreToolUse で
+`ReviewArtifactReservation` を生成し、artifact path の衝突を検査する。安全な path を
+確立できない場合は reservation を `unusable` とし、artifact を読まず、Runtime の
+`task()` 実行は継続するが、mandatory review completion と acceptance / completion は
+blocked とする。usable artifact は matching PostToolUse 後に一度だけ読み取り、digest を
+記録し、consume 後に archive / move または delete して再利用を防止する。
+
 ---
 
 # 9. Gate Profile
 
 Task の種類によって必要な Gate が異なるため、Gate は semantic task type に応じて評価可能でなければならない。
+
+Gate verdict は `PASS` / `WARN` / `FAIL` の3値とし、`UNKNOWN` は採用しない。Gate 評価
+不能、内部エラー、証拠不十分の場合は `gate_pending` または `final_gate_pending` のまま
+blocked とし、`accepted` / `complete` を発行してはならない。`WARN` / `FAIL` はそれぞれ
+task の `rework_required` または Plan の `final_rework_required` へ遷移させる。
 
 Code-producing Task の標準的な Gate は最低限、
 
@@ -1108,6 +1235,11 @@ PlanComplete
       ↓
 AuthorizationReleased
 ```
+
+Plan finalization の実装上の state は `tasks_pending`、`all_tasks_accepted`、
+`final_review_pending`、`final_gate_pending`、`final_rework_required`、`complete` とする。
+`all_tasks_accepted` の task 集合は現在の checkbox 状態ではなく、承認時に生成した
+`CanonicalPlanSnapshot` に含まれる task IDs を SSOT とする。
 
 ---
 
@@ -1301,6 +1433,50 @@ Fail-open execution != fail-open acceptance
 
 内部障害時に Runtime を継続できても、未検証状態を Accepted / Verified と偽らない。
 
+### INV-11
+
+```text
+TaskCallPurpose separates implementation, task_review, final_review
+```
+
+`sp-review` / `sp-final-review` の実行を通常の implementation 完了と混同しない。
+
+### INV-12
+
+```text
+Terminal authorization states are not resurrected
+```
+
+`invalidated` / `released` の Authorization を、同じ `authorizationId` のまま
+`active` に戻さない。
+
+### INV-13
+
+```text
+PostToolUse side effects are processed transactionally
+```
+
+Evidence、Review、Gate、Acceptance、Progress update の side-effecting handlers を
+`Promise.all` で並列実行しない。Acceptance 後にのみ Progress update へ進める。
+
+### INV-14
+
+```text
+Evidence, Review, Gate, and Acceptance are attempt-scoped
+```
+
+各判定を current `TaskExecutionRef` または current `FinalizationAttempt` に厳密に
+束縛し、過去の attempt の証拠を再利用しない。
+
+### INV-15
+
+```text
+Mandatory review completion precedes artifact consumption
+```
+
+mandatory `sp-review` / `sp-final-review` の完了を matching PostToolUse で観測する前に、
+その review artifact を authoritative record として消費しない。
+
 ---
 
 # 16. 必須テストシナリオ
@@ -1427,6 +1603,33 @@ PlanComplete = false
 
 ---
 
+## Attempt Scoping
+
+同一 Task の rework では新しい `attemptId` を発行し、古い attempt の Evidence /
+Review / Gate を再利用しないこと。Final Review の rework では新しい
+`finalizationAttemptId` と増分した `finalReviewRound` を発行し、Final Gate が current
+finalization attempt のみを評価すること。
+
+---
+
+## Review Artifact Integrity
+
+`ReviewArtifactReservation` が `unusable` の場合、artifact を読み取らず、Runtime の
+review task 実行は継続する一方、mandatory review completion と Acceptance は blocked
+となること。usable artifact は matching PostToolUse 後に一度だけ読み取り、consume 後に
+再利用できないこと。
+
+---
+
+## Child-Session Correlation
+
+OmO child session の tool/message observation が `DelegatedExecutionBinding` を通じて
+親の `TaskExecutionRef` または Plan finalization attempt に相関付けられること。相関を
+確立できない場合、Runtime は fail-open で継続しても、authoritative acceptance を発行
+しないこと。
+
+---
+
 # 17. 推奨実装境界
 
 Core と Adapter の責務を以下のように維持する。
@@ -1441,14 +1644,17 @@ Core
 ├── PlanFingerprint
 ├── TaskLifecycle
 ├── EvidenceEngine
+├── ReviewArtifact
 ├── GateEngine
-└── AcceptanceDecision
+├── AcceptanceDecision
+└── ExecutionScope / DelegatedExecutionBinding
 
 Adapter
 ├── OpenCode event translation
 ├── Runtime controller application
 ├── task() payload enrichment
 ├── execution observation
+├── child-session correlation
 └── persistence integration
 ```
 
@@ -1509,6 +1715,12 @@ Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため
 13. 上記すべてについて automated test が存在する。
 14. `justice doctor` が必要 category / configuration の不足を検出できる。
 15. Justice の内部障害時にも、未検証の Task を Accepted と誤認しない。
+16. `TaskCallPurpose` によって implementation / task_review / final_review が区別されている。
+17. `ReviewArtifactV1` により clean review を authoritative に観測できる。
+18. Authorization の terminal state が再承認なしに復活しない。
+19. Evidence / Review / Gate / Acceptance が current attempt にのみ束縛されている。
+20. review artifact の衝突時も Runtime execution は継続し、Acceptance は blocked になる。
+21. OmO child-session observation が親の execution scope に相関付けられる。
 
 ---
 

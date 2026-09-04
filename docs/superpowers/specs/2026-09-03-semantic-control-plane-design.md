@@ -450,13 +450,13 @@ export type TaskCallBinding =
       readonly purpose: "task_review";
       readonly taskExecutionRef: TaskExecutionRef;
       readonly correlation: TaskReviewCorrelation;
-      readonly artifactRequest: ReviewArtifactRequest;
+      readonly artifactReservation: ReviewArtifactReservation;
     }
   | {
       readonly callId: string;
       readonly purpose: "final_review";
       readonly correlation: FinalReviewCorrelation;
-      readonly artifactRequest: ReviewArtifactRequest;
+      readonly artifactReservation: ReviewArtifactReservation;
     };
 ```
 
@@ -513,27 +513,32 @@ export type DelegatedExecutionBinding = {
 - `parentCallId` は `TaskCallBinding.callId` と一致する。`childSessionId` は OmO 子セッションを一意に識別する runtime 識別子である。
 - `childSessionId` を取得するための正確な runtime イベントや API は Phase 3 の runtime spike 項目とする。spike 結果に応じて Adapter 実装を固めるが、上記 contract は変更しない。
 - `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt (`ExecutionScope` の `kind: "task"`) または plan finalization attempt (`ExecutionScope` の `kind: "finalization"`) に還元できる。これは JUS-P0-04 の P0 設計要件である。
-### 4.10 Review Artifact Request
+### 4.10 Review Artifact Reservation
 
 ```ts
-export type ReviewArtifactRequest = {
-  readonly artifactId: string;
-  readonly artifactPath: string;
-  readonly callId: string;
-  readonly correlation: ReviewCorrelation;
-};
+export type ReviewArtifactReservation =
+  | {
+      readonly status: "usable";
+      readonly artifactId: string;
+      readonly artifactPath: string;
+    }
+  | {
+      readonly status: "unusable";
+      readonly reason: "artifact_path_collision_exhausted";
+    };
 ```
 
-- `ReviewArtifactRequest` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で初めて `callId` を含む `ReviewArtifactRequest` を生成する。
+- `ReviewArtifactReservation` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で `callId` を確定させたうえで `TaskCallBinding` と `ReviewArtifactReservation` を生成・bind する。
+- `callId` / `correlation` の SSOT は `TaskCallBinding` とする。`ReviewArtifactReservation` 自身は artifact identity / path のみを表現し、重複する metadata は持たない。
 - mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
-  - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactRequest` を組み立てる。
+  - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactReservation` を組み立てる。
   - `artifactPath` は `callId` と `correlation` から一意に導出される。例：`.justice/reviews/<correlation-kind>-<artifactId>.json`。
   - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで再生成を試みる（最大再生成回数を設ける）。
-  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactRequest` を `unusable` 扱いとする。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は `blocked` 扱いとする。`review_unexpected_existing_artifact` advisory を記録する。
-  - `ReviewArtifactRequest` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactRequest` フィールドへ bind する。
-  - Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。
-  - Justice は matching PostToolUse 到達後、対応する `TaskCallBinding.artifactRequest` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通す。
+  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとする。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は `blocked` 扱いとする。`review_unexpected_existing_artifact` advisory を記録する。
+  - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
+- `usable` の場合、Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。`unusable` の場合は `artifactPath` を提示せず、review worker の完了を mandatory review completion として扱わない。
+- Justice は matching PostToolUse 到達後、`usable` な `TaskCallBinding.artifactReservation` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通す。`unusable` の場合は artifact を読み取らず、mandatory review completion を成立させない。
   - 読み取った内容の digest と `artifactId` を observation log に記録する（`review_artifact_consumed` event）。
   - consume 後、元ファイルを archive / move または delete する。同一 `artifactPath` の再読取りを防止する。
   - 別の attempt（新 `TaskExecutionRef`）や別の finalization attempt（新 `FinalizationAttemptId`）で古い `artifactId` / `artifactPath` を再利用してはならない。`artifactId` は attempt 単位で新規 UUID を発行する。
@@ -682,7 +687,7 @@ Controller (Atlas)
        `TaskReviewCorrelation` は current `TaskExecutionRef` を含む
   → この task() は OmO 子セッションとして実行される
   → `DelegatedExecutionBinding` で親セッションの `TaskExecutionRef` と子セッションを相関付ける
-  → review worker は `ReviewArtifactRequest` に従い Justice が生成したパスへ JSON artifact を書き出す
+  → review worker は `ReviewArtifactReservation` に従い Justice が生成したパスへ JSON artifact を書き出す
   → review worker 観測
 
 Justice
@@ -716,7 +721,7 @@ Task Review:
        directive includes current `TaskExecutionRef`
     → Controller dispatches sp-review worker
     → `DelegatedExecutionBinding` correlates child session to parent `TaskExecutionRef`
-    → sp-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactRequest`
+    → sp-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactReservation`
     → Justice reads the artifact exactly once after matching PostToolUse
     → Justice assembles `ReviewArtifactV1` from trusted metadata + worker result
     → `ReviewArtifactV1` is bound to TaskExecutionRef R
@@ -733,7 +738,7 @@ Final Review:
        directive includes current `finalizationAttemptId`
     → Controller dispatches sp-final-review worker
     → `DelegatedExecutionBinding` correlates child session to parent finalization attempt
-    → sp-final-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactRequest`
+    → sp-final-review worker writes `ReviewWorkerResultV1` to the path in `ReviewArtifactReservation`
     → Justice reads the artifact exactly once after matching PostToolUse
     → Justice assembles `ReviewArtifactV1` from trusted metadata + worker result
     → `ReviewArtifactV1` is bound to finalizationAttemptId N
@@ -752,7 +757,7 @@ Final Review:
 ```
 
 - `sp-review` / `sp-final-review` の起動主体は Controller。
-- Justice は `ReviewRequiredDirective` の生成と、review correlation / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactRequest` を通じた review worker 結果の観測、および `ReviewArtifactV1` の組み立てを行う。
+- Justice は `ReviewRequiredDirective` の生成と、review correlation / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果の観測、および `ReviewArtifactV1` の組み立てを行う。
 - `ReviewArtifactV1`（`complete: true + findings: []`）のみを mandatory review 完了の authoritative evidence とする。
 - external review (CodeRabbit / Greptile) は補助情報であり、mandatory review 完了の証拠にはならない。
 
@@ -784,7 +789,7 @@ Final Review:
 - `ReviewArtifactV1.complete: true + findings: []` を clean review 完了証拠として扱うこと。
 - persisted evidence が attempt-scoped（`TaskExecutionRef` / `FinalizationAttemptId`）であること。
 - OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
-- review artifact anti-replay（`ReviewArtifactRequest`）が機能すること。
+- review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
 - attempt-aware duplicate suppression が機能すること。
 - acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
@@ -902,6 +907,6 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
 - **Task Attempt**: `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行し、`in_progress` 遷移時に新規 attempt を作成する。Gate は current attempt の Evidence / Review のみを評価する。rework 時は新しい attemptId を発行する。
 - **Finalization Attempt**: `FinalizationAttemptId` / `finalReviewRound` を導入し、`final_rework_required → final_review_pending` 遷移時には新しい `finalizationAttemptId`（新 UUID）と増分した `finalReviewRound` を両方更新する。Final Gate は current finalization attempt の evidence / review のみを評価する。
-- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactRequest` を通じた review worker 結果の観測、`ReviewArtifactV1` 組み立てを担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
+- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果の観測、`ReviewArtifactV1` 組み立てを担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
 - **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま acceptance / completion blocked。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
-- **Traceability**: 本設計書の修正に伴い、`REQUIREMENTS_2026-09-03.md` 側への反映（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化など）は別途実施する。
+- **Traceability**: 本設計書の修正内容（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化、attempt-scoped acceptance、Review Artifact transport、child-session correlation など）は `REQUIREMENTS_2026-09-03.md` に反映済みである。
