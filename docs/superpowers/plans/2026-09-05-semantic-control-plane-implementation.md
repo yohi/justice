@@ -37,6 +37,7 @@
 - Modify: `src/core/category-classifier.ts`
 - Test: `tests/core/routing-decision.test.ts`
 - Test: `tests/unit/core/omo-category-mapper.test.ts`
+- Test: `tests/core/retry-policy-calculator.test.ts`
 
 **Consumes:** `ExecutionRole`, `SpCategory`, `createWorkerRoutingDecision(executionRole, category, reason)`.
 
@@ -61,11 +62,18 @@ it.each([
 it("rejects the legacy architecture downgrade", () => {
   expect(() => createWorkerRoutingDecision("architecture", "unspecified-high", "task_classification")).toThrow();
 });
+
+it.each(["sp-deep", "sp-architecture"] as const)("keeps %s at the existing zero retry modifier", (category) => {
+  expect(new RetryPolicyCalculator().compute({ category, stepCount: 1 })).toMatchObject({
+    categoryModifier: 0,
+    maxRetries: RetryPolicyCalculator.BASE,
+  });
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts`
 
 Expected: FAIL because `sp-deep` and `sp-architecture` are not valid categories.
 
@@ -96,14 +104,14 @@ Remove `deep`, `unspecified-high`, and `unspecified-low` from the non-compatibil
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts
+git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts
 git commit -m "feat: execution roleをsp categoryへ完全対応"
 ```
 
@@ -185,37 +193,69 @@ git commit -m "feat: doctorでsp category設定を検査"
 - Test: `tests/core/plan-fingerprint.test.ts`
 - Test: `tests/core/plan-parser.test.ts`
 
-**Consumes:** `PlanParser.parse(content): PlanTask[]`; `hashString(value: string): string` from `src/core/v2/hash.ts`.
+**Consumes:** `PlanParser.parse(content): PlanTask[]`; `hashString(value: string): string` from `src/core/v2/hash.ts`; approval-time task IDs from `PlanParser.parse(raw).map((task) => task.id)`; validation-time task IDs from `binding.canonicalSnapshot.tasks.map((task) => task.taskId)`.
 
-**Produces:** `buildCanonicalSnapshot(raw: string, tasks: readonly PlanTask[]): CanonicalPlanSnapshot`; `computePlanFingerprint(raw: string, tasks: readonly PlanTask[]): PlanFingerprint`; `migrateJusticeGeneratedErrorAnnotations(raw: string, observations: readonly PersistedLogRecord[]): MigrationResult`.
+**Produces:** `buildCanonicalSnapshot(raw: string, approvedTaskIds: readonly string[]): CanonicalPlanSnapshot`; `computePlanFingerprint(raw: string, approvedTaskIds: readonly string[]): PlanFingerprint`; `migrateJusticeGeneratedErrorAnnotations(raw: string, observations: readonly PersistedLogRecord[]): MigrationResult`.
 
 - [ ] **Step 1: Write the failing semantic-boundary tests**
 
+<!-- markdownlint-disable MD013 -->
+
 ```ts
+const taskUnchecked = "## Task 1: approved\n- [ ] execute\n";
+const taskChecked = "## Task 1: approved\n- [x] execute\n";
+const globalUnchecked = "- [ ] release checklist\n\n## Task 1: approved\n- [ ] execute\n";
+const globalChecked = "- [x] release checklist\n\n## Task 1: approved\n- [ ] execute\n";
+const unscopedUnchecked = "Notes\n- [ ] verify manually\n\n## Task 1: approved\n- [ ] execute\n";
+const unscopedChecked = "Notes\n- [x] verify manually\n\n## Task 1: approved\n- [ ] execute\n";
+const fencedUnchecked = "## Task 1: approved\n```text\n- [ ] example\n```\n- [ ] execute\n";
+const fencedChecked = "## Task 1: approved\n```text\n- [x] example\n```\n- [ ] execute\n";
+const unapprovedTaskUnchecked = "## Task 1: approved\n- [ ] execute\n\n## Task 2: added\n- [ ] added step\n";
+const unapprovedTaskChecked = "## Task 1: approved\n- [ ] execute\n\n## Task 2: added\n- [x] added step\n";
+const taskBodyA = "## Task 1: approved\n- [ ] execute\n";
+const taskBodyB = "## Task 1: renamed\n- [ ] execute\n";
+
 it("normalizes only checkbox state in parsed task sections", () => {
-  expect(computePlanFingerprint(taskUnchecked, parser.parse(taskUnchecked))).toEqual(
-    computePlanFingerprint(taskChecked, parser.parse(taskUnchecked)),
+  expect(computePlanFingerprint(taskUnchecked, ["task-1"])).toEqual(
+    computePlanFingerprint(taskChecked, ["task-1"]),
   );
 });
 
-it("treats a global checkbox and a fenced checkbox as semantic", () => {
-  expect(computePlanFingerprint(globalUnchecked, parser.parse(globalUnchecked))).not.toEqual(
-    computePlanFingerprint(globalChecked, parser.parse(globalUnchecked)),
+it("treats global, unscoped, and fenced checkboxes as semantic", () => {
+  expect(computePlanFingerprint(globalUnchecked, ["task-1"])).not.toEqual(
+    computePlanFingerprint(globalChecked, ["task-1"]),
   );
-  expect(computePlanFingerprint(fencedUnchecked, parser.parse(fencedUnchecked))).not.toEqual(
-    computePlanFingerprint(fencedChecked, parser.parse(fencedUnchecked)),
+  expect(computePlanFingerprint(unscopedUnchecked, ["task-1"])).not.toEqual(
+    computePlanFingerprint(unscopedChecked, ["task-1"]),
+  );
+  expect(computePlanFingerprint(fencedUnchecked, ["task-1"])).not.toEqual(
+    computePlanFingerprint(fencedChecked, ["task-1"]),
   );
 });
 
-it("changes for task body edits and not for EOL-only edits", () => {
-  expect(computePlanFingerprint(taskBodyA, parser.parse(taskBodyA))).not.toEqual(
-    computePlanFingerprint(taskBodyB, parser.parse(taskBodyA)),
+it("changes for an unapproved task section, task body edits, and not for EOL-only edits", () => {
+  expect(computePlanFingerprint(unapprovedTaskUnchecked, ["task-1"])).not.toEqual(
+    computePlanFingerprint(unapprovedTaskChecked, ["task-1"]),
   );
-  expect(computePlanFingerprint(taskBodyA, parser.parse(taskBodyA))).toEqual(
-    computePlanFingerprint(taskBodyA.replace(/\n/g, "\r\n"), parser.parse(taskBodyA)),
+  expect(computePlanFingerprint(taskBodyA, ["task-1"])).not.toEqual(
+    computePlanFingerprint(taskBodyB, ["task-1"]),
+  );
+  expect(computePlanFingerprint(taskBodyA, ["task-1"])).toEqual(
+    computePlanFingerprint(taskBodyA.replace(/\n/g, "\r\n"), ["task-1"]),
+  );
+});
+
+it("treats duplicate approved task headings as semantic", () => {
+  const original = "## Task 1: approved\n- [ ] execute\n";
+  const duplicate = "## Task 1: approved\n- [ ] execute\n\n## Task 1: duplicate\n- [x] execute\n";
+
+  expect(computePlanFingerprint(duplicate, ["task-1"])).not.toEqual(
+    computePlanFingerprint(original, ["task-1"]),
   );
 });
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 Add one test whose `error_annotation` observation identifies the exact legacy annotation line and expects migration to remove it. Add one manual annotation test and one unknown-provenance annotation test that expect the fingerprint to change.
 
@@ -227,11 +267,22 @@ Expected: FAIL because canonical snapshot generation is absent.
 
 - [ ] **Step 3: Implement task-section-only canonicalization**
 
-Traverse normalized lines with the same task-heading rule as `PlanParser`. Enter a task section only at `TASK_HEADING_REGEX`; leave it at the next task heading; maintain a fenced-code state. Replace checkbox state only when `inTask === true` and `inFence === false`. Construct each `CanonicalTaskSnapshot` from that task section and construct `globalBodyDigest` from every non-task line without checkbox rewriting.
+Traverse normalized lines with the same task-heading rule as `PlanParser`. Derive a heading
+ID as `task-${taskNumber}` and compare it to `new Set(approvedTaskIds)`. Count each approved
+heading ID while scanning; if an approved ID occurs other than exactly once, retain every
+checkbox in that section and return a fingerprint that differs from the approved snapshot.
+Enter a normalizable task section only when the heading ID is in that set exactly once; leave
+it at the next heading; maintain a fenced-code state. Replace checkbox state only when
+`inApprovedTask === true` and `inFence === false`. A heading not in the approved set, an
+unscoped line, and a fenced line remain byte-semantic after EOL normalization. Construct each
+`CanonicalTaskSnapshot` from an approved task section and construct `globalBodyDigest` from
+every non-approved line without checkbox rewriting. Approval calls both functions with
+`parser.parse(raw).map((task) => task.id)`; later validation calls them with
+`binding.canonicalSnapshot.tasks.map((task) => task.taskId)`.
 
 ```ts
-export function computePlanFingerprint(raw: string, tasks: readonly PlanTask[]): PlanFingerprint {
-  return { algorithm: "sha256", value: hashString(canonicalize(raw, tasks)).replace("sha256:", "") };
+export function computePlanFingerprint(raw: string, approvedTaskIds: readonly string[]): PlanFingerprint {
+  return { algorithm: "sha256", value: hashString(canonicalize(raw, approvedTaskIds)).replace("sha256:", "") };
 }
 ```
 
@@ -581,6 +632,7 @@ git commit -m "test: child session correlation runtime境界を検証"
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
+- Test: `tests/core/task-packager.test.ts`
 
 **Consumes:** `ReviewCorrelation`; `ReviewArtifactV1`; `DelegatedExecutionBinding`; `ReviewArtifactReservation`.
 
@@ -596,26 +648,42 @@ it.each(["pending", "claimed_without_staging", "claimed_with_staging", "terminal
 );
 
 it("does not modify current state for stale PostToolUse", () => {
-  for (const stale of [oldCallId, differentRound, differentArtifactId, differentChildSession]) {
+  for (const stale of [
+    oldCallId,
+    differentRound,
+    differentArtifactId,
+    differentChildSession,
+    differentTaskAttempt,
+    differentFinalizationAttempt,
+  ]) {
     expect(acceptPostToolUse(currentClaim, stale)).toEqual({ kind: "stale" });
   }
 });
 
 it("canonicalizes mandatory reviews to synchronous execution", () => {
-  expect(normalizeTaskToolInput({ category: "sp-review", run_in_background: true }).runInBackground).toBe(false);
-  expect(normalizeTaskToolInput({ category: "sp-final-review", run_in_background: true }).runInBackground).toBe(false);
+  expect(normalizeTaskToolInput({ category: "sp-review", run_in_background: true }).run_in_background).toBe(false);
+  expect(normalizeTaskToolInput({ category: "sp-final-review", run_in_background: true }).run_in_background).toBe(false);
 });
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts`
 
 Expected: FAIL because no durable review protocol exists.
 
 - [ ] **Step 3: Implement durable records and replay rules**
 
-Create one pending slot per parent session. Claim only one matching pending slot and write the claimed transition, `TaskCallBinding`, `ReviewArtifactReservation`, and `DelegatedExecutionBinding` in one durable commit. Generate a UUID artifact ID and a validated `.justice/reviews/<artifactId>.json` path. A terminal slot is immutable. Recover pending by reissuing the same directive; recover claimed without staging by waiting for matching PostToolUse; recover claimed with staging by terminalizing only with the staged call ID, correlation, artifact ID, digest, and observed execution; recover terminal as a tombstone.
+Create one pending slot per parent session. Claim only one matching pending slot and write the
+claimed transition, `TaskCallBinding`, `ReviewArtifactReservation`, and
+`DelegatedExecutionBinding` in one durable commit. Generate a UUID artifact ID and a validated
+`.justice/reviews/<artifactId>.json` path. A terminal slot is immutable. Recover pending by
+reissuing the same directive; recover claimed without staging by waiting for matching
+PostToolUse; recover claimed with staging by terminalizing only with the staged call ID,
+correlation, artifact ID, digest, and observed execution; recover terminal as a tombstone.
+`acceptPostToolUse` must reject a `TaskReviewCorrelation.taskExecutionRef.attemptId` that
+differs from the claimed slot and a `FinalReviewCorrelation.finalizationAttemptId` that differs
+from the claimed slot before artifact I/O.
 
 ```ts
 export type DelegatedExecutionBinding = {
@@ -632,14 +700,14 @@ export function canClaim(slots: readonly ReviewDispatchSlot[], input: ClaimInput
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts
+git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/core/task-packager.test.ts
 git commit -m "feat: durable review dispatchとchild bindingを追加"
 ```
 
@@ -911,10 +979,12 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 
 ## Traceability and Definition of Done
 
+<!-- markdownlint-disable MD013 MD060 -->
+
 | Requirement / Design Decision | Plan Task | Required tests |
 |---|---|---|
 | JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, unapplied, pinned command presence |
-| JUS-P0-02 semantic fingerprint | 2.1 | task progress invariant, global mutation invalidates, fenced mutation invalidates, EOL invariant |
+| JUS-P0-02 semantic fingerprint | 2.1 | approved task progress invariant, global/unscoped/fenced mutation invalidates, duplicate approved task heading invalidates, EOL invariant |
 | JUS-P0-02 canonical snapshot | 2.1, 2.2 | snapshot persistence, hydration, all-tasks-accepted snapshot SSOT |
 | JUS-P0-02 cancel and release | 2.3 | cancel, release, subsequent authorization rejection |
 | JUS-P0-03 seven-to-seven category mapping | 1.1, 1.2 | every role, legacy downgrade rejection, doctor presence |
@@ -925,10 +995,29 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-04 child-session correlation | 3.3, 3.4 | runtime spike, task review correlation, final review correlation, durable binding |
 | JUS-P0-04 anti-replay | 3.4, 3.5 | consume once, staging recovery, stale call ID, stale round, stale artifact, stale child session |
 | JUS-P0-04 transactional PostToolUse | 3.5 | strict sequence, terminal-commit recovery, no parallel side effects |
-| INV-01 through INV-18 | 1.1 through 4.2 | each invariant is covered by the rows above and the named tests |
+| INV-01 controller intent differs from worker intent | 4.1 | `tests/core/routing-decision.test.ts` preserves workflow on controller decisions |
+| INV-02 worker decision ends at category | 1.1 | `tests/core/routing-decision.test.ts` rejects invalid role/category pairs |
+| INV-03 approval survives multiple tasks | 2.2 | `tests/core/plan-authorization.test.ts` hydrates an active binding |
+| INV-04 semantic mutation invalidates approval | 2.1, 2.2 | `tests/core/plan-fingerprint.test.ts` checks semantic changes; `tests/hooks/plan-bridge-authorization.test.ts` rejects a changed fingerprint |
+| INV-05 high complexity does not silently downgrade | 1.1 | `tests/core/routing-decision.test.ts` rejects the architecture downgrade |
+| INV-06 WorkerReported is not TaskAccepted | 3.1, 3.6 | `tests/core/task-lifecycle.test.ts` and `tests/core/progress-updater.test.ts` require an accepted decision |
+| INV-07 declared evidence cannot pass alone | 3.2 | `tests/core/v2/rule-evaluation-engine.test.ts` and `tests/core/v2/gate-provenance-gating.test.ts` require observed or derived evidence |
+| INV-08 Gate PASS precedes progress completion | 3.2, 3.6 | `tests/hooks/observation-handler-gate.test.ts` and `tests/core/progress-updater.test.ts` |
+| INV-09 Final Review and Final Gate precede Plan Complete | 3.1, 3.2 | `tests/core/task-lifecycle.test.ts` and `tests/core/v2/rule-evaluation-engine.test.ts` |
+| INV-10 fail-open execution differs from fail-open acceptance | 2.2, 3.2 | `tests/core/plan-authorization.test.ts` and `tests/hooks/observation-handler-gate.test.ts` retain blocked state on unavailable prerequisites |
+| INV-11 TaskCallPurpose separates all task call kinds | 3.4, 3.5 | `tests/core/review-dispatch-state.test.ts` and `tests/core/session-state-provider.test.ts` |
+| INV-12 terminal authorization is not resurrected | 2.2, 2.3 | `tests/core/plan-authorization.test.ts` and `tests/hooks/plan-bridge-authorization.test.ts` |
+| INV-13 PostToolUse side effects are not parallelized | 3.5 | `tests/hooks/observation-handler-transactional.test.ts` checks the ordered trace |
+| INV-14 evidence, review, Gate, and Acceptance are attempt-scoped | 3.1, 3.2, 3.4 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, and `tests/core/review-dispatch-state.test.ts` |
+| INV-15 mandatory completion precedes artifact consumption | 3.3, 3.5 | `tests/runtime/opencode-adapter-v2.test.ts` and `tests/core/review-artifact.test.ts` |
+| INV-16 one outstanding dispatch and atomic claim | 3.4 | `tests/core/review-dispatch-state.test.ts` |
+| INV-17 dispatch state survives restart without claimed redispatch | 3.4 | `tests/core/v2/state-projection.test.ts` covers pending, claimed without staging, claimed with staging, and terminal |
+| INV-18 stale review cannot affect the current round | 3.4, 3.5 | `tests/core/review-dispatch-state.test.ts` rejects call, round, artifact, child session, task attempt, and finalization attempt mismatches |
 
 Every task above implements one named design decision: Tasks 1.1-1.2 implement Design §5.3; Tasks 2.1-2.3 implement §4.2, §4.3, and §5.2; Tasks 3.1-3.6 implement §4.4 through §4.11 and §5.4 through §5.5; Tasks 4.1-4.2 implement §4.1 and §5.1. No task exists solely for future reuse.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if synchronous mandatory review canonicalization, durable claim, staging, artifact consumption, stale-event rejection, task Gate, or Final Gate lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+
+<!-- markdownlint-enable MD013 MD060 -->
 
 Before implementation handoff, inspect every implementation step for unresolved placeholders, ambiguous file paths, and unbound requirements. Then verify that each table row names at least one exact task and test file.

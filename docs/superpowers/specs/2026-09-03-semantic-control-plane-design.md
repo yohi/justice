@@ -260,9 +260,18 @@ export type PlanFingerprint = {
 ```
 
 - `PlanFingerprint` が canonical plan document から直接生成する。`PlanParser` の解析結果をそのまま使わない。
+- 承認作成時は `PlanParser.parse(raw).map((task) => task.id)` を canonicalization
+  の task ID 入力として使用する。承認後の再計算では
+  `ApprovedPlanBinding.canonicalSnapshot.tasks.map((task) => task.taskId)` を唯一の
+  task ID 入力として使用する。現在の文書に現れる heading だけから task scope を
+  再推定してはならない。
 - `PlanFingerprint` は `{ algorithm: "sha256"; value: string }` 型とし、`ApprovedPlanBinding.planFingerprint` でも同一の structured 型を使用する。外部化表現は `sha256:<lowercase hex>` とする。
 - 正規化対象は以下に限定する。
-  - task execution progress checkbox state（Approved Canonical Snapshot 上で task 実行進捗として認識された `- [ ]` / `- [x]` のみ）。task 外の global/unscoped セクションに含まれる checkbox は semantic change として扱い、正規化しない。
+  - task execution progress checkbox state（Approved Canonical Snapshot の task ID 集合に
+    含まれる task section で認識された `- [ ]` / `- [x]` のみ）。snapshot にない task
+    heading、task 外の global/unscoped セクション、および fenced code block 内の checkbox
+    は semantic change として扱い、正規化しない。task heading を snapshot task ID へ一意に
+    対応付けられない場合は fail-closed で fingerprint を変更する。
   - EOL (`\r\n` → `\n`)
 - fenced code block 内部は一切 normalize しない。コード例の意味変更を見逃さない。
 - 一般空白・Task 本文は正規化しない。fail-closed に倒す。
