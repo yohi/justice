@@ -373,14 +373,25 @@ export type ReviewItem = {
   readonly status: "open" | "resolved";
 };
 
-export type ReviewArtifactV1 = {
+export type TaskReviewArtifactV1 = {
   readonly schemaVersion: 1;
-  readonly reviewKind: ReviewKind;
-  readonly reviewSource: ReviewSource;
-  readonly correlation: ReviewCorrelation;
+  readonly reviewKind: "task-review";
+  readonly reviewSource: "sp-review";
+  readonly correlation: TaskReviewCorrelation;
   readonly complete: boolean;
   readonly findings: ReadonlyArray<ReviewItem>;
 };
+
+export type FinalReviewArtifactV1 = {
+  readonly schemaVersion: 1;
+  readonly reviewKind: "final-review";
+  readonly reviewSource: "sp-final-review";
+  readonly correlation: FinalReviewCorrelation;
+  readonly complete: boolean;
+  readonly findings: ReadonlyArray<ReviewItem>;
+};
+
+export type ReviewArtifactV1 = TaskReviewArtifactV1 | FinalReviewArtifactV1;
 ```
 
 - `sp-review` / `sp-final-review` worker の起動は Justice ではなく Controller (Atlas) が `task(category="sp-review" | "sp-final-review")` として行う。
@@ -448,7 +459,6 @@ export type TaskCallBinding =
   | {
       readonly callId: string;
       readonly purpose: "task_review";
-      readonly taskExecutionRef: TaskExecutionRef;
       readonly correlation: TaskReviewCorrelation;
       readonly artifactReservation: ReviewArtifactReservation;
     }
@@ -466,7 +476,7 @@ export type TaskCallBinding =
   - `task_review` / `final_review` → `ReviewWorkerResultV1` を抽出し、`TaskCallBinding` 由来の trusted metadata と合わせて `ReviewArtifactV1` を組み立て、`review_observed` イベントを発行。
 - `sp-review` / `sp-final-review` として呼ばれた `task()` を、通常の implementation 完了と混同してはならない。
 - `SessionStateProvider` は `callId → TaskCallBinding` の対応を管理する。`callId → taskId` だけを記録する実装は v4 で置き換える。
-- `implementation` / `task_review` binding には `TaskExecutionRef` を含め、current attempt を特定できるようにする。
+- `implementation` binding には `TaskExecutionRef` を含める。`task_review` binding は `TaskReviewCorrelation.taskExecutionRef` から current attempt を特定する。
 
 ### 4.8 Review Required Directive
 
@@ -540,7 +550,7 @@ export type ReviewArtifactReservation =
 - mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
   - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactReservation` を組み立てる。
-  - `artifactPath` は `callId` と `correlation` から一意に導出される。例：`.justice/reviews/<correlation-kind>-<artifactId>.json`。
+  - `artifactPath` は Justice が `ReviewArtifactReservation` ごとに一意な安全な相対 path として生成する。binding identity は `TaskCallBinding` が保持し、path 自体に `callId` / `correlation` を埋め込むことは必須としない。例：`.justice/reviews/<artifactId>.json`。
   - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで再生成を試みる（最大再生成回数を設ける）。
   - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとする。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は `blocked` 扱いとする。`review_unexpected_existing_artifact` advisory を記録する。
   - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
@@ -756,11 +766,15 @@ Final Review:
       WARN/FAIL
         → PlanFinalizationState = final_rework_required
         → fixes
-        → PlanFinalizationState = final_review_pending
         → new finalizationAttemptId N' (new UUID) / finalReviewRound N+1
-    → Final Gate re-evaluation using only current finalization attempt evidence
-      internal error / insufficient evidence
-        → PlanFinalizationState = final_gate_pending (blocked)
+        → PlanFinalizationState = final_review_pending
+        → Final Review
+          → Justice injects `ReviewRequiredDirective` to Controller
+          → Controller dispatches sp-final-review worker
+          → review artifact observed as `final_review_complete`
+          → Final Gate re-evaluation using only current finalization attempt evidence
+            → internal error / insufficient evidence
+              → PlanFinalizationState = final_gate_pending (blocked)
 ```
 
 ### Task Review の `reviewRound`
