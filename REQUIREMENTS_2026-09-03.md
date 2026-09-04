@@ -1008,6 +1008,13 @@ Plan progress の更新は `TaskAccepted` の結果として実行する。
 
 Worker の tool success を直接 Plan completion に接続してはならない。
 
+### JUS-P0-04-08
+
+Mandatory review dispatch は durable な `pending` / `claimed` / `terminal` state として管理し、
+restart / replay 後も同じ review identity を復元できなければならない。復元した `claimed` call
+を自動再発行してはならず、終端が不明な場合は mandatory review completion と Acceptance を
+blocked とする。
+
 ## 8.2 Attempt-Scoped Evidence と Finalization
 
 各 Task の Evidence / Review / Gate / Acceptance は、以下の
@@ -1110,6 +1117,56 @@ matching PostToolUse が review task の終端を確定した後に slot を ter
 dispatch を許可する場合は、将来、Controller 境界を越えて安全に運搬し server-side で検証
 できる専用 selector（例: `dispatchId` または capability）を別途定義する。prompt の自然言語
 や worker の自己申告を selector としてはならない。
+
+## 8.3.2 Durable Review Dispatch State と Restart Recovery
+
+P0 の review dispatch state は以下の3状態に限定する。
+
+```text
+ReviewDispatchState = pending | claimed | terminal
+```
+
+durable `ReviewDispatchTransitionRecord` は少なくとも以下を保持する。
+
+```text
+recordType = observation
+kind = review_dispatch_transition
+transitionId
+parentSessionId
+correlation
+expectedCategory = sp-review | sp-final-review
+from
+to
+callId                  # claimed / terminal の場合
+artifactReservation     # claimed の場合
+artifactConsumption     # terminal の場合、consume 済み artifact の id / digest
+reviewArtifact          # 正常完了 terminal の場合、Justice が組み立てた authoritative artifact
+terminalReason          # terminal の場合
+```
+
+P0 では `ReviewDispatchId` を追加しない。slot identity は
+`parentSessionId + ReviewCorrelation` とし、`transitionId` は durable record の event identity
+に限る。`ReviewDispatchTransitionRecord` が review dispatch state の SSOT であり、
+`SessionStateProvider` などの in-memory cache は replay で再構築する projection に限る。
+`terminalReason = completed` の terminal record には `artifactConsumption` と Justice が組み立てた
+`ReviewArtifactV1` を必須とし、restart 後に `review_observed` と Acceptance の入力を再構築できる
+ようにする。失敗 terminal は `ReviewArtifactV1` を持たず、Acceptance を blocked とする。
+
+以下を restart / replay と claim の規範とする。
+
+1. `null → pending` transition を durable commit してから `ReviewRequiredDirective` を inject する。commit に失敗した場合は mandatory directive、binding、artifact reservation を作成せず、Runtime は fail-open で継続するが Acceptance / Plan completion は blocked とする。
+2. PreToolUse では、期待する parent session、review kind、category に一致する pending slot がちょうど1件ある場合だけ `pending → claimed` を atomic claim する。claim、`TaskCallBinding`、`ReviewArtifactReservation` は同一の durable commit とし、commit 成功前は authoritative として扱わない。
+3. matching `PostToolUse` の binding 検証、artifact consume marker、`review_observed`、Justice が組み立てた `ReviewArtifactV1`、`claimed → terminal` transition は一つの durable commit とする。commit 前に Review、Gate、Acceptance へ結果を渡さず、commit 失敗時は `claimed` を保持して再発行・再消費しない。
+4. restart / replay 後の処理は以下とする。
+
+| 状態 | 許可される復旧 | 禁止される復旧 |
+|---|---|---|
+| `pending` | 同じ correlation の directive を再発行する。`reviewRound` は増分しない。 | 新しい slot、binding、`callId`、review round の作成 |
+| `claimed` | 同じ `callId`、correlation、binding、artifact reservation を復元して matching PostToolUse を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `terminal` | terminal tombstone を保持し、retry 時だけ新しい correlation の `pending` slot を作る。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行 |
+
+5. `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、同一 Task attempt の retry では `reviewRound` を増分する。終端が不明な場合は `claimed` のまま Acceptance を blocked とする。
+6. current claimed slot と parent session、`callId`、purpose、trusted correlation、child-session binding のいずれかが一致しない `PostToolUse` は stale event として記録する。artifact、Review、Gate、Acceptance、current review round に影響させない。
 
 ## 8.4 Review Artifact の権威付けと Transport
 
@@ -1522,6 +1579,25 @@ Review dispatch binding is session-scoped and atomically claimed
 同一 parent session の outstanding mandatory review dispatch は高々 1 件とし、matching
 pending slot の atomic claim なしに `TaskCallBinding` や artifact reservation を作成しない。
 
+### INV-17
+
+```text
+Review dispatch state survives restart without reissuing claimed calls
+```
+
+`pending` / `claimed` / `terminal` transition、claim 時の binding / artifact reservation、consume
+marker を durable log から復元できること。復元した `claimed` call は再発行せず、終端不明なら
+Acceptance を blocked とする。
+
+### INV-18
+
+```text
+Stale review completion cannot affect the current round
+```
+
+current claimed slot と一致しない `PostToolUse` は artifact、Review、Gate、Acceptance、current
+review round に影響させない。
+
 ---
 
 # 16. 必須テストシナリオ
@@ -1661,8 +1737,8 @@ finalization attempt のみを評価すること。
 
 `ReviewArtifactReservation` が `unusable` の場合、artifact を読み取らず、Runtime の
 review task 実行は継続する一方、mandatory review completion と Acceptance は blocked
-となること。usable artifact は matching PostToolUse 後に一度だけ読み取り、consume 後に
-再利用できないこと。
+となること。usable artifact は matching PostToolUse 後に一度だけ atomic consume し、consume
+marker と dispatch terminalization を durable に記録した後、再利用できないこと。
 
 ---
 
@@ -1686,10 +1762,29 @@ Runtime を継続しても mandatory review completion と Acceptance / Plan com
 
 ---
 
+## Review Dispatch Durability and Recovery
+
+以下の状態遷移と再起動ケースを自動テストすること。
+
+```text
+null → pending → claimed → terminal
+```
+
+- `pending` transition が directive inject より先に durable commit されること。commit 失敗時は mandatory directive、binding、artifact reservation を作成せず、Runtime は継続して Acceptance を blocked にすること。
+- 同一 parent session の concurrent PreToolUse では exactly one claim だけが成功し、勝者の durable claim にのみ `callId`、trusted correlation、`TaskCallBinding`、`ReviewArtifactReservation` が bind されること。
+- restart / replay 後、`pending` は同じ correlation の directive のみ再発行し、`claimed` は同じ binding / reservation を復元して directive を再発行しないこと。
+- `claimed` の終端が不明な場合は自動 retry せず、conclusive な lost の場合だけ terminalize 後に同一 Task attempt の `reviewRound` を増分すること。
+- matching `PostToolUse` の artifact consume marker、`review_observed`、`ReviewArtifactV1`、`claimed → terminal` transition が一つの durable commit として扱われ、restart 後に Acceptance の入力を再構築できること。
+- old `callId` の stale `PostToolUse` が新しい review round の binding、artifact、Review、Gate、Acceptance に影響しないこと。
+
+---
+
 ## Task Review Round
 
 同一 `TaskExecutionRef` の review retry では `reviewRound` を増分し、implementation rework で
-新しい `TaskExecutionRef` が発行された場合は `reviewRound = 1` に戻ること。
+新しい `TaskExecutionRef` が発行された場合は `reviewRound = 1` に戻ること。restart 後の
+`pending` / `claimed` 復元だけでは `reviewRound` を変更せず、`claimed` を自動 retry の理由に
+してはならない。
 
 ---
 
@@ -1706,6 +1801,7 @@ Core
 ├── PlanAuthorization
 ├── PlanFingerprint
 ├── TaskLifecycle
+├── ReviewDispatchState
 ├── EvidenceEngine
 ├── ReviewArtifact
 ├── GateEngine
@@ -1739,7 +1835,8 @@ one-shot authorization を PlanScopedAuthorization に置換する。
 
 ### Phase 3 — Transactional Acceptance
 
-WorkerReported と TaskAccepted を分離し、
+WorkerReported と TaskAccepted を分離し、durable review dispatch slot の CAS claim、restart /
+replay recovery、stale-event rejection を含め、
 
 ```text
 Evidence
@@ -1786,6 +1883,8 @@ Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため
 21. OmO child-session observation が親の execution scope に相関付けられる。
 22. Review dispatch が parent session 単位で直列化され、matching pending slot の atomic claim なしに `TaskCallBinding` が作成されない。
 23. 同一 `TaskExecutionRef` の review retry では `reviewRound` が増分し、implementation rework では新しい `TaskExecutionRef` と `reviewRound = 1` が発行される。
+24. Review dispatch の `pending` / `claimed` / `terminal` transition、claim 時の binding / artifact reservation、consume marker、`ReviewArtifactV1` が durable log から restart / replay 後に復元でき、復元した `claimed` call が再発行されない。
+25. old `callId` の stale `PostToolUse` が artifact、Review、Gate、Acceptance、current review round に影響せず、終端不明の claim は自動 retry されない。
 
 ---
 
