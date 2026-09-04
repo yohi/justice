@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+## [3.1.0](https://github.com/yohi/justice/compare/v3.0.0...v3.1.0) (2026-09-04)
+
+
+### Features
+
+* **routing:** add execution role classifier and update CategoryClassifier delegation ([f5e145a](https://github.com/yohi/justice/commit/f5e145afdee47761d0057a6f157f2b311140a170))
+* **routing:** add execution role classifier and update CategoryClassifier delegation ([1b2ce87](https://github.com/yohi/justice/commit/1b2ce8738524b5815c9b30d4239075c1215d0761))
+* **routing:** add routing decision types and factories ([512c26f](https://github.com/yohi/justice/commit/512c26f191150ae61b615fbbed38f1331c59d6f3))
+* **routing:** add routing decision types and factories ([e42ac91](https://github.com/yohi/justice/commit/e42ac91c3641ee072a933c168ac333165dd36c18))
+* **routing:** add WorkflowRouter and restructure AgentRouter for controller routing ([9e22aeb](https://github.com/yohi/justice/commit/9e22aeb756cc1ce45b53cb410e0f3ef274529585))
+* **routing:** add WorkflowRouter and restructure AgentRouter for controller routing ([de1cd5d](https://github.com/yohi/justice/commit/de1cd5d1e38791aa3957167c2e6df95d3c1c1d10))
+* **routing:** normalize task payload to category-only OMO wire format and finalize routing core integration ([d6dfe6e](https://github.com/yohi/justice/commit/d6dfe6e3309863a5193d8d68ee4c655153ef3d95))
+* **routing:** normalize task payload to category-only OMO wire format and finalize routing core integration ([312e443](https://github.com/yohi/justice/commit/312e4434deee5ef3b9e781216ab5417b8b99fff0))
+* **routing:** OMOカテゴリーマッパーを追加 ([68a4615](https://github.com/yohi/justice/commit/68a4615589c7656346c8560d469a2c96ddd94f7b))
+* **routing:** TaskPackagerをcategory-only出力へ正規化 ([3c241e7](https://github.com/yohi/justice/commit/3c241e77952cc62011a2e9dbdbdc4fbfc8d18a9c))
+* **routing:** WorkflowRouterでworkflowからControllerを解決 ([408f919](https://github.com/yohi/justice/commit/408f919a055aca9ffd77be57461f6e7246329ad8))
+* **routing:** ルーティング決定型とfactoryを追加 ([981c948](https://github.com/yohi/justice/commit/981c9488c1b1bd0f71e4ac12781d4aa7b0578a0d))
+* **routing:** 実行ロール分類器を追加 ([899a9b2](https://github.com/yohi/justice/commit/899a9b23878e6e0414113ac806587b459c3c553a))
+
+
+### Bug Fixes
+
+* CodecovとSonarCloudの指摘を是正 ([eac0172](https://github.com/yohi/justice/commit/eac01721ec477fec0b614effdeddaf58208d7394))
+* **core:** extractPackageNameのサブパス付きspecifierの重複排除を修正 ([8114f54](https://github.com/yohi/justice/commit/8114f545219d21f9238cc06fb25c9f71e4540a32))
+* **core:** hasJusticeSpecifierInRawPluginArrayの誤検知とブロックコメント連結を修正 ([6083ce9](https://github.com/yohi/justice/commit/6083ce9e47baf59da7cfb192e324b1b27deba215))
+* **core:** isJusticeSpecifierの部分文字列マッチによる誤検知を修正 ([9593eb7](https://github.com/yohi/justice/commit/9593eb7aee71683c0fb5fb9647519de684a92462))
+* **core:** isJusticeSpecifierの部分文字列マッチによる誤検知を修正 ([88a860c](https://github.com/yohi/justice/commit/88a860c135350e3d64da376ad6a27a482edf4237))
+* **core:** justice_not_found_in_configのsourceを"merged"に修正 ([90a58a4](https://github.com/yohi/justice/commit/90a58a4d0672ffbeead9af9625e7458898b05c76))
+* **core:** SonarCloud指摘を修正 ([e0c8b71](https://github.com/yohi/justice/commit/e0c8b7192f133be28eeb0f6de39fb974a3bb25da))
+* **core:** stripCommentsの行コメント除去時の改行重複を修正 ([faec3c9](https://github.com/yohi/justice/commit/faec3c9bfc4b6739794857f284c89b7dc96b57f2))
+* ExecutionRoleClassifierの分類優先順位を設計に整合 ([3dd2bf7](https://github.com/yohi/justice/commit/3dd2bf734d8e219ab639c5a8ac831f064d509197))
+* ExecutionRoleClassifierの分類優先順位を設計に整合 ([3bbbcf0](https://github.com/yohi/justice/commit/3bbbcf05dd9e6fc153e105fb09aa9640be455d3e))
+* **routing:** deepとarchitectureの実行ロール分類を追加 ([132cefd](https://github.com/yohi/justice/commit/132cefdef631a77957efbeec3094c310e99c96d6))
+* **routing:** guard unknown execution roles ([b0d9949](https://github.com/yohi/justice/commit/b0d994911e710dec4d207b200e3d498ee5f4bf61))
+* **routing:** TaskPackagerの配列aliasを防止 ([579a94e](https://github.com/yohi/justice/commit/579a94e077b0cab3a3f8c2e5e4b0535a805f2284))
+* **routing:** WorkflowRouterのController解決とprototype保護を修正 ([61b523f](https://github.com/yohi/justice/commit/61b523f38bae3ee0257e7df0175824c2bb0f78b5))
+* **routing:** マージ競合とカテゴリーワイヤー契約を解消 ([679f749](https://github.com/yohi/justice/commit/679f7493aa1eb4e9f993886b5db802ff25eae8bd))
+* **routing:** 実行ロール分類器の公開とテストを補完 ([596c976](https://github.com/yohi/justice/commit/596c976541b124d88ede89b6837debb2c3305089))
+* **routing:** 新しい委譲契約へ移行 ([b260051](https://github.com/yohi/justice/commit/b26005168f11c384605f3ee63b2d4ca0335a0437))
+* ルーティングと完了検知のレビュー指摘を修正 ([9057bb6](https://github.com/yohi/justice/commit/9057bb6cc119c3594f9a191861e61d2439e921d0))
+* レビュー指摘の一時ファイル後始末とセッション破棄・Telemetry/Wisdom処理を是正 ([1bc4389](https://github.com/yohi/justice/commit/1bc43895d934d518a475d11fced19c93b01be328))
+* レビュー指摘の永続化とTelemetry処理を是正 ([02fdcd5](https://github.com/yohi/justice/commit/02fdcd5cdd5bf3366f5c5b716f0e7c792b20bd62))
+* 並行永続化のclaim所有権を検証 ([b1ebbf9](https://github.com/yohi/justice/commit/b1ebbf96641257cd1f4658e16a12ebb76ea5f259))
+* 実行ロール分類のキーワード境界を修正 ([6cfde58](https://github.com/yohi/justice/commit/6cfde5808d0547c15d4c01b96a38874d75f71876))
+* 承認レビュー統合テストのCI timeoutを調整 ([2d62b2e](https://github.com/yohi/justice/commit/2d62b2ea5fca9313989dfe1609a3bac971a450b3))
+* 設計乖離に対するWisdom永続化と診断経路を是正 ([b236317](https://github.com/yohi/justice/commit/b23631760c3b70e543a8a5e89da47db5cd0cf3d6))
+* 設計乖離に対するWisdom永続化と診断経路を是正 ([ce9d664](https://github.com/yohi/justice/commit/ce9d66474a636986841a2d65857c1920511abc24))
+* 追加レビュー指摘の安全性とTelemetry処理を是正 ([8639681](https://github.com/yohi/justice/commit/86396817e1dd8838413e51774c1853139fa34878))
+
 ## [3.0.0](https://github.com/yohi/justice/compare/v2.7.0...v3.0.0) (2026-08-06)
 
 
