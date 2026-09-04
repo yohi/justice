@@ -342,6 +342,16 @@ export type ReviewWorkerResultV1 = {
   readonly findings: ReadonlyArray<ReviewItem>;
 };
 
+export type ObservedReviewExecutionV1 = {
+  readonly schemaVersion: 1;
+  readonly provenance: "observed";
+  readonly reviewExecutionEventId: string;
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly childSessionId: string;
+  readonly correlation: ReviewCorrelation;
+};
+
 export type ReviewKind = "task-review" | "final-review";
 
 export type ReviewSource = "sp-review" | "sp-final-review";
@@ -381,6 +391,7 @@ export type TaskReviewArtifactV1 = {
   readonly reviewKind: "task-review";
   readonly reviewSource: "sp-review";
   readonly correlation: TaskReviewCorrelation;
+  readonly observedExecution: ObservedReviewExecutionV1;
   readonly complete: boolean;
   readonly findings: ReadonlyArray<ReviewItem>;
 };
@@ -390,21 +401,37 @@ export type FinalReviewArtifactV1 = {
   readonly reviewKind: "final-review";
   readonly reviewSource: "sp-final-review";
   readonly correlation: FinalReviewCorrelation;
+  readonly observedExecution: ObservedReviewExecutionV1;
   readonly complete: boolean;
   readonly findings: ReadonlyArray<ReviewItem>;
 };
 
 export type ReviewArtifactV1 = TaskReviewArtifactV1 | FinalReviewArtifactV1;
+
+export type CleanReviewArtifactV1 = ReviewArtifactV1 & {
+  readonly complete: true;
+  readonly findings: readonly [];
+};
+
+export type ReviewArtifactWithFindingsV1 = ReviewArtifactV1 & {
+  readonly complete: true;
+  readonly findings: readonly [ReviewItem, ...ReviewItem[]];
+};
+
+export type IncompleteReviewArtifactV1 = ReviewArtifactV1 & {
+  readonly complete: false;
+};
 ```
 
 - `sp-review` / `sp-final-review` worker の起動は Justice ではなく Controller (Atlas) が `task(category="sp-review" | "sp-final-review")` として行う。
 - Justice は `ReviewPending` / `FinalReviewPending` 状態の提示と、review worker 実行結果の観測を行う。
 - review worker と元 task / plan との correlation は内部的に `ReviewCorrelation` で保持する。`TaskReviewCorrelation` は `taskExecutionRef` を用いて review と実装 attempt を一対一に紐付ける。
-- `ReviewWorkerResultV1` は review worker が生成する **untrusted reviewer output** である。Justice は `TaskCallBinding` 由来の trusted metadata と `ReviewWorkerResultV1` から権威付けされた `ReviewArtifactV1` を組み立てる。
-- `ReviewArtifactV1` を mandatory review 完了の authoritative record とする。`ReviewArtifactV1` は Justice が `ReviewWorkerResultV1` + `TaskCallBinding` 由来の trusted metadata から組み立てる。`complete: true + findings: []` を clean review の完了証拠とする。
+- `ReviewWorkerResultV1` は review worker が生成する **untrusted reviewer output** である。Justice は `TaskCallBinding` 由来の trusted metadata、worker output、および独立して観測した `ObservedReviewExecutionV1` から `ReviewArtifactV1` を組み立てる。
+- `ObservedReviewExecutionV1` は matching `PostToolUse` と child-session 上の review worker 実行観測の両方から Justice が生成する。`TaskCallBinding` や artifact path の一致だけでは代用できない。観測を確立できない場合、artifact は authoritative にせず mandatory review completion と Acceptance を blocked にする。
+- `ReviewArtifactV1` を mandatory review 完了の authoritative record とする。`CleanReviewArtifactV1`（`complete: true` かつ `findings: []`）だけを clean review の完了証拠とする。`ReviewArtifactWithFindingsV1` は review が完了して finding がある証拠であり rework へ、`IncompleteReviewArtifactV1` は review 未完了として blocked へ進める。
 - CodeRabbit / Greptile 等の external review は observed-review 系（例：`.justice/reviews/external-*.jsonl` または `review_observed` event）として取り扱い、mandatory `sp-review` / `sp-final-review` の完了証拠にはならない。
 - `ReviewArtifactV1` の Justice 到達経路（transport）は、Phase 3 では **B（JSON artifact file）に固定する**。reviewer が所定の JSON artifact file を書き、Justice が `TaskCallBinding` の trusted metadata と合わせて読み取る。typed PostToolUse payload 等の alternative は Phase 3a transport spike で検証し、達成できれば段階的に導入する。
-- Trust boundary: `reviewSource` / `reviewKind` / `correlation` などの envelope metadata は `TaskCallBinding` 由来の trusted 情報を使用し、reviewer 自己申告を権威付けしない。worker が供給してよいのは `ReviewWorkerResultV1.complete` と `ReviewWorkerResultV1.findings` のみである。`ReviewArtifactV1` の組み立ては Justice が行う。
+- Trust boundary: `reviewSource` / `reviewKind` / `correlation` などの envelope metadata は `TaskCallBinding` 由来の trusted 情報を使用し、reviewer 自己申告を権威付けしない。worker が供給してよいのは `ReviewWorkerResultV1.complete` と `ReviewWorkerResultV1.findings` のみである。`ObservedReviewExecutionV1` は review worker が実行されたことだけを証明し、finding の意味内容を検証するものではない。`ReviewArtifactV1` の組み立てと variant の runtime validation は Justice が行う。
 
 ### 4.6 Gate Verdict
 
@@ -413,7 +440,7 @@ export type GateScope = "task" | "plan";
 
 export type GateTrigger =
   | { readonly scope: "task"; readonly on: "task_complete" | "tool_observed" }
-  | { readonly scope: "plan"; readonly on: "final_review_complete" | "plan_state_reached" };
+  | { readonly scope: "plan"; readonly on: "final_review_complete" };
 
 export type GateVerdict = "PASS" | "WARN" | "FAIL";
 
@@ -513,6 +540,8 @@ export type ReviewDispatchState = "pending" | "claimed" | "terminal";
 
 export type ReviewDispatchTerminalReason =
   | "completed"
+  | "completed_with_findings"
+  | "review_incomplete"
   | "review_execution_failed"
   | "lost_conclusive"
   | "cancelled";
@@ -525,6 +554,21 @@ export type ReviewDispatchSlotKey = {
 export type ReviewArtifactConsumption = {
   readonly artifactId: string;
   readonly digest: string;
+};
+
+export type ReviewCompletionStaging = {
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactConsumption: ReviewArtifactConsumption;
+  readonly reviewArtifact: ReviewArtifactV1;
+  readonly observedExecution: ObservedReviewExecutionV1;
+};
+
+export type ReviewCompletionStagingRecord = {
+  readonly recordType: "observation";
+  readonly kind: "review_completion_staged";
+  readonly parentSessionId: string;
+  readonly staging: ReviewCompletionStaging;
 };
 
 type ReviewDispatchTransitionBase = {
@@ -553,13 +597,32 @@ export type ReviewDispatchTransitionRecord =
       readonly callId: string;
       readonly terminalReason: "completed";
       readonly artifactConsumption: ReviewArtifactConsumption;
-      readonly reviewArtifact: ReviewArtifactV1;
+      readonly reviewArtifact: CleanReviewArtifactV1;
     })
   | (ReviewDispatchTransitionBase & {
       readonly from: "claimed";
       readonly to: "terminal";
       readonly callId: string;
-      readonly terminalReason: Exclude<ReviewDispatchTerminalReason, "completed">;
+      readonly terminalReason: "completed_with_findings";
+      readonly artifactConsumption: ReviewArtifactConsumption;
+      readonly reviewArtifact: ReviewArtifactWithFindingsV1;
+    })
+  | (ReviewDispatchTransitionBase & {
+      readonly from: "claimed";
+      readonly to: "terminal";
+      readonly callId: string;
+      readonly terminalReason: "review_incomplete";
+      readonly artifactConsumption: ReviewArtifactConsumption;
+      readonly reviewArtifact: IncompleteReviewArtifactV1;
+    })
+  | (ReviewDispatchTransitionBase & {
+      readonly from: "claimed";
+      readonly to: "terminal";
+      readonly callId: string;
+      readonly terminalReason: Exclude<
+        ReviewDispatchTerminalReason,
+        "completed" | "completed_with_findings" | "review_incomplete"
+      >;
       readonly artifactConsumption?: ReviewArtifactConsumption;
     })
   | (ReviewDispatchTransitionBase & {
@@ -578,7 +641,7 @@ export type ReviewDispatchSlot = {
 ```
 
 - P0 では `ReviewDispatchId` を導入しない。slot の identity は `parentSessionId` と canonical な `ReviewCorrelation` の組み合わせであり、`transitionId` は個々の durable record の event identity に限る。
-- `ReviewDispatchTransitionRecord` は review dispatch state の durable SSOT である。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`terminalReason: "completed"` の terminal record は `artifactConsumption` と組み立て済み `ReviewArtifactV1` を必須とし、restart 後に `review_observed` と Acceptance の入力を再構築できるようにする。
+- `ReviewDispatchTransitionRecord` と `ReviewCompletionStagingRecord` は review dispatch state の durable SSOT である。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこれらの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`terminalReason: "completed"` は `artifactConsumption` と組み立て済み `CleanReviewArtifactV1` を必須とする。findings を持つ完了 review は `completed_with_findings`、未完了 result は `review_incomplete` とし、いずれも artifact を durable に保持して restart 後の rework / blocked 判定を再構築できるようにする。
 - `null → pending` は directive 発行前、`pending → claimed` は PreToolUse の atomic claim、`claimed → terminal` は matching PostToolUse または conclusive な失敗を観測した後にだけ許可する。`terminal` record は変更・削除・再利用しない。
 - retry は terminal slot を更新せず、新しい `ReviewCorrelation`（同一 Task attempt の場合は増分した `reviewRound`）で新しい `null → pending` record を発行する。
 
@@ -604,10 +667,13 @@ export type ReviewDispatchSlot = {
    は成立させず、protocol violation / binding failure を advisory として記録する。claim
    失敗時は pending slot を消費せず、同じ slot の retry は durable state を再確認してから行う。
 5. matching `PostToolUse` は、parent session、`callId`、purpose、trusted correlation、必要な
-   child-session binding がすべて一致する場合だけ受理する。artifact の consume marker、
+   child-session binding、`ObservedReviewExecutionV1` がすべて一致する場合だけ受理する。Justice は
+   terminalization 前に `ReviewCompletionStagingRecord` として `ReviewCompletionStaging` を durable に記録する。artifact の consume marker、
    `review_observed`、組み立て済み `ReviewArtifactV1`、`claimed → terminal` transition は同一の
-   durable commit とし、commit 前に Acceptance の入力へ結果を渡さない。commit 失敗時は slot を
-   `claimed` のまま保持し、Acceptance を blocked として再発行や再消費を行わない。
+   durable commit とし、commit 前に Acceptance の入力へ結果を渡さない。最終 commit が失敗した場合は
+   slot を `claimed` のまま保持して Acceptance を blocked にするが、staging 済みの同じ
+   `callId`、correlation、artifact ID / digest を使う recovery finalization だけを許可する。新しい
+   dispatch、worker output の再読、または重複した artifact consumption は行わない。
 6. matching `PostToolUse` が review task の終端を確定した後に slot を terminal にする。
    同一 `TaskExecutionRef` の transport / reviewer execution retry は新しい directive を
    発行して `reviewRound` を 1 増分し、implementation rework は新しい
@@ -630,11 +696,12 @@ artifact reservation の SSOT にはしない。
 | restart / replay 後の状態 | 許可される復旧動作 | 禁止される動作 |
 |---|---|---|
 | `pending` | 同じ `ReviewCorrelation` の `ReviewRequiredDirective` を再発行する。`reviewRound` は増分しない。 | 新しい slot、binding、`callId`、review round を作る |
-| `claimed` | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `claimed`（staging なし） | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `claimed`（completion staging あり） | staging の `callId`、correlation、artifact ID / digest、artifact を再検証し、同じ terminalization commit を idempotent に再試行する。成功時だけ `review_observed`、terminal transition、Acceptance 入力を反映する。 | 新しい dispatch / claim / artifact reservation、別 artifact の消費、worker output の再読・再生成 |
 | `terminal` | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行 |
 
 - `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance を blocked にする。
-- `claimed` の復元後に artifact が存在していても、matching `PostToolUse` と durable consume protocol が成立するまで読み取らない。consume marker が既にある場合は path を再読せず、terminal projection を authoritative とする。
+- `claimed` の復元後に artifact が存在していても、matching `PostToolUse` と durable consume protocol が成立するまで読み取らない。completion staging がある場合は、staging 済みの artifact ID / digest と一致することだけを確認して finalization を再試行し、worker output を再読しない。consume marker が既にある場合は path を再読せず、terminal projection を authoritative とする。
 - `callId`、parent session、purpose、trusted correlation、child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
 - log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion は blocked にする。
 
@@ -956,7 +1023,7 @@ review finds issue
 
 - `sp-review` / `sp-final-review` の起動主体は Controller。
 - Justice は `ReviewRequiredDirective` の生成と、review correlation / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果の観測、および `ReviewArtifactV1` の組み立てを行う。
-- `ReviewArtifactV1`（`complete: true + findings: []`）のみを mandatory review 完了の authoritative evidence とする。
+- observed review execution provenance を持つ `CleanReviewArtifactV1`（`complete: true + findings: []`）のみを mandatory review clean completion の authoritative evidence とする。
 - external review (CodeRabbit / Greptile) は補助情報であり、mandatory review 完了の証拠にはならない。
 
 ---
@@ -969,7 +1036,7 @@ review finds issue
 |---|---|
 | `tests/core/controller-routing.test.ts` | desired/actual evaluation、applied/mismatch/unapplied、observation source 優先 |
 | `tests/core/plan-authorization.test.ts` | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否 |
-| `tests/core/plan-fingerprint.test.ts` | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Error annotation migration |
+| `tests/core/plan-fingerprint.test.ts` | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化 |
 | `tests/core/routing-decision.test.ts` | 7→7 全射、deep→sp-deep、architecture→sp-architecture、低 category へのパス不存在 |
 | `tests/core/task-lifecycle.test.ts` | WorkerReported≠accepted、declared-only で Gate 不成立、Gate FAIL→rework、Final Review 未了で PlanComplete=false、attempt scoping で古い evidence の再利用を防ぐ |
 | `tests/core/review-dispatch-state.test.ts` | durable pending / claimed / terminal、CAS claim、restart recovery、conclusive loss、stale PostToolUse、terminal tombstone の再利用禁止 |
@@ -985,7 +1052,7 @@ review finds issue
 - active binding から `PlanBridge` の active plan が復元されること。
 - external review だけでは `sp-review` / `sp-final-review` 要件を満たさないこと。
 - review task と implementation task の correlation / `TaskCallPurpose` / `TaskExecutionRef` が正しく機能すること。
-- `ReviewArtifactV1.complete: true + findings: []` を clean review 完了証拠として扱うこと。
+- observed review execution provenance を持つ `CleanReviewArtifactV1` だけを clean review 完了証拠として扱うこと。
 - persisted evidence が attempt-scoped（`TaskExecutionRef` / `FinalizationAttemptId`）であること。
 - OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
 - review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
@@ -997,13 +1064,16 @@ review finds issue
 - restart / replay 後に `pending` は同じ directive を再発行でき、`claimed` は binding / reservation を復元するだけで directive を再発行しないこと。
 - restart 後に `claimed` の終端が不明な場合は retry せず Acceptance を blocked にし、conclusive な lost の場合だけ terminalize 後に増分した `reviewRound` を発行すること。
 - artifact consume marker と dispatch terminalization が一つの durable commit として復元され、consume 済み artifact が再読されないこと。
+- terminalization commit の失敗後、durable completion staging が同じ `callId`、correlation、artifact ID / digest、observed provenance で一度だけ idempotent に再試行され、成功前に Acceptance 入力へ反映されないこと。
 - old `callId` の stale `PostToolUse` が新しい review round の binding、artifact、Gate、Acceptance に影響しないこと。
 - attempt-aware duplicate suppression が機能すること。
 - acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
 - 同一 `TaskExecutionRef` の review transport / reviewer execution retry では `reviewRound` が増分し、implementation rework で新しい `TaskExecutionRef` が発行された場合は `reviewRound=1` に戻ること。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
-- Controller Routing で Core が Atlas を返し Runtime が Sisyphus のままなら `routingStatus = mismatch` であること。
-- fingerprint が fenced code block 内部を正規化せず、legacy Error annotation 追加で変化すること。
+- Controller Routing で Core が `atlas` を返し Runtime が `sisyphus` のままなら `routingStatus = mismatch` であること。
+- fingerprint が fenced code block 内部を正規化しないこと。
+- provenance が確認できる Justice-generated legacy Error annotation では fingerprint が変化しないこと。
+- manual または provenance 不明の legacy Error annotation では fingerprint が変化すること。
 - Gate 評価が lifecycle state = `gate_pending` に一本化され、Review 前に Gate Decision が発生しないこと。
 
 ### 6.3 品質ゲート
@@ -1126,7 +1196,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
 - **Task Attempt**: `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行し、`in_progress` 遷移時に新規 attempt を作成する。Gate は current attempt の Evidence / Review のみを評価する。rework 時は新しい attemptId を発行する。
 - **Finalization Attempt**: `FinalizationAttemptId` / `finalReviewRound` を導入し、`final_rework_required → final_review_pending` 遷移時には新しい `finalizationAttemptId`（新 UUID）と増分した `finalReviewRound` を両方更新する。Final Gate は current finalization attempt の evidence / review のみを評価する。
-- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果の観測、`ReviewArtifactV1` 組み立てを担当。`ReviewArtifactV1.complete: true + findings: []` のみを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
+- **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果と observed review execution の観測、`ReviewArtifactV1` 組み立てを担当。observed review execution provenance を持つ `CleanReviewArtifactV1`（`complete: true + findings: []`）だけを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、Phase 3a transport spike で typed transport の導入を検証する。
 - **Review Dispatch**: P0 では `ReviewDispatchId` を追加せず、`parentSessionId + ReviewCorrelation` を slot identity とする。`pending` transition を directive 前に durable commit し、PreToolUse の `pending → claimed` CAS commit に `TaskCallBinding` と `ReviewArtifactReservation` を含める。restart 後の `pending` は同じ directive のみ再発行でき、`claimed` は call を再発行せず、terminal tombstone と stale event rejection を維持する。
 - **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま acceptance / completion blocked。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
 - **Traceability**: 本設計書の修正内容（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化、attempt-scoped acceptance、Review Artifact transport、child-session correlation など）は `REQUIREMENTS_2026-09-03.md` に反映済みである。

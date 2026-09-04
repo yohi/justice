@@ -121,10 +121,10 @@ Workflow 全体を進行・統括する Agent。
 
 | Superpowers workflow | Controller |
 |---|---|
-| brainstorming | Sisyphus |
-| writing-plans | Sisyphus |
-| subagent-driven-development | Atlas |
-| executing-plans | Sisyphus |
+| brainstorming | sisyphus |
+| writing-plans | sisyphus |
+| subagent-driven-development | atlas |
+| executing-plans | sisyphus |
 
 ### Worker
 
@@ -260,17 +260,20 @@ Justice は Superpowers workflow から Controller を決定できなければ�
 
 ```text
 brainstorming
-    → Sisyphus
+    → sisyphus
 
 writing-plans
-    → Sisyphus
+    → sisyphus
 
 subagent-driven-development
-    → Atlas
+    → atlas
 
 executing-plans
-    → Sisyphus
+    → sisyphus
 ```
+
+`sisyphus` と `atlas` は Runtime に渡す canonical controller ID である。表示名が必要な場合だけ、
+それぞれ Sisyphus、Atlas と表記する。
 
 ### JUS-P0-01-02
 
@@ -358,25 +361,25 @@ Runtime の制約により Controller を適用できない場合、Justice は 
 
 ```text
 brainstorming
-→ desiredController = Sisyphus
+→ desiredController = sisyphus
 → runtime routing が実際に適用される
 
 writing-plans
-→ desiredController = Sisyphus
+→ desiredController = sisyphus
 
 subagent-driven-development
-→ desiredController = Atlas
+→ desiredController = atlas
 
 executing-plans
-→ desiredController = Sisyphus
+→ desiredController = sisyphus
 ```
 
 さらに、
 
 ```text
-Core が Atlas を返した
+Core が atlas を返した
 BUT
-Runtime は Sisyphus のまま
+Runtime は sisyphus のまま
 ```
 
 の場合、
@@ -874,32 +877,35 @@ Gate
 
 # 8. WorkerReported と TaskAccepted の分離
 
-Task lifecycle を最低限以下として扱う。
+永続化およびテストで使用する canonical state enum は `TaskProgressState` とする。表示名は
+`Authorized` → `authorized`、`TaskInProgress` → `in_progress`、`WorkerReported` →
+`worker_reported`、`TaskAccepted` → `accepted` に対応する。その他の状態も同じく wire value を
+使用し、表示名を persisted value として保存してはならない。
 
 ```text
-Authorized
+authorized
     ↓
-TaskInProgress
+in_progress
     ↓
-WorkerReported
+worker_reported
     ↓
-EvidencePending
+evidence_pending
     ↓
-ReviewPending
+review_pending
     ↓
-GatePending
+gate_pending
     ↓
-TaskAccepted
+accepted
 ```
 
 失敗時は、
 
 ```text
-GatePending
+gate_pending
     ↓
-ReworkRequired
+rework_required
     ↓
-TaskInProgress
+in_progress
 ```
 
 へ戻る。
@@ -1148,21 +1154,24 @@ P0 では `ReviewDispatchId` を追加しない。slot identity は
 `parentSessionId + ReviewCorrelation` とし、`transitionId` は durable record の event identity
 に限る。`ReviewDispatchTransitionRecord` が review dispatch state の SSOT であり、
 `SessionStateProvider` などの in-memory cache は replay で再構築する projection に限る。
-`terminalReason = completed` の terminal record には `artifactConsumption` と Justice が組み立てた
-`ReviewArtifactV1` を必須とし、restart 後に `review_observed` と Acceptance の入力を再構築できる
-ようにする。失敗 terminal は `ReviewArtifactV1` を持たず、Acceptance を blocked とする。
+`terminalReason = completed` の terminal record は、`artifactConsumption`、observed review execution、
+Justice が組み立てた `complete: true` かつ findings が空の clean `ReviewArtifactV1` を必須とする。
+findings を持つ完了 review と未完了 review は別の terminal reason にし、いずれも durable artifact を
+保持して restart 後の rework / blocked 判定を再構築する。review execution failure の terminal は
+`ReviewArtifactV1` を持たず、Acceptance を blocked とする。
 
 以下を restart / replay と claim の規範とする。
 
 1. `null → pending` transition を durable commit してから `ReviewRequiredDirective` を inject する。commit に失敗した場合は mandatory directive、binding、artifact reservation を作成せず、Runtime は fail-open で継続するが Acceptance / Plan completion は blocked とする。
 2. PreToolUse では、期待する parent session、review kind、category に一致する pending slot がちょうど1件ある場合だけ `pending → claimed` を atomic claim する。claim、`TaskCallBinding`、`ReviewArtifactReservation` は同一の durable commit とし、commit 成功前は authoritative として扱わない。
-3. matching `PostToolUse` の binding 検証、artifact consume marker、`review_observed`、Justice が組み立てた `ReviewArtifactV1`、`claimed → terminal` transition は一つの durable commit とする。commit 前に Review、Gate、Acceptance へ結果を渡さず、commit 失敗時は `claimed` を保持して再発行・再消費しない。
+3. matching `PostToolUse` は `TaskCallBinding` に加え、child-session 上で review worker が実行されたことを示す observed provenance を検証する。terminalization 前に、同じ `callId`、correlation、artifact ID / digest、artifact、observed provenance を持つ completion staging を durable に記録する。artifact consume marker、`review_observed`、Justice が組み立てた `ReviewArtifactV1`、`claimed → terminal` transition は一つの durable commit とする。commit 前に Review、Gate、Acceptance へ結果を渡さない。commit 失敗時は `claimed` を保持し、staging と一致する artifact だけで同じ finalization commit を idempotent に再試行する。新しい dispatch、再 claim、別 artifact の消費は行わない。
 4. restart / replay 後の処理は以下とする。
 
 | 状態 | 許可される復旧 | 禁止される復旧 |
 |---|---|---|
 | `pending` | 同じ correlation の directive を再発行する。`reviewRound` は増分しない。 | 新しい slot、binding、`callId`、review round の作成 |
-| `claimed` | 同じ `callId`、correlation、binding、artifact reservation を復元して matching PostToolUse を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `claimed`（staging なし） | 同じ `callId`、correlation、binding、artifact reservation を復元して matching PostToolUse を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| `claimed`（completion staging あり） | staging と同じ `callId`、correlation、artifact ID / digest、observed provenance を再検証し、同じ finalization commit を idempotent に再試行する。 | 新しい dispatch / claim / reservation、別 artifact の消費、worker output の再読 |
 | `terminal` | terminal tombstone を保持し、retry 時だけ新しい correlation の `pending` slot を作る。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行 |
 
 5. `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、同一 Task attempt の retry では `reviewRound` を増分する。終端が不明な場合は `claimed` のまま Acceptance を blocked とする。
@@ -1173,11 +1182,14 @@ P0 では `ReviewDispatchId` を追加しない。slot identity は
 mandatory `sp-review` / `sp-final-review` は Controller が起動し、
 `run_in_background = false` の synchronous execution に固定する。review worker が生成する
 `ReviewWorkerResultV1` は untrusted output とし、Justice が `TaskCallBinding` 由来の
-trusted metadata と組み合わせて `ReviewArtifactV1` を組み立てる。
+trusted metadata と独立した observed review execution provenance を組み合わせて
+`ReviewArtifactV1` を組み立てる。観測を確立できない場合、worker output は authoritative にせず
+mandatory review completion と Acceptance / Plan completion を blocked とする。
 
-`ReviewArtifactV1` の `complete: true` かつ `findings: []` のみを mandatory review completion
-の authoritative evidence とする。CodeRabbit / Greptile 等の external review は補助情報で
-あり、mandatory review completion の代替にはならない。
+observed review execution provenance を持つ `ReviewArtifactV1` のうち、`complete: true` かつ
+`findings: []` の clean artifact のみを mandatory review clean completion の authoritative evidence
+とする。CodeRabbit / Greptile 等の external review は補助情報であり、mandatory review completion
+の代替にはならない。
 
 Phase 3 の transport は JSON artifact file に固定する。Justice は PreToolUse で
 `ReviewArtifactReservation` を生成し、artifact path の衝突を検査する。安全な path を
@@ -1297,22 +1309,22 @@ PlanAuthorized
       ↓
 ┌─────────────────────────────┐
 │                             │
-│ TaskAuthorized              │
+│ authorized                  │
 │      ↓                      │
-│ TaskInProgress              │
+│ in_progress                 │
 │      ↓                      │
-│ WorkerReported              │
+│ worker_reported             │
 │      ↓                      │
-│ EvidencePending             │
+│ evidence_pending            │
 │      ↓                      │
-│ ReviewPending               │
+│ review_pending              │
 │      ↓                      │
-│ GatePending                 │
+│ gate_pending                │
 │      ↓                      │
 │ ┌───────────────┐           │
-│ │ PASS          │ FAIL      │
+│ │ PASS       WARN / FAIL    │
 │ ↓               ↓           │
-│ TaskAccepted  ReworkRequired│
+│ accepted      rework_required│
 │ ↓               │           │
 │ Next Task ←─────┘           │
 │                             │
@@ -1348,7 +1360,7 @@ brainstorming
       ↓
 Justice workflow semantics
       ↓
-Controller = Sisyphus
+Controller = sisyphus
 
 
 Superpowers
@@ -1356,7 +1368,7 @@ writing-plans
       ↓
 Justice plan tracking
       ↓
-Controller = Sisyphus
+Controller = sisyphus
 
 
 Superpowers
@@ -1364,7 +1376,7 @@ subagent-driven-development
       ↓
 Justice plan authorization
       ↓
-Controller = Atlas
+Controller = atlas
 
 
 Superpowers
@@ -1446,7 +1458,7 @@ Agent output は Evidence の一部にはなり得るが、それだけで Gate 
 
 実装後、以下は常に成立しなければならない。
 
-### INV-01
+## INV-01
 
 ```text
 Controller intent != Worker intent
@@ -1454,7 +1466,7 @@ Controller intent != Worker intent
 
 Controller routing と Worker routing を混同しない。
 
-### INV-02
+## INV-02
 
 ```text
 Justice worker decision ends at category
@@ -1462,7 +1474,7 @@ Justice worker decision ends at category
 
 Justice は Worker model/provider を決定しない。
 
-### INV-03
+## INV-03
 
 ```text
 Plan approval survives multiple tasks
@@ -1470,7 +1482,7 @@ Plan approval survives multiple tasks
 
 Plan authorization は one-shot ではない。
 
-### INV-04
+## INV-04
 
 ```text
 Semantic plan mutation invalidates approval
@@ -1478,7 +1490,7 @@ Semantic plan mutation invalidates approval
 
 承認後の Plan 意味変更を検出する。
 
-### INV-05
+## INV-05
 
 ```text
 high complexity never silently downgrades
@@ -1486,7 +1498,7 @@ high complexity never silently downgrades
 
 deep / architecture 等が low category へ silent downgrade されない。
 
-### INV-06
+## INV-06
 
 ```text
 WorkerReported != TaskAccepted
@@ -1494,7 +1506,7 @@ WorkerReported != TaskAccepted
 
 Worker の完了報告だけでは Task completion としない。
 
-### INV-07
+## INV-07
 
 ```text
 Declared evidence never satisfies required gates alone
@@ -1502,7 +1514,7 @@ Declared evidence never satisfies required gates alone
 
 自己申告だけでは Gate PASS としない。
 
-### INV-08
+## INV-08
 
 ```text
 Gate PASS precedes progress completion
@@ -1510,7 +1522,7 @@ Gate PASS precedes progress completion
 
 TaskAccepted より先に Plan を完了状態へ変更しない。
 
-### INV-09
+## INV-09
 
 ```text
 Final Review precedes Plan Complete
@@ -1518,7 +1530,7 @@ Final Review precedes Plan Complete
 
 Final Review / Final Gate 前に Plan 全体を Complete としない。
 
-### INV-10
+## INV-10
 
 ```text
 Fail-open execution != fail-open acceptance
@@ -1526,7 +1538,7 @@ Fail-open execution != fail-open acceptance
 
 内部障害時に Runtime を継続できても、未検証状態を Accepted / Verified と偽らない。
 
-### INV-11
+## INV-11
 
 ```text
 TaskCallPurpose separates implementation, task_review, final_review
@@ -1534,7 +1546,7 @@ TaskCallPurpose separates implementation, task_review, final_review
 
 `sp-review` / `sp-final-review` の実行を通常の implementation 完了と混同しない。
 
-### INV-12
+## INV-12
 
 ```text
 Terminal authorization states are not resurrected
@@ -1543,7 +1555,7 @@ Terminal authorization states are not resurrected
 `invalidated` / `released` の Authorization を、同じ `authorizationId` のまま
 `active` に戻さない。
 
-### INV-13
+## INV-13
 
 ```text
 PostToolUse side effects are processed transactionally
@@ -1552,7 +1564,7 @@ PostToolUse side effects are processed transactionally
 Evidence、Review、Gate、Acceptance、Progress update の side-effecting handlers を
 `Promise.all` で並列実行しない。Acceptance 後にのみ Progress update へ進める。
 
-### INV-14
+## INV-14
 
 ```text
 Evidence, Review, Gate, and Acceptance are attempt-scoped
@@ -1561,7 +1573,7 @@ Evidence, Review, Gate, and Acceptance are attempt-scoped
 各判定を current `TaskExecutionRef` または current `FinalizationAttempt` に厳密に
 束縛し、過去の attempt の証拠を再利用しない。
 
-### INV-15
+## INV-15
 
 ```text
 Mandatory review completion precedes artifact consumption
@@ -1570,7 +1582,7 @@ Mandatory review completion precedes artifact consumption
 mandatory `sp-review` / `sp-final-review` の完了を matching PostToolUse で観測する前に、
 その review artifact を authoritative record として消費しない。
 
-### INV-16
+## INV-16
 
 ```text
 Review dispatch binding is session-scoped and atomically claimed
@@ -1579,7 +1591,7 @@ Review dispatch binding is session-scoped and atomically claimed
 同一 parent session の outstanding mandatory review dispatch は高々 1 件とし、matching
 pending slot の atomic claim なしに `TaskCallBinding` や artifact reservation を作成しない。
 
-### INV-17
+## INV-17
 
 ```text
 Review dispatch state survives restart without reissuing claimed calls
@@ -1589,7 +1601,7 @@ Review dispatch state survives restart without reissuing claimed calls
 marker を durable log から復元できること。復元した `claimed` call は再発行せず、終端不明なら
 Acceptance を blocked とする。
 
-### INV-18
+## INV-18
 
 ```text
 Stale review completion cannot affect the current round
@@ -1605,10 +1617,10 @@ review round に影響させない。
 ## Controller Routing
 
 ```text
-brainstorming → Sisyphus
-writing-plans → Sisyphus
-SDD → Atlas
-executing-plans → Sisyphus
+brainstorming → sisyphus
+writing-plans → sisyphus
+SDD → atlas
+executing-plans → sisyphus
 ```
 
 Domain decision だけでなく Runtime 適用までテストする。
@@ -1773,8 +1785,8 @@ null → pending → claimed → terminal
 - `pending` transition が directive inject より先に durable commit されること。commit 失敗時は mandatory directive、binding、artifact reservation を作成せず、Runtime は継続して Acceptance を blocked にすること。
 - 同一 parent session の concurrent PreToolUse では exactly one claim だけが成功し、勝者の durable claim にのみ `callId`、trusted correlation、`TaskCallBinding`、`ReviewArtifactReservation` が bind されること。
 - restart / replay 後、`pending` は同じ correlation の directive のみ再発行し、`claimed` は同じ binding / reservation を復元して directive を再発行しないこと。
-- `claimed` の終端が不明な場合は自動 retry せず、conclusive な lost の場合だけ terminalize 後に同一 Task attempt の `reviewRound` を増分すること。
-- matching `PostToolUse` の artifact consume marker、`review_observed`、`ReviewArtifactV1`、`claimed → terminal` transition が一つの durable commit として扱われ、restart 後に Acceptance の入力を再構築できること。
+- `claimed` の終端が不明で completion staging がない場合は自動 retry せず、conclusive な lost の場合だけ terminalize 後に同一 Task attempt の `reviewRound` を増分すること。completion staging がある場合は、同じ artifact ID / digest と observed provenance を使う finalization commit の idempotent retry が成功した場合だけ Acceptance 入力へ反映すること。
+- completion staging が最終 terminalization commit より先に durable に記録されること。matching `PostToolUse` の artifact consume marker、`review_observed`、`ReviewArtifactV1`、`claimed → terminal` transition が一つの durable commit として扱われ、restart 後に Acceptance の入力を再構築できること。
 - old `callId` の stale `PostToolUse` が新しい review round の binding、artifact、Review、Gate、Acceptance に影響しないこと。
 
 ---
