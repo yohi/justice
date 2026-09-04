@@ -495,6 +495,44 @@ export type ReviewRequiredDirective = {
 - Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は `correlation.taskExecutionRef`、final-review 時は `correlation` に含まれる current finalization identity を使用する。
 - Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
 - PreToolUse で review task の `callId` を `TaskCallPurpose` / `ReviewCorrelation` と相関付け、PostToolUse で `ReviewWorkerResultV1` を観測し `ReviewArtifactV1` を組み立てる。
+
+#### 4.8.1 P0 Review Dispatch Binding Protocol
+
+P0 では `ReviewDispatchId` を追加せず、同一 parent session 内の review dispatch を直列化する。
+Justice は既存の durable lifecycle / decision log から復元可能な session-scoped trusted
+pending slot を保持し、slot には Controller が提示した値ではなく Justice が発行した
+`ReviewCorrelation` と期待する category / review kind を保持する。
+
+以下を P0 の binding protocol とする。
+
+1. 同一 parent session における outstanding mandatory review dispatch は高々 1 件とする。
+   outstanding には、directive 発行後で未 claim の状態と、claim 済みで matching
+   PostToolUse を待つ状態の両方を含める。複数の `ReviewPending` task が存在する場合も、
+   directive は queue 順に 1 件ずつ発行する。
+2. `task(category="sp-review")` は `task-review`、`task(category="sp-final-review")` は
+   `final-review` の候補としてだけ扱う。category は identity や認証情報ではない。
+   Controller が prompt / args に再提示した `correlation`、task ID、attempt ID、round は
+   trusted data として使用しない。
+3. PreToolUse では、同一 parent session かつ期待する review kind / category に一致する
+   pending slot が **ちょうど 1 件**ある場合に限り、その slot を原子的に claim する。
+   claim と同じ critical section で、slot の trusted correlation を `callId` に紐付けた
+   `TaskCallBinding` を作成し、`ReviewArtifactReservation` を生成する。
+4. pending slot が 0 件、複数件、kind / category 不一致、または atomic claim に失敗した
+   場合は review の `TaskCallBinding` と artifact reservation を作成しない。Runtime の
+   `task()` 実行は fail-open で継続するが、mandatory review の completion と Acceptance
+   は成立させず、protocol violation / binding failure を advisory として記録する。
+5. matching `PostToolUse` が review task の終端を確定した後に slot を terminal にする。
+   同一 `TaskExecutionRef` の transport / reviewer execution retry は新しい directive を
+   発行して `reviewRound` を 1 増分し、implementation rework は新しい
+   `TaskExecutionRef` と `reviewRound = 1` を発行する。Final Review の rework は既存の
+   `finalizationAttemptId` / `finalReviewRound` 規則に従う。
+
+この protocol では、category は server-side pending slot を選択するための必要条件に
+過ぎず、trusted identity は slot から `TaskCallBinding` へコピーされる correlation で
+ある。並列 review dispatch を許可する場合は、将来、Controller 境界を越えて安全に運搬し
+かつ server-side で検証できる専用 selector（例: `dispatchId` または capability）を別途
+定義する。prompt の自然言語や worker の自己申告を selector としてはならない。
+
 ### 4.9 Persisted Execution Binding
 
 ```ts
@@ -834,6 +872,9 @@ review finds issue
 - persisted evidence が attempt-scoped（`TaskExecutionRef` / `FinalizationAttemptId`）であること。
 - OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
 - review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
+- 同一 parent session の review dispatch が 1 件ずつ発行され、matching pending slot の atomic claim により `callId` と trusted correlation が一対一に bind されること。
+- pending slot が 0 件・複数件、または review kind / category が不一致の場合に review binding を作らず、Runtime は継続しながら mandatory Acceptance を blocked にすること。
+- Controller が prompt / args に再提示した correlation や category だけでは trusted identity を成立させないこと。
 - attempt-aware duplicate suppression が機能すること。
 - acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
 - 同一 `TaskExecutionRef` の review transport / reviewer execution retry では `reviewRound` が増分し、implementation rework で新しい `TaskExecutionRef` が発行された場合は `reviewRound=1` に戻ること。
@@ -905,6 +946,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-13 | JUS-P0-04 side-effecting handlers in `PostToolUse` are not dispatched via `Promise.all` |
 | INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttemptId`. |
 | INV-15 | Mandatory `sp-review` / `sp-final-review` completion must be observed before its `ReviewArtifact` is consumed. |
+| INV-16 | A parent session has at most one outstanding mandatory review dispatch, and binding claims are atomic. |
 
 ---
 
@@ -914,7 +956,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 |---|---|---|
 | Phase 1 | JUS-P0-03 Category Routing | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加 |
 | Phase 2 | JUS-P0-02 Plan Authorization | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装 |
-| Phase 3 | JUS-P0-04 Transactional Acceptance | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
+| Phase 3 | JUS-P0-04 Transactional Acceptance | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、session-scoped review dispatch binding。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
 | Phase 4 | JUS-P0-01 Controller Runtime Wiring | ControllerRoutingObservation 評価、pinned-command 雛形・doctor 検査、upstream 拡張要求の分離 |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
@@ -944,6 +986,8 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 19. Evidence / Review / Gate / Acceptance が current `TaskExecutionRef` / `FinalizationAttemptId` のみに束縛されている。
 20. `ReviewArtifactReservation` が unusable の場合も Runtime execution は fail-open で継続し、mandatory review completion / Acceptance は blocked になる。
 21. OmO child-session observation が `DelegatedExecutionBinding` により親 `ExecutionScope` へ相関付けられる。
+22. Review dispatch が parent session 単位で直列化され、matching pending slot の atomic claim なしに `TaskCallBinding` が作成されない。
+23. 同一 TaskExecutionRef の review retry では `reviewRound` が増分し、implementation rework では新しい TaskExecutionRef と `reviewRound = 1` が発行される。
 
 ---
 

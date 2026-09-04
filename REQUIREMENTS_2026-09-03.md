@@ -1049,6 +1049,13 @@ Final Review の rework 後に再試行する場合は、新しい
 `finalizationAttemptId` と増分した `finalReviewRound` を発行する。Final Gate は current
 finalization attempt の Evidence / Review のみを評価する。
 
+Task Review の dispatch は current `TaskExecutionRef` に属する `reviewRound` で区別する。
+初回 dispatch は `reviewRound = 1` とし、同一 attempt の review transport failure または
+reviewer execution failure の retry では `reviewRound` を 1 増分する。Review finding に
+よる implementation rework では新しい `attemptId` を発行し、その attempt の
+`reviewRound` は 1 に戻す。progress 更新や review 状態の投影だけでは
+`reviewRound` を変更しない。
+
 ## 8.3 Task Call Purpose と Child-Session Correlation
 
 `task()` 呼び出しは目的を明示的に区別する。
@@ -1074,6 +1081,35 @@ DelegatedExecutionBinding {
 `childSessionId` が取得できない、または親 scope へ相関付けられない場合、Runtime は
 fail-open で継続できるが、authoritative child evidence を成立させず、Task acceptance /
 Plan completion は blocked とする。
+
+## 8.3.1 Review Dispatch Binding Protocol
+
+P0 では review dispatch を parent session 内で直列化し、同一 parent session の
+outstanding mandatory review dispatch は高々 1 件とする。outstanding には、directive 発行
+後で未 claim の状態と、claim 済みで matching PostToolUse を待つ状態の両方を含める。
+複数の `ReviewPending` task が存在する場合、directive は queue 順に 1 件ずつ発行する。
+
+Justice は既存の durable lifecycle / decision log から復元可能な session-scoped trusted
+pending slot を保持する。slot には Justice が発行した `ReviewCorrelation` と期待する
+review kind / category を保持し、Controller が prompt / args に再提示した correlation、
+task ID、attempt ID、round は trusted data として扱わない。
+
+PreToolUse では、同一 parent session かつ期待する kind / category に一致する pending slot
+がちょうど 1 件ある場合に限り、その slot を原子的に claim する。claim と同じ critical
+section で、slot の trusted correlation を `callId` に紐付けた `TaskCallBinding` と
+`ReviewArtifactReservation` を生成する。`sp-review` は task review、
+`sp-final-review` は final review の候補を示すが、category 自体は identity や認証情報では
+ない。
+
+pending slot が 0 件、複数件、kind / category 不一致、または atomic claim に失敗した場合、
+review binding と artifact reservation を作成しない。Runtime の `task()` 実行は fail-open
+で継続する一方、mandatory review completion と Acceptance / Plan completion は blocked とし、
+binding failure を advisory として記録する。
+
+matching PostToolUse が review task の終端を確定した後に slot を terminal にする。並列 review
+dispatch を許可する場合は、将来、Controller 境界を越えて安全に運搬し server-side で検証
+できる専用 selector（例: `dispatchId` または capability）を別途定義する。prompt の自然言語
+や worker の自己申告を selector としてはならない。
 
 ## 8.4 Review Artifact の権威付けと Transport
 
@@ -1477,6 +1513,15 @@ Mandatory review completion precedes artifact consumption
 mandatory `sp-review` / `sp-final-review` の完了を matching PostToolUse で観測する前に、
 その review artifact を authoritative record として消費しない。
 
+### INV-16
+
+```text
+Review dispatch binding is session-scoped and atomically claimed
+```
+
+同一 parent session の outstanding mandatory review dispatch は高々 1 件とし、matching
+pending slot の atomic claim なしに `TaskCallBinding` や artifact reservation を作成しない。
+
 ---
 
 # 16. 必須テストシナリオ
@@ -1630,6 +1675,24 @@ OmO child session の tool/message observation が `DelegatedExecutionBinding` �
 
 ---
 
+## Review Dispatch Binding
+
+同一 parent session に複数の `ReviewRequiredDirective` を同時に outstanding にせず、review kind /
+category が一致する唯一の pending slot を PreToolUse で atomic claim してから
+`TaskCallBinding` と artifact reservation を生成すること。Controller が再提示した correlation
+や category だけを trusted identity として使用してはならない。binding を確立できない場合は
+Runtime を継続しても mandatory review completion と Acceptance / Plan completion は blocked
+となること。
+
+---
+
+## Task Review Round
+
+同一 `TaskExecutionRef` の review retry では `reviewRound` を増分し、implementation rework で
+新しい `TaskExecutionRef` が発行された場合は `reviewRound = 1` に戻ること。
+
+---
+
 # 17. 推奨実装境界
 
 Core と Adapter の責務を以下のように維持する。
@@ -1721,6 +1784,8 @@ Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため
 19. Evidence / Review / Gate / Acceptance が current attempt にのみ束縛されている。
 20. review artifact の衝突時も Runtime execution は継続し、Acceptance は blocked になる。
 21. OmO child-session observation が親の execution scope に相関付けられる。
+22. Review dispatch が parent session 単位で直列化され、matching pending slot の atomic claim なしに `TaskCallBinding` が作成されない。
+23. 同一 `TaskExecutionRef` の review retry では `reviewRound` が増分し、implementation rework では新しい `TaskExecutionRef` と `reviewRound = 1` が発行される。
 
 ---
 
