@@ -1,92 +1,75 @@
 # Semantic Control Plane Implementation Plan
 
-> **For agentic workers:** Execute this plan **inline in the current session**. Do NOT dispatch subagents (subagent-driven-development は本プランでは利用禁止)。Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute this plan inline in the current session. Do not dispatch subagents. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the Justice v4.0.0 Semantic Control Plane (JUS-P0-01..04): plan-scoped authorization with semantic fingerprints, complete `sp-*` category routing, evidence-based transactional task acceptance with durable review dispatch, and controller routing observation.
+**Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
-**Architecture:** 4 phases (per spec §9) implemented as a **stacked PR chain** on `master`. Pure core modules first (no hook wiring), then hook/adapter wiring, then docs. Each phase lands as one stacked PR with an appropriate diff size; intrusive phases (Phase 3) are split into reviewable sub-tasks committed on the same branch.
+**Architecture:** The append-only observation/decision log is the durable source for lifecycle, review dispatch, completion staging, artifact consumption, review observation, Gate, and Acceptance. `.justice/authorizations.json` is the sole explicit exception: it stores only `ApprovedPlanBinding`, including its `CanonicalPlanSnapshot`. Runtime code remains fail-open; an unavailable or unverified acceptance precondition remains blocked.
 
-**Tech Stack:** TypeScript, Bun, Vitest, existing `AtomicPersistence` / `ObservationLogStore` / `PlanParser` / `SessionStateProvider` building blocks.
-
-**Spec:** `docs/superpowers/specs/2026-09-03-semantic-control-plane-design.md` (SSOT for data models §4, protocols §4.8, invariants §8).
-
-## Stacked PR Strategy
-
-PR は stacked (直列) かつレビュー可能な差分量で作成する。**`gh stack` は使用せず**、通常の stacked branch 運用とする (次の PR の base branch に前の PR の head branch を指定):
-
-| # | Branch (base branch) | Phase | 差分スコープ |
-|---|----------------------|-------|--------------|
-| PR-A | `feature/v4-category-routing` (base: `master`) | Phase 1 | types/routing-decision/omo-category-mapper + doctor カテゴリ検査 + テスト。Doctor README 追記は最小限 |
-| PR-B | `feature/v4-plan-authorization` (base: PR-A branch) | Phase 2 | plan-fingerprint / plan-authorization core + PlanBridge 配線 + 破壊的 one-shot arm 廃止 |
-| PR-C | `feature/v4-task-lifecycle-core` (base: PR-B branch) | Phase 3a | task-lifecycle / review-artifact / acceptance-decision の純粋コア (hook 非接続) |
-| PR-D | `feature/v4-review-dispatch` (base: PR-C branch) | Phase 3b | review-dispatch-state / reservation / 帯域プロトコル + state-projection 拡張 |
-| PR-E | `feature/v4-transactional-wiring` (base: PR-D branch) | Phase 3c | SessionStateProvider TaskCallBinding、observation-handler / task-feedback / justice-plugin の transactional order、PlanParser 直接更新撤廃 |
-| PR-F | `feature/v4-controller-routing` (base: PR-E branch) | Phase 4 | controller-routing core + observation 接続 + doctor pinned-command + README/SPEC.md 更新 |
-
-各 PR は「レビュアが独立に読める」粒度とし、`bun run test / typecheck / lint / build` 全绿を各 PR (各 branch の head) で通す。前の PR がマージされたら次の PR を `git rebase` で追従させる (rebase は人間が実行)。
+**Tech Stack:** TypeScript, Bun, Vitest, Zod, `AtomicPersistence`, `ObservationLogStore`, `StateProjectionCache`, and injected mock file systems.
 
 ## Global Constraints
 
-- **Pure core**: `src/core/**` は `@opencode-ai/*` を import しない。Hook が調整役で core がビジネスロジック (AGENTS.md invariant 1)。
-- **Fail-open execution / fail-closed acceptance**: I/O 障害は `PROCEED` 等の縮退で継続、`Authorized` / `Accepted` / `Complete` は根拠なき生成禁止。
-- **Immutable public state**: `readonly` / `ReadonlyArray` / `ReadonlyMap`。private のみ可変。
-- **No new persistence files**: plan authorization も既存 `.justice/authorizations.json` は Phase 2 で新設するが、既存の `AtomicPersistence` プリミティブを再利用する。
-- **No subagents**: 本プラン実行時はサブエージェントを dispatch しない (ユーザー指定)。
-- **テスト**: 通常の単体テストは mock FS (`tests/helpers/mock-file-system.ts`) 経由。実ディスクアクセスは指定統合スイートのみ。
-- 新規コードのユニットテストは `tests/core/*.test.ts` / `tests/hooks/*.test.ts` に vitest で配置。既存 1469 テストは broken にしない (必ず 100% pass を維持)。
-- コミット単位: タスク末尾の git add/commit は **ユーザーに確認してから** 実行する (エージェントの自律 commit は行わない)。
-- Quality gate (各 Phase / PR 完了時): `bun run test && bun run typecheck && bun run lint && bun run build`。
+- Modify only files listed by the task being executed.
+- `src/core/**` must not import `@opencode-ai/*`.
+- Public state is immutable through `readonly`, `ReadonlyArray`, and `ReadonlyMap`.
+- Ordinary unit tests use `tests/helpers/mock-file-system.ts`; only existing designated real-fs suites access disk.
+- Persist lifecycle and review state only in the existing append-only observation/decision log.
+- Persist authorization state only in `.justice/authorizations.json`; `ApprovedPlanBinding.canonicalSnapshot` is the sole durable canonical snapshot.
+- A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
+- Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
+- A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
+- Run `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build` inside `.devcontainer/` after every phase.
+- Ask the user before each commit. The listed `git add` command is the complete commit scope.
 
 ---
 
-## Phase 1 (PR-A): Semantic Category Routing — JUS-P0-03
+## Phase 1: Semantic Category Routing — JUS-P0-03
 
-既存状態: `src/core/types.ts:159-164` の `SpCategory` は `sp-deep` / `sp-architecture` を含まない。`omo-category-mapper.ts` の `ROLE_TO_CATEGORY` は `deep: undefined, architecture: undefined`。`category-classifier.ts` は `undefined` を受けたら `"unspecified-low"` に silent downgrade している。`routing-decision.ts` は `deep → { deep }`、`architecture → { unspecified-high, deep }`。これらを spec §5.3 の全射に置き換える。
+### Task 1.1: Map all seven execution roles to seven `sp-*` categories
 
-### Task 1.1: 7 role → 7 category の全射化 (core)
+**Requirement:** JUS-P0-03, INV-01, INV-02, INV-05.
 
 **Files:**
-- Modify: `src/core/types.ts` (`SpCategory`)
+- Modify: `src/core/types.ts`
 - Modify: `src/core/omo-category-mapper.ts`
 - Modify: `src/core/routing-decision.ts`
 - Modify: `src/core/category-classifier.ts`
-- Modify: `src/core/retry-policy-calculator.ts` (category→閾値 map の追加)
 - Test: `tests/core/routing-decision.test.ts`
-- Test: `tests/core/category-classifier.test.ts`
-- Test: `tests/core/omo-category-mapper.test.ts` (既存 `tests/unit/core/omo-category-mapper.test.ts` を移動・統合するか新規)
+- Test: `tests/unit/core/omo-category-mapper.test.ts`
 
-**Interfaces:**
-- Consumes: 既存 `ExecutionRole` (7 role 定義済み), `CategoryClassifier.classify(task: PlanTask)`
-- Produces: `OmoCategoryMapper.map(role: ExecutionRole): SpCategory` (全射。`undefined` 非返却)、`isSpCategory(value): value is SpCategory` が 7 値を受理、`CategoryClassifier.classify()` の返り値が 7 category のいずれか
+**Consumes:** `ExecutionRole`, `SpCategory`, `createWorkerRoutingDecision(executionRole, category, reason)`.
 
-- [ ] **Step 1: 失敗テストを書く — 7→7 全射**
+**Produces:** `SpCategory` with `"sp-deep" | "sp-architecture"`; `OmoCategoryMapper.map(role: ExecutionRole): SpCategory`; worker routing that rejects every non-compatibility pair outside the seven-pair mapping.
 
-`tests/core/routing-decision.test.ts` に追記:
+- [ ] **Step 1: Write the failing routing tests**
 
 ```ts
-it("routes deep to sp-deep and architecture to sp-architecture", () => {
-  expect(createWorkerRoutingDecision("deep", "sp-deep", "task_classification").category).toBe("sp-deep");
-  expect(
-    createWorkerRoutingDecision("architecture", "sp-architecture", "task_classification").category,
-  ).toBe("sp-architecture");
+it.each([
+  ["mechanical", "sp-mechanical"],
+  ["implementation", "sp-implementation"],
+  ["integration", "sp-integration"],
+  ["review", "sp-review"],
+  ["final-review", "sp-final-review"],
+  ["deep", "sp-deep"],
+  ["architecture", "sp-architecture"],
+] as const)("maps %s to %s", (role, category) => {
+  expect(new OmoCategoryMapper().map(role)).toBe(category);
+  expect(createWorkerRoutingDecision(role, category, "task_classification").category).toBe(category);
 });
 
-it("rejects architecture -> unspecified-high (legacy downgrade)", () => {
-  expect(() =>
-    createWorkerRoutingDecision("architecture", "unspecified-high", "task_classification"),
-  ).toThrow();
-  expect(() => createWorkerRoutingDecision("deep", "deep", "task_classification")).toThrow();
+it("rejects the legacy architecture downgrade", () => {
+  expect(() => createWorkerRoutingDecision("architecture", "unspecified-high", "task_classification")).toThrow();
 });
 ```
 
-- [ ] **Step 2: テストが失敗することを確認**
+- [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts`
-Expected: FAIL (断言を含む行で throw しない / category 不一致)
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts`
 
-- [ ] **Step 3: `SpCategory` に `sp-deep` / `sp-architecture` を追加**
+Expected: FAIL because `sp-deep` and `sp-architecture` are not valid categories.
 
-`src/core/types.ts` の `SpCategory` union に両者を追加。`TaskCategory` から `"deep"` / `"unspecified-high"` は **残す** (spec では OMO 一般 category、Justice 生成の routing 決定は sp-* に限定。しかし TaskCategory を残すと古 route を残す余地があるため、後段の PlanBridge / CategoryClassifier から参照を削除することを Task 1.2 で行う)。
+- [ ] **Step 3: Implement the exact mapping**
 
 ```ts
 export type SpCategory =
@@ -97,11 +80,7 @@ export type SpCategory =
   | "sp-final-review"
   | "sp-deep"
   | "sp-architecture";
-```
 
-- [ ] **Step 4: `omo-category-mapper.ts` を全射に変更**
-
-```ts
 const ROLE_TO_CATEGORY: Readonly<Record<ExecutionRole, SpCategory>> = {
   mechanical: "sp-mechanical",
   implementation: "sp-implementation",
@@ -111,1040 +90,845 @@ const ROLE_TO_CATEGORY: Readonly<Record<ExecutionRole, SpCategory>> = {
   deep: "sp-deep",
   architecture: "sp-architecture",
 };
-
-export class OmoCategoryMapper {
-  map(role: ExecutionRole): SpCategory {
-    return ROLE_TO_CATEGORY[role];
-  }
-  isSpCategory(value: string): value is SpCategory {
-    return (SP_CATEGORIES as ReadonlySet<string>).has(value);
-  }
-}
 ```
 
-同時に `SP_CATEGORIES` を 7 値に拡張。
+Remove `deep`, `unspecified-high`, and `unspecified-low` from the non-compatibility entries of `VALID_EXECUTION_ROLE_CATEGORIES`. Change `CategoryClassifier.classify()` to return `this.categoryMapper.map(role)` without a fallback. Do not modify `RetryPolicyCalculator`; its existing `SpCategory` modifier is zero.
 
-- [ ] **Step 5: `routing-decision.ts` の VALID map を単射化**
+- [ ] **Step 4: Confirm GREEN**
 
-`deep` → `["sp-deep"]`、`architecture` → `["sp-architecture"]` に変更。
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts`
 
-- [ ] **Step 6: `category-classifier.ts` の silent fallback 削除**
+Expected: PASS.
 
-`return category ?? "unspecified-low"` を削除し、`return this.categoryMapper.map(role)` とする (map は必ず値を返す)。`SpCategory | TaskCategory` 戻り型を `SpCategory` に狭める。
-
-- [ ] **Step 7: `retry-policy-calculator.ts` に `sp-deep` / `sp-architecture` の閾値を追加**
-
-既存の `sp-*` 同様に key を追加 (値は既存 `deep, unspecified-high` の値から合理的に選ぶ。`sp-deep = deep の値、sp-architecture = unspecified-high の値` を再利用)。
-
-- [ ] **Step 8: 全テストを実行**
-
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/core/category-classifier.test.ts`
-Expected: PASS (全テスト)
-
-- [ ] **Step 9: 全体で壊れた影響を調査・修正**
-
-`grep -rn "unspecified-low\|compatibility_fallback\|unspecified-high" src` で使い残しを洗い出し、現在 `category === "unspecified-low" ? "compatibility_fallback" : "classifier"` の分岐を廃止するか統一。`retry-policy-calculator.test.ts` 等も必要なら修正。
-
-- [ ] **Step 10: Commit (確認後)**
+- [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts src/core/retry-policy-calculator.ts tests/core/routing-decision.test.ts tests/core/category-classifier.test.ts
-git commit -m "feat: 7 execution role を 7 sp-* category に全射化"
+git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts
+git commit -m "feat: execution roleをsp categoryへ完全対応"
 ```
 
-### Task 1.2: justice doctor に category 存在検査を追加
+### Task 1.2: Check required `sp-*` categories in doctor
+
+**Requirement:** JUS-P0-03, Design §5.3.
 
 **Files:**
-- Modify: `src/core/doctor-config.ts` または新規 `src/core/doctor-categories.ts`
-- Modify: `src/runtime/doctor-cli.ts` (新チェック呼び出し)
-- Test: `tests/doctor/category-presence.test.ts` (コードベースの慣習に従い `tests/core/doctor-config.test.ts` 系、または既存診断テスト構造に従う)
+- Create: `src/core/doctor-categories.ts`
+- Modify: `src/runtime/doctor-cli.ts`
+- Test: `tests/core/doctor-categories.test.ts`
+- Test: `tests/runtime/doctor-cli.test.ts`
 
-**Interfaces:**
-- Consumes: `SpCategory` (7 値), `doctor-config.ts` の `DoctorCheckResult` 型
-- Produces: `checkSpCategoriesPresence(config): DoctorCheckItem[]` 相当の純粋関数。7 カテゴリのいずれかが設定に無い場合は detail と共に fail/partial
+**Consumes:** `SpCategory` from `src/core/types.ts`; parsed config text already produced by `src/runtime/doctor-cli.ts`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
 
-`tests/doctor/category-presence.test.ts`:
+- [ ] **Step 1: Write the failing tests**
 
 ```ts
-import { describe, it, expect } from "vitest";
-import { checkSpCategoryPresence, ALL_SP_CATEGORIES } from "../../src/core/doctor-categories";
-
-describe("checkSpCategoryPresence", () => {
-  it("passes when all 7 sp-* categories are present", () => {
-    const config = { categories: ALL_SP_CATEGORIES.map((c) => ({ name: c })) };
-    const result = checkSpCategoryPresence(config);
-    expect(result.status).toBe("pass");
-    expect(result.missing).toEqual([]);
+it("reports exactly the missing required categories", () => {
+  expect(checkSpCategoryPresence(["sp-mechanical"])).toEqual({
+    ok: false,
+    missing: ["sp-implementation", "sp-integration", "sp-review", "sp-final-review", "sp-deep", "sp-architecture"],
   });
+});
 
-  it("reports missing categories by name", () => {
-    const config = { categories: [{ name: "sp-mechanical" }] };
-    const result = checkSpCategoryPresence(config);
-    expect(result.status).toBe("fail");
-    expect(result.missing).toEqual([
-      "sp-implementation",
-      "sp-integration",
-      "sp-review",
-      "sp-final-review",
-      "sp-deep",
-      "sp-architecture",
-    ]);
-  });
+it("accepts all seven categories", () => {
+  expect(checkSpCategoryPresence(Array.from(ALL_SP_CATEGORIES))).toEqual({ ok: true, missing: [] });
 });
 ```
 
-- [ ] **Step 2: テスト失敗を確認** `devcontainer exec --workspace-folder . bun run vitest run tests/doctor/category-presence.test.ts` → FAIL
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 3: `src/core/doctor-categories.ts` を作成**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts`
+
+Expected: FAIL because the category checker is absent.
+
+- [ ] **Step 3: Implement the checker and CLI diagnostic**
 
 ```ts
-import type { SpCategory } from "./types";
-
 export const ALL_SP_CATEGORIES: readonly SpCategory[] = [
-  "sp-mechanical",
-  "sp-implementation",
-  "sp-integration",
-  "sp-review",
-  "sp-final-review",
-  "sp-deep",
-  "sp-architecture",
-] as const;
+  "sp-mechanical", "sp-implementation", "sp-integration", "sp-review",
+  "sp-final-review", "sp-deep", "sp-architecture",
+];
 
-export interface SpCategoryPresenceResult {
-  readonly status: "pass" | "fail";
-  readonly missing: readonly SpCategory[];
-  readonly present: readonly SpCategory[];
-}
-
-export function checkSpCategoryPresence(config: {
-  readonly categories?: readonly { readonly name?: string }[];
-}): SpCategoryPresenceResult {
-  const present = new Set(config.categories?.map((c) => c.name) ?? []);
-  const missing = ALL_SP_CATEGORIES.filter((c) => !present.has(c));
-  const presentList = ALL_SP_CATEGORIES.filter((c) => present.has(c));
-  return {
-    status: missing.length === 0 ? "pass" : "fail",
-    missing,
-    present: presentList,
-  };
+export function checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult {
+  const names = new Set(categoryNames);
+  const missing = ALL_SP_CATEGORIES.filter((category) => !names.has(category));
+  return { ok: missing.length === 0, missing };
 }
 ```
 
-- [ ] **Step 4: `doctor-cli.ts` 配線** (既存の check 実行箇所に `checkSpCategoryPresence` を追加; fail なら非ゼロ終了へ含めるが既存 doctor 全 check 総合評価を必ず先行させる)
+Have `doctor-cli.ts` extract category names from the already loaded effective configuration and append one non-zero-exit diagnostic for every missing name.
 
-- [ ] **Step 5: 全テスト実行**
+- [ ] **Step 4: Confirm GREEN**
 
-Run `bun run test` → PASS
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts`
 
-- [ ] **Step 6: Commit (確認後)**
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/doctor-categories.ts src/runtime/doctor-cli.ts tests/doctor/category-presence.test.ts
-git commit -m "feat(doctor): 7 sp-* category の存在検査を追加"
+git add src/core/doctor-categories.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts
+git commit -m "feat: doctorでsp category設定を検査"
 ```
 
 ---
 
-## Phase 2 (PR-B): Plan-Scoped Authorization — JUS-P0-02
+## Phase 2: Plan-Scoped Authorization — JUS-P0-02
 
-### Task 2.1: PlanFingerprint / CanonicalPlanSnapshot コア
+### Task 2.1: Build a parser-aligned canonical plan snapshot
+
+**Requirement:** JUS-P0-02, INV-03, INV-04, Design §4.3.
 
 **Files:**
 - Create: `src/core/plan-fingerprint.ts`
 - Test: `tests/core/plan-fingerprint.test.ts`
+- Test: `tests/core/plan-parser.test.ts`
 
-**Interfaces:**
-- Consumes: `PlanParser` (既存)、`hashString` from `src/core/v2/hash.ts`
-- Produces: 設計書 §4.3 の型のまま。`computePlanFingerprint(raw: string, taskIds: readonly string[]): PlanFingerprint`、`buildCanonicalSnapshot(raw: string, taskIds: readonly string[]): CanonicalPlanSnapshot`。**正規化は「task 配下の実行 checkbox 状態 (`- [ ]` ↔ `- [x]`)」と `EOL` のみ**に限定。
+**Consumes:** `PlanParser.parse(content): PlanTask[]`; `hashString(value: string): string` from `src/core/v2/hash.ts`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `buildCanonicalSnapshot(raw: string, tasks: readonly PlanTask[]): CanonicalPlanSnapshot`; `computePlanFingerprint(raw: string, tasks: readonly PlanTask[]): PlanFingerprint`; `migrateJusticeGeneratedErrorAnnotations(raw: string, observations: readonly PersistedLogRecord[]): MigrationResult`.
 
-`tests/core/plan-fingerprint.test.ts`:
-
-```ts
-import { describe, it, expect } from "vitest";
-import { computePlanFingerprint, buildCanonicalSnapshot } from "../../src/core/plan-fingerprint";
-
-const PLAN = [
-  "# Plan",
-  "",
-  "### Task 1: a",
-  "- [ ] step A",
-  "- [ ] step B",
-  "",
-  "### Task 2: b",
-  "- [ ] step C",
-].join("\n");
-
-const PLAN_CHECKED = PLAN.replace("- [ ] step A", "- [x] step A");
-const PLAN_RENAMED = PLAN.replace("step A", "step A2");
-
-describe("computePlanFingerprint", () => {
-  it("ignores EOL changes", () => {
-    const crlf = PLAN.replace(/\n/g, "\r\n");
-    expect(computePlanFingerprint(crlf, ["task-1", "task-2"])).toEqual(
-      computePlanFingerprint(PLAN, ["task-1", "task-2"]),
-    );
-  });
-
-  it("ignores checkbox state changes to in-progress tasks", () => {
-    expect(computePlanFingerprint(PLAN_CHECKED, ["task-1", "task-2"])).toEqual(
-      computePlanFingerprint(PLAN, ["task-1", "task-2"]),
-    );
-  });
-
-  it("changes when task body is modified", () => {
-    expect(computePlanFingerprint(PLAN_RENAMED, ["task-1", "task-2"])).not.toEqual(
-      computePlanFingerprint(PLAN, ["task-1", "task-2"]),
-    );
-  });
-
-  it("does not normalize fenced code blocks", () => {
-    const withCode = PLAN + "\n```ts\nconst   x  =  1;\n```\n";
-    expect(computePlanFingerprint(withCode, ["task-1", "task-2"])).not.toEqual(
-      computePlanFingerprint(PLAN + "\n```ts\nconst x = 1;\n```\n", ["task-1", "task-2"]),
-    );
-  });
-});
-
-describe("buildCanonicalSnapshot", () => {
-  it("captures task ids and document digest", () => {
-    const snap = buildCanonicalSnapshot(PLAN, ["task-1", "task-2"]);
-    expect(snap.schema).toBe("justice-plan-v1");
-    expect(snap.tasks).toHaveLength(2);
-    expect(snap.tasks.map((t) => t.taskId)).toEqual(["task-1", "task-2"]);
-  });
-});
-```
-
-- [ ] **Step 2: テスト失敗確認** `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts` → FAIL
-
-- [ ] **Step 3: 最小実装**
-
-`src/core/plan-fingerprint.ts`:
+- [ ] **Step 1: Write the failing semantic-boundary tests**
 
 ```ts
-import { hashString } from "./v2/hash";
-
-export type PlanFingerprint = {
-  readonly algorithm: "sha256";
-  readonly value: string;
-};
-
-export type CanonicalTaskSnapshot = {
-  readonly taskId: string;
-  readonly title: string;
-  readonly canonicalBody: string;
-  readonly digest: string;
-};
-
-export type CanonicalPlanSnapshot = {
-  readonly schema: "justice-plan-v1";
-  readonly documentDigest: string;
-  readonly globalBodyDigest: string;
-  readonly tasks: ReadonlyArray<CanonicalTaskSnapshot>;
-};
-
-export function computePlanFingerprint(
-  raw: string,
-  taskIds: readonly string[],
-): PlanFingerprint {
-  return {
-    algorithm: "sha256",
-    value: hashString(canonicalize(raw, taskIds)).replace(/^sha256:/, ""),
-  };
-}
-
-export function buildCanonicalSnapshot(raw: string, taskIds: readonly string[]): CanonicalPlanSnapshot {
-  // Task 区切りは PlanParser と同じ行規則に揃えるが、checkbox のみ normalize。
-  // fenced code block 内部は一切 normalize しない(SPEC §4.3)。
-  const normalizedLines = normalizeTaskCheckboxes(splitLinesAndProtectFenced(raw), taskIds);
-  const documentDigest = hashString(normalizedLines.join("\n"));
-  // ... tasks / global segment 抽出 & 個別 digest
-  // (実装は consumption unit を task 単位に分離: ### Task n: ... セクションのみ taskに正規化)
-}
-
-function canonicalize(raw: string, taskIds: readonly string[]): string {
-  return normalizeTaskCheckboxes(splitLinesAndProtectFenced(raw), taskIds).join("\n");
-}
-
-function splitLinesAndProtectFenced(raw: string): readonly { readonly line: string; readonly inFence: boolean }[] {
-  const lines = raw.replace(/\r\n/g, "\n").split("\n");
-  let inFence = false;
-  return lines.map((line) => {
-    const isFenceEdge = /^\s*```/.test(line);
-    const result = { line, inFence: inFence && !isFenceEdge };
-    if (isFenceEdge) inFence = !inFence;
-    return result;
-  });
-}
-
-function normalizeTaskCheckboxes(
-  lines: readonly { readonly line: string; readonly inFence: boolean }[],
-  _taskIds: readonly string[],
-): readonly string[] {
-  // checkbox は task 内の `- [ ]` / `- [x]` のみを `- [ ]` に正規化。
-  // task 外 (global/unscoped) の checkbox は正規化しない (SPEC §11)。
-  // fenced 内部は一切触らない.
-  return lines.map((entry) =>
-    entry.inFence ? entry.line : entry.line.replace(/^(\s*-\s+\[)[ xX](\]\s+.*)$/, "$1 $2"),
+it("normalizes only checkbox state in parsed task sections", () => {
+  expect(computePlanFingerprint(taskUnchecked, parser.parse(taskUnchecked))).toEqual(
+    computePlanFingerprint(taskChecked, parser.parse(taskUnchecked)),
   );
+});
+
+it("treats a global checkbox and a fenced checkbox as semantic", () => {
+  expect(computePlanFingerprint(globalUnchecked, parser.parse(globalUnchecked))).not.toEqual(
+    computePlanFingerprint(globalChecked, parser.parse(globalUnchecked)),
+  );
+  expect(computePlanFingerprint(fencedUnchecked, parser.parse(fencedUnchecked))).not.toEqual(
+    computePlanFingerprint(fencedChecked, parser.parse(fencedUnchecked)),
+  );
+});
+
+it("changes for task body edits and not for EOL-only edits", () => {
+  expect(computePlanFingerprint(taskBodyA, parser.parse(taskBodyA))).not.toEqual(
+    computePlanFingerprint(taskBodyB, parser.parse(taskBodyA)),
+  );
+  expect(computePlanFingerprint(taskBodyA, parser.parse(taskBodyA))).toEqual(
+    computePlanFingerprint(taskBodyA.replace(/\n/g, "\r\n"), parser.parse(taskBodyA)),
+  );
+});
+```
+
+Add one test whose `error_annotation` observation identifies the exact legacy annotation line and expects migration to remove it. Add one manual annotation test and one unknown-provenance annotation test that expect the fingerprint to change.
+
+- [ ] **Step 2: Confirm RED**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts`
+
+Expected: FAIL because canonical snapshot generation is absent.
+
+- [ ] **Step 3: Implement task-section-only canonicalization**
+
+Traverse normalized lines with the same task-heading rule as `PlanParser`. Enter a task section only at `TASK_HEADING_REGEX`; leave it at the next task heading; maintain a fenced-code state. Replace checkbox state only when `inTask === true` and `inFence === false`. Construct each `CanonicalTaskSnapshot` from that task section and construct `globalBodyDigest` from every non-task line without checkbox rewriting.
+
+```ts
+export function computePlanFingerprint(raw: string, tasks: readonly PlanTask[]): PlanFingerprint {
+  return { algorithm: "sha256", value: hashString(canonicalize(raw, tasks)).replace("sha256:", "") };
 }
 ```
 
-- [ ] **Step 4: テスト通過確認** → PASS
+`migrateJusticeGeneratedErrorAnnotations` must remove only a line whose exact normalized content is referenced by a persisted Justice `error_annotation` observation. It must retain every non-provenance-backed line.
 
-- [ ] **Step 5: Commit (確認後)**
+- [ ] **Step 4: Confirm GREEN**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/plan-fingerprint.ts tests/core/plan-fingerprint.test.ts
-git commit -m "feat: plan fingerprint canonical hash を追加 (checkbox のみ normalize)"
+git add src/core/plan-fingerprint.ts tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts
+git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 ```
 
-### Task 2.2: PlanAuthorization コア
+### Task 2.2: Persist and hydrate the single authorization record
+
+**Requirement:** JUS-P0-02, INV-03, INV-04, INV-12, Design §4.2, §4.4, §5.2.
 
 **Files:**
 - Create: `src/core/plan-authorization.ts`
+- Modify: `src/core/justice-plugin.ts`
+- Modify: `src/hooks/plan-bridge.ts`
 - Test: `tests/core/plan-authorization.test.ts`
+- Test: `tests/hooks/plan-bridge-authorization.test.ts`
 
-**Interfaces:**
-- Consumes: `PlanFingerprint` (Task 2.1), `AtomicPersistence` (既存)
-- Produces: `ApprovedPlanBinding`, `AuthorizationMergeRule`, `createApprovedPlanBinding(...)`, `invalidateBinding(...)`, `isBindingEligibleForTask(b, sessionId, planPath, fp)`。全て純粋。
+**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `ApprovedPlanBinding` containing `canonicalSnapshot`; `AuthorizationStore.approve(input): Promise<ApprovedPlanBinding | null>`; `AuthorizationStore.release(authorizationId, at): Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`.
+
+- [ ] **Step 1: Write the failing persistence and hydration tests**
 
 ```ts
-import { describe, it, expect } from "vitest";
-import {
-  createApprovedPlanBinding,
-  invalidateBinding,
-  isBindingActiveFor,
-  mergeBindings,
-} from "../../src/core/plan-authorization";
+it("stores the canonical snapshot in the same authorization record", async () => {
+  const binding = await store.approve(input);
+  expect(binding?.canonicalSnapshot.documentDigest).toBe(snapshot.documentDigest);
+  expect(JSON.parse(files.get(".justice/authorizations.json") ?? "[]")[0].canonicalSnapshot).toEqual(snapshot);
+});
 
-const fp = { algorithm: "sha256" as const, value: "abc" };
-const base = {
-  sessionId: "s1",
-  planPath: "docs/plan.md",
-  planFingerprint: fp,
-  fingerprintSchema: "justice-plan-v1" as const,
-  approvedAt: "2026-09-05T00:00:00Z",
-};
+it("hydrates an active binding and rejects a changed fingerprint", async () => {
+  await store.approve(input);
+  expect((await store.hydrate())[0]?.status).toBe("active");
+  expect(isBindingActiveFor(binding!, "s1", "docs/p.md", changedFingerprint)).toBe(false);
+});
 
-describe("plan-authorization", () => {
-  it("creates an active binding with new uuid", () => {
-    const b = createApprovedPlanBinding(base);
-    expect(b.status).toBe("active");
-    expect(b.authorizationId).toMatch(/^[0-9a-f-]{36}$/i);
-  });
-
-  it("invalidated bindings are terminal (cannot resurrect)", () => {
-    const active = createApprovedPlanBinding(base);
-    const dead = invalidateBinding(active, "semantic_change");
-    const resurrected = invalidateBinding(active, "x");
-    const merged = mergeBindings(resurrected /*mine*/, dead /*theirs*/);
-    expect(merged.status).toBe("invalidated");
-  });
-
-  it("isBindingActiveFor matches session/plan/fingerprint", () => {
-    const b = createApprovedPlanBinding(base);
-    expect(isBindingActiveFor(b, "s1", "docs/plan.md", fp)).toBe(true);
-    expect(isBindingActiveFor(b, "other", "docs/plan.md", fp)).toBe(false);
-    expect(isBindingActiveFor(b, "s1", "docs/plan.md", { algorithm: "sha256", value: "zzz" })).toBe(false);
-  });
+it("never resurrects invalidated or released bindings", async () => {
+  const binding = await store.approve(input);
+  await store.release(binding!.authorizationId, "2026-09-05T00:00:00.000Z");
+  expect(await store.approve(Object.assign({}, input, { authorizationId: binding!.authorizationId }))).toBeNull();
 });
 ```
 
-Run → FAIL
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 2: 実装 (純粋関数 + private でさえ terminal 復活禁止 merge)**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
-`src/core/plan-authorization.ts`:
+Expected: FAIL because authorization persistence and hydration do not exist.
+
+- [ ] **Step 3: Implement the authorization store**
+
+Use exactly `.justice/authorizations.json` and `.justice/authorizations.conflict.json` as the `AtomicPersistence` paths. Store only `ReadonlyArray<ApprovedPlanBinding>`. On approval, atomically invalidate an existing active binding for the same session with reason `plan_superseded`, generate a fresh authorization ID, and persist the new binding containing the computed snapshot. On a persistence failure, return `null` and leave enrichment unauthorized. On plugin initialization, hydrate active bindings and restore their `planPath` into `PlanBridge`; if the file cannot be read, no binding is active.
 
 ```ts
-import { randomUUID } from "node:crypto";
-import type { PlanFingerprint } from "./plan-fingerprint";
-
 export type ApprovedPlanBinding = {
   readonly authorizationId: string;
   readonly sessionId: string;
   readonly planPath: string;
   readonly planFingerprint: PlanFingerprint;
+  readonly canonicalSnapshot: CanonicalPlanSnapshot;
   readonly fingerprintSchema: "justice-plan-v1";
-  readonly approvedAt: string;
   readonly status: "active" | "invalidated" | "released";
+  readonly approvedAt: string;
   readonly invalidatedAt?: string;
   readonly releasedAt?: string;
 };
-
-export function createApprovedPlanBinding(input: {
-  readonly sessionId: string;
-  readonly planPath: string;
-  readonly planFingerprint: PlanFingerprint;
-  readonly approvedAt: string;
-}): ApprovedPlanBinding {
-  return {
-    authorizationId: randomUUID(),
-    fingerprintSchema: "justice-plan-v1",
-    status: "active",
-    ...input,
-  };
-}
-
-export function invalidateBinding(
-  b: ApprovedPlanBinding,
-  reason: string,
-  at = new Date().toISOString(),
-): ApprovedPlanBinding {
-  if (b.status === "invalidated") return b;
-  return { ...b, status: "invalidated", invalidatedAt: at };
-}
-
-export function releaseBinding(b: ApprovedPlanBinding, at = new Date().toISOString()): ApprovedPlanBinding {
-  return { ...b, status: "released", releasedAt: at };
-}
-
-export function isBindingActiveFor(
-  b: ApprovedPlanBinding,
-  sessionId: string,
-  planPath: string,
-  fp: PlanFingerprint,
-): boolean {
-  return (
-    b.status === "active" &&
-    b.sessionId === sessionId &&
-    b.planPath === planPath &&
-    b.planFingerprint.value === fp.value
-  );
-}
-
-export function mergeBindings(
-  mine: ApprovedPlanBinding,
-  theirs: ApprovedPlanBinding,
-): ApprovedPlanBinding {
-  if (mine.authorizationId !== theirs.authorizationId) return mine;
-  if (isTerminal(theirs) && !isTerminal(mine)) return theirs;
-  if (isTerminal(mine) && isTerminal(theirs))
-    return laterOf(mine, theirs);
-  return mine;
-}
-function isTerminal(b: ApprovedPlanBinding): boolean {
-  return b.status !== "active";
-}
-function laterOf(a: ApprovedPlanBinding, b: ApprovedPlanBinding): ApprovedPlanBinding {
-  const ta = (a.invalidatedAt ?? a.releasedAt ?? a.approvedAt) || "";
-  const tb = (b.invalidatedAt ?? b.releasedAt ?? b.approvedAt) || "";
-  return ta >= tb ? a : b;
-}
 ```
 
-- [ ] **Step 3: テスト確認 → Commit (確認後)**
+- [ ] **Step 4: Confirm GREEN**
 
-`bun run vitest run tests/core/plan-authorization.test.ts` → PASS。
-`git add ... && git commit -m "feat: ApprovedPlanBinding lifecycle を追加 (terminal 不可逆)"`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
-### Task 2.3: PlanBridge の authorization 配線
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/plan-authorization.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts
+git commit -m "feat: plan authorizationをdurable bindingへ置換"
+```
+
+### Task 2.3: Parse and execute explicit authorization cancellation
+
+**Requirement:** JUS-P0-02, Design §5.2.
 
 **Files:**
+- Modify: `src/core/implement-command.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
-- Modify: `src/core/justice-plugin.ts` (アクター保持: `PlanBridge.setAuthorizationProvider(...)` 等の筋道)
-- Modify: `src/core/implement-command.ts` (はあり伏せ + fingerprint 要求)
+- Test: `tests/core/implement-command.test.ts`
+- Test: `tests/runtime/opencode-adapter.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 
-**Interfaces:**
-- Consumes: `ApprovedPlanBinding`, `computePlanFingerprint`
-- Produces: PlanBridge が `implementationArmedSessions` の代わりに `authorizationStore` を参照。`task()` PreToolUse 介入条件を binding 条件に置換。
+**Consumes:** `parseJusticeImplementCommandArguments(argumentsString)`; `AuthorizationStore.release(authorizationId, at)`.
 
-- [ ] **Step 1: 失敗テスト (binding が `active` の場合のみ enrich)**
+**Produces:** `ImplementationArmRequest` union with `{ readonly source: "command"; readonly action: "approve"; readonly planPath: string; readonly approved: boolean }` and `{ readonly source: "command"; readonly action: "cancel"; readonly planPath: string }`.
+
+- [ ] **Step 1: Write the failing cancellation tests**
 
 ```ts
-it("enriches when an active authorization matches the current plan", async () => {
-  const bridge = setupWithAuthorization(activeBinding);
-  const res = await bridge.handlePreToolUse(taskCallEvent);
-  expect(res.action).toBe("inject");
-  expect(modifiedPayload(res)?.args?.load_skills).toContain("test-driven-development");
+it("parses cancel with a safe plan path", () => {
+  expect(parseJusticeImplementCommandArguments("--plan docs/p.md --cancel")).toEqual({
+    source: "command", action: "cancel", planPath: "docs/p.md",
+  });
 });
 
-it("emits implementation_unauthorized when fingerprint mismatched", async () => {
-  const bridge = setupWithAuthorization(mismatchedFingerprintBinding);
-  const res = await bridge.handlePreToolUse(taskCallEvent);
-  expect(res.injectedContext).toContain("AUTHORIZATION INVALIDATED");
+it("releases then rejects subsequent task authorization", async () => {
+  await bridge.handleImplementationArm("s1", approveRequest);
+  await bridge.handleImplementationArm("s1", cancelRequest);
+  expect((await bridge.handlePreToolUse(taskEvent)).injectedContext).toContain("IMPLEMENTATION UNAUTHORIZED");
 });
 ```
 
-→ FAIL
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 2: PlanBridge の `consumeImplementationArm` を `ApprovedPlanBinding` ベースに置換**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
-- `/justice-implement --plan <p> --approved` で `computePlanFingerprint` + `createApprovedPlanBinding` + AtomicPersistence 保存 → PlanBridge へ binding キャッシュ
-- `handlePreToolUse` で `isBindingActiveFor(binding, sessionId, planPath, currentFp)`
-- 不一致 → `invalidateBinding` + 永続化 + advisory `[JUSTICE: AUTHORIZATION INVALIDATED]`
-- `PlanCompletion / cancelled` → `releaseBinding`
-- Hydration: plugin startup で `.justice/authorizations.json` を読み `active` を bridge に設定。file missing → invalidated。
-- 同一 session の active binding ≤ 1: approve 時既存 active は atomically `invalidated (plan_superseded)`。
+Expected: FAIL because `--cancel` is rejected.
 
-- [ ] **Step 3: 既存 `implementationArmedSessions` / one-shot arm を削除**
+- [ ] **Step 3: Implement cancellation**
 
-README の破壊的変更として文書化 (別タスク)。grep で使い残しを消す。
+Accept exactly one of `--approved` and `--cancel`; reject both flags, duplicate flags, missing `--plan`, and unsafe paths. In `PlanBridge.handleImplementationArm`, resolve the active binding for the session and path, persist `active -> released`, clear the active plan cache only after durable success, and make later `handlePreToolUse` return the existing unauthorized advisory.
 
-- [ ] **Step 4: テスト + Commit (確認後)**
+```ts
+if (cancel) return { source: "command", action: "cancel", planPath };
+return { source: "command", action: "approve", planPath, approved };
+```
 
-`bun run test && bun run typecheck` → PASS
-`git add src/hooks/plan-bridge.ts src/core/justice-plugin.ts src/core/implement-command.ts tests/hooks/plan-bridge-authorization.test.ts`
-`git commit -m "feat: one-shot arm を plan-scoped authorization binding へ置換"`
+- [ ] **Step 4: Confirm GREEN**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/implement-command.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
+git commit -m "feat: plan authorizationのcancelを追加"
+```
 
 ---
 
-## Phase 3a (PR-C): Task Lifecycle / Review Artifact / Acceptance コア — JUS-P0-04 (pure core)
+## Phase 3a: Lifecycle and Final Gate — JUS-P0-04
 
-### Task 3.1: Task Lifecycle state machine
+### Task 3.1: Make lifecycle replay-safe
+
+**Requirement:** JUS-P0-04, INV-06, INV-08, INV-09, INV-14.
 
 **Files:**
 - Create: `src/core/task-lifecycle.ts`
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/state-projection.ts`
 - Test: `tests/core/task-lifecycle.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
 
-**Interfaces:**
-- Consumes: 型のみ (spec §4.4 の `TaskProgressState` / `PlanFinalizationState`)
-- Produces: `TaskAttemptId`, `FinalizationAttemptId`, `TaskLifecycleTransitionRecord`, `PlanFinalizationTransitionRecord`, `applyTaskTransition(state, event)` / `applyPlanTransition(...)`, `createTaskAttemptRef(...)`。永続化に依存しない純粋 state machine。
+**Consumes:** `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`.
+
+- [ ] **Step 1: Write the failing replay tests**
 
 ```ts
-import { describe, it, expect } from "vitest";
-import {
-  applyTaskTransition,
-  newTaskExecutionRef,
-  newFinalizationRef,
-  VALID_TASK_TRANSITIONS,
-  VALID_PLAN_FINALIZATION_TRANSITIONS,
-} from "../../src/core/task-lifecycle";
-
-describe("TaskLifecycle", () => {
-  it("worker_reported is NOT accepted", () => {
-    const ref = newTaskExecutionRef("auth-1", "task-1");
-    const state = applyTaskTransition("pending", { kind: "task_started", ref });
-    expect(state).toBe("in_progress");
-    const s2 = applyTaskTransition(state, { kind: "worker_reported", ref });
-    expect(s2).toBe("worker_reported");
-    expect(s2).not.toBe("accepted");
+it("keeps state for duplicate and illegal transitions", () => {
+  expect(applyTaskTransition("accepted", acceptedToPendingEvent)).toEqual({
+    kind: "invalid", state: "accepted", advisory: "accepted -> pending is not allowed",
   });
+  expect(applyTaskTransition("in_progress", duplicateStartEvent)).toEqual({ kind: "duplicate", state: "in_progress" });
+});
 
-  it("rejects accepted -> pending", () => {
-    const ref = newTaskExecutionRef("auth-1", "task-1");
-    expect(() =>
-      applyTaskTransition("accepted", { kind: "task_started", ref }),
-    ).toThrow(/Invalid transition/);
-  });
-
-  it("final_rework_required increments finalizationAttemptId and finalReviewRound", () => {
-    const ref = newFinalizationRef({ authorizationId: "a1", planPath: "docs/p.md" });
-    const { finalizationAttemptId: f1, finalReviewRound: r1 } = ref;
-    const next = ref.nextRound();
-    expect(next.finalizationAttemptId).not.toBe(f1);
-    expect(next.finalReviewRound).toBe(r1 + 1);
-  });
+it("projects an invalid record without aborting later records", () => {
+  expect(project([invalidRecord, validRecord], "2026-09-05T00:00:00.000Z").tasks.get("task-1")?.status).toBe("open");
 });
 ```
 
-- [ ] **Step 2: FAIL 確認**
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 3: 実装**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts`
 
-`src/core/task-lifecycle.ts`:
+Expected: FAIL because lifecycle projection is absent and invalid transitions throw.
+
+- [ ] **Step 3: Implement non-throwing transition outcomes**
+
+Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
 
 ```ts
-import { randomUUID } from "node:crypto";
-
-export type TaskProgressState =
-  | "pending" | "authorized" | "in_progress" | "worker_reported"
-  | "evidence_pending" | "review_pending" | "gate_pending"
-  | "rework_required" | "accepted";
-
-export type PlanFinalizationState =
-  | "tasks_pending" | "all_tasks_accepted" | "final_review_pending"
-  | "final_gate_pending" | "final_rework_required" | "complete";
-
-export type TaskAttemptId = string;
-export type FinalizationAttemptId = string;
-
-export type TaskExecutionRef = {
-  readonly authorizationId: string;
-  readonly taskId: string;
-  readonly attemptId: TaskAttemptId;
-};
-
-export const VALID_TASK_TRANSITIONS: ReadonlyMap<TaskProgressState, ReadonlySet<TaskProgressState>> =
-  new Map([
-    ["pending", new Set(["authorized", "in_progress"])],
-    ["authorized", new Set(["in_progress"])],
-    ["in_progress", new Set(["worker_reported"])],
-    ["worker_reported", new Set(["evidence_pending"])],
-    ["evidence_pending", new Set(["review_pending"])],
-    ["review_pending", new Set(["gate_pending"])],
-    ["gate_pending", new Set(["accepted", "rework_required"])],
-    ["rework_required", new Set(["in_progress"])],
-    ["accepted", new Set<TaskProgressState>()],
-  ]);
-
-export function newTaskExecutionRef(authorizationId: string, taskId: string): TaskExecutionRef {
-  return { authorizationId, taskId, attemptId: newAttemptId() };
+if (event.identity === state.lastTransitionIdentity) return { kind: "duplicate", state: state.value };
+if (!VALID_TASK_TRANSITIONS.get(state.value)?.has(event.to)) {
+  return { kind: "invalid", state: state.value, advisory: `${state.value} -> ${event.to} is not allowed` };
 }
-
-export function newAttemptId(): string {
-  return randomUUID();
-}
-
-// events と plan finalization state machine 同様にイベント駆動で実装
+return { kind: "applied", state: event.to };
 ```
 
-`applyTaskTransition(state, event)` は event から `next` 状態を算定し、無効なら throw。
+- [ ] **Step 4: Confirm GREEN**
 
-- [ ] **Step 4: PASS / Commit (確認後)**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts`
 
-`git add src/core/task-lifecycle.ts tests/core/task-lifecycle.test.ts`
-`git commit -m "feat: TaskProgress/PlanFinalization 純粋 state machine"`
+Expected: PASS.
 
-### Task 3.2: Review Artifact コア
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/task-lifecycle.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts
+git commit -m "feat: lifecycle replayをidempotentに処理"
+```
+
+### Task 3.2: Add task and plan-scoped Gate evaluation
+
+**Requirement:** JUS-P0-04, INV-08, INV-09, INV-14.
 
 **Files:**
-- Create: `src/core/review-artifact.ts`
-- Test: `tests/core/review-artifact.test.ts`
+- Modify: `src/core/v2/gate-definition.ts`
+- Modify: `src/core/v2/gate-context.ts`
+- Modify: `src/core/v2/rule-evaluation-engine.ts`
+- Modify: `src/hooks/observation-handler.ts`
+- Test: `tests/core/v2/rule-evaluation-engine.test.ts`
+- Test: `tests/hooks/observation-handler-gate.test.ts`
 
-**Interfaces:**
-- Consumes: spec §4.5 の型のまま (`ReviewArtifactV1` / `CleanReviewArtifactV1` 等), `PlanFingerprint`
-- Produces: `parseReviewWorkerResult(raw: unknown): ReviewWorkerResultV1 | null`, `assembleReviewArtifactV1(input): ReviewArtifactV1`, `isCleanReviewArtifact(a: ReviewArtifactV1): a is CleanReviewArtifactV1`
+**Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; current projected lifecycle state.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
+
+- [ ] **Step 1: Write the failing Final Gate tests**
 
 ```ts
-it("assembles ReviewArtifactV1 from trusted metadata + worker result", () => {
-  const artifact = assembleReviewArtifactV1({
-    correlation: taskCorrelation, observedExecution: obsExec,
-    workerResult: { schemaVersion: 1, complete: true, findings: [] },
-    source: { reviewSource: "sp-review", reviewKind: "task-review" },
-  });
-  expect(isCleanReviewArtifact(artifact)).toBe(true);
+it("selects a plan gate only for final_review_complete", () => {
+  expect(evaluate([planGate], [], finalReviewContext).gateType).toBe("plan");
+  expect(evaluate([planGate], [], Object.assign({}, finalReviewContext, { trigger: "tool_observed" })).verdict).toBe("SKIP");
 });
 
-it("rejects worker output that lies about findings", () => {
-  const artifact = assembleReviewArtifactV1({
-    correlation: taskCorrelation, observedExecution: obsExec,
-    workerResult: { schemaVersion: 1, complete: true, findings: [someFinding] },
-    source: { reviewSource: "sp-review", reviewKind: "task-review" },
+it("includes the current finalization identity in a plan decision", () => {
+  expect(evaluate([planGate], [], finalReviewContext)).toMatchObject({
+    gateType: "plan", authorizationId: "a1", planPath: "docs/p.md", finalizationAttemptId: "f2", finalReviewRound: 2,
   });
-  expect(isCleanReviewArtifact(artifact)).toBe(false);
+});
+
+it("maps Final Gate verdicts without accepting stale evidence", () => {
+  expect(decidePlanCompletion({ gate: passForCurrentAttempt })).toBe("complete");
+  expect(decidePlanCompletion({ gate: warnForCurrentAttempt })).toBe("final_rework_required");
+  expect(decidePlanCompletion({ gate: undefined })).toBe("final_gate_pending");
+  expect(decidePlanCompletion({ gate: passForOldAttempt })).toBe("final_gate_pending");
 });
 ```
 
-- [ ] **Step 2: FAIL 確認 / 実装 / PASS / Commit (確認後)**
+- [ ] **Step 2: Confirm RED**
 
-重要: `ReviewWorkerResultV1` は **untrusted**。`artifact` 組立時に `correlation` / `reviewSource` / `reviewKind` / `observedExecution` は worker 自己申告を受け付けず TaskCallBinding 由来 trusted metadata のみを使う (spec §4.5 Trust boundary)。
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts`
 
-Commit: `git commit -m "feat: ReviewArtifactV1 組立と clean 判定コア"`
+Expected: FAIL because plan gates are skipped and task gate decisions are fixed.
 
-### Task 3.3: Acceptance Decision コア
+- [ ] **Step 3: Implement scoped Gate selection**
 
-**Files:**
-- Create: `src/core/acceptance-decision.ts`
-- Test: `tests/core/acceptance-decision.test.ts`
-
-**Interfaces:**
-- Consumes: `TaskExecutionRef`, `ProjectedEvidence` (既存 evidence システム), `ReviewArtifactV1`, gate verdict
-- Produces: `TaskAcceptanceDecision`, `PlanAcceptanceDecision`, `decideTaskAcceptance(input)`, `decidePlanComplete(input)`
-
-- [ ] **Step 1: 失敗テスト**
+Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. Evaluate task gates only in `gate_pending`; evaluate plan gates only in `final_gate_pending`. Append a PlanGateDecision only for the current finalization attempt. Map PASS to `complete`, WARN and FAIL to `final_rework_required`, and errors, SKIP, or insufficient evidence to `final_gate_pending`.
 
 ```ts
-it("Gate PASS + clean review + observed evidence => accepted", () => {
-  const d = decideTaskAcceptance({
-    ref, gateVerdict: { kind: "task", verdict: "PASS" },
-    evidence: [observedTestPass], review: cleanReviewArtifact,
-  });
-  expect(d.verdict).toBe("accepted");
-});
-
-it("declared evidence only => blocked", () => {
-  const d = decideTaskAcceptance({
-    ref, gateVerdict: { kind: "task", verdict: "PASS" },
-    evidence: [declaredTestsPassed], // provenance declared
-    review: cleanReviewArtifact,
-  });
-  expect(d.verdict).toBe("blocked");
-});
-
-it("gate WARN => rework-required", () => {
-  expect(decideTaskAcceptance({ ref, gateVerdict: warn, evidence: [obs], review: clean }).verdict).toBe("rework-required");
-});
-
-it("internal error / evidence missing => blocked (gate_pending stay)", () => {
-  expect(decideTaskAcceptance({ ref, gateVerdict: { kind: "error" }, evidence: [], review: clean }).verdict).toBe("blocked");
-});
+const activeGates = gates.filter((gate) => gate.enabled && gate.gateType === ctx.scope && gate.trigger.on === ctx.trigger);
+if (ctx.scope === "plan") {
+  return { gateType: "plan", authorizationId: ctx.authorizationId, planPath: ctx.planPath,
+    finalizationAttemptId: ctx.finalizationAttemptId, finalReviewRound: ctx.finalReviewRound, verdict, ruleResults };
+}
 ```
 
-- [ ] **Step 2: FAIL → 実装 → PASS (Spec §4.11 と §2.3 の「実行 fail-open / 承認 fail-closed」を合わせてコードで強制)**
+- [ ] **Step 4: Confirm GREEN**
 
-- [ ] **Step 3: Commit (確認後)**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts`
 
-`git commit -m "feat: AcceptanceDecision (Task/Plan) 判定コア"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/v2/gate-definition.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/hooks/observation-handler.ts tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts
+git commit -m "feat: Final Gateをplan scopeで評価"
+```
 
 ---
 
-## Phase 3b (PR-D): Review Dispatch Protocol — JUS-P0-04 (durable / atomic claim)
+## Phase 3b: Child Correlation and Durable Review Dispatch — JUS-P0-04
 
-### Task 3.4: Review Dispatch State machine
+### Task 3.3: Prove the child-session correlation boundary
+
+**Requirement:** JUS-P0-04, INV-15, Design §4.9.
+
+**Files:**
+- Create: `spikes/child-session-correlation/verify.ts`
+- Create: `spikes/child-session-correlation/README.md`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
+
+**Consumes:** OpenCode `task()` PreToolUse and PostToolUse event payloads; child-session message and tool observations emitted by the installed runtime.
+
+**Produces:** A committed spike report containing the observed event names, parent `callId`, child `sessionId`, and evidence for both `sp-review` and `sp-final-review`; a test fixture proving the adapter converts that relation into a `DelegatedExecutionBinding` input.
+
+- [ ] **Step 1: Write the failing adapter fixtures**
+
+```ts
+it.each(["sp-review", "sp-final-review"] as const)("captures child session for %s", async (category) => {
+  const events = fixtureWithParentTaskAndChildSession(category, "parent-call", "child-session");
+  await adapter.replay(events);
+  expect(adapter.getDelegatedExecutionInput("parent-call")).toMatchObject({
+    parentCallId: "parent-call", childSessionId: "child-session",
+  });
+});
+```
+
+- [ ] **Step 2: Run the fixture and runtime spike**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts`
+
+Expected: FAIL because the adapter has no child-session relation.
+
+Run: `devcontainer exec --workspace-folder . bun run tsx spikes/child-session-correlation/verify.ts`
+
+Expected: the report contains one task-review trace and one final-review trace, each with a non-empty parent call ID and child session ID.
+
+- [ ] **Step 3: Apply the exit condition**
+
+If either trace lacks a runtime-provided child session ID correlated to its parent call ID, record the raw event shape in `spikes/child-session-correlation/README.md`, mark Phase 3 as BLOCKED, and stop before Task 3.4. Do not substitute artifact-path, category, prompt, or worker self-report for child-session evidence.
+
+- [ ] **Step 4: Commit after approval**
+
+```bash
+git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md tests/runtime/opencode-adapter-v2.test.ts
+git commit -m "test: child session correlation runtime境界を検証"
+```
+
+### Task 3.4: Persist review dispatch, binding, and completion staging
+
+**Requirement:** JUS-P0-04, INV-11, INV-15, INV-16, INV-17, INV-18, Design §4.8 through §4.10.
 
 **Files:**
 - Create: `src/core/review-dispatch-state.ts`
-- Test: `tests/core/review-dispatch-state.test.ts`
-
-**Interfaces:**
-- Consumes: spec §4.8.1 の `ReviewDispatchState` / `ReviewDispatchSlot` / `ReviewDispatchTransitionRecord` / `ReviewCompletionStaging` 型のまま / `ReviewArtifactV1` (Task 3.2)
-- Produces: `newPendingSlot(...)`, `tryClaim(slot, incoming): ClaimResult`, `terminalize(slot, outcome)`, `isTerminal(slot)`, `ReviewDispatchRecovery` (durable record から slot/binding/artifact reservation を再構築する projector 関数)
-
-- [ ] **Step 1: 失敗テスト (CAS / 再発行禁止 / 並列排他)**
-
-```ts
-it("claim succeeds only when exactly one matching pending slot exists", () => {
-  const s = newPendingSlot({ parentSessionId: "ps", correlation: cor, expectedCategory: "sp-review" });
-  const res = tryClaim([s], { callId: "c1", category: "sp-review", parentSessionId: "ps" });
-  expect(res.status).toBe("claimed");
-  expect(res.claim!.binding.callId).toBe("c1");
-});
-
-it("claim fails (no binding created) when multiple or zero pending slots", () => {
-  const s1 = newPendingSlot({ ... });
-  const s2 = newPendingSlot({ ... }); // same parentSessionId, two slots
-  expect(tryClaim([s1, s2], { ... }).status).toBe("no_binding");
-  expect(tryClaim([], { ... }).status).toBe("no_binding");
-});
-
-it("claimed slot can be recovered from durable record without reissuing directive", () => {
-  const record = transitionRecord(nullToPending({ ... }));
-  const slots = projectReviewDispatchSlots([record]);
-  expect(slots[0].state).toBe("pending");
-  expect(slots[0].canReissueDirective).toBe(true);
-  // claimed 状態の record を追加すると再 directive 発行は false
-});
-
-it("terminal slot is never reused / deleted", () => {
-  const terminal = terminalize(slot, "completed");
-  expect(() => tryClaim([terminal], { callId: "c2", ... })).toThrow;
-});
-```
-
-- [ ] **Step 2: FAIL 確認 / 実装 / PASS / Commit (確認後)**
-
-`git commit -m "feat: Review dispatch slot の CAS + durable recovery"`
-
-### Task 3.5: Review Artifact Reservation (anti-replay)
-
-**Files:**
 - Create: `src/core/review-artifact-reservation.ts`
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/state-projection.ts`
+- Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
 
-**Interfaces:**
-- Consumes: `FileReader`/`FileWriter`、`normalizeSafeRelativePath`、UUID 生成
-- Produces: `ReviewArtifactReservation` (usable/unusable), `createReservation(input, fs): Promise<ReviewArtifactReservation>`。discriminated union で `unusable` の場合 `reason` に spec §4.10 の failure reason を保持。
+**Consumes:** `ReviewCorrelation`; `ReviewArtifactV1`; `DelegatedExecutionBinding`; `ReviewArtifactReservation`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** durable records for `null -> pending`, `pending -> claimed`, `review_completion_staged`, `review_artifact_consumed`, `review_observed`, and `claimed -> terminal`; `projectReviewDispatchSlots(records)`; `projectDelegatedExecutionBindings(records)`.
+
+- [ ] **Step 1: Write the failing protocol and recovery tests**
 
 ```ts
-it("reserves a unique artifactPath", async () => {
-  const fs = mockFs({ existing: [".justice/reviews/abc.json"] });
-  const r = await createReservation({ fs, artifactDir: ".justice/reviews" });
-  expect(r.status).toBe("usable");
-  if (r.status === "usable") expect(r.artifactPath).not.toBe(".justice/reviews/abc.json");
+it.each(["pending", "claimed_without_staging", "claimed_with_staging", "terminal"] as const)(
+  "replays %s without unsafe redispatch", (state) => {
+    expect(projectReviewDispatchSlots(recordsFor(state))).toMatchSnapshot();
+  },
+);
+
+it("does not modify current state for stale PostToolUse", () => {
+  for (const stale of [oldCallId, differentRound, differentArtifactId, differentChildSession]) {
+    expect(acceptPostToolUse(currentClaim, stale)).toEqual({ kind: "stale" });
+  }
 });
 
-it("returns unusable when max collision retries exceeded", async () => {
-  const fs = mockFs({ existing: "__MAX_COLLISION_MODE__" });
-  const r = await createReservation({ fs, artifactDir: ".justice/reviews", maxRetries: 3 });
-  expect(r.status).toBe("unusable");
-  if (r.status === "unusable") expect(r.reason).toBe("artifact_path_collision_exhausted");
+it("canonicalizes mandatory reviews to synchronous execution", () => {
+  expect(normalizeTaskToolInput({ category: "sp-review", run_in_background: true }).runInBackground).toBe(false);
+  expect(normalizeTaskToolInput({ category: "sp-final-review", run_in_background: true }).runInBackground).toBe(false);
 });
 ```
 
-- [ ] **Step 2: FAIL 確認 / 実装 / PASS && Commit (確認後)**
+- [ ] **Step 2: Confirm RED**
 
-`git commit -m "feat: Review artifact reservation (anti-replay, digest, unusable handling)"`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts`
 
-### Task 3.6: state-projection 拡張
+Expected: FAIL because no durable review protocol exists.
 
-**Files:**
-- Modify: `src/core/v2/state-projection.ts` (review dispatch slot / review_observed / 持続化 evidence の再構成を追加)
-- Modify: `src/core/v2/state-projection.test.ts` (新規または追加)
-- Modify: `src/core/v2/observation-model.ts` (spec §4 の typed lifecycle record union 追加)
+- [ ] **Step 3: Implement durable records and replay rules**
 
-**Interfaces:**
-- Produces: `projectReviewDispatchSlots(records)` / `projectTaskLifecycle(records)` / `projectPlanFinalization(records)` を `project()` の組み込み対象に追加
+Create one pending slot per parent session. Claim only one matching pending slot and write the claimed transition, `TaskCallBinding`, `ReviewArtifactReservation`, and `DelegatedExecutionBinding` in one durable commit. Generate a UUID artifact ID and a validated `.justice/reviews/<artifactId>.json` path. A terminal slot is immutable. Recover pending by reissuing the same directive; recover claimed without staging by waiting for matching PostToolUse; recover claimed with staging by terminalizing only with the staged call ID, correlation, artifact ID, digest, and observed execution; recover terminal as a tombstone.
 
-- [ ] **Step 1: 失敗テスト**
+```ts
+export type DelegatedExecutionBinding = {
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly childSessionId: string;
+  readonly scope: ExecutionScope;
+};
 
-`.justice/events` に durable `review_dispatch_transition` record を並べた投影で slot を再構築する回帰テスト。restart 直後に同一 event list を 2 回投影して deterministic になることも独立ケース。
+export function canClaim(slots: readonly ReviewDispatchSlot[], input: ClaimInput): boolean {
+  return slots.filter((slot) => slot.state === "pending" && slot.key.parentSessionId === input.parentSessionId && slot.expectedCategory === input.category).length === 1;
+}
+```
 
-- [ ] **Step 2: 失敗確認 / 実装 / PASS / Commit (確認後)**
+- [ ] **Step 4: Confirm GREEN**
 
-`git commit -m "feat(v2): projection に lifecycle/dispatch slot reviver を追加"`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts
+git commit -m "feat: durable review dispatchとchild bindingを追加"
+```
 
 ---
 
-## Phase 3c (PR-E): Hook / Adapter 接続 — JUS-P0-04 完成
+## Phase 3c: Transactional PostToolUse — JUS-P0-04
 
-### Task 3.7: TaskCallBinding (PreToolUse order)
+### Task 3.5: Consume a matching review artifact exactly once
+
+**Requirement:** JUS-P0-04, INV-13, INV-15 through INV-18, Design §4.8.1, §4.8.2, §4.10.
 
 **Files:**
+- Create: `src/core/review-artifact.ts`
 - Modify: `src/core/session-state-provider.ts`
 - Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/core/justice-plugin.ts`
+- Test: `tests/core/review-artifact.test.ts`
 - Test: `tests/core/session-state-provider.test.ts`
+- Test: `tests/hooks/observation-handler-transactional.test.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
 
-**Interfaces:**
-- Produces: SessionStateProvider に `setTaskCallBinding(callId, TaskCallBinding)` / `getTaskCallBinding(callId)` を追加。`callId` は必ず TaskExecutionRef または ReviewCorrelation のいずれかに紐付く (spec §4.7)。`TaskCallPurpose` を observation log へ付画。
-- `PreToolUse` では callId への binding は **`pending` slot の原子 claim と同一 commit** で確立するため、SessionStateProvider は in-memory cache のみを扱い authoritative にしない (spec §4.8.1)。
+**Consumes:** projected claimed dispatch slot; `TaskCallBinding`; `DelegatedExecutionBinding`; reserved artifact path.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>` where success is possible only after a matching child observation and durable terminalization.
+
+- [ ] **Step 1: Write the failing ordering and anti-replay tests**
 
 ```ts
-it("binding distinguishes implementation vs task_review vs final_review", () => {
-  const p = new SessionStateProvider();
-  p.setTaskCallBinding("c1", { callId: "c1", purpose: "implementation", taskExecutionRef: ref });
-  p.setTaskCallBinding("c2", { callId: "c2", purpose: "task_review", correlation, artifactReservation });
-  expect(p.getTaskCallBinding("c1")!.purpose).toBe("implementation");
-  expect(p.getTaskCallBinding("c2")!.purpose).toBe("task_review");
+it("performs the review completion protocol in durable order", async () => {
+  await consumeReviewCompletion(matchingInput);
+  expect(trace).toEqual([
+    "verify-claimed-binding", "verify-child-binding", "read-artifact-once", "validate-schema",
+    "compute-digest", "commit-staging", "commit-consumption-review-terminal", "apply-acceptance", "cleanup-artifact",
+  ]);
+});
+
+it("retries terminalization from staging without rereading the artifact", async () => {
+  await consumeReviewCompletion(inputWithTerminalCommitFailure);
+  await recoverReviewCompletion(stagedRecord);
+  expect(readArtifact).toHaveBeenCalledTimes(1);
+});
+
+it("does not dispatch task PostToolUse side effects through Promise.all", async () => {
+  expect(await runTaskPostToolUseSequentially(event)).toEqual(PROCEED);
+  expect(trace).toEqual(["observation", "lifecycle", "directive", "acceptance", "progress"]);
 });
 ```
 
-- [ ] **Step 2: 失敗確認 / 実装 / PASS**
+- [ ] **Step 2: Confirm RED**
 
-### Task 3.8: Observation Handler / task() purpose 分岐
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts`
+
+Expected: FAIL because matching review completion is not transactional.
+
+- [ ] **Step 3: Implement the fixed protocol**
+
+Implement this exact sequence: validate claimed parent binding; validate child-session binding; read the usable artifact once; strictly parse `ReviewWorkerResultV1`; calculate digest; commit `ReviewCompletionStagingRecord`; commit `review_artifact_consumed`, `review_observed`, assembled `ReviewArtifactV1`, and terminal transition atomically; only then evaluate acceptance; archive or delete the artifact idempotently. Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, or child session returns a stale advisory without artifact I/O or state mutation.
+
+```ts
+const staging = await commitStaging(await validateAndReadMatchingArtifact(input));
+const terminal = await commitConsumedReviewAndTerminal(staging);
+if (terminal.kind !== "committed") return { kind: "blocked" };
+await cleanupArtifact(staging.artifactConsumption.artifactId);
+return applyAcceptance(terminal.reviewArtifact);
+```
+
+Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `runTaskPostToolUseSequentially`. Keep independent non-task handlers unchanged.
+
+- [ ] **Step 4: Confirm GREEN**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/review-artifact.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts tests/runtime/opencode-adapter-v2.test.ts
+git commit -m "feat: review artifact消費をtransactionalに処理"
+```
+
+### Task 3.6: Update plan progress only after accepted task decisions
+
+**Requirement:** JUS-P0-04, INV-06, INV-08.
 
 **Files:**
-- Modify: `src/hooks/observation-handler.ts`
-- Test: `tests/hooks/observation-handler-*.test.ts` の既存系 + 新規 `tests/hooks/observation-handler-transactional.test.ts`
+- Create: `src/core/progress-updater.ts`
+- Modify: `src/hooks/task-feedback.ts`
+- Test: `tests/core/progress-updater.test.ts`
+- Test: `tests/hooks/task-feedback.test.ts`
 
-**Interfaces:**
-- Consumes: TaskCallBinding (Task 3.7), ObservationLogStore 既存 append API
-- Produces: `handlePostToolUse` の task 呼出で以下を transactional order:
-  1. `classify TaskCallPurpose`
-  2. `implementation` → `WorkerReported` event を emit
-  3. `task_review` / `final_review` → `ReviewWorkerResultV1` を収集し `ReviewArtifactV1` 組立 → `review_observed` イベント + atomic 永続化
-  4. gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` でのみ
-  5. `AcceptanceDecision` 発行後のみ ProgressUpdater (別タスクで checkbox 更新)
+**Consumes:** `TaskAcceptanceDecision`; `PlanParser.updateCheckbox(content, lineNumber, checked)`.
 
-- [ ] **Step 1: 失敗テスト (invocation 順序 & 相互 splice 禁止)**
+**Produces:** `updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult`.
+
+- [ ] **Step 1: Write the failing progress tests**
 
 ```ts
-it("runs side-effecting handlers sequentially, not via Promise.all", async () => {
-  const calls: string[] = [];
-  const handlerA = () => calls.push("A");
-  const handlerB = () => calls.push("B");
-  const handlerC = () => calls.push("C");
-  await plugin.runPostToolUseForTask(
-    fakeEvent,
-    { classify: () => ({ purpose: "implementation" }), reportWorker: handlerA, projectLifecycle: handlerB, accept: handlerC },
-  );
-  expect(calls).toEqual(["A", "B", "C"]);
+it("does not update a checkbox for rework-required or blocked", () => {
+  expect(updatePlanProgress(plan, task, reworkDecision)).toEqual({ content: plan, updated: false });
+  expect(updatePlanProgress(plan, task, blockedDecision)).toEqual({ content: plan, updated: false });
+});
+
+it("updates only an accepted task", () => {
+  expect(updatePlanProgress(plan, task, acceptedDecision).updated).toBe(true);
 });
 ```
 
-これは static test として `src/core/justice-plugin.ts` の Promise.all 同時実行構造をテスト可能な形にする (コード生成 test で `await Promise.all` 行数を 0 にする等も検討可).
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 2: 既存の Promise.all 駆除と transactional dispatcher 実装**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts`
+
+Expected: FAIL because worker feedback writes progress directly.
+
+- [ ] **Step 3: Implement accepted-only progress updates**
+
+Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. Invoke the updater after the durable acceptance decision only.
 
 ```ts
-// src/core/justice-plugin.ts PostToolUse case:
-case "PostToolUse": {
-  if (event.payload.toolName === "task") {
-    return this.runTaskPostToolUseSequentially(event); // see below
-  }
-  // ... 既存非 task 維持
-}
-
-private async runTaskPostToolUseSequentially(event: HookEvent): Promise<HookResponse> {
-  // 1) classify purpose (read-only)
-  // 2) observation.emit WorkerReported (fail-open): evidence log
-  // 3) project lifecycle (fail-open): in-memory snapshot + durable transition record
-  // 4) if review_pending reached -> inject ReviewRequiredDirective (artifactReservation generated if needed)
-  // 5) acceptance decision (durable) -> only on accepted, progress update (progress credit to Task 3.9)
-  //    error path: blocked (no progress update)
+export function updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult {
+  if (decision.verdict !== "accepted" || decision.taskExecutionRef.taskId !== task.id) return { content, updated: false };
+  return { content: new PlanParser().updateCheckbox(content, task.steps.at(-1)!.lineNumber, true), updated: true };
 }
 ```
 
-INV-13 を コンパイル時のテストで保証するために `codeContains` introspection test を追加する (実際の `Promise.all` パターンが再導入されると fail する)。
+- [ ] **Step 4: Confirm GREEN**
 
-- [ ] **Step 3: 全テスト / Commit (確認後)**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts`
 
-`git commit -m "feat: task() PostToolUse を classified → worker-reported → gate → acceptance の transactional order に"`
+Expected: PASS.
 
-### Task 3.9: ProgressUpdater 分離
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/progress-updater.ts src/hooks/task-feedback.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts
+git commit -m "feat: accepted decision後だけplan progressを更新"
+```
+
+---
+
+## Phase 4: Controller Routing — JUS-P0-01
+
+### Task 4.1: Preserve workflow identity in routing decisions
+
+**Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
 **Files:**
-- Modify: `src/hooks/task-feedback.ts` (直接 updateCheckbox を撤去)
-- Create: `src/core/progress-updater.ts` または既存適切な場所
-- Test: `tests/hooks/task-feedback.test.ts` / `tests/core/progress-updater.test.ts`
+- Modify: `src/core/types.ts`
+- Modify: `src/core/routing-decision.ts`
+- Create: `src/core/controller-routing.ts`
+- Test: `tests/core/routing-decision.test.ts`
+- Test: `tests/core/controller-routing.test.ts`
 
-**Interfaces:**
-- Produces: `updatePlanProgress(planContent, ref, decision): { content: string; updated: boolean }`。`worker report から checkbox 更新しない`。`decision.verdict === "accepted"` のみ updateCheckbox 呼び出し。
+**Consumes:** `WorkflowRouter.resolveController(workflow)`; `ControllerAgent`.
 
-- [ ] **Step 1: 失敗テスト**
+**Produces:** `ControllerRoutingDecision = { readonly kind: "controller"; readonly workflow: string; readonly controller: ControllerAgent; readonly reason: RoutingReason }`; `createControllerRoutingDecision(workflow, controller, reason)`.
+
+- [ ] **Step 1: Write the failing workflow-identity tests**
 
 ```ts
-it("worker success without acceptance does not update plan.md", () => {
-  const before = plan;
-  const after = updatePlanProgress(before, ref, { verdict: "rework-required", ... });
-  expect(after.updated).toBe(false);
-  expect(after.content).toBe(before);
+it("retains workflow when two workflows select the same controller", () => {
+  expect(createControllerRoutingDecision("brainstorming", "sisyphus", "workflow_rule").workflow).toBe("brainstorming");
+  expect(createControllerRoutingDecision("writing-plans", "sisyphus", "workflow_rule").workflow).toBe("writing-plans");
 });
 
-it("accepted verdict updates checkbox via PlanParser", () => {
-  const after = updatePlanProgress(plan, ref, acceptedDecision);
-  expect(after.updated).toBe(true);
-  expect(after.content).toContain("- [x]");
+it("reports applied, mismatch, and unapplied controller observations", () => {
+  expect(evaluateControllerRoutingObservation(appliedInput).routingStatus).toBe("applied");
+  expect(evaluateControllerRoutingObservation(mismatchInput).routingStatus).toBe("mismatch");
+  expect(evaluateControllerRoutingObservation(unappliedInput).routingStatus).toBe("unapplied");
 });
 ```
 
-- [ ] **Step 2: `task-feedback.ts` の handleSuccess / handleFailure path から直接 writeFile を外し、`ProgressUpdater` への橋渡しに変更**
+- [ ] **Step 2: Confirm RED**
 
-- [ ] **Step 3: 全テスト / Commit (確認後)**
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts`
 
-`git commit -m "feat: ProgressUpdater を WorkerReported 経路から分離 (INV-06, INV-08)"`
+Expected: FAIL because controller routing decisions discard workflow identity.
 
-### Task 3.10: ReviewRequiredDirective 経路
+- [ ] **Step 3: Implement typed routing identity and observation evaluation**
+
+Move only the controller union member in `RoutingDecision` to include `workflow`; preserve the union in `src/core/types.ts`. Change the factory signature and all callers. Implement `evaluateControllerRoutingObservation` in `src/core/controller-routing.ts`; only a matching `message.updated` observation can return `applied`, and `chat.params` alone returns `unapplied` with `actual_not_observed`.
+
+```ts
+export function createControllerRoutingDecision(
+  workflow: string, controller: ControllerAgent, reason: RoutingReason,
+): Extract<RoutingDecision, { readonly kind: "controller" }> {
+  return { kind: "controller", workflow, controller, reason };
+}
+```
+
+- [ ] **Step 4: Confirm GREEN**
+
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+git add src/core/types.ts src/core/routing-decision.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
+git commit -m "feat: controller routingにworkflow identityを保持"
+```
+
+### Task 4.2: Persist controller routing observations and doctor diagnostics
+
+**Requirement:** JUS-P0-01, Design §3.3 and §5.1.
 
 **Files:**
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/observation-handler.ts`
-- Modify: `src/core/justice-plugin.ts`
-- Test: `tests/runtime/opencode-adapter*.test.ts` または既存 integration suite に追記
+- Modify: `src/core/doctor-categories.ts`
+- Modify: `src/runtime/doctor-cli.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
+- Test: `tests/hooks/observation-handler-gate.test.ts`
+- Test: `tests/runtime/doctor-cli.test.ts`
 
-**Interfaces:**
-- Produces: Justice が `ReviewPending` / `FinalReviewPending` に到達した時点で controller へ `ReviewRequiredDirective { kind: "review_required", correlation }` を injected context として emit。existing PreToolUse/PostToolUse で category="sp-review"/"sp-final-review" の場合に pending slot claim + artifact reservation + binding を作る入力として、この directive を参照。
+**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; parsed command configuration.
 
-- [ ] **失敗テスト: directive inject による相関付け (callId → TaskCallBinding が pending slot と一致)**
+**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller, actual controller, status, application method, and source; `checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult`.
 
-- [ ] **実装**: adapter に directive inject 用の output 経路を 新設 (若しくは既存 `inject` の variant を拡張)。省庁-durable commit 順序: (1) pending-transition durable commit (2) directive inject (3) atomic claim (4) terminalization。
-
-- [ ] **ケース: atomic claim 失敗 (0/2 件 / category 不一致) → fail-open + advisory + Acceptance blocked** を regression テストに含める
-
-- [ ] **全テスト / Commit (確認後)**
-
-`git commit -m "feat(adapter): ReviewRequiredDirective と dispatch binding の結線"`
-
----
-
-## Phase 4 (PR-F): Controller Routing — JUS-P0-01
-
-### Task 4.1: Controller Routing コア
-
-**Files:**
-- Create: `src/core/controller-routing.ts`
-- Test: `tests/core/controller-routing.test.ts`
-
-**Interfaces:**
-- Consumes: `ControllerAgent` (既存 types.ts), `WorkflowRouter.resolveController(workflow)` (既存)
-- Produces: `evaluateControllerRoutingObservation(input)` 純粋関数で spec §4.1 の判定を実施
-
-- [ ] **Step 1: 失敗テスト (spec の主要分岐を取り上げ)**
+- [ ] **Step 1: Write the failing runtime and doctor tests**
 
 ```ts
-const params = (patch: Partial<Input>) => ({ ...defaultProbeInput, ...patch });
-
-it("message.updated で actual === desired なら applied", () => {
-  const r = evaluateControllerRoutingObservation(params({
-    desired: "sisyphus", application: "pinned-command", actualObservedBy: "message.updated", actual: "sisyphus",
-  }));
-  expect(r.routingStatus).toBe("applied");
+it("persists mismatch when the observed controller differs", async () => {
+  await adapter.handleMessageUpdated(messageUpdatedFor("sisyphus"));
+  expect(await readRoutingObservation()).toMatchObject({ workflow: "subagent-driven-development", routingStatus: "mismatch" });
 });
 
-it("message.updated で actual !== desired => mismatch", () => {
-  const r = evaluateControllerRoutingObservation(params({
-    desired: "atlas", application: "pinned-command", actualObservedBy: "message.updated", actual: "sisyphus",
-  }));
-  expect(r.routingStatus).toBe("mismatch");
-});
-
-it("chat.params 一致だけでは applied にしない", () => {
-  const r = evaluateControllerRoutingObservation(params({
-    desired: "sisyphus", application: "pinned-command", actualObservedBy: "chat.params", actual: "sisyphus",
-  }));
-  expect(r.routingStatus).toBe("unapplied");
-  if (r.routingStatus === "unapplied") expect(r.reason).toBe("actual_not_observed");
-});
-
-it("no application configured => unapplied(application_not_configured)", () => {
-  const r = evaluateControllerRoutingObservation(params({
-    desired: "atlas", application: "none", actualObservedBy: "none",
-  }));
-  expect(r.routingStatus).toBe("unapplied");
-  if (r.routingStatus === "unapplied") expect(r.reason).toBe("application_not_configured");
+it("reports missing pinned command names", () => {
+  expect(checkPinnedCommandPresence(["justice-start"])).toEqual({
+    ok: false,
+    missing: ["justice-implement-brainstorming", "justice-implement-writing-plans", "justice-implement-subagent-driven-development", "justice-implement-executing-plans"],
+  });
 });
 ```
 
-- [ ] **Step 2: FAIL / 実装 (discriminated union 準拠) / PASS / Commit (確認後)**
+- [ ] **Step 2: Confirm RED**
 
-`git commit -m "feat: ControllerRoutingObservation 評価 core (spec §4.1)"`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts`
 
-### Task 4.2: chat.params / message.updated を observation に接続
+Expected: FAIL because routing observations and pinned-command diagnostics are absent.
 
-**Files:**
-- Modify: `src/runtime/opencode-adapter.ts` の `chat.params` / `message.updated` 経路
-- Modify: `src/hooks/observation-handler.ts`
-- Test: integration で既存 events + ControllerRoutingObservation を書き込むテストを追加
+- [ ] **Step 3: Implement observation and diagnostics**
 
-**Interfaces:**
-- PreToolUse/PostToolUse に加え、`chat.params` / `message.updated` の `agent` 値を actual として durable log に persist。spec §3.3。
+Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path. Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a routing mismatch block execution. In `doctor-categories.ts`, require `justice-implement-brainstorming`, `justice-implement-writing-plans`, `justice-implement-subagent-driven-development`, and `justice-implement-executing-plans`; doctor reports each missing name and exits non-zero.
 
-- [ ] **Step 1: 既存 HandleMessage の agentName → sessionStateProvider 流を参考に実装方重fix。既存の SessionStateProvider.setAgentMapping() と併せて controller routing 用の Sideband observation 追加。**
+```ts
+export function checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult {
+  const present = new Set(commandNames);
+  const missing = REQUIRED_PINNED_COMMANDS.filter((name) => !present.has(name));
+  return { ok: missing.length === 0, missing };
+}
+```
 
-- [ ] **Step 2: fail-open 確認 + durable 永続化と mismatch advisory追加**
+- [ ] **Step 4: Confirm GREEN**
 
-advisory は `[JUSTICE] Controller routing mismatch: desired=atlas actual=sisyphus (application=pinned-command)` 相当。
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts`
 
-- [ ] **Step 3: 全テスト / Commit (確認後)**
+Expected: PASS.
 
-`git commit -m "feat: chat.params/message.updated を controller routing observation に接続"`
+- [ ] **Step 5: Commit after approval**
 
-### Task 4.3: doctor pinned-command 雛形 + README/SPEC 更新
-
-**Files:**
-- Modify: `src/core/doctor-*` (pinned-command 不足検査)
-- Modify: `README.md` (`/justice-implement`, `/justice-start`, 推奨 pinned-command example)
-- Modify: `SPEC.md` (v4.0.0 ADR / 破壊的変更記録)
-- Modify: `docs/agents/upstream-drift.md` (必要に応じて)
-
-- [ ] **Step 1: doctor の check 追加**
-
-`checkPinnedCommandsPresence(config)` を実装。workflow → controller 期待される pin を doctor が提示 (例: `brainstorming` => `sisyphus`)。missing なら doctor exit non-zero。
-
-- [ ] **Step 2: README/SPEC の変更**
-
-- SPEC.md 15.x / 15.12 に v4 の Semantic Control Plane 追記 (ADR)
-- README の `/justice-implement` セクションを binding に合わせ書き換え、制定 plan mutation invalidates を明記
-- 破壊的変更: one-shot arm, deep/architecture legacy route, worker supported direct plan update 等を CHANGELOG 様に記録
-
-- [ ] **Step 3: プレフライト / 品質ゲート (§6.3)**
-
-`bun run test && bun run typecheck && bun run lint && bun run build`
-
-- [ ] **Commit (確認後)**
-
-`git add src/core/doctor-*.ts README.md SPEC.md docs/agents/upstream-drift.md`
-`git commit -m "docs: v4.0.0 semantic control plane の導入を文書化 + doctor pinned-command 檢査"`
+```bash
+git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts
+git commit -m "feat: controller routing observationとdoctor診断を追加"
+```
 
 ---
 
-## 実行時の注記
+## Traceability and Definition of Done
 
-- **サブエージェント不使用: 本プラン実行中は subagent (task() ) を dispatch しない。**
-- **Stacked PR**: PR-A 起点にブランチを積み上げ、前の PR を base にして、GitHub 上で順次 review→merge。差分変更量は `PR-A` が最も小さく、Phase 3(=3a/3b/3c) が大きいため能動的に分割した3 PR に分かれている。の手順:
-  1. `git checkout -b feature/v4-category-routing master` → PR-A 作成
-  2. マージ後 `feature/v4-plan-authorization` を base=PR-A で rebase → PR-B 作成
-  3. 同様に 3a → 3b → 3c → 4 の順に stack を伸ばす
-- **エージェントによる `git commit` / `git rebase` / `gh` 実行はユーザー確認前提。** 実行前に確認。
+| Requirement / Design Decision | Plan Task | Required tests |
+|---|---|---|
+| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, unapplied, pinned command presence |
+| JUS-P0-02 semantic fingerprint | 2.1 | task progress invariant, global mutation invalidates, fenced mutation invalidates, EOL invariant |
+| JUS-P0-02 canonical snapshot | 2.1, 2.2 | snapshot persistence, hydration, all-tasks-accepted snapshot SSOT |
+| JUS-P0-02 cancel and release | 2.3 | cancel, release, subsequent authorization rejection |
+| JUS-P0-03 seven-to-seven category mapping | 1.1, 1.2 | every role, legacy downgrade rejection, doctor presence |
+| JUS-P0-04 lifecycle replay | 3.1 | duplicate identity, invalid transition, replay continuation |
+| JUS-P0-04 task Gate | 3.2 | current task attempt only |
+| JUS-P0-04 Final Gate | 3.2 | current finalization attempt only, PASS complete, WARN/FAIL rework, insufficient blocked |
+| JUS-P0-04 durable review dispatch | 3.4 | pending, claimed, terminal, four restart states |
+| JUS-P0-04 child-session correlation | 3.3, 3.4 | runtime spike, task review correlation, final review correlation, durable binding |
+| JUS-P0-04 anti-replay | 3.4, 3.5 | consume once, staging recovery, stale call ID, stale round, stale artifact, stale child session |
+| JUS-P0-04 transactional PostToolUse | 3.5 | strict sequence, terminal-commit recovery, no parallel side effects |
+| INV-01 through INV-18 | 1.1 through 4.2 | each invariant is covered by the rows above and the named tests |
 
-## DoD (§10 準拠)
+Every task above implements one named design decision: Tasks 1.1-1.2 implement Design §5.3; Tasks 2.1-2.3 implement §4.2, §4.3, and §5.2; Tasks 3.1-3.6 implement §4.4 through §4.11 and §5.4 through §5.5; Tasks 4.1-4.2 implement §4.1 and §5.1. No task exists solely for future reuse.
 
-- 全 Phase の `bun run test/typecheck/lint/build` が pass
-- INV-01〜INV-18 のうち automated test に載せられたものは all green
-- 未検証 (例: OpenCode runtime boundary) は SPEC §15.12 に既知限界として記録
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if synchronous mandatory review canonicalization, durable claim, staging, artifact consumption, stale-event rejection, task Gate, or Final Gate lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+
+Before implementation handoff, inspect every implementation step for unresolved placeholders, ambiguous file paths, and unbound requirements. Then verify that each table row names at least one exact task and test file.

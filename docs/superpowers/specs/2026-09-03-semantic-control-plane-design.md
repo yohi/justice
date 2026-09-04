@@ -117,7 +117,8 @@ Justice は以下を提供する。
 ### 4.1 Controller Routing
 
 ```ts
-// src/core/routing-decision.ts
+// src/core/types.ts
+// Factory functions are in src/core/routing-decision.ts.
 export type ControllerAgent =
   | "sisyphus"
   | "atlas"
@@ -210,6 +211,7 @@ export type ApprovedPlanBinding = {
   readonly sessionId: string;
   readonly planPath: string;
   readonly planFingerprint: PlanFingerprint;
+  readonly canonicalSnapshot: CanonicalPlanSnapshot;
   readonly fingerprintSchema: "justice-plan-v1";
   readonly approvedAt: string;
   readonly status: "active" | "invalidated" | "released";
@@ -229,7 +231,7 @@ export type AuthorizationMergeRule = {
 - `authorizationId` は承認単位の不変 identity。同一 `authorizationId` では `active → invalidated|released` は不可逆とする。
 - 再承認（re-approval）は新しい `authorizationId` を発行する。古い terminal binding を `active` に戻す merge は禁止する。
 - `fingerprintSchema` は canonicalization ロジックが将来変わったときの安全装置である。
-- 承認時に `CanonicalPlanSnapshot` を必ず生成する。
+- 承認時に `CanonicalPlanSnapshot` を必ず生成し、同一の `ApprovedPlanBinding` record に格納する。snapshot の別 store、別 cache、または別 persistence file を SSOT としてはならない。
 - `invalidatedAt` / `releasedAt` は監査・競合解決用タイムスタンプ。
 - `invalidated` / `released` 状態の永続化に失敗しても、その binding store を uncertain として扱い、再利用禁止とする。
 - `AtomicPersistence.merge` において、`terminalStates` に含まれる status を持つ binding を `active` で上書きしてはならない。
@@ -331,7 +333,8 @@ export type PlanFinalizationTransitionRecord = {
 - 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。同一 `TaskExecutionRef` + 同一 transition identity の重複のみ idempotent に無視する。transition identity には必要に応じて `eventId` を含め、replay 時の冪等性を保つ。許可されていない `accepted → pending` 遷移は無効として記録。
 - restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の証拠・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
-- 新規 persistence file は作らない。
+- Lifecycle、review dispatch、completion staging、artifact consumption、review observation、Gate、Acceptance は既存の append-only observation/decision log を durable store とする。`state-projection.ts` と `SessionStateProvider` はこの log から再構築する projection/cache であり SSOT ではない。
+- Plan authorization だけは明示的な例外として `.justice/authorizations.json` を durable store とする。このファイルには `ApprovedPlanBinding` のみを保存し、binding 内の `canonicalSnapshot` を authorization snapshot の唯一の durable copy とする。これ以外の専用 persistence file は作らない。
 
 ### 4.5 Review Artifact
 
@@ -835,6 +838,7 @@ Acceptance criteria:
   → ApprovedPlanBinding {
       authorizationId: <new UUID>,
       sessionId, planPath, planFingerprint,
+      canonicalSnapshot,
       fingerprintSchema: "justice-plan-v1",
       approvedAt, status: "active"
     }
