@@ -2,7 +2,7 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Review Pending（レビュー指摘反映済み、再レビュー待ち）  
+**Status:** Design Approved（anti-replay 契約を復元、implementation plan 作成可）
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
 
@@ -326,7 +326,7 @@ export type PlanFinalizationTransitionRecord = {
 - lifecycle transition は `TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` として durable observation/decision log に記録される。各 record は current `attemptId` / `finalizationAttemptId` を保持する。
 - durable log に書き込まれる `PersistedEnvelope`（persisted observation/decision record envelope）は、スコープに応じた実行コンテキストを必ず含む。task-scoped レコードでは `taskExecutionRef`（`authorizationId` / `taskId` / `attemptId`）を、plan-scoped レコードでは `{ authorizationId, finalizationAttemptId }` を含める。これにより restart / replay 時に当該レコードがどの attempt に属するかを再構築できる。
 - 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。同一 `TaskExecutionRef` + 同一 transition identity の重複のみ idempotent に無視する。transition identity には必要に応じて `eventId` を含め、replay 時の冪等性を保つ。許可されていない `accepted → pending` 遷移は無効として記録。
-- restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の证据・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
+- restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の証拠・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
 - 新規 persistence file は作らない。
 
@@ -450,11 +450,13 @@ export type TaskCallBinding =
       readonly purpose: "task_review";
       readonly taskExecutionRef: TaskExecutionRef;
       readonly correlation: TaskReviewCorrelation;
+      readonly artifactRequest: ReviewArtifactRequest;
     }
   | {
       readonly callId: string;
       readonly purpose: "final_review";
       readonly correlation: FinalReviewCorrelation;
+      readonly artifactRequest: ReviewArtifactRequest;
     };
 ```
 
@@ -524,6 +526,16 @@ export type ReviewArtifactRequest = {
 
 - `ReviewArtifactRequest` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で初めて `callId` を含む `ReviewArtifactRequest` を生成する。
 - mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
+- **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
+  - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactRequest` を組み立てる。
+  - `artifactPath` は `callId` と `correlation` から一意に導出される。例：`.justice/reviews/<correlation-kind>-<artifactId>.json`。
+  - dispatch 前に同 `artifactPath` のファイル存在を拒否する。存在する場合はその `task()` 呼び出しを fail-closed で block し、`review_unexpected_existing_artifact` advisory を記録する。
+  - `ReviewArtifactRequest` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactRequest` フィールドへ bind する。
+  - Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。
+  - Justice は matching PostToolUse 到達後、対応する `TaskCallBinding.artifactRequest` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通す。
+  - 読み取った内容の digest と `artifactId` を observation log に記録する（`review_artifact_consumed` event）。
+  - consume 後、元ファイルを archive / move または delete する。同一 `artifactPath` の再読取りを防止する。
+  - 別の attempt（新 `TaskExecutionRef`）や別の finalization attempt（新 `FinalizationAttemptId`）で古い `artifactId` / `artifactPath` を再利用してはならない。`artifactId` は attempt 単位で新規 UUID を発行する。
 ### 4.11 Acceptance Decision
 
 ```ts
@@ -840,7 +852,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-11 | `TaskCallPurpose` separates implementation, task_review, final_review |
 | INV-12 | Terminal authorization states (invalidated / released) are not resurrected |
 | INV-13 | JUS-P0-04 side-effecting handlers in `PostToolUse` are not dispatched via `Promise.all` |
-| INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttempt`. |
+| INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttemptId`. |
 | INV-15 | Mandatory `sp-review` / `sp-final-review` completion must be observed before its `ReviewArtifact` is consumed. |
 
 ---
