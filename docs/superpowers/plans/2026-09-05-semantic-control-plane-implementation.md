@@ -122,13 +122,15 @@ git commit -m "feat: execution roleをsp categoryへ完全対応"
 
 **Files:**
 - Create: `src/core/doctor-categories.ts`
+- Modify: `src/core/doctor-config.ts`
 - Modify: `src/runtime/doctor-cli.ts`
 - Test: `tests/core/doctor-categories.test.ts`
+- Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** `SpCategory` from `src/core/types.ts`; parsed config text already produced by `src/runtime/doctor-cli.ts`.
+**Consumes:** `SpCategory` from `src/core/types.ts`; `buildDoctorEffectiveConfigView(scans): DoctorEffectiveConfigView` from `src/core/doctor-config.ts`.
 
-**Produces:** `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
+**Produces:** `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, { readonly agent?: string }> }`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -143,11 +145,24 @@ it("reports exactly the missing required categories", () => {
 it("accepts all seven categories", () => {
   expect(checkSpCategoryPresence(Array.from(ALL_SP_CATEGORIES))).toEqual({ ok: true, missing: [] });
 });
+
+it("uses the higher-priority JSONC category value instead of a source union", () => {
+  const effective = buildDoctorEffectiveConfigView([
+    scanConfigText("global", '{ category: { "sp-review": { agent: "old" }, "sp-deep": {} } }'),
+    scanConfigText("project", '{ category: { "sp-review": { agent: "new" } } }'),
+  ]);
+  expect(effective.effectiveCategoryNames).toEqual(["sp-review"]);
+});
+
+it.each(["category", "command"])("omits a missing %s key without exposing values", (key) => {
+  const effective = buildDoctorEffectiveConfigView([scanConfigText("project", "{}")]);
+  expect(key === "category" ? effective.effectiveCategoryNames : Array.from(effective.effectiveCommandDefinitions)).toEqual([]);
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
 Expected: FAIL because the category checker is absent.
 
@@ -166,18 +181,20 @@ export function checkSpCategoryPresence(categoryNames: readonly string[]): SpCat
 }
 ```
 
-Have `doctor-cli.ts` extract category names from the already loaded effective configuration and append one non-zero-exit diagnostic for every missing name.
+Parse each readable supported JSONC source in `doctor-config.ts` and reduce it in existing `SOURCE_PRIORITY` order. For allowlisted top-level `category` and `command` objects, a higher-priority same-name key replaces the lower-priority value; do not deep-merge or union names. Export category names and, for commands only, the allowlisted `agent` field keyed by command name. Unreadable, unsupported, and parse-error sources contribute no effective values and retain redacted diagnostics. `doctor-cli.ts` passes `effectiveCategoryNames` to the checker and appends one non-zero-exit diagnostic for every missing name.
+
+Add focused tests for command precedence, unreadable source, unsupported source, JSONC comments/trailing commas, category missing, command missing, and diagnostics that contain neither literal category/command values nor secret-like values.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/doctor-categories.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts
+git add src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
 git commit -m "feat: doctorでsp category設定を検査"
 ```
 
@@ -315,7 +332,7 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 
 **Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`.
 
-**Produces:** `ApprovedPlanBinding` containing `canonicalSnapshot`; `AuthorizationStore.approve(input): Promise<ApprovedPlanBinding | null>`; `AuthorizationStore.release(authorizationId, at): Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`.
+**Produces:** `ApprovedPlanBinding` containing `canonicalSnapshot`; `ApprovePlanInput` without `authorizationId`; `AuthorizationStore.approve(input: ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always generates a fresh authorizationId; `AuthorizationStore.release(authorizationId, at): Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`.
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
 
@@ -332,10 +349,15 @@ it("hydrates an active binding and rejects a changed fingerprint", async () => {
   expect(isBindingActiveFor(binding!, "s1", "docs/p.md", changedFingerprint)).toBe(false);
 });
 
-it("never resurrects invalidated or released bindings", async () => {
-  const binding = await store.approve(input);
-  await store.release(binding!.authorizationId, "2026-09-05T00:00:00.000Z");
-  expect(await store.approve(Object.assign({}, input, { authorizationId: binding!.authorizationId }))).toBeNull();
+it("generates a fresh authorizationId on reapproval", async () => {
+  const oldBinding = await store.approve(input);
+  await store.release(oldBinding!.authorizationId, "2026-09-05T00:00:00.000Z");
+  const newBinding = await store.approve(input);
+  expect(newBinding!.authorizationId).not.toBe(oldBinding!.authorizationId);
+});
+
+it("never lets a stale active merge overwrite the same terminal authorizationId", () => {
+  expect(mergeBindings(staleActive, releasedBinding)).toEqual(releasedBinding);
 });
 ```
 
@@ -347,7 +369,7 @@ Expected: FAIL because authorization persistence and hydration do not exist.
 
 - [ ] **Step 3: Implement the authorization store**
 
-Use exactly `.justice/authorizations.json` and `.justice/authorizations.conflict.json` as the `AtomicPersistence` paths. Store only `ReadonlyArray<ApprovedPlanBinding>`. On approval, atomically invalidate an existing active binding for the same session with reason `plan_superseded`, generate a fresh authorization ID, and persist the new binding containing the computed snapshot. On a persistence failure, return `null` and leave enrichment unauthorized. On plugin initialization, hydrate active bindings and restore their `planPath` into `PlanBridge`; if the file cannot be read, no binding is active.
+Use exactly `.justice/authorizations.json` and `.justice/authorizations.conflict.json` as the `AtomicPersistence` paths. Store only `ReadonlyArray<ApprovedPlanBinding>`. `ApprovePlanInput` must not accept a caller-provided authorizationId. On approval, atomically invalidate an existing active binding for the same session with reason `plan_superseded`, generate a fresh authorization ID, and persist the new binding containing the computed snapshot. Keep the same-ID terminal-overwrite rule inside the persistence merge function and test it independently from approval. On a persistence failure, return `null` and leave enrichment unauthorized. On plugin initialization, hydrate active bindings and restore their `planPath` into `PlanBridge`; if the file cannot be read, no binding is active.
 
 ```ts
 export type ApprovedPlanBinding = {
@@ -383,6 +405,7 @@ git commit -m "feat: plan authorizationをdurable bindingへ置換"
 
 **Files:**
 - Modify: `src/core/implement-command.ts`
+- Modify: `src/core/types.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Test: `tests/core/implement-command.test.ts`
@@ -391,14 +414,26 @@ git commit -m "feat: plan authorizationをdurable bindingへ置換"
 
 **Consumes:** `parseJusticeImplementCommandArguments(argumentsString)`; `AuthorizationStore.release(authorizationId, at)`.
 
-**Produces:** `ImplementationArmRequest` union with `{ readonly source: "command"; readonly action: "approve"; readonly planPath: string; readonly approved: boolean }` and `{ readonly source: "command"; readonly action: "cancel"; readonly planPath: string }`.
+**Produces:** `ImplementationArmRequest` discriminated union with `{ readonly source: "command"; readonly action: "approve"; readonly planPath: string; readonly approved: boolean }` and `{ readonly source: "command"; readonly action: "cancel" }`.
 
 - [ ] **Step 1: Write the failing cancellation tests**
 
 ```ts
-it("parses cancel with a safe plan path", () => {
-  expect(parseJusticeImplementCommandArguments("--plan docs/p.md --cancel")).toEqual({
-    source: "command", action: "cancel", planPath: "docs/p.md",
+it("parses pathless cancel", () => {
+  expect(parseJusticeImplementCommandArguments("--cancel")).toEqual({
+    source: "command", action: "cancel",
+  });
+});
+
+it.each(["--plan docs/p.md --cancel", "--approved --cancel", "--cancel --cancel"])(
+  "rejects incompatible cancel flags: %s", (argumentsString) => {
+    expect(parseJusticeImplementCommandArguments(argumentsString)).toBeNull();
+  },
+);
+
+it("accepts only plan-scoped approval", () => {
+  expect(parseJusticeImplementCommandArguments("--plan docs/p.md --approved")).toMatchObject({
+    action: "approve", planPath: "docs/p.md", approved: true,
   });
 });
 
@@ -406,6 +441,11 @@ it("releases then rejects subsequent task authorization", async () => {
   await bridge.handleImplementationArm("s1", approveRequest);
   await bridge.handleImplementationArm("s1", cancelRequest);
   expect((await bridge.handlePreToolUse(taskEvent)).injectedContext).toContain("IMPLEMENTATION UNAUTHORIZED");
+});
+
+it("treats cancel without an active binding as an idempotent no-op", async () => {
+  await expect(bridge.handleImplementationArm("s1", cancelRequest)).resolves.toMatchObject({ armed: false });
+  expect(release).not.toHaveBeenCalled();
 });
 ```
 
@@ -417,10 +457,10 @@ Expected: FAIL because `--cancel` is rejected.
 
 - [ ] **Step 3: Implement cancellation**
 
-Accept exactly one of `--approved` and `--cancel`; reject both flags, duplicate flags, missing `--plan`, and unsafe paths. In `PlanBridge.handleImplementationArm`, resolve the active binding for the session and path, persist `active -> released`, clear the active plan cache only after durable success, and make later `handlePreToolUse` return the existing unauthorized advisory.
+Accept exactly one of `--approved` and `--cancel`. Approve requires exactly one safe `--plan`; cancel forbids `--plan`. Reject both flags, duplicate flags, missing approve plan, and unsafe paths. In `PlanBridge.handleImplementationArm`, branch on `action` before resolving a plan path. For cancel, resolve only the current session's single active binding, persist `active -> released`, and clear the active plan cache only after durable success. With no active binding, return the deterministic non-armed no-op result without persistence I/O. After either successful release or no-op, later `handlePreToolUse` returns the existing unauthorized advisory.
 
 ```ts
-if (cancel) return { source: "command", action: "cancel", planPath };
+if (cancel) return { source: "command", action: "cancel" };
 return { source: "command", action: "approve", planPath, approved };
 ```
 
@@ -433,7 +473,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/implement-command.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
+git add src/core/implement-command.ts src/core/types.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
 git commit -m "feat: plan authorizationのcancelを追加"
 ```
 
@@ -441,20 +481,26 @@ git commit -m "feat: plan authorizationのcancelを追加"
 
 ## Phase 3a: Lifecycle and Final Gate — JUS-P0-04
 
-### Task 3.1: Make lifecycle replay-safe
+### Task 3.1: Make lifecycle replay-safe and orchestrate attempts
 
 **Requirement:** JUS-P0-04, INV-06, INV-08, INV-09, INV-14.
 
 **Files:**
 - Create: `src/core/task-lifecycle.ts`
+- Modify: `src/core/types.ts`
 - Modify: `src/core/v2/observation-model.ts`
 - Modify: `src/core/v2/state-projection.ts`
+- Modify: `src/core/session-state-provider.ts`
+- Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Test: `tests/core/task-lifecycle.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
+- Create: `tests/hooks/observation-handler-lifecycle.test.ts`
+- Test: `tests/core/session-state-provider.test.ts`
 
-**Consumes:** `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
+**Consumes:** active `ApprovedPlanBinding` from Task 2.2; implementation `TaskCallBinding`; `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
 
-**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`.
+**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`.
 
 - [ ] **Step 1: Write the failing replay tests**
 
@@ -469,17 +515,48 @@ it("keeps state for duplicate and illegal transitions", () => {
 it("projects an invalid record without aborting later records", () => {
   expect(project([invalidRecord, validRecord], "2026-09-05T00:00:00.000Z").tasks.get("task-1")?.status).toBe("open");
 });
+
+it("records the happy-path lifecycle in order", async () => {
+  await runImplementationLifecycle(currentTask);
+  expect(trace).toEqual([
+    "authorized", "in_progress", "worker_reported", "evidence_pending", "review_pending", "review-directive",
+  ]);
+});
+
+it("starts rework with a fresh attempt and reviewRound 1", async () => {
+  const next = await startImplementationAttempt(reworkRequiredTask);
+  expect(next.taskExecutionRef.attemptId).not.toBe(oldAttemptId);
+  expect(next.reviewRound).toBe(1);
+});
+
+it("rejects old-attempt evidence and worker reports", async () => {
+  await recordWorkerReportedAndEvidence(oldAttemptBinding);
+  expect(projectedCurrentAttempt().evidence).toEqual([]);
+});
+
+it("rebuilds exactly one current task attempt after restart", () => {
+  expect(project(lifecycleRecords, now).currentTaskExecutionRef("task-1")).toEqual(currentAttempt);
+});
+
+it("starts and reworks finalization with fresh finalization identities", async () => {
+  const initial = await advanceFinalizationAfterAllTasksAccepted(binding);
+  const rework = await startNextFinalizationAttempt(initial);
+  expect(rework.finalizationAttemptId).not.toBe(initial.finalizationAttemptId);
+  expect(rework.finalReviewRound).toBe(initial.finalReviewRound + 1);
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts`
 
-Expected: FAIL because lifecycle projection is absent and invalid transitions throw.
+Expected: FAIL because lifecycle projection and runtime orchestration are absent.
 
 - [ ] **Step 3: Implement non-throwing transition outcomes**
 
 Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
+
+In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after Task 3.4 has committed its pending dispatch slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the current finalization attempt and durably enter `final_review_pending`. Do not evaluate a Gate in this task; Task 3.2 receives only projected `gate_pending` / `final_gate_pending` states after Task 3.6 terminalization.
 
 ```ts
 if (event.identity === state.lastTransitionIdentity) return { kind: "duplicate", state: state.value };
@@ -491,14 +568,14 @@ return { kind: "applied", state: event.to };
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/task-lifecycle.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts
+git add src/core/task-lifecycle.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts
 git commit -m "feat: lifecycle replayをidempotentに処理"
 ```
 
@@ -507,16 +584,18 @@ git commit -m "feat: lifecycle replayをidempotentに処理"
 **Requirement:** JUS-P0-04, INV-08, INV-09, INV-14.
 
 **Files:**
+- Create: `src/core/acceptance-decision.ts`
 - Modify: `src/core/v2/gate-definition.ts`
 - Modify: `src/core/v2/gate-context.ts`
 - Modify: `src/core/v2/rule-evaluation-engine.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Test: `tests/core/v2/rule-evaluation-engine.test.ts`
+- Create: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 
-**Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; current projected lifecycle state.
+**Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; current projected lifecycle state from Task 3.1.
 
-**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
+**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `evaluateGatePendingAttempt`; `deriveAcceptanceDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
 
 - [ ] **Step 1: Write the failing Final Gate tests**
 
@@ -538,17 +617,39 @@ it("maps Final Gate verdicts without accepting stale evidence", () => {
   expect(decidePlanCompletion({ gate: undefined })).toBe("final_gate_pending");
   expect(decidePlanCompletion({ gate: passForOldAttempt })).toBe("final_gate_pending");
 });
+
+it("does not evaluate before the terminal review projects gate_pending", async () => {
+  await evaluateGatePendingAttempt(reviewPendingContext);
+  expect(evaluate).not.toHaveBeenCalled();
+});
+
+it("records GateDecision before deriving acceptance for the same current attempt", async () => {
+  await evaluateGatePendingAttempt(gatePendingContext);
+  expect(trace).toEqual(["record-gate-decision", "record-acceptance", "accepted"]);
+});
+
+it("blocks an old-attempt GateDecision", () => {
+  expect(deriveAcceptanceDecision(oldAttemptPass, currentAttempt)).toMatchObject({ verdict: "blocked" });
+});
+
+it.each([gateUnavailable, gateError, insufficientEvidence])(
+  "keeps gate_pending and blocks acceptance for %s", async (outcome) => {
+    await evaluateGatePendingAttempt(contextFor(outcome));
+    expect(projectedTaskState()).toBe("gate_pending");
+    expect(latestAcceptanceDecision()).toMatchObject({ verdict: "blocked" });
+  },
+);
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts`
 
 Expected: FAIL because plan gates are skipped and task gate decisions are fixed.
 
 - [ ] **Step 3: Implement scoped Gate selection**
 
-Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. Evaluate task gates only in `gate_pending`; evaluate plan gates only in `final_gate_pending`. Append a PlanGateDecision only for the current finalization attempt. Map PASS to `complete`, WARN and FAIL to `final_rework_required`, and errors, SKIP, or insufficient evidence to `final_gate_pending`.
+Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`.
 
 ```ts
 const activeGates = gates.filter((gate) => gate.enabled && gate.gateType === ctx.scope && gate.trigger.on === ctx.trigger);
@@ -560,14 +661,14 @@ if (ctx.scope === "plan") {
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/v2/gate-definition.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/hooks/observation-handler.ts tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts
+git add src/core/acceptance-decision.ts src/core/v2/gate-definition.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/hooks/observation-handler.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts
 git commit -m "feat: Final Gateをplan scopeで評価"
 ```
 
@@ -765,18 +866,19 @@ git commit -m "feat: review child bindingをdurableに記録"
 
 **Files:**
 - Create: `src/core/review-artifact.ts`
-- Create: `src/core/acceptance-decision.ts`
 - Modify: `src/core/session-state-provider.ts`
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/state-projection.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/justice-plugin.ts`
 - Test: `tests/core/review-artifact.test.ts`
-- Test: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/core/session-state-provider.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 
-**Consumes:** projected claimed dispatch slot; durable `TaskCallBinding`; durable `DelegatedExecutionBinding`; reserved artifact path; current Gate decision.
+**Consumes:** projected claimed dispatch slot; durable `TaskCallBinding`; durable `DelegatedExecutionBinding`; reserved artifact path; `evaluateGatePendingAttempt` from Task 3.2.
 
-**Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>` and attempt-scoped `TaskAcceptanceDecision | PlanAcceptanceDecision`; success is possible only after matching child observation and durable terminalization.
+**Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>`; one composite terminal `ReviewDispatchTransitionRecord`; a projected `review_observed` semantic; and a gate-evaluation request only after durable `gate_pending` / `final_gate_pending` transition.
 
 - [ ] **Step 1: Write the failing ordering, decision, and anti-replay tests**
 
@@ -785,7 +887,8 @@ it("performs the review completion protocol in durable order", async () => {
   await consumeReviewCompletion(matchingInput);
   expect(trace).toEqual([
     "verify-claimed-binding", "verify-child-binding", "read-artifact-once", "validate-schema",
-    "compute-digest", "commit-staging", "commit-consumption-review-terminal", "apply-acceptance", "cleanup-artifact",
+    "compute-digest", "commit-staging", "append-terminal-record", "project-review-observed",
+    "record-gate-pending", "evaluate-gate", "cleanup-artifact",
   ]);
 });
 
@@ -800,43 +903,66 @@ it("retries terminalization from staging without rereading the artifact", async 
   expect(readArtifact).toHaveBeenCalledTimes(1);
 });
 
-it("creates an acceptance decision only from the current attempt's Gate verdict", () => {
-  expect(decideTaskAcceptance(currentPass)).toMatchObject({ verdict: "accepted" });
-  expect(decideTaskAcceptance(stalePass)).toMatchObject({ verdict: "blocked" });
+it("does not consume a duplicate matching PostToolUse twice", async () => {
+  await consumeReviewCompletion(matchingInput);
+  await consumeReviewCompletion(matchingInput);
+  expect(readArtifact).toHaveBeenCalledTimes(1);
+  expect(appendTerminalRecord).toHaveBeenCalledTimes(1);
+});
+
+it("never exposes a partial terminal state when the physical append fails", async () => {
+  await consumeReviewCompletion(inputWithTerminalCommitFailure);
+  expect(projectedReview()).toBeUndefined();
+  expect(projectedSlot().state).toBe("claimed");
+});
+
+it("replays one terminal record into the same consumed review and summary", () => {
+  expect(project([terminalRecord], now)).toEqual(project([terminalRecord], later));
+});
+
+it("rejects a terminal record that lacks its required artifact payload", () => {
+  expect(project([malformedConsumedWithoutArtifact], now).reviewSummary).toEqual(emptyReviewSummary);
+  expect(project([malformedConsumedWithoutArtifact], now).dispatchSlot?.state).toBe("claimed");
+});
+
+it("does not create acceptance before terminalization and gate_pending", async () => {
+  await consumeReviewCompletion(inputBeforeTerminalAppend);
+  expect(recordAcceptanceDecision).not.toHaveBeenCalled();
 });
 ```
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts`
 
-Expected: FAIL because matching review completion and attempt-scoped acceptance decisions are not transactional.
+Expected: FAIL because matching review completion has no composite terminal physical record or ordered Gate request.
 
 - [ ] **Step 3: Implement the fixed protocol**
 
-Implement this exact sequence: validate claimed parent binding; validate durable child-session binding; read the usable artifact once; strictly parse `ReviewWorkerResultV1`; calculate digest; commit `ReviewCompletionStagingRecord`; commit `review_artifact_consumed`, `review_observed`, assembled `ReviewArtifactV1`, and terminal transition atomically; evaluate and durably record the current attempt's acceptance decision; then archive or delete the artifact idempotently. Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, child session, task attempt, or finalization attempt returns a stale advisory without artifact I/O or state mutation.
+Implement this exact sequence: validate claimed parent binding; validate durable child-session binding; read the usable artifact once; strictly parse `ReviewWorkerResultV1`; calculate digest; commit `ReviewCompletionStagingRecord`; append exactly one composite terminal `ReviewDispatchTransitionRecord` containing consumption, assembled artifact, and `claimed → terminal`; project `review_observed` from that record; durably record `review_pending → gate_pending` or `final_review_pending → final_gate_pending`; request `evaluateGatePendingAttempt`; then archive or delete the artifact idempotently. Do not add `appendBatch`: the composite terminal record is the existing single-append atomicity boundary. Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, child session, task attempt, or finalization attempt returns a stale advisory without artifact I/O or state mutation.
 
 ```ts
 const staging = await commitStaging(await validateAndReadMatchingArtifact(input));
-const terminal = await commitConsumedReviewAndTerminal(staging);
+const terminal = await appendTerminalRecord(staging);
 if (terminal.kind !== "committed") return { kind: "blocked" };
-const decision = await applyAcceptance(terminal.reviewArtifact);
+await projectTerminalRecord(terminal);
+await recordGatePendingAndEvaluate(terminal.reviewArtifact);
 await cleanupArtifact(staging.artifactConsumption.artifactId);
-return decision;
+return { kind: "terminalized" };
 ```
 
 Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `runTaskPostToolUseSequentially`. Keep independent non-task handlers unchanged.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-artifact.ts src/core/acceptance-decision.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/acceptance-decision.test.ts tests/core/session-state-provider.test.ts tests/hooks/observation-handler-transactional.test.ts
+git add src/core/review-artifact.ts src/core/session-state-provider.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts
 git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
 ```
 
@@ -865,7 +991,19 @@ it("does not update a checkbox for rework-required or blocked", () => {
 });
 
 it("updates only an accepted task", () => {
-  expect(updatePlanProgress(plan, task, acceptedDecision).updated).toBe(true);
+  const result = updatePlanProgress(planWithThreeUncheckedSteps, task, acceptedDecision);
+  expect(result.content).toContain("- [x] first");
+  expect(result.content).toContain("- [x] second");
+  expect(result.content).toContain("- [x] third");
+  expect(new PlanParser().parse(result.content).find((item) => item.id === task.id)?.status).toBe("completed");
+});
+
+it("preserves checked steps and leaves every other task unchanged", () => {
+  expect(updatePlanProgress(planWithOneCheckedStepAndAnotherTask, task, acceptedDecision).content).toEqual(expectedOnlyTargetChanged);
+});
+
+it("does not throw or change a zero-step accepted task", () => {
+  expect(updatePlanProgress(planWithZeroStepTask, zeroStepTask, acceptedDecision)).toEqual({ content: planWithZeroStepTask, updated: false });
 });
 
 it("does not update progress until the acceptance decision is durably recorded", async () => {
@@ -882,12 +1020,18 @@ Expected: FAIL because worker feedback writes progress directly.
 
 - [ ] **Step 3: Implement accepted-only progress updates**
 
-Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. `JusticePlugin` invokes the updater only after Task 3.6 has durably recorded the accepted decision; `TaskFeedbackHandler` must not infer acceptance from worker success.
+Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. For an accepted non-empty task, update every unchecked step in source order with the existing `PlanParser.updateCheckbox()` operation; preserve already checked steps and never touch another task. A zero-step task follows existing parser semantics and returns deterministic unchanged/no-op. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. `JusticePlugin` invokes the updater only after Task 3.2 has durably recorded the accepted decision; `TaskFeedbackHandler` must not infer acceptance from worker success.
 
 ```ts
 export function updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult {
   if (decision.verdict !== "accepted" || decision.taskExecutionRef.taskId !== task.id) return { content, updated: false };
-  return { content: new PlanParser().updateCheckbox(content, task.steps.at(-1)!.lineNumber, true), updated: true };
+  if (task.steps.length === 0) return { content, updated: false };
+  const parser = new PlanParser();
+  const updated = task.steps.reduce(
+    (current, step) => (step.checked ? current : parser.updateCheckbox(current, step.lineNumber, true)),
+    content,
+  );
+  return { content: updated, updated: updated !== content };
 }
 ```
 
@@ -977,16 +1121,18 @@ git commit -m "feat: controller routingにworkflow identityを保持"
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/doctor-categories.ts`
+- Modify: `src/core/doctor-config.ts`
 - Modify: `src/runtime/doctor-cli.ts`
 - Modify: `README.md`
 - Modify: `SPEC.md`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
+- Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; parsed command configuration.
+**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; `DoctorEffectiveConfigView.effectiveCommandDefinitions` from Task 1.2.
 
-**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller, actual controller, status, application method, and source; `checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult`; `justice doctor` output containing the complete missing pinned-command templates; README and release documentation describing the required v4.0.0 configuration and its manual-install boundary.
+**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller, actual controller, status, application method, and source; `checkPinnedCommandPresence(commandDefinitions: ReadonlyMap<string, { readonly agent?: string }>): PinnedCommandPresenceResult`; `justice doctor` output containing the complete missing or mismatched pinned-command templates; README and release documentation describing the required v4.0.0 configuration and its manual-install boundary.
 
 - [ ] **Step 1: Write the failing runtime and doctor tests**
 
@@ -997,10 +1143,18 @@ it("persists mismatch when the observed controller differs", async () => {
 });
 
 it("reports missing pinned command names", () => {
-  expect(checkPinnedCommandPresence(["justice-start"])).toEqual({
+  expect(checkPinnedCommandPresence(new Map([["justice-start", {}]]))).toEqual({
     ok: false,
     missing: ["justice-implement-brainstorming", "justice-implement-writing-plans", "justice-implement-subagent-driven-development", "justice-implement-executing-plans"],
   });
+});
+
+it("uses the higher-priority effective command names", () => {
+  const effective = buildDoctorEffectiveConfigView([
+    scanConfigText("global", '{ command: { "justice-implement-brainstorming": { agent: "atlas" } } }'),
+    scanConfigText("project", '{ command: { "justice-implement-brainstorming": { agent: "sisyphus" } } }'),
+  ]);
+  expect(effective.effectiveCommandDefinitions.get("justice-implement-brainstorming")).toEqual({ agent: "sisyphus" });
 });
 
 it("renders every missing pinned command as an agent-pinned OpenCode configuration", () => {
@@ -1018,7 +1172,7 @@ Expected: FAIL because routing observations and pinned-command diagnostics are a
 
 - [ ] **Step 3: Implement observation and diagnostics**
 
-Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path. Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a routing mismatch block execution. In `doctor-categories.ts`, require `justice-implement-brainstorming`, `justice-implement-writing-plans`, `justice-implement-subagent-driven-development`, and `justice-implement-executing-plans`; doctor reports each missing name, renders its complete `command` object with `template`, `description`, and the required `agent`, and exits non-zero. Document the same four command definitions and the v4.0.0 migration in `README.md` and `SPEC.md`; state that users register the commands and Justice only observes the result.
+Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path. Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a routing mismatch block execution. In `doctor-categories.ts`, require `justice-implement-brainstorming`, `justice-implement-writing-plans`, `justice-implement-subagent-driven-development`, and `justice-implement-executing-plans`; consume only `DoctorEffectiveConfigView.effectiveCommandDefinitions`, report each missing name or mismatched/missing pinned `agent`, render its complete `command` object with `template`, `description`, and the required `agent`, and exit non-zero. Do not parse a second configuration path or union source names. Document the same four command definitions and the v4.0.0 migration in `README.md` and `SPEC.md`; state that users register the commands and Justice only observes the result.
 
 ```ts
 export function checkPinnedCommandPresence(commandNames: readonly string[]): PinnedCommandPresenceResult {
@@ -1037,7 +1191,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/doctor-cli.test.ts
+git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
 git commit -m "feat: controller routing observationとdoctor診断を追加"
 ```
 
@@ -1049,40 +1203,41 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 
 | Requirement / Design Decision | Plan Task | Required tests |
 |---|---|---|
-| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, unapplied, pinned command presence, command template output, release documentation |
-| JUS-P0-02 semantic fingerprint | 2.1 | approved task progress invariant, global/unscoped/fenced mutation invalidates, duplicate approved task heading invalidates, EOL invariant |
-| JUS-P0-02 canonical snapshot | 2.1, 2.2 | snapshot persistence, hydration, all-tasks-accepted snapshot SSOT |
-| JUS-P0-02 cancel and release | 2.3 | cancel, release, subsequent authorization rejection |
-| JUS-P0-03 seven-to-seven category mapping | 1.1, 1.2 | every role, legacy downgrade rejection, doctor presence |
-| JUS-P0-04 lifecycle replay | 3.1 | duplicate identity, invalid transition, replay continuation |
-| JUS-P0-04 task Gate | 3.2 | current task attempt only |
-| JUS-P0-04 Final Gate | 3.2 | current finalization attempt only, PASS complete, WARN/FAIL rework, insufficient blocked |
-| JUS-P0-04 durable review dispatch | 3.4 | pending, claimed, terminal, four restart states |
-| JUS-P0-04 child-session correlation | 3.3, 3.5 | runtime spike, task review correlation, final review correlation, durable binding |
-| JUS-P0-04 anti-replay | 3.4, 3.5, 3.6 | consume once, staging recovery, stale call ID, stale round, stale artifact, stale child session |
-| JUS-P0-04 transactional PostToolUse | 3.6 | strict sequence, terminal-commit recovery, no parallel side effects |
-| INV-01 controller intent differs from worker intent | 4.1 | `tests/core/routing-decision.test.ts` preserves workflow on controller decisions |
-| INV-02 worker decision ends at category | 1.1 | `tests/core/routing-decision.test.ts` rejects invalid role/category pairs |
-| INV-03 approval survives multiple tasks | 2.2 | `tests/core/plan-authorization.test.ts` hydrates an active binding |
-| INV-04 semantic mutation invalidates approval | 2.1, 2.2 | `tests/core/plan-fingerprint.test.ts` checks semantic changes; `tests/hooks/plan-bridge-authorization.test.ts` rejects a changed fingerprint |
-| INV-05 high complexity does not silently downgrade | 1.1 | `tests/core/routing-decision.test.ts` rejects the architecture downgrade |
-| INV-06 WorkerReported is not TaskAccepted | 3.1, 3.6, 3.7 | `tests/core/task-lifecycle.test.ts`, `tests/core/acceptance-decision.test.ts`, and `tests/core/progress-updater.test.ts` require an accepted decision |
-| INV-07 declared evidence cannot pass alone | 3.2 | `tests/core/v2/rule-evaluation-engine.test.ts` and `tests/core/v2/gate-provenance-gating.test.ts` require observed or derived evidence |
-| INV-08 Gate PASS precedes progress completion | 3.2, 3.6, 3.7 | `tests/hooks/observation-handler-gate.test.ts`, `tests/core/acceptance-decision.test.ts`, and `tests/core/progress-updater.test.ts` |
-| INV-09 Final Review and Final Gate precede Plan Complete | 3.1, 3.2, 3.6 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, and `tests/core/acceptance-decision.test.ts` |
-| INV-10 fail-open execution differs from fail-open acceptance | 2.2, 3.2 | `tests/core/plan-authorization.test.ts` and `tests/hooks/observation-handler-gate.test.ts` retain blocked state on unavailable prerequisites |
-| INV-11 TaskCallPurpose separates all task call kinds | 3.4, 3.6 | `tests/core/review-dispatch-state.test.ts` and `tests/core/session-state-provider.test.ts` |
-| INV-12 terminal authorization is not resurrected | 2.2, 2.3 | `tests/core/plan-authorization.test.ts` and `tests/hooks/plan-bridge-authorization.test.ts` |
-| INV-13 PostToolUse side effects are not parallelized | 3.6 | `tests/hooks/observation-handler-transactional.test.ts` checks the ordered trace |
-| INV-14 evidence, review, Gate, and Acceptance are attempt-scoped | 3.1, 3.2, 3.4, 3.5, 3.6 | `tests/core/task-lifecycle.test.ts`, `tests/core/v2/rule-evaluation-engine.test.ts`, `tests/core/review-dispatch-state.test.ts`, and `tests/core/acceptance-decision.test.ts` |
-| INV-15 mandatory completion precedes artifact consumption | 3.3, 3.5, 3.6 | `tests/runtime/opencode-adapter-v2.test.ts` and `tests/core/review-artifact.test.ts` |
-| INV-16 one outstanding dispatch and atomic claim | 3.4 | `tests/core/review-dispatch-state.test.ts` |
-| INV-17 dispatch state survives restart without claimed redispatch | 3.4 | `tests/core/v2/state-projection.test.ts` covers pending, claimed without staging, claimed with staging, and terminal |
-| INV-18 stale review cannot affect the current round | 3.4, 3.5, 3.6 | `tests/core/review-dispatch-state.test.ts` rejects call, round, artifact, child session, task attempt, and finalization attempt mismatches |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2 | routing decision, applied, mismatch, effective pinned-command precedence, template output |
+| JUS-P0-02 semantic fingerprint and canonical snapshot | 2.1, 2.2 | semantic mutation, snapshot persistence, hydration, fresh reapproval ID, terminal merge protection |
+| JUS-P0-02 session-scoped cancel | 2.3 | pathless parser, invalid flag combinations, durable release, no-binding idempotence |
+| JUS-P0-03 seven-to-seven category mapping | 1.1 | every role, legacy downgrade rejection |
+| JUS-P0-03 doctor effective category configuration | 1.2 | JSONC parsing, source precedence, missing category, unreadable/unsupported source, redaction |
+| JUS-P0-04 task lifecycle | 3.1 | full `authorized → in_progress → worker_reported → evidence_pending → review_pending` trace, fresh attempt, restart reconstruction |
+| JUS-P0-04 attempt-scoped Evidence / Review / Gate | 3.1, 3.2, 3.4, 3.5, 3.6 | stale attempt/call/child/artifact rejection, reviewRound reset on rework |
+| JUS-P0-04 review terminal atomicity | 3.6 | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance |
+| JUS-P0-04 Gate after `gate_pending` | 3.1, 3.2, 3.6 | no early evaluation, terminal review before gate_pending, GateDecision before AcceptanceDecision, unavailable/error blocked |
+| JUS-P0-04 finalization lifecycle | 3.1, 3.2, 3.4, 3.5, 3.6 | fresh finalization attempt, final review terminalization, Final Gate PASS/rework/blocked |
+| JUS-P0-04 durable review dispatch and child correlation | 3.3, 3.4, 3.5 | runtime spike, pending/claimed recovery, atomic claim, durable child binding |
+| JUS-P0-04 accepted task progress | 3.7 | all unchecked steps checked, reparse completed, other tasks unchanged, zero-step no-op, durable acceptance ordering |
+| JSON review transport fixed for P0 | 3.4, 3.6 | artifact reservation, one read, composite terminal record; no typed transport dependency |
+| INV-01 through INV-05 | 1.1, 2.1, 2.2, 4.1 | category/routing/fingerprint/authorization focused tests named in those tasks |
+| INV-06 through INV-10 | 3.1, 3.2, 3.6, 3.7 | lifecycle, Gate, terminalization, progress, Final Gate tests named in those tasks |
+| INV-11 through INV-18 | 3.3, 3.4, 3.5, 3.6 | purpose separation, claim, restart, correlation, stale-event and consumption tests named in those tasks |
 
-Every task above implements one named design decision: Tasks 1.1-1.2 implement Design §5.3; Tasks 2.1-2.3 implement §4.2, §4.3, and §5.2; Tasks 3.1-3.7 implement §4.4 through §4.11 and §5.4 through §5.5; Tasks 4.1-4.2 implement §3.4, §4.1, §5.1, and §7.3. No task exists solely for future reuse.
+| Plan Task | Requirement / Design Decision implemented | Verification |
+|---|---|---|
+| 1.1 | JUS-P0-03, Design §5.3, INV-02, INV-05 | role-to-category mapping tests |
+| 1.2 | JUS-P0-03, Design §3.4 and §5.3 | effective configuration and category-presence tests |
+| 2.1 | JUS-P0-02, Design §4.3, INV-04 | fingerprint boundary tests |
+| 2.2 | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12 | authorization persistence, fresh ID, merge tests |
+| 2.3 | JUS-P0-02, Design §4.2 and §5.2 | pathless cancel parser and durable release tests |
+| 3.1 | JUS-P0-04, Design §3.3, §4.4, §5.4, INV-06, INV-09, INV-14 | lifecycle orchestration and finalization tests |
+| 3.2 | JUS-P0-04, Design §4.6 and §4.11, INV-07, INV-08, INV-10, INV-14 | gate-pending-only, decision ordering, blocked tests |
+| 3.3 | JUS-P0-04, Design §4.9, INV-15 | child-session runtime spike |
+| 3.4 | JUS-P0-04, Design §4.8, §4.8.2, §4.10, INV-11, INV-16, INV-17 | dispatch and claim recovery tests |
+| 3.5 | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18 | durable child-binding tests |
+| 3.6 | JUS-P0-04, Design §4.8.1, §4.10, §4.11, INV-13 through INV-18 | composite terminal/replay/stale tests |
+| 3.7 | JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08 | accepted-only full progress update tests |
+| 4.1 | JUS-P0-01, Design §4.1, INV-01 | controller routing tests |
+| 4.2 | JUS-P0-01, Design §3.4 and §5.1 | effective pinned-command and routing-observation tests |
 
-Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if synchronous mandatory review canonicalization, durable claim, durable child binding, staging, artifact consumption, stale-event rejection, attempt-scoped acceptance, task Gate, or Final Gate lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, durable claim, durable child binding, composite terminal record, staging recovery, stale-event rejection, attempt-scoped Gate/Acceptance, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
 <!-- markdownlint-enable MD013 MD060 -->
 
