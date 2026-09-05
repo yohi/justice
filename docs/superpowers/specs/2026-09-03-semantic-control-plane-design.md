@@ -25,11 +25,11 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 
 ### 2.1 責務分離
 
-| 層 | 責務 | 例 |
-|---|---|---|
-| Superpowers | 方法論・プロセスの Source of Truth | Brainstorming / Planning / TDD / Review / Verification |
-| Justice | 意味の解釈・検証・承認 | Workflow routing / Authorization / Category mapping / Observation / Evidence / Gate / Acceptance |
-| OmO | 実際のエージェント実行 | Category dispatch / Agent / Model / Provider / Fallback |
+| 層          | 責務                               | 例                                                                                               |
+| ----------- | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Superpowers | 方法論・プロセスの Source of Truth | Brainstorming / Planning / TDD / Review / Verification                                           |
+| Justice     | 意味の解釈・検証・承認             | Workflow routing / Authorization / Category mapping / Observation / Evidence / Gate / Acceptance |
+| OmO         | 実際のエージェント実行             | Category dispatch / Agent / Model / Provider / Fallback                                          |
 
 ### 2.2 Controller と Worker の分離
 
@@ -50,14 +50,14 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 
 ### 3.1 新規 Core モジュール
 
-| モジュール | 責務 |
-|---|---|
-| `src/core/controller-routing.ts` | `WorkflowRouter` による controller 判定と、actual controller 観測からの routingStatus 評価 |
-| `src/core/plan-authorization.ts` | `ApprovedPlanBinding` のライフサイクル管理 (approve / invalidate / release) |
-| `src/core/plan-fingerprint.ts` | 正規化 semantic hash、canonical plan snapshot の生成 |
-| `src/core/task-lifecycle.ts` | Task Progress State (9状態) と Plan Finalization State (6状態) の純粋 state machine |
-| `src/core/acceptance-decision.ts` | Evidence / Review / Gate 結果から `accepted` / `rework_required` / blocked を判定 |
-| `src/core/review-artifact.ts` | `ReviewArtifactV1` の検証・解析、clean review 権威付け |
+| モジュール                          | 責務                                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `src/core/controller-routing.ts`    | `WorkflowRouter` による controller 判定と、actual controller 観測からの routingStatus 評価          |
+| `src/core/plan-authorization.ts`    | `ApprovedPlanBinding` のライフサイクル管理 (approve / invalidate / release)                         |
+| `src/core/plan-fingerprint.ts`      | 正規化 semantic hash、canonical plan snapshot の生成                                                |
+| `src/core/task-lifecycle.ts`        | Task Progress State (9状態) と Plan Finalization State (6状態) の純粋 state machine                 |
+| `src/core/acceptance-decision.ts`   | Evidence / Review / Gate 結果から `accepted` / `rework_required` / blocked を判定                   |
+| `src/core/review-artifact.ts`       | `ReviewArtifactV1` の検証・解析、clean review 権威付け                                              |
 | `src/core/review-dispatch-state.ts` | review dispatch slot の state machine、durable claim precondition、restart / replay recovery の判定 |
 
 ### 3.2 既存モジュール拡張
@@ -140,12 +140,7 @@ Justice は以下を提供する。
 ```ts
 // src/core/types.ts
 // Factory functions are in src/core/routing-decision.ts.
-export type ControllerAgent =
-  | "sisyphus"
-  | "atlas"
-  | "oracle"
-  | "momus"
-  | "hephaestus";
+export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
 
 export type ControllerRoutingDecision = {
   readonly kind: "controller";
@@ -155,49 +150,29 @@ export type ControllerRoutingDecision = {
 };
 
 // src/core/controller-routing.ts
-export type ControllerApplicationMethod =
-  | "pinned-command"
-  | "runtime-api"
-  | "none";
+export type ControllerApplicationMethod = "pinned-command" | "runtime-api" | "none";
 
-export type ControllerObservationSource =
-  | "chat.params"
-  | "message.updated"
-  | "both"
-  | "none";
+export type ControllerObservationSource = "chat.params" | "message.updated" | "both" | "none";
 
-export type ControllerRoutingStatus =
-  | "applied"
-  | "unapplied"
-  | "unsupported"
-  | "mismatch";
+export type ControllerRoutingStatus = "applied" | "unapplied" | "unsupported" | "mismatch";
 
-export type ControllerRoutingUnappliedReason =
-  | "application_not_configured"
-  | "actual_not_observed";
+export type ControllerRoutingUnappliedReason = "application_not_configured" | "actual_not_observed";
 
-export type ControllerRoutingUnsupportedReason =
-  | "runtime_capability_unsupported";
+export type ControllerRoutingUnsupportedReason = "runtime_capability_unsupported";
 
 export type ControllerRoutingObservation =
   | {
       readonly routingStatus: "applied";
       readonly desiredController: ControllerAgent;
       readonly actualController: ControllerAgent;
-      readonly applicationMethod: Exclude<
-        ControllerApplicationMethod,
-        "none"
-      >;
+      readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
       readonly observationSource: "message.updated" | "both";
     }
   | {
       readonly routingStatus: "mismatch";
       readonly desiredController: ControllerAgent;
       readonly actualController: ObservationAgentId;
-      readonly applicationMethod: Exclude<
-        ControllerApplicationMethod,
-        "none"
-      >;
+      readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
       readonly observationSource: "message.updated" | "both";
     }
   | {
@@ -227,7 +202,7 @@ export type ControllerRoutingObservation =
 ### 4.2 Plan Authorization
 
 ```ts
-export type ApprovedPlanBinding = {
+type ApprovedPlanBindingBase = {
   readonly authorizationId: string;
   readonly sessionId: string;
   readonly planPath: string;
@@ -235,17 +210,26 @@ export type ApprovedPlanBinding = {
   readonly canonicalSnapshot: CanonicalPlanSnapshot;
   readonly fingerprintSchema: "justice-plan-v1";
   readonly approvedAt: string;
-  readonly status: "active" | "invalidated" | "released";
-  readonly invalidatedAt?: string;
-  readonly releasedAt?: string;
 };
+
+export type ApprovedPlanBinding =
+  | (ApprovedPlanBindingBase & {
+      readonly status: "active";
+    })
+  | (ApprovedPlanBindingBase & {
+      readonly status: "invalidated";
+      readonly invalidatedAt: string;
+      // Only supersession needs a durable reason in P0; other invalidations need no reason taxonomy.
+      readonly invalidationReason?: "plan_superseded";
+    })
+  | (ApprovedPlanBindingBase & {
+      readonly status: "released";
+      readonly releasedAt: string;
+    });
 
 export type AuthorizationMergeRule = {
   readonly terminalStates: ReadonlyArray<"invalidated" | "released">;
-  readonly resolve: (
-    mine: ApprovedPlanBinding,
-    theirs: ApprovedPlanBinding,
-  ) => ApprovedPlanBinding;
+  readonly resolve: (mine: ApprovedPlanBinding, theirs: ApprovedPlanBinding) => ApprovedPlanBinding;
 };
 ```
 
@@ -254,6 +238,8 @@ export type AuthorizationMergeRule = {
 - `fingerprintSchema` は canonicalization ロジックが将来変わったときの安全装置である。
 - 承認時に `CanonicalPlanSnapshot` を必ず生成し、同一の `ApprovedPlanBinding` record に格納する。snapshot の別 store、別 cache、または別 persistence file を SSOT としてはならない。
 - `invalidatedAt` / `releasedAt` は監査・競合解決用タイムスタンプ。
+- `invalidationReason: "plan_superseded"` は、新しい approval によって無効化された binding
+  にだけ永続化する P0 の監査値である。一般化した invalidation-reason framework は導入しない。
 - `invalidated` / `released` 状態の永続化に失敗しても、その binding store を uncertain として扱い、再利用禁止とする。
 - `AtomicPersistence.merge` において、`terminalStates` に含まれる status を持つ binding を `active` で上書きしてはならない。
 
@@ -404,9 +390,7 @@ export type FinalReviewCorrelation = {
   readonly finalReviewRound: number;
 };
 
-export type ReviewCorrelation =
-  | TaskReviewCorrelation
-  | FinalReviewCorrelation;
+export type ReviewCorrelation = TaskReviewCorrelation | FinalReviewCorrelation;
 
 export type ReviewSeverity = "critical" | "major" | "minor";
 
@@ -508,10 +492,7 @@ export type GateDecision = TaskGateDecision | PlanGateDecision;
 ### 4.7 Task Call Purpose
 
 ```ts
-export type TaskCallPurpose =
-  | "implementation"
-  | "task_review"
-  | "final_review";
+export type TaskCallPurpose = "implementation" | "task_review" | "final_review";
 
 export type TaskCallBinding =
   | {
@@ -680,6 +661,25 @@ export type ReviewDispatchSlot = {
 - `null → pending` は directive 発行前、`pending → claimed` は PreToolUse の atomic claim、`claimed → terminal` は matching PostToolUse または conclusive な失敗を観測した後にだけ許可する。`terminal` record は変更・削除・再利用しない。
 - retry は terminal slot を更新せず、新しい `ReviewCorrelation`（同一 Task attempt の場合は増分した `reviewRound`）で新しい `null → pending` record を発行する。
 
+review outcome から terminal record、lifecycle、retry identity への対応は次で一意に定める。ここで
+`task` は task-review、`final` は final-review の対応する lifecycle を表す。`review_pending`
+を blocked のまま保持する場合、Acceptance は発行しない。
+
+| Review outcome              | terminalReason             | artifact subtype               | next lifecycle                                                                            | Gate invocation                                | retry/rework identity                                                                                                                                   |
+| --------------------------- | -------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| clean                       | `completed`                | `CleanReviewArtifactV1`        | `task: review_pending → gate_pending`; `final: final_review_pending → final_gate_pending` | current identity に対して実行する              | なし                                                                                                                                                    |
+| complete with findings      | `completed_with_findings`  | `ReviewArtifactWithFindingsV1` | `task: rework_required`; `final: final_rework_required`                                   | 実行しない。既知の findings は Gate に委ねない | `task`: 次の implementation で fresh `TaskExecutionRef` / `reviewRound = 1`; `final`: fixes 後に fresh `finalizationAttemptId` / `finalReviewRound + 1` |
+| incomplete                  | `review_incomplete`        | `IncompleteReviewArtifactV1`   | 対応する `review_pending` を blocked のまま保持する                                       | 実行しない                                     | 自動 retry/rework なし                                                                                                                                  |
+| reviewer execution failure  | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| transport failure           | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| conclusive lost             | `lost_conclusive`          | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| uncertain recovered claimed | terminal record を作らない | なし                           | `claimed` を保持し Acceptance を blocked にする                                           | 実行しない                                     | 自動 redispatch/retry なし。restart だけでは round を変更しない                                                                                         |
+
+`completed` だけが Gate 評価に進む。`completed_with_findings` は Gate を経由せず直接
+rework を要求し、`review_incomplete` と unusable reservation は Gate を呼ばず blocked を維持する。
+この表で定めた review failure retry は implementation を再実行しない。implementation
+rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する。
+
 1. 同一 parent session における outstanding mandatory review dispatch は高々 1 件とする。
    outstanding には、directive 発行後で未 claim の状態と、claim 済みで matching
    PostToolUse を待つ状態の両方を含める。複数の `ReviewPending` task が存在する場合も、
@@ -728,12 +728,12 @@ Review dispatch の状態遷移は write-ahead で既存の durable observation 
 in-memory cache は再構築可能な cache に限り、restart 後の dispatch identity、claim、binding、
 artifact reservation の SSOT にはしない。
 
-| restart / replay 後の状態 | 許可される復旧動作 | 禁止される動作 |
-|---|---|---|
-| `pending` | 同じ `ReviewCorrelation` の `ReviewRequiredDirective` を再発行する。`reviewRound` は増分しない。 | 新しい slot、binding、`callId`、review round を作る |
-| `claimed`（staging なし） | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。 | directive の再発行、同じ correlation の再 claim、artifact の先読み |
+| restart / replay 後の状態            | 許可される復旧動作                                                                                                                                                                                                  | 禁止される動作                                                                                   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `pending`                            | 同じ `ReviewCorrelation` の `ReviewRequiredDirective` を再発行する。`reviewRound` は増分しない。                                                                                                                    | 新しい slot、binding、`callId`、review round を作る                                              |
+| `claimed`（staging なし）            | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。                                                                                      | directive の再発行、同じ correlation の再 claim、artifact の先読み                               |
 | `claimed`（completion staging あり） | staging の `callId`、correlation、artifact ID / digest、artifact を再検証し、同じ terminalization commit を idempotent に再試行する。成功時だけ `review_observed`、terminal transition、Acceptance 入力を反映する。 | 新しい dispatch / claim / artifact reservation、別 artifact の消費、worker output の再読・再生成 |
-| `terminal` | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行 |
+| `terminal`                           | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。                                                                                                              | terminal slot の変更・削除・再利用、同じ `callId` の再発行                                       |
 
 - `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance を blocked にする。
 - `claimed` の復元後に artifact が存在していても、matching `PostToolUse` と durable consume protocol が成立するまで読み取らない。completion staging がある場合は、staging 済みの artifact ID / digest と一致することだけを確認して finalization を再試行し、worker output を再読しない。consume marker が既にある場合は path を再読せず、terminal projection を authoritative とする。
@@ -769,6 +769,7 @@ export type DelegatedExecutionBinding = {
 - `childSessionId` を取得するための正確な runtime イベントや API は Phase 3 の runtime spike 項目とする。spike 結果に応じて Adapter 実装を固めるが、上記 contract は変更しない。
 - `DelegatedExecutionBinding` は、PreToolUse の claim commit には含めない。runtime が current claimed slot の `parentCallId -> childSessionId` relation を観測した後、trusted correlation から解決した `ExecutionScope` とともに append-only log へ durable に記録する。relation の未観測、unknown parent call、または stale child relation は binding を作成せず advisory とし、matching PostToolUse は current binding が durable になるまで authoritative completion として受理しない。
 - `DelegatedExecutionBinding` により、子セッションの `message.updated` / `chat.params` / tool observation を親の task attempt (`ExecutionScope` の `kind: "task"`) または plan finalization attempt (`ExecutionScope` の `kind: "finalization"`) に還元できる。これは JUS-P0-04 の P0 設計要件である。
+
 ### 4.10 Review Artifact Reservation
 
 ```ts
@@ -792,19 +793,23 @@ export type ReviewArtifactReservation =
 
 - `ReviewArtifactReservation` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で `callId` を確定させたうえで `TaskCallBinding` と `ReviewArtifactReservation` を生成・bind する。
 - `artifact_path_collision_exhausted` は候補 path の衝突を上限回数まで回避できなかった場合に使用する。`artifact_storage_unavailable` は exists check、artifact directory 作成、その他の保存先 I/O が利用できない場合に使用し、`artifact_path_invalid` は安全な相対 path として検証できない場合に使用する。上記に分類できない reservation 生成障害は `reservation_internal_error` として記録する。
+- P0 の最大 reservation 再生成回数は設定項目でも公開 API でもない有限の実装定数とする。
+  具体値は Plan Task 3.4 の `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3` に固定し、変更時は
+  設計書と同時に review する。
 - `callId` / `correlation` の SSOT は `TaskCallBinding` とする。`ReviewArtifactReservation` 自身は artifact identity / path のみを表現し、重複する metadata は持たない。
 - mandatory `sp-review` / `sp-final-review` は **synchronous execution（`run_in_background = false`）に固定する**。background 実行時には PostToolUse 後の artifact 読み取り契約が成立しないため、これらの mandatory review worker は synchronous 実行を必須とする。これは execution semantics の制約であり、Justice が model / agent を選択することとは無関係である。
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
   - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactReservation` を組み立てる。
   - `artifactPath` は Justice が `ReviewArtifactReservation` ごとに一意な安全な相対 path として生成する。binding identity は `TaskCallBinding` が保持し、path 自体に `callId` / `correlation` を埋め込むことは必須としない。例：`.justice/reviews/<artifactId>.json`。
-  - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで再生成を試みる（最大再生成回数を設ける）。
-  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとする。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は `blocked` 扱いとする。`review_unexpected_existing_artifact` advisory を記録する。
+  - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。
+  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は blocked 扱いとする。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance を行わない。
   - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
 - `usable` の場合、Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。`unusable` の場合は `artifactPath` を提示せず、review worker の完了を mandatory review completion として扱わない。
 - Justice は matching PostToolUse 到達後、`usable` な `TaskCallBinding.artifactReservation` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通し、reservation 単位の atomic consume operation として扱う。`unusable` の場合は artifact を読み取らず、mandatory review completion を成立させない。
   - atomic consume operation は読み取った内容の digest、`artifactId`、consume marker、組み立て済み `ReviewArtifactV1`、`claimed → terminal` transition を一件の terminal physical record に記録する。projection が `review_observed` semantic を導出する。commit 前に `ReviewArtifactV1` を Acceptance の入力へ渡さず、commit 失敗時は slot を `claimed` のまま保持する。
   - consume 後、元ファイルを archive / move または delete する。consume marker が存在する reservation は同一 `artifactPath` を再読せず、cleanup は idempotent に再試行できる。
   - 別の attempt（新 `TaskExecutionRef`）や別の finalization attempt（新 `FinalizationAttemptId`）で古い `artifactId` / `artifactPath` を再利用してはならない。`artifactId` は attempt 単位で新規 UUID を発行する。
+
 ### 4.11 Acceptance Decision
 
 ```ts
@@ -823,9 +828,7 @@ export type PlanAcceptanceDecision = {
   readonly verdict: "complete" | "rework-required" | "blocked";
 };
 
-export type AcceptanceDecision =
-  | TaskAcceptanceDecision
-  | PlanAcceptanceDecision;
+export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision;
 ```
 
 - `AcceptanceDecision` は Gate 評価結果に基づき Justice が発行する decision record である。terminal review record が durable かつ projected で、`review_pending → gate_pending` または `final_review_pending → final_gate_pending` が durable / projected になった後だけ Gate を評価する。
@@ -900,7 +903,7 @@ authorization merge rule:
 
 authorization cardinality:
   - 同一 session に active な `ApprovedPlanBinding` は高々 1 つまでとする（at most one active binding per session）。
-  - 新しい plan を approve する際、同一 session に既存 active binding が存在する場合は **atomically に既存 binding を `invalidated`（reason = `plan_superseded`）とし、新しい `authorizationId` を発行する**。
+  - 新しい plan を approve する際、同一 session に既存 active binding が存在する場合は、同じ authoritative `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>` save で既存 binding を `invalidated`（`invalidationReason = "plan_superseded"`）とし、新しい `authorizationId` を発行する。save が失敗または `conflict_diverted` の場合、new binding と active-plan cache を authority に昇格してはならない。
   - 明示的な cancel を要求して新規承認をブロックする挙動は P0 では採用しない。
 
 restart / hydration:
@@ -958,9 +961,12 @@ Controller (Atlas)
 
 Justice
   → `ReviewWorkerResultV1` を抽出し、`TaskCallBinding` 由来の trusted metadata と合わせて `ReviewArtifactV1` を組み立てる
-  → `ReviewArtifactV1` は current `TaskExecutionRef` に bind する
-  → ReviewPending → GatePending
-  → lifecycle state = `gate_pending` になったタイミングで GateEngine 評価
+  → terminal outcome mapping に従う
+       clean のみ: `ReviewArtifactV1` を current `TaskExecutionRef` に bind
+         → ReviewPending → GatePending
+         → lifecycle state = `gate_pending` になったタイミングで GateEngine 評価
+       findings: Gate を経由せず ReworkRequired
+       incomplete / unusable / uncertain: ReviewPending を blocked のまま保持
        評価対象は current attempt の Evidence / Review のみ
        PASS  → `TaskAcceptanceDecision { accepted }`
              → TaskProgressState = accepted
@@ -995,8 +1001,8 @@ Task Review:
        from trusted metadata + worker result
     → one terminal physical record commits artifact consumption, ReviewArtifactV1,
       and terminalization; projection derives `review_observed`
-    → `ReviewArtifactV1` is bound to TaskExecutionRef R
-    → durable `review_pending → gate_pending`, then Gate evaluation
+    → terminal outcome mapping に従う。clean artifact のみが TaskExecutionRef R に bind され、
+      durable `review_pending → gate_pending` と Gate evaluation へ進む
       (when lifecycle state = gate_pending)
        Evidence / Review for current TaskExecutionRef R only
        PASS  → TaskAccepted
@@ -1018,8 +1024,8 @@ Final Review:
        from trusted metadata + worker result
     → one terminal physical record commits artifact consumption, ReviewArtifactV1,
       and terminalization; projection derives `review_observed`
-    → `ReviewArtifactV1` is bound to finalizationAttemptId N
-    → durable `final_review_pending → final_gate_pending`, then Final Gate evaluation
+    → terminal outcome mapping に従う。clean artifact のみが finalizationAttemptId N に bind され、
+      durable `final_review_pending → final_gate_pending` と Final Gate evaluation へ進む
       (trigger: final_review_complete)
       PASS
         → PlanFinalizationState = complete
@@ -1073,19 +1079,19 @@ review finds issue
 
 ### 6.1 新規テストファイル
 
-| テストファイル | 対象 |
-|---|---|
-| `tests/core/controller-routing.test.ts` | desired/actual evaluation、applied/mismatch/unapplied、observation source 優先 |
-| `tests/core/plan-authorization.test.ts` | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否 |
-| `tests/core/plan-fingerprint.test.ts` | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化 |
-| `tests/core/routing-decision.test.ts` | 7→7 全射、deep→sp-deep、architecture→sp-architecture、低 category へのパス不存在 |
-| `tests/core/task-lifecycle.test.ts` | full lifecycle order、WorkerReported≠accepted、fresh rework attempt、restart current-attempt reconstruction、Final Review 未了で PlanComplete=false、attempt scoping で古い evidence の再利用を防ぐ |
-| `tests/core/review-dispatch-state.test.ts` | durable pending / claimed / terminal、CAS claim、restart recovery、conclusive loss、stale PostToolUse、terminal tombstone の再利用禁止 |
-| `tests/core/v2/state-projection.test.ts` | one terminal physical record から consumption / authoritative review / review-observed semantic を同一に replay し、partial terminal state を投影しない |
-| `tests/core/acceptance-decision.test.ts` | PASS/WARN/FAIL/unavailable それぞれの遷移、GateDecision の後だけ AcceptanceDecision を生成、evidence provenance 判定 |
-| `tests/core/doctor-categories.test.ts` | `justice doctor` が 7 `sp-*` category の欠落を effective category view から検出 |
-| `tests/core/justice-doctor-config.test.ts` | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics |
-| `tests/hooks/plan-bridge-authorization.test.ts` | `/justice-implement --approved` が binding を発行、不一致で invalidate |
+| テストファイル                                  | 対象                                                                                                                                                                                                |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/core/controller-routing.test.ts`         | desired/actual evaluation、applied/mismatch/unapplied、observation source 優先                                                                                                                      |
+| `tests/core/plan-authorization.test.ts`         | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否                                                                                             |
+| `tests/core/plan-fingerprint.test.ts`           | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化                       |
+| `tests/core/routing-decision.test.ts`           | 7→7 全射、deep→sp-deep、architecture→sp-architecture、低 category へのパス不存在                                                                                                                    |
+| `tests/core/task-lifecycle.test.ts`             | full lifecycle order、WorkerReported≠accepted、fresh rework attempt、restart current-attempt reconstruction、Final Review 未了で PlanComplete=false、attempt scoping で古い evidence の再利用を防ぐ |
+| `tests/core/review-dispatch-state.test.ts`      | durable pending / claimed / terminal、CAS claim、restart recovery、conclusive loss、stale PostToolUse、terminal tombstone の再利用禁止                                                              |
+| `tests/core/v2/state-projection.test.ts`        | one terminal physical record から consumption / authoritative review / review-observed semantic を同一に replay し、partial terminal state を投影しない                                             |
+| `tests/core/acceptance-decision.test.ts`        | PASS/WARN/FAIL/unavailable それぞれの遷移、GateDecision の後だけ AcceptanceDecision を生成、evidence provenance 判定                                                                                |
+| `tests/core/doctor-categories.test.ts`          | `justice doctor` が 7 `sp-*` category の欠落を effective category view から検出                                                                                                                     |
+| `tests/core/justice-doctor-config.test.ts`      | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics                                                                                         |
+| `tests/hooks/plan-bridge-authorization.test.ts` | `/justice-implement --approved` が binding を発行、不一致で invalidate                                                                                                                              |
 
 ### 6.2 特に追加すべきシナリオ
 
@@ -1165,37 +1171,37 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 
 実装後、以下は常に成立しなければならない。
 
-| ID | Invariant |
-|---|---|
-| INV-01 | Controller intent ≠ Worker intent |
-| INV-02 | Justice worker decision ends at category |
-| INV-03 | Plan approval survives multiple tasks |
-| INV-04 | Semantic plan mutation invalidates approval |
-| INV-05 | High complexity never silently downgrades |
-| INV-06 | WorkerReported ≠ TaskAccepted |
-| INV-07 | Declared evidence never satisfies required gates alone |
-| INV-08 | Gate PASS precedes progress completion |
-| INV-09 | Final Review / Final Gate precedes Plan Complete |
-| INV-10 | Fail-open execution ≠ fail-open acceptance |
-| INV-11 | `TaskCallPurpose` separates implementation, task_review, final_review |
-| INV-12 | Terminal authorization states (invalidated / released) are not resurrected |
-| INV-13 | JUS-P0-04 side-effecting handlers in `PostToolUse` are not dispatched via `Promise.all` |
-| INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttemptId`. |
-| INV-15 | Mandatory `sp-review` / `sp-final-review` completion must be observed before its `ReviewArtifact` is consumed. |
-| INV-16 | A parent session has at most one outstanding mandatory review dispatch, and binding claims are atomic. |
+| ID     | Invariant                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| INV-01 | Controller intent ≠ Worker intent                                                                                                 |
+| INV-02 | Justice worker decision ends at category                                                                                          |
+| INV-03 | Plan approval survives multiple tasks                                                                                             |
+| INV-04 | Semantic plan mutation invalidates approval                                                                                       |
+| INV-05 | High complexity never silently downgrades                                                                                         |
+| INV-06 | WorkerReported ≠ TaskAccepted                                                                                                     |
+| INV-07 | Declared evidence never satisfies required gates alone                                                                            |
+| INV-08 | Gate PASS precedes progress completion                                                                                            |
+| INV-09 | Final Review / Final Gate precedes Plan Complete                                                                                  |
+| INV-10 | Fail-open execution ≠ fail-open acceptance                                                                                        |
+| INV-11 | `TaskCallPurpose` separates implementation, task_review, final_review                                                             |
+| INV-12 | Terminal authorization states (invalidated / released) are not resurrected                                                        |
+| INV-13 | JUS-P0-04 side-effecting handlers in `PostToolUse` are not dispatched via `Promise.all`                                           |
+| INV-14 | Evidence / Review / Gate / Acceptance are scoped to exactly one `TaskExecutionRef` or `FinalizationAttemptId`.                    |
+| INV-15 | Mandatory `sp-review` / `sp-final-review` completion must be observed before its `ReviewArtifact` is consumed.                    |
+| INV-16 | A parent session has at most one outstanding mandatory review dispatch, and binding claims are atomic.                            |
 | INV-17 | Review dispatch `pending` / `claimed` / `terminal` state is durable and restart/replay never reissues a recovered `claimed` call. |
-| INV-18 | A stale review `PostToolUse` cannot consume an artifact or affect the current review round, Gate, or Acceptance. |
+| INV-18 | A stale review `PostToolUse` cannot consume an artifact or affect the current review round, Gate, or Acceptance.                  |
 
 ---
 
 ## 9. 推奨実装順序
 
-| Phase | 対象 | ゴール |
-|---|---|---|
-| Phase 1 | JUS-P0-03 Category Routing | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加 |
-| Phase 2 | JUS-P0-02 Plan Authorization | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装 |
-| Phase 3 | JUS-P0-04 Transactional Acceptance | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
-| Phase 4 | JUS-P0-01 Controller Runtime Wiring | ControllerRoutingObservation 評価、pinned-command 雛形・doctor 検査、upstream 拡張要求の分離 |
+| Phase   | 対象                                | ゴール                                                                                                                                                                                                                                                                                                                                                           |
+| ------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 | JUS-P0-03 Category Routing          | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加                                                                                                                                                                                                                                                                            |
+| Phase 2 | JUS-P0-02 Plan Authorization        | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装                                                                                                                                                                                                                                                                          |
+| Phase 3 | JUS-P0-04 Transactional Acceptance  | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
+| Phase 4 | JUS-P0-01 Controller Runtime Wiring | ControllerRoutingObservation 評価、pinned-command 雛形・doctor 検査、upstream 拡張要求の分離                                                                                                                                                                                                                                                                     |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
 
