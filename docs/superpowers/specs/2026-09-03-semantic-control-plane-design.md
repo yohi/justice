@@ -231,6 +231,11 @@ export type AuthorizationMergeRule = {
   readonly terminalStates: ReadonlyArray<"invalidated" | "released">;
   readonly resolve: (mine: ApprovedPlanBinding, theirs: ApprovedPlanBinding) => ApprovedPlanBinding;
 };
+
+export type AuthorizationBindingsMerge = (
+  mine: ReadonlyArray<ApprovedPlanBinding>,
+  theirs: ReadonlyArray<ApprovedPlanBinding>,
+) => ReadonlyArray<ApprovedPlanBinding>;
 ```
 
 - `authorizationId` は承認単位の不変 identity。同一 `authorizationId` では `active → invalidated|released` は不可逆とする。
@@ -242,6 +247,7 @@ export type AuthorizationMergeRule = {
   にだけ永続化する P0 の監査値である。一般化した invalidation-reason framework は導入しない。
 - `invalidated` / `released` 状態の永続化に失敗しても、その binding store を uncertain として扱い、再利用禁止とする。
 - `AtomicPersistence.merge` において、`terminalStates` に含まれる status を持つ binding を `active` で上書きしてはならない。
+- `AuthorizationBindingsMerge` は authorization domain 専用の `AtomicPersistence.merge` hook である。generic conflict-resolution abstraction は導入しない。
 
 ### 4.3 Plan Fingerprint
 
@@ -344,8 +350,10 @@ export type PlanFinalizationTransitionRecord = {
 - `TaskLifecycle Core` は永続化に依存しない。
 - `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行する不透明な文字列である。同一 task における異なる attempt は異なる `attemptId` を持つ。
 - `FinalizationAttemptId` / `finalReviewRound` は plan finalization の各 iteration を区別する。`final_rework_required → final_review_pending` 遷移時には、**新しい `finalizationAttemptId`（新 UUID）および増分した `finalReviewRound` を両方発行・更新する**。
+- Final Review の reviewer execution failure、transport failure、conclusive lost は review-only retry であり、`final_review_pending` を維持する。retry は同じ `finalizationAttemptId` と `finalReviewRound + 1` を持つ新しい final-review `ReviewCorrelation` の `null → pending` record で durable に表す。これは lifecycle transition でも finalization identity rotation でもない。
+- Final Review の actual rework は `completed_with_findings` または current Final Gate の WARN / FAIL による `final_rework_required` を経由する。この場合だけ `final_rework_required → final_review_pending` transition record が fresh `finalizationAttemptId` と `finalReviewRound + 1` を保持する。
 - lifecycle transition は `TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` として durable observation/decision log に記録される。各 record は current `attemptId` / `finalizationAttemptId` を保持する。
-- durable log に書き込まれる `PersistedEnvelope`（persisted observation/decision record envelope）は、スコープに応じた実行コンテキストを必ず含む。task-scoped レコードでは `taskExecutionRef`（`authorizationId` / `taskId` / `attemptId`）を、plan-scoped レコードでは `{ authorizationId, finalizationAttemptId }` を含める。これにより restart / replay 時に当該レコードがどの attempt に属するかを再構築できる。
+- durable log に書き込まれる `PersistedEnvelope`（persisted observation/decision record envelope）は、スコープに応じた実行コンテキストを必ず含む。task-scoped レコードでは `taskExecutionRef`（`authorizationId` / `taskId` / `attemptId`）を、plan-scoped レコードでは `{ authorizationId, finalizationAttemptId, finalReviewRound }` を含める。これにより restart / replay 時に当該 record がどの attempt と review round に属するかを再構築できる。
 - 合法遷移表を定義し、重複イベント・無効遷移は idempotent に扱う。同一 `TaskExecutionRef` + 同一 transition identity の重複のみ idempotent に無視する。transition identity には必要に応じて `eventId` を含め、replay 時の冪等性を保つ。許可されていない `accepted → pending` 遷移は無効として記録。
 - restart / replay 時は event log を時系列で再投影する。projector は current attempt / current finalization attempt の証拠・レビューのみを Gate 評価に使用する。`all_tasks_accepted` の task 集合は、current checkbox ではなく **Approved Canonical Snapshot に含まれる task IDs** を SSOT とする。
 - compaction / restart 後は `state-projection.ts` の拡張によりこれらを再構築する。
@@ -670,9 +678,9 @@ review outcome から terminal record、lifecycle、retry identity への対応�
 | clean                       | `completed`                | `CleanReviewArtifactV1`        | `task: review_pending → gate_pending`; `final: final_review_pending → final_gate_pending` | current identity に対して実行する              | なし                                                                                                                                                    |
 | complete with findings      | `completed_with_findings`  | `ReviewArtifactWithFindingsV1` | `task: rework_required`; `final: final_rework_required`                                   | 実行しない。既知の findings は Gate に委ねない | `task`: 次の implementation で fresh `TaskExecutionRef` / `reviewRound = 1`; `final`: fixes 後に fresh `finalizationAttemptId` / `finalReviewRound + 1` |
 | incomplete                  | `review_incomplete`        | `IncompleteReviewArtifactV1`   | 対応する `review_pending` を blocked のまま保持する                                       | 実行しない                                     | 自動 retry/rework なし                                                                                                                                  |
-| reviewer execution failure  | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
-| transport failure           | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
-| conclusive lost             | `lost_conclusive`          | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: fresh `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| reviewer execution failure  | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| transport failure           | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                    |
+| conclusive lost             | `lost_conclusive`          | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                    |
 | uncertain recovered claimed | terminal record を作らない | なし                           | `claimed` を保持し Acceptance を blocked にする                                           | 実行しない                                     | 自動 redispatch/retry なし。restart だけでは round を変更しない                                                                                         |
 
 `completed` だけが Gate 評価に進む。`completed_with_findings` は Gate を経由せず直接
@@ -710,10 +718,10 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    `callId`、correlation、artifact ID / digest を使う recovery finalization だけを許可する。新しい
    dispatch、worker output の再読、または重複した artifact consumption は行わない。
 6. matching `PostToolUse` が review task の終端を確定した後に slot を terminal にする。
-   同一 `TaskExecutionRef` の transport / reviewer execution retry は新しい directive を
-   発行して `reviewRound` を 1 増分し、implementation rework は新しい
-   `TaskExecutionRef` と `reviewRound = 1` を発行する。Final Review の rework は既存の
-   `finalizationAttemptId` / `finalReviewRound` 規則に従う。
+   Task review-only retry は同一 `TaskExecutionRef` と `reviewRound + 1`、Task implementation
+   rework は fresh `TaskExecutionRef` と `reviewRound = 1` を使う。Final Review-only retry は
+   同じ `finalizationAttemptId` と `finalReviewRound + 1` を使い、actual final rework は fresh
+   `finalizationAttemptId` と `finalReviewRound + 1` を使う。
 
 この protocol では、category は server-side pending slot を選択するための必要条件に
 過ぎず、trusted identity は slot から `TaskCallBinding` へコピーされる correlation で
@@ -733,9 +741,10 @@ artifact reservation の SSOT にはしない。
 | `pending`                            | 同じ `ReviewCorrelation` の `ReviewRequiredDirective` を再発行する。`reviewRound` は増分しない。                                                                                                                    | 新しい slot、binding、`callId`、review round を作る                                              |
 | `claimed`（staging なし）            | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。                                                                                      | directive の再発行、同じ correlation の再 claim、artifact の先読み                               |
 | `claimed`（completion staging あり） | staging の `callId`、correlation、artifact ID / digest、artifact を再検証し、同じ terminalization commit を idempotent に再試行する。成功時だけ `review_observed`、terminal transition、Acceptance 入力を反映する。 | 新しい dispatch / claim / artifact reservation、別 artifact の消費、worker output の再読・再生成 |
-| `terminal`                           | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。                                                                                                              | terminal slot の変更・削除・再利用、同じ `callId` の再発行                                       |
+| `terminal`                           | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。review-only retry は terminal record とその新しい pending record から current round を再構築する。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行                                       |
 
 - `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance を blocked にする。
+- final-review の review-only retry では、projector は同じ `finalizationAttemptId` を持つ terminal failure record の後に append された pending slot の `ReviewCorrelation.finalReviewRound` を current round として復元する。old round の terminal review、GateDecision、AcceptanceDecision は current finalization correlation と一致しない stale record として扱い、Final Gate の入力に使用しない。
 - `claimed` の復元後に artifact が存在していても、matching `PostToolUse` と durable consume protocol が成立するまで読み取らない。completion staging がある場合は、staging 済みの artifact ID / digest と一致することだけを確認して finalization を再試行し、worker output を再読しない。consume marker が既にある場合は path を再読せず、terminal projection を authoritative とする。
 - `callId`、parent session、purpose、trusted correlation、child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
 - log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion は blocked にする。
@@ -900,10 +909,24 @@ authorization merge rule:
   - terminal state ("invalidated" / "released") を "active" で上書きしてはならない。
   - 同一 authorizationId で競合した場合、timestamp が新しい terminal state を採用する。
   - 再承認は新しい authorizationId を発行する。
+  - `AtomicPersistence.merge(mine, theirs)` の `mine` は現在保存を再試行する candidate、
+    `theirs` は最新 durable array とする。domain merge はまず authorizationId ごとに terminal
+    dominance を適用し、terminal binding を active に戻さない。
+  - `mine` に含まれ `theirs` に存在しない fresh active authorizationId は、同じ session の
+    superseding approval candidate である。candidate がある場合、merge result では candidate
+    を active とし、`theirs` 側を含む同 session の他の active binding を
+    `invalidated` / `invalidationReason = "plan_superseded"` へ変換する。
+  - 同一 merge input に同 session の fresh active candidate が複数ある異常状態では、
+    `approvedAt` の降順、同値では `authorizationId` の昇順で一件を winner とし、残りを
+    `plan_superseded` へ変換する。通常の approve path は fresh candidate を一件だけ生成する。
+  - 異なる session の binding は変更せず保持する。merge result は session ごとに active
+    binding を高々一件にし、version mismatch 後に authoritative save へ成功した candidate が
+    active authorization となる。
 
 authorization cardinality:
   - 同一 session に active な `ApprovedPlanBinding` は高々 1 つまでとする（at most one active binding per session）。
   - 新しい plan を approve する際、同一 session に既存 active binding が存在する場合は、同じ authoritative `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>` save で既存 binding を `invalidated`（`invalidationReason = "plan_superseded"`）とし、新しい `authorizationId` を発行する。save が失敗または `conflict_diverted` の場合、new binding と active-plan cache を authority に昇格してはならない。
+  - version mismatch で retry するときも authorization domain merge は同じ cardinality rule を適用する。したがって concurrent fresh-ID approval の最終 durable state では同一 session の active binding は高々一件であり、cache は `saved` になった merged durable state からだけ更新する。
   - 明示的な cancel を要求して新規承認をブロックする挙動は P0 では採用しない。
 
 restart / hydration:
@@ -983,6 +1006,11 @@ Justice
   - `task(category="sp-final-review")`
   - Final Gate PASS → `PlanFinalizationState = complete`
   - binding released
+- Final Review の reviewer execution failure、transport failure、conclusive lost は、対応する
+  dispatch を terminalize してから、同じ `finalizationAttemptId` と増分した
+  `finalReviewRound` の pending dispatch を durable に発行する。implementation/fix を再実行せず、
+  lifecycle は `final_review_pending` のままとする。findings または Final Gate WARN / FAIL による
+  actual rework だけが fresh `finalizationAttemptId` を発行する。
 
 ### 5.5 Review と Final Review
 
@@ -1042,6 +1070,11 @@ Final Review:
           → Final Gate re-evaluation using only current finalization attempt evidence
             → internal error / insufficient evidence
               → PlanFinalizationState = final_gate_pending (blocked)
+    → reviewer execution failure / transport failure / conclusive lost
+      → terminal record を durable に記録
+      → PlanFinalizationState = final_review_pending を維持
+      → same finalizationAttemptId N / finalReviewRound N+1 の新しい pending slot
+      → stale N round の Final Review / Final Gate を拒否
 ```
 
 ### Task Review の `reviewRound`

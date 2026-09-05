@@ -374,11 +374,31 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 `ApprovePlanInput` without `authorizationId`; `AuthorizationStore.approve(input:
 ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always generates a fresh authorizationId and
 leaves at most one active binding per session; `AuthorizationStore.release(authorizationId, at):
-Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`.
+Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`; and the
+domain-private `mergeAuthorizationBindings(mine: ReadonlyArray<ApprovedPlanBinding>,
+theirs: ReadonlyArray<ApprovedPlanBinding>): ReadonlyArray<ApprovedPlanBinding>` used only as this
+store's `AtomicPersistence.merge` hook.
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
 
 ```ts
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value?: T) => void } {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve: (value) => resolve?.(value as T) };
+}
+
+const authorizationAtomic = new AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>(files, files, {
+  filePath: ".justice/authorizations.json",
+  conflictPath: ".justice/authorizations.conflict.json",
+  serialize: (bindings) => JSON.stringify(bindings),
+  deserialize: (raw) => JSON.parse(raw) as ReadonlyArray<ApprovedPlanBinding>,
+  merge: mergeAuthorizationBindings,
+  emptyValue: () => [],
+});
+
 it("stores the canonical snapshot in the same authorization record", async () => {
   const binding = await store.approve(input);
   expect(binding?.canonicalSnapshot.documentDigest).toBe(snapshot.documentDigest);
@@ -402,6 +422,78 @@ it("generates a fresh authorizationId on reapproval", async () => {
 
 it("never lets a stale active merge overwrite the same terminal authorizationId", () => {
   expect(mergeBindings(staleActive, releasedBinding)).toEqual(releasedBinding);
+});
+
+it("preserves authorization cardinality through AtomicPersistence initial merge", async () => {
+  await files.writeFile(
+    ".justice/authorizations.json",
+    JSON.stringify({ version: 4, data: [oldActiveBinding] }),
+  );
+  await authorizationAtomic.saveAtomicWithLock([
+    invalidateSuperseded(oldActiveBinding),
+    freshBindingFor("s1", "docs/new.md", "new-id"),
+  ]);
+  const durable = (await authorizationAtomic.loadWithLock()).data;
+
+  expect(durable.filter((binding) => binding.sessionId === "s1" && binding.status === "active")).toHaveLength(1);
+  expect(durable.find((binding) => binding.authorizationId === oldActiveBinding.authorizationId)).toMatchObject({
+    status: "invalidated",
+    invalidationReason: "plan_superseded",
+  });
+});
+
+it("keeps one active binding when a version-conflicted fresh approval retries", async () => {
+  const firstTwoLinkAttempts = deferred<void>();
+  let coordinateContenders = false;
+  let linkAttempts = 0;
+  const files = new MockFileSystem();
+  const originalLink = files.link.bind(files);
+  files.link = async (target, claimPath) => {
+    if (!coordinateContenders) return originalLink(target, claimPath);
+    linkAttempts += 1;
+    if (linkAttempts <= 2) {
+      if (linkAttempts === 2) firstTwoLinkAttempts.resolve();
+      await firstTwoLinkAttempts.promise;
+    }
+    await originalLink(target, claimPath);
+  };
+  const store = new AuthorizationStore(files, files);
+
+  const old = await store.approve(inputFor("s1", "docs/old.md"));
+  const other = await store.approve(inputFor("s2", "docs/other.md"));
+  coordinateContenders = true;
+  linkAttempts = 0;
+  const approvalA = store.approve(inputFor("s1", "docs/a.md"));
+  const approvalB = store.approve(inputFor("s1", "docs/b.md"));
+  await firstTwoLinkAttempts.promise;
+  const [a, b] = await Promise.all([approvalA, approvalB]);
+  const durable = await store.hydrate();
+  const active = durable.filter((binding) => binding.sessionId === "s1" && binding.status === "active");
+
+  expect([a, b].filter((binding) => binding !== null)).toHaveLength(2);
+  expect(linkAttempts).toBeGreaterThanOrEqual(3);
+  expect(active).toHaveLength(1);
+  expect(durable.filter((binding) => binding.sessionId === "s1" && binding.status !== "active")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ authorizationId: old?.authorizationId, status: "invalidated", invalidationReason: "plan_superseded" }),
+    ]),
+  );
+  expect(
+    durable.filter(
+      (binding) =>
+        (binding.authorizationId === a?.authorizationId || binding.authorizationId === b?.authorizationId) &&
+        binding.status === "active",
+    ),
+  ).toHaveLength(1);
+  expect(
+    durable.filter(
+      (binding) =>
+        (binding.authorizationId === a?.authorizationId || binding.authorizationId === b?.authorizationId) &&
+        binding.status === "invalidated",
+    ),
+  ).toEqual([expect.objectContaining({ invalidationReason: "plan_superseded" })]);
+  expect(durable.find((binding) => binding.authorizationId === other?.authorizationId)).toMatchObject({ status: "active" });
+  expect(bridge.activePlanFor("s1")).toBe(active[0]?.planPath);
 });
 
 it("atomically supersedes only the active binding in the approving session", async () => {
@@ -449,12 +541,21 @@ Use exactly `.justice/authorizations.json` and `.justice/authorizations.conflict
 accept a caller-provided authorizationId. For approval, load the authoritative array and construct one
 replacement array: map only same-session active bindings to `{ status: "invalidated", invalidatedAt,
 invalidationReason: "plan_superseded" }`, retain every terminal and other-session binding, then append one
-fresh active binding. Submit that complete array through one `AtomicPersistence.saveAtomicWithLock` call.
-Promote the result to the authorization cache and `PlanBridge` only if the result is `saved`; on an
-exception or `conflict_diverted`, return `null`, retain the prior cache, and leave enrichment unauthorized.
-Keep the same-ID terminal-overwrite rule inside the persistence merge function and test it independently
-from approval. On plugin initialization, hydrate active bindings and restore their `planPath` into
-`PlanBridge`; if the file cannot be read, no binding is active. Do not add a transaction framework.
+fresh active binding. Submit that complete array and the loaded `LockMetadata` through one
+`AtomicPersistence.saveAtomicWithLock` call. Promote the result to the authorization cache and `PlanBridge`
+only if the result is `saved`; on an exception or `conflict_diverted`, return `null`, retain the prior cache,
+and leave enrichment unauthorized. On plugin initialization, hydrate active bindings and restore their
+`planPath` into `PlanBridge`; if the file cannot be read, no binding is active. Do not add a transaction
+framework.
+
+The `AtomicPersistence.merge` hook must merge the entire binding array, not only two records. It is used both
+by `saveAtomicWithLock(candidate)` when no `LockMetadata` is supplied and by its version-mismatch retry.
+`mine` is the approval candidate being retried and `theirs` is the latest durable array. `mergeSameAuthorizationId` returns
+terminal. `invalidateSuperseded` creates only the Design §4.2 invalidated shape. A fresh active candidate is
+an active `mine` record absent from `theirs`; the normal approve path creates exactly one per session. After
+same-ID merging, choose that candidate for its session, invalidate every other active binding in that session,
+and retain all other-session bindings unchanged. This makes the candidate that wins the authoritative retry
+the sole active binding without modifying `AtomicPersistence` itself.
 
 ```ts
 type ApprovedPlanBindingBase = {
@@ -475,6 +576,72 @@ export type ApprovedPlanBinding =
       readonly invalidationReason?: "plan_superseded";
     })
   | (ApprovedPlanBindingBase & { readonly status: "released"; readonly releasedAt: string });
+
+function mergeAuthorizationBindings(
+  mine: ReadonlyArray<ApprovedPlanBinding>,
+  theirs: ReadonlyArray<ApprovedPlanBinding>,
+): ReadonlyArray<ApprovedPlanBinding> {
+  const theirsById = new Map(theirs.map((binding) => [binding.authorizationId, binding]));
+  const merged = new Map(theirsById);
+  for (const candidate of mine) {
+    const durable = merged.get(candidate.authorizationId);
+    merged.set(
+      candidate.authorizationId,
+      durable === undefined ? candidate : mergeSameAuthorizationId(candidate, durable),
+    );
+  }
+
+  const freshCandidates = mine.filter(
+    (binding): binding is Extract<ApprovedPlanBinding, { readonly status: "active" }> =>
+      binding.status === "active" && !theirsById.has(binding.authorizationId),
+  );
+  for (const sessionId of new Set(freshCandidates.map((binding) => binding.sessionId))) {
+    const winner = freshCandidates
+      .filter((binding) => binding.sessionId === sessionId)
+      .sort(
+        (left, right) =>
+          right.approvedAt.localeCompare(left.approvedAt) ||
+          left.authorizationId.localeCompare(right.authorizationId),
+      )[0];
+    if (winner === undefined) continue;
+    for (const binding of merged.values()) {
+      if (
+        binding.sessionId === sessionId &&
+        binding.status === "active" &&
+        binding.authorizationId !== winner.authorizationId
+      ) {
+        merged.set(binding.authorizationId, invalidateSuperseded(binding));
+      }
+    }
+  }
+  return [...merged.values()];
+}
+
+function mergeSameAuthorizationId(
+  mine: ApprovedPlanBinding,
+  theirs: ApprovedPlanBinding,
+): ApprovedPlanBinding {
+  if (mine.status === "active") return theirs.status === "active" ? mine : theirs;
+  if (theirs.status === "active") return mine;
+  return terminalTimestamp(mine).localeCompare(terminalTimestamp(theirs)) >= 0 ? mine : theirs;
+}
+
+function terminalTimestamp(
+  binding: Exclude<ApprovedPlanBinding, { readonly status: "active" }>,
+): string {
+  return binding.status === "invalidated" ? binding.invalidatedAt : binding.releasedAt;
+}
+
+function invalidateSuperseded(
+  binding: Extract<ApprovedPlanBinding, { readonly status: "active" }>,
+): ApprovedPlanBinding {
+  return {
+    ...binding,
+    status: "invalidated",
+    invalidatedAt: new Date().toISOString(),
+    invalidationReason: "plan_superseded",
+  };
+}
 ```
 
 - [ ] **Step 4: Confirm GREEN**
@@ -601,7 +768,7 @@ git commit -m "feat: plan authorizationのcancelを追加"
 
 **Consumes:** active `ApprovedPlanBinding` from Task 2.2; implementation `TaskCallBinding`; `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
 
-**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`.
+**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`; `FinalizationContext`; and `startNextFinalizationAttempt(current: FinalizationContext): PlanFinalizationTransitionRecord`.
 
 - [ ] **Step 1: Write the failing replay tests**
 
@@ -651,11 +818,28 @@ it("rebuilds exactly one current task attempt after restart", () => {
   expect(project(lifecycleRecords, now).currentTaskExecutionRef("task-1")).toEqual(currentAttempt);
 });
 
-it("starts and reworks finalization with fresh finalization identities", async () => {
+it("keeps the finalization identity for review-only retry and rotates it only for actual rework", async () => {
   const initial = await advanceFinalizationAfterAllTasksAccepted(binding);
+  const reviewRetry = project(finalReviewFailureThenRetryRecords, now).currentFinalization();
   const rework = await startNextFinalizationAttempt(initial);
+
+  expect(reviewRetry.finalizationAttemptId).toBe(initial.finalizationAttemptId);
+  expect(reviewRetry.finalReviewRound).toBe(initial.finalReviewRound + 1);
+  expect(reviewRetry.state).toBe("final_review_pending");
   expect(rework.finalizationAttemptId).not.toBe(initial.finalizationAttemptId);
   expect(rework.finalReviewRound).toBe(initial.finalReviewRound + 1);
+  expect(rework.from).toBe("final_rework_required");
+  expect(rework.to).toBe("final_review_pending");
+});
+
+it("replays the current final-review retry correlation and rejects its old round", () => {
+  const projected = project(finalReviewFailureThenRetryRecords, now);
+  expect(projected.currentFinalization()).toMatchObject({
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 2,
+    state: "final_review_pending",
+  });
+  expect(projected.finalGateInputFor(oldFinalReviewCorrelation)).toBeUndefined();
 });
 ```
 
@@ -669,7 +853,7 @@ Expected: FAIL because lifecycle projection and runtime orchestration are absent
 
 Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
 
-In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after Task 3.4 has committed its pending dispatch slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the current finalization attempt and durably enter `final_review_pending`. Do not evaluate a Gate in this task; Task 3.2 receives only projected `gate_pending` / `final_gate_pending` states after Task 3.6 terminalization.
+In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after Task 3.4 has committed its pending dispatch slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the current finalization attempt and durably enter `final_review_pending`. A review-only failure writes no plan lifecycle transition: Task 3.4 first terminalizes the failure, then appends a new final-review pending slot with the same `finalizationAttemptId` and incremented `finalReviewRound`. `startNextFinalizationAttempt` is reserved for actual `final_rework_required → final_review_pending` and writes the fresh identity transition. Do not evaluate a Gate in this task; Task 3.2 receives only projected `gate_pending` / `final_gate_pending` states after Task 3.6 terminalization.
 
 ```ts
 if (event.identity === state.lastTransitionIdentity)
@@ -682,6 +866,30 @@ if (!VALID_TASK_TRANSITIONS.get(state.value)?.has(event.to)) {
   };
 }
 return { kind: "applied", state: event.to };
+
+type FinalizationContext = {
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+  readonly state: PlanFinalizationState;
+};
+
+function startNextFinalizationAttempt(
+  current: FinalizationContext,
+): PlanFinalizationTransitionRecord {
+  return {
+    recordType: "observation",
+    kind: "plan_finalization_transition",
+    planPath: current.planPath,
+    authorizationId: current.authorizationId,
+    finalizationAttemptId: randomUUID(),
+    finalReviewRound: current.finalReviewRound + 1,
+    from: "final_rework_required",
+    to: "final_review_pending",
+    reason: "finalization_rework",
+  };
+}
 ```
 
 - [ ] **Step 4: Confirm GREEN**
@@ -877,6 +1085,10 @@ Promise<ClaimReviewDispatchOutcome>`; `projectReviewDispatchSlots(records)`; and
 reconstructed only from the durable projection. `ClaimReviewDispatchOutcome` is either `{ readonly kind:
 "claimed"; readonly taskCallBinding: TaskCallBinding }` or `{ readonly kind: "blocked"; readonly
 advisory: string }`; a blocked outcome exposes neither `callId` nor `artifactId` as authority.
+`serializeParentSessionClaim<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T>` is a
+module-private, parent-session keyed queue helper. `terminalizeReviewFailure(claim: ClaimedReviewDispatch,
+reason: "review_execution_failed" | "lost_conclusive"): Promise<ReviewFailureOutcome>` appends the terminal
+record before appending the next pending slot.
 
 - [ ] **Step 1: Write the failing dispatch, claim, and recovery tests**
 
@@ -968,6 +1180,77 @@ it("allows exactly one concurrent claim for one parent-session slot", async () =
   expect(reserveReviewArtifact).toHaveBeenCalledTimes(1);
 });
 
+it("does not let a third same-parent claim enter while the second queued claim is in its critical section", async () => {
+  const aEntered = deferred<void>();
+  const releaseA = deferred<void>();
+  const bEntered = deferred<void>();
+  const releaseB = deferred<void>();
+  let durableReads = 0;
+  readDurableRecords.mockImplementation(async () => {
+    durableReads += 1;
+    if (durableReads === 1) {
+      aEntered.resolve();
+      await releaseA.promise;
+      return onePendingSlotRecords;
+    }
+    if (durableReads === 2) {
+      bEntered.resolve();
+      await releaseB.promise;
+      return claimedSlotRecords;
+    }
+    return claimedSlotRecords;
+  });
+
+  const a = claimReviewDispatch(reviewPreToolUseFor("call-a"));
+  await aEntered.promise;
+  const b = claimReviewDispatch(reviewPreToolUseFor("call-b"));
+  releaseA.resolve();
+  await bEntered.promise;
+  const c = claimReviewDispatch(reviewPreToolUseFor("call-c"));
+
+  await Promise.resolve();
+  expect(durableReads).toBe(2);
+  releaseB.resolve();
+  const [aResult, bResult, cResult] = await Promise.all([a, b, c]);
+  expect([aResult, bResult, cResult].filter((result) => result.kind === "claimed")).toHaveLength(1);
+  expect(durableTransitions("pending", "claimed")).toHaveLength(1);
+  expect(projectedTaskCallBindings()).toHaveLength(1);
+  expect(projectedArtifactReservations()).toHaveLength(1);
+  expect(authoritativeCallIds()).toEqual(["call-a"]);
+  expect(authoritativeCallIds()).not.toEqual(expect.arrayContaining(["call-b", "call-c"]));
+  expect(authoritativeArtifactIds()).toHaveLength(1);
+});
+
+it("does not serialize claims from different parent sessions", async () => {
+  const bothEntered = deferred<void>();
+  const releaseBoth = deferred<void>();
+  let activeReads = 0;
+  readDurableRecords.mockImplementation(async () => {
+    activeReads += 1;
+    if (activeReads === 2) bothEntered.resolve();
+    await releaseBoth.promise;
+    return pendingSlotsForDifferentParents;
+  });
+
+  const first = claimReviewDispatch(reviewPreToolUseFor("call-a", "parent-a"));
+  const second = claimReviewDispatch(reviewPreToolUseFor("call-b", "parent-b"));
+  await bothEntered.promise;
+  releaseBoth.resolve();
+  await expect(Promise.all([first, second])).resolves.toEqual(
+    expect.arrayContaining([expect.objectContaining({ kind: "claimed" })]),
+  );
+});
+
+it("continues a same-parent queue after its predecessor rejects", async () => {
+  const rejected = serializeParentSessionClaim("parent-1", async () => {
+    throw new Error("append failed");
+  });
+  const following = serializeParentSessionClaim("parent-1", async () => "continued");
+
+  await expect(rejected).rejects.toThrow("append failed");
+  await expect(following).resolves.toBe("continued");
+});
+
 it("terminalizes conclusive loss before retrying the same task attempt", async () => {
   await recoverConclusiveReviewLoss(currentClaim);
   expect(durableTerminal()).toMatchObject({ terminalReason: "lost_conclusive" });
@@ -975,6 +1258,28 @@ it("terminalizes conclusive loss before retrying the same task attempt", async (
     taskExecutionRef: currentTaskExecutionRef,
     reviewRound: currentReviewRound + 1,
   });
+});
+
+it.each([
+  ["reviewer execution failure", "review_execution_failed"],
+  ["transport failure", "review_execution_failed"],
+  ["conclusive loss", "lost_conclusive"],
+] as const)("retries final review after %s without finalization rework", async (_name, reason) => {
+  const retry = await terminalizeReviewFailure(currentFinalClaim, reason);
+  const replayed = projectReviewDispatchSlots(await readDurableRecords());
+
+  expect(retry).toMatchObject({ kind: "retried" });
+  if (retry.kind !== "retried") throw new Error("expected final review retry");
+  expect(durableTerminal()).toMatchObject({ terminalReason: reason });
+  expect(retry.correlation).toMatchObject({
+    finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  expect(projectedFinalizationState()).toBe("final_review_pending");
+  expect(durableFinalizationTransitions()).not.toContainEqual(
+    expect.objectContaining({ from: "final_rework_required", to: "final_review_pending" }),
+  );
+  expect(replayed.currentFinalReviewCorrelation()).toEqual(retry.correlation);
 });
 
 it("keeps an uncertain recovered claim blocked without redispatch", async () => {
@@ -995,8 +1300,10 @@ Expected: FAIL because durable dispatch, trusted call binding, and review direct
 
 Persist one `pending` slot per parent session before injecting its `ReviewRequiredDirective`. Implement a
 private, domain-specific `pendingClaimQueues: Map<string, Promise<void>>`, keyed by `parentSessionId`.
-`claimReviewDispatch` appends its operation to that parent session's queue and removes the map entry after
-the queued operation settles. This queue is not a reusable lock framework.
+This queue is not a reusable lock framework. Each operation installs its own unresolved tail before awaiting
+the predecessor. Its `finally` resolves that tail and deletes the map entry only when the tail is still the
+current entry; an older operation can therefore never delete a newer queued tail. A rejected predecessor is
+ignored for queue progression while its caller still receives its own rejection.
 
 Inside that one parent-session critical section, read the latest durable log and re-project the slot;
 require exactly one matching pending slot; create its reservation; and append one claimed transition record
@@ -1024,7 +1331,40 @@ PostToolUse, conclusive loss writes `lost_conclusive` before a new review round,
 recovery does not redispatch.
 
 ```ts
+type ClaimedReviewDispatch = {
+  readonly parentSessionId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly expectedCategory: "sp-review" | "sp-final-review";
+  readonly callId: string;
+};
+
+type ReviewFailureOutcome =
+  | { readonly kind: "retried"; readonly correlation: ReviewCorrelation }
+  | { readonly kind: "blocked" };
+
 const pendingClaimQueues = new Map<string, Promise<void>>();
+
+function serializeParentSessionClaim<T>(
+  parentSessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const predecessor = pendingClaimQueues.get(parentSessionId) ?? Promise.resolve();
+  let releaseTail: (() => void) | undefined;
+  const tail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+  pendingClaimQueues.set(parentSessionId, tail);
+
+  return predecessor
+    .catch(() => undefined)
+    .then(operation)
+    .finally(() => {
+      releaseTail?.();
+      if (pendingClaimQueues.get(parentSessionId) === tail) {
+        pendingClaimQueues.delete(parentSessionId);
+      }
+    });
+}
 
 async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispatchOutcome> {
   return serializeParentSessionClaim(input.parentSessionId, async () => {
@@ -1038,6 +1378,38 @@ async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispat
       ? { kind: "claimed", taskCallBinding: projectTaskCallBinding(claimed.record) }
       : { kind: "blocked", advisory: "review_claim_commit_failed" };
   });
+}
+
+async function terminalizeReviewFailure(
+  claim: ClaimedReviewDispatch,
+  terminalReason: "review_execution_failed" | "lost_conclusive",
+): Promise<ReviewFailureOutcome> {
+  const terminal = await appendReviewDispatchTransition({
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: randomUUID(),
+    parentSessionId: claim.parentSessionId,
+    correlation: claim.correlation,
+    expectedCategory: claim.expectedCategory,
+    from: "claimed",
+    to: "terminal",
+    callId: claim.callId,
+    terminalReason,
+  });
+  if (terminal.kind !== "committed") return { kind: "blocked" };
+
+  const correlation = { ...claim.correlation, reviewRound: claim.correlation.reviewRound + 1 };
+  const pending = await appendReviewDispatchTransition({
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: randomUUID(),
+    parentSessionId: claim.parentSessionId,
+    correlation,
+    expectedCategory: claim.expectedCategory,
+    from: null,
+    to: "pending",
+  });
+  return pending.kind === "committed" ? { kind: "retried", correlation } : { kind: "blocked" };
 }
 ```
 
@@ -1154,7 +1526,7 @@ git commit -m "feat: review child bindingをdurableに記録"
 
 **Consumes:** projected claimed dispatch slot; durable `TaskCallBinding`; durable
 `DelegatedExecutionBinding`; Design §4.10 `ReviewArtifactReservation`; `evaluateGatePendingAttempt` from
-Task 3.2.
+Task 3.2; and `terminalizeReviewFailure` from Task 3.4.
 
 **Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>`;
 `classifyReviewCompletion(result: ReviewWorkerResultV1): ReviewCompletionClassification`; one composite
@@ -1275,6 +1647,28 @@ it("rejects an old-round PostToolUse without changing the new round", async () =
   expect(readArtifact).not.toHaveBeenCalled();
   expect(currentReviewCorrelation()).toMatchObject({ reviewRound: currentReviewRound + 1 });
 });
+
+it.each([
+  ["reviewer execution failure", "review_execution_failed"],
+  ["transport failure", "review_execution_failed"],
+  ["conclusive loss", "lost_conclusive"],
+] as const)("rejects stale Final Review and Final Gate records after %s", async (_name, reason) => {
+  const retry = await terminalizeReviewFailure(currentFinalClaim, reason);
+  await consumeReviewCompletion(oldFinalRoundPostToolUse);
+  await evaluateGatePendingAttempt(oldFinalRoundGateContext);
+  const replayed = project(await readDurableRecords(), now);
+
+  expect(retry).toMatchObject({ kind: "retried" });
+  if (retry.kind !== "retried") throw new Error("expected final review retry");
+  expect(readArtifact).not.toHaveBeenCalled();
+  expect(evaluate).not.toHaveBeenCalled();
+  expect(replayed.currentFinalization()).toMatchObject({
+    finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
+    finalReviewRound: retry.correlation.finalReviewRound,
+    state: "final_review_pending",
+  });
+  expect(replayed.planAcceptanceDecisionFor(oldFinalRoundGateContext)).toBeUndefined();
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
@@ -1297,7 +1691,9 @@ final_gate_pending` and request `evaluateGatePendingAttempt`. For `completed_wit
 project direct `rework_required` / `final_rework_required` without calling Gate. For `review_incomplete`,
 retain `review_pending` / `final_review_pending` as blocked without invoking Gate or auto-redispatching.
 Task 3.4 terminalizes `review_execution_failed` and `lost_conclusive` before it creates their next-round
-pending slot; those failure branches never call this artifact-consumption path. An `unusable` reservation
+pending slot; those failure branches never call this artifact-consumption path. For a final-review failure,
+the next pending correlation retains `finalizationAttemptId`, increments `finalReviewRound`, and leaves
+`final_review_pending` current; only actual final rework creates a fresh finalization identity. An `unusable` reservation
 does no filesystem read, creates no `ReviewArtifactV1`, cannot terminalize as clean, does not invoke Gate,
 and leaves mandatory Acceptance blocked while runtime task execution remains fail-open.
 
@@ -1707,7 +2103,9 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2                | routing decision, applied, mismatch, effective pinned-command precedence, template output                                                                                              |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                         |
 | JUS-P0-02 semantic fingerprint and canonical snapshot          | 2.1, 2.2                | semantic mutation, snapshot persistence, hydration, fresh reapproval ID, terminal merge protection                                                                                     |
-| authorization cardinality                                      | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation, failed save retains authority/cache |
+| authorization sequential supersession                           | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation |
+| authorization concurrent supersession                           | 2.2                     | barrier-coordinated fresh-ID approvals traverse `AtomicPersistence` version mismatch and merge/retry, retain exactly one same-session active binding, terminalize old and losing bindings, preserve other-session active binding |
+| authorization terminal dominance and cache consistency          | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value |
 | JUS-P0-02 session-scoped cancel                                | 2.3                     | pathless parser, invalid flag combinations, durable release, no-binding idempotence                                                                                                    |
 | JUS-P0-03 seven-to-seven category mapping                      | 1.1                     | every role, legacy downgrade rejection                                                                                                                                                 |
 | JUS-P0-03 doctor effective category configuration              | 1.2                     | JSONC parsing, source precedence, missing category, unreadable/unsupported source, redaction                                                                                           |
@@ -1715,14 +2113,18 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-04 attempt-scoped Evidence / Review / Gate              | 3.1, 3.2, 3.4, 3.5, 3.6 | stale attempt/call/child/artifact rejection, reviewRound reset on rework                                                                                                               |
 | artifact reservation anti-replay                               | 3.4                     | safe path, collision retry with fresh UUID, bounded collision exhaustion, exists/directory I/O failure, invalid path, internal failure, unusable durable reservation and advisory      |
 | unusable reservation blocks Acceptance                         | 3.4, 3.6                | fail-open review task execution, worker input without artifact path, no filesystem read or ReviewArtifact, blocked Acceptance                                                          |
-| concurrent review claim                                        | 3.4                     | simultaneous same-parent claims yield exactly one claimed transition, binding, reservation, and authoritative call/artifact identity                                                   |
+| same-parent review claim serialization                          | 3.4                     | 2-call claim race and barrier-controlled overlapping 3-call race permit one critical section and exactly one claimed transition, binding, reservation, and authoritative call/artifact identity |
+| atomic review claim                                             | 3.4                     | critical section re-reads latest durable records, projects, validates one pending slot, reserves, then appends claimed before publishing authority                                      |
 | JUS-P0-04 review terminal atomicity                            | 3.6                     | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance                                                                |
 | terminal artifact classification                               | 3.6                     | clean → `completed`/Gate, findings → `completed_with_findings`/direct rework, incomplete → `review_incomplete`/blocked                                                                 |
-| review failure retry                                           | 3.4, 3.6                | reviewer execution and transport failure terminalize, retain the TaskExecutionRef, and issue `reviewRound + 1`                                                                         |
+| Task review-only retry                                         | 3.4, 3.6                | reviewer execution, transport failure, and conclusive loss terminalize; retain TaskExecutionRef; issue `reviewRound + 1`; reject the old round                                         |
+| Task implementation rework                                     | 3.1, 3.6                | fresh TaskExecutionRef and `reviewRound = 1` only after actual rework                                                                                                                  |
+| Final Review-only retry                                        | 3.1, 3.4, 3.6           | reviewer execution, transport failure, and conclusive loss keep `final_review_pending`, retain finalizationAttemptId, increment finalReviewRound, reject stale Final Review/Gate, and replay one current correlation |
+| Final actual rework                                            | 3.1, 3.6                | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound                                                    |
 | conclusive loss recovery                                       | 3.4, 3.6                | `lost_conclusive` terminalization occurs before a new round                                                                                                                            |
 | uncertain claimed recovery                                     | 3.4, 3.6                | no automatic redispatch, artifact read, or Acceptance after restart                                                                                                                    |
 | JUS-P0-04 Gate after `gate_pending`                            | 3.1, 3.2, 3.6           | no early evaluation, terminal review before gate_pending, GateDecision before AcceptanceDecision, unavailable/error blocked                                                            |
-| JUS-P0-04 finalization lifecycle                               | 3.1, 3.2, 3.4, 3.5, 3.6 | fresh finalization attempt, final review terminalization, Final Gate PASS/rework/blocked                                                                                               |
+| JUS-P0-04 finalization lifecycle                               | 3.1, 3.2, 3.4, 3.5, 3.6 | review-only retry preserves finalizationAttemptId and increments round; actual rework rotates identity; final review terminalization; stale Final Gate rejection; Final Gate PASS/rework/blocked |
 | JUS-P0-04 durable review dispatch and child correlation        | 3.3, 3.4, 3.5           | runtime spike, pending/claimed recovery, parent-session critical section, concurrent claim, durable child binding                                                                      |
 | JUS-P0-04 accepted task progress                               | 3.7                     | all unchecked steps checked, reparse completed, other tasks unchanged, zero-step no-op, durable acceptance ordering                                                                    |
 | JSON review transport fixed for P0                             | 3.4, 3.6                | reservation anti-replay, unusable fail-open/blocked path, one usable-path read, composite terminal record; no typed transport dependency                                               |
@@ -1735,14 +2137,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                     | role-to-category mapping tests                                                                                                                                                     |
 | 1.2       | JUS-P0-03, Design §3.4 and §5.3                                            | effective configuration and category-presence tests                                                                                                                                |
 | 2.1       | JUS-P0-02, Design §4.3, INV-04                                             | fingerprint boundary tests                                                                                                                                                         |
-| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality | authorization persistence, fresh ID, terminal merge, atomic supersession, exactly-one-active, failed-save cache-retention tests                                                    |
+| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests |
 | 2.3       | JUS-P0-02, Design §4.2 and §5.2                                            | pathless cancel parser and durable release tests                                                                                                                                   |
-| 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, INV-06, INV-09, INV-14                 | lifecycle orchestration and finalization tests                                                                                                                                     |
+| 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14           | lifecycle orchestration; review-only versus actual-rework finalization identity; replayed current final correlation tests                                                           |
 | 3.2       | JUS-P0-04, Design §4.6 and §4.11, INV-07, INV-08, INV-10, INV-14           | gate-pending-only, decision ordering, blocked tests                                                                                                                                |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                             | child-session runtime spike                                                                                                                                                        |
-| 3.4       | JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17      | parent-session critical section, concurrent claim, reservation collision/I/O/unusable, conclusive-loss and uncertain-claim recovery tests                                          |
+| 3.4       | JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17      | exact parent-session queue primitive, 2-call and overlapping 3-call mutual exclusion, different-parent concurrency, durable claim ordering, reservation collision/I/O/unusable, task and final review failure/retry, conclusive-loss and uncertain-claim recovery tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                     | durable child-binding tests                                                                                                                                                        |
-| 3.6       | JUS-P0-04, Design §4.5, §4.8.1, §4.10, §4.11, INV-13 through INV-18        | unusable no-read blocked path, terminal subtype classification, clean Gate, direct findings rework, incomplete blocking, same-attempt retry, composite terminal/replay/stale tests |
+| 3.6       | JUS-P0-04, Design §4.5, §4.8.1, §4.10, §4.11, INV-13 through INV-18        | unusable no-read blocked path, terminal subtype classification, clean Gate, direct findings rework, incomplete blocking, task retry, final review stale-event/Gate rejection, composite terminal/replay tests |
 | 3.7       | JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08                            | accepted-only full progress update tests                                                                                                                                           |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                             | controller routing tests                                                                                                                                                           |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                     | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                            |
