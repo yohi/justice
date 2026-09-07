@@ -1170,8 +1170,9 @@ to append `null -> pending`. Its module-private `selectNextEligibleReviewCandida
 `projectReviewCandidateParentSessionIds(records)` implement only Design §4.8.1 candidate derivation and
 deterministic order; `recordIntegrityAdvisory("review_dispatch_integrity_violation")` records the fail-closed
 corruption outcome. `projectCurrentFinalReviewCorrelation(records, lifecycle)` is module-private and derives the
-current final review round from ordered Review Dispatch records, so Task 3.4 alone owns review-only Final Review
-retry projection and stale old-round rejection. The module-private `nextReviewRetryCorrelation(correlation: ReviewCorrelation)` and
+current final review round from `lifecycle.currentFinalization().finalReviewRound` first, then applies ordered
+Review Dispatch records for the same finalization identity, so Task 3.4 alone owns review-only Final Review retry
+projection and stale old-round rejection. The module-private `nextReviewRetryCorrelation(correlation: ReviewCorrelation)` and
 `recoverReviewDispatchesAfterRestart(): Promise<void>` operate only in the ReviewDispatch domain; no
 generic scheduler, queue, recovery, transaction, lock, or CAS abstraction is added. The
 module-private `isCurrentActiveAuthorization(correlation: ReviewCorrelation): Promise<boolean>`,
@@ -1189,6 +1190,11 @@ after Task 2.3 has committed a cancel or the fingerprint check has committed inv
 failure, retry, and recovery operations call the within-parent helper directly.
 
 - [ ] **Step 1: Write the failing dispatch, claim, offer, and recovery tests**
+
+Final Review fixtures must persist the current lifecycle's `finalReviewRound` as the source of the initial
+candidate. The actual-rework fixture must persist a fresh `finalizationAttemptId` with `finalReviewRound + 1`,
+and the review-only retry fixture must retain that attempt ID while advancing only the round. These fixtures are
+defined before the tests and are reused by the restart cases.
 
 ```ts
 type ReviewPendingLifecycleFixture = {
@@ -1707,6 +1713,85 @@ it("retries a Final Review with the same finalizationAttemptId and only finalRev
   ).toBe(false);
 });
 
+it("uses the initial lifecycle finalReviewRound for the first Final Review dispatch", async () => {
+  const initial = await arrangeInitialFinalizationLifecycle({ finalReviewRound: 1 });
+
+  await offerNextMandatoryReview(initial.parentSessionId);
+
+  expect(nextPendingCorrelation()).toMatchObject({
+    reviewKind: "final-review",
+    finalizationAttemptId: initial.finalizationAttemptId,
+    finalReviewRound: 1,
+  });
+});
+
+it("dispatches an actual final rework at the lifecycle finalReviewRound without resetting it", async () => {
+  const rework = await arrangeCurrentFinalReworkLifecycle({
+    finalizationAttemptId: "fresh-finalization-attempt",
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+
+  await offerNextMandatoryReview(rework.parentSessionId);
+
+  expect(nextPendingCorrelation()).toMatchObject({
+    reviewKind: "final-review",
+    finalizationAttemptId: rework.finalizationAttemptId,
+    finalReviewRound: rework.finalReviewRound,
+  });
+  expect(nextPendingCorrelation()).not.toMatchObject({ finalReviewRound: 1 });
+});
+
+it("keeps a clean Final Review after actual rework on the lifecycle round through Final Gate", async () => {
+  const rework = await arrangeCurrentFinalReworkLifecycle({
+    finalizationAttemptId: "fresh-finalization-attempt",
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  await arrangeCleanFinalReviewFor(rework);
+
+  await consumeReviewCompletion(currentFinalPostToolUse);
+
+  expect(currentFinalReviewCorrelation()).toMatchObject({
+    finalizationAttemptId: rework.finalizationAttemptId,
+    finalReviewRound: rework.finalReviewRound,
+  });
+  expect(projectedFinalizationState()).toBe("final_gate_pending");
+  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+});
+
+it("increments only the review round for a review-only retry after actual rework", async () => {
+  const rework = await arrangeCurrentFinalReworkLifecycle({
+    finalizationAttemptId: "fresh-finalization-attempt",
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  const retry = await terminalizeReviewFailure(
+    await currentFinalClaimFor(rework),
+    "review_execution_failed",
+  );
+
+  expect(retry).toMatchObject({
+    kind: "retried",
+    correlation: {
+      finalizationAttemptId: rework.finalizationAttemptId,
+      finalReviewRound: rework.finalReviewRound + 1,
+    },
+  });
+});
+
+it("reconstructs the actual-rework Final Review round from lifecycle state after restart", async () => {
+  const rework = await arrangeCurrentFinalReworkLifecycle({
+    finalizationAttemptId: "fresh-finalization-attempt",
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  restartReviewDispatchRepository();
+
+  await recoverReviewDispatchesAfterRestart();
+
+  expect(currentFinalReviewCorrelation()).toMatchObject({
+    finalizationAttemptId: rework.finalizationAttemptId,
+    finalReviewRound: rework.finalReviewRound,
+  });
+});
+
 it("recovers a terminal-to-pending crash exactly once and only dispatches after durable pending", async () => {
   failNextReviewPendingAppend();
   await expect(
@@ -1804,6 +1889,9 @@ With zero outstanding slots, enumerate only Design §4.8.1 eligible current task
 durable total order (retry source terminal first, then lifecycle projection order), check the selected
 correlation's current Authorization, append exactly one `null -> pending`, and inject exactly one directive only
 after that append succeeds. It never accepts a caller-provided correlation as selection authority.
+An ordinary Final Review candidate copies `finalReviewRound` from the current finalization lifecycle, and its source
+transition must match `authorizationId`, `planPath`, `finalizationAttemptId`, and that same round. Only
+`nextReviewRetryCorrelation` advances the round without rotating `finalizationAttemptId`.
 
 Task 3.1 calls the public offer boundary immediately after a durable current `review_pending` or
 `final_review_pending` lifecycle transition; this is a lifecycle candidate notification, not a request to append
@@ -2034,7 +2122,9 @@ function currentOrdinaryCandidates(
       if (
         current !== undefined &&
         current.authorizationId === record.authorizationId &&
-        current.finalizationAttemptId === record.finalizationAttemptId
+        current.planPath === record.planPath &&
+        current.finalizationAttemptId === record.finalizationAttemptId &&
+        current.finalReviewRound === record.finalReviewRound
       ) {
         candidates.push({
           parentSessionId: record.parentSessionId,
@@ -2044,7 +2134,7 @@ function currentOrdinaryCandidates(
             authorizationId: current.authorizationId,
             planFingerprint: current.planFingerprint,
             finalizationAttemptId: current.finalizationAttemptId,
-            finalReviewRound: 1,
+            finalReviewRound: current.finalReviewRound,
           },
           expectedCategory: "sp-final-review",
           orderingSource: record,
@@ -2068,7 +2158,7 @@ function projectCurrentFinalReviewCorrelation(
     authorizationId: current.authorizationId,
     planFingerprint: current.planFingerprint,
     finalizationAttemptId: current.finalizationAttemptId,
-    finalReviewRound: 1,
+    finalReviewRound: current.finalReviewRound,
   };
   for (const record of orderEventsForProjection(records)) {
     if (record.kind !== "review_dispatch_transition" || record.correlation.reviewKind !== "final-review") {
@@ -2617,8 +2707,8 @@ git commit -m "feat: review child bindingをdurableに記録"
 `ensureTerminalReviewOutcomeApplied(terminal: ReviewDispatchTransitionRecord): Promise<ReviewCompletionOutcome>`;
 `ensureConsumedReviewArtifactCleaned(staged: ReviewCompletionStagingRecord, terminal:
 ReviewDispatchTransitionRecord): Promise<void>`;
-`findMatchingCompletionStaging(records: readonly PersistedLogRecord[], terminal:
-ReviewDispatchTransitionRecord): ReviewCompletionStagingRecord | undefined`;
+`findMatchingTerminalForStaging(records: readonly PersistedLogRecord[], staged:
+ReviewCompletionStagingRecord): ReviewDispatchTransitionRecord | undefined`;
 `reviewAuthorizationId(correlation: ReviewCorrelation): string`; and
 `isReviewAuthorizationActive(correlation: ReviewCorrelation): Promise<boolean>`;
 `classifyReviewCompletion(result: ReviewWorkerResultV1): ReviewCompletionClassification`; one composite
@@ -2629,6 +2719,13 @@ artifact; and a gate-evaluation request only for a durable clean-artifact `gate_
 subtype in each branch.
 
 - [ ] **Step 1: Write the failing ordering, decision, and anti-replay tests**
+
+All staging fixtures used by these tests, projection fixtures, and restart fixtures must construct the Design
+§4.8.1 shape exactly: `kind: "review_completion_staged"`, top-level `parentSessionId`, and the nested
+`staging: { callId, correlation, artifactConsumption, reviewArtifact, observedExecution }`. The final-review
+round fixtures include initial lifecycle round 1, actual-rework lifecycle round `N + 1`, and review-only retry
+round `N + 2` without rotating the finalization attempt. The named fixture helpers below are defined in the test
+setup with these types so RED failures are assertion failures rather than unresolved symbols or shape errors.
 
 ```ts
 it("performs the review completion protocol in durable order", async () => {
@@ -2738,7 +2835,7 @@ it.each([
   mismatchedArtifactIdTerminal,
   mismatchedDigestTerminal,
 ])("does not match completion staging on a partial terminal identity", (terminal) => {
-  expect(findMatchingCompletionStaging([stagedRecord, terminal], terminal)).toBeUndefined();
+  expect(findMatchingTerminalForStaging([stagedRecord, terminal], stagedRecord)).toBeUndefined();
 });
 
 it("cleans a staged artifact only after the cancelled tombstone is durable", async () => {
@@ -2771,6 +2868,22 @@ it("keeps repeated cancelled recovery idempotent and blocked", async () => {
   await recoverStagedReviewCompletionsAfterRestart();
 
   expect(readArtifact).not.toHaveBeenCalled();
+  expect(durableTerminals("cancelled")).toHaveLength(1);
+  expect(cleanupArtifact).toHaveBeenCalledTimes(1);
+  expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
+});
+
+it("retries cleanup after a durable cancelled terminal cleanup failure without rereading or reappending", async () => {
+  await arrangeCancelledStagedCompletion(stagedRecord);
+  failNextArtifactCleanup();
+
+  await recoverStagedReviewCompletionsAfterRestart();
+  restartReviewCompletionRepository();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(readArtifact).not.toHaveBeenCalled();
+  expect(appendTerminalRecord).not.toHaveBeenCalled();
+  expect(cleanupArtifact).toHaveBeenCalledTimes(2);
   expect(durableTerminals("cancelled")).toHaveLength(1);
   expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
 });
@@ -2827,6 +2940,17 @@ it("resumes one missing Gate path after gate_pending was durable before a crash"
 
 it("recovers a Final Review clean terminal to final_gate_pending and one Final Gate", async () => {
   await arrangeFinalStagingWithMatchingCleanTerminalWithoutLifecycle(finalStagedRecord);
+  await recoverStagedReviewCompletionsAfterRestart();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(appendTerminalRecord).not.toHaveBeenCalled();
+  expect(durableFinalGatePendingTransitions()).toHaveLength(1);
+  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+});
+
+it("resumes one missing Final Gate path after final_gate_pending was durable before a crash", async () => {
+  await arrangeFinalStagingWithMatchingCleanTerminalAndFinalGatePending(finalStagedRecord);
   await recoverStagedReviewCompletionsAfterRestart();
   await recoverStagedReviewCompletionsAfterRestart();
 
@@ -3011,7 +3135,7 @@ once; strictly parse `ReviewWorkerResultV1`; classify it before lifecycle work; 
 `src/core/review-artifact.ts` owns the module-private `recoverStagedReviewCompletion` and
 `ensureTerminalReviewOutcomeApplied`; it exports only `recoverStagedReviewCompletionsAfterRestart` for
 `JusticePlugin.initialize()`. `src/core/review-dispatch-state.ts` owns the module-private
-`findMatchingCompletionStaging` and `ensureConsumedReviewArtifactCleaned`, because cancellation convergence
+`findMatchingTerminalForStaging` and `ensureConsumedReviewArtifactCleaned`, because cancellation convergence
 already owns the parent-session critical section there. Task 3.6 updates that existing cancellation helper only
 after defining these helpers; Task 3.4 has no import from Task 3.6 and remains independently GREEN. Task 3.6
 consumes `projectTaskCallBindings` from Task 3.4, `projectDelegatedExecutionBindings` from Task 3.5, and
@@ -3023,21 +3147,24 @@ After every successful composite terminal append, and whenever recovery finds th
 Task 3.4 `offerNextMandatoryReview(parentSessionId)` boundary. The cleanup helper is a small Review Dispatch
 domain helper in `review-dispatch-state.ts`, not a generic cleanup framework. It reprojects the matching staging,
 terminal consume marker, and reservation; it reads neither artifact content nor worker output. It performs
-best-effort / idempotent cleanup only when a durable `completed`, `completed_with_findings`,
-`review_incomplete`, or matching staged `cancelled` terminal exists. Cleanup failure is reported as an advisory
+best-effort / idempotent cleanup only when `findMatchingTerminalForStaging` finds a durable `completed`,
+`completed_with_findings`, `review_incomplete`, or matching staged `cancelled` terminal. Normal matching requires
+`parentSessionId`, `staging.callId`, exact `staging.correlation`, and matching artifact ID / digest. Cancelled
+matching requires `terminalReason: "cancelled"`, `parentSessionId`, `staging.callId`, exact `staging.correlation`,
+and the durable claimed binding's artifact ID. Cleanup failure is reported as an advisory
 but never rolls back terminal, lifecycle, Gate, or Acceptance authority. `ensureTerminalReviewOutcomeApplied`
 re-reads the latest durable Authorization and
-lifecycle projection, classifies the immutable terminal reason, and never appends the terminal record itself. For
-`completed`, it appends `review_pending → gate_pending` or `final_review_pending → final_gate_pending` only when
-that exact current identity has no durable transition, then calls Task 3.2's idempotent
-`evaluateGatePendingAttempt`. If the transition is already durable but its current-identity GateDecision is
-missing, it resumes only that Gate path. For `completed_with_findings`, it appends direct
-`rework_required` / `final_rework_required` only when absent and never calls Gate. For `review_incomplete`, it
-does not append lifecycle, Gate, Acceptance, or retry records and returns blocked. Terminal, missing, unreadable,
-conflict-diverted, or otherwise uncertain Authorization returns blocked / stale, retains the immutable terminal
-record, and creates no positive lifecycle, Gate, Acceptance, or Progress state. Repeated calls use the Task 3.1
-current-lifecycle and Task 3.2 current-decision checks so lifecycle transitions, GateDecision, and
-AcceptanceDecision are each authoritative at most once.
+lifecycle projection, classifies the immutable terminal reason, and never appends the terminal record itself. It
+first checks only current identity. For `completed`, `review_pending` / `final_review_pending` appends the matching
+Gate-pending transition only when absent; `gate_pending` / `final_gate_pending` appends no lifecycle transition
+and resumes only that current Gate path. If the current identity already has its GateDecision and Acceptance,
+the operation is a no-op. For `completed_with_findings`, it appends direct `rework_required` /
+`final_rework_required` only when absent, treats the same identity's already durable rework state as a no-op, and
+never calls Gate. For `review_incomplete`, it does not append lifecycle, Gate, Acceptance, or retry records and
+returns blocked. Terminal, missing, unreadable, conflict-diverted, or otherwise uncertain Authorization returns
+blocked / stale, retains the immutable terminal record, and creates no positive lifecycle, Gate, Acceptance, or
+Progress state. Repeated calls use the Task 3.1 current-lifecycle and Task 3.2 current-decision checks so lifecycle
+transitions, GateDecision, and AcceptanceDecision are each authoritative at most once.
 Task 3.4 terminalizes `review_execution_failed` and `lost_conclusive` before its shared offer boundary selects
 any next-round pending slot; those failure branches never call this artifact-consumption path. For a final-review failure,
 the next pending correlation retains `finalizationAttemptId`, increments `finalReviewRound`, and leaves
@@ -3079,16 +3206,18 @@ append; (5) run `recoverReviewDispatchesAfterRestart` to reissue still-active pe
 eligible undispatched lifecycle candidate when no outstanding slot exists. This ordering prevents `claimed +
 staging` from being mistaken for pending and prevents a terminal Authorization from reissuing a directive.
 
-For each staging record, `recoverStagedReviewCompletion` first reads durable records for a matching terminal
-physical record by parent session, callId, exact correlation, and staged artifact ID / digest. When
-that terminal exists, it reads neither the artifact nor worker output, does not require the slot to remain
+For each staging record, `recoverStagedReviewCompletion` first reads durable records through the single
+`findMatchingTerminalForStaging(records, staged)` domain helper. The helper matches a normal terminal by
+`parentSessionId`, `staging.callId`, exact `staging.correlation`, and `staging.artifactConsumption` ID / digest;
+it matches a claimed `cancelled` terminal by the same parent/call/correlation plus the durable claimed binding's
+artifact ID. When that terminal exists, recovery reads neither the artifact nor worker output, does not require the slot to remain
 `claimed`, does not append a terminal record, and calls `ensureTerminalReviewOutcomeApplied(existingTerminal)`,
 `ensureConsumedReviewArtifactCleaned(staged, existingTerminal)`, and then `offerNextMandatoryReview`.
 When no matching terminal exists, it verifies that the parent session / callId / correlation slot remains current
-`claimed`, that its `TaskCallBinding` and `DelegatedExecutionBinding` still match, and that the staged artifact ID
-and digest match the staged composite payload. It then checks current active Authorization and retries exactly the
-one composite terminal append using only the staging's stored `artifactConsumption`, assembled
-`ReviewArtifactV1`, and `ObservedReviewExecution`; it never reads the artifact path, fetches worker output,
+`claimed`, that its `TaskCallBinding` and `DelegatedExecutionBinding` still match, and that the
+`staged.staging.artifactConsumption` ID and digest match the staged composite payload. It then checks current active
+Authorization and retries exactly the one composite terminal append using only `staged.staging.artifactConsumption`,
+`staged.staging.reviewArtifact`, and `staged.staging.observedExecution`; it never reads the artifact path, fetches worker output,
 creates a reservation or dispatch, or changes either review-round field. Only a successful terminal append calls
 `ensureTerminalReviewOutcomeApplied`, `ensureConsumedReviewArtifactCleaned`, and `offerNextMandatoryReview` for
 the same terminal. A failed append leaves the slot `claimed` plus staging durable and Acceptance blocked. A
@@ -3100,34 +3229,28 @@ type ReviewCompletionOutcome =
   | { readonly kind: "blocked" }
   | { readonly kind: "stale" };
 
-function findMatchingCompletionStaging(
-  records: readonly PersistedLogRecord[],
+function isMatchingNormalStaging(
+  staged: ReviewCompletionStagingRecord,
   terminal: ReviewDispatchTransitionRecord,
-): ReviewCompletionStagingRecord | undefined {
-  if (terminal.to !== "terminal" || terminal.callId === undefined) return undefined;
-  const consumed = terminal.artifactConsumption;
-  if (consumed === undefined) return undefined;
-  return records.find(
-    (record): record is ReviewCompletionStagingRecord =>
-      record.kind === "review_completion_staging" &&
-      record.parentSessionId === terminal.parentSessionId &&
-      record.callId === terminal.callId &&
-      sameReviewCorrelation(record.correlation, terminal.correlation) &&
-      record.artifactConsumption.artifactId === consumed.artifactId &&
-      record.artifactConsumption.digest === consumed.digest,
-  );
-}
-
-function sameCompletionStaging(
-  left: ReviewCompletionStagingRecord,
-  right: ReviewCompletionStagingRecord,
 ): boolean {
+  if (
+    terminal.to !== "terminal" ||
+    !("callId" in terminal) ||
+    terminal.callId === undefined ||
+    !("artifactConsumption" in terminal) ||
+    terminal.artifactConsumption === undefined ||
+    (terminal.terminalReason !== "completed" &&
+      terminal.terminalReason !== "completed_with_findings" &&
+      terminal.terminalReason !== "review_incomplete")
+  ) {
+    return false;
+  }
   return (
-    left.parentSessionId === right.parentSessionId &&
-    left.callId === right.callId &&
-    sameReviewCorrelation(left.correlation, right.correlation) &&
-    left.artifactConsumption.artifactId === right.artifactConsumption.artifactId &&
-    left.artifactConsumption.digest === right.artifactConsumption.digest
+    staged.parentSessionId === terminal.parentSessionId &&
+    staged.staging.callId === terminal.callId &&
+    sameReviewCorrelation(staged.staging.correlation, terminal.correlation) &&
+    staged.staging.artifactConsumption.artifactId === terminal.artifactConsumption.artifactId &&
+    staged.staging.artifactConsumption.digest === terminal.artifactConsumption.digest
   );
 }
 
@@ -3136,32 +3259,41 @@ function isMatchingCancelledStaging(
   staging: ReviewCompletionStagingRecord,
   terminal: ReviewDispatchTransitionRecord,
 ): boolean {
-  if (terminal.terminalReason !== "cancelled" || terminal.callId !== staging.callId) return false;
+  if (
+    terminal.to !== "terminal" ||
+    !("callId" in terminal) ||
+    terminal.terminalReason !== "cancelled" ||
+    terminal.callId !== staging.staging.callId
+  ) {
+    return false;
+  }
   if (
     terminal.parentSessionId !== staging.parentSessionId ||
-    !sameReviewCorrelation(terminal.correlation, staging.correlation)
+    !sameReviewCorrelation(terminal.correlation, staging.staging.correlation)
   ) {
     return false;
   }
   const binding = projectTaskCallBindings(records).find(
     (candidate) =>
       candidate.parentSessionId === staging.parentSessionId &&
-      candidate.callId === staging.callId &&
-      sameReviewCorrelation(candidate.correlation, staging.correlation),
+      candidate.callId === staging.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
   );
   return (
     binding?.artifactReservation.status === "usable" &&
-    binding.artifactReservation.artifactId === staging.artifactConsumption.artifactId
+    binding.artifactReservation.artifactId === staging.staging.artifactConsumption.artifactId
   );
 }
 
-function findMatchingCancelledCompletionStaging(
+function findMatchingTerminalForStaging(
   records: readonly PersistedLogRecord[],
-  terminal: ReviewDispatchTransitionRecord,
-): ReviewCompletionStagingRecord | undefined {
+  staged: ReviewCompletionStagingRecord,
+): ReviewDispatchTransitionRecord | undefined {
   return records.find(
-    (record): record is ReviewCompletionStagingRecord =>
-      record.kind === "review_completion_staging" && isMatchingCancelledStaging(records, record, terminal),
+    (record): record is ReviewDispatchTransitionRecord =>
+      record.kind === "review_dispatch_transition" &&
+      record.to === "terminal" &&
+      (isMatchingNormalStaging(staged, record) || isMatchingCancelledStaging(records, staged, record)),
   );
 }
 
@@ -3183,20 +3315,8 @@ async function ensureConsumedReviewArtifactCleaned(
   terminal: ReviewDispatchTransitionRecord,
 ): Promise<void> {
   const records = await readDurableRecords();
-  const matchingTerminal = records.find(
-    (record): record is ReviewDispatchTransitionRecord =>
-      record.kind === "review_dispatch_transition" &&
-      record.to === "terminal" &&
-      record.parentSessionId === terminal.parentSessionId &&
-      record.callId === terminal.callId &&
-      sameReviewCorrelation(record.correlation, terminal.correlation) &&
-      record.terminalReason === terminal.terminalReason,
-  );
-  if (matchingTerminal === undefined) return;
-  const normalStaging = findMatchingCompletionStaging(records, matchingTerminal);
-  const normalTerminal = normalStaging !== undefined && sameCompletionStaging(normalStaging, staged);
-  const cancelledTerminal = isMatchingCancelledStaging(records, staged, matchingTerminal);
-  if (!normalTerminal && !cancelledTerminal) return;
+  const matchingTerminal = findMatchingTerminalForStaging(records, staged);
+  if (matchingTerminal === undefined || matchingTerminal.transitionId !== terminal.transitionId) return;
   if (
     matchingTerminal.terminalReason !== "completed" &&
     matchingTerminal.terminalReason !== "completed_with_findings" &&
@@ -3206,7 +3326,7 @@ async function ensureConsumedReviewArtifactCleaned(
     return;
   }
   try {
-    await cleanupArtifact(staged.artifactConsumption.artifactId);
+    await cleanupArtifact(staged.staging.artifactConsumption.artifactId);
   } catch (error) {
     await recordAdvisory("review_artifact_cleanup_failed", error);
   }
@@ -3229,7 +3349,7 @@ type TerminalOutcomeTransition =
       readonly to: "final_gate_pending" | "final_rework_required";
     };
 
-function isCurrentTerminalCorrelation(
+function terminalMatchesCurrentIdentity(
   terminal: ReviewDispatchTransitionRecord,
   lifecycle: ReturnType<typeof projectLifecycle>,
 ): boolean {
@@ -3238,8 +3358,7 @@ function isCurrentTerminalCorrelation(
     return (
       current !== undefined &&
       current.authorizationId === terminal.correlation.taskExecutionRef.authorizationId &&
-      current.attemptId === terminal.correlation.taskExecutionRef.attemptId &&
-      lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId) === "review_pending"
+      current.attemptId === terminal.correlation.taskExecutionRef.attemptId
     );
   }
   const current = lifecycle.currentFinalization();
@@ -3248,7 +3367,6 @@ function isCurrentTerminalCorrelation(
     current.authorizationId === terminal.correlation.authorizationId &&
     current.planPath === terminal.correlation.planPath &&
     current.finalizationAttemptId === terminal.correlation.finalizationAttemptId &&
-    current.state === "final_review_pending" &&
     current.finalReviewRound === terminal.correlation.finalReviewRound
   );
 }
@@ -3257,8 +3375,11 @@ function gatePendingTransitionFor(
   terminal: ReviewDispatchTransitionRecord,
   lifecycle: ReturnType<typeof projectLifecycle>,
 ): TerminalOutcomeTransition | undefined {
-  if (!isCurrentTerminalCorrelation(terminal, lifecycle)) return undefined;
+  if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return undefined;
   if (terminal.correlation.reviewKind === "task-review") {
+    if (lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId) !== "review_pending") {
+      return undefined;
+    }
     return {
       scope: "task",
       taskExecutionRef: terminal.correlation.taskExecutionRef,
@@ -3266,6 +3387,8 @@ function gatePendingTransitionFor(
       to: "gate_pending",
     };
   }
+  const current = lifecycle.currentFinalization();
+  if (current === undefined || current.state !== "final_review_pending") return undefined;
   return {
     scope: "final",
     authorizationId: terminal.correlation.authorizationId,
@@ -3353,16 +3476,22 @@ function gateContextForCurrentTerminal(
   terminal: ReviewDispatchTransitionRecord,
   lifecycle: ReturnType<typeof projectLifecycle>,
 ): GatePendingAttemptContext | undefined {
-  if (!isCurrentTerminalCorrelation(terminal, lifecycle)) return undefined;
-  return terminal.correlation.reviewKind === "task-review"
-    ? { scope: "task", taskExecutionRef: terminal.correlation.taskExecutionRef }
-    : {
-        scope: "plan",
-        authorizationId: terminal.correlation.authorizationId,
-        planPath: terminal.correlation.planPath,
-        finalizationAttemptId: terminal.correlation.finalizationAttemptId,
-        finalReviewRound: terminal.correlation.finalReviewRound,
-      };
+  if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return undefined;
+  if (terminal.correlation.reviewKind === "task-review") {
+    if (lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId) !== "gate_pending") {
+      return undefined;
+    }
+    return { scope: "task", taskExecutionRef: terminal.correlation.taskExecutionRef };
+  }
+  const current = lifecycle.currentFinalization();
+  if (current === undefined || current.state !== "final_gate_pending") return undefined;
+  return {
+    scope: "plan",
+    authorizationId: terminal.correlation.authorizationId,
+    planPath: terminal.correlation.planPath,
+    finalizationAttemptId: terminal.correlation.finalizationAttemptId,
+    finalReviewRound: terminal.correlation.finalReviewRound,
+  };
 }
 
 function delegatedBindingMatchesStaging(
@@ -3371,26 +3500,26 @@ function delegatedBindingMatchesStaging(
 ): boolean {
   if (
     binding.parentSessionId !== staging.parentSessionId ||
-    binding.parentCallId !== staging.callId ||
-    binding.childSessionId !== staging.observedReviewExecution.childSessionId
+    binding.parentCallId !== staging.staging.callId ||
+    binding.childSessionId !== staging.staging.observedExecution.childSessionId
   ) {
     return false;
   }
-  if (staging.correlation.reviewKind === "task-review") {
+  if (staging.staging.correlation.reviewKind === "task-review") {
     return (
       binding.scope.kind === "task" &&
       binding.scope.taskExecutionRef.authorizationId ===
-        staging.correlation.taskExecutionRef.authorizationId &&
-      binding.scope.taskExecutionRef.taskId === staging.correlation.taskExecutionRef.taskId &&
-      binding.scope.taskExecutionRef.attemptId === staging.correlation.taskExecutionRef.attemptId
+        staging.staging.correlation.taskExecutionRef.authorizationId &&
+      binding.scope.taskExecutionRef.taskId === staging.staging.correlation.taskExecutionRef.taskId &&
+      binding.scope.taskExecutionRef.attemptId === staging.staging.correlation.taskExecutionRef.attemptId
     );
   }
   return (
     binding.scope.kind === "finalization" &&
-    binding.scope.authorizationId === staging.correlation.authorizationId &&
-    binding.scope.planPath === staging.correlation.planPath &&
-    binding.scope.finalizationAttemptId === staging.correlation.finalizationAttemptId &&
-    binding.scope.finalReviewRound === staging.correlation.finalReviewRound
+    binding.scope.authorizationId === staging.staging.correlation.authorizationId &&
+    binding.scope.planPath === staging.staging.correlation.planPath &&
+    binding.scope.finalizationAttemptId === staging.staging.correlation.finalizationAttemptId &&
+    binding.scope.finalReviewRound === staging.staging.correlation.finalReviewRound
   );
 }
 
@@ -3400,25 +3529,32 @@ async function ensureTerminalReviewOutcomeApplied(
   if (!(await isReviewAuthorizationActive(terminal.correlation))) return { kind: "blocked" };
   const records = await readDurableRecords();
   const lifecycle = projectLifecycle(records);
-  if (!isCurrentTerminalCorrelation(terminal, lifecycle)) return { kind: "stale" };
+  if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return { kind: "stale" };
 
   switch (terminal.terminalReason) {
     case "completed": {
       const transition = gatePendingTransitionFor(terminal, lifecycle);
-      if (transition === undefined) return { kind: "stale" };
-      if (!hasLifecycleTransition(records, transition)) {
+      if (transition !== undefined && !hasLifecycleTransition(records, transition)) {
         const appended = await appendLifecycleTransition(transition);
         if (appended.kind !== "committed") return { kind: "blocked" };
       }
       const projected = projectLifecycle(await readDurableRecords());
       const gateContext = gateContextForCurrentTerminal(terminal, projected);
-      if (gateContext === undefined) return { kind: "stale" };
-      if (!hasCurrentGateDecision(projected, terminal.correlation)) {
+      if (gateContext !== undefined) {
         await evaluateGatePendingAttempt(gateContext);
+        return { kind: "terminalized" };
       }
-      return { kind: "terminalized" };
+      return hasCurrentGateDecision(projected, terminal.correlation)
+        ? { kind: "terminalized" }
+        : { kind: "stale" };
     }
     case "completed_with_findings": {
+      const currentState = terminal.correlation.reviewKind === "task-review"
+        ? lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId)
+        : lifecycle.currentFinalization()?.state;
+      if (currentState === "rework_required" || currentState === "final_rework_required") {
+        return { kind: "terminalized" };
+      }
       const transition = reworkTransitionFor(terminal, lifecycle);
       if (transition === undefined) return { kind: "stale" };
       if (!hasLifecycleTransition(records, transition)) {
@@ -3440,14 +3576,7 @@ async function recoverStagedReviewCompletion(
   staged: ReviewCompletionStagingRecord,
 ): Promise<ReviewCompletionOutcome> {
   const records = await readDurableRecords();
-  const existingTerminal = records.find(
-    (record): record is ReviewDispatchTransitionRecord =>
-      record.kind === "review_dispatch_transition" &&
-      (() => {
-        const matching = findMatchingCompletionStaging(records, record);
-        return matching !== undefined && sameCompletionStaging(matching, staged);
-      })(),
-  );
+  const existingTerminal = findMatchingTerminalForStaging(records, staged);
   if (existingTerminal !== undefined) {
     const outcome = await ensureTerminalReviewOutcomeApplied(existingTerminal);
     await ensureConsumedReviewArtifactCleaned(staged, existingTerminal);
@@ -3459,19 +3588,19 @@ async function recoverStagedReviewCompletion(
     (candidate) =>
       candidate.key.parentSessionId === staged.parentSessionId &&
       candidate.state === "claimed" &&
-      candidate.callId === staged.callId &&
-      sameReviewCorrelation(candidate.key.correlation, staged.correlation),
+      candidate.callId === staged.staging.callId &&
+      sameReviewCorrelation(candidate.key.correlation, staged.staging.correlation),
   );
   const taskCallBinding = projectTaskCallBindings(records).find(
     (candidate) =>
       candidate.parentSessionId === staged.parentSessionId &&
-      candidate.callId === staged.callId &&
-      sameReviewCorrelation(candidate.correlation, staged.correlation),
+      candidate.callId === staged.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staged.staging.correlation),
   );
   const delegatedBinding = projectDelegatedExecutionBindings(records).find(
     (candidate) =>
       candidate.parentSessionId === staged.parentSessionId &&
-      candidate.parentCallId === staged.callId,
+      candidate.parentCallId === staged.staging.callId,
   );
   if (
     slot === undefined ||
@@ -3479,14 +3608,14 @@ async function recoverStagedReviewCompletion(
     delegatedBinding === undefined ||
     !delegatedBindingMatchesStaging(delegatedBinding, staged) ||
     taskCallBinding.artifactReservation.status !== "usable" ||
-    taskCallBinding.artifactReservation.artifactId !== staged.artifactConsumption.artifactId
+    taskCallBinding.artifactReservation.artifactId !== staged.staging.artifactConsumption.artifactId
   ) {
     return { kind: "stale" };
   }
-  if (!(await isReviewAuthorizationActive(staged.correlation))) {
+  if (!(await isReviewAuthorizationActive(staged.staging.correlation))) {
     await cancelReviewDispatchesForTerminalAuthorization(
       staged.parentSessionId,
-      reviewAuthorizationId(staged.correlation),
+      reviewAuthorizationId(staged.staging.correlation),
     );
     return { kind: "blocked" };
   }
@@ -3501,7 +3630,7 @@ async function recoverStagedReviewCompletion(
 export async function recoverStagedReviewCompletionsAfterRestart(): Promise<void> {
   const records = orderEventsForProjection(await readDurableRecords());
   const stagings = records.filter(
-    (record): record is ReviewCompletionStagingRecord => record.kind === "review_completion_staging",
+    (record): record is ReviewCompletionStagingRecord => record.kind === "review_completion_staged",
   );
   for (const staged of stagings) {
     try {
@@ -3526,7 +3655,15 @@ async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSession
   if (current === undefined) return;
   const terminal = await appendCancelledReviewDispatchTransition(current);
   if (terminal?.kind !== "committed") return;
-  const staging = findMatchingCancelledCompletionStaging(await readDurableRecords(), terminal.record);
+  const records = await readDurableRecords();
+  const staging = records
+    .filter(
+      (record): record is ReviewCompletionStagingRecord => record.kind === "review_completion_staged",
+    )
+    .find(
+      (candidate) =>
+        findMatchingTerminalForStaging(records, candidate)?.transitionId === terminal.record.transitionId,
+    );
   if (staging !== undefined) await ensureConsumedReviewArtifactCleaned(staging, terminal.record);
 }
 
@@ -3966,9 +4103,11 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | corrupt multiple outstanding slots                             | 3.4                     | fail-closed offer and claim create no arbitrary pending, claim, reservation, or directive and record an integrity advisory                                                                                                       |
 | atomic review claim                                            | 3.4                     | critical section re-reads latest durable records, projects, validates one pending slot, reserves, then appends claimed before publishing authority                                                                               |
 | JUS-P0-04 review terminal atomicity                            | 3.6                     | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance                                                                                                          |
+| ReviewCompletionStagingRecord schema                           | 3.6                     | Design `review_completion_staged` discriminant and exact nested `record.staging` payload are used by append, projection, cleanup, and restart fixtures                                    |
 | claimed + completion staging restart recovery                  | 3.6                     | staging durable, terminal append failure, restart recovery, no artifact/worker-output reread, exactly one terminal                                                                                                               |
 | staged completion restart recovery                             | 3.6                     | `recoverStagedReviewCompletion` reuses matching terminal or retries one terminal append from durable staging, and `recoverStagedReviewCompletionsAfterRestart` processes ordered staging records independently                |
 | terminal to lifecycle crash recovery                           | 3.6                     | existing clean terminal is reused without artifact reread or terminal append; missing gate_pending / final_gate_pending transition is appended exactly once                                                                      |
+| gate_pending / final_gate_pending crash recovery               | 3.2, 3.6                | durable lifecycle transition is not reappended; a missing current-identity Gate or Final Gate resumes exactly once                                                    |
 | post-terminal outcome recovery                                 | 3.6                     | `ensureTerminalReviewOutcomeApplied` discriminates completed/findings/incomplete and verifies repeated lifecycle/Gate recovery is idempotent                                                                                     |
 | clean terminal recovery                                        | 3.2, 3.6                | clean task and Final Review terminal recover gate_pending and current-identity Gate exactly once; repeated recovery creates no duplicate GateDecision or AcceptanceDecision                                                      |
 | findings terminal recovery                                     | 3.6                     | task and Final Review findings terminal recover rework_required / final_rework_required exactly once and never invoke Gate                                                                                                       |
@@ -3977,14 +4116,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | staged terminalization idempotency                             | 3.6                     | repeated recovery has no duplicate terminal, Gate, or Acceptance                                                                                                                                                                 |
 | staging recovery failure                                       | 3.6                     | claimed plus staging remains durable; no new dispatch, reservation, or round; Acceptance stays blocked                                                                                                                           |
 | consumed artifact cleanup recovery                             | 3.6                     | normal terminal before cleanup crash and cleanup failure retry without artifact reread, terminal reappend, Gate rollback, or Acceptance rollback                                                                                 |
-| consumed artifact cleanup                                      | 3.6                     | `findMatchingCompletionStaging` requires parent session, call ID, exact correlation, artifact ID, and digest; `ensureConsumedReviewArtifactCleaned` retries only after a matching durable terminal                             |
-| cancelled staged artifact cleanup                              | 3.4, 3.6                | cancelled tombstone precedes cleanup; failed tombstone preserves artifact; restart converges tombstone then retries idempotent cleanup while Acceptance remains blocked                                                          |
+| consumed artifact cleanup                                      | 3.6                     | `findMatchingTerminalForStaging` matches normal terminals by nested staging identity and cancelled claimed terminals by durable binding artifact ID; cleanup occurs only after a matching durable terminal                             |
+| cancelled staged artifact cleanup                              | 3.4, 3.6                | cancelled tombstone precedes cleanup; failed tombstone preserves artifact; restart rediscovers the durable tombstone without reread/reappend and retries idempotent cleanup while Acceptance remains blocked                       |
 | staging versus terminal Authorization                          | 2.3, 3.4, 3.6           | cancel/invalidation after staging prevents promotion; slot converges to cancelled; fresh approval does not reuse old state                                                                                                       |
 | terminal artifact classification                               | 3.6                     | clean → `completed`/Gate, findings → `completed_with_findings`/direct rework, incomplete → `review_incomplete`/blocked                                                                                                           |
 | Task Review failure retry                                      | 3.4, 3.6                | `retries a task review with the same TaskExecutionRef and only reviewRound + 1` verifies the retained ref, incremented task round, absent `finalReviewRound`, and stale old-round rejection                                      |
 | Task implementation rework                                     | 3.1, 3.6                | fresh TaskExecutionRef and `reviewRound = 1` only after actual rework                                                                                                                                                            |
 | Final Review review-only retry                                 | 3.4, 3.6                | dispatch retry retains finalizationAttemptId, increments finalReviewRound, projects that round as current, and rejects old PostToolUse/artifact/Gate records                                                                     |
-| Final actual rework                                            | 3.1, 3.6                | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound                                                                                            |
+| Final actual rework                                            | 3.1, 3.4, 3.6           | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound; dispatch uses that lifecycle round                 |
 | terminal failure to retry-pending recovery                     | 3.4                     | `recovers a terminal-to-pending crash exactly once and only dispatches after durable pending` simulates committed terminal plus failed pending append, restart, and recovery                                                     |
 | retry dispatch ordering                                        | 3.4                     | the terminal-to-pending crash test records `terminal-committed -> next-pending-committed -> directive-injected`; failed pending append has no directive                                                                          |
 | retry recovery idempotency                                     | 3.4                     | the terminal-to-pending crash test runs recovery twice and verifies exactly one next-round `null -> pending` transition                                                                                                          |
