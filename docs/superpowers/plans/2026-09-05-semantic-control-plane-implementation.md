@@ -236,12 +236,16 @@ git commit -m "feat: doctorでsp category設定を検査"
 **Files:**
 
 - Create: `src/core/plan-fingerprint.ts`
+- Modify: `src/core/types.ts`
 - Test: `tests/core/plan-fingerprint.test.ts`
 - Test: `tests/core/plan-parser.test.ts`
 
 **Consumes:** `PlanParser.parse(content): PlanTask[]`; `hashString(value: string): string` from `src/core/v2/hash.ts`; approval-time task IDs from `PlanParser.parse(raw).map((task) => task.id)`; validation-time task IDs from `binding.canonicalSnapshot.tasks.map((task) => task.taskId)`.
 
 **Produces:** `buildCanonicalSnapshot(raw: string, approvedTaskIds: readonly string[]): CanonicalPlanSnapshot`; `computePlanFingerprint(raw: string, approvedTaskIds: readonly string[]): PlanFingerprint`; `migrateJusticeGeneratedErrorAnnotations(raw: string, observations: readonly PersistedLogRecord[]): MigrationResult`.
+Export `CanonicalTaskSnapshot`, `CanonicalPlanSnapshot`, and `PlanFingerprint` from
+`src/core/types.ts`; `plan-fingerprint.ts` imports these shared types rather than defining a
+second fingerprint shape.
 
 - [ ] **Step 1: Write the failing semantic-boundary tests**
 
@@ -329,6 +333,27 @@ every non-approved line without checkbox rewriting. Approval calls both function
 `binding.canonicalSnapshot.tasks.map((task) => task.taskId)`.
 
 ```ts
+// src/core/types.ts
+export type CanonicalTaskSnapshot = {
+  readonly taskId: string;
+  readonly title: string;
+  readonly canonicalBody: string;
+  readonly digest: string;
+};
+
+export type CanonicalPlanSnapshot = {
+  readonly schema: "justice-plan-v1";
+  readonly documentDigest: string;
+  readonly globalBodyDigest: string;
+  readonly tasks: ReadonlyArray<CanonicalTaskSnapshot>;
+};
+
+export type PlanFingerprint = {
+  readonly algorithm: "sha256";
+  readonly value: string;
+};
+
+// src/core/plan-fingerprint.ts
 export function computePlanFingerprint(
   raw: string,
   approvedTaskIds: readonly string[],
@@ -798,7 +823,20 @@ git commit -m "feat: plan authorizationのcancelを追加"
 
 **Consumes:** active `ApprovedPlanBinding` from Task 2.2; implementation `TaskCallBinding`; `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
 
-**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`; `FinalizationContext`; `ProjectedLifecycle = { readonly currentTaskExecutionRefs: ReadonlyMap<string, TaskExecutionRef>; readonly taskStates: ReadonlyMap<string, TaskProgressState>; readonly finalization?: FinalizationContext }`; the existing `project(events, rebuiltAt): ProjectedState` extended with the lifecycle-only `ProjectedLifecycle`; `appendTaskLifecycleTransition(input: { readonly taskExecutionRef: TaskExecutionRef; readonly from: "review_pending"; readonly to: "gate_pending" | "rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; `appendPlanFinalizationTransition(input: { readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly from: "final_review_pending"; readonly to: "final_gate_pending" | "final_rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; and `startNextFinalizationAttempt(current: FinalizationContext): PlanFinalizationTransitionRecord`.
+**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`; `FinalizationContext`; `ProjectedLifecycle = { readonly currentTaskExecutionRefs: ReadonlyMap<string, TaskExecutionRef>; readonly taskStates: ReadonlyMap<string, TaskProgressState>; readonly finalization?: FinalizationContext }`; the existing `project(events, rebuiltAt): ProjectedState` extended with the lifecycle-only `ProjectedLifecycle`; `appendTaskLifecycleTransition(input: { readonly taskExecutionRef: TaskExecutionRef; readonly from: "review_pending"; readonly to: "gate_pending" | "rework_required" } | { readonly taskExecutionRef: TaskExecutionRef; readonly from: "gate_pending"; readonly to: "accepted" | "rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; `appendPlanFinalizationTransition(input: { readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly from: "final_review_pending"; readonly to: "final_gate_pending" | "final_rework_required" } | { readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly from: "final_gate_pending"; readonly to: "complete" | "final_rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; and `startNextFinalizationAttempt(current: FinalizationContext): PlanFinalizationTransitionRecord`.
+
+**Type ownership:** Export `TaskExecutionRef`, `TaskAttemptId`, and `FinalizationAttemptId` from
+`src/core/types.ts` in this task. Task 3.2 imports those types and does not define a second identity
+shape. Task 3.1 owns lifecycle identity projection; Task 3.2 owns only the durable Gate and
+Acceptance decision variants and their lookup.
+The same `src/core/types.ts` module also owns `ReviewKind`, `TaskReviewCorrelation`,
+`FinalReviewCorrelation`, and `ReviewCorrelation`; Task 3.2 and Task 3.4 import these shared
+correlation types rather than creating local copies.
+The lifecycle appenders also expose the post-Gate outcome transitions as discriminated inputs:
+`gate_pending → accepted | rework_required` for a current task attempt and
+`final_gate_pending → complete | final_rework_required` for the current finalization identity.
+Task 3.2 appends these transitions only after the matching AcceptanceDecision is durable; blocked
+Acceptance leaves the lifecycle in `gate_pending` / `final_gate_pending`.
 
 - [ ] **Step 1: Write the failing replay tests**
 
@@ -877,13 +915,51 @@ Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-
 
 Expected: FAIL because lifecycle projection and runtime orchestration are absent.
 
+“Lifecycle-only” means Gate/Acceptance records are not used to derive or mutate lifecycle state
+inside Task 3.1. Preserve the existing task-Gate compatibility projection under
+`ProjectedState.tasks` where current rule-engine consumers require it; `applyDecisionEvent` must
+ignore AcceptanceDecision and plan-scoped GateDecision records, while Task 3.2 uses its own
+current-identity decision lookups for authoritative Gate/Acceptance recovery.
+
 - [ ] **Step 3: Implement non-throwing transition outcomes**
 
 Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
 
+Extend the transition tables explicitly: task `review_pending` may enter `gate_pending` or
+`rework_required`, and current-ref `gate_pending` may enter `accepted` or `rework_required`;
+finalization `final_review_pending` may enter `final_gate_pending` or `final_rework_required`,
+and current-identity `final_gate_pending` may enter `complete` or `final_rework_required`.
+Post-Gate transitions must require the exact current `TaskExecutionRef` or finalization identity;
+matching identity plus an already-applied target is a duplicate, while a stale identity is invalid
+and leaves the projected state unchanged.
+
 In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after the review-dispatch offer boundary has committed its pending slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the initial finalization attempt and durably enter `final_review_pending`. Task 3.1 neither defines nor projects review-dispatch retry records: review-only failure retry, its current final-review round, and old-round rejection belong exclusively to Task 3.4. `startNextFinalizationAttempt` is reserved for actual `final_rework_required → final_review_pending` and writes the fresh identity transition. `project(...)` remains the only projection boundary: it adds lifecycle-only data under `ProjectedState.lifecycle` and does not define or project GateDecision / AcceptanceDecision. Do not evaluate a Gate in this task; Task 3.2 receives the lifecycle-only projection and queries durable decisions independently.
 
 ```ts
+// src/core/types.ts
+export type TaskAttemptId = string;
+export type TaskExecutionRef = {
+  readonly authorizationId: string;
+  readonly taskId: string;
+  readonly attemptId: TaskAttemptId;
+};
+export type FinalizationAttemptId = string;
+export type ReviewKind = "task-review" | "final-review";
+export type TaskReviewCorrelation = {
+  readonly reviewKind: "task-review";
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly reviewRound: number;
+};
+export type FinalReviewCorrelation = {
+  readonly reviewKind: "final-review";
+  readonly planPath: string;
+  readonly authorizationId: string;
+  readonly planFingerprint: PlanFingerprint;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+};
+export type ReviewCorrelation = TaskReviewCorrelation | FinalReviewCorrelation;
+
 if (event.identity === state.lastTransitionIdentity)
   return { kind: "duplicate", state: state.value };
 if (!VALID_TASK_TRANSITIONS.get(state.value)?.has(event.to)) {
@@ -919,22 +995,45 @@ function startNextFinalizationAttempt(
   };
 }
 
-async function appendTaskLifecycleTransition(input: {
-  readonly taskExecutionRef: TaskExecutionRef;
-  readonly from: "review_pending";
-  readonly to: "gate_pending" | "rework_required";
-}): Promise<{ readonly kind: "committed" | "failed" }> {
+type TaskLifecycleTransitionInput =
+  | {
+      readonly taskExecutionRef: TaskExecutionRef;
+      readonly from: "review_pending";
+      readonly to: "gate_pending" | "rework_required";
+    }
+  | {
+      readonly taskExecutionRef: TaskExecutionRef;
+      readonly from: "gate_pending";
+      readonly to: "accepted" | "rework_required";
+    };
+
+async function appendTaskLifecycleTransition(
+  input: TaskLifecycleTransitionInput,
+): Promise<{ readonly kind: "committed" | "failed" }> {
   return appendLifecycleRecord({ kind: "task", ...input });
 }
 
-async function appendPlanFinalizationTransition(input: {
-  readonly authorizationId: string;
-  readonly planPath: string;
-  readonly finalizationAttemptId: FinalizationAttemptId;
-  readonly finalReviewRound: number;
-  readonly from: "final_review_pending";
-  readonly to: "final_gate_pending" | "final_rework_required";
-}): Promise<{ readonly kind: "committed" | "failed" }> {
+type PlanFinalizationTransitionInput =
+  | {
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalReviewRound: number;
+      readonly from: "final_review_pending";
+      readonly to: "final_gate_pending" | "final_rework_required";
+    }
+  | {
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalReviewRound: number;
+      readonly from: "final_gate_pending";
+      readonly to: "complete" | "final_rework_required";
+    };
+
+async function appendPlanFinalizationTransition(
+  input: PlanFinalizationTransitionInput,
+): Promise<{ readonly kind: "committed" | "failed" }> {
   return appendLifecycleRecord({ kind: "final", ...input });
 }
 ```
@@ -959,27 +1058,205 @@ git commit -m "feat: lifecycle replayをidempotentに処理"
 **Files:**
 
 - Create: `src/core/acceptance-decision.ts`
+- Modify: `src/core/v2/decision-model.ts`
 - Modify: `src/core/v2/gate-definition.ts`
+- Modify: `src/core/v2/default-gates.ts`
 - Modify: `src/core/v2/gate-context.ts`
 - Modify: `src/core/v2/rule-evaluation-engine.ts`
+- Modify: `src/core/v2/state-projection.ts`
+- Modify: `src/core/v2/persistence-redaction.ts`
+- Modify: `src/runtime/validation.ts`
 - Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/runtime/justice-tools.ts`
 - Test: `tests/core/v2/rule-evaluation-engine.test.ts`
+- Test: `tests/core/v2/gate-yaml-parser.test.ts`
+- Test: `tests/core/v2/gate-definition.test.ts`
+- Test: `tests/core/v2/default-gates.test.ts`
+- Test: `tests/runtime/gate-loader.test.ts`
+- Test: `tests/runtime/gate-yaml-injection.test.ts`
 - Create: `tests/core/acceptance-decision.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
+- Test: `tests/core/v2/persistence-redaction.test.ts`
+- Test: `tests/runtime/validation.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
+- Test: `tests/core/rule-engine-determinism.test.ts`
+- Test: `tests/core/evidence-provenance.test.ts`
+- Test: `tests/core/v2/gate-provenance-gating.test.ts`
+- Test: `tests/runtime/justice-gate-tool.test.ts`
+- Test: `tests/core/observation-log-replay.test.ts`
+- Test: `tests/core/record-reference-resolution.test.ts`
+- Test: `tests/runtime/observation-log-integrity.test.ts`
+- Test: `tests/hooks/observation-handler-tool.test.ts`
+- Test: `tests/hooks/observation-handler-workflow-bootstrap.test.ts`
 
 **Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; durable `PersistedLogRecord` decision records; `AuthorizationStore.findByAuthorizationId` for the gate correlation's authorizationId.
 
-**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly taskExecutionRef: TaskExecutionRef } | { readonly scope: "plan"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number }`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecision | undefined`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecision | undefined`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<void>`; `deriveAcceptanceDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
+**Produces:** durable `DecisionRecord` with exactly four discriminated payload variants (`task` / `plan` GateDecision and `task-acceptance` / `plan-acceptance` AcceptanceDecision); `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly trigger: "task_complete" | "tool_observed"; readonly taskExecutionRef: TaskExecutionRef; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string } | { readonly scope: "plan"; readonly trigger: "final_review_complete"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string }`; `GatePendingAttemptResult = { readonly kind: "not_applicable" } | { readonly kind: "decided"; readonly decision: GateDecisionPayload } | { readonly kind: "blocked"; readonly advisory: string }`; `GateDecisionLookup` and `AcceptanceDecisionLookup` results that distinguish `missing`, `found`, and `conflict`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecisionLookup`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecisionLookup`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>`; `deriveAcceptanceDecision(gate: GateDecision): AcceptanceDecisionPayload`; `evaluate(gates, evidence, context)` returns a `GateDecisionPayload` containing either `taskExecutionRef` or the complete plan finalization identity; and the module-exported internal `authorizationIdFor(correlation)` / `isCurrentActiveAuthorization(correlation)` helpers. `DecisionRecord` remains the source used by the existing `PersistedLogRecord` alias; no second persistence union or projection subsystem is introduced.
+`appendBlockedAcceptanceIfMissing` is the shared internal idempotent append path for unusable,
+uncertain, or terminalized mandatory-review states that the design marks as blocked; it accepts the
+current `ReviewCorrelation` and persisted envelope identity, and never creates a positive lifecycle
+transition. It is not used for `review_incomplete`, whose canonical state is blocked `review_pending`
+with no AcceptanceDecision.
 
-- [ ] **Step 1: Write the failing Final Gate tests**
+Both `GatePendingAttemptContext` variants also carry the invoking `agentId`, `sessionId`, and `writerId`
+needed to build the durable decision envelope; review scope and projected review summary are resolved
+from the current durable projection rather than trusted from a caller-supplied result.
+`authorizationIdFor` derives the authorization ID from the task execution reference or finalization
+correlation. `isCurrentActiveAuthorization` uses only the injected
+`AuthorizationStore.findByAuthorizationId` port, requires `status === "active"`, and for Final Review
+also checks the correlation's plan path and fingerprint against the binding; read, missing, or
+conflict-diverted authorization returns `false`. The helper is the single shared authorization guard
+imported by Tasks 3.4 and 3.6; it does not import a runtime store or read the conflict journal.
+Define `GateEvaluationDependencies` as the explicit injected boundary with `readDurableRecords`,
+`appendDecision`, `findAuthorizationById`, `appendTaskLifecycleTransition`,
+`appendPlanFinalizationTransition`, `evaluateRules`, and `recordAdvisory` ports. Export only the
+internal factory `createGatePendingAttemptEvaluator(dependencies)`; it closes over those ports and
+returns `{ evaluateGatePendingAttempt, appendBlockedAcceptanceIfMissing }`. Every helper in the
+following pseudocode is a closure in that factory or a pure exported lookup/identity function. The
+hook/runtime layer creates exactly one evaluator with its log, Authorization, lifecycle, rule, and
+notifier adapters, so `evaluateGatePendingAttempt(context)` never reads an implicit singleton or a
+caller-supplied Authorization object.
+All log reads, decision appends, Authorization lookups, lifecycle appends, and advisory writes in this
+task are injected ports supplied by `ObservationHandler` / `JusticePlugin`; `src/core` does not import
+`ObservationLogStore`, `AuthorizationStore`, runtime adapters, or notifier implementations directly.
+
+- [ ] **Step 1: Write the failing task/Final Gate and recovery tests**
 
 ```ts
+const currentTaskExecutionRef: TaskExecutionRef = {
+  authorizationId: "a1",
+  taskId: "task-1",
+  attemptId: "attempt-1",
+};
+const currentFinalizationIdentity = {
+  authorizationId: "a1",
+  planPath: "docs/p.md",
+  finalizationAttemptId: "f2",
+  finalReviewRound: 2,
+} as const;
+const currentPlanFingerprint = { algorithm: "sha256", value: "f1" } as const;
+const decisionEnvelope = {
+  schemaVersion: 1,
+  sequence: 4,
+  timestamp: "2026-09-05T00:00:00.000Z",
+  agentId: "atlas",
+  sessionId: "s1",
+  writerId: "w1",
+  recordType: "decision",
+} as const;
+const gateAudit = {
+  verdict: "PASS",
+  reachableEnforcementLevel: "L1",
+  appliedEnforcementLevel: "L0",
+  ruleResults: [],
+} as const;
+const taskGateRecord = {
+  ...decisionEnvelope,
+  taskId: currentTaskExecutionRef.taskId,
+  taskExecutionRef: currentTaskExecutionRef,
+  gateType: "task",
+  ...gateAudit,
+} as const;
+const planGateRecord = {
+  ...decisionEnvelope,
+  ...currentFinalizationIdentity,
+  gateType: "plan",
+  ...gateAudit,
+} as const;
+const taskAcceptanceRecord = {
+  ...decisionEnvelope,
+  taskId: currentTaskExecutionRef.taskId,
+  taskExecutionRef: currentTaskExecutionRef,
+  kind: "task-acceptance",
+  verdict: "accepted",
+} as const;
+const planAcceptanceRecord = {
+  ...decisionEnvelope,
+  ...currentFinalizationIdentity,
+  kind: "plan-acceptance",
+  verdict: "complete",
+} as const;
+const currentTaskCorrelation: TaskReviewCorrelation = {
+  reviewKind: "task-review",
+  taskExecutionRef: currentTaskExecutionRef,
+  reviewRound: 1,
+};
+const currentFinalReviewCorrelation: FinalReviewCorrelation = {
+  reviewKind: "final-review",
+  ...currentFinalizationIdentity,
+  planFingerprint: currentPlanFingerprint,
+};
+const taskGate: GateRule = {
+  id: "task-tests",
+  gateType: "task",
+  trigger: { scope: "task", on: "task_complete" },
+  check: { type: "evidence_present", evidenceKind: "test" },
+  onViolation: "fail",
+  onMissingEvidence: "warn",
+  enabled: true,
+};
+const planGate: GateRule = {
+  id: "final-review-clean",
+  gateType: "plan",
+  trigger: { scope: "plan", on: "final_review_complete" },
+  check: { type: "review_open_items", minimumSeverity: "major" },
+  onViolation: "fail",
+  onMissingEvidence: "warn",
+  enabled: true,
+};
+const finalReviewContext: GateContext = {
+  scope: "plan",
+  trigger: "final_review_complete",
+  ...currentFinalizationIdentity,
+  agentId: "atlas",
+  sessionId: "s1",
+  writerId: "w1",
+  reviewScope: [],
+};
+const taskGateContext: GateContext = {
+  scope: "task",
+  trigger: "task_complete",
+  taskExecutionRef: currentTaskExecutionRef,
+  agentId: "atlas",
+  sessionId: "s1",
+  writerId: "w1",
+  reviewScope: [],
+};
+const passForCurrentAttempt = planGateRecord;
+const warnForCurrentAttempt = { ...planGateRecord, verdict: "WARN" } as const;
+const passForOldAttempt = { ...planGateRecord, finalReviewRound: 1 } as const;
+const oldFinalAcceptanceRecord = { ...planAcceptanceRecord, finalReviewRound: 1 } as const;
+const oldAttemptPass = {
+  ...taskGateRecord,
+  taskExecutionRef: { ...currentTaskExecutionRef, attemptId: "old-attempt" },
+} as const;
+const gatePendingContext: GatePendingAttemptContext = {
+  scope: "task",
+  trigger: "task_complete",
+  taskExecutionRef: currentTaskExecutionRef,
+  agentId: "atlas",
+  sessionId: "s1",
+  writerId: "w1",
+};
+const finalGatePendingContext: GatePendingAttemptContext = {
+  scope: "plan",
+  trigger: "final_review_complete",
+  ...currentFinalizationIdentity,
+  agentId: "atlas",
+  sessionId: "s1",
+  writerId: "w1",
+};
+const reviewPendingContext: GatePendingAttemptContext = gatePendingContext;
+
+it("selects a task gate and preserves the current task execution reference", () => {
+  expect(evaluate([taskGate], [], taskGateContext)).toMatchObject({
+    gateType: "task",
+    taskExecutionRef: currentTaskExecutionRef,
+  });
+});
+
 it("selects a plan gate only for final_review_complete", () => {
-  expect(evaluate([planGate], [], finalReviewContext).gateType).toBe("plan");
-  expect(
-    evaluate([planGate], [], Object.assign({}, finalReviewContext, { trigger: "tool_observed" }))
-      .verdict,
-  ).toBe("SKIP");
+  expect(evaluate([planGate], [], finalReviewContext)).toMatchObject({ gateType: "plan" });
 });
 
 it("includes the current finalization identity in a plan decision", () => {
@@ -992,11 +1269,35 @@ it("includes the current finalization identity in a plan decision", () => {
   });
 });
 
-it("maps Final Gate verdicts without accepting stale evidence", () => {
-  expect(decidePlanCompletion({ gate: passForCurrentAttempt })).toBe("complete");
-  expect(decidePlanCompletion({ gate: warnForCurrentAttempt })).toBe("final_rework_required");
-  expect(decidePlanCompletion({ gate: undefined })).toBe("final_gate_pending");
-  expect(decidePlanCompletion({ gate: passForOldAttempt })).toBe("final_gate_pending");
+it.each([
+  ["task", "final_review_complete"],
+  ["plan", "task_complete"],
+] as const)("rejects a %s gate with an incompatible trigger", (gateType, trigger) => {
+  expect(() =>
+    GateRuleSchema.parse({
+      id: "gate",
+      gateType,
+      trigger: { scope: gateType, on: trigger },
+      check: { type: "evidence_present", evidenceKind: "test" },
+      onViolation: "warn",
+      onMissingEvidence: "warn",
+      enabled: true,
+    }),
+  ).toThrow();
+});
+
+it("maps current Final Gate verdicts and excludes stale evidence", () => {
+  expect(deriveAcceptanceDecision(passForCurrentAttempt)).toMatchObject({
+    kind: "plan-acceptance",
+    verdict: "complete",
+  });
+  expect(deriveAcceptanceDecision(warnForCurrentAttempt)).toMatchObject({
+    kind: "plan-acceptance",
+    verdict: "rework-required",
+  });
+  expect(findCurrentGateDecision([passForOldAttempt], currentFinalReviewCorrelation)).toEqual({
+    kind: "missing",
+  });
 });
 
 it("does not evaluate before the terminal review projects gate_pending", async () => {
@@ -1006,20 +1307,103 @@ it("does not evaluate before the terminal review projects gate_pending", async (
 
 it("records GateDecision before deriving acceptance for the same current attempt", async () => {
   await evaluateGatePendingAttempt(gatePendingContext);
-  expect(trace).toEqual(["record-gate-decision", "record-acceptance", "accepted"]);
+  expect(trace).toEqual([
+    "record-gate-decision",
+    "record-acceptance",
+    "record-lifecycle-accepted",
+    "accepted",
+  ]);
 });
 
+it.each(["WARN", "FAIL"] as const)(
+  "records %s Acceptance before entering task rework",
+  async (verdict) => {
+    await evaluateGatePendingAttempt(contextForGateVerdict(verdict));
+    expect(trace).toEqual(["record-gate-decision", "record-acceptance", "record-lifecycle-rework"]);
+    expect(projectedTaskState()).toBe("rework_required");
+  },
+);
+
+it("resumes a Gate outcome lifecycle after Acceptance was durable before restart", async () => {
+  await arrangeCurrentGatePendingWithDurableGateAndAcceptance(gatePendingContext);
+  await evaluateGatePendingAttempt(gatePendingContext);
+  expect(recordGateDecision).not.toHaveBeenCalled();
+  expect(recordAcceptanceDecision).not.toHaveBeenCalled();
+  expect(recordLifecycleTransition).toHaveBeenCalledTimes(1);
+  expect(projectedTaskState()).toBe("accepted");
+});
+
+it("records Final Gate PASS before completing the current finalization identity", async () => {
+  await arrangeCurrentFinalGatePendingWithoutDecisions(finalGatePendingContext);
+  await evaluateGatePendingAttempt(finalGatePendingContext);
+  expect(trace).toEqual(["record-gate-decision", "record-acceptance", "record-lifecycle-complete"]);
+  expect(projectedFinalizationState()).toBe("complete");
+});
+
+it.each(["WARN", "FAIL"] as const)(
+  "maps Final Gate %s to final rework after Acceptance",
+  async (verdict) => {
+    await arrangeCurrentFinalGatePendingWithVerdict(finalGatePendingContext, verdict);
+    await evaluateGatePendingAttempt(finalGatePendingContext);
+    expect(projectedFinalizationState()).toBe("final_rework_required");
+  },
+);
+
 it("blocks an old-attempt GateDecision", () => {
-  expect(deriveAcceptanceDecision(oldAttemptPass, currentAttempt)).toMatchObject({
-    verdict: "blocked",
-  });
   expect(
     findCurrentGateDecision([oldAttemptPass], {
       reviewKind: "task-review",
-      taskExecutionRef: currentAttempt,
+      taskExecutionRef: currentTaskExecutionRef,
       reviewRound: 1,
     }),
-  ).toBeUndefined();
+  ).toEqual({ kind: "missing" });
+});
+
+it("validates all four durable decision variants", () => {
+  for (const record of [
+    taskGateRecord,
+    planGateRecord,
+    taskAcceptanceRecord,
+    planAcceptanceRecord,
+  ]) {
+    expect(() => validateRecordSchema(record)).not.toThrow();
+  }
+});
+
+it.each([
+  ["plan gate", { ...planGateRecord, planPath: "../unsafe.md" }],
+  ["plan acceptance", { ...planAcceptanceRecord, finalReviewRound: Number.POSITIVE_INFINITY }],
+  ["task acceptance", { ...taskAcceptanceRecord, kind: "task-acceptance", verdict: "PASS" }],
+  ["unknown decision", { ...taskGateRecord, gateType: "other", kind: undefined }],
+] as const)("rejects malformed durable %s records", (_name, record) => {
+  expect(() => validateRecordSchema(record)).toThrow();
+});
+
+it("returns a conflict instead of selecting an arbitrary duplicate current GateDecision", () => {
+  expect(findCurrentGateDecision([taskGateRecord, taskGateRecord], currentTaskCorrelation)).toEqual(
+    {
+      kind: "conflict",
+      advisory: "multiple current GateDecision records",
+    },
+  );
+});
+
+it("returns missing for a stale final-review round", () => {
+  expect(
+    findCurrentAcceptanceDecision([oldFinalAcceptanceRecord], currentFinalReviewCorrelation),
+  ).toEqual({
+    kind: "missing",
+  });
+});
+
+it("does not treat a task GateDecision with a different attempt as current", () => {
+  const oldAttempt = {
+    ...taskGateRecord,
+    taskExecutionRef: { ...currentTaskExecutionRef, attemptId: "old-attempt" },
+  };
+  expect(findCurrentGateDecision([oldAttempt], currentTaskCorrelation)).toEqual({
+    kind: "missing",
+  });
 });
 
 it.each(["released", "invalidated", "missing", "uncertain"] as const)(
@@ -1068,41 +1452,896 @@ it.each([gateUnavailable, gateError, insufficientEvidence])(
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts`
 
-Expected: FAIL because plan gates are skipped and task gate decisions are fixed.
+Expected: FAIL because plan-scoped Gate selection, the four durable decision variants,
+restart validation, and Gate/Acceptance recovery are not implemented.
 
 - [ ] **Step 3: Implement scoped Gate selection**
 
 Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. Gate and Acceptance lookups are pure queries over the durable `PersistedLogRecord` stream: `findCurrentGateDecision` and `findCurrentAcceptanceDecision` scan projection order and match the complete task execution identity or finalization identity, so an old attempt or old final-review round is never reused. They do not add methods to `ProjectedLifecycle` and do not infer decisions from lifecycle state. The evaluator must inspect the same current identity for both existing durable decisions: an existing GateDecision and AcceptanceDecision are reused as the authoritative result and neither record is appended again; a missing GateDecision is evaluated and appended once; a GateDecision with no derived AcceptanceDecision derives and appends that decision once. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
 
+Update every existing `GateContext` caller to use the new scope-discriminated shape. `ObservationHandler.evaluateGateIfTriggered` keeps its fail-open hook boundary, resolves the current `TaskExecutionRef` from the Task 3.1 lifecycle projection, and calls `evaluateGatePendingAttempt` instead of directly appending a raw GateDecision on every PostToolUse. `defineJusticeGateTool` returns a `SKIP` result when no current task attempt exists and otherwise builds a task-scoped context from the projected current ref. Update the direct rule-engine fixtures in `tests/core/rule-engine-determinism.test.ts`, `tests/core/evidence-provenance.test.ts`, `tests/core/v2/gate-provenance-gating.test.ts`, and `tests/core/v2/rule-evaluation-engine.test.ts` with `scope: "task"` and `taskExecutionRef`; update the gate-tool fixture to include the new `gateType`/trigger pair. The schema parser must reject a `task` gate with `final_review_complete` and a `plan` gate with a task trigger rather than silently ignoring either configuration.
+
 ```ts
-const activeGates = gates.filter(
-  (gate) => gate.enabled && gate.gateType === ctx.scope && gate.trigger.on === ctx.trigger,
-);
-if (ctx.scope === "plan") {
+// src/core/v2/gate-definition.ts
+export type GateScope = "task" | "plan";
+export type GateTrigger =
+  | { readonly scope: "task"; readonly on: "task_complete" | "tool_observed" }
+  | { readonly scope: "plan"; readonly on: "final_review_complete" };
+
+export const GateRuleSchema = z
+  .strictObject({
+    id: z.string().trim().min(1),
+    description: z.string().optional(),
+    gateType: z.enum(["task", "plan"]),
+    trigger: z.strictObject({
+      scope: z.enum(["task", "plan"]),
+      on: z.enum(["task_complete", "tool_observed", "final_review_complete"]),
+    }),
+    check: GateCheckSchema,
+    onViolation: z.enum(["pass", "warn", "fail"]),
+    onMissingEvidence: z.enum(["pass", "warn", "fail"]),
+    enabled: z.boolean().default(true),
+  })
+  .superRefine((rule, refinement) => {
+    const validTrigger =
+      rule.trigger.scope === rule.gateType &&
+      (rule.gateType === "task"
+        ? rule.trigger.on === "task_complete" || rule.trigger.on === "tool_observed"
+        : rule.trigger.on === "final_review_complete");
+    if (!validTrigger) {
+      refinement.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["trigger", "on"],
+        message: "gateType and trigger scope do not match",
+      });
+    }
+  });
+
+export type GateRule = Omit<z.infer<typeof GateRuleSchema>, "trigger"> & {
+  readonly trigger: GateTrigger;
+};
+
+// Update the matching `trigger.scope` field in every `DEFAULT_GATES` entry and every valid YAML
+// fixture. Verify that `gate-yaml-parser` and `gate-loader` consume the new schema/defaults, and
+// update the injection tests together so the required schema change cannot silently fall back to
+// stale task-only fixtures.
+
+// src/core/v2/gate-context.ts
+import type { FinalizationAttemptId, ObservationAgentId, TaskExecutionRef } from "../types";
+import type { ScopeReviewSummary } from "./state-projection";
+
+export type GateContext =
+  | {
+      readonly scope: "task";
+      readonly trigger: "task_complete" | "tool_observed";
+      readonly taskExecutionRef: TaskExecutionRef;
+      readonly agentId: ObservationAgentId;
+      readonly sessionId: string;
+      readonly writerId: string;
+      readonly reviewScope: readonly string[];
+      readonly reviewSummary?: { readonly byScope: ReadonlyMap<string, ScopeReviewSummary> };
+    }
+  | {
+      readonly scope: "plan";
+      readonly trigger: "final_review_complete";
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalReviewRound: number;
+      readonly agentId: ObservationAgentId;
+      readonly sessionId: string;
+      readonly writerId: string;
+      readonly reviewScope: readonly string[];
+      readonly reviewSummary?: { readonly byScope: ReadonlyMap<string, ScopeReviewSummary> };
+    };
+
+export type GatePendingAttemptContext =
+  | {
+      readonly scope: "task";
+      readonly trigger: "task_complete" | "tool_observed";
+      readonly taskExecutionRef: TaskExecutionRef;
+      readonly agentId: ObservationAgentId;
+      readonly sessionId: string;
+      readonly writerId: string;
+    }
+  | {
+      readonly scope: "plan";
+      readonly trigger: "final_review_complete";
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalReviewRound: number;
+      readonly agentId: ObservationAgentId;
+      readonly sessionId: string;
+      readonly writerId: string;
+    };
+
+// src/core/v2/decision-model.ts
+import type { FinalizationAttemptId, TaskExecutionRef } from "../types";
+
+type GateDecisionFields = {
+  readonly verdict: Verdict;
+  readonly reachableEnforcementLevel: "L1";
+  readonly appliedEnforcementLevel: "L0";
+  readonly ruleResults: readonly RuleResult[];
+};
+
+export type TaskGateDecisionPayload = GateDecisionFields & {
+  readonly recordType: "decision";
+  readonly gateType: "task";
+  readonly taskId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+};
+
+export type PlanGateDecisionPayload = GateDecisionFields & {
+  readonly recordType: "decision";
+  readonly gateType: "plan";
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+};
+
+export type TaskAcceptanceDecisionPayload = {
+  readonly recordType: "decision";
+  readonly kind: "task-acceptance";
+  readonly taskId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly verdict: "accepted" | "rework-required" | "blocked";
+};
+
+export type PlanAcceptanceDecisionPayload = {
+  readonly recordType: "decision";
+  readonly kind: "plan-acceptance";
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+  readonly verdict: "complete" | "rework-required" | "blocked";
+};
+
+export type DecisionPayload =
+  | TaskGateDecisionPayload
+  | PlanGateDecisionPayload
+  | TaskAcceptanceDecisionPayload
+  | PlanAcceptanceDecisionPayload;
+export type GateDecisionPayload = TaskGateDecisionPayload | PlanGateDecisionPayload;
+export type AcceptanceDecisionPayload =
+  | TaskAcceptanceDecisionPayload
+  | PlanAcceptanceDecisionPayload;
+export type PendingDecisionRecord = PendingEnvelope & DecisionPayload;
+export type DecisionRecord = PersistedEnvelope & DecisionPayload;
+export type TaskGateDecision = PersistedEnvelope & TaskGateDecisionPayload;
+export type PlanGateDecision = PersistedEnvelope & PlanGateDecisionPayload;
+export type TaskAcceptanceDecision = PersistedEnvelope & TaskAcceptanceDecisionPayload;
+export type PlanAcceptanceDecision = PersistedEnvelope & PlanAcceptanceDecisionPayload;
+export type GateDecision = TaskGateDecision | PlanGateDecision;
+export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision;
+
+// src/runtime/validation.ts
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isSafePlanPath(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    !value.startsWith("/") &&
+    !value.startsWith("\\") &&
+    !/^[A-Za-z]:/u.test(value) &&
+    !value.split(/[\\/]/u).includes("..")
+  );
+}
+
+function isPositiveReviewRound(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0
+  );
+}
+
+function isTaskExecutionRef(value: unknown): value is TaskExecutionRef {
+  return (
+    isObject(value) &&
+    isNonEmptyString(value.authorizationId) &&
+    isNonEmptyString(value.taskId) &&
+    isNonEmptyString(value.attemptId)
+  );
+}
+
+function validateRuleResults(value: unknown): void {
+  if (!Array.isArray(value)) throw new Error("Invalid decision record");
+  for (const ruleResult of value) {
+    if (
+      !isObject(ruleResult) ||
+      !isNonEmptyString(ruleResult.ruleId) ||
+      !isOneOf(ruleResult.verdict, ["PASS", "WARN", "FAIL"]) ||
+      typeof ruleResult.reason !== "string" ||
+      !Array.isArray(ruleResult.evidenceRefs)
+    ) {
+      throw new Error("Invalid decision ruleResult");
+    }
+    for (const ref of ruleResult.evidenceRefs) {
+      if (
+        !isObject(ref) ||
+        ref.kind !== "full" ||
+        typeof ref.agentId !== "string" ||
+        typeof ref.sessionId !== "string" ||
+        typeof ref.writerId !== "string" ||
+        typeof ref.sequence !== "number" ||
+        !Number.isFinite(ref.sequence) ||
+        ref.sequence < 0 ||
+        typeof ref.evidenceId !== "string"
+      ) {
+        throw new Error("Invalid decision evidenceRef");
+      }
+    }
+  }
+}
+
+function validateGateFields(r: Record<string, unknown>): void {
+  if (
+    !isOneOf(r.verdict, ["PASS", "WARN", "FAIL"]) ||
+    r.reachableEnforcementLevel !== "L1" ||
+    r.appliedEnforcementLevel !== "L0"
+  ) {
+    throw new Error("Invalid decision record");
+  }
+  validateRuleResults(r.ruleResults);
+}
+
+function validateDecisionRecord(r: Record<string, unknown>): void {
+  const hasGateDiscriminant = r.gateType !== undefined;
+  const hasAcceptanceDiscriminant = r.kind !== undefined;
+  if (hasGateDiscriminant === hasAcceptanceDiscriminant) {
+    throw new Error("Invalid decision record: ambiguous decision discriminant");
+  }
+
+  if (hasGateDiscriminant) {
+    if (!isOneOf(r.gateType, ["task", "plan"])) {
+      throw new Error("Invalid decision record: unknown gateType");
+    }
+    validateGateFields(r);
+    if (r.gateType === "task") {
+      if (
+        !isTaskExecutionRef(r.taskExecutionRef) ||
+        !isNonEmptyString(r.taskId) ||
+        r.taskId !== r.taskExecutionRef.taskId
+      ) {
+        throw new Error("Invalid task GateDecision identity");
+      }
+      return;
+    }
+    if (
+      r.taskId !== undefined ||
+      !isNonEmptyString(r.authorizationId) ||
+      !isSafePlanPath(r.planPath) ||
+      !isNonEmptyString(r.finalizationAttemptId) ||
+      !isPositiveReviewRound(r.finalReviewRound)
+    ) {
+      throw new Error("Invalid plan GateDecision identity");
+    }
+    return;
+  }
+
+  if (r.kind === "task-acceptance") {
+    if (
+      !isTaskExecutionRef(r.taskExecutionRef) ||
+      !isNonEmptyString(r.taskId) ||
+      r.taskId !== r.taskExecutionRef.taskId ||
+      !isOneOf(r.verdict, ["accepted", "rework-required", "blocked"])
+    ) {
+      throw new Error("Invalid task AcceptanceDecision");
+    }
+    return;
+  }
+  if (r.kind === "plan-acceptance") {
+    if (
+      r.taskId !== undefined ||
+      !isNonEmptyString(r.authorizationId) ||
+      !isSafePlanPath(r.planPath) ||
+      !isNonEmptyString(r.finalizationAttemptId) ||
+      !isPositiveReviewRound(r.finalReviewRound) ||
+      !isOneOf(r.verdict, ["complete", "rework-required", "blocked"])
+    ) {
+      throw new Error("Invalid plan AcceptanceDecision");
+    }
+    return;
+  }
+  throw new Error("Invalid decision record: unknown acceptance kind");
+}
+
+// src/core/v2/state-projection.ts
+function applyDecisionEvent(
+  tasks: Map<string, MutableTask>,
+  event: Extract<PersistedLogRecord, { readonly recordType: "decision" }>,
+): void {
+  if (!("gateType" in event) || event.gateType !== "task") return;
+  const taskState = ensureTask(tasks, event.taskId);
+  taskState.lastVerdict = event.verdict;
+  taskState.status = event.verdict;
+}
+
+// src/core/v2/persistence-redaction.ts
+// Replace only the decision branch at the top of the existing redaction boundary;
+// keep the observation-record switch below it unchanged.
+if (record.recordType === "decision") {
+  if (!("ruleResults" in record)) return record;
   return {
-    gateType: "plan",
-    authorizationId: ctx.authorizationId,
-    planPath: ctx.planPath,
-    finalizationAttemptId: ctx.finalizationAttemptId,
-    finalReviewRound: ctx.finalReviewRound,
+    ...record,
+    ruleResults: record.ruleResults.map((result) => ({
+      ...result,
+      ...(result.reason === undefined ? {} : { reason: redactForPersistence(result.reason) }),
+    })),
+  };
+}
+
+// src/core/acceptance-decision.ts
+import type { FinalizationAttemptId, ReviewCorrelation, TaskExecutionRef } from "./types";
+import type {
+  AcceptanceDecision,
+  AcceptanceDecisionPayload,
+  DecisionPayload,
+  GateDecision,
+  GateDecisionPayload,
+  PendingDecisionRecord,
+} from "./v2/decision-model";
+import type { GatePendingAttemptContext } from "./v2/gate-context";
+import type { PersistedEnvelope, PersistedLogRecord } from "./v2/observation-model";
+
+export type GateDecisionLookup =
+  | { readonly kind: "missing" }
+  | { readonly kind: "found"; readonly decision: GateDecision }
+  | { readonly kind: "conflict"; readonly advisory: "multiple current GateDecision records" };
+export type AcceptanceDecisionLookup =
+  | { readonly kind: "missing" }
+  | { readonly kind: "found"; readonly decision: AcceptanceDecision }
+  | {
+      readonly kind: "conflict";
+      readonly advisory: "multiple current AcceptanceDecision records";
+    };
+
+function sameTaskExecutionRef(left: TaskExecutionRef, right: TaskExecutionRef): boolean {
+  return (
+    left.authorizationId === right.authorizationId &&
+    left.taskId === right.taskId &&
+    left.attemptId === right.attemptId
+  );
+}
+
+function isGateDecisionRecord(record: PersistedLogRecord): record is GateDecision {
+  return (
+    record.recordType === "decision" &&
+    "gateType" in record &&
+    (record.gateType === "task" || record.gateType === "plan")
+  );
+}
+
+function isAcceptanceDecisionRecord(record: PersistedLogRecord): record is AcceptanceDecision {
+  return (
+    record.recordType === "decision" &&
+    "kind" in record &&
+    (record.kind === "task-acceptance" || record.kind === "plan-acceptance")
+  );
+}
+
+function gateMatchesCorrelation(record: GateDecision, correlation: ReviewCorrelation): boolean {
+  if (correlation.reviewKind === "task-review") {
+    return (
+      record.gateType === "task" &&
+      sameTaskExecutionRef(record.taskExecutionRef, correlation.taskExecutionRef)
+    );
+  }
+  return (
+    record.gateType === "plan" &&
+    record.authorizationId === correlation.authorizationId &&
+    record.planPath === correlation.planPath &&
+    record.finalizationAttemptId === correlation.finalizationAttemptId &&
+    record.finalReviewRound === correlation.finalReviewRound
+  );
+}
+
+function acceptanceMatchesCorrelation(
+  record: AcceptanceDecision,
+  correlation: ReviewCorrelation,
+): boolean {
+  if (correlation.reviewKind === "task-review") {
+    return (
+      record.kind === "task-acceptance" &&
+      sameTaskExecutionRef(record.taskExecutionRef, correlation.taskExecutionRef)
+    );
+  }
+  return (
+    record.kind === "plan-acceptance" &&
+    record.authorizationId === correlation.authorizationId &&
+    record.planPath === correlation.planPath &&
+    record.finalizationAttemptId === correlation.finalizationAttemptId &&
+    record.finalReviewRound === correlation.finalReviewRound
+  );
+}
+
+function acceptanceMatchesGate(gate: GateDecision, acceptance: AcceptanceDecision): boolean {
+  if (gate.gateType === "task") {
+    return (
+      acceptance.kind === "task-acceptance" &&
+      sameTaskExecutionRef(acceptance.taskExecutionRef, gate.taskExecutionRef) &&
+      acceptance.verdict === (gate.verdict === "PASS" ? "accepted" : "rework-required")
+    );
+  }
+  return (
+    acceptance.kind === "plan-acceptance" &&
+    acceptance.authorizationId === gate.authorizationId &&
+    acceptance.planPath === gate.planPath &&
+    acceptance.finalizationAttemptId === gate.finalizationAttemptId &&
+    acceptance.finalReviewRound === gate.finalReviewRound &&
+    acceptance.verdict === (gate.verdict === "PASS" ? "complete" : "rework-required")
+  );
+}
+
+async function ensureGateAcceptance(
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+  gate: GateDecision,
+): Promise<GatePendingAttemptResult> {
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    return { kind: "blocked", advisory: "review_authorization_not_active" };
+  }
+  const existing = findCurrentAcceptanceDecision(await readDurableRecords(), correlation);
+  if (existing.kind === "conflict") {
+    recordIntegrityAdvisory("decision_integrity_violation");
+    return { kind: "blocked", advisory: "decision_integrity_violation" };
+  }
+  if (existing.kind === "missing") {
+    await appendAcceptanceDecisionIfMissing(
+      context,
+      correlation,
+      deriveAcceptanceDecision(gate),
+      context.writerId,
+    );
+  }
+  const latest = findCurrentAcceptanceDecision(await readDurableRecords(), correlation);
+  if (latest.kind === "found" && !acceptanceMatchesGate(gate, latest.decision)) {
+    recordIntegrityAdvisory("decision_integrity_violation");
+    return { kind: "blocked", advisory: "decision_integrity_violation" };
+  }
+  if (latest.kind !== "found") {
+    return { kind: "blocked", advisory: "acceptance_append_failed" };
+  }
+  const lifecycle = await applyGateOutcomeLifecycle(context, correlation, gate);
+  return lifecycle.kind === "blocked" ? lifecycle : { kind: "decided", decision: gate };
+}
+
+export function deriveAcceptanceDecision(gate: GateDecision): AcceptanceDecisionPayload {
+  if (gate.gateType === "task") {
+    return {
+      recordType: "decision",
+      kind: "task-acceptance",
+      taskId: gate.taskId,
+      taskExecutionRef: gate.taskExecutionRef,
+      verdict: gate.verdict === "PASS" ? "accepted" : "rework-required",
+    };
+  }
+  return {
+    recordType: "decision",
+    kind: "plan-acceptance",
+    authorizationId: gate.authorizationId,
+    planPath: gate.planPath,
+    finalizationAttemptId: gate.finalizationAttemptId,
+    finalReviewRound: gate.finalReviewRound,
+    verdict: gate.verdict === "PASS" ? "complete" : "rework-required",
+  };
+}
+
+function blockedAcceptanceDecision(context: GatePendingAttemptContext): AcceptanceDecisionPayload {
+  if (context.scope === "task") {
+    return {
+      recordType: "decision",
+      kind: "task-acceptance",
+      taskId: context.taskExecutionRef.taskId,
+      taskExecutionRef: context.taskExecutionRef,
+      verdict: "blocked",
+    };
+  }
+  return {
+    recordType: "decision",
+    kind: "plan-acceptance",
+    authorizationId: context.authorizationId,
+    planPath: context.planPath,
+    finalizationAttemptId: context.finalizationAttemptId,
+    finalReviewRound: context.finalReviewRound,
+    verdict: "blocked",
+  };
+}
+
+type DecisionAppendResult = {
+  readonly kind: "committed" | "already_present" | "failed";
+};
+
+async function appendDecisionWithEnvelope(
+  context: GatePendingAttemptContext,
+  payload: DecisionPayload,
+  writerId: string,
+): Promise<DecisionAppendResult> {
+  const pending: PendingDecisionRecord = {
+    schemaVersion: 1,
+    timestamp: new Date().toISOString(),
+    agentId: context.agentId,
+    sessionId: context.sessionId,
+    writerId,
+    recordType: "decision",
+    ...payload,
+  };
+  try {
+    await observationLogStore.append(
+      { agentId: pending.agentId, sessionId: pending.sessionId, writerId: pending.writerId },
+      pending,
+    );
+    return { kind: "committed" };
+  } catch {
+    return { kind: "failed" };
+  }
+}
+
+async function appendGateDecision(
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+  payload: GateDecisionPayload,
+): Promise<DecisionAppendResult> {
+  if (!(await isCurrentActiveAuthorization(correlation))) return { kind: "failed" };
+  const existing = findCurrentGateDecision(await readDurableRecords(), correlation);
+  if (existing.kind === "conflict") {
+    recordIntegrityAdvisory("decision_integrity_violation");
+    return { kind: "failed" };
+  }
+  if (existing.kind === "found") return { kind: "already_present" };
+  return appendDecisionWithEnvelope(context, payload, context.writerId);
+}
+
+async function appendAcceptanceDecisionIfMissing(
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+  payload: AcceptanceDecisionPayload,
+  writerId: string,
+): Promise<DecisionAppendResult> {
+  if (!(await isCurrentActiveAuthorization(correlation))) return { kind: "failed" };
+  const existing = findCurrentAcceptanceDecision(await readDurableRecords(), correlation);
+  if (existing.kind === "conflict") {
+    recordIntegrityAdvisory("decision_integrity_violation");
+    return { kind: "failed" };
+  }
+  if (existing.kind === "found") return { kind: "already_present" };
+  return appendDecisionWithEnvelope(context, payload, writerId);
+}
+
+export async function appendBlockedAcceptanceIfMissing(
+  correlation: ReviewCorrelation,
+  envelope: Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">,
+): Promise<{ readonly kind: "committed" | "already_present" | "failed" }> {
+  const context =
+    correlation.reviewKind === "task-review"
+      ? {
+          scope: "task" as const,
+          trigger: "task_complete" as const,
+          taskExecutionRef: correlation.taskExecutionRef,
+          agentId: envelope.agentId,
+          sessionId: envelope.sessionId,
+          writerId: envelope.writerId,
+        }
+      : {
+          scope: "plan" as const,
+          trigger: "final_review_complete" as const,
+          authorizationId: correlation.authorizationId,
+          planPath: correlation.planPath,
+          finalizationAttemptId: correlation.finalizationAttemptId,
+          finalReviewRound: correlation.finalReviewRound,
+          agentId: envelope.agentId,
+          sessionId: envelope.sessionId,
+          writerId: envelope.writerId,
+        };
+  return appendAcceptanceDecisionIfMissing(
+    context,
+    correlation,
+    blockedAcceptanceDecision(context),
+    envelope.writerId,
+  );
+}
+
+export function findCurrentGateDecision(
+  records: readonly PersistedLogRecord[],
+  correlation: ReviewCorrelation,
+): GateDecisionLookup {
+  const matches = orderEventsForProjection(records)
+    .filter(isGateDecisionRecord)
+    .filter((record) => gateMatchesCorrelation(record, correlation));
+  if (matches.length === 0) return { kind: "missing" };
+  if (matches.length > 1) {
+    return { kind: "conflict", advisory: "multiple current GateDecision records" };
+  }
+  const decision = matches[0];
+  return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
+}
+
+export function findCurrentAcceptanceDecision(
+  records: readonly PersistedLogRecord[],
+  correlation: ReviewCorrelation,
+): AcceptanceDecisionLookup {
+  const matches = orderEventsForProjection(records)
+    .filter(isAcceptanceDecisionRecord)
+    .filter((record) => acceptanceMatchesCorrelation(record, correlation));
+  if (matches.length === 0) return { kind: "missing" };
+  if (matches.length > 1) {
+    return { kind: "conflict", advisory: "multiple current AcceptanceDecision records" };
+  }
+  const decision = matches[0];
+  return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
+}
+
+export async function evaluateGatePendingAttempt(
+  context: GatePendingAttemptContext,
+): Promise<GatePendingAttemptResult> {
+  const records = await readDurableRecords();
+  const lifecycle = project(records, new Date().toISOString()).lifecycle;
+  const correlation = currentReviewCorrelationFor(context, records, lifecycle);
+  if (
+    correlation === undefined ||
+    !isCurrentGatePending(context, lifecycle) ||
+    !hasProjectedTerminalReview(records, correlation)
+  ) {
+    return { kind: "not_applicable" };
+  }
+
+  const gate = findCurrentGateDecision(records, correlation);
+  const acceptance = findCurrentAcceptanceDecision(records, correlation);
+  if (gate.kind === "conflict" || acceptance.kind === "conflict") {
+    recordIntegrityAdvisory("decision_integrity_violation");
+    return { kind: "blocked", advisory: "decision_integrity_violation" };
+  }
+  if (gate.kind === "found" && acceptance.kind === "found") {
+    if (!acceptanceMatchesGate(gate.decision, acceptance.decision)) {
+      recordIntegrityAdvisory("decision_integrity_violation");
+      return { kind: "blocked", advisory: "decision_integrity_violation" };
+    }
+    const lifecycle = await applyGateOutcomeLifecycle(context, correlation, gate.decision);
+    return lifecycle.kind === "blocked" ? lifecycle : { kind: "decided", decision: gate.decision };
+  }
+
+  if (gate.kind === "found") {
+    return ensureGateAcceptance(context, correlation, gate.decision);
+  }
+
+  // An existing blocked Acceptance without a Gate is the durable fail-closed result
+  // of a previous unavailable/invalid Gate evaluation; never append it repeatedly.
+  if (acceptance.kind === "found") {
+    if (acceptance.decision.verdict === "blocked") {
+      return { kind: "blocked", advisory: "gate_evaluation_blocked" };
+    }
+    recordIntegrityAdvisory("acceptance_without_gate");
+    return { kind: "blocked", advisory: "acceptance_without_gate" };
+  }
+
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    return { kind: "blocked", advisory: "review_authorization_not_active" };
+  }
+  const evaluated = await safelyEvaluateGate(context);
+  if (evaluated.kind === "blocked") {
+    if (!(await isCurrentActiveAuthorization(correlation))) {
+      return { kind: "blocked", advisory: "review_authorization_not_active" };
+    }
+    await appendAcceptanceDecisionIfMissing(
+      context,
+      correlation,
+      blockedAcceptanceDecision(context),
+      context.writerId,
+    );
+    return { kind: "blocked", advisory: evaluated.advisory };
+  }
+
+  const gateAppend = await appendGateDecision(context, correlation, evaluated.decision);
+  if (gateAppend.kind === "failed") {
+    return { kind: "blocked", advisory: "gate_decision_append_failed" };
+  }
+  const latestGate = findCurrentGateDecision(await readDurableRecords(), correlation);
+  if (latestGate.kind !== "found") {
+    return {
+      kind: "blocked",
+      advisory:
+        latestGate.kind === "conflict"
+          ? "decision_integrity_violation"
+          : "gate_decision_append_failed",
+    };
+  }
+  return ensureGateAcceptance(context, correlation, latestGate.decision);
+}
+
+type GateOutcomeLifecycleResult =
+  | { readonly kind: "applied" | "already_applied" }
+  | { readonly kind: "blocked"; readonly advisory: string };
+
+async function applyGateOutcomeLifecycle(
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+  decision: GateDecisionPayload,
+): Promise<GateOutcomeLifecycleResult> {
+  if (context.scope === "task" && decision.gateType !== "task") {
+    return { kind: "blocked", advisory: "gate_scope_mismatch" };
+  }
+  if (context.scope === "plan" && decision.gateType !== "plan") {
+    return { kind: "blocked", advisory: "gate_scope_mismatch" };
+  }
+
+  const records = await readDurableRecords();
+  const lifecycle = project(records, new Date().toISOString()).lifecycle;
+  if (context.scope === "task") {
+    const target = decision.verdict === "PASS" ? "accepted" : "rework_required";
+    const currentRef = lifecycle.currentTaskExecutionRefs.get(context.taskExecutionRef.taskId);
+    if (currentRef === undefined || !sameTaskExecutionRef(currentRef, context.taskExecutionRef)) {
+      return { kind: "blocked", advisory: "gate_lifecycle_identity_stale" };
+    }
+    const current = lifecycle.taskStates.get(context.taskExecutionRef.taskId);
+    if (current === target) return { kind: "already_applied" };
+    if (current !== "gate_pending") {
+      return { kind: "blocked", advisory: "gate_lifecycle_state_stale" };
+    }
+    if (!(await isCurrentActiveAuthorization(correlation))) {
+      return { kind: "blocked", advisory: "review_authorization_not_active" };
+    }
+    const appended = await appendTaskLifecycleTransition({
+      taskExecutionRef: context.taskExecutionRef,
+      from: "gate_pending",
+      to: target,
+    });
+    return appended.kind === "committed"
+      ? { kind: "applied" }
+      : { kind: "blocked", advisory: "gate_lifecycle_append_failed" };
+  }
+
+  const current = lifecycle.finalization;
+  const target = decision.verdict === "PASS" ? "complete" : "final_rework_required";
+  if (
+    current === undefined ||
+    current.authorizationId !== context.authorizationId ||
+    current.planPath !== context.planPath ||
+    current.finalizationAttemptId !== context.finalizationAttemptId ||
+    current.finalReviewRound !== context.finalReviewRound
+  ) {
+    return { kind: "blocked", advisory: "gate_lifecycle_identity_stale" };
+  }
+  if (current?.state === target) return { kind: "already_applied" };
+  if (current === undefined || current.state !== "final_gate_pending") {
+    return { kind: "blocked", advisory: "gate_lifecycle_state_stale" };
+  }
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    return { kind: "blocked", advisory: "review_authorization_not_active" };
+  }
+  const appended = await appendPlanFinalizationTransition({
+    authorizationId: context.authorizationId,
+    planPath: context.planPath,
+    finalizationAttemptId: context.finalizationAttemptId,
+    finalReviewRound: context.finalReviewRound,
+    from: "final_gate_pending",
+    to: target,
+  });
+  return appended.kind === "committed"
+    ? { kind: "applied" }
+    : { kind: "blocked", advisory: "gate_lifecycle_append_failed" };
+}
+
+type SafeGateEvaluation =
+  | { readonly kind: "evaluated"; readonly decision: GateDecisionPayload }
+  | { readonly kind: "blocked"; readonly advisory: string };
+
+type SkipGateEvaluation = {
+  readonly verdict: "SKIP";
+  readonly reason: string;
+};
+
+export type GatePendingAttemptResult =
+  | { readonly kind: "not_applicable" }
+  | { readonly kind: "decided"; readonly decision: GateDecisionPayload }
+  | { readonly kind: "blocked"; readonly advisory: string };
+
+export function evaluate(
+  gates: readonly GateRule[],
+  evidence: readonly ProjectedEvidence[],
+  ctx: GateContext,
+): GateDecisionPayload | SkipGateEvaluation {
+  const activeGates = gates.filter(
+    (gate) =>
+      gate.enabled &&
+      gate.gateType === ctx.scope &&
+      gate.trigger.scope === ctx.scope &&
+      gate.trigger.on === ctx.trigger,
+  );
+  if (activeGates.length === 0) {
+    return {
+      verdict: "SKIP",
+      reason: `no matching active gates found for trigger: ${ctx.trigger}`,
+    };
+  }
+
+  const ruleResults = activeGates.map((gate) => evaluateRule(gate, evidence, ctx));
+  const verdict = worstOf(ruleResults.map((result) => result.verdict));
+  if (ctx.scope === "plan") {
+    return {
+      recordType: "decision",
+      gateType: "plan",
+      authorizationId: ctx.authorizationId,
+      planPath: ctx.planPath,
+      finalizationAttemptId: ctx.finalizationAttemptId,
+      finalReviewRound: ctx.finalReviewRound,
+      verdict,
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults,
+    };
+  }
+  return {
+    recordType: "decision",
+    gateType: "task",
+    taskId: ctx.taskExecutionRef.taskId,
+    taskExecutionRef: ctx.taskExecutionRef,
     verdict,
+    reachableEnforcementLevel: "L1",
+    appliedEnforcementLevel: "L0",
     ruleResults,
   };
 }
 ```
 
+The module-private helpers used above have fixed responsibilities: the injected
+`readDurableRecords()` port reads through `ObservationLogStore.readAll()`; `currentReviewCorrelationFor()` derives the current task review
+round or final-review correlation from the Task 3.1/3.4 projection and trusted authorization
+snapshot; `hasProjectedTerminalReview()` requires the matching observed terminal review record;
+`isCurrentGatePending()` checks the matching `gate_pending` or `final_gate_pending` lifecycle state;
+`safelyEvaluateGate()` constructs the full `GateContext` from the current correlation, projected
+review summary, agent/session identity, and trigger; it normalizes `SKIP`, loader, projection, and
+evaluator failures to a blocked outcome; and `appendGateDecision()` /
+`appendAcceptanceDecisionIfMissing(context, payload, writerId)` add the common
+persisted envelope and use the injected append-only store port. `appendBlockedAcceptanceIfMissing()` uses the same
+append boundary for a correlation-derived blocked payload. Both append helpers re-read their corresponding
+durable lookup inside the append boundary and treat an existing found record as a no-op, while a
+conflict records `decision_integrity_violation` and never chooses a winner. `evaluateGatePendingAttempt`
+wraps its complete read/project/authorization/evaluation/append boundary and converts any I/O,
+projection, loader, or append failure into `{ kind: "blocked" }` without throwing; callers still
+retain their outer fail-open boundary. `ObservationHandler` catches every failure around this
+orchestration and still returns `PROCEED`. Update the existing
+`applyGateOutcomeLifecycle` so it is called only after the matching AcceptanceDecision is found. It
+appends `gate_pending → accepted | rework_required` or
+`final_gate_pending → complete | final_rework_required` through the Task 3.1 idempotent lifecycle
+boundary, after a fresh authorization check; it never updates `plan.md` directly.
+`observation-handler-gate`, `observation-handler-tool`, and `observation-handler-workflow-bootstrap`
+fixtures to arrange a current lifecycle identity before invoking the private hook path; assert the
+Gate/Acceptance pair and advisory result rather than a raw per-event GateDecision append.
+The hook maps `GatePendingAttemptResult.kind` as follows: `not_applicable` returns `PROCEED`;
+`decided` returns `PROCEED` for `PASS` and uses `formatGateAdvisoryMessage` for `WARN`/`FAIL`;
+`blocked` injects a plain L0 blocked/stale advisory without passing it to the GateDecision formatter.
+All three paths remain non-blocking and preserve the existing response merge behavior for review
+directives.
+The public `evaluate` and `formatGateAdvisoryMessage` signatures accept only `GateDecisionPayload`;
+change the formatter parameter from `Pick<DecisionPayload, "verdict" | "ruleResults">` to the
+corresponding `GateDecisionPayload` pick, handle `SkipGateEvaluation` before formatting, and never
+pass an AcceptanceDecision record to the Gate advisory formatter. Keep the Design §7.2 distinction
+explicit: AcceptanceDecision uses the literal `rework-required`, while lifecycle transitions use
+`rework_required` and `final_rework_required`.
+
+For `defineJusticeGateTool`, return the existing JSON `SKIP` shape directly when `taskId` is
+missing or when `state.lifecycle.currentTaskExecutionRefs.get(taskId)` is absent; do not call
+`evaluate` with a partial context. For a current ref, construct the task `GateContext` with that
+ref, the invoking agent/session, projected review summary, and `trigger: "task_complete"`, then
+handle `SkipGateEvaluation` before serializing the result. The tool remains internal and must not
+be added to `OpenCodeAdapter.getTools()`.
+
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/acceptance-decision.ts src/core/v2/gate-definition.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/hooks/observation-handler.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/acceptance-decision.test.ts tests/hooks/observation-handler-gate.test.ts
+git add src/core/acceptance-decision.ts src/core/v2/decision-model.ts src/core/v2/gate-definition.ts src/core/v2/default-gates.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/core/v2/state-projection.ts src/core/v2/persistence-redaction.ts src/runtime/validation.ts src/hooks/observation-handler.ts src/runtime/justice-tools.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts
 git commit -m "feat: Final Gateをplan scopeで評価"
 ```
 
@@ -1168,6 +2407,10 @@ git commit -m "test: child session correlation runtime境界を検証"
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; `FileReader.fileExists`;
 `FileWriter.mkdir`; safe-relative-path validation; `AuthorizationStore.findByAuthorizationId`.
+All log, Authorization, filesystem, directive, and advisory operations are injected ports assembled by
+the hook/runtime layer. `src/core/review-dispatch-state.ts` contains no runtime singleton import or direct
+filesystem access; its append ports receive a `Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">`
+from the observed event or the durable source record.
 
 **Produces:** `ReviewRequiredDirective`; durable `null -> pending` and `pending -> claimed` records;
 `TaskCallBinding`; Design §4.10 `ReviewArtifactReservation`; `claimReviewDispatch(input):
@@ -1176,13 +2419,29 @@ and an in-memory cache
 reconstructed only from the durable projection. `ClaimReviewDispatchOutcome` is either `{ readonly kind:
 "claimed"; readonly taskCallBinding: TaskCallBinding }` or `{ readonly kind: "blocked"; readonly
 advisory: string }`; a blocked outcome exposes neither `callId` nor `artifactId` as authority.
+`ReviewDispatchTransitionRecord` is `PersistedEnvelope` plus the dispatch fields, so every durable
+transition also carries the observed `agentId` and `sessionId` used later to build Gate/Acceptance
+decision envelopes. The common append helper supplies those envelope fields from the current runtime
+observation or the durable recovery record; correlation and category remain selected from the durable
+slot, never from worker text.
+`ReviewDispatchSlot` is a projection and therefore also retains the source `agentId`, `sessionId`, and
+`writerId` needed for cancellation append envelopes; those fields are not part of slot identity.
+`PendingReviewDispatchTransitionRecord` and `ReviewDispatchTransitionRecord` are the exact Design §4.8.1
+transition union intersected with `PendingEnvelope` and `PersistedEnvelope` respectively. The injected
+`appendReviewDispatchTransition(input: PendingReviewDispatchTransitionRecord)` boundary is the only
+function that appends a dispatch transition and returns either
+`{ readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord }` or
+`{ readonly kind: "failed" }`.
 `serializeParentSessionClaim<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T>` is a
-module-private, parent-session keyed queue helper. `terminalizeReviewFailure(claim: ClaimedReviewDispatch,
+module-private, parent-session keyed queue helper. Export the internal
+`withReviewDispatchParentSessionClaim<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T>`
+wrapper for Task 3.6; it is a Review Dispatch domain boundary, not a generic lock API.
+`terminalizeReviewFailure(claim: ClaimedReviewDispatch,
 reason: "review_execution_failed" | "lost_conclusive"): Promise<ReviewFailureOutcome>` appends the terminal
 record and delegates all next-dispatch work to `offerNextMandatoryReview`. The public,
 ReviewDispatch-specific `offerNextMandatoryReview(parentSessionId: string): Promise<ReviewOfferOutcome>` is
 called only after a durable ReviewPending / FinalReviewPending lifecycle notification, a durable terminalization,
-or startup recovery. Its module-private
+or startup recovery. Its module-exported internal
 `offerNextMandatoryReviewWithinParentSessionClaim(parentSessionId: string): Promise<ReviewOfferOutcome>`
 reprojects the durable lifecycle, snapshot, dispatch, and Authorization state and is the only function allowed
 to append `null -> pending`. Its module-private `selectNextEligibleReviewCandidate(input)` and
@@ -1191,17 +2450,25 @@ deterministic order; `recordIntegrityAdvisory("review_dispatch_integrity_violati
 corruption outcome. `projectCurrentFinalReviewCorrelation(records, lifecycle, authorizations)` is module-private and derives the
 current final review round from `lifecycle.finalization?.finalReviewRound` first, then applies ordered
 Review Dispatch records for the same finalization identity, so Task 3.4 alone owns review-only Final Review retry
-projection and stale old-round rejection. The module-private `nextReviewRetryCorrelation(correlation: ReviewCorrelation)` and
+projection and stale old-round rejection. Export the shared identity helper
+`sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean` for Task 3.6's durable
+binding and staging checks. Keep `nextReviewRetryCorrelation(correlation: ReviewCorrelation)` module-private and
 `recoverReviewDispatchesAfterRestart(): Promise<void>` operate only in the ReviewDispatch domain; no
 generic scheduler, queue, recovery, transaction, lock, or CAS abstraction is added. The
-module-private `isCurrentActiveAuthorization(correlation: ReviewCorrelation): Promise<boolean>`,
-`authorizationIdFor(correlation: ReviewCorrelation): string`, and
-`hydrateAuthorizationsBeforeReviewRecovery(): Promise<void>` perform only the durable Authorization check needed
-by this domain. The module-exported, Review Dispatch-specific
+Task 3.2 `isCurrentActiveAuthorization(correlation: ReviewCorrelation): Promise<boolean>` and
+`authorizationIdFor(correlation: ReviewCorrelation): string` are the only shared authorization helpers;
+Task 3.4 receives them, `readDurableAuthorizations`, `hydrateAuthorizationsBeforeReviewRecovery`,
+`injectReviewRequiredDirective`, and `recordIntegrityAdvisory` as injected domain ports. The module-private
+`readDurableAuthorizations` result is used only to reconstruct canonical-snapshot membership and Final Review
+fingerprint; it never authorizes an append or directive by itself. Every such state change still calls the Task 3.2
+guard immediately before it occurs. The module-private
+`selectExactlyOnePendingSlotForParentAndCategory(slots, parentSessionId, expectedCategory)` selects one durable
+pending slot or returns `undefined`; `appendClaimedTransition({ pending, callId, reservation, envelope })`
+delegates to `appendReviewDispatchTransition` and returns its committed-or-failed result. The module-exported, Review Dispatch-specific
 `cancelReviewDispatchesForTerminalAuthorization(parentSessionId, authorizationId): Promise<void>` is the public
-queue-acquiring wrapper for PlanBridge, fingerprint invalidation, and startup entry points. Its module-private
+queue-acquiring wrapper for PlanBridge, fingerprint invalidation, and startup entry points. Its module-exported internal
 `cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(parentSessionId, authorizationId):
-Promise<void>` counterpart never acquires the queue and is callable only while the caller already owns that
+Promise<void>` counterpart is for Task 3.6, never acquires the queue, and is callable only while the caller already owns that
 parent-session critical section. It reads the latest durable projection, best-effort appends `cancelled` only for
 the current pending or claimed slot of that authorization, and treats an existing terminal slot as a no-op. These
 are the only cancellation helpers; callers must not choose lock behavior dynamically. The public wrapper is called
@@ -1229,7 +2496,7 @@ async function appendReviewPendingLifecycleFixture(
 }
 
 async function appendTerminalThenRunOfferFixture(
-  terminal: ReviewDispatchTransitionRecord,
+  terminal: PendingReviewDispatchTransitionRecord,
 ): Promise<ReviewOfferOutcome> {
   const appended = await appendReviewDispatchTransition(terminal);
   if (appended.kind !== "committed") throw new Error("fixture terminal append failed");
@@ -1322,14 +2589,19 @@ it("uses the candidate authorization binding snapshot instead of a global snapsh
     canonicalSnapshot: snapshotWithTaskIds(["task-b"]),
   });
   setLegacyCurrentSnapshotForFixture(snapshotWithTaskIds(["task-a"]));
-  await appendReviewPendingLifecycleFixture(taskReviewPendingFor("parent-b", "authorization-b", "task-b"));
+  await appendReviewPendingLifecycleFixture(
+    taskReviewPendingFor("parent-b", "authorization-b", "task-b"),
+  );
 
   await offerNextMandatoryReview("parent-b");
 
   expect(offeredCorrelations()).toEqual([
     expect.objectContaining({
       reviewKind: "task-review",
-      taskExecutionRef: expect.objectContaining({ authorizationId: "authorization-b", taskId: "task-b" }),
+      taskExecutionRef: expect.objectContaining({
+        authorizationId: "authorization-b",
+        taskId: "task-b",
+      }),
     }),
   ]);
   expect(legacyCurrentSnapshotWasRead()).toBe(false);
@@ -1416,6 +2688,18 @@ it("does not reissue or claim a pending slot after a cancellation tombstone appe
   expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
 });
 
+it("cancels a claimed slot after restart when its authorization is terminal", async () => {
+  await arrangeCurrentClaimedReview(activeAuthorization);
+  releaseAuthorization(currentAuthorizationId);
+  restartReviewDispatchRepository();
+
+  await recoverReviewDispatchesAfterRestart();
+
+  expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
+  expect(injectedReviewDirectives()).toEqual([]);
+  expect(durableTransitions("pending", "claimed")).toHaveLength(1);
+});
+
 it.each(["review_execution_failed", "lost_conclusive"] as const)(
   "lets terminal authorization cancellation win over a claimed %s handler",
   async (reason) => {
@@ -1453,6 +2737,15 @@ it("completes a terminal-authorization claim without recursively waiting on its 
   expect(durableTransitions("pending", "claimed")).toHaveLength(0);
   expect(projectedArtifactReservations()).toHaveLength(0);
   await expect(serializeParentSessionClaim("parent-1", async () => "next")).resolves.toBe("next");
+});
+
+it("does not arbitrarily cancel one slot from corrupted multiple outstanding slots", async () => {
+  await arrangeCorruptMultipleOutstandingSlotsForAuthorization(currentAuthorizationId);
+
+  await cancelReviewDispatchesForTerminalAuthorization("parent-1", currentAuthorizationId);
+
+  expect(recordIntegrityAdvisory).toHaveBeenCalledWith("review_dispatch_integrity_violation");
+  expect(durableTerminals("cancelled")).toHaveLength(0);
 });
 
 it("serializes external cancellation with a concurrent claim for the same parent session", async () => {
@@ -1767,14 +3060,14 @@ it("keeps a clean Final Review after actual rework on the lifecycle round throug
   });
   await arrangeCleanFinalReviewFor(rework);
 
-  await consumeReviewCompletion(currentFinalPostToolUse);
+  await consumeReviewCompletion(currentFinalCompletionInput);
 
   expect(currentFinalReviewCorrelation()).toMatchObject({
     finalizationAttemptId: rework.finalizationAttemptId,
     finalReviewRound: rework.finalReviewRound,
   });
   expect(projectedFinalizationState()).toBe("final_gate_pending");
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
 });
 
 it("increments only the review round for a review-only retry after actual rework", async () => {
@@ -1852,7 +3145,7 @@ it("replays one current Final Review retry and rejects its old PostToolUse, arti
     ...currentFinalClaim.correlation,
     finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
   });
-  await consumeReviewCompletion(oldFinalRoundPostToolUse);
+  await consumeReviewCompletion(oldFinalRoundCompletionInput);
   await evaluateGatePendingAttempt(oldFinalRoundGateContext);
   expect(readArtifact).not.toHaveBeenCalled();
   expect(evaluate).not.toHaveBeenCalled();
@@ -1860,7 +3153,10 @@ it("replays one current Final Review retry and rejects its old PostToolUse, arti
 });
 
 it("projects a review-only Final Review retry and rejects the old round", async () => {
-  await arrangeCurrentFinalReviewFailureWithoutNextPending(currentFinalClaim, "review_execution_failed");
+  await arrangeCurrentFinalReviewFailureWithoutNextPending(
+    currentFinalClaim,
+    "review_execution_failed",
+  );
   await offerNextMandatoryReview(currentFinalClaim.parentSessionId);
   const projected = project(await readDurableRecords(), now);
 
@@ -1869,7 +3165,11 @@ it("projects a review-only Final Review retry and rejects the old round", async 
     finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
     state: "final_review_pending",
   });
-  expect(findCurrentGateDecision(await readDurableRecords(), currentFinalClaim.correlation)).toBeUndefined();
+  expect(
+    findCurrentGateDecision(await readDurableRecords(), currentFinalClaim.correlation),
+  ).toEqual({
+    kind: "missing",
+  });
 });
 
 it("keeps an uncertain recovered claim blocked without redispatch", async () => {
@@ -1949,6 +3249,12 @@ returns `artifact_storage_unavailable`; invalid paths return `artifact_path_inva
 failures return `reservation_internal_error`. The claimed record retains either result. For a usable result,
 add only `artifactPath` to the worker input. For an unusable result, omit the path, continue the runtime
 `task()` call fail-open, and record blocked mandatory-review acceptance without creating a ReviewArtifact.
+The claimed transition remains the durable claim authority and the runtime task still proceeds; after
+that claim commit, append one current-scope `blocked` AcceptanceDecision using the claimed correlation
+and the observed envelope. This append is idempotent and must happen before the unusable-claim result
+is returned. The same blocked-Acceptance helper is used for uncertain claimed recovery, failed
+terminalization staging, and terminal-authorization cancellation where the design calls for a blocked
+mandatory review, but never for `review_incomplete` (which remains `review_pending` with no Acceptance).
 
 Do not create `DelegatedExecutionBinding` here: a child session has not yet been authoritatively observed.
 Canonicalize `sp-review` and `sp-final-review` to `run_in_background = false` before the claim. A terminal
@@ -1991,6 +3297,9 @@ type ClaimedReviewDispatch = {
   readonly correlation: ReviewCorrelation;
   readonly expectedCategory: "sp-review" | "sp-final-review";
   readonly callId: string;
+  readonly agentId: ObservationAgentId;
+  readonly sessionId: string;
+  readonly writerId: string;
 };
 
 type ClaimInput = {
@@ -1998,7 +3307,32 @@ type ClaimInput = {
   readonly callId: string;
   readonly expectedCategory: "sp-review" | "sp-final-review";
   readonly correlation?: unknown;
+  readonly agentId: ObservationAgentId;
+  readonly sessionId: string;
+  readonly writerId: string;
 };
+
+type ReviewDispatchSlot = {
+  readonly key: ReviewDispatchSlotKey;
+  readonly expectedCategory: "sp-review" | "sp-final-review";
+  readonly state: "pending" | "claimed" | "terminal";
+  readonly callId?: string;
+  readonly artifactReservation?: ReviewArtifactReservation;
+  // The last durable transition envelope supplies cancellation/reissue provenance.
+  readonly agentId: ObservationAgentId;
+  readonly sessionId: string;
+  readonly writerId: string;
+};
+
+type ReviewDispatchEnvelope = Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">;
+
+function envelopeFromRecord(record: PersistedLogRecord): ReviewDispatchEnvelope {
+  return { agentId: record.agentId, sessionId: record.sessionId, writerId: record.writerId };
+}
+
+function envelopeFromSlot(slot: ReviewDispatchSlot): ReviewDispatchEnvelope {
+  return { agentId: slot.agentId, sessionId: slot.sessionId, writerId: slot.writerId };
+}
 
 type ReviewCandidateKind = "retry" | "task-review" | "final-review";
 
@@ -2017,6 +3351,12 @@ type SelectNextEligibleReviewCandidateInput = {
   readonly slots: readonly ReviewDispatchSlot[];
   readonly authorizations: readonly ApprovedPlanBinding[];
 };
+
+`authorizationIdFor(correlation)` returns the authorization ID from the task execution reference or
+finalization correlation. `isCurrentActiveAuthorization(correlation)` reads only the injected authoritative
+Authorization port, requires `status === "active"`, and for final review also requires the correlation's
+plan path and fingerprint to match the binding. Read failures return `false` and never consult the
+conflict journal.
 
 function candidateAuthorizationId(candidate: ReviewCandidate): string {
   return authorizationIdFor(candidate.correlation);
@@ -2060,26 +3400,44 @@ function hasAuthoritativeTerminalForCorrelation(
   );
 }
 
-function candidateMatchesCurrentLifecycle(
-  candidate: ReviewCandidate,
+function reviewCorrelationMatchesCurrentLifecycle(
+  correlation: ReviewCorrelation,
   lifecycle: ProjectedLifecycle,
 ): boolean {
-  if (candidate.correlation.reviewKind === "task-review") {
-    const current = lifecycle.currentTaskExecutionRefs.get(candidate.correlation.taskExecutionRef.taskId);
+  if (correlation.reviewKind === "task-review") {
+    const current = lifecycle.currentTaskExecutionRefs.get(correlation.taskExecutionRef.taskId);
     return (
       current !== undefined &&
-      current.authorizationId === candidate.correlation.taskExecutionRef.authorizationId &&
-      current.attemptId === candidate.correlation.taskExecutionRef.attemptId &&
-      lifecycle.taskStates.get(candidate.correlation.taskExecutionRef.taskId) === "review_pending"
+      current.authorizationId === correlation.taskExecutionRef.authorizationId &&
+      current.attemptId === correlation.taskExecutionRef.attemptId &&
+      lifecycle.taskStates.get(correlation.taskExecutionRef.taskId) === "review_pending"
     );
   }
   const current = lifecycle.finalization;
   return (
     current !== undefined &&
-    current.authorizationId === candidate.correlation.authorizationId &&
-    current.planPath === candidate.correlation.planPath &&
-    current.finalizationAttemptId === candidate.correlation.finalizationAttemptId &&
+    current.authorizationId === correlation.authorizationId &&
+    current.planPath === correlation.planPath &&
+    current.finalizationAttemptId === correlation.finalizationAttemptId &&
+    current.finalReviewRound === correlation.finalReviewRound &&
     current.state === "final_review_pending"
+  );
+}
+
+function candidateMatchesCurrentLifecycle(
+  candidate: ReviewCandidate,
+  lifecycle: ProjectedLifecycle,
+): boolean {
+  return reviewCorrelationMatchesCurrentLifecycle(candidate.correlation, lifecycle);
+}
+
+function reviewCorrelationUsesAuthorizationSnapshot(
+  correlation: ReviewCorrelation,
+  binding: ApprovedPlanBinding,
+): boolean {
+  if (correlation.reviewKind !== "task-review") return true;
+  return binding.canonicalSnapshot.tasks.some(
+    (task) => task.taskId === correlation.taskExecutionRef.taskId,
   );
 }
 
@@ -2087,15 +3445,13 @@ function candidateUsesAuthorizationSnapshot(
   candidate: ReviewCandidate,
   binding: ApprovedPlanBinding,
 ): boolean {
-  if (candidate.correlation.reviewKind !== "task-review") return true;
-  return binding.canonicalSnapshot.tasks.some(
-    (task) => task.taskId === candidate.correlation.taskExecutionRef.taskId,
-  );
+  return reviewCorrelationUsesAuthorizationSnapshot(candidate.correlation, binding);
 }
 
 function currentRetryCandidates(
   ordered: readonly PersistedLogRecord[],
   lifecycle: ProjectedLifecycle,
+  authorizations: readonly ApprovedPlanBinding[],
 ): readonly ReviewCandidate[] {
   const candidates: ReviewCandidate[] = [];
   for (const record of ordered) {
@@ -2108,9 +3464,54 @@ function currentRetryCandidates(
       orderingSource: record,
       kind: "retry",
     };
-    if (candidateMatchesCurrentLifecycle(candidate, lifecycle)) candidates.push(candidate);
+    const currentCorrelation =
+      correlation.reviewKind === "task-review"
+        ? projectCurrentTaskReviewCorrelation(
+            ordered,
+            lifecycle,
+            correlation.taskExecutionRef.taskId,
+          )
+        : projectCurrentFinalReviewCorrelation(ordered, lifecycle, authorizations);
+    if (
+      currentCorrelation !== undefined &&
+      sameReviewCorrelation(currentCorrelation, correlation) &&
+      candidateMatchesCurrentLifecycle(candidate, lifecycle)
+    ) {
+      candidates.push(candidate);
+    }
   }
   return candidates;
+}
+
+function projectCurrentTaskReviewCorrelation(
+  ordered: readonly PersistedLogRecord[],
+  lifecycle: ProjectedLifecycle,
+  taskId: string,
+): TaskReviewCorrelation | undefined {
+  const taskExecutionRef = lifecycle.currentTaskExecutionRefs.get(taskId);
+  if (
+    taskExecutionRef === undefined ||
+    lifecycle.taskStates.get(taskId) !== "review_pending"
+  ) {
+    return undefined;
+  }
+  let reviewRound = 1;
+  for (const record of ordered) {
+    if (
+      record.kind !== "review_dispatch_transition" ||
+      record.correlation.reviewKind !== "task-review" ||
+      record.correlation.taskExecutionRef.authorizationId !== taskExecutionRef.authorizationId ||
+      record.correlation.taskExecutionRef.taskId !== taskExecutionRef.taskId ||
+      record.correlation.taskExecutionRef.attemptId !== taskExecutionRef.attemptId
+    ) {
+      continue;
+    }
+    reviewRound = Math.max(
+      reviewRound,
+      record.correlation.reviewRound + (isRetryableTerminalFailure(record) ? 1 : 0),
+    );
+  }
+  return { reviewKind: "task-review", taskExecutionRef, reviewRound };
 }
 
 function currentOrdinaryCandidates(
@@ -2127,13 +3528,20 @@ function currentOrdinaryCandidates(
         current.authorizationId === record.taskExecutionRef.authorizationId &&
         current.attemptId === record.taskExecutionRef.attemptId
       ) {
-        candidates.push({
-          parentSessionId: record.parentSessionId,
-          correlation: { reviewKind: "task-review", taskExecutionRef: current, reviewRound: 1 },
-          expectedCategory: "sp-review",
-          orderingSource: record,
-          kind: "task-review",
-        });
+        const correlation = projectCurrentTaskReviewCorrelation(
+          ordered,
+          lifecycle,
+          record.taskExecutionRef.taskId,
+        );
+        if (correlation !== undefined) {
+          candidates.push({
+            parentSessionId: record.parentSessionId,
+            correlation,
+            expectedCategory: "sp-review",
+            orderingSource: record,
+            kind: "task-review",
+          });
+        }
       }
       continue;
     }
@@ -2151,16 +3559,11 @@ function currentOrdinaryCandidates(
         current.finalizationAttemptId === record.finalizationAttemptId &&
         current.finalReviewRound === record.finalReviewRound
       ) {
+        const correlation = projectCurrentFinalReviewCorrelation(ordered, lifecycle, authorizations);
+        if (correlation === undefined) continue;
         candidates.push({
           parentSessionId: record.parentSessionId,
-          correlation: {
-            reviewKind: "final-review",
-            planPath: current.planPath,
-            authorizationId: current.authorizationId,
-            planFingerprint: binding.planFingerprint,
-            finalizationAttemptId: current.finalizationAttemptId,
-            finalReviewRound: current.finalReviewRound,
-          },
+          correlation,
           expectedCategory: "sp-final-review",
           orderingSource: record,
           kind: "final-review",
@@ -2217,13 +3620,20 @@ function selectNextEligibleReviewCandidate(
 ): ReviewCandidate | undefined {
   const ordered = orderEventsForProjection(input.records);
   const candidates = [
-    ...currentRetryCandidates(ordered, input.lifecycle),
+    ...currentRetryCandidates(ordered, input.lifecycle, input.authorizations),
     ...currentOrdinaryCandidates(ordered, input.lifecycle, input.authorizations),
   ];
   for (const candidate of candidates) {
     if (candidate.parentSessionId !== input.parentSessionId) continue;
     if (!candidateMatchesCurrentLifecycle(candidate, input.lifecycle)) continue;
-    if (candidate.correlation.reviewKind === "final-review") {
+    if (candidate.correlation.reviewKind === "task-review") {
+      const current = projectCurrentTaskReviewCorrelation(
+        ordered,
+        input.lifecycle,
+        candidate.correlation.taskExecutionRef.taskId,
+      );
+      if (current === undefined || !sameReviewCorrelation(current, candidate.correlation)) continue;
+    } else {
       const current = projectCurrentFinalReviewCorrelation(ordered, input.lifecycle, input.authorizations);
       if (current === undefined || !sameReviewCorrelation(current, candidate.correlation)) continue;
     }
@@ -2245,7 +3655,7 @@ function projectReviewCandidateParentSessionIds(
   const slots = projectReviewDispatchSlots(ordered);
   const parentSessionIds: string[] = [];
   for (const candidate of [
-    ...currentRetryCandidates(ordered, lifecycle),
+    ...currentRetryCandidates(ordered, lifecycle, authorizations),
     ...currentOrdinaryCandidates(ordered, lifecycle, authorizations),
   ]) {
     if (hasDispatchSlotForCorrelation(slots, candidate.parentSessionId, candidate.correlation)) continue;
@@ -2283,6 +3693,14 @@ function serializeParentSessionClaim<T>(
     });
 }
 
+// This is an internal domain boundary for Task 3.6; it is not a generic lock API.
+export function withReviewDispatchParentSessionClaim<T>(
+  parentSessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return serializeParentSessionClaim(parentSessionId, operation);
+}
+
 type ReviewOfferOutcome =
   | { readonly kind: "offered"; readonly correlation: ReviewCorrelation }
   | { readonly kind: "deferred" | "blocked" | "none" };
@@ -2293,7 +3711,7 @@ async function offerNextMandatoryReview(parentSessionId: string): Promise<Review
   );
 }
 
-async function offerNextMandatoryReviewWithinParentSessionClaim(
+export async function offerNextMandatoryReviewWithinParentSessionClaim(
   parentSessionId: string,
 ): Promise<ReviewOfferOutcome> {
   const records = await readDurableRecords();
@@ -2320,6 +3738,7 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
   if (!(await isCurrentActiveAuthorization(candidate.correlation))) return { kind: "blocked" };
 
   const pending = await appendReviewDispatchTransition({
+    ...envelopeFromRecord(candidate.orderingSource),
     recordType: "observation",
     kind: "review_dispatch_transition",
     transitionId: randomUUID(),
@@ -2379,10 +3798,28 @@ async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispat
       );
       return { kind: "blocked", advisory: "review_authorization_terminal" };
     }
-    const claimed = await appendClaimedTransition({ pending, callId: input.callId, reservation });
-    return claimed.kind === "committed"
-      ? { kind: "claimed", taskCallBinding: projectTaskCallBinding(claimed.record) }
-      : { kind: "blocked", advisory: "review_claim_commit_failed" };
+    const claimed = await appendClaimedTransition({
+      pending,
+      callId: input.callId,
+      reservation,
+      envelope: {
+        agentId: input.agentId,
+        sessionId: input.sessionId,
+        writerId: input.writerId,
+      },
+    });
+    if (claimed.kind !== "committed") return { kind: "blocked", advisory: "review_claim_commit_failed" };
+    if (reservation.status === "unusable") {
+      const blocked = await appendBlockedAcceptanceIfMissing(correlation, {
+        agentId: input.agentId,
+        sessionId: input.sessionId,
+        writerId: input.writerId,
+      });
+      if (blocked.kind === "failed") {
+        await recordIntegrityAdvisory("blocked_acceptance_append_failed");
+      }
+    }
+    return { kind: "claimed", taskCallBinding: projectTaskCallBinding(claimed.record) };
   });
 }
 
@@ -2420,6 +3857,9 @@ async function terminalizeReviewFailure(
     }
 
     const terminal = await appendReviewDispatchTransition({
+      agentId: claim.agentId,
+      sessionId: claim.sessionId,
+      writerId: claim.writerId,
       recordType: "observation",
       kind: "review_dispatch_transition",
       transitionId: randomUUID(),
@@ -2479,7 +3919,7 @@ function isRetryableTerminalFailure(
   );
 }
 
-function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
+export function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
   if (left.reviewKind !== right.reviewKind) return false;
   if (left.reviewKind === "task-review" && right.reviewKind === "task-review") {
     return (
@@ -2527,17 +3967,21 @@ async function cancelReviewDispatchesForTerminalAuthorization(
   });
 }
 
-async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+export async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
   parentSessionId: string,
   authorizationId: string,
 ): Promise<void> {
-  const slots = projectReviewDispatchSlots(await readDurableRecords());
-  const current = slots.find(
-    (slot) =>
-      slot.key.parentSessionId === parentSessionId &&
-      authorizationIdFor(slot.key.correlation) === authorizationId &&
-      (slot.state === "pending" || slot.state === "claimed"),
+  const candidates = findCurrentPendingOrClaimedSlotsForAuthorization(
+    projectReviewDispatchSlots(await readDurableRecords()),
+    parentSessionId,
+    authorizationId,
   );
+  if (candidates.length === 0) return;
+  if (candidates.length > 1) {
+    await recordIntegrityAdvisory("review_dispatch_integrity_violation");
+    return;
+  }
+  const current = candidates[0];
   if (current === undefined) return;
   const terminal = await appendCancelledReviewDispatchTransition(current);
   if (terminal?.kind !== "committed") return;
@@ -2546,6 +3990,7 @@ async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSession
 async function appendCancelledReviewDispatchTransition(current: ReviewDispatchSlot) {
   if (current.state === "pending") {
     return appendReviewDispatchTransition({
+      ...envelopeFromSlot(current),
       recordType: "observation",
       kind: "review_dispatch_transition",
       transitionId: randomUUID(),
@@ -2559,6 +4004,7 @@ async function appendCancelledReviewDispatchTransition(current: ReviewDispatchSl
   }
   if (current.state !== "claimed" || current.callId === undefined) return;
   return appendReviewDispatchTransition({
+    ...envelopeFromSlot(current),
     recordType: "observation",
     kind: "review_dispatch_transition",
     transitionId: randomUUID(),
@@ -2574,7 +4020,8 @@ async function appendCancelledReviewDispatchTransition(current: ReviewDispatchSl
 
 async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlot): Promise<void> {
   await serializeParentSessionClaim(slot.key.parentSessionId, async () => {
-    const latestSlots = projectReviewDispatchSlots(await readDurableRecords());
+    const latestRecords = await readDurableRecords();
+    const latestSlots = projectReviewDispatchSlots(latestRecords);
     const outstanding = latestSlots.filter(
       (candidate) =>
         candidate.key.parentSessionId === slot.key.parentSessionId &&
@@ -2590,6 +4037,25 @@ async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlo
         sameReviewCorrelation(candidate.key.correlation, slot.key.correlation),
     );
     if (latest?.state !== "pending") return;
+    const lifecycle = project(latestRecords, new Date().toISOString()).lifecycle;
+    if (!reviewCorrelationMatchesCurrentLifecycle(latest.key.correlation, lifecycle)) return;
+    const authorizations = await readDurableAuthorizations();
+    const authorization = authorizations.find(
+      (binding) =>
+        binding.authorizationId === authorizationIdFor(latest.key.correlation) &&
+        binding.status === "active",
+    );
+    if (authorization === undefined) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        latest.key.parentSessionId,
+        authorizationIdFor(latest.key.correlation),
+      );
+      return;
+    }
+    if (!reviewCorrelationUsesAuthorizationSnapshot(latest.key.correlation, authorization)) {
+      await recordIntegrityAdvisory("review_dispatch_integrity_violation");
+      return;
+    }
     if (!(await isCurrentActiveAuthorization(latest.key.correlation))) {
       await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
         latest.key.parentSessionId,
@@ -2604,20 +4070,53 @@ async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlo
   });
 }
 
+async function cancelTerminalClaimedReviewDispatchAfterRestart(
+  slot: ReviewDispatchSlot,
+): Promise<void> {
+  await serializeParentSessionClaim(slot.key.parentSessionId, async () => {
+    const latest = projectReviewDispatchSlots(await readDurableRecords()).find(
+      (candidate) =>
+        candidate.key.parentSessionId === slot.key.parentSessionId &&
+        sameReviewCorrelation(candidate.key.correlation, slot.key.correlation),
+    );
+    if (latest?.state !== "claimed") return;
+    if (await isCurrentActiveAuthorization(latest.key.correlation)) return;
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+      latest.key.parentSessionId,
+      authorizationIdFor(latest.key.correlation),
+    );
+  });
+}
+
 async function recoverReviewDispatchesAfterRestart(): Promise<void> {
-  await hydrateAuthorizationsBeforeReviewRecovery();
-  const records = await readDurableRecords();
-  const parentSessionIds = projectReviewCandidateParentSessionIds(
-    records,
-    await readDurableAuthorizations(),
-  );
-  const slots = projectReviewDispatchSlots(records);
-  for (const slot of slots) {
-    if (slot.state !== "pending") continue;
-    await reissuePendingReviewDirectiveAfterRestart(slot);
-  }
-  for (const parentSessionId of parentSessionIds) {
-    await offerNextMandatoryReview(parentSessionId);
+  try {
+    await hydrateAuthorizationsBeforeReviewRecovery();
+    const records = await readDurableRecords();
+    const parentSessionIds = projectReviewCandidateParentSessionIds(
+      records,
+      await readDurableAuthorizations(),
+    );
+    const slots = projectReviewDispatchSlots(records);
+    for (const slot of slots) {
+      try {
+        if (slot.state === "pending") {
+          await reissuePendingReviewDirectiveAfterRestart(slot);
+        } else if (slot.state === "claimed") {
+          await cancelTerminalClaimedReviewDispatchAfterRestart(slot);
+        }
+      } catch (error) {
+        await recordAdvisory("review_dispatch_slot_recovery_failed", error);
+      }
+    }
+    for (const parentSessionId of parentSessionIds) {
+      try {
+        await offerNextMandatoryReview(parentSessionId);
+      } catch (error) {
+        await recordAdvisory("review_dispatch_offer_recovery_failed", error);
+      }
+    }
+  } catch (error) {
+    await recordAdvisory("review_dispatch_recovery_failed", error);
   }
 }
 ```
@@ -2655,6 +4154,9 @@ git commit -m "feat: durable review dispatchとclaimを追加"
 - Test: `tests/core/v2/state-projection.test.ts`
 
 **Consumes:** the exact runtime event/API and field paths recorded by Task 3.3; projected claimed dispatch slot; `TaskCallBinding`; trusted `ReviewCorrelation`.
+The adapter and observation handler provide the runtime event and append operations as injected
+boundaries; core projection and binding logic must not import OpenCode runtime types or access the
+filesystem directly.
 
 **Produces:** `DelegatedExecutionRelationObserved` from the adapter and a durable `DelegatedExecutionBinding` whose `ExecutionScope` is derived from the claimed slot, never from worker input.
 
@@ -2739,8 +4241,19 @@ git commit -m "feat: review child bindingをdurableに記録"
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
 `DelegatedExecutionBinding`; Design §4.10 `ReviewArtifactReservation`; durable `AuthorizationStore`
-`findByAuthorizationId`; `evaluateGatePendingAttempt` from Task 3.2; `terminalizeReviewFailure`; and exported
-`cancelReviewDispatchesForTerminalAuthorization` from Task 3.4.
+`findByAuthorizationId`; `evaluateGatePendingAttempt` from Task 3.2; `terminalizeReviewFailure`; the Task 3.4
+imported `authorizationIdFor` and `isCurrentActiveAuthorization` helpers from Task 3.2; and the Task 3.4
+internal boundaries `withReviewDispatchParentSessionClaim`,
+`offerNextMandatoryReviewWithinParentSessionClaim`, and
+`cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim`, plus the shared
+`sameReviewCorrelation` identity helper.
+The completion consumer receives the normalized `PostToolUseEvent` plus its observed
+`parentSessionId` / `callId`; it resolves the claimed slot, `TaskCallBinding`, and
+`DelegatedExecutionBinding` from the durable projection rather than trusting correlation,
+category, artifact path, or worker-provided metadata from the event.
+Its input also carries the already-resolved `ObservationAgentId` and `writerId` used only for the
+new persisted envelope; the correlation and artifact identity always come from the durable claimed
+slot and binding.
 
 **Produces:** `consumeReviewCompletion(input): Promise<ReviewCompletionOutcome>`;
 `recoverStagedReviewCompletion(staged: ReviewCompletionStagingRecord): Promise<ReviewCompletionOutcome>`;
@@ -2750,14 +4263,30 @@ git commit -m "feat: review child bindingをdurableに記録"
 ReviewDispatchTransitionRecord): Promise<void>`;
 `findMatchingTerminalForStaging(records: readonly PersistedLogRecord[], staged:
 ReviewCompletionStagingRecord): ReviewDispatchTransitionRecord | undefined`;
-`reviewAuthorizationId(correlation: ReviewCorrelation): string`; and
-`isReviewAuthorizationActive(correlation: ReviewCorrelation): Promise<boolean>`;
 `classifyReviewCompletion(result: ReviewWorkerResultV1): ReviewCompletionClassification`; one composite
 terminal `ReviewDispatchTransitionRecord`; a projected `review_observed` semantic only for an assembled
 artifact; and a gate-evaluation request only for a durable clean-artifact `gate_pending` /
 `final_gate_pending` transition. `ReviewCompletionClassification` is a discriminated union for
 `completed`, `completed_with_findings`, and `review_incomplete`, with the exact Design §4.8.1 artifact
 subtype in each branch.
+`ReviewCompletionStagingRecord` is the existing Design §4.8.1 nested `staging` shape carried in a
+`PersistedEnvelope`; the common envelope supplies the observed `agentId`, `sessionId`, `writerId`,
+and sequence without changing the nested staging contract. Terminal transition records and staged
+completion records therefore remain replayable `PersistedLogRecord` variants and never become an
+in-memory-only completion marker. In `observation-model.ts`, define the pending staging variant as
+`PendingEnvelope & { readonly recordType: "observation"; readonly kind: "review_completion_staged";
+readonly parentSessionId: string; readonly staging: ReviewCompletionStaging }` and the persisted variant
+as that shape plus `sequence`. `appendReviewCompletionStaging` accepts the pending shape, while
+`appendTerminalRecord` accepts a pending terminal transition and delegates to the existing
+`appendReviewDispatchTransition` physical append boundary, which is the only boundary that assigns the
+persisted sequence. `readAndAssembleMatchingArtifact` returns the nested `ReviewCompletionStaging`
+payload after strict parse, classification, digest calculation, and observed-execution construction.
+All artifact reads, durable appends, Authorization lookups, cleanup, lifecycle transitions, and Gate
+requests in this task are injected ports. The core module must not import `ObservationLogStore`,
+`AuthorizationStore`, OpenCode adapter types, or notifier implementations directly. The injected
+`cleanupArtifact(reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>)`
+port receives the trusted reservation pair, not an artifact path or ID from PostToolUse or worker
+output.
 
 - [ ] **Step 1: Write the failing ordering, decision, and anti-replay tests**
 
@@ -2767,6 +4296,11 @@ All staging fixtures used by these tests, projection fixtures, and restart fixtu
 round fixtures include initial lifecycle round 1, actual-rework lifecycle round `N + 1`, and review-only retry
 round `N + 2` without rotating the finalization attempt. The named fixture helpers below are defined in the test
 setup with these types so RED failures are assertion failures rather than unresolved symbols or shape errors.
+Every completion fixture passed to `consumeReviewCompletion` is a `ReviewCompletionInput`; raw
+`PostToolUseEvent` fixtures are wrapped with their trusted parent session, parent call ID, observed agent ID,
+and writer ID before the call. In particular, define `currentFinalCompletionInput`,
+`oldFinalRoundCompletionInput`, `oldAuthorizationACompletionInput`, and `oldRoundCompletionInput` rather
+than passing the raw `*PostToolUse` event directly.
 
 ```ts
 it("performs the review completion protocol in durable order", async () => {
@@ -2800,13 +4334,22 @@ it("does not accept a review without a durable child binding", async () => {
   expect(readArtifact).not.toHaveBeenCalled();
 });
 
+it("rejects a PostToolUse when the durable review binding purpose mismatches its claimed slot", async () => {
+  await arrangeClaimedSlotWithMismatchedReviewTaskCallPurpose();
+
+  await expect(consumeReviewCompletion(matchingInput)).resolves.toEqual({ kind: "stale" });
+
+  expect(readArtifact).not.toHaveBeenCalled();
+  expect(appendReviewCompletionStaging).not.toHaveBeenCalled();
+});
+
 it("does not read or assemble an unusable reservation and leaves Acceptance blocked", async () => {
   await expect(consumeReviewCompletion(inputWithUnusableReservation)).resolves.toEqual({
     kind: "blocked",
   });
   expect(readArtifact).not.toHaveBeenCalled();
   expect(assembleReviewArtifact).not.toHaveBeenCalled();
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
 });
 
@@ -2817,7 +4360,7 @@ it.each(["released", "invalidated"] as const)(
     setAuthorizationStatus(currentAuthorizationId, status);
     await consumeReviewCompletion(matchingInput);
     expect(readArtifact).not.toHaveBeenCalled();
-    expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+    expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
     expect(recordAcceptanceDecision).not.toHaveBeenCalled();
     expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
   },
@@ -2830,7 +4373,7 @@ it("recovers a staged terminalization after restart without rereading the artifa
   expect(readArtifact).toHaveBeenCalledTimes(1);
   expect(appendTerminalRecord).toHaveBeenCalledTimes(2);
   expect(durableTerminalRecords()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
 });
 
 it("does not duplicate terminalization, Gate, or Acceptance during repeated staged recovery", async () => {
@@ -2839,7 +4382,7 @@ it("does not duplicate terminalization, Gate, or Acceptance during repeated stag
   await recoverStagedReviewCompletionsAfterRestart();
   expect(readArtifact).not.toHaveBeenCalled();
   expect(durableTerminalRecords()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
@@ -2860,7 +4403,7 @@ it("retains terminal, Gate, and Acceptance authority when cleanup fails then ret
   failNextArtifactCleanup();
   await consumeReviewCompletion(matchingInput);
   expect(durableTerminalRecords()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 
   restartReviewCompletionRepository();
@@ -2875,7 +4418,8 @@ it.each([
   mismatchedCorrelationTerminal,
   mismatchedArtifactIdTerminal,
   mismatchedDigestTerminal,
-])("does not match completion staging on a partial terminal identity", (terminal) => {
+  malformedPendingToTerminalWithArtifact,
+])("does not match completion staging on a partial or invalid terminal identity", (terminal) => {
   expect(findMatchingTerminalForStaging([stagedRecord, terminal], stagedRecord)).toBeUndefined();
 });
 
@@ -2910,7 +4454,9 @@ it("keeps repeated cancelled recovery idempotent and blocked", async () => {
 
   expect(readArtifact).not.toHaveBeenCalled();
   expect(durableTerminals("cancelled")).toHaveLength(1);
-  expect(cleanupArtifact).toHaveBeenCalledWith(stagedRecord.staging.artifactConsumption.artifactId);
+  expect(cleanupArtifact).toHaveBeenCalledWith(
+    expect.objectContaining({ artifactId: stagedRecord.staging.artifactConsumption.artifactId }),
+  );
   expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
 });
 
@@ -2964,7 +4510,7 @@ it("recovers a clean terminal after terminal append but before gate_pending with
   expect(readArtifact).not.toHaveBeenCalled();
   expect(appendTerminalRecord).not.toHaveBeenCalled();
   expect(durableGatePendingTransitions()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
@@ -2975,7 +4521,7 @@ it("resumes one missing Gate path after gate_pending was durable before a crash"
 
   expect(appendTerminalRecord).not.toHaveBeenCalled();
   expect(durableGatePendingTransitions()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
@@ -2986,7 +4532,7 @@ it("recovers a Final Review clean terminal to final_gate_pending and one Final G
 
   expect(appendTerminalRecord).not.toHaveBeenCalled();
   expect(durableFinalGatePendingTransitions()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
@@ -2997,7 +4543,7 @@ it("resumes one missing Final Gate path after final_gate_pending was durable bef
 
   expect(appendTerminalRecord).not.toHaveBeenCalled();
   expect(durableFinalGatePendingTransitions()).toHaveLength(1);
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
@@ -3010,7 +4556,7 @@ it.each(["task-review", "final-review"] as const)(
 
     expect(appendTerminalRecord).not.toHaveBeenCalled();
     expect(durableReworkTransitions(reviewKind)).toHaveLength(1);
-    expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+    expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   },
 );
 
@@ -3020,9 +4566,11 @@ it("keeps an existing incomplete terminal blocked without Gate, rework, or dupli
   await recoverStagedReviewCompletionsAfterRestart();
 
   expect(appendTerminalRecord).not.toHaveBeenCalled();
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(durableReworkTransitions()).toHaveLength(0);
-  expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
+  expect(
+    findCurrentAcceptanceDecision(await readDurableRecords(), currentReviewCorrelation()),
+  ).toEqual({ kind: "missing" });
 });
 
 it("retains a clean terminal but suppresses lifecycle, Gate, and Acceptance after authorization becomes terminal", async () => {
@@ -3032,7 +4580,7 @@ it("retains a clean terminal but suppresses lifecycle, Gate, and Acceptance afte
 
   expect(durableTerminalRecords()).toHaveLength(1);
   expect(durableGatePendingTransitions()).toHaveLength(0);
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(recordAcceptanceDecision).not.toHaveBeenCalled();
 });
 
@@ -3043,7 +4591,7 @@ it.each(["released", "invalidated"] as const)(
     setAuthorizationStatus(stagedAuthorizationId, status);
     await recoverStagedReviewCompletionsAfterRestart();
     expect(readArtifact).not.toHaveBeenCalled();
-    expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+    expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
     expect(recordAcceptanceDecision).not.toHaveBeenCalled();
     expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
   },
@@ -3052,13 +4600,13 @@ it.each(["released", "invalidated"] as const)(
 it("does not let old authorization A affect fresh authorization B", async () => {
   await arrangeCancelledAuthorizationWithStagedReview("A");
   await approveFreshAuthorization("B");
-  await consumeReviewCompletion(oldAuthorizationAPostToolUse);
+  await consumeReviewCompletion(oldAuthorizationACompletionInput);
   await recoverStagedReviewCompletionsAfterRestart();
   const current = currentReviewCorrelation();
   if (current.reviewKind !== "task-review") throw new Error("expected task review");
   expect(current.taskExecutionRef.authorizationId).toBe("B");
   expect(readArtifact).not.toHaveBeenCalled();
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(recordAcceptanceDecision).not.toHaveBeenCalled();
 });
 
@@ -3094,24 +4642,32 @@ it("does not create acceptance before terminalization and gate_pending", async (
 it("classifies a clean artifact as completed and invokes the Gate", async () => {
   await consumeReviewCompletion(inputFor({ complete: true, findings: [] }));
   expect(durableTerminal()).toMatchObject({ terminalReason: "completed" });
-  expect(recordGatePendingAndEvaluate).toHaveBeenCalledWith(
-    expect.objectContaining({ complete: true, findings: [] }),
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledWith(
+    expect.objectContaining({
+      scope: "task",
+      trigger: "task_complete",
+      taskExecutionRef: currentTaskExecutionRef,
+      agentId: expect.any(String),
+      sessionId: expect.any(String),
+    }),
   );
 });
 
 it("classifies findings as completed_with_findings and requires direct rework", async () => {
   await consumeReviewCompletion(inputFor({ complete: true, findings: [finding] }));
   expect(durableTerminal()).toMatchObject({ terminalReason: "completed_with_findings" });
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(projectedTaskState()).toBe("rework_required");
 });
 
 it("classifies an incomplete artifact as review_incomplete and keeps the review blocked", async () => {
   await consumeReviewCompletion(inputFor({ complete: false, findings: [] }));
   expect(durableTerminal()).toMatchObject({ terminalReason: "review_incomplete" });
-  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(evaluateGatePendingAttempt).not.toHaveBeenCalled();
   expect(projectedTaskState()).toBe("review_pending");
-  expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
+  expect(
+    findCurrentAcceptanceDecision(await readDurableRecords(), currentReviewCorrelation()),
+  ).toEqual({ kind: "missing" });
 });
 
 it.each([
@@ -3128,7 +4684,7 @@ it.each([
 
 it("rejects an old-round PostToolUse without changing the new round", async () => {
   await terminalizeAndRetryCurrentAttempt();
-  await consumeReviewCompletion(oldRoundPostToolUse);
+  await consumeReviewCompletion(oldRoundCompletionInput);
   expect(readArtifact).not.toHaveBeenCalled();
   expect(currentReviewCorrelation()).toMatchObject({ reviewRound: currentReviewRound + 1 });
 });
@@ -3139,7 +4695,7 @@ it.each([
   ["conclusive loss", "lost_conclusive"],
 ] as const)("rejects stale Final Review and Final Gate records after %s", async (_name, reason) => {
   const retry = await terminalizeReviewFailure(currentFinalClaim, reason);
-  await consumeReviewCompletion(oldFinalRoundPostToolUse);
+  await consumeReviewCompletion(oldFinalRoundCompletionInput);
   await evaluateGatePendingAttempt(oldFinalRoundGateContext);
   const replayedRecords = await readDurableRecords();
   const replayed = project(replayedRecords, now);
@@ -3155,7 +4711,9 @@ it.each([
     finalReviewRound: retry.correlation.finalReviewRound,
     state: "final_review_pending",
   });
-  expect(findCurrentAcceptanceDecision(replayedRecords, currentFinalClaim.correlation)).toBeUndefined();
+  expect(findCurrentAcceptanceDecision(replayedRecords, currentFinalClaim.correlation)).toEqual({
+    kind: "missing",
+  });
 });
 ```
 
@@ -3174,9 +4732,9 @@ once; strictly parse `ReviewWorkerResultV1`; classify it before lifecycle work; 
 `ReviewDispatchTransitionRecord` containing consumption, the classification-matched artifact subtype, and
 `claimed → terminal`; then project the terminal result.
 
-`src/core/review-artifact.ts` owns the module-private `recoverStagedReviewCompletion` and
-`ensureTerminalReviewOutcomeApplied`; it exports only `recoverStagedReviewCompletionsAfterRestart` for
-`JusticePlugin.initialize()`. `src/core/review-dispatch-state.ts` owns the module-private
+`src/core/review-artifact.ts` owns the internally exported (for focused tests) `recoverStagedReviewCompletion` and
+`ensureTerminalReviewOutcomeApplied`; runtime wiring exports only `recoverStagedReviewCompletionsAfterRestart` for
+`JusticePlugin.initialize()`. `src/core/review-dispatch-state.ts` owns the internally exported
 `findMatchingTerminalForStaging` and `ensureConsumedReviewArtifactCleaned`, because cancellation convergence
 already owns the parent-session critical section there. Task 3.6 updates that existing cancellation helper only
 after defining these helpers; Task 3.4 has no import from Task 3.6 and remains independently GREEN. Task 3.6
@@ -3265,17 +4823,327 @@ creates a reservation or dispatch, or changes either review-round field. Only a 
 the same terminal. A failed append leaves the slot `claimed` plus staging durable and Acceptance blocked. A
 mismatch is stale/advisory with no state mutation.
 
+`consumeReviewCompletion` must first validate the PostToolUse parent/call identity against the
+current claimed slot. A current slot with no durable child binding is blocked and receives one
+blocked AcceptanceDecision; a stale parent/call/identity is stale with no mutation. The usable
+path reads and validates the artifact exactly once, appends staging before the composite terminal,
+and returns the downstream outcome from `ensureTerminalReviewOutcomeApplied` rather than treating
+terminal append success alone as completion.
+
 ```ts
 type ReviewCompletionOutcome =
   | { readonly kind: "terminalized" }
   | { readonly kind: "blocked" }
   | { readonly kind: "stale" };
 
+export type ReviewCompletionInput = {
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly postToolUse: PostToolUseEvent;
+  readonly agentId: ObservationAgentId;
+  readonly writerId: string;
+};
+
+type ReviewTaskCallBinding =
+  | Extract<TaskCallBinding, { readonly purpose: "task_review" }>
+  | Extract<TaskCallBinding, { readonly purpose: "final_review" }>;
+
+type ClaimedReviewDispatchSlot = ReviewDispatchSlot & {
+  readonly state: "claimed";
+  readonly callId: string;
+};
+
+type PendingReviewDispatchTransitionRecord = Omit<ReviewDispatchTransitionRecord, "sequence">;
+
+function isReviewTaskCallBinding(binding: TaskCallBinding): binding is ReviewTaskCallBinding {
+  return binding.purpose === "task_review" || binding.purpose === "final_review";
+}
+
+function executionScopeMatchesCorrelation(
+  scope: ExecutionScope,
+  correlation: ReviewCorrelation,
+): boolean {
+  if (correlation.reviewKind === "task-review") {
+    return (
+      scope.kind === "task" &&
+      scope.taskExecutionRef.authorizationId === correlation.taskExecutionRef.authorizationId &&
+      scope.taskExecutionRef.taskId === correlation.taskExecutionRef.taskId &&
+      scope.taskExecutionRef.attemptId === correlation.taskExecutionRef.attemptId
+    );
+  }
+  return (
+    scope.kind === "finalization" &&
+    scope.authorizationId === correlation.authorizationId &&
+    scope.planPath === correlation.planPath &&
+    scope.finalizationAttemptId === correlation.finalizationAttemptId &&
+    scope.finalReviewRound === correlation.finalReviewRound
+  );
+}
+
+function delegatedBindingMatchesSlot(
+  binding: DelegatedExecutionBinding,
+  slot: ClaimedReviewDispatchSlot,
+): boolean {
+  return (
+    binding.parentSessionId === slot.key.parentSessionId &&
+    binding.parentCallId === slot.callId &&
+    executionScopeMatchesCorrelation(binding.scope, slot.key.correlation)
+  );
+}
+
+function reviewTaskCallBindingMatchesSlot(
+  binding: ReviewTaskCallBinding,
+  slot: ClaimedReviewDispatchSlot,
+): boolean {
+  return reviewTaskCallBindingMatchesCorrelation(binding, slot.callId, slot.key.correlation);
+}
+
+function reviewTaskCallBindingMatchesCorrelation(
+  binding: ReviewTaskCallBinding,
+  callId: string,
+  correlation: ReviewCorrelation,
+): boolean {
+  const expectedPurpose = correlation.reviewKind === "task-review" ? "task_review" : "final_review";
+  return (
+    binding.callId === callId &&
+    binding.purpose === expectedPurpose &&
+    sameReviewCorrelation(binding.correlation, correlation)
+  );
+}
+
+function matchesReviewPostToolUseIdentity(
+  postToolUse: PostToolUseEvent,
+  parentSessionId: string,
+  callId: string,
+  slot: ClaimedReviewDispatchSlot,
+): boolean {
+  return (
+    postToolUse.type === "PostToolUse" &&
+    slot.key.parentSessionId === parentSessionId &&
+    slot.callId === callId &&
+    postToolUse.callId === callId
+  );
+}
+
+function matchesReviewPostToolUse(
+  postToolUse: PostToolUseEvent,
+  slot: ClaimedReviewDispatchSlot,
+  taskCallBinding: ReviewTaskCallBinding,
+  binding: DelegatedExecutionBinding,
+): boolean {
+  return (
+    postToolUse.sessionId === binding.childSessionId &&
+    reviewTaskCallBindingMatchesSlot(taskCallBinding, slot) &&
+    delegatedBindingMatchesSlot(binding, slot)
+  );
+}
+
+function isCleanReviewArtifact(artifact: ReviewArtifactV1): artifact is CleanReviewArtifactV1 {
+  return artifact.complete && artifact.findings.length === 0;
+}
+
+function isReviewArtifactWithFindings(
+  artifact: ReviewArtifactV1,
+): artifact is ReviewArtifactWithFindingsV1 {
+  return artifact.complete && artifact.findings.length > 0;
+}
+
+function isIncompleteReviewArtifact(
+  artifact: ReviewArtifactV1,
+): artifact is IncompleteReviewArtifactV1 {
+  return !artifact.complete;
+}
+
+function buildTerminalRecord(
+  staged: ReviewCompletionStagingRecord,
+  slot: ClaimedReviewDispatchSlot,
+): PendingReviewDispatchTransitionRecord {
+  const base = {
+    schemaVersion: staged.schemaVersion,
+    timestamp: new Date().toISOString(),
+    agentId: staged.agentId,
+    sessionId: staged.sessionId,
+    writerId: staged.writerId,
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: randomUUID(),
+    parentSessionId: staged.parentSessionId,
+    correlation: staged.staging.correlation,
+    expectedCategory: slot.expectedCategory,
+    from: "claimed",
+    to: "terminal",
+    callId: staged.staging.callId,
+    artifactConsumption: staged.staging.artifactConsumption,
+  } as const;
+  const artifact = staged.staging.reviewArtifact;
+  if (isCleanReviewArtifact(artifact)) {
+    return { ...base, terminalReason: "completed", reviewArtifact: artifact };
+  }
+  if (isReviewArtifactWithFindings(artifact)) {
+    return { ...base, terminalReason: "completed_with_findings", reviewArtifact: artifact };
+  }
+  if (isIncompleteReviewArtifact(artifact)) {
+    return { ...base, terminalReason: "review_incomplete", reviewArtifact: artifact };
+  }
+  throw new Error("review artifact classification invariant violated");
+}
+
+async function appendTerminalRecord(
+  pending: PendingReviewDispatchTransitionRecord,
+): Promise<
+  | { readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord }
+  | { readonly kind: "failed" }
+> {
+  return appendReviewDispatchTransition(pending);
+}
+
+function findStagedCompletionForCall(
+  records: readonly PersistedLogRecord[],
+  parentSessionId: string,
+  callId: string,
+): ReviewCompletionStagingRecord | undefined {
+  return records.find(
+    (record): record is ReviewCompletionStagingRecord =>
+      record.kind === "review_completion_staged" &&
+      record.parentSessionId === parentSessionId &&
+      record.staging.callId === callId,
+  );
+}
+
+export async function consumeReviewCompletion(
+  input: ReviewCompletionInput,
+): Promise<ReviewCompletionOutcome> {
+  try {
+    return await withReviewDispatchParentSessionClaim(input.parentSessionId, async () => {
+      const records = await readDurableRecords();
+      const existingStaging = findStagedCompletionForCall(
+        records,
+        input.parentSessionId,
+        input.callId,
+      );
+      if (existingStaging !== undefined) {
+        const stagedBinding = projectTaskCallBindings(records).find(
+          (candidate): candidate is ReviewTaskCallBinding =>
+            isReviewTaskCallBinding(candidate) &&
+            reviewTaskCallBindingMatchesCorrelation(
+              candidate,
+              existingStaging.staging.callId,
+              existingStaging.staging.correlation,
+            ),
+        );
+        return input.postToolUse.callId === existingStaging.staging.callId &&
+          input.postToolUse.sessionId ===
+            existingStaging.staging.observedExecution.childSessionId &&
+          stagedBinding !== undefined
+          ? recoverStagedReviewCompletion(existingStaging)
+          : { kind: "stale" };
+      }
+      const slot = projectReviewDispatchSlots(records).find(
+        (candidate): candidate is ClaimedReviewDispatchSlot =>
+          candidate.key.parentSessionId === input.parentSessionId &&
+          candidate.state === "claimed" &&
+          candidate.callId === input.callId,
+      );
+      const taskCallBinding = projectTaskCallBindings(records).find(
+        (candidate): candidate is ReviewTaskCallBinding =>
+          slot !== undefined &&
+          isReviewTaskCallBinding(candidate) &&
+          reviewTaskCallBindingMatchesSlot(candidate, slot),
+      );
+      const delegatedBinding = projectDelegatedExecutionBindings(records).find(
+        (candidate) =>
+          slot !== undefined &&
+          candidate.parentSessionId === input.parentSessionId &&
+          candidate.parentCallId === input.callId &&
+          delegatedBindingMatchesSlot(candidate, slot),
+      );
+      if (slot === undefined || taskCallBinding === undefined) {
+        return { kind: "stale" };
+      }
+      if (
+        !matchesReviewPostToolUseIdentity(
+          input.postToolUse,
+          input.parentSessionId,
+          input.callId,
+          slot,
+        )
+      ) {
+        return { kind: "stale" };
+      }
+      if (!(await isCurrentActiveAuthorization(slot.key.correlation))) {
+        await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+          input.parentSessionId,
+          authorizationIdFor(slot.key.correlation),
+        );
+        return { kind: "blocked" };
+      }
+      if (delegatedBinding === undefined) {
+        await appendBlockedAcceptanceIfMissing(slot.key.correlation, {
+          agentId: input.agentId,
+          sessionId: input.postToolUse.sessionId,
+          writerId: input.writerId,
+        });
+        return { kind: "blocked" };
+      }
+      if (!matchesReviewPostToolUse(input.postToolUse, slot, taskCallBinding, delegatedBinding)) {
+        return { kind: "stale" };
+      }
+      if (taskCallBinding.artifactReservation.status === "unusable") {
+        await appendBlockedAcceptanceIfMissing(slot.key.correlation, {
+          agentId: input.agentId,
+          sessionId: input.postToolUse.sessionId,
+          writerId: input.writerId,
+        });
+        return { kind: "blocked" };
+      }
+
+      const assembled = await readAndAssembleMatchingArtifact(
+        input.postToolUse,
+        taskCallBinding,
+        delegatedBinding,
+        slot.key.correlation,
+      );
+      const staging = await appendReviewCompletionStaging({
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        agentId: input.agentId,
+        sessionId: input.postToolUse.sessionId,
+        writerId: input.writerId,
+        recordType: "observation",
+        kind: "review_completion_staged",
+        parentSessionId: input.parentSessionId,
+        staging: assembled,
+      });
+      if (staging.kind !== "committed") return { kind: "blocked" };
+      if (!(await isCurrentActiveAuthorization(slot.key.correlation))) {
+        await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+          input.parentSessionId,
+          authorizationIdFor(slot.key.correlation),
+        );
+        return { kind: "blocked" };
+      }
+
+      const terminal = await appendTerminalRecord(buildTerminalRecord(staging.record, slot));
+      if (terminal.kind !== "committed") return { kind: "blocked" };
+      const outcome = await ensureTerminalReviewOutcomeApplied(terminal.record);
+      await ensureConsumedReviewArtifactCleaned(staging.record, terminal.record);
+      if (outcome.kind === "terminalized") {
+        await offerNextMandatoryReviewWithinParentSessionClaim(input.parentSessionId);
+      }
+      return outcome;
+    });
+  } catch (error) {
+    await recordAdvisory("review_completion_failed", error);
+    return { kind: "blocked" };
+  }
+}
+
 function isMatchingNormalStaging(
   staged: ReviewCompletionStagingRecord,
   terminal: ReviewDispatchTransitionRecord,
 ): boolean {
   if (
+    terminal.from !== "claimed" ||
     terminal.to !== "terminal" ||
     !("callId" in terminal) ||
     terminal.callId === undefined ||
@@ -3316,8 +5184,8 @@ function isMatchingCancelledStaging(
     return false;
   }
   const binding = projectTaskCallBindings(records).find(
-    (candidate) =>
-      candidate.parentSessionId === staging.parentSessionId &&
+    (candidate): candidate is ReviewTaskCallBinding =>
+      isReviewTaskCallBinding(candidate) &&
       candidate.callId === staging.staging.callId &&
       sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
   );
@@ -3335,21 +5203,39 @@ function findMatchingTerminalForStaging(
     (record): record is ReviewDispatchTransitionRecord =>
       record.kind === "review_dispatch_transition" &&
       record.to === "terminal" &&
-      (isMatchingNormalStaging(staged, record) || isMatchingCancelledStaging(records, staged, record)),
+      (isMatchingNormalStaging(staged, record) ||
+        isMatchingCancelledStaging(records, staged, record)),
   );
 }
 
-function findCurrentPendingOrClaimedSlotForAuthorization(
+function findCurrentPendingOrClaimedSlotsForAuthorization(
   slots: readonly ReviewDispatchSlot[],
   parentSessionId: string,
   authorizationId: string,
-): ReviewDispatchSlot | undefined {
-  return slots.find(
+): readonly ReviewDispatchSlot[] {
+  return slots.filter(
     (slot) =>
       slot.key.parentSessionId === parentSessionId &&
       authorizationIdFor(slot.key.correlation) === authorizationId &&
       (slot.state === "pending" || slot.state === "claimed"),
   );
+}
+
+function findMatchingUsableArtifactReservation(
+  records: readonly PersistedLogRecord[],
+  staged: ReviewCompletionStagingRecord,
+): Extract<ReviewArtifactReservation, { readonly status: "usable" }> | undefined {
+  const binding = projectTaskCallBindings(records).find(
+    (candidate): candidate is ReviewTaskCallBinding =>
+      isReviewTaskCallBinding(candidate) &&
+      candidate.callId === staged.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staged.staging.correlation),
+  );
+  const reservation = binding?.artifactReservation;
+  return reservation?.status === "usable" &&
+    reservation.artifactId === staged.staging.artifactConsumption.artifactId
+    ? reservation
+    : undefined;
 }
 
 async function ensureConsumedReviewArtifactCleaned(
@@ -3358,7 +5244,8 @@ async function ensureConsumedReviewArtifactCleaned(
 ): Promise<void> {
   const records = await readDurableRecords();
   const matchingTerminal = findMatchingTerminalForStaging(records, staged);
-  if (matchingTerminal === undefined || matchingTerminal.transitionId !== terminal.transitionId) return;
+  if (matchingTerminal === undefined || matchingTerminal.transitionId !== terminal.transitionId)
+    return;
   if (
     matchingTerminal.terminalReason !== "completed" &&
     matchingTerminal.terminalReason !== "completed_with_findings" &&
@@ -3367,8 +5254,13 @@ async function ensureConsumedReviewArtifactCleaned(
   ) {
     return;
   }
+  const reservation = findMatchingUsableArtifactReservation(records, staged);
+  if (reservation === undefined) {
+    await recordAdvisory("review_artifact_cleanup_reservation_missing");
+    return;
+  }
   try {
-    await cleanupArtifact(staged.staging.artifactConsumption.artifactId);
+    await cleanupArtifact(reservation);
   } catch (error) {
     await recordAdvisory("review_artifact_cleanup_failed", error);
   }
@@ -3396,7 +5288,9 @@ function terminalMatchesCurrentIdentity(
   lifecycle: ProjectedLifecycle,
 ): boolean {
   if (terminal.correlation.reviewKind === "task-review") {
-    const current = lifecycle.currentTaskExecutionRefs.get(terminal.correlation.taskExecutionRef.taskId);
+    const current = lifecycle.currentTaskExecutionRefs.get(
+      terminal.correlation.taskExecutionRef.taskId,
+    );
     return (
       current !== undefined &&
       current.authorizationId === terminal.correlation.taskExecutionRef.authorizationId &&
@@ -3419,7 +5313,9 @@ function gatePendingTransitionFor(
 ): TerminalOutcomeTransition | undefined {
   if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return undefined;
   if (terminal.correlation.reviewKind === "task-review") {
-    if (lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) !== "review_pending") {
+    if (
+      lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) !== "review_pending"
+    ) {
       return undefined;
     }
     return {
@@ -3504,9 +5400,12 @@ function hasCurrentGateAndAcceptanceDecisions(
   records: readonly PersistedLogRecord[],
   correlation: ReviewCorrelation,
 ): boolean {
+  const gate = findCurrentGateDecision(records, correlation);
+  const acceptance = findCurrentAcceptanceDecision(records, correlation);
   return (
-    findCurrentGateDecision(records, correlation) !== undefined &&
-    findCurrentAcceptanceDecision(records, correlation) !== undefined
+    gate.kind === "found" &&
+    acceptance.kind === "found" &&
+    acceptanceMatchesGate(gate.decision, acceptance.decision)
   );
 }
 
@@ -3519,16 +5418,27 @@ function gateContextForCurrentTerminal(
     if (lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) !== "gate_pending") {
       return undefined;
     }
-    return { scope: "task", taskExecutionRef: terminal.correlation.taskExecutionRef };
+    return {
+      scope: "task",
+      trigger: "task_complete",
+      taskExecutionRef: terminal.correlation.taskExecutionRef,
+      agentId: terminal.agentId,
+      sessionId: terminal.sessionId,
+      writerId: terminal.writerId,
+    };
   }
   const current = lifecycle.finalization;
   if (current === undefined || current.state !== "final_gate_pending") return undefined;
   return {
     scope: "plan",
+    trigger: "final_review_complete",
     authorizationId: terminal.correlation.authorizationId,
     planPath: terminal.correlation.planPath,
     finalizationAttemptId: terminal.correlation.finalizationAttemptId,
     finalReviewRound: terminal.correlation.finalReviewRound,
+    agentId: terminal.agentId,
+    sessionId: terminal.sessionId,
+    writerId: terminal.writerId,
   };
 }
 
@@ -3543,28 +5453,13 @@ function delegatedBindingMatchesStaging(
   ) {
     return false;
   }
-  if (staging.staging.correlation.reviewKind === "task-review") {
-    return (
-      binding.scope.kind === "task" &&
-      binding.scope.taskExecutionRef.authorizationId ===
-        staging.staging.correlation.taskExecutionRef.authorizationId &&
-      binding.scope.taskExecutionRef.taskId === staging.staging.correlation.taskExecutionRef.taskId &&
-      binding.scope.taskExecutionRef.attemptId === staging.staging.correlation.taskExecutionRef.attemptId
-    );
-  }
-  return (
-    binding.scope.kind === "finalization" &&
-    binding.scope.authorizationId === staging.staging.correlation.authorizationId &&
-    binding.scope.planPath === staging.staging.correlation.planPath &&
-    binding.scope.finalizationAttemptId === staging.staging.correlation.finalizationAttemptId &&
-    binding.scope.finalReviewRound === staging.staging.correlation.finalReviewRound
-  );
+  return executionScopeMatchesCorrelation(binding.scope, staging.staging.correlation);
 }
 
 async function ensureTerminalReviewOutcomeApplied(
   terminal: ReviewDispatchTransitionRecord,
 ): Promise<ReviewCompletionOutcome> {
-  if (!(await isReviewAuthorizationActive(terminal.correlation))) return { kind: "blocked" };
+  if (!(await isCurrentActiveAuthorization(terminal.correlation))) return { kind: "blocked" };
   const records = await readDurableRecords();
   const lifecycle = project(records, new Date().toISOString()).lifecycle;
   if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return { kind: "stale" };
@@ -3573,6 +5468,9 @@ async function ensureTerminalReviewOutcomeApplied(
     case "completed": {
       const transition = gatePendingTransitionFor(terminal, lifecycle);
       if (transition !== undefined && !hasLifecycleTransition(records, transition)) {
+        if (!(await isCurrentActiveAuthorization(terminal.correlation))) {
+          return { kind: "blocked" };
+        }
         const appended = await appendLifecycleTransition(transition);
         if (appended.kind !== "committed") return { kind: "blocked" };
       }
@@ -3580,7 +5478,9 @@ async function ensureTerminalReviewOutcomeApplied(
       const projected = project(currentRecords, new Date().toISOString()).lifecycle;
       const gateContext = gateContextForCurrentTerminal(terminal, projected);
       if (gateContext !== undefined) {
-        await evaluateGatePendingAttempt(gateContext);
+        const gateOutcome = await evaluateGatePendingAttempt(gateContext);
+        if (gateOutcome.kind === "blocked") return { kind: "blocked" };
+        if (gateOutcome.kind === "not_applicable") return { kind: "stale" };
         return { kind: "terminalized" };
       }
       return hasCurrentGateAndAcceptanceDecisions(currentRecords, terminal.correlation)
@@ -3588,15 +5488,19 @@ async function ensureTerminalReviewOutcomeApplied(
         : { kind: "stale" };
     }
     case "completed_with_findings": {
-      const currentState = terminal.correlation.reviewKind === "task-review"
-        ? lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId)
-        : lifecycle.finalization?.state;
+      const currentState =
+        terminal.correlation.reviewKind === "task-review"
+          ? lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId)
+          : lifecycle.finalization?.state;
       if (currentState === "rework_required" || currentState === "final_rework_required") {
         return { kind: "terminalized" };
       }
       const transition = reworkTransitionFor(terminal, lifecycle);
       if (transition === undefined) return { kind: "stale" };
       if (!hasLifecycleTransition(records, transition)) {
+        if (!(await isCurrentActiveAuthorization(terminal.correlation))) {
+          return { kind: "blocked" };
+        }
         const appended = await appendLifecycleTransition(transition);
         if (appended.kind !== "committed") return { kind: "blocked" };
       }
@@ -3619,27 +5523,31 @@ async function recoverStagedReviewCompletion(
   if (existingTerminal !== undefined) {
     const outcome = await ensureTerminalReviewOutcomeApplied(existingTerminal);
     await ensureConsumedReviewArtifactCleaned(staged, existingTerminal);
-    await offerNextMandatoryReview(staged.parentSessionId);
+    if (outcome.kind === "terminalized") {
+      await offerNextMandatoryReviewWithinParentSessionClaim(staged.parentSessionId);
+    }
     return outcome;
   }
 
   const slot = projectReviewDispatchSlots(records).find(
-    (candidate) =>
+    (candidate): candidate is ClaimedReviewDispatchSlot =>
       candidate.key.parentSessionId === staged.parentSessionId &&
       candidate.state === "claimed" &&
       candidate.callId === staged.staging.callId &&
       sameReviewCorrelation(candidate.key.correlation, staged.staging.correlation),
   );
   const taskCallBinding = projectTaskCallBindings(records).find(
-    (candidate) =>
-      candidate.parentSessionId === staged.parentSessionId &&
-      candidate.callId === staged.staging.callId &&
-      sameReviewCorrelation(candidate.correlation, staged.staging.correlation),
+    (candidate): candidate is ReviewTaskCallBinding =>
+      isReviewTaskCallBinding(candidate) &&
+      slot !== undefined &&
+      reviewTaskCallBindingMatchesSlot(candidate, slot),
   );
   const delegatedBinding = projectDelegatedExecutionBindings(records).find(
     (candidate) =>
+      slot !== undefined &&
       candidate.parentSessionId === staged.parentSessionId &&
-      candidate.parentCallId === staged.staging.callId,
+      candidate.parentCallId === staged.staging.callId &&
+      delegatedBindingMatchesSlot(candidate, slot),
   );
   if (
     slot === undefined ||
@@ -3651,19 +5559,21 @@ async function recoverStagedReviewCompletion(
   ) {
     return { kind: "stale" };
   }
-  if (!(await isReviewAuthorizationActive(staged.staging.correlation))) {
-    await cancelReviewDispatchesForTerminalAuthorization(
+  if (!(await isCurrentActiveAuthorization(staged.staging.correlation))) {
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
       staged.parentSessionId,
-      reviewAuthorizationId(staged.staging.correlation),
+      authorizationIdFor(staged.staging.correlation),
     );
     return { kind: "blocked" };
   }
-  const terminal = await appendTerminalRecord(staged);
+  const terminal = await appendTerminalRecord(buildTerminalRecord(staged, slot));
   if (terminal.kind !== "committed") return { kind: "blocked" };
-  await ensureTerminalReviewOutcomeApplied(terminal.record);
+  const outcome = await ensureTerminalReviewOutcomeApplied(terminal.record);
   await ensureConsumedReviewArtifactCleaned(staged, terminal.record);
-  await offerNextMandatoryReview(staged.parentSessionId);
-  return { kind: "terminalized" };
+  if (outcome.kind === "terminalized") {
+    await offerNextMandatoryReviewWithinParentSessionClaim(staged.parentSessionId);
+  }
+  return outcome;
 }
 
 export async function recoverStagedReviewCompletionsAfterRestart(): Promise<void> {
@@ -3673,7 +5583,9 @@ export async function recoverStagedReviewCompletionsAfterRestart(): Promise<void
   );
   for (const staged of stagings) {
     try {
-      await recoverStagedReviewCompletion(staged);
+      await withReviewDispatchParentSessionClaim(staged.parentSessionId, () =>
+        recoverStagedReviewCompletion(staged),
+      );
     } catch (error) {
       await recordAdvisory("review_staged_completion_recovery_failed", error);
     }
@@ -3682,53 +5594,37 @@ export async function recoverStagedReviewCompletionsAfterRestart(): Promise<void
 
 // Task 3.6 replaces Task 3.4's cancellation helper body with this extension after
 // adding the helpers above; Task 3.4 itself therefore remains independently GREEN.
-async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+export async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
   parentSessionId: string,
   authorizationId: string,
 ): Promise<void> {
-  const current = findCurrentPendingOrClaimedSlotForAuthorization(
+  const candidates = findCurrentPendingOrClaimedSlotsForAuthorization(
     projectReviewDispatchSlots(await readDurableRecords()),
     parentSessionId,
     authorizationId,
   );
+  if (candidates.length === 0) return;
+  if (candidates.length > 1) {
+    await recordIntegrityAdvisory("review_dispatch_integrity_violation");
+    return;
+  }
+  const current = candidates[0];
   if (current === undefined) return;
   const terminal = await appendCancelledReviewDispatchTransition(current);
   if (terminal?.kind !== "committed") return;
   const records = await readDurableRecords();
   const staging = records
     .filter(
-      (record): record is ReviewCompletionStagingRecord => record.kind === "review_completion_staged",
+      (record): record is ReviewCompletionStagingRecord =>
+        record.kind === "review_completion_staged",
     )
     .find(
       (candidate) =>
-        findMatchingTerminalForStaging(records, candidate)?.transitionId === terminal.record.transitionId,
+        findMatchingTerminalForStaging(records, candidate)?.transitionId ===
+        terminal.record.transitionId,
     );
   if (staging !== undefined) await ensureConsumedReviewArtifactCleaned(staging, terminal.record);
 }
-
-if (claim.artifactReservation.status === "unusable") return { kind: "blocked" };
-if (!(await isReviewAuthorizationActive(claim.correlation))) {
-  await cancelReviewDispatchesForTerminalAuthorization(
-    claim.parentSessionId,
-    reviewAuthorizationId(claim.correlation),
-  );
-  return { kind: "blocked" };
-}
-const staging = await commitStaging(await validateAndReadMatchingArtifact(input));
-if (!(await isReviewAuthorizationActive(claim.correlation))) {
-  await cancelReviewDispatchesForTerminalAuthorization(
-    claim.parentSessionId,
-    reviewAuthorizationId(claim.correlation),
-  );
-  return { kind: "blocked" };
-}
-const terminal = await appendTerminalRecord(staging);
-if (terminal.kind !== "committed") return { kind: "blocked" };
-await projectTerminalRecord(terminal.record);
-await ensureTerminalReviewOutcomeApplied(terminal.record);
-await ensureConsumedReviewArtifactCleaned(staging, terminal.record);
-await offerNextMandatoryReview(claim.parentSessionId);
-return { kind: "terminalized" };
 ```
 
 Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `runTaskPostToolUseSequentially`. Keep independent non-task handlers unchanged.
@@ -4134,19 +6030,19 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | one outstanding dispatch per parent                            | 3.4                     | pending / claimed cardinality permits zero or one; corrupt multiple outstanding input is advisory, creates no pending, claim, reservation, or directive, and blocks Acceptance                                                   |
 | deferred ReviewPending liveness                                | 3.1, 3.4, 3.6           | a second lifecycle candidate receives exactly one dispatch and directive from the production terminalization path without a second manual request                                                                                |
 | deferred candidate restart recovery                            | 3.4                     | an undispatched current lifecycle candidate with no dispatch record is rediscovered after restart and offered exactly once                                                                                                       |
-| deterministic eligible review candidate selection               | 3.4                     | `selectNextEligibleReviewCandidate` code uses `orderEventsForProjection`; retry candidates precede ordinary candidates and each category retains source order                                                                    |
-| Canonical Snapshot membership                                   | 3.4                     | multi-Authorization fixture proves task-B is accepted only through authorization-B's durable `canonicalSnapshot`, never a global snapshot cache                                                                                 |
-| deferred parent-session discovery                               | 3.4                     | `projectReviewCandidateParentSessionIds` code discovers undispatched current task/final candidates and retryable terminal candidates in deterministic order                                                                       |
+| deterministic eligible review candidate selection              | 3.4                     | `selectNextEligibleReviewCandidate` code uses `orderEventsForProjection`; retry candidates precede ordinary candidates and each category retains source order                                                                    |
+| Canonical Snapshot membership                                  | 3.4                     | multi-Authorization fixture proves task-B is accepted only through authorization-B's durable `canonicalSnapshot`, never a global snapshot cache                                                                                  |
+| deferred parent-session discovery                              | 3.4                     | `projectReviewCandidateParentSessionIds` code discovers undispatched current task/final candidates and retryable terminal candidates in deterministic order                                                                      |
 | deterministic durable queue order                              | 3.4                     | three candidates terminalize and offer in projection order across a restart                                                                                                                                                      |
 | retry versus unrelated candidate priority                      | 3.4                     | a retryable terminal candidate precedes an unrelated ReviewPending candidate according to Design §4.8.1                                                                                                                          |
-| corrupt multiple outstanding slots                             | 3.4                     | fail-closed offer and claim create no arbitrary pending, claim, reservation, or directive and record an integrity advisory                                                                                                       |
+| corrupt multiple outstanding slots                             | 3.4                     | fail-closed offer, claim, and cancellation create no arbitrary pending, claim, reservation, directive, or tombstone and record an integrity advisory                                                                             |
 | atomic review claim                                            | 3.4                     | critical section re-reads latest durable records, projects, validates one pending slot, reserves, then appends claimed before publishing authority                                                                               |
 | JUS-P0-04 review terminal atomicity                            | 3.6                     | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance                                                                                                          |
-| ReviewCompletionStagingRecord schema                           | 3.6                     | Design `review_completion_staged` discriminant and exact nested `record.staging` payload are used by append, projection, cleanup, and restart fixtures                                    |
+| ReviewCompletionStagingRecord schema                           | 3.6                     | Design `review_completion_staged` discriminant and exact nested `record.staging` payload are used by append, projection, cleanup, and restart fixtures                                                                           |
 | claimed + completion staging restart recovery                  | 3.6                     | staging durable, terminal append failure, restart recovery, no artifact/worker-output reread, exactly one terminal                                                                                                               |
-| staged completion restart recovery                             | 3.6                     | `recoverStagedReviewCompletion` reuses matching terminal or retries one terminal append from durable staging, and `recoverStagedReviewCompletionsAfterRestart` processes ordered staging records independently                |
+| staged completion restart recovery                             | 3.6                     | `recoverStagedReviewCompletion` reuses matching terminal or retries one terminal append from durable staging, and `recoverStagedReviewCompletionsAfterRestart` processes ordered staging records independently                   |
 | terminal to lifecycle crash recovery                           | 3.6                     | existing clean terminal is reused without artifact reread or terminal append; missing gate_pending / final_gate_pending transition is appended exactly once                                                                      |
-| gate_pending / final_gate_pending crash recovery               | 3.2, 3.6                | durable lifecycle transition is not reappended; a missing current-identity Gate or Final Gate resumes exactly once                                                    |
+| gate_pending / final_gate_pending crash recovery               | 3.2, 3.6                | durable lifecycle transition is not reappended; a missing current-identity Gate or Final Gate resumes exactly once                                                                                                               |
 | post-terminal outcome recovery                                 | 3.6                     | `ensureTerminalReviewOutcomeApplied` discriminates completed/findings/incomplete and verifies repeated lifecycle/Gate recovery is idempotent                                                                                     |
 | clean terminal recovery                                        | 3.2, 3.6                | clean task and Final Review terminal recover gate_pending and current-identity Gate exactly once; repeated recovery creates no duplicate GateDecision or AcceptanceDecision                                                      |
 | findings terminal recovery                                     | 3.6                     | task and Final Review findings terminal recover rework_required / final_rework_required exactly once and never invoke Gate                                                                                                       |
@@ -4155,14 +6051,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | staged terminalization idempotency                             | 3.6                     | repeated recovery has no duplicate terminal, Gate, or Acceptance                                                                                                                                                                 |
 | staging recovery failure                                       | 3.6                     | claimed plus staging remains durable; no new dispatch, reservation, or round; Acceptance stays blocked                                                                                                                           |
 | consumed artifact cleanup recovery                             | 3.6                     | normal terminal before cleanup crash and cleanup failure retry without artifact reread, terminal reappend, Gate rollback, or Acceptance rollback                                                                                 |
-| consumed artifact cleanup                                      | 3.6                     | `findMatchingTerminalForStaging` matches normal terminals by nested staging identity and cancelled claimed terminals by durable binding artifact ID; cleanup occurs only after a matching durable terminal                             |
-| cancelled staged artifact cleanup                              | 3.4, 3.6                | cancelled tombstone precedes cleanup; failed tombstone preserves artifact; restart rediscovers the durable tombstone without reread/reappend and retries idempotent cleanup while Acceptance remains blocked                       |
+| consumed artifact cleanup                                      | 3.6                     | `findMatchingTerminalForStaging` matches normal terminals by nested staging identity and cancelled claimed terminals by durable binding artifact ID; cleanup occurs only after a matching durable terminal                       |
+| cancelled staged artifact cleanup                              | 3.4, 3.6                | cancelled tombstone precedes cleanup; failed tombstone preserves artifact; restart rediscovers the durable tombstone without reread/reappend and retries idempotent cleanup while Acceptance remains blocked                     |
 | staging versus terminal Authorization                          | 2.3, 3.4, 3.6           | cancel/invalidation after staging prevents promotion; slot converges to cancelled; fresh approval does not reuse old state                                                                                                       |
 | terminal artifact classification                               | 3.6                     | clean → `completed`/Gate, findings → `completed_with_findings`/direct rework, incomplete → `review_incomplete`/blocked                                                                                                           |
 | Task Review failure retry                                      | 3.4, 3.6                | `retries a task review with the same TaskExecutionRef and only reviewRound + 1` verifies the retained ref, incremented task round, absent `finalReviewRound`, and stale old-round rejection                                      |
 | Task implementation rework                                     | 3.1, 3.6                | fresh TaskExecutionRef and `reviewRound = 1` only after actual rework                                                                                                                                                            |
 | Final Review review-only retry                                 | 3.4, 3.6                | dispatch retry retains finalizationAttemptId, increments finalReviewRound, projects that round as current, and rejects old PostToolUse/artifact/Gate records                                                                     |
-| Final actual rework                                            | 3.1, 3.4, 3.6           | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound; dispatch uses that lifecycle round                 |
+| Final actual rework                                            | 3.1, 3.4, 3.6           | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound; dispatch uses that lifecycle round                                                        |
 | terminal failure to retry-pending recovery                     | 3.4                     | `recovers a terminal-to-pending crash exactly once and only dispatches after durable pending` simulates committed terminal plus failed pending append, restart, and recovery                                                     |
 | retry dispatch ordering                                        | 3.4                     | the terminal-to-pending crash test records `terminal-committed -> next-pending-committed -> directive-injected`; failed pending append has no directive                                                                          |
 | retry recovery idempotency                                     | 3.4                     | the terminal-to-pending crash test runs recovery twice and verifies exactly one next-round `null -> pending` transition                                                                                                          |
@@ -4179,22 +6075,22 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | INV-11 through INV-18                                          | 3.3, 3.4, 3.5, 3.6      | purpose separation, claim, restart, correlation, stale-event and consumption tests named in those tasks                                                                                                                          |
 | INV-19 terminal Authorization boundary                         | 2.3, 3.2, 3.4, 3.6, 3.7 | terminality guards for dispatch, claim, staged completion, Gate, Acceptance, progress, recovery, cancellation-tombstone failure, and fresh reapproval isolation                                                                  |
 
-| Plan Task | Requirement / Design Decision implemented                                                        | Verification                                                                                                                                                                                                                                                                                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                |
-| 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                           |
-| 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary tests                                                                                                                                                                                                                                                                                                                                                    |
-| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality                       | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests                                                                                                                            |
-| 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                               |
-| 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                               |
-| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only, authorization guard before Gate and Acceptance append, current-identity Gate/Acceptance idempotency, decision ordering, blocked tests                                                                                                                                                                                                                      |
-| 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                   |
+| Plan Task | Requirement / Design Decision implemented                                                        | Verification                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality                       | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests                                                                                                                                                                                                                                                                                                |
+| 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
+| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only, authorization guard before Gate and Acceptance append, current-identity Gate/Acceptance idempotency, decision ordering, blocked tests                                                                                                                                                                                                                                                                                                                                                                                          |
+| 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
-| 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                   |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | unusable no-read blocked path, authorization guard, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay tests                                                                             |
-| 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                    |
-| 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                      |
-| 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                       |
+| 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | unusable no-read blocked path, authorization guard, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay tests                                                                                                                                                                                              |
+| 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
