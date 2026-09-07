@@ -15,6 +15,8 @@
 - Public state is immutable through `readonly`, `ReadonlyArray`, and `ReadonlyMap`.
 - Ordinary unit tests use `tests/helpers/mock-file-system.ts`; only existing designated real-fs suites access disk.
 - Persist lifecycle and review state only in the existing append-only observation/decision log.
+- Do not redefine an existing valid persisted `schemaVersion: 1` record as invalid. Runtime validator changes for durable schemas include replay coverage, and read compatibility never promotes a legacy record to current lifecycle / Gate / Acceptance authority.
+- Treat `read → check → append` as exactly-once only inside the documented decision-identity serialization boundary; the in-memory boundary is never durable authority and is not a generic lock or idempotency framework.
 - Persist authorization state only in `.justice/authorizations.json`; `ApprovedPlanBinding.canonicalSnapshot` is the sole durable canonical snapshot.
 - Use `.justice/authorizations.conflict.json` only as `AtomicPersistence`'s non-authoritative failure journal; never hydrate it or use it for authorization, canonical snapshot, or active-plan restoration.
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
@@ -1091,7 +1093,13 @@ git commit -m "feat: lifecycle replayをidempotentに処理"
 
 **Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; durable `PersistedLogRecord` decision records; `AuthorizationStore.findByAuthorizationId` for the gate correlation's authorizationId.
 
-**Produces:** durable `DecisionRecord` with exactly four discriminated payload variants (`task` / `plan` GateDecision and `task-acceptance` / `plan-acceptance` AcceptanceDecision); `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly trigger: "task_complete" | "tool_observed"; readonly taskExecutionRef: TaskExecutionRef; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string } | { readonly scope: "plan"; readonly trigger: "final_review_complete"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string }`; `GatePendingAttemptResult = { readonly kind: "not_applicable" } | { readonly kind: "decided"; readonly decision: GateDecisionPayload } | { readonly kind: "blocked"; readonly advisory: string }`; `GateDecisionLookup` and `AcceptanceDecisionLookup` results that distinguish `missing`, `found`, and `conflict`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecisionLookup`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecisionLookup`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>`; `deriveAcceptanceDecision(gate: GateDecision): AcceptanceDecisionPayload`; `evaluate(gates, evidence, context)` returns a `GateDecisionPayload` containing either `taskExecutionRef` or the complete plan finalization identity; and the module-exported internal `authorizationIdFor(correlation)` / `isCurrentActiveAuthorization(correlation)` helpers. `DecisionRecord` remains the source used by the existing `PersistedLogRecord` alias; no second persistence union or projection subsystem is introduced.
+**Produces:** durable `DecisionRecord` with four new authoritative discriminated payload variants (`task` / `plan` GateDecision and `task-acceptance` / `plan-acceptance` AcceptanceDecision); `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly trigger: "task_complete" | "tool_observed"; readonly taskExecutionRef: TaskExecutionRef; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string } | { readonly scope: "plan"; readonly trigger: "final_review_complete"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string }`; `GatePendingAttemptResult = { readonly kind: "not_applicable" } | { readonly kind: "decided"; readonly decision: GateDecisionPayload } | { readonly kind: "blocked"; readonly advisory: string }`; `GateDecisionLookup` and `AcceptanceDecisionLookup` results that distinguish `missing`, `found`, and `conflict`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecisionLookup`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecisionLookup`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>`; `deriveAcceptanceDecision(gate: GateDecision): AcceptanceDecisionPayload`; `evaluate(gates, evidence, context)` returns a `GateDecisionPayload` containing either `taskExecutionRef` or the complete plan finalization identity; and the module-exported internal `authorizationIdFor(correlation)` / `isCurrentActiveAuthorization(correlation)` helpers. `DecisionRecord` remains the source used by the existing `PersistedLogRecord` alias; no second persistence union or projection subsystem is introduced.
+The four variants above are the new authoritative variants. Add the separate read-only
+`LegacyTaskGateDecisionPayload` for the pre-existing `schemaVersion: 1` task Gate shape that lacks
+`taskExecutionRef`; it remains in `DecisionPayload` / `DecisionRecord` so persisted records are
+readable, but it is excluded from `GateDecision`, current Gate lookup, Acceptance derivation, and
+lifecycle authority. No migration, second persistence union, or generic compatibility router is added.
+
 `appendBlockedAcceptanceIfMissing` is the shared internal idempotent append path for unusable,
 uncertain, or terminalized mandatory-review states that the design marks as blocked; it accepts the
 current `ReviewCorrelation` and persisted envelope identity, and never creates a positive lifecycle
@@ -1109,13 +1117,98 @@ conflict-diverted authorization returns `false`. The helper is the single shared
 imported by Tasks 3.4 and 3.6; it does not import a runtime store or read the conflict journal.
 Define `GateEvaluationDependencies` as the explicit injected boundary with `readDurableRecords`,
 `appendDecision`, `findAuthorizationById`, `appendTaskLifecycleTransition`,
-`appendPlanFinalizationTransition`, `evaluateRules`, and `recordAdvisory` ports. Export only the
-internal factory `createGatePendingAttemptEvaluator(dependencies)`; it closes over those ports and
-returns `{ evaluateGatePendingAttempt, appendBlockedAcceptanceIfMissing }`. Every helper in the
+`appendPlanFinalizationTransition`, `evaluateRules`, and `recordAdvisory` ports. Export only pure
+lookup / identity functions, including `isLegacyTaskGateDecisionRecord`, and the internal factory
+`createGatePendingAttemptEvaluator(dependencies)`; it closes over those ports and
+returns `{ evaluateGatePendingAttempt, appendBlockedAcceptanceIfMissing }` and owns one private
+decision-identity tail map shared by both public entry points. Every helper in the
 following pseudocode is a closure in that factory or a pure exported lookup/identity function. The
 hook/runtime layer creates exactly one evaluator with its log, Authorization, lifecycle, rule, and
 notifier adapters, so `evaluateGatePendingAttempt(context)` never reads an implicit singleton or a
 caller-supplied Authorization object.
+
+`decisionIdentityKey(identity)` uses exactly the authoritative identity: task keys contain
+`authorizationId`, `taskId`, and `attemptId`; plan keys contain `authorizationId`, `planPath`,
+`finalizationAttemptId`, and `finalReviewRound`. `serializeDecisionIdentity(correlation, operation)`
+is a module-private factory helper, not a generic queue utility or authority store. Its per-key
+Promise-tail implementation waits for a predecessor after absorbing predecessor rejection, installs
+its own tail before executing `operation`, releases that tail only after `operation` settles, and
+removes the map entry only if it still owns the current tail. Therefore a rejected predecessor cannot
+poison the queue, an old cleanup cannot delete a newer tail, and a subsequent operation cannot begin
+before the current operation finishes. The map is discarded on restart; durable records alone remain
+the restart authority.
+
+```ts
+const decisionTails = new Map<string, Promise<void>>();
+
+type DecisionIdentity =
+  | Pick<TaskExecutionRef, "authorizationId" | "taskId" | "attemptId">
+  | Pick<
+      FinalReviewCorrelation,
+      "authorizationId" | "planPath" | "finalizationAttemptId" | "finalReviewRound"
+    >;
+
+function decisionIdentityForContext(context: GatePendingAttemptContext): DecisionIdentity {
+  return context.scope === "task"
+    ? context.taskExecutionRef
+    : {
+        authorizationId: context.authorizationId,
+        planPath: context.planPath,
+        finalizationAttemptId: context.finalizationAttemptId,
+        finalReviewRound: context.finalReviewRound,
+      };
+}
+
+function decisionIdentityForCorrelation(correlation: ReviewCorrelation): DecisionIdentity {
+  return correlation.reviewKind === "task-review"
+    ? correlation.taskExecutionRef
+    : {
+        authorizationId: correlation.authorizationId,
+        planPath: correlation.planPath,
+        finalizationAttemptId: correlation.finalizationAttemptId,
+        finalReviewRound: correlation.finalReviewRound,
+      };
+}
+
+async function serializeDecisionIdentity<T>(
+  identity: DecisionIdentity,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = decisionIdentityKey(identity);
+  const predecessor = (decisionTails.get(key) ?? Promise.resolve()).catch(() => undefined);
+  let releaseCurrent!: () => void;
+  const currentCompletion = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const currentTail = predecessor.then(() => currentCompletion);
+  decisionTails.set(key, currentTail);
+
+  await predecessor;
+  try {
+    return await operation();
+  } finally {
+    releaseCurrent();
+    if (decisionTails.get(key) === currentTail) decisionTails.delete(key);
+  }
+}
+```
+
+Expose only these factory closures to hook/runtime consumers:
+
+```ts
+const evaluateGatePendingAttempt = (context: GatePendingAttemptContext) =>
+  serializeDecisionIdentity(decisionIdentityForContext(context), () =>
+    evaluateGatePendingAttemptWithinDecisionIdentity(context),
+  );
+
+const appendBlockedAcceptanceIfMissing = (
+  correlation: ReviewCorrelation,
+  envelope: Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">,
+) =>
+  serializeDecisionIdentity(decisionIdentityForCorrelation(correlation), () =>
+    appendBlockedAcceptanceWithinDecisionIdentity(correlation, envelope),
+  );
+```
 All log reads, decision appends, Authorization lookups, lifecycle appends, and advisory writes in this
 task are injected ports supplied by `ObservationHandler` / `JusticePlugin`; `src/core` does not import
 `ObservationLogStore`, `AuthorizationStore`, runtime adapters, or notifier implementations directly.
@@ -1450,6 +1543,81 @@ it.each([gateUnavailable, gateError, insufficientEvidence])(
 );
 ```
 
+Add the following RED cases to the named Task 3.2 suites. They use the real current producer shape,
+not an unsafe cast or a synthetic legacy approximation:
+
+Define `normalObservationRecord`, `writeOneShard`, and `arrangeCurrentGatePendingWith` as local test
+fixtures in their named test files before using them below. `normalObservationRecord(sequence)` returns
+the existing valid ObservationRecord fixture with only its sequence replaced;
+`writeOneShard(records)` serializes those records into one valid physical shard; and
+`arrangeCurrentGatePendingWith(records)` seeds the existing lifecycle fixture with the supplied durable
+records. They are not new production symbols, so RED failures remain behavior failures.
+
+```ts
+const legacyTaskGateRecord = {
+  ...decisionEnvelope,
+  taskId: currentTaskExecutionRef.taskId,
+  gateType: "task",
+  ...gateAudit,
+} as const;
+
+it("accepts a schemaVersion 1 legacy task Gate record without taskExecutionRef", () => {
+  expect(() => validateRecordSchema(legacyTaskGateRecord)).not.toThrow();
+  expect(project([legacyTaskGateRecord], "2026-09-05T00:00:00.000Z").tasks.get("task-1"))
+    .toMatchObject({ lastVerdict: "PASS" });
+});
+
+it("keeps a physical shard readable around a legacy task Gate record", async () => {
+  await writeOneShard([
+    normalObservationRecord(1),
+    { ...legacyTaskGateRecord, sequence: 2 },
+    normalObservationRecord(3),
+  ]);
+  await expect(store.readAll()).resolves.toHaveLength(3);
+  expect(store.getLastReadIntegrity()).toEqual({ hasIntegrityViolation: false });
+});
+
+it("excludes a legacy task Gate from current authority and Acceptance", async () => {
+  await arrangeCurrentGatePendingWith([legacyTaskGateRecord]);
+  expect(findCurrentGateDecision([legacyTaskGateRecord], currentTaskCorrelation)).toEqual({
+    kind: "missing",
+  });
+  await evaluateGatePendingAttempt(gatePendingContext);
+  expect(recordAcceptanceDecision).not.toHaveBeenCalled();
+  expect(projectedTaskState()).toBe("gate_pending");
+});
+
+it("rejects a malformed present taskExecutionRef instead of reading it as legacy", () => {
+  expect(() =>
+    validateRecordSchema({ ...legacyTaskGateRecord, taskExecutionRef: { attemptId: "attempt-1" } }),
+  ).toThrow();
+});
+```
+
+Keep the existing four-new-variant validation fixture and add replay fixtures for each new task Gate,
+plan Gate, task Acceptance, and plan Acceptance variant. Put the exact legacy validation and
+malformed-half-new tests in `tests/runtime/validation.test.ts`; put the three-line single-physical-shard
+fixture in `tests/runtime/observation-log-integrity.test.ts`; put compatibility projection coverage in
+`tests/core/v2/state-projection.test.ts`; and put authoritative lookup / no-Acceptance-promotion
+coverage in `tests/core/acceptance-decision.test.ts`. These tests must fail for the intended missing
+compatibility behavior, not because a symbol is undefined.
+
+Add barrier-coordinated concurrent RED tests in `tests/core/acceptance-decision.test.ts` against the
+factory's public entry points. Release all callers at a barrier *before* they enter the decision
+serialization boundary; pause the first `evaluateRules` result until the other calls are pending, then
+release it. This creates actual overlapping invocations without blocking a correctly serialized
+critical section. Cover all of the following:
+
+- Two concurrent `evaluateGatePendingAttempt` calls for one `gate_pending` task identity evaluate Gate authority once, append exactly one durable GateDecision and one durable AcceptanceDecision, apply one downstream lifecycle transition, and return no integrity conflict.
+- With one durable authoritative GateDecision but no AcceptanceDecision, two concurrent recoveries append exactly one AcceptanceDecision and return no conflict.
+- Three overlapping calls for one identity maintain maximum one active decision operation, append one GateDecision and one AcceptanceDecision, and leave the factory's private `decisionTails` map empty only after the final operation. Arrange A's completion after B and C have installed tails so the assertion detects an old cleanup deleting a newer tail.
+- Concurrent blocked paths, including an evaluator failure and insufficient evidence, use the same shared boundary through `appendBlockedAcceptanceIfMissing` and append exactly one blocked AcceptanceDecision.
+- When inexpensive, a different TaskExecutionRef or Finalization identity can enter its own boundary while the first identity is paused; it must not wait on an unrelated global lock.
+
+The tests must use only existing dependency ports and a private-field cast through `unknown` when
+observing `decisionTails`; do not add test-only production DI. They must prove overlap with a barrier
+and controlled promises, not claim concurrency idempotency from sequential invocations.
+
 - [ ] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts`
@@ -1575,6 +1743,14 @@ export type TaskGateDecisionPayload = GateDecisionFields & {
   readonly taskExecutionRef: TaskExecutionRef;
 };
 
+// Read compatibility only. It is deliberately not a member of GateDecision.
+export type LegacyTaskGateDecisionPayload = GateDecisionFields & {
+  readonly recordType: "decision";
+  readonly gateType: "task";
+  readonly taskId: string;
+  readonly taskExecutionRef?: undefined;
+};
+
 export type PlanGateDecisionPayload = GateDecisionFields & {
   readonly recordType: "decision";
   readonly gateType: "plan";
@@ -1603,6 +1779,7 @@ export type PlanAcceptanceDecisionPayload = {
 };
 
 export type DecisionPayload =
+  | LegacyTaskGateDecisionPayload
   | TaskGateDecisionPayload
   | PlanGateDecisionPayload
   | TaskAcceptanceDecisionPayload
@@ -1614,6 +1791,7 @@ export type AcceptanceDecisionPayload =
 export type PendingDecisionRecord = PendingEnvelope & DecisionPayload;
 export type DecisionRecord = PersistedEnvelope & DecisionPayload;
 export type TaskGateDecision = PersistedEnvelope & TaskGateDecisionPayload;
+export type LegacyTaskGateDecision = PersistedEnvelope & LegacyTaskGateDecisionPayload;
 export type PlanGateDecision = PersistedEnvelope & PlanGateDecisionPayload;
 export type TaskAcceptanceDecision = PersistedEnvelope & TaskAcceptanceDecisionPayload;
 export type PlanAcceptanceDecision = PersistedEnvelope & PlanAcceptanceDecisionPayload;
@@ -1704,6 +1882,14 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
     }
     validateGateFields(r);
     if (r.gateType === "task") {
+      // Property presence selects the new schema. Invalid present data must not
+      // downgrade to the legacy branch.
+      if (!Object.hasOwn(r, "taskExecutionRef")) {
+        if (!isNonEmptyString(r.taskId)) {
+          throw new Error("Invalid legacy task GateDecision");
+        }
+        return;
+      }
       if (
         !isTaskExecutionRef(r.taskExecutionRef) ||
         !isNonEmptyString(r.taskId) ||
@@ -1763,6 +1949,10 @@ function applyDecisionEvent(
   taskState.status = event.verdict;
 }
 
+// Legacy task Gate records remain compatibility projection input only. The
+// authoritative lookup, Acceptance derivation, and lifecycle code use the
+// separate isAuthoritativeGateDecisionRecord predicate below.
+
 // src/core/v2/persistence-redaction.ts
 // Replace only the decision branch at the top of the existing redaction boundary;
 // keep the observation-record switch below it unchanged.
@@ -1785,6 +1975,7 @@ import type {
   DecisionPayload,
   GateDecision,
   GateDecisionPayload,
+  LegacyTaskGateDecision,
   PendingDecisionRecord,
 } from "./v2/decision-model";
 import type { GatePendingAttemptContext } from "./v2/gate-context";
@@ -1810,11 +2001,22 @@ function sameTaskExecutionRef(left: TaskExecutionRef, right: TaskExecutionRef): 
   );
 }
 
-function isGateDecisionRecord(record: PersistedLogRecord): record is GateDecision {
+function isAuthoritativeGateDecisionRecord(record: PersistedLogRecord): record is GateDecision {
   return (
     record.recordType === "decision" &&
     "gateType" in record &&
-    (record.gateType === "task" || record.gateType === "plan")
+    ((record.gateType === "task" && "taskExecutionRef" in record) || record.gateType === "plan")
+  );
+}
+
+export function isLegacyTaskGateDecisionRecord(
+  record: PersistedLogRecord,
+): record is LegacyTaskGateDecision {
+  return (
+    record.recordType === "decision" &&
+    "gateType" in record &&
+    record.gateType === "task" &&
+    !("taskExecutionRef" in record)
   );
 }
 
@@ -2014,7 +2216,7 @@ async function appendAcceptanceDecisionIfMissing(
   return appendDecisionWithEnvelope(context, payload, writerId);
 }
 
-export async function appendBlockedAcceptanceIfMissing(
+async function appendBlockedAcceptanceWithinDecisionIdentity(
   correlation: ReviewCorrelation,
   envelope: Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">,
 ): Promise<{ readonly kind: "committed" | "already_present" | "failed" }> {
@@ -2052,7 +2254,7 @@ export function findCurrentGateDecision(
   correlation: ReviewCorrelation,
 ): GateDecisionLookup {
   const matches = orderEventsForProjection(records)
-    .filter(isGateDecisionRecord)
+    .filter(isAuthoritativeGateDecisionRecord)
     .filter((record) => gateMatchesCorrelation(record, correlation));
   if (matches.length === 0) return { kind: "missing" };
   if (matches.length > 1) {
@@ -2077,7 +2279,7 @@ export function findCurrentAcceptanceDecision(
   return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
 }
 
-export async function evaluateGatePendingAttempt(
+async function evaluateGatePendingAttemptWithinDecisionIdentity(
   context: GatePendingAttemptContext,
 ): Promise<GatePendingAttemptResult> {
   const records = await readDurableRecords();
@@ -2289,6 +2491,21 @@ export function evaluate(
 }
 ```
 
+Wrap both public factory entry points with `serializeDecisionIdentity`. Inside its single operation,
+perform, in order, the latest durable-record read, lifecycle and Authorization revalidation, Gate and
+Acceptance lookup, Gate evaluation, GateDecision append, durable-record re-read, Acceptance derivation
+and append, and downstream lifecycle application. The complete existing body of
+`evaluateGatePendingAttempt` moves inside this wrapper. `appendBlockedAcceptanceIfMissing` is likewise
+a queued public wrapper that invokes a within-boundary blocked-Acceptance helper; it must not re-enter
+the same boundary from `evaluateGatePendingAttempt`.
+
+`appendGateDecision`, `appendAcceptanceDecisionIfMissing`, `ensureGateAcceptance`, and the blocked
+Acceptance helper are module-private within-boundary helpers. Their contract is that the caller already
+owns the exact decision-identity serialization boundary. They re-read durable records only as part of
+that operation and never create an independent queue. Tasks 3.4 and 3.6 receive only the factory's
+queued `appendBlockedAcceptanceIfMissing` entry point, so every writer of one AcceptanceDecision stream
+shares the same boundary.
+
 The module-private helpers used above have fixed responsibilities: the injected
 `readDurableRecords()` port reads through `ObservationLogStore.readAll()`; `currentReviewCorrelationFor()` derives the current task review
 round or final-review correlation from the Task 3.1/3.4 projection and trusted authorization
@@ -2331,6 +2548,12 @@ missing or when `state.lifecycle.currentTaskExecutionRefs.get(taskId)` is absent
 ref, the invoking agent/session, projected review summary, and `trigger: "task_complete"`, then
 handle `SkipGateEvaluation` before serializing the result. The tool remains internal and must not
 be added to `OpenCodeAdapter.getTools()`.
+
+GREEN requires all legacy and new decision variants to replay without shard loss; legacy task Gate
+records to remain excluded from authoritative lookup and Acceptance; the malformed half-new record to
+be rejected; and every same-identity concurrent test to produce exactly one GateDecision and one
+AcceptanceDecision without an integrity conflict. Sequential recovery remains idempotent, and restart
+reconstructs state only from durable records.
 
 - [ ] **Step 4: Confirm GREEN**
 
@@ -6024,6 +6247,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-03 doctor effective category configuration              | 1.2                     | JSONC parsing, source precedence, missing category, unreadable/unsupported source, redaction                                                                                                                                     |
 | JUS-P0-04 task lifecycle                                       | 3.1                     | full `authorized → in_progress → worker_reported → evidence_pending → review_pending` trace, fresh attempt, restart reconstruction                                                                                               |
 | JUS-P0-04 attempt-scoped Evidence / Review / Gate              | 3.1, 3.2, 3.4, 3.5, 3.6 | stale attempt/call/child/artifact rejection, reviewRound reset on rework                                                                                                                                                         |
+| concurrent GateDecision idempotency                            | 3.2                     | same-identity concurrent evaluation produces one GateDecision, one AcceptanceDecision, and one lifecycle transition without conflict                                                                                               |
+| concurrent AcceptanceDecision idempotency                      | 3.2                     | same-identity concurrent recovery after a durable GateDecision produces one AcceptanceDecision without conflict                                                                                                                   |
+| decision identity serialization                                | 3.2                     | barrier-coordinated three-way overlap proves one active critical section, successor-tail preservation, and cleanup only after the final operation                                                                                   |
+| legacy task Gate replay compatibility                          | 3.2                     | exact existing schemaVersion 1 task Gate record without `taskExecutionRef` is accepted by validation and compatibility projection                                                                                                  |
+| legacy shard integrity                                         | 3.2                     | legacy task Gate between two normal observations leaves all three records readable from one physical shard                                                                                                                        |
+| legacy Gate non-authority                                     | 3.2                     | current Gate lookup excludes legacy task Gate; legacy-only input neither generates Acceptance nor promotes `gate_pending`                                                                                                          |
+| new task/plan Gate replay                                      | 3.2                     | strict validation and authoritative lookup accept the new task and plan Gate variants                                                                                                                                            |
+| new task/plan Acceptance replay                                | 3.2                     | strict validation and lookup accept the new task and plan Acceptance variants                                                                                                                                                     |
 | artifact reservation anti-replay                               | 3.4                     | safe path, collision retry with fresh UUID, bounded collision exhaustion, exists/directory I/O failure, invalid path, internal failure, unusable durable reservation and advisory                                                |
 | unusable reservation blocks Acceptance                         | 3.4, 3.6                | fail-open review task execution, worker input without artifact path, no filesystem read or ReviewArtifact, blocked Acceptance                                                                                                    |
 | same-parent review claim serialization                         | 3.4                     | 2-call claim race and barrier-controlled overlapping 3-call race permit one critical section and exactly one claimed transition, binding, reservation, and authoritative call/artifact identity                                  |
@@ -6083,7 +6314,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality                       | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests                                                                                                                                                                                                                                                                                                |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
-| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only, authorization guard before Gate and Acceptance append, current-identity Gate/Acceptance idempotency, decision ordering, blocked tests                                                                                                                                                                                                                                                                                                                                                                                          |
+| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; blocked tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -6092,7 +6323,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
-Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
 <!-- markdownlint-enable MD013 MD060 -->
 
