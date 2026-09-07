@@ -377,7 +377,8 @@ leaves at most one active binding per session; `AuthorizationStore.release(autho
 Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`; and the
 domain-private `mergeAuthorizationBindings(mine: ReadonlyArray<ApprovedPlanBinding>,
 theirs: ReadonlyArray<ApprovedPlanBinding>): ReadonlyArray<ApprovedPlanBinding>` used only as this
-store's `AtomicPersistence.merge` hook.
+store's `AtomicPersistence.merge` hook. It is exported from this source module only so its array
+contract can be tested; it is not re-exported by a package barrel and is not a public Justice API.
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
 
@@ -421,7 +422,9 @@ it("generates a fresh authorizationId on reapproval", async () => {
 });
 
 it("never lets a stale active merge overwrite the same terminal authorizationId", () => {
-  expect(mergeBindings(staleActive, releasedBinding)).toEqual(releasedBinding);
+  expect(mergeAuthorizationBindings([staleActive], [releasedBinding])).toEqual([
+    releasedBinding,
+  ]);
 });
 
 it("preserves authorization cardinality through AtomicPersistence initial merge", async () => {
@@ -532,7 +535,7 @@ it("does not publish a superseding binding when the single authoritative save fa
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
-Expected: FAIL because authorization persistence and hydration do not exist.
+Expected: FAIL because authorization persistence, hydration, and terminal-dominant array merge do not exist; after the import resolves, the terminal-dominance assertion fails until the merge implementation is added.
 
 - [ ] **Step 3: Implement the authorization store**
 
@@ -577,7 +580,7 @@ export type ApprovedPlanBinding =
     })
   | (ApprovedPlanBindingBase & { readonly status: "released"; readonly releasedAt: string });
 
-function mergeAuthorizationBindings(
+export function mergeAuthorizationBindings(
   mine: ReadonlyArray<ApprovedPlanBinding>,
   theirs: ReadonlyArray<ApprovedPlanBinding>,
 ): ReadonlyArray<ApprovedPlanBinding> {
@@ -1076,8 +1079,8 @@ git commit -m "test: child session correlation runtime境界を検証"
 - Test: `tests/core/justice-plugin-routing.test.ts`
 
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; review
-`TaskCallPurpose`; durable log append; `FileReader.fileExists`; `FileWriter.mkdir`; safe-relative-path
-validation.
+`TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; `FileReader.fileExists`;
+`FileWriter.mkdir`; safe-relative-path validation.
 
 **Produces:** `ReviewRequiredDirective`; durable `null -> pending` and `pending -> claimed` records;
 `TaskCallBinding`; Design §4.10 `ReviewArtifactReservation`; `claimReviewDispatch(input):
@@ -1088,7 +1091,11 @@ advisory: string }`; a blocked outcome exposes neither `callId` nor `artifactId`
 `serializeParentSessionClaim<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T>` is a
 module-private, parent-session keyed queue helper. `terminalizeReviewFailure(claim: ClaimedReviewDispatch,
 reason: "review_execution_failed" | "lost_conclusive"): Promise<ReviewFailureOutcome>` appends the terminal
-record before appending the next pending slot.
+record and delegates retry-pending recovery to `ensureReviewRetryPendingAfterTerminalFailure`. The
+module-private `nextReviewRetryCorrelation(correlation: ReviewCorrelation): ReviewCorrelation` and
+`ensureReviewRetryPendingAfterTerminalFailure(terminal: RetryableTerminalFailure):
+Promise<ReviewFailureOutcome>` and `recoverReviewDispatchesAfterRestart(): Promise<void>` operate only in the
+ReviewDispatch domain; no generic retry, recovery, transaction, lock, or CAS abstraction is added.
 
 - [ ] **Step 1: Write the failing dispatch, claim, and recovery tests**
 
@@ -1260,6 +1267,26 @@ it("terminalizes conclusive loss before retrying the same task attempt", async (
   });
 });
 
+it("retries a task review with the same TaskExecutionRef and only reviewRound + 1", async () => {
+  const retry = await terminalizeReviewFailure(currentClaim, "review_execution_failed");
+  if (retry.kind !== "retried" || retry.correlation.reviewKind !== "task-review") {
+    throw new Error("expected task-review retry");
+  }
+
+  expect(retry.correlation).toEqual({
+    reviewKind: "task-review",
+    taskExecutionRef: currentTaskExecutionRef,
+    reviewRound: currentReviewRound + 1,
+  });
+  expect(retry.correlation).not.toHaveProperty("finalReviewRound");
+  expect(projectReviewDispatchSlots(await readDurableRecords()).currentTaskReviewCorrelation()).toEqual(
+    retry.correlation,
+  );
+  expect(projectReviewDispatchSlots(await readDurableRecords()).isCurrent(oldTaskReviewCorrelation)).toBe(
+    false,
+  );
+});
+
 it.each([
   ["reviewer execution failure", "review_execution_failed"],
   ["transport failure", "review_execution_failed"],
@@ -1269,7 +1296,9 @@ it.each([
   const replayed = projectReviewDispatchSlots(await readDurableRecords());
 
   expect(retry).toMatchObject({ kind: "retried" });
-  if (retry.kind !== "retried") throw new Error("expected final review retry");
+  if (retry.kind !== "retried" || retry.correlation.reviewKind !== "final-review") {
+    throw new Error("expected final review retry");
+  }
   expect(durableTerminal()).toMatchObject({ terminalReason: reason });
   expect(retry.correlation).toMatchObject({
     finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
@@ -1280,6 +1309,74 @@ it.each([
     expect.objectContaining({ from: "final_rework_required", to: "final_review_pending" }),
   );
   expect(replayed.currentFinalReviewCorrelation()).toEqual(retry.correlation);
+});
+
+it("retries a Final Review with the same finalizationAttemptId and only finalReviewRound + 1", async () => {
+  const retry = await terminalizeReviewFailure(currentFinalClaim, "review_execution_failed");
+  if (retry.kind !== "retried" || retry.correlation.reviewKind !== "final-review") {
+    throw new Error("expected final-review retry");
+  }
+
+  expect(retry.correlation).toEqual({
+    reviewKind: "final-review",
+    planPath: currentFinalClaim.correlation.planPath,
+    authorizationId: currentFinalClaim.correlation.authorizationId,
+    planFingerprint: currentFinalClaim.correlation.planFingerprint,
+    finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  expect(retry.correlation).not.toHaveProperty("reviewRound");
+  expect(projectReviewDispatchSlots(await readDurableRecords()).isCurrent(oldFinalReviewCorrelation)).toBe(
+    false,
+  );
+});
+
+it("recovers a terminal-to-pending crash exactly once and only dispatches after durable pending", async () => {
+  failNextReviewPendingAppend();
+  await expect(
+    terminalizeReviewFailure(currentFinalClaim, "review_execution_failed"),
+  ).resolves.toEqual({ kind: "blocked" });
+  expect(trace).toEqual(["terminal-committed", "next-pending-append-failed"]);
+  expect(injectedReviewDirectives()).toEqual([]);
+
+  restartReviewDispatchRepository();
+  await recoverReviewDispatchesAfterRestart();
+  expect(trace).toEqual([
+    "terminal-committed",
+    "next-pending-append-failed",
+    "next-pending-committed",
+    "directive-injected",
+  ]);
+  expect(durableTransitions(null, "pending", nextFinalReviewCorrelation())).toHaveLength(1);
+  expect(injectedReviewDirectives()).toEqual([
+    { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+  ]);
+
+  await recoverReviewDispatchesAfterRestart();
+  expect(durableTransitions(null, "pending", nextFinalReviewCorrelation())).toHaveLength(1);
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+  expect(injectedReviewDirectives()).toEqual(
+    expect.arrayContaining([
+      { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+    ]),
+  );
+});
+
+it("replays one current Final Review retry and rejects its old PostToolUse, artifact, and Gate", async () => {
+  failNextReviewPendingAppend();
+  await terminalizeReviewFailure(currentFinalClaim, "lost_conclusive");
+  restartReviewDispatchRepository();
+  await recoverReviewDispatchesAfterRestart();
+
+  expect(currentFinalReviewCorrelation()).toEqual({
+    ...currentFinalClaim.correlation,
+    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
+  });
+  await consumeReviewCompletion(oldFinalRoundPostToolUse);
+  await evaluateGatePendingAttempt(oldFinalRoundGateContext);
+  expect(readArtifact).not.toHaveBeenCalled();
+  expect(evaluate).not.toHaveBeenCalled();
+  expect(currentFinalReviewCorrelation()).not.toEqual(oldFinalReviewCorrelation);
 });
 
 it("keeps an uncertain recovered claim blocked without redispatch", async () => {
@@ -1294,7 +1391,10 @@ it("keeps an uncertain recovered claim blocked without redispatch", async () => 
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts`
 
-Expected: FAIL because durable dispatch, trusted call binding, and review directives do not exist.
+Expected: FAIL at the retry assertions: the pre-change implementation reads `reviewRound` from the union,
+does not reconstruct a missing retry pending after restart, and does not establish
+`terminal-committed -> next-pending-committed -> directive-injected`. The test setup supplies all fixtures
+and mocks; the RED failure is an assertion failure, not an unresolved symbol.
 
 - [ ] **Step 3: Implement durable dispatch and claim**
 
@@ -1326,9 +1426,13 @@ add only `artifactPath` to the worker input. For an unusable result, omit the pa
 
 Do not create `DelegatedExecutionBinding` here: a child session has not yet been authoritatively observed.
 Canonicalize `sp-review` and `sp-final-review` to `run_in_background = false` before the claim. A terminal
-slot is immutable; pending recovery reissues the same directive, recovered claimed slots wait for matching
-PostToolUse, conclusive loss writes `lost_conclusive` before a new review round, and uncertain claimed
-recovery does not redispatch.
+slot is immutable. A restart recovery first re-reads the durable log and projection. For each terminal slot
+whose terminal reason is only `review_execution_failed` or `lost_conclusive`, it derives the next correlation,
+checks whether that exact parent-session/correlation slot is already pending, claimed, or terminal, and appends
+`null -> pending` only when it is absent. It injects the next directive only after the pending record is durable.
+When the next slot already exists, recovery may reissue that same directive as permitted by Design §4.8.2; it
+must not append a second pending record or create a second claim. Recovered claimed slots wait for matching
+PostToolUse, and uncertain claimed recovery does not redispatch.
 
 ```ts
 type ClaimedReviewDispatch = {
@@ -1384,32 +1488,165 @@ async function terminalizeReviewFailure(
   claim: ClaimedReviewDispatch,
   terminalReason: "review_execution_failed" | "lost_conclusive",
 ): Promise<ReviewFailureOutcome> {
-  const terminal = await appendReviewDispatchTransition({
-    recordType: "observation",
-    kind: "review_dispatch_transition",
-    transitionId: randomUUID(),
-    parentSessionId: claim.parentSessionId,
-    correlation: claim.correlation,
-    expectedCategory: claim.expectedCategory,
-    from: "claimed",
-    to: "terminal",
-    callId: claim.callId,
-    terminalReason,
-  });
-  if (terminal.kind !== "committed") return { kind: "blocked" };
+  return serializeParentSessionClaim(claim.parentSessionId, async () => {
+    const existing = findRetryableTerminalFailure(
+      await readDurableRecords(),
+      claim.parentSessionId,
+      claim.correlation,
+    );
+    if (existing !== undefined) {
+      return ensureReviewRetryPendingWithinParentSessionClaim(existing);
+    }
 
-  const correlation = { ...claim.correlation, reviewRound: claim.correlation.reviewRound + 1 };
+    const terminal = await appendReviewDispatchTransition({
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: randomUUID(),
+      parentSessionId: claim.parentSessionId,
+      correlation: claim.correlation,
+      expectedCategory: claim.expectedCategory,
+      from: "claimed",
+      to: "terminal",
+      callId: claim.callId,
+      terminalReason,
+    });
+    if (terminal.kind !== "committed") return { kind: "blocked" };
+    return ensureReviewRetryPendingWithinParentSessionClaim(terminal.record);
+  });
+}
+
+function nextReviewRetryCorrelation(correlation: ReviewCorrelation): ReviewCorrelation {
+  if (correlation.reviewKind === "task-review") {
+    return {
+      reviewKind: "task-review",
+      taskExecutionRef: correlation.taskExecutionRef,
+      reviewRound: correlation.reviewRound + 1,
+    };
+  }
+  return {
+    reviewKind: "final-review",
+    planPath: correlation.planPath,
+    authorizationId: correlation.authorizationId,
+    planFingerprint: correlation.planFingerprint,
+    finalizationAttemptId: correlation.finalizationAttemptId,
+    finalReviewRound: correlation.finalReviewRound + 1,
+  };
+}
+
+type RetryableTerminalFailure = ReviewDispatchTransitionRecord & {
+  readonly from: "claimed";
+  readonly to: "terminal";
+  readonly terminalReason: "review_execution_failed" | "lost_conclusive";
+};
+
+function isRetryableTerminalFailure(
+  record: PersistedLogRecord,
+): record is RetryableTerminalFailure {
+  if (record.kind !== "review_dispatch_transition") return false;
+  return (
+    record.from === "claimed" &&
+    record.to === "terminal" &&
+    (record.terminalReason === "review_execution_failed" || record.terminalReason === "lost_conclusive")
+  );
+}
+
+function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
+  if (left.reviewKind !== right.reviewKind) return false;
+  if (left.reviewKind === "task-review" && right.reviewKind === "task-review") {
+    return (
+      left.taskExecutionRef.authorizationId === right.taskExecutionRef.authorizationId &&
+      left.taskExecutionRef.taskId === right.taskExecutionRef.taskId &&
+      left.taskExecutionRef.attemptId === right.taskExecutionRef.attemptId &&
+      left.reviewRound === right.reviewRound
+    );
+  }
+  if (left.reviewKind === "final-review" && right.reviewKind === "final-review") {
+    return (
+      left.planPath === right.planPath &&
+      left.authorizationId === right.authorizationId &&
+      left.planFingerprint.algorithm === right.planFingerprint.algorithm &&
+      left.planFingerprint.value === right.planFingerprint.value &&
+      left.finalizationAttemptId === right.finalizationAttemptId &&
+      left.finalReviewRound === right.finalReviewRound
+    );
+  }
+  return false;
+}
+
+function findRetryableTerminalFailure(
+  records: ReadonlyArray<PersistedLogRecord>,
+  parentSessionId: string,
+  correlation: ReviewCorrelation,
+): RetryableTerminalFailure | undefined {
+  return records.find(
+    (record): record is RetryableTerminalFailure =>
+      isRetryableTerminalFailure(record) &&
+      record.parentSessionId === parentSessionId &&
+      sameReviewCorrelation(record.correlation, correlation),
+  );
+}
+
+async function ensureReviewRetryPendingAfterTerminalFailure(
+  terminal: RetryableTerminalFailure,
+): Promise<ReviewFailureOutcome> {
+  return serializeParentSessionClaim(terminal.parentSessionId, async () =>
+    ensureReviewRetryPendingWithinParentSessionClaim(terminal),
+  );
+}
+
+async function ensureReviewRetryPendingWithinParentSessionClaim(
+  terminal: RetryableTerminalFailure,
+): Promise<ReviewFailureOutcome> {
+  const correlation = nextReviewRetryCorrelation(terminal.correlation);
+  const slots = projectReviewDispatchSlots(await readDurableRecords());
+  const existing = slots.find(
+    (slot) =>
+      slot.key.parentSessionId === terminal.parentSessionId &&
+      sameReviewCorrelation(slot.key.correlation, correlation),
+  );
+  if (existing?.state === "claimed" || existing?.state === "terminal") {
+    return { kind: "retried", correlation };
+  }
+  if (existing?.state === "pending") {
+    await injectReviewRequiredDirective({ kind: "review_required", correlation });
+    return { kind: "retried", correlation };
+  }
+
   const pending = await appendReviewDispatchTransition({
     recordType: "observation",
     kind: "review_dispatch_transition",
     transitionId: randomUUID(),
-    parentSessionId: claim.parentSessionId,
+    parentSessionId: terminal.parentSessionId,
     correlation,
-    expectedCategory: claim.expectedCategory,
+    expectedCategory: terminal.expectedCategory,
     from: null,
     to: "pending",
   });
-  return pending.kind === "committed" ? { kind: "retried", correlation } : { kind: "blocked" };
+  if (pending.kind !== "committed") return { kind: "blocked" };
+  await injectReviewRequiredDirective({ kind: "review_required", correlation });
+  return { kind: "retried", correlation };
+}
+
+async function recoverReviewDispatchesAfterRestart(): Promise<void> {
+  const records = await readDurableRecords();
+  const retryableTerminals = records.filter(isRetryableTerminalFailure);
+  for (const record of retryableTerminals) {
+    await ensureReviewRetryPendingAfterTerminalFailure(record);
+  }
+  const slots = projectReviewDispatchSlots(await readDurableRecords());
+  for (const slot of slots) {
+    if (slot.state !== "pending") continue;
+    const isRetryPending = retryableTerminals.some(
+      (terminal) =>
+        terminal.parentSessionId === slot.key.parentSessionId &&
+        sameReviewCorrelation(nextReviewRetryCorrelation(terminal.correlation), slot.key.correlation),
+    );
+    if (isRetryPending) continue;
+    await injectReviewRequiredDirective({
+      kind: "review_required",
+      correlation: slot.key.correlation,
+    });
+  }
 }
 ```
 
@@ -1659,7 +1896,9 @@ it.each([
   const replayed = project(await readDurableRecords(), now);
 
   expect(retry).toMatchObject({ kind: "retried" });
-  if (retry.kind !== "retried") throw new Error("expected final review retry");
+  if (retry.kind !== "retried" || retry.correlation.reviewKind !== "final-review") {
+    throw new Error("expected final review retry");
+  }
   expect(readArtifact).not.toHaveBeenCalled();
   expect(evaluate).not.toHaveBeenCalled();
   expect(replayed.currentFinalization()).toMatchObject({
@@ -1696,6 +1935,14 @@ the next pending correlation retains `finalizationAttemptId`, increments `finalR
 `final_review_pending` current; only actual final rework creates a fresh finalization identity. An `unusable` reservation
 does no filesystem read, creates no `ReviewArtifactV1`, cannot terminalize as clean, does not invoke Gate,
 and leaves mandatory Acceptance blocked while runtime task execution remains fail-open.
+
+Review failure entry points must call Task 3.4's `terminalizeReviewFailure`; they must not construct a retry
+correlation, read either round field, append a retry pending transition, or inject a retry directive themselves.
+The helper discriminates `ReviewCorrelation`, preserves the task or finalization identity, and is the only
+source of the next round. Startup recovery calls Task 3.4's `recoverReviewDispatchesAfterRestart` before a
+recovered pending slot is offered to the Controller. Thus terminal failure followed by a failed pending append
+remains blocked without changing the terminal tombstone, and a later recovery can commit exactly one next pending
+slot before it injects a directive.
 
 Do not add `appendBatch`: the composite terminal record is the existing single-append atomicity boundary.
 Any mismatch in parent session, parent call ID, purpose, correlation, artifact ID, review round, child
@@ -2117,11 +2364,15 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | atomic review claim                                             | 3.4                     | critical section re-reads latest durable records, projects, validates one pending slot, reserves, then appends claimed before publishing authority                                      |
 | JUS-P0-04 review terminal atomicity                            | 3.6                     | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance                                                                |
 | terminal artifact classification                               | 3.6                     | clean → `completed`/Gate, findings → `completed_with_findings`/direct rework, incomplete → `review_incomplete`/blocked                                                                 |
-| Task review-only retry                                         | 3.4, 3.6                | reviewer execution, transport failure, and conclusive loss terminalize; retain TaskExecutionRef; issue `reviewRound + 1`; reject the old round                                         |
+| Task Review failure retry                                      | 3.4, 3.6                | `retries a task review with the same TaskExecutionRef and only reviewRound + 1` verifies the retained ref, incremented task round, absent `finalReviewRound`, and stale old-round rejection |
 | Task implementation rework                                     | 3.1, 3.6                | fresh TaskExecutionRef and `reviewRound = 1` only after actual rework                                                                                                                  |
-| Final Review-only retry                                        | 3.1, 3.4, 3.6           | reviewer execution, transport failure, and conclusive loss keep `final_review_pending`, retain finalizationAttemptId, increment finalReviewRound, reject stale Final Review/Gate, and replay one current correlation |
+| Final Review failure retry                                     | 3.1, 3.4, 3.6           | `retries a Final Review with the same finalizationAttemptId and only finalReviewRound + 1` verifies retained identity, incremented final round, absent `reviewRound`; final stale PostToolUse/artifact/Gate replay is rejected |
 | Final actual rework                                            | 3.1, 3.6                | findings or Final Gate WARN/FAIL enter final_rework_required, then issue fresh finalizationAttemptId and incremented finalReviewRound                                                    |
-| conclusive loss recovery                                       | 3.4, 3.6                | `lost_conclusive` terminalization occurs before a new round                                                                                                                            |
+| terminal failure to retry-pending recovery                     | 3.4                     | `recovers a terminal-to-pending crash exactly once and only dispatches after durable pending` simulates committed terminal plus failed pending append, restart, and recovery                  |
+| retry dispatch ordering                                        | 3.4                     | the terminal-to-pending crash test records `terminal-committed -> next-pending-committed -> directive-injected`; failed pending append has no directive                                  |
+| retry recovery idempotency                                     | 3.4                     | the terminal-to-pending crash test runs recovery twice and verifies exactly one next-round `null -> pending` transition                                                               |
+| stale old review round rejection                               | 3.4, 3.6                | task retry rejects old correlation; Final Review restart replay rejects old PostToolUse/artifact consumption/Gate and leaves the new correlation current                               |
+| conclusive loss recovery                                       | 3.4, 3.6                | `lost_conclusive` terminalization occurs before a new round and uses the same union-safe retry helper                                                                                |
 | uncertain claimed recovery                                     | 3.4, 3.6                | no automatic redispatch, artifact read, or Acceptance after restart                                                                                                                    |
 | JUS-P0-04 Gate after `gate_pending`                            | 3.1, 3.2, 3.6           | no early evaluation, terminal review before gate_pending, GateDecision before AcceptanceDecision, unavailable/error blocked                                                            |
 | JUS-P0-04 finalization lifecycle                               | 3.1, 3.2, 3.4, 3.5, 3.6 | review-only retry preserves finalizationAttemptId and increments round; actual rework rotates identity; final review terminalization; stale Final Gate rejection; Final Gate PASS/rework/blocked |
@@ -2142,9 +2393,9 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14           | lifecycle orchestration; review-only versus actual-rework finalization identity; replayed current final correlation tests                                                           |
 | 3.2       | JUS-P0-04, Design §4.6 and §4.11, INV-07, INV-08, INV-10, INV-14           | gate-pending-only, decision ordering, blocked tests                                                                                                                                |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                             | child-session runtime spike                                                                                                                                                        |
-| 3.4       | JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17      | exact parent-session queue primitive, 2-call and overlapping 3-call mutual exclusion, different-parent concurrency, durable claim ordering, reservation collision/I/O/unusable, task and final review failure/retry, conclusive-loss and uncertain-claim recovery tests |
+| 3.4       | JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18 | exact parent-session queue primitive, 2-call and overlapping 3-call mutual exclusion, different-parent concurrency, durable claim ordering, reservation collision/I/O/unusable, discriminated task/final retry correlation, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                     | durable child-binding tests                                                                                                                                                        |
-| 3.6       | JUS-P0-04, Design §4.5, §4.8.1, §4.10, §4.11, INV-13 through INV-18        | unusable no-read blocked path, terminal subtype classification, clean Gate, direct findings rework, incomplete blocking, task retry, final review stale-event/Gate rejection, composite terminal/replay tests |
+| 3.6       | JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-18 | unusable no-read blocked path, terminal subtype classification, clean Gate, direct findings rework, incomplete blocking, Task 3.4 union-safe task/final retry consumption, final review stale-event/Gate rejection, composite terminal/replay tests |
 | 3.7       | JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08                            | accepted-only full progress update tests                                                                                                                                           |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                             | controller routing tests                                                                                                                                                           |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                     | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                            |
