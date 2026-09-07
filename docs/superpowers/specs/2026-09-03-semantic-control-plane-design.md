@@ -715,9 +715,10 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    `review_pending` / `final_review_pending` lifecycle transition の同順で置く。この order は timestamp、
    shard identity、shard 内 sequence による既存 projection order であり、in-memory arrival order を
    authority にしない。したがって restart 前後で同じ candidate が選ばれ、review-only retry と
-   unrelated `ReviewPending` の競合は retry 優先で一意に解決される。Approved Canonical Snapshot は
-   candidate の taskId が current approved task であることの検証に使い、snapshot にない task は
-   candidate にしない。
+   unrelated `ReviewPending` の競合は retry 優先で一意に解決される。task candidate の Canonical
+   Snapshot membership は、candidate の `authorizationId` に一致する durable `active`
+   `ApprovedPlanBinding.canonicalSnapshot` だけを authority として検証する。global / session-agnostic
+   snapshot cache は authority にせず、その snapshot にない task は candidate にしない。
 
    offer は parent-session serialization の内側で最新 durable state を再読・再投影して行う。outstanding
    が 1 件なら candidate を追加せず、0 件なら上記の先頭 candidate だけについて `null → pending` を
