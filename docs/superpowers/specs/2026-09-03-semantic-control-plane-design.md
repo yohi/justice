@@ -452,7 +452,7 @@ export type IncompleteReviewArtifactV1 = ReviewArtifactV1 & {
 - Justice は `ReviewPending` / `FinalReviewPending` 状態の提示と、review worker 実行結果の観測を行う。
 - review worker と元 task / plan との correlation は内部的に `ReviewCorrelation` で保持する。`TaskReviewCorrelation` は `taskExecutionRef` を用いて review と実装 attempt を一対一に紐付ける。
 - `ReviewWorkerResultV1` は review worker が生成する **untrusted reviewer output** である。Justice は `TaskCallBinding` 由来の trusted metadata、worker output、および独立して観測した `ObservedReviewExecutionV1` から `ReviewArtifactV1` を組み立てる。
-- `ObservedReviewExecutionV1` は matching `PostToolUse` と child-session 上の review worker 実行観測の両方から Justice が生成する。`TaskCallBinding` や artifact path の一致だけでは代用できない。観測を確立できない場合、artifact は authoritative にせず mandatory review completion と Acceptance を blocked にする。
+- `ObservedReviewExecutionV1` は matching `PostToolUse` と child-session 上の review worker 実行観測の両方から Justice が生成する。`TaskCallBinding` や artifact path の一致だけでは代用できない。観測を確立できない場合、artifact は authoritative にせず mandatory review completion の precondition を未成立のまま保持する。この pre-Gate blocked state では `AcceptanceDecision` を発行しない。
 - `ReviewArtifactV1` を mandatory review 完了の authoritative record とする。`CleanReviewArtifactV1`（`complete: true` かつ `findings: []`）だけを clean review の完了証拠とする。`ReviewArtifactWithFindingsV1` は review が完了して finding がある証拠であり rework へ、`IncompleteReviewArtifactV1` は review 未完了として blocked へ進める。
 - CodeRabbit / Greptile 等の external review は observed-review 系（例：`.justice/reviews/external-*.jsonl` または `review_observed` event）として取り扱い、mandatory `sp-review` / `sp-final-review` の完了証拠にはならない。
 - `ReviewArtifactV1` の Justice 到達経路（transport）は、Phase 3 では **B（JSON artifact file）に固定する**。reviewer が所定の JSON artifact file を書き、Justice が `TaskCallBinding` の trusted metadata と合わせて読み取る。typed PostToolUse payload は将来候補であり、P0 の transport abstraction、plugin mechanism、adapter、spike task は追加しない。
@@ -677,7 +677,10 @@ export type ReviewDispatchSlot = {
 
 review outcome から terminal record、lifecycle、retry identity への対応は次で一意に定める。ここで
 `task` は task-review、`final` は final-review の対応する lifecycle を表す。`review_pending`
-を blocked のまま保持する場合、Acceptance は発行しない。
+または `final_review_pending` を blocked のまま保持する場合、Acceptance の precondition は未成立であり、
+`AcceptanceDecision` は発行しない。pre-Gate の blocked state は lifecycle、`ReviewDispatchSlot`、
+`ReviewArtifactReservation`、terminal / recovery record、および advisory から再構築し、新しい blocked-state
+record は追加しない。
 
 | Review outcome              | terminalReason             | artifact subtype               | next lifecycle                                                                            | Gate invocation                                | retry/rework identity                                                                                                                                   |
 | --------------------------- | -------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -687,7 +690,7 @@ review outcome から terminal record、lifecycle、retry identity への対応�
 | reviewer execution failure  | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                     |
 | transport failure           | `review_execution_failed`  | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                     |
 | conclusive lost             | `lost_conclusive`          | なし                           | 対応する `review_pending` のまま新しい dispatch を待つ                                    | 実行しない                                     | `task`: 同じ `TaskExecutionRef` / `reviewRound + 1`; `final`: 同じ `finalizationAttemptId` / `finalReviewRound + 1`                                     |
-| uncertain recovered claimed | terminal record を作らない | なし                           | `claimed` を保持し Acceptance を blocked にする                                           | 実行しない                                     | 自動 redispatch/retry なし。restart だけでは round を変更しない                                                                                         |
+| uncertain recovered claimed | terminal record を作らない | なし                           | `claimed` を保持し Acceptance の precondition を未成立にする                              | 実行しない                                     | 自動 redispatch/retry なし。restart だけでは round を変更しない                                                                                         |
 
 `completed` だけが Gate 評価に進む。`completed_with_findings` は Gate を経由せず直接
 rework を要求し、`review_incomplete` と unusable reservation は Gate を呼ばず blocked を維持する。
@@ -698,7 +701,8 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    outstanding には、directive 発行後で未 claim の `pending` と、claim 済みで matching
    `PostToolUse` を待つ `claimed` の両方を含める。将来のキュー項目に対する `pending` transition
    や directive を先行して作成してはならない。pending transition を永続化できない場合、mandatory
-   directive は発行せず、Runtime は fail-open で継続するが、Acceptance は blocked とする。
+   directive は発行せず、Runtime は fail-open で継続する。この pre-Gate condition では Acceptance の
+   precondition を未成立のまま保持し、`AcceptanceDecision` は発行しない。
 
    **Durable candidate derivation and queue order** は新しい persistent queue ではなく、最新の
    durable lifecycle record、Approved Canonical Snapshot、review-dispatch record、および
@@ -727,7 +731,8 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    が 1 件なら candidate を追加せず、0 件なら上記の先頭 candidate だけについて `null → pending` を
    append し、append 成功後だけ directive を inject する。same parent に `pending | claimed` が 2 件以上
    ある corruption は任意の slot を選ばない。new pending、claim、reservation、directive を作成せず、
-   integrity advisory を記録して Acceptance を fail-closed にする。
+   integrity advisory を記録して Acceptance の precondition を fail-closed にする。`AcceptanceDecision` は
+   発行しない。
 
    current outstanding slot の durable terminalization 直後、および restart / replay で Authorization
    hydration、lifecycle / dispatch projection、staged-completion recovery、post-terminal outcome recovery
@@ -751,15 +756,15 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    を authoritative として使用せず、成功後にのみ review worker の実行を開始する。
 4. pending slot が 0 件、複数件、kind / category 不一致、または atomic claim に失敗した
    場合は review の `TaskCallBinding` と artifact reservation を作成しない。Runtime の
-   `task()` 実行は fail-open で継続するが、mandatory review の completion と Acceptance
-   は成立させず、protocol violation / binding failure を advisory として記録する。claim
+   `task()` 実行は fail-open で継続するが、mandatory review の completion と Acceptance の
+   precondition は成立させず、`AcceptanceDecision` を発行しない。protocol violation / binding failure を advisory として記録する。claim
    失敗時は pending slot を消費せず、同じ slot の retry は durable state を再確認してから行う。
 5. matching `PostToolUse` は、parent session、`callId`、purpose、trusted correlation、必要な
    child-session binding、`ObservedReviewExecutionV1` がすべて一致する場合だけ受理する。Justice は
    terminalization 前に `ReviewCompletionStagingRecord` として `ReviewCompletionStaging` を durable に記録する。artifact の consume marker、
    assembled `ReviewArtifactV1`、`claimed → terminal` transition を含む terminal physical record は同一の
    durable commit とし、projection が `review_observed` semantic を導出する前に Acceptance の入力へ結果を渡さない。最終 commit が失敗した場合は
-   slot を `claimed` のまま保持して Acceptance を blocked にするが、staging 済みの同じ
+   slot を `claimed` のまま保持して Acceptance の precondition を未成立にするが、staging 済みの同じ
    `callId`、correlation、artifact ID / digest を使う recovery finalization だけを許可する。新しい
    dispatch、worker output の再読、または重複した artifact consumption は行わない。
 6. matching `PostToolUse` が review task の終端を確定した後に slot を terminal にする。
@@ -788,12 +793,12 @@ artifact reservation の SSOT にはしない。
 | `claimed`（completion staging あり） | durable Authorization が current `active` の場合に限り、staging の `callId`、correlation、artifact ID / digest、assembled artifact を再検証し、同じ terminalization commit を idempotent に再試行する。成功時だけ `review_observed`、terminal transition、Acceptance 入力を反映する。terminal / uncertain Authorization なら staged result を昇格せず cancelled tombstone を収束させる。                   | 新しい dispatch / claim / artifact reservation、別 artifact の消費、worker output の再読・再生成 |
 | `terminal`                           | terminal physical record は不変の authority として保持する。retryable failure (`review_execution_failed` / `lost_conclusive`) は durable Authorization が current `active` の場合だけ、新しい correlation の `pending` slot を作る。`completed` / `completed_with_findings` / `review_incomplete` は terminal record を再appendせず、下記の post-terminal outcome application を idempotent に収束させる。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行、terminal record の再append           |
 
-- `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance を blocked にする。
+- `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance の precondition を未成立にする。`AcceptanceDecision` は発行しない。
 - restart / replay は retryable terminal と既存 `pending` slot だけを走査して完了としてはならない。outstanding
   slot がない parent session ごとに §4.8.1 の durable candidate derivation を実行し、dispatch record を
   まだ持たない current `ReviewPending` / `FinalReviewPending` candidate も lifecycle projection から再発見する。
   既存 `pending` / `claimed` が一件なら新たな slot を作らず、二件以上なら integrity advisory と
-  Acceptance blocked のまま停止する。
+  Acceptance の precondition 未成立のまま停止する。`AcceptanceDecision` は発行しない。
 - final-review の review-only retry では、projector は同じ `finalizationAttemptId` を持つ terminal failure record の後に append された pending slot の `ReviewCorrelation.finalReviewRound` を current round として復元する。old round の terminal review、GateDecision、AcceptanceDecision は current finalization correlation と一致しない stale record として扱い、Final Gate の入力に使用しない。
 - `claimed` の復元後に artifact が存在していても、matching `PostToolUse` と durable consume protocol が成立するまで読み取らない。completion staging がある場合は、staging 済みの artifact ID / digest と一致することだけを確認して finalization を再試行し、worker output を再読しない。consume marker が既にある場合は path を再読せず、terminal projection を authoritative とする。
 - matching terminal physical record がある staging は、terminal record の `artifactConsumption` と staging
@@ -803,12 +808,12 @@ artifact reservation の SSOT にはしない。
   success 後に cleanup する。tombstone append が失敗した場合は cleanup せず staging と artifact を保持する。
   cleanup failure は immutable terminal、Gate、Acceptance を rollback しない。
 - `callId`、parent session、purpose、trusted correlation、child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
-- log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion は blocked にする。
+- log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion の precondition を未成立にする。この pre-Gate condition で `AcceptanceDecision` は発行しない。
 - completion staging が durable でも Authorization terminality が優先する。terminal Authorization を検出した recovery / completion は staged artifact を `accepted` / `complete` に昇格せず、対応 slot を `cancelled` として閉じる。staging artifact の cleanup は terminal tombstone の durable success 後に限る best-effort / idempotent operation とし、reapproval の新しい authorizationId へ移植しない。
 - **Post-terminal outcome application**: matching terminal physical record が既に durable であっても、対応する downstream lifecycle outcome が durable / projected でなければ、recovery は terminal record を再appendせず outcome mapping だけを同一 parent-session operation で再開する。`completed` は durable current `active` Authorization の場合だけ task を `review_pending → gate_pending`、final を `final_review_pending → final_gate_pending` へ一度だけ遷移させ、current identity の既存 Gate path を再開する。`completed_with_findings` は Gate を呼ばず、`rework_required` または `final_rework_required` が未成立の場合だけ一度だけ成立させる。`review_incomplete` は blocked が正規状態であり、lifecycle、Gate、rework の追加 mutation を行わない。terminal / missing / uncertain Authorization はこの mapping より優先し、terminal review record を保持したまま Gate、Acceptance、Progress、positive lifecycle transition を生成しない。
 - post-terminal outcome application は繰り返し実行可能でなければならない。既存の current lifecycle、current review identity、current GateDecision、current AcceptanceDecision を durable projection で確認し、duplicate lifecycle transition、GateDecision、AcceptanceDecision を authority として append してはならない。lifecycle transition 後かつ Gate 処理前の crash では、同じ recovery が current `gate_pending` / `final_gate_pending` に対する未完了の既存 Gate path だけを再開する。
 - 同一 decision identity の Gate / Acceptance recovery は、task では `authorizationId` / `taskId` / `attemptId`、plan では `authorizationId` / `planPath` / `finalizationAttemptId` / `finalReviewRound` ごとの軽量な in-memory serialization boundary 内で実行する。この boundary は latest durable records read、lifecycle / Authorization revalidation、Gate / Acceptance lookup、Gate evaluation、GateDecision append、durable re-read、Acceptance derivation / append、downstream lifecycle application を一続きに直列化する。in-memory queue は restart authority ではなく、authority は常に durable records にある。
-- serialization boundary は generic mutex / idempotency framework として抽象化しない。異なる decision identity を不要に global serialization せず、同一 identity の public Gate evaluation と blocked Acceptance append の全経路で共有する。restart 後は queue を復元せず durable records を再読して idempotency を再構築する。
+- serialization boundary は generic mutex / idempotency framework として抽象化しない。異なる decision identity を不要に global serialization せず、同一 identity の public Gate evaluation と Gate-phase blocked Acceptance append の全経路で共有する。restart 後は queue を復元せず durable records を再読して idempotency を再構築する。
 
 ### 4.9 Persisted Execution Binding
 
@@ -872,7 +877,7 @@ export type ReviewArtifactReservation =
   - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactReservation` を組み立てる。
   - `artifactPath` は Justice が `ReviewArtifactReservation` ごとに一意な安全な相対 path として生成する。binding identity は `TaskCallBinding` が保持し、path 自体に `callId` / `correlation` を埋め込むことは必須としない。例：`.justice/reviews/<artifactId>.json`。
   - dispatch 前に同 `artifactPath` のファイル存在を確認する。既存ファイルが存在する場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。
-  - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` は blocked 扱いとする。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance を行わない。
+- 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
   - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
 - `usable` の場合、Controller の prompt / injected directive には `artifactPath` のみを提示し、review worker はそのパスへ `ReviewWorkerResultV1` を JSON として書き出す。`unusable` の場合は `artifactPath` を提示せず、review worker の完了を mandatory review completion として扱わない。
 - Justice は matching PostToolUse 到達後、`usable` な `TaskCallBinding.artifactReservation` に基づいて `artifactPath` を **ちょうど 1 回だけ** 読み取る。読み取り結果は strict schema validation を通し、reservation 単位の atomic consume operation として扱う。`unusable` の場合は artifact を読み取らず、mandatory review completion を成立させない。
@@ -906,9 +911,9 @@ export type PlanAcceptanceDecision = {
 export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision;
 ```
 
-- `AcceptanceDecision` は Gate 評価結果に基づき Justice が発行する decision record である。terminal review record が durable かつ projected で、`review_pending → gate_pending` または `final_review_pending → final_gate_pending` が durable / projected になった後だけ Gate を評価する。
+- `AcceptanceDecision` は Gate 評価結果に基づき Justice が発行する decision record である。terminal review record が durable かつ projected で、`review_pending → gate_pending` または `final_review_pending → final_gate_pending` が durable / projected になった後だけ Gate を評価する。unusable reservation、DelegatedExecutionBinding 未確立、uncertain claimed state、review_incomplete、artifact completion 未成立、terminal Authorization、review failure retry 待ちなどの pre-Gate blocked condition では `AcceptanceDecision` を発行しない。
 - task acceptance decision は current `TaskExecutionRef` に bind される。plan acceptance decision は current finalization attempt（`authorizationId` / `planPath` / `finalizationAttemptId` / `finalReviewRound`）に bind される。
-- `accepted` / `complete` は current GateDecision の `PASS` 時のみ発行する。`rework-required` は current GateDecision の `WARN` / `FAIL` 時に発行する。`blocked` は GateDecision を生成できない evaluation failure、内部エラー、証拠不十分時に発行するが lifecycle は `gate_pending` / `final_gate_pending` のままにする。
+- `accepted` / `complete` は current GateDecision の `PASS` 時のみ発行する。`rework-required` は current GateDecision の `WARN` / `FAIL` 時に発行する。`blocked` は clean terminal review と `gate_pending` / `final_gate_pending` が durable / projected で、Gate evaluation を開始した後に GateDecision を安全に生成できない evaluation failure、内部エラー、証拠不十分時だけ発行する。この Gate-phase blocked case でも lifecycle は `gate_pending` / `final_gate_pending` のままにする。
 - `AcceptanceDecision` は durable decision log に書き込まれ、`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` と共に restart / replay 時の状態再構築に使用される。
 - Gate evaluation の直前と GateDecision から AcceptanceDecision を append する直前に、decision correlation の authorizationId が current durable `active` binding であることを確認する。terminal / missing / uncertain Authorization では Gate を authoritative に実行せず、`accepted` / `complete` を append しない。既存 lifecycle は `gate_pending` / `final_gate_pending` のまま blocked / stale advisory とする。replay で発見した旧 terminal Authorization の GateDecision / AcceptanceDecision は current authority に使用しない。
 
@@ -1064,7 +1069,7 @@ Justice
              → TaskProgressState = accepted
              → ProgressUpdater → PlanParser.updateCheckbox()
        WARN/FAIL → rework_required → 新しい `TaskExecutionRef`（新 attemptId）を発行して in_progress へ
-       unavailable/error/insufficient → gate_pending のまま acceptance blocked
+       unavailable/error/insufficient → gate_pending のまま保持し、Gate-phase の評価失敗時だけ blocked AcceptanceDecision を発行
 ```
 
 terminal physical record の durable commit 後に process が停止した場合、restart recovery は terminal
@@ -1228,12 +1233,12 @@ review finds issue
 - OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
 - review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
 - 同一 parent session の review dispatch が 1 件ずつ発行され、matching pending slot の atomic claim により `callId` と trusted correlation が一対一に bind されること。
-- pending slot が 0 件・複数件、または review kind / category が不一致の場合に review binding を作らず、Runtime は継続しながら mandatory Acceptance を blocked にすること。
+- pending slot が 0 件・複数件、または review kind / category が不一致の場合に review binding を作らず、Runtime は継続し、pre-Gate の lifecycle / advisory を保持して AcceptanceDecision を発行しないこと。
 - Controller が prompt / args に再提示した correlation や category だけでは trusted identity を成立させないこと。
 - `pending` transition の durable commit が directive inject より先に行われ、commit 失敗時に mandatory directive / binding / reservation が作成されないこと。
 - 同一 parent session の concurrent claim では exactly one claim だけが成功し、失敗側が binding / reservation を作成しないこと。
 - restart / replay 後に `pending` は同じ directive を再発行でき、`claimed` は binding / reservation を復元するだけで directive を再発行しないこと。
-- restart 後に `claimed` の終端が不明な場合は retry せず Acceptance を blocked にし、conclusive な lost の場合だけ terminalize 後に増分した `reviewRound` を発行すること。
+- restart 後に `claimed` の終端が不明な場合は retry せず `claimed` を保持して AcceptanceDecision を発行せず、conclusive な lost の場合だけ terminalize 後に増分した `reviewRound` を発行すること。
 - artifact consume marker と dispatch terminalization が一つの durable commit として復元され、consume 済み artifact が再読されないこと。
 - terminalization commit の失敗後、durable completion staging が同じ `callId`、correlation、artifact ID / digest、observed provenance で一度だけ idempotent に再試行され、成功前に Acceptance 入力へ反映されないこと。
 - old `callId` の stale `PostToolUse` が新しい review round の binding、artifact、Gate、Acceptance に影響しないこと。
@@ -1351,7 +1356,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 17. `ReviewArtifactV1` により clean review を authoritative に観測できる。
 18. Authorization の terminal state が再承認なしに復活しない。
 19. Evidence / Review / Gate / Acceptance が current `TaskExecutionRef` / `FinalizationAttemptId` のみに束縛されている。
-20. `ReviewArtifactReservation` が unusable の場合も Runtime execution は fail-open で継続し、mandatory review completion / Acceptance は blocked になる。
+20. `ReviewArtifactReservation` が unusable の場合も Runtime execution は fail-open で継続し、mandatory review completion は未成立のまま保持して AcceptanceDecision を発行しない。Gate-phase に到達してからの評価失敗だけが blocked AcceptanceDecision になる。
 21. OmO child-session observation が `DelegatedExecutionBinding` により親 `ExecutionScope` へ相関付けられる。
 22. Review dispatch が parent session 単位で直列化され、matching pending slot の atomic claim なしに `TaskCallBinding` が作成されない。
 23. 同一 TaskExecutionRef の review retry では `reviewRound` が増分し、implementation rework では新しい TaskExecutionRef と `reviewRound = 1` が発行される。
@@ -1376,6 +1381,6 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 - **Finalization Attempt**: `FinalizationAttemptId` / `finalReviewRound` を導入し、`final_rework_required → final_review_pending` 遷移時には新しい `finalizationAttemptId`（新 UUID）と増分した `finalReviewRound` を両方更新する。Final Gate は current finalization attempt の evidence / review のみを評価する。
 - **Review**: `sp-review` / `sp-final-review` worker は Controller が `task()` として起動。Justice は `ReviewRequiredDirective` 生成、`ReviewCorrelation` / `TaskCallBinding` / `DelegatedExecutionBinding` / `ReviewArtifactReservation` を通じた review worker 結果と observed review execution の観測、`ReviewArtifactV1` 組み立てを担当。observed review execution provenance を持つ `CleanReviewArtifactV1`（`complete: true + findings: []`）だけを clean review 完了の authoritative evidence とする。external review を mandatory review 完了の証拠とはしない。Review transport は Phase 3 では JSON artifact file (B) に固定し、typed transport は将来候補・現スコープ外とする。
 - **Review Dispatch**: P0 では `ReviewDispatchId` を追加せず、`parentSessionId + ReviewCorrelation` を slot identity とする。`pending` transition を directive 前に durable commit し、PreToolUse の `pending → claimed` CAS commit に `TaskCallBinding` と `ReviewArtifactReservation` を含める。restart 後の `pending` は同じ directive のみ再発行でき、`claimed` は call を再発行せず、terminal tombstone と stale event rejection を維持する。
-- **Authorization and Review Dispatch**: ReviewCorrelation が参照する durable Authorization は Review、Gate、Acceptance、Progress の authority boundary である。release / invalidation を先に durable commit し、その後 existing `cancelled` dispatch tombstone を best-effort で収束させる。別 store を transaction 化せず、すべての recovery / claim / completion / Gate entry point が terminality を再確認することで、tombstone append failure 中も fail-closed acceptance を維持する。
-- **Gate Verdict**: `UNKNOWN` は採用しない。評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま acceptance / completion blocked。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
+- **Authorization and Review Dispatch**: ReviewCorrelation が参照する durable Authorization は Review、Gate、Acceptance、Progress の authority boundary である。release / invalidation を先に durable commit し、その後 existing `cancelled` dispatch tombstone を best-effort で収束させる。別 store を transaction 化せず、すべての recovery / claim / completion / Gate entry point が terminality を再確認することで、pre-Gate では AcceptanceDecision を発行せず、Gate-phase でも fail-closed acceptance を維持する。
+- **Gate Verdict**: `UNKNOWN` は採用しない。Gate 評価の評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま保持し、Gate-phase の評価失敗に限って blocked AcceptanceDecision を発行する。pre-Gate の評価不能・証拠不足・レビュー未完了では AcceptanceDecision を発行しない。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
 - **Traceability**: 本設計書の修正内容（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化、attempt-scoped acceptance、Review Artifact transport、child-session correlation など）は `REQUIREMENTS_2026-09-03.md` に反映済みである。
