@@ -1163,6 +1163,31 @@ it("commits pending before injecting exactly one review directive", async () => 
   expect(trace).toEqual(["commit-pending", "inject-review-directive"]);
 });
 
+it("defers a second same-parent review until the outstanding slot terminalizes", async () => {
+  await requestMandatoryReview(firstTaskReviewCorrelation);
+  await requestMandatoryReview(secondTaskReviewCorrelation);
+
+  expect(durableTransitions(null, "pending")).toHaveLength(1);
+  expect(injectedReviewDirectives()).toEqual([
+    { kind: "review_required", correlation: firstTaskReviewCorrelation },
+  ]);
+
+  await terminalizeCompletedReview(firstTaskReviewCorrelation);
+  await requestMandatoryReview(secondTaskReviewCorrelation);
+  expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
+});
+
+it("does not create a retry pending while another same-parent review is outstanding", async () => {
+  await arrangeRetryableTerminalWithoutNextPending(firstClaim, "lost_conclusive");
+  await arrangeCurrentPendingReviewFor(secondTaskReviewCorrelation);
+
+  await expect(ensureReviewRetryPendingAfterTerminalFailure(firstTerminal)).resolves.toEqual({
+    kind: "blocked",
+  });
+  expect(durableTransitions(null, "pending", nextReviewRetryCorrelation(firstClaim.correlation))).toHaveLength(0);
+  expect(injectedReviewDirectives()).toEqual([]);
+});
+
 it.each(["released", "invalidated", "missing", "uncertain"] as const)(
   "does not create or inject a review directive for a %s authorization",
   async (status) => {
@@ -1310,6 +1335,22 @@ it("rejects zero, multiple, and category-mismatched pending slots without a bind
   await expect(claimReviewDispatch(reviewPreToolUse)).resolves.toEqual({ kind: "blocked" });
   expect(writeDurableRecord).not.toHaveBeenCalledWith(
     expect.objectContaining({ kind: "delegated_execution_binding" }),
+  );
+});
+
+it("uses the selected durable slot rather than PreToolUse correlation for authorization", async () => {
+  arrangeCurrentPendingReview(activeAuthorization, trustedTaskReviewCorrelation);
+  const result = await claimReviewDispatch({
+    ...reviewPreToolUse,
+    correlation: staleOrForgedTaskReviewCorrelation,
+  });
+
+  expect(result).toMatchObject({ kind: "claimed" });
+  expect(isCurrentActiveAuthorization).toHaveBeenCalledWith(trustedTaskReviewCorrelation);
+  expect(isCurrentActiveAuthorization).not.toHaveBeenCalledWith(staleOrForgedTaskReviewCorrelation);
+  expect(cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim).not.toHaveBeenCalledWith(
+    expect.anything(),
+    authorizationIdFor(staleOrForgedTaskReviewCorrelation),
   );
 });
 
@@ -1594,9 +1635,14 @@ the predecessor. Its `finally` resolves that tail and deletes the map entry only
 current entry; an older operation can therefore never delete a newer queued tail. A rejected predecessor is
 ignored for queue progression while its caller still receives its own rejection.
 
-Inside that one parent-session critical section, read the latest durable log and re-project the slot;
-require exactly one matching pending slot; create its reservation; and append one claimed transition record
-containing the trusted correlation, `callId`, expected category, and reservation. The projection derives
+Inside that one parent-session critical section, read the latest durable log and re-project the slots.
+If any `pending` or `claimed` slot already exists for the parent session, `requestMandatoryReview` and
+retry-pending creation create neither another `pending` record nor a directive; they leave the later review
+pending in its lifecycle state for a later terminal/recovery trigger. Only when no outstanding slot exists may
+they append one `null -> pending` record and inject its directive after the durable append. For claim, select
+exactly one pending slot using only the runtime-observed parent session and expected category. Create its
+reservation and append one claimed transition record containing the selected slot's trusted correlation,
+`callId`, expected category, and reservation. The projection derives
 the `TaskCallBinding` from that claimed record. Do not publish the binding, reservation, or worker-path
 argument until that append succeeds. If the append fails, retain the pending slot, publish no binding or
 reservation, emit a binding-failure advisory, and return `blocked`. The queue is process-local exclusion
@@ -1609,6 +1655,12 @@ that observes terminal, missing, unreadable, conflict-diverted, or otherwise unc
 within-parent cancellation helper for an existing pending or claimed slot, injects no directive, and returns a
 blocked / stale advisory. A retryable terminal is immutable: when its Authorization is non-active, it remains
 unchanged and produces neither a next pending slot nor a directive.
+
+`ClaimInput.correlation` is untrusted echo data and is ignored by Review Dispatch.
+`claimReviewDispatch` first selects the durable pending slot, then uses only `pending.key.correlation` for every
+Authorization lookup, cancellation authorization ID, claimed transition, binding, and artifact-reservation
+association. A missing, multiple, or category-mismatched slot returns `review_claim_unavailable` before any
+Authorization lookup or state mutation.
 
 `reserveReviewArtifact` uses the fixed P0 constant
 `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3`. For each attempt it generates a fresh UUID, builds
@@ -1661,6 +1713,13 @@ type ClaimedReviewDispatch = {
   readonly callId: string;
 };
 
+type ClaimInput = {
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly expectedCategory: "sp-review" | "sp-final-review";
+  readonly correlation?: unknown;
+};
+
 type ReviewFailureOutcome =
   | { readonly kind: "retried"; readonly correlation: ReviewCorrelation }
   | { readonly kind: "blocked" };
@@ -1695,6 +1754,13 @@ async function requestMandatoryReview(
   expectedCategory: "sp-review" | "sp-final-review",
 ): Promise<void> {
   await serializeParentSessionClaim(parentSessionId, async () => {
+    const slots = projectReviewDispatchSlots(await readDurableRecords());
+    if (slots.some((slot) =>
+      slot.key.parentSessionId === parentSessionId &&
+      (slot.state === "pending" || slot.state === "claimed"),
+    )) {
+      return;
+    }
     if (!(await isCurrentActiveAuthorization(correlation))) {
       await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
         parentSessionId,
@@ -1726,22 +1792,27 @@ async function requestMandatoryReview(
 
 async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispatchOutcome> {
   return serializeParentSessionClaim(input.parentSessionId, async () => {
-    if (!(await isCurrentActiveAuthorization(input.correlation))) {
+    const slots = projectReviewDispatchSlots(await readDurableRecords());
+    const pending = selectExactlyOnePendingSlotForParentAndCategory(
+      slots,
+      input.parentSessionId,
+      input.expectedCategory,
+    );
+    if (pending === undefined) return { kind: "blocked", advisory: "review_claim_unavailable" };
+    const correlation = pending.key.correlation;
+    if (!(await isCurrentActiveAuthorization(correlation))) {
       await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
         input.parentSessionId,
-        authorizationIdFor(input.correlation),
+        authorizationIdFor(correlation),
       );
       return { kind: "blocked", advisory: "review_authorization_terminal" };
     }
-    const slots = projectReviewDispatchSlots(await readDurableRecords());
-    const pending = selectExactlyOnePendingSlot(slots, input);
-    if (pending === undefined) return { kind: "blocked", advisory: "review_claim_unavailable" };
 
     const reservation = await reserveReviewArtifact();
-    if (!(await isCurrentActiveAuthorization(input.correlation))) {
+    if (!(await isCurrentActiveAuthorization(correlation))) {
       await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
         input.parentSessionId,
-        authorizationIdFor(input.correlation),
+        authorizationIdFor(correlation),
       );
       return { kind: "blocked", advisory: "review_authorization_terminal" };
     }
@@ -1907,6 +1978,13 @@ async function ensureReviewRetryPendingWithinParentSessionClaim(
     }
     await injectReviewRequiredDirective({ kind: "review_required", correlation });
     return { kind: "retried", correlation };
+  }
+
+  if (slots.some((slot) =>
+    slot.key.parentSessionId === terminal.parentSessionId &&
+    (slot.state === "pending" || slot.state === "claimed"),
+  )) {
+    return { kind: "blocked" };
   }
 
   if (!(await isCurrentActiveAuthorization(correlation))) {

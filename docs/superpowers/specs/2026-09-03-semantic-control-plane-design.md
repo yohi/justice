@@ -692,17 +692,22 @@ rework を要求し、`review_incomplete` と unusable reservation は Gate を�
 rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する。
 
 1. 同一 parent session における outstanding mandatory review dispatch は高々 1 件とする。
-   outstanding には、directive 発行後で未 claim の状態と、claim 済みで matching
-   PostToolUse を待つ状態の両方を含める。複数の `ReviewPending` task が存在する場合も、
-   `pending` transition を durable commit した後、directive は queue 順に 1 件ずつ発行する。
-   pending transition を永続化できない場合、mandatory directive は発行せず、Runtime は
-   fail-open で継続するが、Acceptance は blocked とする。
+   outstanding には、directive 発行後で未 claim の `pending` と、claim 済みで matching
+   `PostToolUse` を待つ `claimed` の両方を含める。複数の `ReviewPending` task が存在する場合、
+   dispatcher は current `pending` / `claimed` slot がない correlation だけを次の1件として選び、
+   その slot の terminalization 後にのみ次の correlation を再評価する。将来のキュー項目に対する
+   `pending` transition や directive を先行して作成してはならない。pending transition を
+   永続化できない場合、mandatory directive は発行せず、Runtime は fail-open で継続するが、
+   Acceptance は blocked とする。
 2. `task(category="sp-review")` は `task-review`、`task(category="sp-final-review")` は
    `final-review` の候補としてだけ扱う。category は identity や認証情報ではない。
    Controller が prompt / args に再提示した `correlation`、task ID、attempt ID、round は
-   trusted data として使用しない。
-3. PreToolUse では、同一 parent session かつ期待する review kind / category に一致する
-   pending slot が **ちょうど 1 件**ある場合に限り、その slot を原子的に claim する。
+   trusted data として使用しない。とくに PreToolUse input の `correlation` は slot selector、
+   Authorization lookup、cancellation、binding、artifact reservation のいずれにも使用しない。
+3. PreToolUse では、runtime が観測した parent session と期待 category で durable slot を
+   再投影し、同一 parent session かつ期待する review kind / category に一致する pending slot が
+   **ちょうど 1 件**ある場合に限り、その slot を原子的に claim する。Authorization lookup と
+   cancellation は、選択済み slot の trusted correlation からだけ行う。
    claim と同じ critical section で、slot の trusted correlation を `callId` に紐付けた
    `TaskCallBinding` と `ReviewArtifactReservation` を生成し、`pending → claimed`
    transition と同一の durable commit に含める。この commit が成功するまで binding / reservation
