@@ -798,7 +798,7 @@ git commit -m "feat: plan authorizationのcancelを追加"
 
 **Consumes:** active `ApprovedPlanBinding` from Task 2.2; implementation `TaskCallBinding`; `PersistedLogRecord`; `TaskExecutionRef`; `FinalizationAttemptId`.
 
-**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`; `FinalizationContext`; `appendTaskLifecycleTransition(input: { readonly taskExecutionRef: TaskExecutionRef; readonly from: "review_pending"; readonly to: "gate_pending" | "rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; `appendPlanFinalizationTransition(input: { readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly from: "final_review_pending"; readonly to: "final_gate_pending" | "final_rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; and `startNextFinalizationAttempt(current: FinalizationContext): PlanFinalizationTransitionRecord`.
+**Produces:** `TransitionOutcome = { readonly kind: "applied" | "duplicate" | "invalid"; readonly state: TaskProgressState | PlanFinalizationState; readonly advisory?: string }`; `applyTaskTransition`; `applyPlanTransition`; `startImplementationAttempt`; `recordWorkerReportedAndEvidence`; `requestCurrentTaskReview`; `advanceFinalizationAfterAllTasksAccepted`; `FinalizationContext`; `ProjectedLifecycle = { readonly currentTaskExecutionRefs: ReadonlyMap<string, TaskExecutionRef>; readonly taskStates: ReadonlyMap<string, TaskProgressState>; readonly finalization?: FinalizationContext }`; the existing `project(events, rebuiltAt): ProjectedState` extended with the lifecycle-only `ProjectedLifecycle`; `appendTaskLifecycleTransition(input: { readonly taskExecutionRef: TaskExecutionRef; readonly from: "review_pending"; readonly to: "gate_pending" | "rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; `appendPlanFinalizationTransition(input: { readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly from: "final_review_pending"; readonly to: "final_gate_pending" | "final_rework_required" }): Promise<{ readonly kind: "committed" | "failed" }>`; and `startNextFinalizationAttempt(current: FinalizationContext): PlanFinalizationTransitionRecord`.
 
 - [ ] **Step 1: Write the failing replay tests**
 
@@ -845,7 +845,19 @@ it("rejects old-attempt evidence and worker reports", async () => {
 });
 
 it("rebuilds exactly one current task attempt after restart", () => {
-  expect(project(lifecycleRecords, now).currentTaskExecutionRef("task-1")).toEqual(currentAttempt);
+  expect(project(lifecycleRecords, now).lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(
+    currentAttempt,
+  );
+});
+
+it("projects current lifecycle identity and round without GateDecision input", () => {
+  const projected = project(lifecycleRecords, now);
+  expect(projected.lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(currentAttempt);
+  expect(projected.lifecycle.taskStates.get("task-1")).toBe("review_pending");
+  expect(projected.lifecycle.finalization).toMatchObject({
+    finalizationAttemptId: currentFinalizationAttemptId,
+    finalReviewRound: currentFinalReviewRound,
+  });
 });
 
 it("rotates the finalization identity only for actual final rework", async () => {
@@ -869,7 +881,7 @@ Expected: FAIL because lifecycle projection and runtime orchestration are absent
 
 Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
 
-In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after Task 3.4 has committed its pending dispatch slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the initial finalization attempt and durably enter `final_review_pending`. Task 3.1 neither defines nor projects review-dispatch retry records: review-only failure retry, its current final-review round, and old-round rejection belong exclusively to Task 3.4. `startNextFinalizationAttempt` is reserved for actual `final_rework_required → final_review_pending` and writes the fresh identity transition. Do not evaluate a Gate in this task; Task 3.2 receives only projected `gate_pending` / `final_gate_pending` states after Task 3.6 terminalization.
+In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after the review-dispatch offer boundary has committed its pending slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, create the initial finalization attempt and durably enter `final_review_pending`. Task 3.1 neither defines nor projects review-dispatch retry records: review-only failure retry, its current final-review round, and old-round rejection belong exclusively to Task 3.4. `startNextFinalizationAttempt` is reserved for actual `final_rework_required → final_review_pending` and writes the fresh identity transition. `project(...)` remains the only projection boundary: it adds lifecycle-only data under `ProjectedState.lifecycle` and does not define or project GateDecision / AcceptanceDecision. Do not evaluate a Gate in this task; Task 3.2 receives the lifecycle-only projection and queries durable decisions independently.
 
 ```ts
 if (event.identity === state.lastTransitionIdentity)
@@ -955,9 +967,9 @@ git commit -m "feat: lifecycle replayをidempotentに処理"
 - Create: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 
-**Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; current projected lifecycle state from Task 3.1; `AuthorizationStore.findByAuthorizationId` for the gate correlation's authorizationId.
+**Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; durable `PersistedLogRecord` decision records; `AuthorizationStore.findByAuthorizationId` for the gate correlation's authorizationId.
 
-**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly taskExecutionRef: TaskExecutionRef } | { readonly scope: "plan"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number }`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<void>`; `deriveAcceptanceDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
+**Produces:** `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly taskExecutionRef: TaskExecutionRef } | { readonly scope: "plan"; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number }`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecision | undefined`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecision | undefined`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<void>`; `deriveAcceptanceDecision`; `evaluate(gates, evidence, context)` returns a decision containing either `taskExecutionRef` or `authorizationId`, `planPath`, `finalizationAttemptId`, and `finalReviewRound`.
 
 - [ ] **Step 1: Write the failing Final Gate tests**
 
@@ -1001,6 +1013,13 @@ it("blocks an old-attempt GateDecision", () => {
   expect(deriveAcceptanceDecision(oldAttemptPass, currentAttempt)).toMatchObject({
     verdict: "blocked",
   });
+  expect(
+    findCurrentGateDecision([oldAttemptPass], {
+      reviewKind: "task-review",
+      taskExecutionRef: currentAttempt,
+      reviewRound: 1,
+    }),
+  ).toBeUndefined();
 });
 
 it.each(["released", "invalidated", "missing", "uncertain"] as const)(
@@ -1055,7 +1074,7 @@ Expected: FAIL because plan gates are skipped and task gate decisions are fixed.
 
 - [ ] **Step 3: Implement scoped Gate selection**
 
-Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. It must then inspect the same current identity for an existing durable GateDecision and its derived AcceptanceDecision: an existing decision is reused as the authoritative result and neither record is appended again; a missing GateDecision is evaluated and appended once; a GateDecision with no derived AcceptanceDecision derives and appends that decision once. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
+Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. Gate and Acceptance lookups are pure queries over the durable `PersistedLogRecord` stream: `findCurrentGateDecision` and `findCurrentAcceptanceDecision` scan projection order and match the complete task execution identity or finalization identity, so an old attempt or old final-review round is never reused. They do not add methods to `ProjectedLifecycle` and do not infer decisions from lifecycle state. The evaluator must inspect the same current identity for both existing durable decisions: an existing GateDecision and AcceptanceDecision are reused as the authoritative result and neither record is appended again; a missing GateDecision is evaluated and appended once; a GateDecision with no derived AcceptanceDecision derives and appends that decision once. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
 
 ```ts
 const activeGates = gates.filter(
@@ -1146,7 +1165,7 @@ git commit -m "test: child session correlation runtime境界を検証"
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 
-**Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; review
+**Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; `FileReader.fileExists`;
 `FileWriter.mkdir`; safe-relative-path validation; `AuthorizationStore.findByAuthorizationId`.
 
@@ -1167,10 +1186,10 @@ or startup recovery. Its module-private
 `offerNextMandatoryReviewWithinParentSessionClaim(parentSessionId: string): Promise<ReviewOfferOutcome>`
 reprojects the durable lifecycle, snapshot, dispatch, and Authorization state and is the only function allowed
 to append `null -> pending`. Its module-private `selectNextEligibleReviewCandidate(input)` and
-`projectReviewCandidateParentSessionIds(records)` implement only Design §4.8.1 candidate derivation and
+`projectReviewCandidateParentSessionIds(records, authorizations)` implement only Design §4.8.1 candidate derivation and
 deterministic order; `recordIntegrityAdvisory("review_dispatch_integrity_violation")` records the fail-closed
-corruption outcome. `projectCurrentFinalReviewCorrelation(records, lifecycle)` is module-private and derives the
-current final review round from `lifecycle.currentFinalization().finalReviewRound` first, then applies ordered
+corruption outcome. `projectCurrentFinalReviewCorrelation(records, lifecycle, authorizations)` is module-private and derives the
+current final review round from `lifecycle.finalization?.finalReviewRound` first, then applies ordered
 Review Dispatch records for the same finalization identity, so Task 3.4 alone owns review-only Final Review retry
 projection and stale old-round rejection. The module-private `nextReviewRetryCorrelation(correlation: ReviewCorrelation)` and
 `recoverReviewDispatchesAfterRestart(): Promise<void>` operate only in the ReviewDispatch domain; no
@@ -1845,12 +1864,12 @@ it("projects a review-only Final Review retry and rejects the old round", async 
   await offerNextMandatoryReview(currentFinalClaim.parentSessionId);
   const projected = project(await readDurableRecords(), now);
 
-  expect(projected.currentFinalization()).toMatchObject({
+  expect(projected.lifecycle.finalization).toMatchObject({
     finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
     finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
     state: "final_review_pending",
   });
-  expect(projected.finalGateInputFor(currentFinalClaim.correlation)).toBeUndefined();
+  expect(findCurrentGateDecision(await readDurableRecords(), currentFinalClaim.correlation)).toBeUndefined();
 });
 
 it("keeps an uncertain recovered claim blocked without redispatch", async () => {
@@ -1994,7 +2013,7 @@ type ReviewCandidate = {
 type SelectNextEligibleReviewCandidateInput = {
   readonly parentSessionId: string;
   readonly records: readonly PersistedLogRecord[];
-  readonly lifecycle: ReturnType<typeof projectLifecycle>;
+  readonly lifecycle: ProjectedLifecycle;
   readonly slots: readonly ReviewDispatchSlot[];
   readonly authorizations: readonly ApprovedPlanBinding[];
 };
@@ -2043,18 +2062,18 @@ function hasAuthoritativeTerminalForCorrelation(
 
 function candidateMatchesCurrentLifecycle(
   candidate: ReviewCandidate,
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): boolean {
   if (candidate.correlation.reviewKind === "task-review") {
-    const current = lifecycle.currentTaskExecutionRef(candidate.correlation.taskExecutionRef.taskId);
+    const current = lifecycle.currentTaskExecutionRefs.get(candidate.correlation.taskExecutionRef.taskId);
     return (
       current !== undefined &&
       current.authorizationId === candidate.correlation.taskExecutionRef.authorizationId &&
       current.attemptId === candidate.correlation.taskExecutionRef.attemptId &&
-      lifecycle.taskState(candidate.correlation.taskExecutionRef.taskId) === "review_pending"
+      lifecycle.taskStates.get(candidate.correlation.taskExecutionRef.taskId) === "review_pending"
     );
   }
-  const current = lifecycle.currentFinalization();
+  const current = lifecycle.finalization;
   return (
     current !== undefined &&
     current.authorizationId === candidate.correlation.authorizationId &&
@@ -2076,7 +2095,7 @@ function candidateUsesAuthorizationSnapshot(
 
 function currentRetryCandidates(
   ordered: readonly PersistedLogRecord[],
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): readonly ReviewCandidate[] {
   const candidates: ReviewCandidate[] = [];
   for (const record of ordered) {
@@ -2096,12 +2115,13 @@ function currentRetryCandidates(
 
 function currentOrdinaryCandidates(
   ordered: readonly PersistedLogRecord[],
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
+  authorizations: readonly ApprovedPlanBinding[],
 ): readonly ReviewCandidate[] {
   const candidates: ReviewCandidate[] = [];
   for (const record of ordered) {
     if (record.kind === "task_lifecycle_transition" && record.to === "review_pending") {
-      const current = lifecycle.currentTaskExecutionRef(record.taskExecutionRef.taskId);
+      const current = lifecycle.currentTaskExecutionRefs.get(record.taskExecutionRef.taskId);
       if (
         current !== undefined &&
         current.authorizationId === record.taskExecutionRef.authorizationId &&
@@ -2118,9 +2138,14 @@ function currentOrdinaryCandidates(
       continue;
     }
     if (record.kind === "plan_finalization_transition" && record.to === "final_review_pending") {
-      const current = lifecycle.currentFinalization();
+      const current = lifecycle.finalization;
+      const binding = authorizations.find(
+        (candidate) =>
+          candidate.authorizationId === current?.authorizationId && candidate.status === "active",
+      );
       if (
         current !== undefined &&
+        binding !== undefined &&
         current.authorizationId === record.authorizationId &&
         current.planPath === record.planPath &&
         current.finalizationAttemptId === record.finalizationAttemptId &&
@@ -2132,7 +2157,7 @@ function currentOrdinaryCandidates(
             reviewKind: "final-review",
             planPath: current.planPath,
             authorizationId: current.authorizationId,
-            planFingerprint: current.planFingerprint,
+            planFingerprint: binding.planFingerprint,
             finalizationAttemptId: current.finalizationAttemptId,
             finalReviewRound: current.finalReviewRound,
           },
@@ -2148,15 +2173,20 @@ function currentOrdinaryCandidates(
 
 function projectCurrentFinalReviewCorrelation(
   records: readonly PersistedLogRecord[],
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
+  authorizations: readonly ApprovedPlanBinding[],
 ): Extract<ReviewCorrelation, { readonly reviewKind: "final-review" }> | undefined {
-  const current = lifecycle.currentFinalization();
+  const current = lifecycle.finalization;
   if (current === undefined || current.state !== "final_review_pending") return undefined;
+  const binding = authorizations.find(
+    (candidate) => candidate.authorizationId === current.authorizationId && candidate.status === "active",
+  );
+  if (binding === undefined) return undefined;
   let correlation: Extract<ReviewCorrelation, { readonly reviewKind: "final-review" }> = {
     reviewKind: "final-review",
     planPath: current.planPath,
     authorizationId: current.authorizationId,
-    planFingerprint: current.planFingerprint,
+    planFingerprint: binding.planFingerprint,
     finalizationAttemptId: current.finalizationAttemptId,
     finalReviewRound: current.finalReviewRound,
   };
@@ -2186,12 +2216,15 @@ function selectNextEligibleReviewCandidate(
   input: SelectNextEligibleReviewCandidateInput,
 ): ReviewCandidate | undefined {
   const ordered = orderEventsForProjection(input.records);
-  const candidates = [...currentRetryCandidates(ordered, input.lifecycle), ...currentOrdinaryCandidates(ordered, input.lifecycle)];
+  const candidates = [
+    ...currentRetryCandidates(ordered, input.lifecycle),
+    ...currentOrdinaryCandidates(ordered, input.lifecycle, input.authorizations),
+  ];
   for (const candidate of candidates) {
     if (candidate.parentSessionId !== input.parentSessionId) continue;
     if (!candidateMatchesCurrentLifecycle(candidate, input.lifecycle)) continue;
     if (candidate.correlation.reviewKind === "final-review") {
-      const current = projectCurrentFinalReviewCorrelation(ordered, input.lifecycle);
+      const current = projectCurrentFinalReviewCorrelation(ordered, input.lifecycle, input.authorizations);
       if (current === undefined || !sameReviewCorrelation(current, candidate.correlation)) continue;
     }
     if (hasDispatchSlotForCorrelation(input.slots, candidate.parentSessionId, candidate.correlation)) continue;
@@ -2205,12 +2238,16 @@ function selectNextEligibleReviewCandidate(
 
 function projectReviewCandidateParentSessionIds(
   records: readonly PersistedLogRecord[],
+  authorizations: readonly ApprovedPlanBinding[],
 ): readonly string[] {
   const ordered = orderEventsForProjection(records);
-  const lifecycle = projectLifecycle(ordered);
+  const lifecycle = project(ordered, new Date().toISOString()).lifecycle;
   const slots = projectReviewDispatchSlots(ordered);
   const parentSessionIds: string[] = [];
-  for (const candidate of [...currentRetryCandidates(ordered, lifecycle), ...currentOrdinaryCandidates(ordered, lifecycle)]) {
+  for (const candidate of [
+    ...currentRetryCandidates(ordered, lifecycle),
+    ...currentOrdinaryCandidates(ordered, lifecycle, authorizations),
+  ]) {
     if (hasDispatchSlotForCorrelation(slots, candidate.parentSessionId, candidate.correlation)) continue;
     if (hasAuthoritativeTerminalForCorrelation(ordered, candidate.parentSessionId, candidate.correlation)) continue;
     if (!parentSessionIds.includes(candidate.parentSessionId)) parentSessionIds.push(candidate.parentSessionId);
@@ -2275,7 +2312,7 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
   const candidate = selectNextEligibleReviewCandidate({
     parentSessionId,
     records,
-    lifecycle: projectLifecycle(records),
+    lifecycle: project(records, new Date().toISOString()).lifecycle,
     slots,
     authorizations: await readDurableAuthorizations(),
   });
@@ -2570,7 +2607,10 @@ async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlo
 async function recoverReviewDispatchesAfterRestart(): Promise<void> {
   await hydrateAuthorizationsBeforeReviewRecovery();
   const records = await readDurableRecords();
-  const parentSessionIds = projectReviewCandidateParentSessionIds(records);
+  const parentSessionIds = projectReviewCandidateParentSessionIds(
+    records,
+    await readDurableAuthorizations(),
+  );
   const slots = projectReviewDispatchSlots(records);
   for (const slot of slots) {
     if (slot.state !== "pending") continue;
@@ -2696,7 +2736,8 @@ git commit -m "feat: review child bindingをdurableに記録"
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 
-**Consumes:** projected claimed dispatch slot; durable `TaskCallBinding`; durable
+**Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
+`findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
 `DelegatedExecutionBinding`; Design §4.10 `ReviewArtifactReservation`; durable `AuthorizationStore`
 `findByAuthorizationId`; `evaluateGatePendingAttempt` from Task 3.2; `terminalizeReviewFailure`; and exported
 `cancelReviewDispatchesForTerminalAuthorization` from Task 3.4.
@@ -2869,7 +2910,7 @@ it("keeps repeated cancelled recovery idempotent and blocked", async () => {
 
   expect(readArtifact).not.toHaveBeenCalled();
   expect(durableTerminals("cancelled")).toHaveLength(1);
-  expect(cleanupArtifact).toHaveBeenCalledTimes(1);
+  expect(cleanupArtifact).toHaveBeenCalledWith(stagedRecord.staging.artifactConsumption.artifactId);
   expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
 });
 
@@ -3100,7 +3141,8 @@ it.each([
   const retry = await terminalizeReviewFailure(currentFinalClaim, reason);
   await consumeReviewCompletion(oldFinalRoundPostToolUse);
   await evaluateGatePendingAttempt(oldFinalRoundGateContext);
-  const replayed = project(await readDurableRecords(), now);
+  const replayedRecords = await readDurableRecords();
+  const replayed = project(replayedRecords, now);
 
   expect(retry).toMatchObject({ kind: "retried" });
   if (retry.kind !== "retried" || retry.correlation.reviewKind !== "final-review") {
@@ -3108,12 +3150,12 @@ it.each([
   }
   expect(readArtifact).not.toHaveBeenCalled();
   expect(evaluate).not.toHaveBeenCalled();
-  expect(replayed.currentFinalization()).toMatchObject({
+  expect(replayed.lifecycle.finalization).toMatchObject({
     finalizationAttemptId: currentFinalClaim.correlation.finalizationAttemptId,
     finalReviewRound: retry.correlation.finalReviewRound,
     state: "final_review_pending",
   });
-  expect(replayed.planAcceptanceDecisionFor(oldFinalRoundGateContext)).toBeUndefined();
+  expect(findCurrentAcceptanceDecision(replayedRecords, currentFinalClaim.correlation)).toBeUndefined();
 });
 ```
 
@@ -3351,17 +3393,17 @@ type TerminalOutcomeTransition =
 
 function terminalMatchesCurrentIdentity(
   terminal: ReviewDispatchTransitionRecord,
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): boolean {
   if (terminal.correlation.reviewKind === "task-review") {
-    const current = lifecycle.currentTaskExecutionRef(terminal.correlation.taskExecutionRef.taskId);
+    const current = lifecycle.currentTaskExecutionRefs.get(terminal.correlation.taskExecutionRef.taskId);
     return (
       current !== undefined &&
       current.authorizationId === terminal.correlation.taskExecutionRef.authorizationId &&
       current.attemptId === terminal.correlation.taskExecutionRef.attemptId
     );
   }
-  const current = lifecycle.currentFinalization();
+  const current = lifecycle.finalization;
   return (
     current !== undefined &&
     current.authorizationId === terminal.correlation.authorizationId &&
@@ -3373,11 +3415,11 @@ function terminalMatchesCurrentIdentity(
 
 function gatePendingTransitionFor(
   terminal: ReviewDispatchTransitionRecord,
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): TerminalOutcomeTransition | undefined {
   if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return undefined;
   if (terminal.correlation.reviewKind === "task-review") {
-    if (lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId) !== "review_pending") {
+    if (lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) !== "review_pending") {
       return undefined;
     }
     return {
@@ -3387,7 +3429,7 @@ function gatePendingTransitionFor(
       to: "gate_pending",
     };
   }
-  const current = lifecycle.currentFinalization();
+  const current = lifecycle.finalization;
   if (current === undefined || current.state !== "final_review_pending") return undefined;
   return {
     scope: "final",
@@ -3402,7 +3444,7 @@ function gatePendingTransitionFor(
 
 function reworkTransitionFor(
   terminal: ReviewDispatchTransitionRecord,
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): TerminalOutcomeTransition | undefined {
   const gatePending = gatePendingTransitionFor(terminal, lifecycle);
   if (gatePending === undefined) return undefined;
@@ -3458,32 +3500,28 @@ async function appendLifecycleTransition(
   });
 }
 
-function hasCurrentGateDecision(
-  lifecycle: ReturnType<typeof projectLifecycle>,
+function hasCurrentGateAndAcceptanceDecisions(
+  records: readonly PersistedLogRecord[],
   correlation: ReviewCorrelation,
 ): boolean {
-  return correlation.reviewKind === "task-review"
-    ? lifecycle.taskGateDecisionFor(correlation.taskExecutionRef) !== undefined
-    : lifecycle.planGateDecisionFor({
-        authorizationId: correlation.authorizationId,
-        planPath: correlation.planPath,
-        finalizationAttemptId: correlation.finalizationAttemptId,
-        finalReviewRound: correlation.finalReviewRound,
-      }) !== undefined;
+  return (
+    findCurrentGateDecision(records, correlation) !== undefined &&
+    findCurrentAcceptanceDecision(records, correlation) !== undefined
+  );
 }
 
 function gateContextForCurrentTerminal(
   terminal: ReviewDispatchTransitionRecord,
-  lifecycle: ReturnType<typeof projectLifecycle>,
+  lifecycle: ProjectedLifecycle,
 ): GatePendingAttemptContext | undefined {
   if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return undefined;
   if (terminal.correlation.reviewKind === "task-review") {
-    if (lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId) !== "gate_pending") {
+    if (lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) !== "gate_pending") {
       return undefined;
     }
     return { scope: "task", taskExecutionRef: terminal.correlation.taskExecutionRef };
   }
-  const current = lifecycle.currentFinalization();
+  const current = lifecycle.finalization;
   if (current === undefined || current.state !== "final_gate_pending") return undefined;
   return {
     scope: "plan",
@@ -3528,7 +3566,7 @@ async function ensureTerminalReviewOutcomeApplied(
 ): Promise<ReviewCompletionOutcome> {
   if (!(await isReviewAuthorizationActive(terminal.correlation))) return { kind: "blocked" };
   const records = await readDurableRecords();
-  const lifecycle = projectLifecycle(records);
+  const lifecycle = project(records, new Date().toISOString()).lifecycle;
   if (!terminalMatchesCurrentIdentity(terminal, lifecycle)) return { kind: "stale" };
 
   switch (terminal.terminalReason) {
@@ -3538,20 +3576,21 @@ async function ensureTerminalReviewOutcomeApplied(
         const appended = await appendLifecycleTransition(transition);
         if (appended.kind !== "committed") return { kind: "blocked" };
       }
-      const projected = projectLifecycle(await readDurableRecords());
+      const currentRecords = await readDurableRecords();
+      const projected = project(currentRecords, new Date().toISOString()).lifecycle;
       const gateContext = gateContextForCurrentTerminal(terminal, projected);
       if (gateContext !== undefined) {
         await evaluateGatePendingAttempt(gateContext);
         return { kind: "terminalized" };
       }
-      return hasCurrentGateDecision(projected, terminal.correlation)
+      return hasCurrentGateAndAcceptanceDecisions(currentRecords, terminal.correlation)
         ? { kind: "terminalized" }
         : { kind: "stale" };
     }
     case "completed_with_findings": {
       const currentState = terminal.correlation.reviewKind === "task-review"
-        ? lifecycle.taskState(terminal.correlation.taskExecutionRef.taskId)
-        : lifecycle.currentFinalization()?.state;
+        ? lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId)
+        : lifecycle.finalization?.state;
       if (currentState === "rework_required" || currentState === "final_rework_required") {
         return { kind: "terminalized" };
       }
