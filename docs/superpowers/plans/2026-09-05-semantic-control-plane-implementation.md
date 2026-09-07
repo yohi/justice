@@ -997,6 +997,23 @@ it("rechecks authorization after Gate evaluation and before Acceptance append", 
   expect(projectedTaskState()).toBe("gate_pending");
 });
 
+it("does not append duplicate GateDecision or AcceptanceDecision when recovery revisits the current gate_pending identity", async () => {
+  await arrangeCurrentGatePendingWithDurableGateAndAcceptance(gatePendingContext);
+  await evaluateGatePendingAttempt(gatePendingContext);
+
+  expect(recordGateDecision).not.toHaveBeenCalled();
+  expect(recordAcceptanceDecision).not.toHaveBeenCalled();
+});
+
+it("resumes exactly one missing Gate evaluation after a durable gate_pending transition", async () => {
+  await arrangeCurrentGatePendingWithoutGateDecision(gatePendingContext);
+  await evaluateGatePendingAttempt(gatePendingContext);
+  await evaluateGatePendingAttempt(gatePendingContext);
+
+  expect(recordGateDecision).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+});
+
 it.each([gateUnavailable, gateError, insufficientEvidence])(
   "keeps gate_pending and blocks acceptance for %s",
   async (outcome) => {
@@ -1015,7 +1032,7 @@ Expected: FAIL because plan gates are skipped and task gate decisions are fixed.
 
 - [ ] **Step 3: Implement scoped Gate selection**
 
-Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
+Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. It must then inspect the same current identity for an existing durable GateDecision and its derived AcceptanceDecision: an existing decision is reused as the authoritative result and neither record is appended again; a missing GateDecision is evaluated and appended once; a GateDecision with no derived AcceptanceDecision derives and appends that decision once. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
 
 ```ts
 const activeGates = gates.filter(
@@ -1128,10 +1145,15 @@ module-private `isCurrentActiveAuthorization(correlation: ReviewCorrelation): Pr
 `authorizationIdFor(correlation: ReviewCorrelation): string`, and
 `hydrateAuthorizationsBeforeReviewRecovery(): Promise<void>` perform only the durable Authorization check needed
 by this domain. The module-exported, Review Dispatch-specific
-`cancelReviewDispatchesForTerminalAuthorization(parentSessionId, authorizationId): Promise<void>`
-uses the existing `cancelled` transition to close current pending or claimed slots after a durable Authorization
-release / invalidation. It is the only cancellation orchestration and is called by the Task 3.4 PlanBridge
-integration after Task 2.3 has committed a cancel or the fingerprint check has committed invalidation.
+`cancelReviewDispatchesForTerminalAuthorization(parentSessionId, authorizationId): Promise<void>` is the public
+queue-acquiring wrapper for PlanBridge, fingerprint invalidation, and startup entry points. Its module-private
+`cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(parentSessionId, authorizationId):
+Promise<void>` counterpart never acquires the queue and is callable only while the caller already owns that
+parent-session critical section. It reads the latest durable projection, best-effort appends `cancelled` only for
+the current pending or claimed slot of that authorization, and treats an existing terminal slot as a no-op. These
+are the only cancellation helpers; callers must not choose lock behavior dynamically. The public wrapper is called
+after Task 2.3 has committed a cancel or the fingerprint check has committed invalidation; queue-owning claim,
+failure, retry, and recovery operations call the within-parent helper directly.
 
 - [ ] **Step 1: Write the failing dispatch, claim, and recovery tests**
 
@@ -1175,6 +1197,99 @@ it("keeps acceptance fail-closed when cancellation tombstone append fails", asyn
   expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
   await recoverReviewDispatchesAfterRestart();
   expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
+});
+
+it.each(["review_execution_failed", "lost_conclusive"] as const)(
+  "does not create a retry pending or directive when a retryable %s terminal outlives its authorization",
+  async (reason) => {
+    await arrangeRetryableTerminalWithoutNextPending(currentClaim, reason);
+    releaseAuthorization(currentAuthorizationId);
+    restartReviewDispatchRepository();
+
+    await recoverReviewDispatchesAfterRestart();
+
+    expect(durableTransitions(null, "pending", nextReviewRetryCorrelation(currentClaim.correlation))).toHaveLength(0);
+    expect(injectedReviewDirectives()).toEqual([]);
+    expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
+  },
+);
+
+it("does not reissue or claim a pending slot after a cancellation tombstone append fails", async () => {
+  await arrangeCurrentPendingReview(activeAuthorization);
+  failNextCancellationTombstoneAppend();
+  await bridge.handleImplementationArm("s1", cancelRequest);
+  restartReviewDispatchRepository();
+
+  await recoverReviewDispatchesAfterRestart();
+
+  expect(injectedReviewDirectives()).toEqual([]);
+  await expect(claimReviewDispatch(reviewPreToolUse)).resolves.toEqual({ kind: "blocked" });
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+  await recoverReviewDispatchesAfterRestart();
+  expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
+});
+
+it.each(["review_execution_failed", "lost_conclusive"] as const)(
+  "lets terminal authorization cancellation win over a claimed %s handler",
+  async (reason) => {
+    await arrangeCurrentClaimedReview(activeAuthorization);
+    releaseAuthorizationBeforeFailureAuthorizationCheck(currentAuthorizationId);
+
+    await expect(terminalizeReviewFailure(currentClaim, reason)).resolves.toEqual({ kind: "blocked" });
+
+    expect(durableTerminals(reason)).toHaveLength(0);
+    expect(durableTransitions(null, "pending", nextReviewRetryCorrelation(currentClaim.correlation))).toHaveLength(0);
+    expect(durableTerminal()).toMatchObject({ terminalReason: "cancelled" });
+  },
+);
+
+it("completes a terminal-authorization claim without recursively waiting on its parent queue", async () => {
+  await arrangeCurrentPendingReview(releasedAuthorization);
+  const completedCancellation = deferred<void>();
+  appendCancellationTombstone.mockImplementation(async () => {
+    completedCancellation.resolve();
+    return committedCancelledTransition;
+  });
+
+  const claim = claimReviewDispatch(reviewPreToolUse);
+  await completedCancellation.promise;
+  await expect(claim).resolves.toMatchObject({
+    kind: "blocked",
+    advisory: "review_authorization_terminal",
+  });
+
+  expect(durableTerminals("cancelled")).toHaveLength(1);
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+  expect(projectedArtifactReservations()).toHaveLength(0);
+  await expect(serializeParentSessionClaim("parent-1", async () => "next")).resolves.toBe("next");
+});
+
+it("serializes external cancellation with a concurrent claim for the same parent session", async () => {
+  await arrangeCurrentPendingReview(activeAuthorization);
+  const cancellationEntered = deferred<void>();
+  const releaseCancellation = deferred<void>();
+  blockCancellationAppend(cancellationEntered, releaseCancellation);
+
+  const cancellation = cancelReviewDispatchesForTerminalAuthorization("parent-1", currentAuthorizationId);
+  await cancellationEntered.promise;
+  const claim = claimReviewDispatch(reviewPreToolUse);
+  releaseCancellation.resolve();
+
+  await Promise.all([cancellation, claim]);
+  expect(maxConcurrentParentSessionOperations("parent-1")).toBe(1);
+  expect(durableTerminals("cancelled")).toHaveLength(1);
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+});
+
+it("preserves A then B then C parent-session ordering when cancellation occupies A", async () => {
+  const a = cancelReviewDispatchesForTerminalAuthorization("parent-1", currentAuthorizationId);
+  const b = claimReviewDispatch(reviewPreToolUseFor("call-b"));
+  const c = claimReviewDispatch(reviewPreToolUseFor("call-c"));
+
+  await releaseQueuedCancellationAThenAwaitAll(a, b, c);
+
+  expect(parentSessionOperationTrace()).toEqual(["cancel-a", "claim-b", "claim-c"]);
+  expect(pendingClaimQueues.has("parent-1")).toBe(false);
 });
 
 it.each(["pending", "claimed_without_staging", "claimed_with_staging", "terminal"] as const)(
@@ -1487,6 +1602,14 @@ argument until that append succeeds. If the append fails, retain the pending slo
 reservation, emit a binding-failure advisory, and return `blocked`. The queue is process-local exclusion
 only: restart always re-projects durable records, which remain the SSOT.
 
+`requestMandatoryReview`, `claimReviewDispatch`, `terminalizeReviewFailure`, retry-pending creation, restart
+directive reissue, and cancellation convergence each execute their durable Authorization recheck in the
+parent-session critical section immediately before their state-changing append or directive injection. A request
+that observes terminal, missing, unreadable, conflict-diverted, or otherwise uncertain Authorization calls the
+within-parent cancellation helper for an existing pending or claimed slot, injects no directive, and returns a
+blocked / stale advisory. A retryable terminal is immutable: when its Authorization is non-active, it remains
+unchanged and produces neither a next pending slot nor a directive.
+
 `reserveReviewArtifact` uses the fixed P0 constant
 `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3`. For each attempt it generates a fresh UUID, builds
 `.justice/reviews/<artifactId>.json`, validates it with `normalizeSafeRelativePath`, ensures the review
@@ -1508,15 +1631,18 @@ When the next slot already exists, recovery may reissue that same directive as p
 must not append a second pending record or create a second claim. Recovered claimed slots wait for matching
 PostToolUse, and uncertain claimed recovery does not redispatch.
 
-Every directive creation or reissue, `claimReviewDispatch`, and terminal-failure retry-pending creation resolves
-the correlation's authorizationId and requires its `AuthorizationStore` binding to be durably `active` immediately
-before the state-changing append or directive injection. Released, invalidated, missing, unreadable,
-conflict-diverted, or otherwise uncertain Authorization returns a blocked / stale advisory, creates no pending
-slot, claim binding, reservation, or directive, and requests idempotent cancellation of an already pending or
-claimed slot. `recoverReviewDispatchesAfterRestart` must hydrate Authorization before projecting review records;
-it must never decide retry eligibility from the review log alone. The parent-session queue serializes this
-domain-specific check with claim, retry-pending append, directive injection, and cancellation terminalization, so
-an operation that observes a newly terminal Authorization cannot publish a later directive.
+Every directive creation or reissue, `claimReviewDispatch`, failure terminalization, and terminal-failure
+retry-pending creation resolves the correlation's authorizationId and requires its `AuthorizationStore` binding to
+be durably `active` immediately before the state-changing append or directive injection. Released, invalidated,
+missing, unreadable, conflict-diverted, or otherwise uncertain Authorization returns a blocked / stale advisory,
+creates no failure terminal, pending slot, claim binding, reservation, or directive, and invokes the within-parent
+cancellation helper only for an already pending or claimed slot. `recoverReviewDispatchesAfterRestart` must
+hydrate Authorization before projecting review records; it must never decide retry eligibility from the review log
+alone. For every retryable terminal and ordinary pending slot, recovery acquires its parent-session queue,
+re-reads the latest durable Authorization inside that operation, and only then creates/reissues a pending
+directive. The parent-session queue serializes this domain-specific check with claim, failure terminalization,
+retry-pending append, directive injection, and cancellation terminalization, so an operation that observes a newly
+terminal Authorization cannot publish later review progress.
 
 In this Task only, extend `PlanBridge.handleImplementationArm` after Task 2.3's successful durable release, and
 the existing fingerprint-invalidation path after its durable invalidation, to call
@@ -1560,13 +1686,48 @@ function serializeParentSessionClaim<T>(
       if (pendingClaimQueues.get(parentSessionId) === tail) {
         pendingClaimQueues.delete(parentSessionId);
       }
+  });
+}
+
+async function requestMandatoryReview(
+  parentSessionId: string,
+  correlation: ReviewCorrelation,
+  expectedCategory: "sp-review" | "sp-final-review",
+): Promise<void> {
+  await serializeParentSessionClaim(parentSessionId, async () => {
+    if (!(await isCurrentActiveAuthorization(correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        parentSessionId,
+        authorizationIdFor(correlation),
+      );
+      return;
+    }
+    const pending = await appendReviewDispatchTransition({
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: randomUUID(),
+      parentSessionId,
+      correlation,
+      expectedCategory,
+      from: null,
+      to: "pending",
     });
+    if (pending.kind !== "committed") return;
+    if (!(await isCurrentActiveAuthorization(correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        parentSessionId,
+        authorizationIdFor(correlation),
+      );
+      return;
+    }
+    await injectReviewRequiredDirective({ kind: "review_required", correlation });
+  });
 }
 
 async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispatchOutcome> {
   return serializeParentSessionClaim(input.parentSessionId, async () => {
     if (!(await isCurrentActiveAuthorization(input.correlation))) {
-      await cancelReviewDispatchesForTerminalAuthorization(
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
         input.parentSessionId,
         authorizationIdFor(input.correlation),
       );
@@ -1577,6 +1738,13 @@ async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispat
     if (pending === undefined) return { kind: "blocked", advisory: "review_claim_unavailable" };
 
     const reservation = await reserveReviewArtifact();
+    if (!(await isCurrentActiveAuthorization(input.correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        input.parentSessionId,
+        authorizationIdFor(input.correlation),
+      );
+      return { kind: "blocked", advisory: "review_authorization_terminal" };
+    }
     const claimed = await appendClaimedTransition({ pending, callId: input.callId, reservation });
     return claimed.kind === "committed"
       ? { kind: "claimed", taskCallBinding: projectTaskCallBinding(claimed.record) }
@@ -1589,6 +1757,13 @@ async function terminalizeReviewFailure(
   terminalReason: "review_execution_failed" | "lost_conclusive",
 ): Promise<ReviewFailureOutcome> {
   return serializeParentSessionClaim(claim.parentSessionId, async () => {
+    if (!(await isCurrentActiveAuthorization(claim.correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        claim.parentSessionId,
+        authorizationIdFor(claim.correlation),
+      );
+      return { kind: "blocked" };
+    }
     const existing = findRetryableTerminalFailure(
       await readDurableRecords(),
       claim.parentSessionId,
@@ -1596,6 +1771,14 @@ async function terminalizeReviewFailure(
     );
     if (existing !== undefined) {
       return ensureReviewRetryPendingWithinParentSessionClaim(existing);
+    }
+
+    if (!(await isCurrentActiveAuthorization(claim.correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        claim.parentSessionId,
+        authorizationIdFor(claim.correlation),
+      );
+      return { kind: "blocked" };
     }
 
     const terminal = await appendReviewDispatchTransition({
@@ -1698,6 +1881,13 @@ async function ensureReviewRetryPendingWithinParentSessionClaim(
   terminal: RetryableTerminalFailure,
 ): Promise<ReviewFailureOutcome> {
   const correlation = nextReviewRetryCorrelation(terminal.correlation);
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+      terminal.parentSessionId,
+      authorizationIdFor(correlation),
+    );
+    return { kind: "blocked" };
+  }
   const slots = projectReviewDispatchSlots(await readDurableRecords());
   const existing = slots.find(
     (slot) =>
@@ -1708,8 +1898,23 @@ async function ensureReviewRetryPendingWithinParentSessionClaim(
     return { kind: "retried", correlation };
   }
   if (existing?.state === "pending") {
+    if (!(await isCurrentActiveAuthorization(correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        terminal.parentSessionId,
+        authorizationIdFor(correlation),
+      );
+      return { kind: "blocked" };
+    }
     await injectReviewRequiredDirective({ kind: "review_required", correlation });
     return { kind: "retried", correlation };
+  }
+
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+      terminal.parentSessionId,
+      authorizationIdFor(correlation),
+    );
+    return { kind: "blocked" };
   }
 
   const pending = await appendReviewDispatchTransition({
@@ -1723,8 +1928,92 @@ async function ensureReviewRetryPendingWithinParentSessionClaim(
     to: "pending",
   });
   if (pending.kind !== "committed") return { kind: "blocked" };
+  if (!(await isCurrentActiveAuthorization(correlation))) {
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+      terminal.parentSessionId,
+      authorizationIdFor(correlation),
+    );
+    return { kind: "blocked" };
+  }
   await injectReviewRequiredDirective({ kind: "review_required", correlation });
   return { kind: "retried", correlation };
+}
+
+async function cancelReviewDispatchesForTerminalAuthorization(
+  parentSessionId: string,
+  authorizationId: string,
+): Promise<void> {
+  await serializeParentSessionClaim(parentSessionId, async () => {
+    await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+      parentSessionId,
+      authorizationId,
+    );
+  });
+}
+
+async function cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+  parentSessionId: string,
+  authorizationId: string,
+): Promise<void> {
+  const slots = projectReviewDispatchSlots(await readDurableRecords());
+  const current = slots.find(
+    (slot) =>
+      slot.key.parentSessionId === parentSessionId &&
+      authorizationIdFor(slot.key.correlation) === authorizationId &&
+      (slot.state === "pending" || slot.state === "claimed"),
+  );
+  if (current === undefined) return;
+  await appendCancelledReviewDispatchTransition(current);
+}
+
+async function appendCancelledReviewDispatchTransition(current: ReviewDispatchSlot): Promise<void> {
+  if (current.state === "pending") {
+    await appendReviewDispatchTransition({
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: randomUUID(),
+      parentSessionId: current.key.parentSessionId,
+      correlation: current.key.correlation,
+      expectedCategory: current.expectedCategory,
+      from: "pending",
+      to: "terminal",
+      terminalReason: "cancelled",
+    });
+    return;
+  }
+  if (current.state !== "claimed" || current.callId === undefined) return;
+  await appendReviewDispatchTransition({
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: randomUUID(),
+    parentSessionId: current.key.parentSessionId,
+    correlation: current.key.correlation,
+    expectedCategory: current.expectedCategory,
+    from: "claimed",
+    to: "terminal",
+    callId: current.callId,
+    terminalReason: "cancelled",
+  });
+}
+
+async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlot): Promise<void> {
+  await serializeParentSessionClaim(slot.key.parentSessionId, async () => {
+    const latestSlots = projectReviewDispatchSlots(await readDurableRecords());
+    const latest = latestSlots.find(
+      (candidate) =>
+        candidate.key.parentSessionId === slot.key.parentSessionId &&
+        sameReviewCorrelation(candidate.key.correlation, slot.key.correlation),
+    );
+    if (latest?.state !== "pending") return;
+    if (!(await isCurrentActiveAuthorization(latest.key.correlation))) {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        latest.key.parentSessionId,
+        authorizationIdFor(latest.key.correlation),
+      );
+      return;
+    }
+    await injectReviewRequiredDirective({ kind: "review_required", correlation: latest.key.correlation });
+  });
 }
 
 async function recoverReviewDispatchesAfterRestart(): Promise<void> {
@@ -1743,10 +2032,7 @@ async function recoverReviewDispatchesAfterRestart(): Promise<void> {
         sameReviewCorrelation(nextReviewRetryCorrelation(terminal.correlation), slot.key.correlation),
     );
     if (isRetryPending) continue;
-    await injectReviewRequiredDirective({
-      kind: "review_required",
-      correlation: slot.key.correlation,
-    });
+    await reissuePendingReviewDirectiveAfterRestart(slot);
   }
 }
 ```
@@ -1970,12 +2256,73 @@ it.each([mismatchedParentSessionStaging, mismatchedCallIdStaging, mismatchedCorr
   },
 );
 
-it("is a no-op when a matching terminal record already exists", async () => {
-  await arrangeClaimedStagingWithMatchingTerminal(stagedRecord);
+it("recovers a clean terminal after terminal append but before gate_pending without rereading its artifact", async () => {
+  await arrangeClaimedStagingWithMatchingCleanTerminalWithoutLifecycle(stagedRecord);
   await recoverStagedReviewCompletion(stagedRecord);
+  await recoverStagedReviewCompletion(stagedRecord);
+
   expect(readArtifact).not.toHaveBeenCalled();
   expect(appendTerminalRecord).not.toHaveBeenCalled();
+  expect(durableGatePendingTransitions()).toHaveLength(1);
+  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+});
+
+it("resumes one missing Gate path after gate_pending was durable before a crash", async () => {
+  await arrangeClaimedStagingWithMatchingCleanTerminalAndGatePending(stagedRecord);
+  await recoverStagedReviewCompletion(stagedRecord);
+  await recoverStagedReviewCompletion(stagedRecord);
+
+  expect(appendTerminalRecord).not.toHaveBeenCalled();
+  expect(durableGatePendingTransitions()).toHaveLength(1);
+  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+});
+
+it("recovers a Final Review clean terminal to final_gate_pending and one Final Gate", async () => {
+  await arrangeFinalStagingWithMatchingCleanTerminalWithoutLifecycle(finalStagedRecord);
+  await recoverStagedReviewCompletionsAfterRestart();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(appendTerminalRecord).not.toHaveBeenCalled();
+  expect(durableFinalGatePendingTransitions()).toHaveLength(1);
+  expect(recordGatePendingAndEvaluate).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+});
+
+it.each(["task-review", "final-review"] as const)(
+  "recovers %s findings terminal to direct rework exactly once without Gate",
+  async (reviewKind) => {
+    await arrangeMatchingFindingsTerminalWithoutRework(reviewKind);
+    await recoverStagedReviewCompletionsAfterRestart();
+    await recoverStagedReviewCompletionsAfterRestart();
+
+    expect(appendTerminalRecord).not.toHaveBeenCalled();
+    expect(durableReworkTransitions(reviewKind)).toHaveLength(1);
+    expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps an existing incomplete terminal blocked without Gate, rework, or duplicate mutation", async () => {
+  await arrangeMatchingIncompleteTerminal(stagedRecord);
+  await recoverStagedReviewCompletionsAfterRestart();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(appendTerminalRecord).not.toHaveBeenCalled();
   expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(durableReworkTransitions()).toHaveLength(0);
+  expect(projectedAcceptance()).toMatchObject({ verdict: "blocked" });
+});
+
+it("retains a clean terminal but suppresses lifecycle, Gate, and Acceptance after authorization becomes terminal", async () => {
+  await arrangeClaimedStagingWithMatchingCleanTerminalWithoutLifecycle(stagedRecord);
+  releaseAuthorization(stagedAuthorizationId);
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(durableTerminalRecords()).toHaveLength(1);
+  expect(durableGatePendingTransitions()).toHaveLength(0);
+  expect(recordGatePendingAndEvaluate).not.toHaveBeenCalled();
+  expect(recordAcceptanceDecision).not.toHaveBeenCalled();
 });
 
 it.each(["released", "invalidated"] as const)(
@@ -2115,10 +2462,19 @@ once; strictly parse `ReviewWorkerResultV1`; classify it before lifecycle work; 
 `ReviewDispatchTransitionRecord` containing consumption, the classification-matched artifact subtype, and
 `claimed → terminal`; then project the terminal result.
 
-For `completed`, durably record `review_pending → gate_pending` or `final_review_pending →
-final_gate_pending` and request `evaluateGatePendingAttempt`. For `completed_with_findings`, durably
-project direct `rework_required` / `final_rework_required` without calling Gate. For `review_incomplete`,
-retain `review_pending` / `final_review_pending` as blocked without invoking Gate or auto-redispatching.
+After every successful composite terminal append, and whenever recovery finds that matching terminal, call only
+`ensureTerminalReviewOutcomeApplied`. This Task 3.6-private helper re-reads the latest durable Authorization and
+lifecycle projection, classifies the immutable terminal reason, and never appends the terminal record itself. For
+`completed`, it appends `review_pending → gate_pending` or `final_review_pending → final_gate_pending` only when
+that exact current identity has no durable transition, then calls Task 3.2's idempotent
+`evaluateGatePendingAttempt`. If the transition is already durable but its current-identity GateDecision is
+missing, it resumes only that Gate path. For `completed_with_findings`, it appends direct
+`rework_required` / `final_rework_required` only when absent and never calls Gate. For `review_incomplete`, it
+does not append lifecycle, Gate, Acceptance, or retry records and returns blocked. Terminal, missing, unreadable,
+conflict-diverted, or otherwise uncertain Authorization returns blocked / stale, retains the immutable terminal
+record, and creates no positive lifecycle, Gate, Acceptance, or Progress state. Repeated calls use the Task 3.1
+current-lifecycle and Task 3.2 current-decision checks so lifecycle transitions, GateDecision, and
+AcceptanceDecision are each authoritative at most once.
 Task 3.4 terminalizes `review_execution_failed` and `lost_conclusive` before it creates their next-round
 pending slot; those failure branches never call this artifact-consumption path. For a final-review failure,
 the next pending correlation retains `finalizationAttemptId`, increments `finalReviewRound`, and leaves
@@ -2158,17 +2514,19 @@ append; (5) run `recoverReviewDispatchesAfterRestart` to offer only still-active
 Controller. This ordering prevents `claimed + staging` from being mistaken for pending and prevents a terminal
 Authorization from reissuing a directive.
 
-For each staging record, `recoverStagedReviewCompletion` reads durable records and verifies that the matching
-parent session / callId / correlation slot remains current `claimed`, that its `TaskCallBinding` and
-`DelegatedExecutionBinding` still match, and that the staged artifact ID and digest match the staged composite
-payload. It then checks current active Authorization. A terminal physical record for that same callId and
-correlation is a no-op. Otherwise it retries exactly the one composite terminal append using only the staging's
-stored `artifactConsumption`, assembled `ReviewArtifactV1`, and `ObservedReviewExecution`; it never reads the
-artifact path, fetches worker output, creates a reservation or dispatch, or changes either review-round field.
-Only a successful terminal append runs the ordinary completion outcome mapping: `completed` enters the normal
-gate-pending and Gate path, `completed_with_findings` enters direct rework, and `review_incomplete` remains
-blocked. A failed append leaves the slot `claimed` plus staging durable and Acceptance blocked. Cleanup is
-idempotent and runs only after the terminal durable success. A mismatch is stale/advisory with no state mutation.
+For each staging record, `recoverStagedReviewCompletion` first reads durable records for a matching terminal
+physical record by parent session, callId, correlation, staged artifact ID / digest, and assembled artifact. When
+that terminal exists, it reads neither the artifact nor worker output, does not require the slot to remain
+`claimed`, does not append a terminal record, and calls `ensureTerminalReviewOutcomeApplied(existingTerminal)`.
+When no matching terminal exists, it verifies that the parent session / callId / correlation slot remains current
+`claimed`, that its `TaskCallBinding` and `DelegatedExecutionBinding` still match, and that the staged artifact ID
+and digest match the staged composite payload. It then checks current active Authorization and retries exactly the
+one composite terminal append using only the staging's stored `artifactConsumption`, assembled
+`ReviewArtifactV1`, and `ObservedReviewExecution`; it never reads the artifact path, fetches worker output,
+creates a reservation or dispatch, or changes either review-round field. Only a successful terminal append calls
+`ensureTerminalReviewOutcomeApplied` for the same terminal. A failed append leaves the slot `claimed` plus staging
+durable and Acceptance blocked. Cleanup is idempotent and runs only after the terminal durable success. A mismatch
+is stale/advisory with no state mutation.
 
 ```ts
 if (claim.artifactReservation.status === "unusable") return { kind: "blocked" };
@@ -2189,18 +2547,8 @@ if (!(await isReviewAuthorizationActive(claim.correlation))) {
 }
 const terminal = await appendTerminalRecord(staging);
 if (terminal.kind !== "committed") return { kind: "blocked" };
-await projectTerminalRecord(terminal);
-switch (terminal.terminalReason) {
-  case "completed":
-    await recordGatePendingAndEvaluate(terminal.reviewArtifact);
-    break;
-  case "completed_with_findings":
-    await recordDirectRework(terminal.correlation);
-    break;
-  case "review_incomplete":
-    await recordBlockedReview(terminal.correlation);
-    break;
-}
+await projectTerminalRecord(terminal.record);
+await ensureTerminalReviewOutcomeApplied(terminal.record);
 await cleanupArtifact(staging.artifactConsumption.artifactId);
 return { kind: "terminalized" };
 ```
@@ -2595,6 +2943,9 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | authorization terminal dominance and cache consistency          | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value |
 | JUS-P0-02 session-scoped cancel                                | 2.3, 3.4                | pathless parser, invalid flag combinations, durable release, no-binding idempotence, release-before-cancelled ordering, pending/claimed cancellation tombstone                            |
 | terminal Authorization blocks review dispatch                  | 2.3, 3.4                | cancel or invalidation prevents initial/reissued directive and claim; restart does not revive a pending slot; tombstone failure remains fail-closed and later converges                  |
+| terminal Authorization blocks review retry                     | 3.4                     | `review_execution_failed` and `lost_conclusive` terminal followed by cancel/restart creates no next pending, directive, or Acceptance progress                                      |
+| terminal Authorization blocks pending recovery                 | 3.4                     | cancellation tombstone append failure followed by restart emits no pending directive, permits no claim, and later converges one tombstone                                              |
+| cancellation serialization                                     | 3.4                     | terminal-Authorization claim completes without reentrant queue wait; external cancellation and claim serialize; A → B → C leaves no stale queue tail and at most one tombstone          |
 | JUS-P0-03 seven-to-seven category mapping                      | 1.1                     | every role, legacy downgrade rejection                                                                                                                                                 |
 | JUS-P0-03 doctor effective category configuration              | 1.2                     | JSONC parsing, source precedence, missing category, unreadable/unsupported source, redaction                                                                                           |
 | JUS-P0-04 task lifecycle                                       | 3.1                     | full `authorized → in_progress → worker_reported → evidence_pending → review_pending` trace, fresh attempt, restart reconstruction                                                     |
@@ -2605,6 +2956,11 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | atomic review claim                                             | 3.4                     | critical section re-reads latest durable records, projects, validates one pending slot, reserves, then appends claimed before publishing authority                                      |
 | JUS-P0-04 review terminal atomicity                            | 3.6                     | one terminal physical record, failed append has no partial projection, deterministic replay, no pre-terminal acceptance                                                                |
 | claimed + completion staging restart recovery                  | 3.6                     | staging durable, terminal append failure, restart recovery, no artifact/worker-output reread, exactly one terminal                                                                     |
+| terminal to lifecycle crash recovery                           | 3.6                     | existing clean terminal is reused without artifact reread or terminal append; missing gate_pending / final_gate_pending transition is appended exactly once                            |
+| clean terminal recovery                                        | 3.2, 3.6                | clean task and Final Review terminal recover gate_pending and current-identity Gate exactly once; repeated recovery creates no duplicate GateDecision or AcceptanceDecision             |
+| findings terminal recovery                                     | 3.6                     | task and Final Review findings terminal recover rework_required / final_rework_required exactly once and never invoke Gate                                                            |
+| terminal Authorization after completed terminal                | 3.2, 3.6                | completed terminal remains durable while terminal Authorization suppresses lifecycle promotion, Gate, Acceptance, and Progress                                                        |
+| repeated post-terminal recovery                                | 3.2, 3.6                | terminal append, lifecycle transition, GateDecision, and AcceptanceDecision remain exactly once across repeated recovery                                                              |
 | staged terminalization idempotency                             | 3.6                     | repeated recovery has no duplicate terminal, Gate, or Acceptance                                                                                                                        |
 | staging recovery failure                                       | 3.6                     | claimed plus staging remains durable; no new dispatch, reservation, or round; Acceptance stays blocked                                                                                  |
 | staging versus terminal Authorization                          | 2.3, 3.4, 3.6           | cancel/invalidation after staging prevents promotion; slot converges to cancelled; fresh approval does not reuse old state                                                              |
@@ -2637,16 +2993,16 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                  | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                    |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14           | lifecycle orchestration; review-only versus actual-rework finalization identity; replayed current final correlation tests                                                           |
-| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6 and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19 | gate-pending-only, authorization guard before Gate and Acceptance append, decision ordering, blocked tests                                                              |
+| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19 | gate-pending-only, authorization guard before Gate and Acceptance append, current-identity Gate/Acceptance idempotency, decision ordering, blocked tests                      |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                             | child-session runtime spike                                                                                                                                                        |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19 | exact parent-session queue primitive, authorization guard, cancel/invalidation tombstone orchestration, 2-call and overlapping 3-call mutual exclusion, durable claim ordering, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19 | exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                     | durable child-binding tests                                                                                                                                                        |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19 | unusable no-read blocked path, authorization guard, staged terminalization startup recovery, no reread, idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19 | unusable no-read blocked path, authorization guard, staged terminalization and post-terminal outcome recovery, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19        | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                           |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                             | controller routing tests                                                                                                                                                           |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                     | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                            |
 
-Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, parent-session claim serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
 <!-- markdownlint-enable MD013 MD060 -->
 

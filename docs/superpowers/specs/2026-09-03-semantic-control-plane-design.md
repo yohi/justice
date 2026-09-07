@@ -744,7 +744,7 @@ artifact reservation の SSOT にはしない。
 | `pending`                            | durable Authorization が current `active` の場合に限り、同じ `ReviewCorrelation` の `ReviewRequiredDirective` を再発行する。`reviewRound` は増分しない。terminal / uncertain Authorization なら cancellation tombstone を収束させ、directive は発行しない。 | 新しい slot、binding、`callId`、review round を作る                                              |
 | `claimed`（staging なし）            | durable record から同じ `callId`、trusted correlation、binding、artifact reservation を復元し、matching `PostToolUse` を待つ。                                                                                      | directive の再発行、同じ correlation の再 claim、artifact の先読み                               |
 | `claimed`（completion staging あり） | durable Authorization が current `active` の場合に限り、staging の `callId`、correlation、artifact ID / digest、assembled artifact を再検証し、同じ terminalization commit を idempotent に再試行する。成功時だけ `review_observed`、terminal transition、Acceptance 入力を反映する。terminal / uncertain Authorization なら staged result を昇格せず cancelled tombstone を収束させる。 | 新しい dispatch / claim / artifact reservation、別 artifact の消費、worker output の再読・再生成 |
-| `terminal`                           | terminal tombstone を保持する。retry が必要な場合は新しい correlation で新しい `pending` slot を作る。review-only retry は terminal record とその新しい pending record から current round を再構築する。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行                                       |
+| `terminal`                           | terminal physical record は不変の authority として保持する。retryable failure (`review_execution_failed` / `lost_conclusive`) は durable Authorization が current `active` の場合だけ、新しい correlation の `pending` slot を作る。`completed` / `completed_with_findings` / `review_incomplete` は terminal record を再appendせず、下記の post-terminal outcome application を idempotent に収束させる。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行、terminal record の再append |
 
 - `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance を blocked にする。
 - final-review の review-only retry では、projector は同じ `finalizationAttemptId` を持つ terminal failure record の後に append された pending slot の `ReviewCorrelation.finalReviewRound` を current round として復元する。old round の terminal review、GateDecision、AcceptanceDecision は current finalization correlation と一致しない stale record として扱い、Final Gate の入力に使用しない。
@@ -752,6 +752,8 @@ artifact reservation の SSOT にはしない。
 - `callId`、parent session、purpose、trusted correlation、child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
 - log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion は blocked にする。
 - completion staging が durable でも Authorization terminality が優先する。terminal Authorization を検出した recovery / completion は staged artifact を `accepted` / `complete` に昇格せず、対応 slot を `cancelled` として閉じる。staging artifact の cleanup は terminal tombstone の durable success 後に限る best-effort / idempotent operation とし、reapproval の新しい authorizationId へ移植しない。
+- **Post-terminal outcome application**: matching terminal physical record が既に durable であっても、対応する downstream lifecycle outcome が durable / projected でなければ、recovery は terminal record を再appendせず outcome mapping だけを同一 parent-session operation で再開する。`completed` は durable current `active` Authorization の場合だけ task を `review_pending → gate_pending`、final を `final_review_pending → final_gate_pending` へ一度だけ遷移させ、current identity の既存 Gate path を再開する。`completed_with_findings` は Gate を呼ばず、`rework_required` または `final_rework_required` が未成立の場合だけ一度だけ成立させる。`review_incomplete` は blocked が正規状態であり、lifecycle、Gate、rework の追加 mutation を行わない。terminal / missing / uncertain Authorization はこの mapping より優先し、terminal review record を保持したまま Gate、Acceptance、Progress、positive lifecycle transition を生成しない。
+- post-terminal outcome application は繰り返し実行可能でなければならない。既存の current lifecycle、current review identity、current GateDecision、current AcceptanceDecision を durable projection で確認し、duplicate lifecycle transition、GateDecision、AcceptanceDecision を authority として append してはならない。lifecycle transition 後かつ Gate 処理前の crash では、同じ recovery が current `gate_pending` / `final_gate_pending` に対する未完了の既存 Gate path だけを再開する。
 
 ### 4.9 Persisted Execution Binding
 
@@ -1005,6 +1007,13 @@ Justice
        unavailable/error/insufficient → gate_pending のまま acceptance blocked
 ```
 
+terminal physical record の durable commit 後に process が停止した場合、restart recovery は terminal
+record を authority として再利用し、record を再appendせず post-terminal outcome application を実行する。
+clean review は `gate_pending` の durable transition と current identity の未完了 Gate path を一度だけ
+収束させる。findings は `rework_required` を一度だけ収束させ、incomplete は blocked のまま no-op とする。
+Authorization が terminal / missing / uncertain なら、terminal review record は保持するが Gate、Acceptance、
+Progress、positive lifecycle transition を行わない。
+
 - Worker の正常終了を `TaskAccepted` と同一視しない。
 - "tests passed" 等の自己申告 (declared evidence) だけでは Gate PASS 不可。
 - Gate PASS より先に plan.md を完了状態にしない。
@@ -1084,6 +1093,13 @@ Final Review:
       → same finalizationAttemptId N / finalReviewRound N+1 の新しい pending slot
       → stale N round の Final Review / Final Gate を拒否
 ```
+
+Task Review と同様、Final Review の terminal physical record がすでに存在して lifecycle/Gate outcome
+だけが未適用の場合、restart recovery は terminal record を再appendしない。clean terminal は
+`final_review_pending → final_gate_pending` と current identity の未完了 Final Gate path を一度だけ
+収束させ、findings terminal は `final_rework_required` を一度だけ収束させる。incomplete terminal は
+blocked のままにする。terminal / missing / uncertain Authorization はすべての positive downstream
+progress に優先する。
 
 Task Review と Final Review の各矢印は、対応する correlation の authorizationId が current durable
 `active` binding である場合だけ authoritative に進める。cancel / invalidation 後は pending / claimed
