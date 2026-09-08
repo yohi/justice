@@ -5130,13 +5130,14 @@ never-rejecting port.
 `unusable`; the runtime continues the task fail-open with no artifact path and never treats that binding as
 review completion authority. A `blocked` outcome exposes neither `callId` nor `artifactId` as authority.
 `FileWriter.createExclusiveMarker?.(path)` returns `"created"` with a JSON-safe
-`ReviewArtifactInodeIdentity` and private `leasePath`, or `"occupied"`. The runtime adapter implements
-it with a unique same-directory temporary marker, the existing atomic `FileWriter.link` destination
-operation, and a retained private hard-link lease to the created inode; it maps only `EEXIST` to
-`"occupied"` and removes only collision markers best-effort. It must not use `fileExists` followed by
-`writeFile`, follow a destination symlink, or fall back to non-exclusive overwrite. Missing or failed
-exclusive-create, identity capture, or no-follow support returns an unusable reservation with
-`artifact_storage_unavailable`.
+`ReviewArtifactInodeIdentity` and private `leasePath`, or `"occupied"`. This is an optional runtime
+capability, not a promise that every `FileWriter` can provide it. A runtime may implement it only with
+descriptor-relative or equivalent native operations that bind the review directory and all ancestors
+for the complete operation. `resolveSafely()` followed by an absolute-path `O_NOFOLLOW` open is not
+such an implementation. The current path-only `NodeFileSystem` therefore leaves this capability
+absent until a descriptor-relative adapter is selected and tested. Missing or failed exclusive-create,
+identity capture, or no-follow support returns an unusable reservation with
+`artifact_storage_unavailable`; no `fileExists` → `writeFile` fallback is permitted.
 `ReviewDispatchTransitionRecord` is `PersistedEnvelope` plus the dispatch fields, so every durable
 transition also carries the observed `agentId` and `sessionId` used later to build Gate/Acceptance
 decision envelopes. The common append helper supplies those envelope fields from the current runtime
@@ -6789,12 +6790,43 @@ export type JusticePluginOptions = {
 };
 ```
 
-`src/runtime/opencode-plugin.ts` (or the existing runtime composition site that creates the two
-`NodeFileSystem` instances) passes `fileSystem.createReservedReviewArtifactIo()` into the plugin options.
-Test compositions pass `createMockReservedReviewArtifactIo(files)` explicitly. A runtime that has no
-review-artifact capability passes `undefined`; reservation is then unusable and the artifact path is never
-included in the worker payload. Do not derive the capability from `FileWriter` with `instanceof`, do not add it
-to unrelated storage interfaces, and do not introduce a generic filesystem DI layer.
+The sole production composition owner is `OpenCodeAdapter.#runInit()` in
+`src/runtime/opencode-adapter.ts`. Immediately after constructing its one `localFs` instance, it calls
+`localFs.createReservedReviewArtifactIo()` exactly once and conditionally passes the returned capability
+to the same `JusticePlugin` constructor that receives `localFs`, the shared `ObservationLogStore`, and
+the shared `AuthorizationStore`. Test compositions pass `createMockReservedReviewArtifactIo(files)`
+explicitly. A runtime that has no review-artifact capability passes no option; reservation is then
+unusable and the artifact path is never included in the worker payload. Do not derive the capability
+from `FileWriter` with `instanceof`, do not add it to unrelated storage interfaces, and do not introduce
+a generic filesystem DI layer.
+
+```ts
+// src/runtime/opencode-adapter.ts, OpenCodeAdapter.#runInit()
+const localFs = new NodeFileSystem(root);
+const reservedReviewArtifactIo = localFs.createReservedReviewArtifactIo();
+const reviewArtifactOptions: Pick<JusticePluginOptions, "reservedReviewArtifactIo"> =
+  reservedReviewArtifactIo === undefined ? {} : { reservedReviewArtifactIo };
+
+const justice = new JusticePlugin(localFs, localFs, {
+  logger: loggerAdapter,
+  onError: (err): void => {
+    void this.log("error", "[Justice] internal error", err);
+  },
+  globalFileSystem: globalFs ?? undefined,
+  notifier,
+  writerId,
+  workspaceRoot: root,
+  ...reviewArtifactOptions,
+});
+```
+
+`tests/runtime/opencode-adapter-v2.test.ts` must exercise this exact composition path, not a direct
+`new JusticePlugin(...)` substitute. It spies on the runtime capability factory, returns one sentinel
+`ReservedReviewArtifactIo`, calls `adapter.ensureInitialized()`, and inspects the constructed plugin
+through an `unknown` cast to assert that the same sentinel is stored in
+`JusticePluginOptions.reservedReviewArtifactIo`. A second case returns `undefined` and asserts that a
+review claim reaches the existing `artifact_reservation_unusable` fail-open path without exposing an
+artifact path. The test must restore the prototype spy in `finally` and must not add a production test hook.
 
 The production task route must branch before `PlanBridge.handlePreToolUse()` while preserving
 the existing observation handler and response merger. `buildReviewClaimResponse` must use the
@@ -7066,10 +7098,13 @@ omits the field at every boundary.
 
 The reservation and runtime filesystem tests must verify that the worker's existing-inode write is accepted,
 while a deleted-and-recreated leaf, symlink replacement, or replacement with a different hard-linked inode is
-rejected before artifact parsing. `NodeFileSystem` must expose the descriptor-relative/no-follow operation
-needed by the injected reservation port; generic pathname `readFile` / `writeFile` is not sufficient for this
-artifact path. Cleanup must refuse to unlink a replacement path, retain an advisory, and remove only the
-private lease after the original inode has reached a durable terminal.
+rejected before artifact parsing. The injected reservation port may be usable only when the runtime exposes
+the descriptor-relative/no-follow operation; generic pathname `readFile` / `writeFile` is not sufficient for
+this artifact path. The current path-only `NodeFileSystem` intentionally exposes no review-artifact
+capability, so its production path must return `artifact_storage_unavailable` without creating a worker
+artifact path. If a native descriptor-relative provider is added later, its runtime tests must cover the
+ancestor-swap cases before the provider is enabled. Cleanup must refuse to unlink a replacement path, retain
+an advisory, and remove the private lease only when the runtime can perform identity-verified deletion.
 
 Do not create `DelegatedExecutionBinding` here: a child session has not yet been authoritatively observed.
 Canonicalize `sp-review` and `sp-final-review` to `run_in_background = false` before the claim. The
@@ -8977,11 +9012,368 @@ type ReviewArtifactCompletionFixture = {
   readonly replaceArtifactWithDifferentInode: (content: string) => Promise<void>;
   readonly ensureCleanup: () => Promise<void>;
   readonly readReplacementArtifact: () => Promise<string>;
-  readonly durableFailureStaging: () => Promise<ReviewArtifactFailureStagingRecord | undefined>;
-  readonly durableGateDecisions: () => Promise<readonly GateDecisionRecord[]>;
-  readonly durableAcceptanceDecisions: () => Promise<readonly AcceptanceDecisionRecord[]>;
+  readonly durableFailureStaging: () => Promise<
+    | Extract<PersistedLogRecord, { readonly kind: "review_artifact_failure_staged" }>
+    | undefined
+  >;
+  readonly durableGateDecisions: () => Promise<readonly GateDecision[]>;
+  readonly durableAcceptanceDecisions: () => Promise<readonly AcceptanceDecision[]>;
 };
 ```
+
+Export `createMockReservedReviewArtifactIo(files)` from `tests/helpers/mock-file-system.ts` so the routing,
+reservation, and completion tests all use the same deterministic capability double. Define the two fixture
+functions below immediately after the type. They must construct the real `createReviewCompletionDomain` and
+the real Task 3.2 within-boundary Gate evaluator; they must not stub `consumeReviewCompletion` or return a
+synthetic completion outcome. The only test doubles are the injected filesystem capability, durable append
+ports, advisory spy, and the rule evaluator's deterministic `PASS` result.
+
+```ts
+type UsableReviewArtifactReservation = Extract<
+  ReviewArtifactReservation,
+  { readonly status: "usable" }
+>;
+type CompletionFixtureMode = "claimed" | "terminalized";
+type ReviewCompletionDependenciesForTest = Parameters<
+  typeof reviewArtifactModule.createReviewCompletionDomain
+>[0];
+
+async function arrangeClaimedUsableReviewCompletion(): Promise<ReviewArtifactCompletionFixture> {
+  return arrangeReviewArtifactCompletionFixture("claimed");
+}
+
+async function arrangeTerminalizedReviewWithUsableReservation(): Promise<ReviewArtifactCompletionFixture> {
+  return arrangeReviewArtifactCompletionFixture("terminalized");
+}
+
+async function arrangeReviewArtifactCompletionFixture(
+  mode: CompletionFixtureMode,
+): Promise<ReviewArtifactCompletionFixture> {
+  const files = createMockFileSystem();
+  const parentSessionId = "parent-review-artifact";
+  const childSessionId = "child-review-artifact";
+  const callId = "review-artifact-call";
+  const writerId = "writer-review-artifact";
+  const agentId: ObservationAgentId = "atlas";
+  const planPath = "docs/review-artifact.md";
+  const planContent = "## Task 1: review artifact\n- [ ] implementation\n";
+  const shard: ShardId = { agentId, sessionId: parentSessionId, writerId };
+  const logStore = new ObservationLogStore(files, files, writerId);
+  const boundary = createAuthorizationReviewBoundary();
+  const seedAuthorizationStore = new AuthorizationStore(files, files, boundary);
+  const approvedTaskIds = new PlanParser().parse(planContent).map((task) => task.id);
+  await files.writeFile(planPath, planContent);
+  const authorization = await seedAuthorizationStore.approve({
+    sessionId: parentSessionId,
+    planPath,
+    canonicalSnapshot: buildCanonicalSnapshot(planContent, approvedTaskIds),
+    planFingerprint: computePlanFingerprint(planContent, approvedTaskIds),
+    approvedAt: "2026-09-05T00:00:00.000Z",
+  });
+  if (authorization === null || authorization.status !== "active") {
+    throw new Error("completion fixture could not seed an active Authorization");
+  }
+  const taskExecutionRef: TaskExecutionRef = {
+    authorizationId: authorization.authorizationId,
+    taskId: "task-1",
+    attemptId: "attempt-review-artifact",
+  };
+  const correlation: TaskReviewCorrelation = {
+    reviewKind: "task-review",
+    taskExecutionRef,
+    reviewRound: 1,
+  };
+
+  const artifactPath = ".justice/reviews/review-artifact.json";
+  const leasePath = ".justice/reviews/.leases/review-artifact.json.lease";
+  const artifactIdentity: ReviewArtifactInodeIdentity = {
+    device: "mock-device",
+    inode: "review-artifact-1",
+  };
+  const reservation: UsableReviewArtifactReservation = {
+    status: "usable",
+    artifactId: "review-artifact-1",
+    artifactPath,
+    leasePath,
+    artifactIdentity,
+  };
+  files.writtenFiles[artifactPath] = "";
+  files.writtenFiles[leasePath] = "";
+  files.reviewArtifactIdentities.set(artifactPath, artifactIdentity);
+  files.reviewArtifactIdentities.set(leasePath, artifactIdentity);
+
+  const originalDeleteFile = files.deleteFile.bind(files);
+  const unlinkArtifactPath = vi.fn(originalDeleteFile);
+  files.deleteFile = unlinkArtifactPath;
+  const baseArtifactIo = createMockReservedReviewArtifactIo(files);
+  const writeReservedArtifact = vi.fn(baseArtifactIo.writeExisting.bind(baseArtifactIo));
+  const readReservedArtifact = vi.fn(baseArtifactIo.readOnce.bind(baseArtifactIo));
+  const genericArtifactRead = vi.fn(files.readFile.bind(files));
+  const recordAdvisory = vi.fn(async (_advisory: string, _cause?: unknown): Promise<void> => undefined);
+  const parseAndAssemble = vi.spyOn(reviewArtifactModule, "assembleReviewCompletionStaging");
+  const appendPendingRecord = async <T extends PendingLogRecord>(
+    input: T,
+  ): Promise<T & { readonly sequence: number }> => {
+    const sequence = await logStore.append(shard, input);
+    return { ...input, sequence };
+  };
+
+  const envelope = () => ({
+    schemaVersion: 1 as const,
+    timestamp: "2026-09-05T00:00:00.000Z",
+    agentId,
+    sessionId: parentSessionId,
+    writerId,
+    recordType: "observation" as const,
+  });
+  await appendPendingRecord({
+    ...envelope(),
+    kind: "review_dispatch_transition",
+    transitionId: "review-artifact-pending",
+    parentSessionId,
+    correlation,
+    expectedCategory: "sp-review",
+    from: null,
+    to: "pending",
+  });
+  await appendPendingRecord({
+    ...envelope(),
+    kind: "review_dispatch_transition",
+    transitionId: "review-artifact-claimed",
+    parentSessionId,
+    correlation,
+    expectedCategory: "sp-review",
+    from: "pending",
+    to: "claimed",
+    callId,
+    artifactReservation: reservation,
+  });
+  await appendPendingRecord({
+    ...envelope(),
+    kind: "delegated_execution_binding",
+    parentSessionId,
+    parentCallId: callId,
+    childSessionId,
+    scope: { kind: "task", taskExecutionRef },
+  });
+
+  const findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"] = (id) =>
+    id === authorization.authorizationId
+      ? Promise.resolve(authorization)
+      : Promise.resolve(null);
+  const appendReviewDispatchTransition: ReviewCompletionDependenciesForTest["appendReviewDispatchTransition"] =
+    async (input) => ({
+      kind: "committed" as const,
+      record: await appendPendingRecord(input),
+    });
+  const appendTaskLifecycleTransition: ReviewCompletionDependenciesForTest["appendTaskLifecycleTransition"] =
+    async (input) => {
+      await appendPendingRecord({ ...envelope(), kind: "task_lifecycle_transition", ...input });
+      return { kind: "committed" as const };
+    };
+  const appendPlanFinalizationTransition: ReviewCompletionDependenciesForTest["appendPlanFinalizationTransition"] =
+    async (input) => {
+      await appendPendingRecord({ ...envelope(), kind: "plan_finalization_transition", ...input });
+      return { kind: "committed" as const };
+    };
+  const appendDecision: GateEvaluationDependencies["appendDecision"] = async (input) => {
+    await appendPendingRecord(input);
+    return { kind: "committed" as const };
+  };
+  const gateEvaluator = createGatePendingAttemptEvaluator({
+    readDurableRecords: () => logStore.readAll(),
+    appendDecision,
+    findAuthorizationById,
+    withAuthorizationReviewBoundary: boundary.withParentSession,
+    appendTaskLifecycleTransition,
+    appendPlanFinalizationTransition,
+    evaluateRules: async ({ context }) =>
+      context.scope === "task"
+        ? {
+            recordType: "decision" as const,
+            gateType: "task" as const,
+            taskId: context.taskExecutionRef.taskId,
+            taskExecutionRef: context.taskExecutionRef,
+            verdict: "PASS" as const,
+            reachableEnforcementLevel: "L1" as const,
+            appliedEnforcementLevel: "L0" as const,
+            ruleResults: [],
+          }
+        : {
+            recordType: "decision" as const,
+            gateType: "plan" as const,
+            authorizationId: context.authorizationId,
+            planPath: context.planPath,
+            finalizationAttemptId: context.finalizationAttemptId,
+            finalReviewRound: context.finalReviewRound,
+            verdict: "PASS" as const,
+            reachableEnforcementLevel: "L1" as const,
+            appliedEnforcementLevel: "L0" as const,
+            ruleResults: [],
+          },
+    recordAdvisory: async (advisory) => recordAdvisory(advisory),
+  });
+  const readAndAssembleMatchingArtifact: ReviewCompletionDependenciesForTest["readAndAssembleMatchingArtifact"] =
+    async (postToolUse, binding, delegatedBinding, trustedCorrelation) => {
+      const content = await readReservedArtifact(binding.artifactReservation);
+      return parseAndAssemble(postToolUse, binding, delegatedBinding, trustedCorrelation, content);
+    };
+  const cleanupArtifact: ReviewCompletionDependenciesForTest["cleanupArtifact"] = async (usableReservation) => {
+    const outcome = await baseArtifactIo.cleanup(usableReservation);
+    if (outcome === "replacement_retained") {
+      await recordAdvisory("review_artifact_identity_mismatch");
+    }
+  };
+  const completion = createReviewCompletionDomain({
+    readDurableRecords: () => logStore.readAll(),
+    findAuthorizationById,
+    appendReviewCompletionStaging: async (input) => ({
+      kind: "committed" as const,
+      record: await appendPendingRecord(input),
+    }),
+    appendReviewArtifactReadAttempt: async (input) => ({
+      kind: "committed" as const,
+      record: await appendPendingRecord(input),
+    }),
+    appendReviewArtifactFailureStaging: async (input) => ({
+      kind: "committed" as const,
+      record: await appendPendingRecord(input),
+    }),
+    appendReviewPostToolUsePending: async (input) => {
+      await appendPendingRecord(input);
+      return { kind: "committed" as const };
+    },
+    appendReviewDispatchTransition,
+    readAndAssembleMatchingArtifact,
+    cleanupArtifact,
+    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary:
+      gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
+    appendTaskLifecycleTransition,
+    appendPlanFinalizationTransition,
+    recordAdvisory,
+    dispatch: {
+      withReviewDispatchParentSessionClaim: boundary.withParentSession,
+      offerNextMandatoryReviewWithinParentSessionClaim: vi.fn(async () => ({ kind: "none" as const })),
+      cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim: vi.fn(
+        async () => undefined,
+      ),
+    },
+  });
+  const validReviewWorkerJson = JSON.stringify({ schemaVersion: 1, complete: true, findings: [] });
+  const postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId"> = {
+    type: "PostToolUse",
+    sessionId: childSessionId,
+    callId,
+  };
+  const consume = (): Promise<ReviewCompletionOutcome> =>
+    completion.consumeReviewCompletion({
+      parentSessionId,
+      callId,
+      postToolUse,
+      agentId,
+      writerId,
+    });
+  let staged: ReviewCompletionStagingRecord | undefined;
+  let terminal: ReviewDispatchTransitionRecord | undefined;
+  if (mode === "terminalized") {
+    const observedExecution: ObservedReviewExecutionV1 = {
+      schemaVersion: 1,
+      provenance: "observed",
+      reviewExecutionEventId: "review-artifact-execution",
+      parentSessionId,
+      callId,
+      childSessionId,
+      correlation,
+    };
+    const reviewArtifact: CleanReviewArtifactV1 = {
+      schemaVersion: 1,
+      reviewKind: "task-review",
+      reviewSource: "sp-review",
+      correlation,
+      observedExecution,
+      complete: true,
+      findings: [],
+    };
+    const artifactConsumption = {
+      artifactId: reservation.artifactId,
+      digest: hashString(validReviewWorkerJson),
+    };
+    staged = await appendPendingRecord({
+      ...envelope(),
+      kind: "review_completion_staged",
+      parentSessionId,
+      staging: { callId, correlation, artifactConsumption, reviewArtifact, observedExecution },
+    });
+    terminal = await appendPendingRecord({
+      ...envelope(),
+      kind: "review_dispatch_transition",
+      transitionId: "review-artifact-terminal",
+      parentSessionId,
+      correlation,
+      expectedCategory: "sp-review",
+      from: "claimed",
+      to: "terminal",
+      callId,
+      artifactConsumption,
+      terminalReason: "completed",
+      reviewArtifact,
+    });
+  }
+
+  return {
+    reservation,
+    validReviewWorkerJson,
+    writeReservedArtifact,
+    readReservedArtifact,
+    genericArtifactRead,
+    parseAndAssemble,
+    recordAdvisory,
+    unlinkArtifactPath,
+    consume,
+    replaceArtifactWithDifferentInode: async (content) => {
+      files.writtenFiles[reservation.artifactPath] = content;
+      files.reviewArtifactIdentities.set(reservation.artifactPath, {
+        device: "mock-device",
+        inode: "review-artifact-replacement",
+      });
+    },
+    ensureCleanup: async () => {
+      if (staged === undefined || terminal === undefined) {
+        throw new Error("terminalized completion fixture was not initialized");
+      }
+      await completion.ensureConsumedReviewArtifactCleaned(staged, terminal);
+    },
+    readReplacementArtifact: () => files.readFile(reservation.artifactPath),
+    durableFailureStaging: async () =>
+      (await logStore.readAll()).find(
+        (record): record is Extract<
+          PersistedLogRecord,
+          { readonly kind: "review_artifact_failure_staged" }
+        > =>
+          record.kind === "review_artifact_failure_staged" && record.callId === callId,
+      ),
+    durableGateDecisions: async () =>
+      (await logStore.readAll()).filter(
+        (record): record is GateDecision =>
+          record.recordType === "decision" &&
+          (record.gateType === "task" || record.gateType === "plan"),
+      ),
+    durableAcceptanceDecisions: async () =>
+      (await logStore.readAll()).filter(
+        (record): record is AcceptanceDecision =>
+          record.recordType === "decision" &&
+          (record.kind === "task-acceptance" || record.kind === "plan-acceptance"),
+      ),
+  };
+}
+```
+
+The fixture must import the module namespace used by the spy, `PlanParser`, the plan fingerprint helpers,
+`AuthorizationStore`, `createAuthorizationReviewBoundary`, `ObservationLogStore`, the Task 3.2
+`createGatePendingAttemptEvaluator`, and the shared model types. `createMockReservedReviewArtifactIo` must
+be defined in the shared mock-file-system helper, not copied into each test. The `terminalized` variant
+seeds the exact claimed binding, completion staging, and matching terminal needed by
+`ensureConsumedReviewArtifactCleaned`; it does not call the completion consumer during arrangement.
 
 ```ts
 it("reads exactly once from matching artifact, lease, and durable identities", async () => {
@@ -9019,11 +9411,13 @@ it("retains a replacement path during terminal cleanup and records an advisory",
 });
 ```
 
-For the real-filesystem Node tests, assert all of the following independently: a matching reservation can
-`writeExisting` then `readOnce`; an unlink/recreate and a symlink replacement both make `writeExisting` reject
-without changing replacement bytes; `readOnce` rejects an artifact/lease/durable identity mismatch before JSON
-parsing; and cleanup retains a replacement. The Node cleanup test must assert the documented fail-closed
-`replacement_retained` result rather than relying on a racy `lstat` then `unlink` implementation.
+The real-filesystem Node test first asserts that the current path-only adapter exposes neither review-artifact
+capability. Do not add passing `writeExisting` / `readOnce` / cleanup cases against that adapter: they would
+codify the ancestor-swap vulnerability. If a descriptor-relative native provider is introduced, enable a
+separate provider-specific suite only after it independently proves matching-inode writes and reads, unlink/
+recreate and symlink replacement rejection without changing replacement bytes, identity mismatch rejection
+before JSON parsing, and fail-closed `replacement_retained` cleanup. The provider-specific cleanup test must
+never rely on a racy `lstat` then `unlink` implementation.
 
 ```ts
 it.each(["task-review", "final-review"] as const)(
@@ -11861,9 +12255,9 @@ boundary, inject only an active current pending slot, discard terminal / claimed
 and retain unreadable-authority deliveries with zero positive directive.
 F-041 reverse traceability is explicit: Task 3.4 makes `createExclusiveMarker` an optional
 `FileWriter` capability; the reservation port turns capability absence into an unusable result with
-no check-then-use fallback, NodeFileSystem provides the sole production capability, and the shared
-production-routing helper supplies deterministic marker behavior without forcing unrelated writers
-or inline test doubles to change.
+no check-then-use fallback, the production adapter passes only a verified descriptor-relative
+capability when one exists, and the shared production-routing helper supplies deterministic marker
+behavior without forcing unrelated writers or inline test doubles to change.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
@@ -11908,9 +12302,11 @@ Task 2.2、Task 3.2、Task 3.4、Task 3.6 は同じ boundary と同じ durable l
   `agentId`、`sessionId`、`writerId` から現在の shard を構成する。Core factory が
   `ObservationLogStore`、`AuthorizationStore`、OpenCode adapter を直接 import しては
   ならない。
-- `reserveReviewArtifact` は Task 3.4 の `ReviewArtifactReservationPort` と
-  `NodeFileSystem` の exclusive marker / no-follow 実装に接続する。path の再生成、
-  `fileExists` と `writeFile` の check-then-use、非排他的な上書きは許可しない。
+- `reserveReviewArtifact` は Task 3.4 の `ReviewArtifactReservationPort` と、
+  `OpenCodeAdapter.#runInit()` から渡される optional な descriptor-relative review-artifact
+  capability に接続する。path の再生成、`fileExists` と `writeFile` の check-then-use、
+  非排他的な上書き、canonical absolute path と leaf-only `O_NOFOLLOW` の組み合わせは
+  許可しない。capability がない Node runtime は `artifact_storage_unavailable` へ縮退する。
 - `recordAdvisory` は既存の Observation Log の advisory append 経路へ接続する。
   logger のみへの出力を durable advisory の代替にしてはならない。
 - `reviewDispatchState` を生成した直後に `this.reviewDispatchState` へ代入し、同じ
@@ -12094,166 +12490,38 @@ export type ReservedReviewArtifactIo = {
 };
 ```
 
-`NodeFileSystem.createExclusiveMarker` remains the only `FileWriter` addition. Add the separate
-`createReservedReviewArtifactIo(): ReservedReviewArtifactIo` method to `NodeFileSystem`; it is not declared on
-`FileWriter`. Add `randomUUID` from `node:crypto`, `constants` from `node:fs`, `open` and `lstat` from
-`node:fs/promises`, and the `ReviewArtifactInodeIdentity`, `ReviewArtifactReservation`, and
-`ReservedReviewArtifactIo` type imports. `FileHandle.stat()` is the required fstat operation. The only
-`EEXIST` mapped to `occupied` is the destination hard-link install; marker, lease, identity, or I/O capability
-creation failures must not create a usable reservation.
+The current `NodeFileSystem` uses path-only `node:fs/promises` operations and must not claim that
+`resolveSafely()` plus leaf-only `O_NOFOLLOW` is descriptor-relative. Do not add
+`createExclusiveMarker` or `ReservedReviewArtifactIo` implementations that resolve an absolute path and
+then open, link, or unlink it. Such code leaves an ancestor-swap window between validation and use.
+
+Until a native descriptor-relative provider is selected for the supported deployment platforms, add only
+the explicit unsupported result below. The method is intentionally separate from `FileWriter`; it gives
+the production composition a typed capability probe without turning an unsafe path helper into a review
+artifact boundary.
 
 ```ts
-private async readNoFollowInodeIdentity(path: string): Promise<ReviewArtifactInodeIdentity> {
-  // The descriptor is opened with O_NOFOLLOW before fstat, so a symlink cannot become a reservation.
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const fileStat = await handle.stat();
-    if (!fileStat.isFile()) throw new Error(`Review artifact is not a regular file: ${path}`);
-    return { device: String(fileStat.dev), inode: String(fileStat.ino) };
-  } finally {
-    await handle.close();
-  }
-}
-
-private async openVerifiedReservedArtifact(
-  reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  flags: number,
-): Promise<FileHandle> {
-  const artifactPath = await this.resolveSafely(reservation.artifactPath);
-  const leasePath = await this.resolveSafely(reservation.leasePath);
-  const artifact = await open(artifactPath, flags | constants.O_NOFOLLOW);
-  try {
-    const lease = await open(leasePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const [artifactStat, leaseStat] = await Promise.all([artifact.stat(), lease.stat()]);
-      const matches = (entry: Stats): boolean =>
-        entry.isFile() &&
-        String(entry.dev) === reservation.artifactIdentity.device &&
-        String(entry.ino) === reservation.artifactIdentity.inode;
-      if (!matches(artifactStat) || !matches(leaseStat)) {
-        throw Object.assign(new Error("reserved review artifact identity mismatch"), {
-          reason: "artifact_read_failed",
-        });
-      }
-      return artifact;
-    } finally {
-      await lease.close();
-    }
-  } catch (cause) {
-    await artifact.close().catch(() => undefined);
-    throw cause;
-  }
-}
-
-createReservedReviewArtifactIo(): ReservedReviewArtifactIo {
-  return {
-    writeExisting: async (reservation, content): Promise<void> => {
-      const handle = await this.openVerifiedReservedArtifact(
-        reservation,
-        constants.O_WRONLY,
-      ).catch((cause: unknown) => {
-        throw Object.assign(new Error("reserved review artifact write failed", { cause }), {
-          reason: "artifact_write_failed",
-        });
-      });
-      try {
-        await handle.truncate(0);
-        await handle.writeFile(content, "utf8");
-      } finally {
-        await handle.close();
-      }
-    },
-    readOnce: async (reservation): Promise<string> => {
-      const handle = await this.openVerifiedReservedArtifact(reservation, constants.O_RDONLY).catch(
-        (cause: unknown) => {
-          throw Object.assign(new Error("reserved review artifact read failed", { cause }), {
-            reason: "artifact_read_failed",
-          });
-        },
-      );
-      try {
-        return await handle.readFile({ encoding: "utf8" });
-      } finally {
-        await handle.close();
-      }
-    },
-    cleanup: async (reservation): Promise<"cleaned" | "replacement_retained"> => {
-      const artifactPath = await this.resolveSafelyForWrite(reservation.artifactPath);
-      try {
-        const artifact = await lstat(artifactPath);
-        const matches =
-          !artifact.isSymbolicLink() &&
-          String(artifact.dev) === reservation.artifactIdentity.device &&
-          String(artifact.ino) === reservation.artifactIdentity.inode;
-        // Node exposes no unlinkat-by-descriptor primitive. Do not perform a racy
-        // lstat-then-unlink for either the artifact or private lease; retaining both
-        // is safer than deleting a replacement.
-        if (!matches) return "replacement_retained";
-        return "replacement_retained";
-      } catch (cause: unknown) {
-        if (cause instanceof Error && (cause as NodeJS.ErrnoException).code === "ENOENT") {
-          return "cleaned";
-        }
-        throw cause;
-      }
-    },
-  };
-}
-
-async createExclusiveMarker(
-  path: string,
-): Promise<
-  | {
-      readonly kind: "created";
-      readonly leasePath: string;
-      readonly artifactIdentity: ReviewArtifactInodeIdentity;
-    }
-  | { readonly kind: "occupied" }
-> {
-  const destination = await this.resolveSafelyForWrite(path);
-  const markerPath = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.marker`);
-  const leaseRelativePath = join(dirname(path), ".leases", `${basename(path)}.lease`);
-  const leasePath = await this.resolveSafelyForWrite(leaseRelativePath);
-
-  await fsMkdir(dirname(destination), { recursive: true });
-  await fsMkdir(dirname(leasePath), { recursive: true });
-  const marker = await open(
-    markerPath,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-    0o600,
-  );
-  await marker.close();
-
-  try {
-    try {
-      await fsLink(markerPath, destination);
-    } catch (cause: unknown) {
-      if (cause instanceof Error && (cause as NodeJS.ErrnoException).code === "EEXIST") {
-        return { kind: "occupied" };
-      }
-      throw cause;
-    }
-    const artifactIdentity = await this.readNoFollowInodeIdentity(destination);
-    await fsLink(destination, leasePath);
-    return {
-      kind: "created",
-      leasePath: leaseRelativePath,
-      artifactIdentity,
-    };
-  } catch (cause: unknown) {
-    // Node cannot atomically bind identity verification to unlink. Retain an
-    // unusable artifact rather than racing to remove a possible replacement.
-    throw cause;
-  } finally {
-    await this.bestEffortDelete(() => unlink(markerPath));
-  }
+// src/runtime/node-file-system.ts
+createReservedReviewArtifactIo(): ReservedReviewArtifactIo | undefined {
+  // The public Node filesystem API used by this adapter has no operation that
+  // binds open/link/unlink to the validated ancestor descriptors.
+  return undefined;
 }
 ```
+
+`NodeFileSystem` must not add `createExclusiveMarker` while this method returns `undefined`. If a future
+native provider is introduced, it must be injected as a separate runtime capability and must hold an open
+directory descriptor for the review root and every ancestor used by marker, lease, read, write, and cleanup.
+Its operations must be descriptor-relative (or a platform-equivalent atomic primitive), compare artifact
+and lease identities before I/O, and be guarded by real-filesystem ancestor-swap tests. The provider must
+be enabled only after those tests pass; otherwise the composition continues to pass no capability and the
+reservation port returns `artifact_storage_unavailable` without creating a directory or exposing a path.
 - `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter, reservedReviewArtifactIo: ReservedReviewArtifactIo | undefined, recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation, bounded collision retry, and capability completeness. `createExclusiveMarker` and `ReservedReviewArtifactIo` are runtime capabilities, not general storage interfaces or a second composition dependency.
 
 Define the reservation port and helper before the production RED/GREEN tests. The helper below is the
 complete core-side retry and classification boundary; inode capture, marker cleanup, and no-follow
-support remain inside the injected `FileWriter.createExclusiveMarker` runtime operation:
+support remain inside the injected `FileWriter.createExclusiveMarker` runtime operation when that
+optional capability is present. The path-only Node runtime takes the missing-capability branch.
 
 ```ts
 const MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3;
@@ -12330,8 +12598,10 @@ export function createReviewArtifactReservationPort(
 }
 ```
 
-The optional `FileWriter` type change and `NodeFileSystem.createExclusiveMarker` implementation are part of
-Task 3.4's Files list. `createReservedReviewArtifactIo()` is supplied separately at the composition root.
+The optional `FileWriter` type change is part of Task 3.4's Files list. The current `NodeFileSystem`
+implementation adds only `createReservedReviewArtifactIo(): ReservedReviewArtifactIo | undefined`, which
+returns `undefined` until a descriptor-relative native provider is available; it does not add
+`createExclusiveMarker`. `createReservedReviewArtifactIo()` is called once at the composition root.
 Either capability being absent is an explicit `artifact_storage_unavailable` unusable result: it invokes neither
 `fileExists` nor `writeFile` and exposes no worker artifact path. `createMockFileWriter()` remains compatible;
 the review-artifact tests create a separate deterministic `createMockReservedReviewArtifactIo(files)` alongside
@@ -12339,8 +12609,9 @@ it. `createMockFileSystem()` uses that explicit test port only when a test const
 the review composition. `createMemFs().writer` and unrelated inline writer doubles remain unchanged unless their
 own test exercises reservation. The mock I/O port must reject a mismatched/symlink replacement without mutating
 its bytes, read only a matching recorded identity, and return `replacement_retained` instead of deleting a
-replacement. Runtime inode/no-follow semantics remain owned by `tests/runtime/node-file-system.test.ts`. Tests
-must assert that `fileExists` is never used for reservation, that a collision retries with a fresh UUID, and that
+replacement. The shared helper owns only deterministic identity bookkeeping; the runtime file test owns the
+unsupported-capability probe and any future native-provider tests. Tests must assert that `fileExists` is never
+used for reservation, that a collision retries with a fresh UUID, and that
 marker, identity, lease, or either missing capability returns the exact unusable reason without exposing a path.
 
 Extend the existing `node:path` import with `basename` and add type-only imports for
@@ -12367,7 +12638,7 @@ createExclusiveMarker: vi.fn(async (path: string) => {
 }),
 ```
 
-Define `createMockReservedReviewArtifactIo(files)` in this same test setup as a separate
+Define and export `createMockReservedReviewArtifactIo(files)` in `tests/helpers/mock-file-system.ts` as a separate
 `ReservedReviewArtifactIo`. `replaceArtifactLeafWithDifferentInode` changes the artifact entry in
 `files.reviewArtifactIdentities` without changing the lease entry. This lets the mock test the same durable
 identity mismatch boundary as the runtime test without pretending that an in-memory record is a no-follow file
@@ -12412,56 +12683,30 @@ function createMockReservedReviewArtifactIo(
 ```
 
 `createMockFileSystem()` continues to spread only its writer. Each review fixture explicitly passes this separate
-I/O port to `JusticePluginOptions`, so unrelated `FileWriter` users remain unchanged.
+I/O port to `JusticePluginOptions`, so unrelated `FileWriter` users remain unchanged. The mock port is the
+usable-capability test double; it must not be described as evidence of Node's descriptor-relative guarantees.
 
 Add a focused assertion in `tests/core/review-artifact-reservation.test.ts` that the production routing fixture
 receives a usable reservation through an explicitly supplied `createMockReservedReviewArtifactIo(files)`. The
 test must also assert a second call for the same destination returns `{ kind: "occupied" }` without replacing
 its existing content.
 
-Add `mkdtemp` and `rm` from `node:fs/promises`, `tmpdir` from `node:os`, and `join` from `node:path` if
-they are not already present, then add these real-filesystem cases to `tests/runtime/node-file-system.test.ts`.
-They own platform inode and no-follow behavior rather than the shared mock helper.
+Add this real-filesystem capability probe to `tests/runtime/node-file-system.test.ts`. It owns the
+runtime capability decision rather than pretending that the shared mock helper proves Node's filesystem
+semantics. Until a descriptor-relative native provider is added, the expected result is unsupported.
 
 ```ts
-it("creates an exclusive marker with a retained JSON-safe lease identity", async () => {
-  const root = await mkdtemp(join(tmpdir(), "justice-marker-"));
-  try {
-    const fs = new NodeFileSystem(root);
-    const createExclusiveMarker = fs.createExclusiveMarker;
-    if (createExclusiveMarker === undefined) throw new Error("marker capability is missing");
-    const result = await createExclusiveMarker.call(fs, ".justice/reviews/one.json");
+it("does not advertise review-artifact I/O without descriptor-relative primitives", () => {
+  const fs = new NodeFileSystem(".");
 
-    expect(result).toMatchObject({
-      kind: "created",
-      leasePath: ".justice/reviews/.leases/one.json.lease",
-      artifactIdentity: { device: expect.any(String), inode: expect.any(String) },
-    });
-    if (result.kind !== "created") throw new Error("marker was not created");
-    expect(await fs.fileExists(".justice/reviews/one.json")).toBe(true);
-    expect(await fs.fileExists(result.leasePath)).toBe(true);
-    expect(() => JSON.stringify(result.artifactIdentity)).not.toThrow();
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-it("reports an occupied destination without overwriting it", async () => {
-  const root = await mkdtemp(join(tmpdir(), "justice-marker-"));
-  try {
-    const fs = new NodeFileSystem(root);
-    const destination = ".justice/reviews/existing.json";
-    await fs.writeFile(destination, "existing artifact");
-    const createExclusiveMarker = fs.createExclusiveMarker;
-    if (createExclusiveMarker === undefined) throw new Error("marker capability is missing");
-
-    await expect(createExclusiveMarker.call(fs, destination)).resolves.toEqual({ kind: "occupied" });
-    await expect(fs.readFile(destination)).resolves.toBe("existing artifact");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  expect(fs.createReservedReviewArtifactIo()).toBeUndefined();
+  expect("createExclusiveMarker" in fs).toBe(false);
 });
 ```
+
+If a descriptor-relative native provider is later introduced, replace this probe with matching-inode
+`writeExisting` / `readOnce`, ancestor-swap, symlink-replacement, and replacement-retaining cleanup
+tests. Those tests are a prerequisite for enabling the provider, not an optional enhancement.
 - `resolveMandatoryReviewCategory(toolInput: Readonly<Record<string, unknown>>): "sp-review" | "sp-final-review" | undefined` returns a value only for exact canonical categories after the existing task-input normalizer has run.
 - `buildReviewClaimResponse(event: PreToolUseEvent, outcome: ClaimReviewDispatchOutcome): HookResponse` maps only a committed `TaskCallBinding` / explicit blocked outcome to the existing `HookResponse` union; it never copies correlation or artifact identity from `event.payload`.
 - `formatReviewDirective(directive: ReviewRequiredDirective): string` is the single pure formatter for the Controller-facing review directive.
