@@ -347,6 +347,16 @@ export type AuthorizationMutationResult =
 - `status: "saved"` 後は、同じ boundary を保持したまま authoritative `.justice/authorizations.json` を再読する。再読した配列から同一 session の active bindings を exact に確認し、active が一件で、かつ fresh `authorizationId` と一致した場合だけ `approve()` はその authoritative binding を返す。fresh ID が `invalidated` / `released` になった場合、別の binding が winner であっても、要求した plan の approval は成功扱いにせず `null` を返す。別 plan の winner を requested approval の positive result または armed result として返してはならない。
 - own fresh ID が winner ではないが post-save reread が成功した場合、`reconcileActivePlan` には latest durable active binding（なければ `null`）を渡して cache を reconciliation する。ただし `approve()` の戻り値は `null` のままとし、PlanBridge は request を arm しない。own fresh ID が winner の場合だけ callback に own binding を渡して cache を publish し、PlanBridge は同じ binding を armed result にする。
 - post-save authoritative reread が失敗した場合、fresh candidate を positive authority にせず、`reconcileActivePlan(sessionId, null)` で stale positive cache を clear し、`approve()` は `null` を返す。再読前の cache を fresh candidate として残したり、requested plan を armed にしたりしてはならない。initial read failure、例外、`conflict_diverted` では save が authoritative success ではないため callback を呼ばず、既存 cache を勝手に置換しない。
+
+  approval と active-plan cache の callback 契約は、以下の行列を normative contract とする。callback の結果は approval の戻り値や arm 可否を変更しない。
+
+  | outcome | save | `reconcileActivePlan` | `approve()` | cache / arm behavior |
+  | --- | --- | --- | --- | --- |
+  | initial authoritative read failure | save しない | 呼ばない | `null` | existing cache を変更せず、arm しない |
+  | save exception / `conflict_diverted` | authoritative success ではない | 呼ばない | `null` | requested candidate を publish せず、existing cache を変更しない |
+  | save 成功 + post-save reread 成功 + own fresh ID が winner | saved | active own binding を渡す | 同じ active binding | requested approval は arm してよい |
+  | save 成功 + post-save reread 成功 + own fresh ID が loser | saved | latest durable active winner、なければ `null` を渡す | `null` | requested loser plan を publish / arm しない |
+  | save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 - `AuthorizationStore.hydrate()` は authoritative `.justice/authorizations.json` だけを読み、`.justice/authorizations.conflict.json` を読まない。read/parse/validation failure は空の non-active result に縮退し、active-plan restoration はその結果の `status: "active"` binding だけを `PlanBridge.setActivePlan(sessionId, planPath)` に渡す。`invalidated` / `released` binding は復元対象にしない。
 - `AuthorizationStore.release(authorizationId, at)` と fingerprint invalidation の public wrapper は、まず authoritative binding を `authorizationId` の exact match で読み、そこから得た不変 `sessionId` で boundary を一度だけ取得する。binding がない、読込に失敗した、または persistence が uncertain な場合は defined non-success を返し、親 session を推測してはならない。
 - `releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)` と `invalidateForFingerprintWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, currentFingerprint, at)` は、すでに同じ parent-session boundary を保持する caller 専用である。どちらも authoritative array を再読し、exact authorization ID と `binding.sessionId === parentSessionId` を確認する。release は active binding だけを `released` にし、invalidation は active binding の stored fingerprint が `currentFingerprint` と異なる場合だけを `invalidated` にする。terminal binding を active に戻してはならない。
@@ -1215,11 +1225,25 @@ approval result / cache semantics:
 
 PlanBridge approval path:
   - cache owner は PlanBridge であり、AuthorizationStore は PlanBridge を直接所有・生成しない。
-  - PlanBridge は shared boundary 内で `approveWithinAuthorizationReviewBoundary` を呼び、authoritative
-    reread が成功した場合だけ `reconcileActivePlan` callback を受け取る。callback が渡す binding と
-    `approve()` の positive result は同じ durable record でなければならない。
+  - PlanBridge は shared boundary 内で `approveWithinAuthorizationReviewBoundary` を呼ぶ。callback は
+    §4.2 の行列に従い、save 成功後の authoritative outcome を cache へ反映する。post-save reread
+    failure では `null` を受け取り、stale positive cache を clear する。initial read failure、save
+    exception、`conflict_diverted` では callback を受け取らず、existing cache を変更しない。
+  - own fresh ID が winner の場合、callback が渡す binding と `approve()` の positive result は同じ
+    durable record でなければならない。loser の callback は winner / `null` の cache reconciliation
+    に限られ、`approve()` の戻り値を positive に変更しない。
   - callback が winner binding を受け取っても、`approve()` の return が `null` なら requested call は
     arm しない。これは winner の cache reconciliation と requested approval の成功を分離するためである。
+
+  callback matrix:
+
+  | outcome | save | `reconcileActivePlan` | `approve()` | cache / arm behavior |
+  | --- | --- | --- | --- | --- |
+  | initial authoritative read failure | save しない | 呼ばない | `null` | existing cache を変更せず、arm しない |
+  | save exception / `conflict_diverted` | authoritative success ではない | 呼ばない | `null` | requested candidate を publish せず、existing cache を変更しない |
+  | save 成功 + post-save reread 成功 + own fresh ID が winner | saved | active own binding を渡す | 同じ active binding | requested approval は arm してよい |
+  | save 成功 + post-save reread 成功 + own fresh ID が loser | saved | latest durable active winner、なければ `null` を渡す | `null` | requested loser plan を publish / arm しない |
+  | save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 
 task() PreToolUse 介入条件:
   binding.status === "active"

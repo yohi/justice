@@ -424,6 +424,7 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 - Modify: `src/hooks/plan-bridge.ts`
 - Test: `tests/core/plan-authorization.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
+- Test: `tests/core/justice-plugin.test.ts`
 
 **Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`.
 
@@ -454,8 +455,16 @@ review-dispatch, review-completion, and Gate domains. `ApprovedPlanBinding.sessi
 `parentSessionId` use the same boundary key; the boundary serializes the durable commit and all
 dependent state changes, but is not a generic transaction or mutex framework. The PlanBridge owns the
 active-plan cache; AuthorizationStore receives no PlanBridge instance. Its approval inner operation invokes
-the injected `AuthorizationActivePlanReconciler` only after a successful post-save authoritative reread,
-and the callback never changes the approval return semantics.
+the injected `AuthorizationActivePlanReconciler` according to the callback matrix below. The callback never
+changes the approval return semantics.
+
+| outcome | save | `reconcileActivePlan` | `approve()` | cache / arm behavior |
+| --- | --- | --- | --- | --- |
+| initial authoritative read failure | save しない | 呼ばない | `null` | existing cache を変更せず、arm しない |
+| save exception / `conflict_diverted` | authoritative success ではない | 呼ばない | `null` | requested candidate を publish せず、existing cache を変更しない |
+| save 成功 + post-save reread 成功 + own fresh ID が winner | saved | active own binding を渡す | 同じ active binding | requested approval は arm してよい |
+| save 成功 + post-save reread 成功 + own fresh ID が loser | saved | latest durable active winner、なければ `null` を渡す | `null` | requested loser plan を publish / arm しない |
+| save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
 
@@ -1078,6 +1087,21 @@ it("does not let old cleanup delete a newer same-parent tail", async () => {
 });
 ```
 
+Extend `tests/core/justice-plugin.test.ts` in the same RED phase with focused composition-root
+regression tests. Keep the existing `refreshes the projection cache during initialization` and
+`should call loadAll on TieredWisdomStore during initialize` tests unchanged and continue to run them.
+The new tests use the existing `plugin.getPlanBridge()`, `plugin.getTieredWisdomStore()`, and
+`plugin.getObservationHandler()` accessors with `vi.spyOn`:
+
+- `plugin.initialize()` calls `restoreActivePlans()`, `TieredWisdomStore.loadAll()`, and
+  `ObservationHandler.initializeProjectionCache()` when authorization restoration succeeds.
+- A rejected `restoreActivePlans()` does not reject `plugin.initialize()` and does not prevent
+  `TieredWisdomStore.loadAll()` or `ObservationHandler.initializeProjectionCache()` from running.
+
+The test setup must use the same `JusticePlugin` production construction path as the existing tests.
+The restoration spy is the only authorization-specific test double; it must not replace the existing
+wisdom, telemetry, projection, notifier, or observation-handler wiring.
+
 Every `AuthorizationStore` fixture in this task, including shared `beforeEach` fixtures and both stores in
 the cross-process test, passes an explicit `AuthorizationReviewBoundary`; do not add an optional or test-only
 boundary fallback. The same-process test intentionally holds only the first authorization mutation and then
@@ -1091,15 +1115,19 @@ boundary, and the PlanBridge that receives that Store explicitly.
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts`
 
-Before running RED, add only the compile-only typed scaffold required by the exact `AuthorizationStore`
-signatures in **Produces** if the new module does not yet exist. The scaffold is created after the tests are
-written, is not a fallback boundary, and is replaced by Step 3 before any commit. RED must therefore fail on
-intended behavioral assertions rather than module resolution, missing methods, or a deadlock. The expected
+Before running RED, add only the compile-only typed scaffold required by the exact `AuthorizationStore`,
+`PlanBridge.setAuthorizationDependencies`, and `PlanBridge.restoreActivePlans` signatures in **Produces**
+and the new `JusticePlugin` tests if the new module or methods do not yet exist. The scaffold is created
+after the tests are written, is not a fallback boundary, and is replaced by Step 3 before any commit. RED
+must therefore fail on intended behavioral assertions rather than module resolution, constructor compile
+failure, missing methods, accidental deletion of existing initialization, or a deadlock. The expected
 failures are: canonical snapshot persistence/hydration, fresh-ID supersession, terminal-dominant merge,
 same-parent approval serialization, real version-mismatch merge/retry, loser return semantics, explicit
-PlanBridge cache wiring, failed-save non-publication, and post-save reread failure fail-closed behavior.
+PlanBridge cache wiring, failed-save non-publication, post-save reread failure fail-closed behavior,
+authorization restoration invocation, and restoration failure isolation from the existing plugin
+initialization path.
 
 - [ ] **Step 3: Implement the authorization store**
 
@@ -1322,39 +1350,113 @@ export function createAuthorizationReviewBoundary(): AuthorizationReviewBoundary
   };
 }
 
-// src/core/justice-plugin.ts -- the one construction site retained by Tasks 3.2, 3.4, and 3.6.
+// src/core/justice-plugin.ts -- fields added to the existing JusticePlugin class.
 private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
 private readonly authorizationStore: AuthorizationStore;
+```
 
-constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
-  this.authorizationReviewBoundary = createAuthorizationReviewBoundary();
-  this.authorizationStore = new AuthorizationStore(
-    fileReader,
-    fileWriter,
-    this.authorizationReviewBoundary,
-  );
-  this.planBridge = new PlanBridge(
-    fileReader,
-    this.loopHandler,
-    this.tieredWisdomStore,
-    options.notifier,
-    this.telemetry,
-  );
-  this.planBridge.setAuthorizationDependencies({
-    authorizationStore: this.authorizationStore,
-    authorizationReviewBoundary: this.authorizationReviewBoundary,
-  });
-}
+The field declarations above are additive. Do not remove or reorder the existing fields solely to
+introduce authorization state, and do not replace the existing `JusticePlugin` constructor with a
+standalone constructor snippet.
 
+At the existing constructor construction point, preserve this exact order:
+
+1. Keep the existing `fileReader` / `options` assignments, `TelemetryStore` construction, Wisdom metrics
+   and persistence construction, `WisdomStore` / `TieredWisdomStore` construction, and
+   `LoopDetectionHandler` construction unchanged.
+2. Immediately after `this.loopHandler` has been constructed, call
+   `createAuthorizationReviewBoundary()` exactly once and assign the result to
+   `this.authorizationReviewBoundary`.
+3. Construct exactly one production `AuthorizationStore(fileReader, fileWriter,
+   this.authorizationReviewBoundary)` and assign it to `this.authorizationStore`.
+4. Keep the existing `PlanBridge` construction at its current point and with its current arguments:
+
+```ts
+this.planBridge = new PlanBridge(
+  fileReader,
+  this.loopHandler,
+  this.tieredWisdomStore,
+  options.notifier,
+  this.telemetry,
+);
+```
+
+5. Immediately after that existing `PlanBridge` construction, inject the same production instances:
+
+```ts
+this.planBridge.setAuthorizationDependencies({
+  authorizationStore: this.authorizationStore,
+  authorizationReviewBoundary: this.authorizationReviewBoundary,
+});
+```
+
+6. Continue with every existing constructor statement without deletion or replacement:
+   `SessionStateProvider` construction; `TaskFeedbackHandler` construction with the existing
+   `fileReader`, `fileWriter`, `tieredWisdomStore`, and `telemetry`; `CompactionProtector` construction;
+   the full `ObservationHandler` construction with `ObservationLogStore`, `StateProjectionCache`,
+   writer ID, workspace root, logger, and gate loader; the `loopHandler.setSessionRemovedCallback`
+   callback; and the `taskFeedback.setObservationHandler`, `loopHandler.setObservationHandler`, and
+   `planBridge.setObservationHandler` injections. Tasks 3.2, 3.4, and 3.6 reuse these same stored
+   boundary and store instances and do not create a second boundary, a second authorization PlanBridge,
+   or an implicit/test-only boundary.
+
+The `initialize()` change is an additive integration into the existing method. Authorization restoration
+has its own fail-open try/catch so an unexpected restoration exception cannot skip the existing Wisdom,
+Telemetry, projection, or notifier path. The existing initialization try/catch and nested notifier
+failure isolation remain in place:
+
+```ts
 async initialize(): Promise<void> {
   try {
     await this.planBridge.restoreActivePlans();
-    // Continue with the existing wisdom, telemetry, projection, and notifier initialization.
-  } catch {
-    // The Store already fails closed; startup restoration must never block plugin initialization.
+  } catch (error) {
+    try {
+      this.options.logger?.warn(`Failed to restore authorization during initialization: ${error}`);
+    } catch {
+      /* Ignore logging errors to preserve fail-open behavior */
+    }
+  }
+
+  try {
+    await this.tieredWisdomStore.loadAll();
+    await this.telemetry.load();
+    await this.observationHandler.initializeProjectionCache();
+    try {
+      await this.options.notifier?.notify({
+        level: "info",
+        variant: "atlas_orchestration",
+        title: "Justice initialized",
+        message: "OpenCode adapter initialization complete.",
+      });
+    } catch {
+      /* Ignore notification errors to preserve fail-open behavior */
+    }
+  } catch (error) {
+    try {
+      this.options.logger?.warn(`Failed to load wisdom during initialization: ${error}`);
+    } catch {
+      /* Ignore logging errors to preserve fail-open behavior */
+    }
   }
 }
+```
 
+The two error paths are distinct: authorization restoration failure is logged and then the existing
+initialization path still runs; an existing initialization failure uses the current outer logger guard;
+and notifier failure remains isolated by its current nested catch. Do not introduce a startup framework,
+generic lifecycle abstraction, or generic error-handling framework.
+
+Task 3.6 later extends this same `JusticePlugin.initialize()` method; it must not replace this method or
+rebuild the composition root. After authorization hydration and the existing
+`observationHandler.initializeProjectionCache()` durable-record projection, Task 3.6 inserts
+`recoverStagedReviewCompletionsAfterRestart`, then Task 3.4 inserts
+`recoverReviewDispatchesAfterRestart`, in that order. The existing Wisdom, Telemetry, and notifier
+statements and their error isolation remain wired; the two recovery calls are inserted between
+`observationHandler.initializeProjectionCache()` and the existing notifier invocation. The final startup sequence is
+authorization hydration → durable record projection → staged completion recovery → review dispatch
+recovery, with no new startup orchestrator abstraction.
+
+```ts
 // Tasks 3.2, 3.4, and 3.6 pass this same field, never a newly constructed boundary,
 // to the Gate evaluator, Review Dispatch factory, and Review Completion factory respectively.
 
@@ -1719,14 +1821,14 @@ function invalidateSuperseded(
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/plan-authorization.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts
+git add src/core/plan-authorization.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts
 git commit -m "feat: plan authorizationをdurable bindingへ置換"
 ```
 
@@ -9036,7 +9138,13 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | authorization sequential supersession                          | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation                                                                                |
 | same-process approval serialization                            | 2.2                     | one store plus one injected boundary: concurrent same-parent approvals have maximum mutation-body concurrency one, do not deadlock, retain one active binding, terminalize losers, and publish the final durable active cache |
 | cross-process authorization conflict                           | 2.2                     | two stores plus independent boundaries and shared persistence: fresh approvals traverse real `AtomicPersistence` version mismatch and `mergeAuthorizationBindings` retry, retain one active binding, terminalize the losing fresh ID as `plan_superseded`, preserve other-session active binding |
-| authorization terminal dominance and cache consistency         | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value                                                                                       |
+| post-merge own-ID authority                                    | 2.2                     | authoritative reread returns the own fresh-ID winner, returns `null` for a merge loser, reconciles loser cache to durable winner / `null`, and never arms the requested loser plan |
+| authorization startup hydration                                | 2.2                     | only authoritative active bindings restore `PlanBridge` active plans; terminal bindings and hydrate read/parse/validation failures restore no active plan |
+| authorization terminal dominance and cache consistency         | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value; post-save reread failure invokes `reconcileActivePlan(sessionId, null)` and clears positive cache |
+| authorization active-plan callback matrix                      | 2.2                     | initial-read/save failure has no callback and retains cache; winner returns own binding; loser returns `null` and reconciles winner / `null`; post-save reread failure callbacks `null` and never arms |
+| JusticePlugin existing initialization preservation              | 2.2                     | `plugin.initialize()` keeps `TieredWisdomStore.loadAll()`, telemetry load, projection cache initialization, notifier invocation, notifier isolation, and initialization logging |
+| authorization restoration failure isolation                     | 2.2                     | rejected `restoreActivePlans()` does not reject `plugin.initialize()` and does not prevent Wisdom or projection initialization |
+| startup recovery ordering                                       | 2.2, 3.4, 3.6           | authorization hydration → durable record projection → staged completion recovery → review dispatch recovery on the same `JusticePlugin.initialize()` pipeline |
 | Authorization public/inner mutation split                      | 2.2                     | public release and fingerprint invalidation acquire the boundary once; their within-boundary counterparts acquire it zero times; wrong parent causes no durable mutation                                                                                                       |
 | `AuthorizationReviewBoundary` implementation                  | 2.2                     | same-parent exclusion, rejected-predecessor recovery, A -> B -> C conditional-tail cleanup, and different-parent progress                                                                                                       |
 | shared boundary singleton wiring                               | 2.2, 3.2, 3.4, 3.6      | plugin construction calls the factory once; cross-domain same-parent integration proves max concurrency one                                                                                                                      |
@@ -9127,7 +9235,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary, typed `error_annotation` persistence/replay, exact plan/line identity migration tests                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality and shared boundary    | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache retention, same-parent boundary exclusion, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, and one-factory construction contract tests |
+| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality, shared boundary, and JusticePlugin initialization preservation | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, callback matrix and cache/durable agreement, failed-save cache retention, post-save reread failure cache clearing, same-parent boundary exclusion, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, one-factory construction contract, existing initialization preservation, and restoration failure isolation tests |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
