@@ -10501,3 +10501,233 @@ Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review corre
 <!-- markdownlint-enable MD013 MD060 -->
 
 Before implementation handoff, inspect every implementation step for unresolved placeholders, ambiguous file paths, and unbound requirements. Verify that every test file in a Task's Files list appears in that Task's RED and GREEN command and its `git add` scope. Verify that every table row names an exact Task and RED/GREEN test, and that every Task row names its Design decision and Requirement. Do not hand off a plan with undefined work, implied test coverage, cross-task shorthand, or an atomicity statement without its exclusion mechanism.
+
+---
+
+## F-037対応追記: Task 3.4 production wiring
+
+これは F-037 の未解決だった production composition と hook routing を Task 3.4 の
+必須完了条件として固定する追記である。`createReviewDispatchState` の unit test が
+GREEN であることだけでは Task 3.4 を完了扱いにしない。以下の production integration
+が実装され、対象テストが GREEN になるまで、Task 3.4 Step 3 は未完了とする。
+
+### Production composition contract
+
+既存の `JusticePlugin` composition root を拡張し、domain factory を一度だけ実体化する。
+Task 2.2、Task 3.2、Task 3.4、Task 3.6 は同じ boundary と同じ durable log を共有し、
+各 Task が独自の singleton、queue、AuthorizationStore、ObservationLogStore を作っては
+ならない。
+
+- `JusticePlugin` に `private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>`
+  を追加する。
+- `createAuthorizationReviewBoundary()` は plugin construction 中に一度だけ呼び出し、
+  そのインスタンスを `AuthorizationStore`、Gate evaluator、Review Dispatch factory、
+  Review Completion factory に渡す。
+- `AuthorizationStore` は `new AuthorizationStore(fileReader, fileWriter, authorizationReviewBoundary)`
+  で一つだけ生成し、`readDurableAuthorizations` と `findAuthorizationById` の production
+  port はこの instance に束縛する。
+- `writerId` は一度だけ確定し、同じ `ObservationLogStore(fileWriter, fileReader, writerId)`
+  を `ObservationHandler` と Review Dispatch の durable read/append port で共有する。
+- Review Dispatch は `readDurableRecords`、`readDurableAuthorizations`、
+  `findAuthorizationById`、`appendReviewDispatchTransition`、`reserveReviewArtifact`、
+  `injectReviewRequiredDirective`、`withAuthorizationReviewBoundary`、
+  `hydrateAuthorizationsBeforeReviewRecovery`、`recordAdvisory` の全 port を実際の
+  hook/runtime adapter に束縛して生成する。production で `async () => undefined` の
+  no-op port を使用してはならない。
+- `appendReviewDispatchTransition` は共有 `ObservationLogStore.append()` へ接続し、入力の
+  `agentId`、`sessionId`、`writerId` から現在の shard を構成する。Core factory が
+  `ObservationLogStore`、`AuthorizationStore`、OpenCode adapter を直接 import しては
+  ならない。
+- `reserveReviewArtifact` は Task 3.4 の `ReviewArtifactReservationPort` と
+  `NodeFileSystem` の exclusive marker / no-follow 実装に接続する。path の再生成、
+  `fileExists` と `writeFile` の check-then-use、非排他的な上書きは許可しない。
+- `recordAdvisory` は既存の Observation Log の advisory append 経路へ接続する。
+  logger のみへの出力を durable advisory の代替にしてはならない。
+- `reviewDispatchState` を生成した直後に `this.reviewDispatchState` へ代入し、同じ
+  instance の
+  `cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim` を、既存の
+  `PlanBridge` へ一度だけ `setReviewDispatchCancellation(...)` で注入する。既存の
+  cancellation-only snippet はこの state wiring の代替ではない。
+
+`injectReviewRequiredDirective` は notifier-only callback ではなく、hook response へ到達
+する domain-specific sink とする。既存の `ReviewRequiredDirective` の identity は
+`correlation` のみを SSOT として維持し、delivery routing のためだけに次の envelope を
+使用する。
+
+```ts
+type ReviewDirectiveDelivery = {
+  readonly parentSessionId: string;
+  readonly directive: ReviewRequiredDirective;
+};
+```
+
+Review Dispatch factory の `injectReviewRequiredDirective` port はこの
+`ReviewDirectiveDelivery` を受け取り、`parentSessionId` を directive identity に複製
+せず、`JusticePlugin` が所有する hook response accumulator へ渡す。live hook では同じ
+event の response に一度だけ merge し、startup recovery では次の Controller-facing hook
+へ再発行できる domain-specific pending delivery として保持する。delivery は
+`parentSessionId + sameReviewCorrelation` で重複排除する。notifier、prompt text、category、
+artifact path、worker self-report を delivery identity に使用してはならない。
+
+### Startup ordering
+
+`JusticePlugin.initialize()` は既存の Wisdom、Telemetry、projection cache、notifier の
+fail-open を維持しつつ、Authorization-dependent recovery を次の順序で実行する。
+
+1. `PlanBridge.restoreActivePlans()` を通じて authoritative `AuthorizationStore.hydrate()`
+   を完了し、`AuthorizationRestorationOutcome` を readiness として保持する。
+2. `ObservationHandler.initializeProjectionCache()` で durable observation log を読み、
+   lifecycle と Review Dispatch projection を再構築する。
+3. `authorizationRecoveryReady` が true の場合だけ、Task 3.6 の
+   `recoverStagedReviewCompletionsAfterRestart()` を実行する。
+4. 同じ readiness の内側で、Task 3.4 の
+   `this.reviewDispatchState.recoverReviewDispatchesAfterRestart()` を実行する。
+5. 既存の notifier 初期化を完了し、その後に通常の event processing を受け付ける。
+
+Authorization の read、parse、validation が失敗した場合は empty array として扱わない。
+readiness を false にし、Review Dispatch directive の reissue、offer、claim、reservation、
+Gate、Acceptance、Progress を行わず、既存の fail-open plugin 初期化だけを継続する。
+`claimed` slot は directive を再発行せず、`pending` slot だけを同じ correlation で再発行
+する。recovery は上記の production instance を使用し、factory を再生成してはならない。
+
+### Lifecycle offer ownership
+
+Task 3.1 の lifecycle handler は、`review_pending` または `final_review_pending` の durable
+transition が commit された後にだけ、`this.reviewDispatchState.offerNextMandatoryReview(parentSessionId)`
+を呼び出す。caller は correlation を渡してはならず、candidate の選択と
+`null -> pending` append は Review Dispatch の single offer boundary が行う。
+
+Task 3.4 の failure terminalization、Task 3.6 の completion terminalization、startup
+recovery は同じ offer boundary を使用する。すでに parent boundary を保持している caller
+は `offerNextMandatoryReviewWithinParentSessionClaim` を使い、public wrapper を再入しない。
+`pending` commit が成功する前に directive を delivery してはならず、terminalization の
+前に retry pending を作ってはならない。
+
+### PreToolUse routing precedence
+
+`JusticePlugin.handleEvent(PreToolUse)` は既存の PlanBridge path より先に、review task の
+専用 routing を判定する。判定は次の順序で行う。
+
+1. `toolName === "task"` 以外は既存の ObservationHandler path へ渡す。
+2. task input を既存の normalizer で canonicalize し、category が正確に `sp-review` または
+   `sp-final-review` の場合だけ review route に入る。category は candidate identity ではなく
+   expected category としてのみ使用する。
+3. `event.sessionId`、観測された `event.callId`、`SessionStateProvider` から解決した
+   `agentId`、plugin が保持する `writerId` が空でないことを検証する。parent session と
+   parent call の field path は Task 3.3 の runtime spike で観測したものを使用し、prompt、
+   category、artifact path、worker report から推測しない。
+4. `ClaimInput` を構成し、`parentSessionId`、`callId`、`expectedCategory`、`agentId`、
+   `sessionId`、`writerId` を渡して `reviewDispatchState.claimReviewDispatch()` を呼ぶ。
+   `ClaimInput.correlation` が存在する場合も untrusted echo として無視し、durable pending
+   slot の correlation を使用する。
+5. claim が commit されるまで `TaskCallBinding`、`ReviewArtifactReservation`、worker path、
+   `SessionStateProvider` の positive binding cache を公開しない。
+
+review route に入った call は `PlanBridge.handlePreToolUse()` を呼ばず、
+`consumeImplementationArm()` を消費しない。pending slot がない、複数ある、category が
+不一致、Authorization が terminal / missing / unreadable / uncertain、または claim append
+が失敗した場合は blocked / stale advisory とし、implementation route へ fallback しない。
+これにより review task が implementation task として誤認される経路を禁止する。
+
+`claimed` の成功結果からは、commit 済み `TaskCallBinding` の trusted correlation と
+`artifactReservation` だけを使用する。usable reservation の `artifactPath` は一度だけ
+worker payload へ渡し、hook / adapter が再生成・再正規化・別 path の選択をしてはならない。
+`claimed_unusable` は path を省略したまま task execution を fail-open で継続し、
+`artifact_reservation_unusable` terminal tombstone を authoritative completion として扱わない。
+
+両 review category は package、hook、adapter の全境界で `run_in_background = false` にする。
+caller が `runInBackground: true` または `run_in_background: true` を指定しても、review
+route が最終 wire payload を上書きする。non-review category の caller 値は変更しない。
+
+### HookResponse mapping
+
+既存の `HookResponse` union だけを使用し、`PROCEED` の新しい型や `skip` の代替を追加しない。
+`ProceedResponse` は `modifiedPayload` を持てないため、usable claim の payload 変更は必ず
+既存の `InjectResponse` と `mergePreToolUseResponses` で行う。
+
+- usable な `claimed` は `action: "inject"` とし、元の args を保った
+  `modifiedPayload.args` に committed binding の exact `artifactPath` と
+  `run_in_background: false` を設定する。correlation、category、task identity は committed
+  binding と expected category から構成し、入力値を権威にしない。
+- `claimed_unusable` は `action: "inject"` の advisory を返してもよいが、
+  `modifiedPayload.args` に `artifactPath` を含めない。元の task は fail-open で継続し、
+  ReviewArtifact、Gate、Acceptance、retry を生成しない。
+- `blocked` は既存の `action: "proceed"` または advisory を含む既存の `action: "inject"`
+  とし、binding、reservation、artifact path を返さない。`action: "skip"` は使用しない。
+- observation response、normal injected context、gate advisory context がある場合は既存
+  merger の意味を保ち、review route の payload が PlanBridge の implementation payload を
+  上書きしない。
+- claim、reservation、projection、directive delivery の例外は全て review route 内で捕捉し、
+  advisory を best-effort に記録した上で `PROCEED` または既存 inject response に縮退する。
+  exception を `handleEvent()` の外へ漏らしてはならない。
+
+### PostToolUse routing
+
+`PostToolUse` では call ID から durable projection の `TaskCallBinding` を解決し、purpose を
+最初に判定する。
+
+- `purpose === "implementation"` は既存の WorkerReported / Evidence / lifecycle path へ渡す。
+- `purpose === "task_review"` または `purpose === "final_review"` は、matching parent
+  session、call ID、trusted correlation、expected category、child binding を検証した後、
+  Task 3.6 の `consumeReviewCompletion` へ渡す。failure は Task 3.4 の
+  `terminalizeReviewFailure` へ渡し、caller が retry correlation を構成しない。
+- stale event、purpose mismatch、old round、unknown child relation は advisory-only とし、
+  artifact I/O、ReviewArtifact、Gate、Acceptance、Progress に影響させない。
+- review purpose の PostToolUse を PlanBridge の implementation feedback、
+  `TaskFeedbackHandler` の implementation completion、または generic task summary として
+  処理してはならない。side-effecting review completion は Task 3.6 の指定順序で直列化する。
+
+### Required production tests
+
+以下は planned test ではなく production path を実際に通す RED/GREEN acceptance criteria
+として扱う。unit-only の `createReviewDispatchState` を直接呼ぶだけでは代替できない。
+
+- `tests/core/justice-plugin-routing.test.ts` で、実際の `JusticePlugin` composition を構築し、
+  valid Authorization と durable `null -> pending` slot を準備する。`sp-review` と
+  `sp-final-review` の PreToolUse がそれぞれ一度だけ claim され、`TaskCallPurpose`、trusted
+  correlation、exact artifact path、`run_in_background: false` が production response に
+  現れることを確認する。
+- 同じテストで review task が implementation arm を消費せず、PlanBridge の
+  `implementation_unauthorized` または implementation context を返さないことを確認する。
+  pending slot がない場合は binding / reservation / path なしで blocked / advisory となる。
+- 同じテストで `arrangeLiveMandatoryReviewWithUnreadableAuthorization()` を使い、strict な
+  real Authorization persistence adapter の malformed JSON を production plugin 初期化後に
+  読ませる。`handleEvent()` が reject せず、既存 `HookResponse` union の proceed または
+  inject に縮退し、new claim、reservation、Gate、Acceptance、Progress を作らず、同じ
+  parent の cancellation tombstone だけを best-effort に試行することを確認する。
+- `tests/hooks/observation-handler-lifecycle.test.ts` で lifecycle transition commit 後に
+  offer が一度だけ呼ばれ、pending commit 前の directive delivery がなく、二重 offer が新しい
+  slot を作らないことを確認する。
+- `tests/hooks/observation-handler-transactional.test.ts` で matching review PostToolUse が
+  completion / terminalization へ進み、implementation feedback path を通らないこと、stale
+  call ID と old round が artifact を読まないことを確認する。
+- `tests/runtime/opencode-adapter-v2.test.ts` で usable path が package から final wire まで
+  byte-for-byte 保持され、unusable path は全境界で省略されること、両 review category の
+  final wire が synchronous であることを確認する。
+- `tests/core/justice-plugin.test.ts` で boundary、AuthorizationStore、ObservationLogStore、
+  Review Dispatch state が各一つであり、initialize が Authorization hydration、projection、
+  staged completion recovery、Review Dispatch recovery の順序を守ることを確認する。
+
+各 production integration test は、実装前に missing routing / missing composition を理由と
+する assertion failure を確認し、undefined symbol や引数型エラーを RED の根拠にしない。
+実装後は次の targeted command と全体 command を実行する。
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/justice-plugin-routing.test.ts \
+  tests/core/justice-plugin.test.ts \
+  tests/hooks/observation-handler-lifecycle.test.ts \
+  tests/hooks/observation-handler-transactional.test.ts \
+  tests/runtime/opencode-adapter-v2.test.ts
+bun run test
+bun run typecheck
+bun run lint
+bun run build
+```
+
+F-037 の reverse traceability は、`JusticePlugin` の single composition、startup recovery
+ordering、review-first PreToolUse routing、purpose-aware PostToolUse routing、既存
+`HookResponse` mapping、fail-open boundary、上記 production integration tests で構成する。
+なお、`ec23694` は計画書だけを変更したため、既存の F-036 記述にある integration test は
+このコミットで実際に追加されたテストではなく、計画上のテスト仕様である。この区別を保った
+まま、実テストの追加と GREEN を Task 3.4 の完了条件にする。
