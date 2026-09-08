@@ -4837,6 +4837,11 @@ git commit -m "test: child session correlation runtime境界を検証"
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the injected
 `ReviewArtifactReservationPort.createExclusiveMarker`; safe-relative-path validation;
 `AuthorizationStore.findByAuthorizationId`.
+Task 2.2's `AuthorizationStore` strict authoritative-read contract is also consumed:
+malformed, blank, schema-invalid, or otherwise unreadable `.justice/authorizations.json`
+may reject the `readDurableAuthorizations` port. That rejection means
+`Authorization` is unreadable / uncertain; it is not a legitimate empty authoritative
+array and must never be normalized to `[]` for candidate selection or claim.
 All log, Authorization, filesystem, directive, and advisory operations are injected ports assembled by
 the hook/runtime layer. `src/core/review-dispatch-state.ts` contains no runtime singleton import or direct
 filesystem access; its append ports receive a `Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">`
@@ -4851,6 +4856,16 @@ reconstructed only from the durable projection. `ClaimReviewDispatchOutcome` is 
 readonly taskCallBinding: Extract<TaskCallBinding, { readonly purpose: "task_review" | "final_review" }>;
 readonly artifactPathOmitted: true; readonly advisory: "artifact_reservation_unusable" }`, or `{ readonly kind:
 "blocked"; readonly advisory: string }`.
+For live offer and claim, rejection from either full authoritative
+`readDurableAuthorizations()` read is an ordinary authority-unavailable condition:
+offer resolves `{ readonly kind: "blocked" }`, while claim resolves
+`{ readonly kind: "blocked"; readonly advisory: "review_authorization_unreadable" }`.
+Neither operation leaks that rejection to its caller. The rejection branch records
+`review_authorization_unreadable` best-effort, attempts only existing same-parent stale-slot
+cancellation convergence, and creates no pending slot, directive, reservation, claim,
+Gate, Acceptance, or Progress authority. The `readDurableAuthorizations` port remains
+typed as `() => Promise<readonly ApprovedPlanBinding[]>`; it is explicitly not a
+never-rejecting port.
 `claimed_unusable` carries the trusted durable call binding while its `artifactReservation.status` is
 `unusable`; the runtime continues the task fail-open with no artifact path and never treats that binding as
 review completion authority. A `blocked` outcome exposes neither `callId` nor `artifactId` as authority.
@@ -4952,6 +4967,120 @@ The test setup constructs one `reviewDispatchState` with the existing injected p
 its returned operations (`claimReviewDispatch`, `offerNextMandatoryReview`, `terminalizeReviewFailure`,
 the cancellation boundary, and restart recovery). Queue tests use the returned
 `withReviewDispatchParentSessionClaim`; they do not access closure state.
+The unreadable-Authorization fixtures use the same injected `readDurableAuthorizations` mock for both
+the initial read and the post-convergence reread. A first-read rejection is configured with one
+`mockRejectedValueOnce`; a reread rejection is configured with one successful active-binding result
+followed by `mockRejectedValueOnce`. The offer fixture has a current lifecycle candidate, and the claim
+fixture has a current pending slot. Assertions distinguish an unchanged pre-existing pending record from
+an attempted new `null -> pending` record, and use the existing projected reservation, directive, terminal,
+and Acceptance-record helpers rather than inspecting closure state.
+
+Add these tests to `tests/core/review-dispatch-state.test.ts`:
+
+```ts
+it("returns blocked when offer's initial Authorization read is unreadable", async () => {
+  const lifecycle = await arrangeInitialFinalizationLifecycle({ finalReviewRound: 1 });
+  const error = new Error("authorization JSON is unreadable");
+  readDurableAuthorizations.mockRejectedValueOnce(error);
+
+  await expect(offerNextMandatoryReview(lifecycle.parentSessionId)).resolves.toEqual({
+    kind: "blocked",
+  });
+  expect(recordAdvisory).toHaveBeenCalledWith(
+    "review_authorization_unreadable",
+    error,
+  );
+  expect(durableTransitions(null, "pending")).toHaveLength(0);
+  expect(injectedReviewDirectives()).toEqual([]);
+  expect(projectedArtifactReservations()).toHaveLength(0);
+  expect(durableAcceptanceRecords(await readDurableRecords())).toHaveLength(0);
+});
+
+it("returns blocked when offer's Authorization reread is unreadable", async () => {
+  const lifecycle = await arrangeInitialFinalizationLifecycle({ finalReviewRound: 1 });
+  const error = new Error("authorization reread failed");
+  readDurableAuthorizations
+    .mockResolvedValueOnce([activeAuthorization])
+    .mockRejectedValueOnce(error);
+
+  await expect(offerNextMandatoryReview(lifecycle.parentSessionId)).resolves.toEqual({
+    kind: "blocked",
+  });
+  expect(recordAdvisory).toHaveBeenCalledWith(
+    "review_authorization_unreadable",
+    error,
+  );
+  expect(durableTransitions(null, "pending")).toHaveLength(0);
+  expect(injectedReviewDirectives()).toEqual([]);
+  expect(projectedArtifactReservations()).toHaveLength(0);
+  expect(durableAcceptanceRecords(await readDurableRecords())).toHaveLength(0);
+});
+
+it("blocks claim and cancels the current slot when the initial Authorization read is unreadable", async () => {
+  await arrangeCurrentPendingReview(activeAuthorization);
+  const error = new Error("authorization JSON is unreadable");
+  readDurableAuthorizations.mockRejectedValueOnce(error);
+
+  await expect(claimReviewDispatch(reviewPreToolUse)).resolves.toEqual({
+    kind: "blocked",
+    advisory: "review_authorization_unreadable",
+  });
+  expect(recordAdvisory).toHaveBeenCalledWith(
+    "review_authorization_unreadable",
+    error,
+  );
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+  expect(durableTerminals("cancelled")).toHaveLength(1);
+  expect(projectedArtifactReservations()).toHaveLength(0);
+  expect(durableAcceptanceRecords(await readDurableRecords())).toHaveLength(0);
+});
+
+it("blocks claim and cancels the latest slot when the Authorization reread is unreadable", async () => {
+  await arrangeCurrentPendingReview(activeAuthorization);
+  const error = new Error("authorization reread failed");
+  readDurableAuthorizations
+    .mockResolvedValueOnce([activeAuthorization])
+    .mockRejectedValueOnce(error);
+
+  await expect(claimReviewDispatch(reviewPreToolUse)).resolves.toEqual({
+    kind: "blocked",
+    advisory: "review_authorization_unreadable",
+  });
+  expect(recordAdvisory).toHaveBeenCalledWith(
+    "review_authorization_unreadable",
+    error,
+  );
+  expect(durableTransitions("pending", "claimed")).toHaveLength(0);
+  expect(durableTerminals("cancelled")).toHaveLength(1);
+  expect(projectedArtifactReservations()).toHaveLength(0);
+  expect(durableAcceptanceRecords(await readDurableRecords())).toHaveLength(0);
+});
+```
+
+Add this integration regression to `tests/core/justice-plugin-routing.test.ts`. The fixture must drive
+the production `JusticePlugin.handleEvent()` -> live mandatory-review PreToolUse -> `claimReviewDispatch`
+path with the real strict Authorization persistence adapter; do not replace the claim path with a direct
+mock of `handleEvent()`. The response assertion must use the existing `HookResponse` union: it must resolve,
+must not be `"skip"`, and may be either the existing non-blocking `"proceed"` response or an advisory
+`"inject"` response. If it is `"inject"`, assert that its context contains
+`review_authorization_unreadable`; do not add a new `PROCEED` type.
+
+```ts
+it("keeps live mandatory-review PreToolUse fail-open when Authorization is unreadable", async () => {
+  const { plugin, event } = await arrangeLiveMandatoryReviewWithUnreadableAuthorization();
+
+  const response = await plugin.handleEvent(event);
+
+  expect(response.action).not.toBe("skip");
+  expect(["proceed", "inject"]).toContain(response.action);
+  if (response.action === "inject") {
+    expect(response.injectedContext).toContain("review_authorization_unreadable");
+  }
+  expect(authoritativeReviewClaims()).toHaveLength(0);
+  expect(authoritativeArtifactReservations()).toHaveLength(0);
+  expect(durablePositiveGateAndAcceptanceTransitions()).toEqual([]);
+});
+```
 
 ```ts
 it("releases and cancels in one parent-boundary operation", async () => {
@@ -5915,6 +6044,10 @@ cannot rediscover an undispatched lifecycle candidate after restart, and does no
 `terminal-committed -> next-pending-committed -> directive-injected` through the shared offer boundary. The
 test setup defines its fixtures and calls only planned production signatures; the RED failure is an assertion
 failure, not an unresolved symbol or argument-count/type error.
+The four unreadable-Authorization tests also fail behaviorally because the strict full-read rejection currently
+escapes `offerNextMandatoryReview` / `claimReviewDispatch`; the runtime fail-open routing test fails because the
+rejection is not normalized to the existing non-blocking HookResponse. The failures must not be caused by an
+undefined advisory, missing helper, invented `PROCEED` type, or invalid matcher.
 
 - [ ] **Step 3: Implement durable dispatch and claim**
 
@@ -5966,6 +6099,15 @@ that observes terminal, missing, unreadable, conflict-diverted, or otherwise unc
 within-parent cancellation helper for an existing pending or claimed slot, injects no directive, and returns a
 blocked / stale advisory. A retryable terminal is immutable: when its Authorization is non-active, it remains
 unchanged and produces neither a next pending slot nor a directive.
+
+The bulk `readDurableAuthorizations()` port is explicitly allowed to reject because Task 2.2 uses strict
+authoritative persistence for Authorization. In the live offer and claim paths, both the initial read and the
+post-convergence reread are narrow authority-unavailable branches: catch the rejection inside the already-held
+parent-session boundary, record `review_authorization_unreadable` best-effort, converge only the current same-parent
+`pending | claimed` slots through the existing within-parent cancellation helper, and return before candidate
+selection, reservation, claim, append of a new pending/claimed state, or directive injection. Never replace the
+rejected result with `[]`; an unreadable Authorization is not an authoritative empty state. The cancellation and
+advisory attempts are themselves best-effort and must not turn this blocked outcome into a rejection.
 
 `ClaimInput.correlation` is untrusted echo data and is ignored by Review Dispatch.
 `claimReviewDispatch` first selects the durable pending slot, then uses only `pending.key.correlation` for every
@@ -6633,6 +6775,46 @@ function withReviewDispatchParentSessionClaim<T>(
   return withAuthorizationReviewBoundary(parentSessionId, operation);
 }
 
+async function handleUnreadableAuthorizationWithinParentSessionClaim(
+  parentSessionId: string,
+  cause: unknown,
+): Promise<void> {
+  try {
+    await recordAdvisory("review_authorization_unreadable", cause);
+  } catch {
+    // The authority-unavailable outcome must survive advisory I/O failure.
+  }
+
+  let slots: readonly ReviewDispatchSlot[];
+  try {
+    slots = projectReviewDispatchSlots(await readDurableRecords());
+  } catch {
+    return;
+  }
+
+  const authorizationIds = [
+    ...new Set(
+      slots
+        .filter(
+          (slot) =>
+            slot.key.parentSessionId === parentSessionId &&
+            (slot.state === "pending" || slot.state === "claimed"),
+        )
+        .map((slot) => authorizationIdFor(slot.key.correlation)),
+    ),
+  ];
+  for (const authorizationId of authorizationIds) {
+    try {
+      await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+        parentSessionId,
+        authorizationId,
+      );
+    } catch {
+      // Cancellation is best-effort; unreadable Authorization remains blocked.
+    }
+  }
+}
+
 async function offerNextMandatoryReview(parentSessionId: string): Promise<ReviewOfferOutcome> {
   return serializeParentSessionClaim(parentSessionId, () =>
     offerNextMandatoryReviewWithinParentSessionClaim(parentSessionId),
@@ -6644,7 +6826,13 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
 ): Promise<ReviewOfferOutcome> {
   const initialRecords = await readDurableRecords();
   const initialSlots = projectReviewDispatchSlots(initialRecords);
-  const initialAuthorizations = await readDurableAuthorizations();
+  let initialAuthorizations: readonly ApprovedPlanBinding[];
+  try {
+    initialAuthorizations = await readDurableAuthorizations();
+  } catch (cause) {
+    await handleUnreadableAuthorizationWithinParentSessionClaim(parentSessionId, cause);
+    return { kind: "blocked" };
+  }
   await convergeStaleReviewSlotsWithinParentSessionClaim(
     parentSessionId,
     initialSlots,
@@ -6652,7 +6840,13 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
   );
   const records = await readDurableRecords();
   const slots = projectReviewDispatchSlots(records);
-  const authorizations = await readDurableAuthorizations();
+  let authorizations: readonly ApprovedPlanBinding[];
+  try {
+    authorizations = await readDurableAuthorizations();
+  } catch (cause) {
+    await handleUnreadableAuthorizationWithinParentSessionClaim(parentSessionId, cause);
+    return { kind: "blocked" };
+  }
   const outstanding = projectActiveAuthorizedOutstandingSlots(slots, parentSessionId, authorizations);
   if (outstanding.length > 1) {
     await recordAdvisory("review_dispatch_integrity_violation");
@@ -6701,14 +6895,26 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
 async function claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispatchOutcome> {
   return serializeParentSessionClaim(input.parentSessionId, async () => {
     const initialSlots = projectReviewDispatchSlots(await readDurableRecords());
-    const initialAuthorizations = await readDurableAuthorizations();
+    let initialAuthorizations: readonly ApprovedPlanBinding[];
+    try {
+      initialAuthorizations = await readDurableAuthorizations();
+    } catch (cause) {
+      await handleUnreadableAuthorizationWithinParentSessionClaim(input.parentSessionId, cause);
+      return { kind: "blocked", advisory: "review_authorization_unreadable" };
+    }
     await convergeStaleReviewSlotsWithinParentSessionClaim(
       input.parentSessionId,
       initialSlots,
       initialAuthorizations,
     );
     const slots = projectReviewDispatchSlots(await readDurableRecords());
-    const authorizations = await readDurableAuthorizations();
+    let authorizations: readonly ApprovedPlanBinding[];
+    try {
+      authorizations = await readDurableAuthorizations();
+    } catch (cause) {
+      await handleUnreadableAuthorizationWithinParentSessionClaim(input.parentSessionId, cause);
+      return { kind: "blocked", advisory: "review_authorization_unreadable" };
+    }
     const activeAuthorizedSlots = projectActiveAuthorizedOutstandingSlots(
       slots,
       input.parentSessionId,
@@ -7148,6 +7354,14 @@ async function recoverReviewDispatchesAfterRestart(): Promise<void> {
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: PASS.
+The unreadable-Authorization assertions must additionally prove:
+
+- offer full-read rejection resolves `{ kind: "blocked" }` and claim full-read rejection resolves `{ kind: "blocked", advisory: "review_authorization_unreadable" }`;
+- neither initial nor reread failure rejects its ordinary live caller;
+- unreadable Authorization creates no new pending transition, directive, reservation, claimed transition, Gate, Acceptance, or Progress positive state;
+- existing same-parent `pending | claimed` slots receive only a best-effort cancellation-tombstone attempt and remain unclaimable;
+- cancellation uses the already-held parent boundary with zero nested acquisition;
+- the live mandatory-review PreToolUse integration continues through the existing non-blocking `HookResponse` shape.
 
 - [ ] **Step 5: Commit after approval**
 
@@ -9959,6 +10173,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | Design §5.2 startup hydration uncertainty                       | 2.2, 3.6                | real malformed authority -> strict hydrate failure -> `restoreActivePlans() === "uncertain"` -> positive startup recovery is skipped |
 | AtomicPersistence backward compatibility                        | 2.2                     | default `loadWithLock()` corruption behavior remains `emptyValue()` with lock version `0` |
 | Authorization strict persistence                              | 2.2                     | strict mode treats ENOENT as empty state and throws for existing blank, malformed, and invalid-schema payloads |
+| Design §4.8.1 live Authorization read failure                     | 3.4                     | strict initial or reread failure in offer/claim resolves a blocked outcome, records `review_authorization_unreadable`, converges same-parent active slots by best-effort cancellation, and creates no positive dispatch or decision state |
 | missing plan startup invalidation                              | 2.2                     | confirmed missing (`readPlanFile() === null`) performs durable active -> invalidated; an existing plan proceeds to current fingerprint validation rather than restoring by existence alone |
 | missing-plan invalidation reason                               | 2.2                     | missing-plan terminalization records `invalidatedAt` and never records `plan_superseded` |
 | missing-plan boundary ownership                                | 2.2, 3.4                | one parent boundary owns exact reread, invalidation, cancellation, and cache clear; inner acquire count is zero |
@@ -10066,7 +10281,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root semantic-mismatch and progress-only startup ordering; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -10078,6 +10293,10 @@ Design §4.2 authoritative-read failure semantics without changing other persist
 Authorization malformed-persistence tests verify Design §4.2 and §5.2 propagation; and the Task 3.6
 uncertainty gate consumes the `AuthorizationRestorationOutcome` produced by Task 2.2 to keep
 `authorizationRecoveryReady` false and skip positive startup recovery.
+F-036 reverse traceability is explicit: Task 3.4 covers both initial and reread live offer/claim
+reads, maps rejection to blocked outcomes and `review_authorization_unreadable`, performs only
+best-effort same-parent cancellation/advisory recording, and verifies that no positive dispatch,
+claim, reservation, Gate, Acceptance, or Progress state leaks through the runtime integration path.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
