@@ -4809,7 +4809,11 @@ git commit -m "test: child session correlation runtime境界を検証"
 
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
-**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, and §4.10.
+**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.3, §12.5, and the PreToolUse portion of §12.6.
+
+Task 3.4 owns Review Dispatch composition, directive delivery, and review-first PreToolUse
+claiming. It does not import or invoke Task 3.6's completion consumer and does not own the
+purpose-aware review PostToolUse branch; Task 3.6 owns that branch and its completion tests.
 
 **Files:**
 
@@ -4826,17 +4830,29 @@ git commit -m "test: child session correlation runtime境界を検証"
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
-- Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 - Test: `tests/hooks/plan-bridge.test.ts`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 - Test: `tests/runtime/node-file-system.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 
+`tests/runtime/opencode-adapter-v2.test.ts` is extended here only for the review-category
+`run_in_background = false` final-wire cases; Task 3.5 later extends the same file for the
+runtime child relation. `tests/core/v2/state-projection.test.ts` remains a shared projection
+file: Task 3.4 owns dispatch-slot and task-call-binding projections, while Tasks 3.5 and 3.6
+append their child-binding and completion-record cases. `tests/core/justice-plugin-routing.test.ts`
+is owned here for the live PreToolUse claim route and is extended by Task 3.6 for live review
+PostToolUse completion routing. The completion-specific transactional test is owned by Task 3.6,
+not this task.
+
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the injected
 `ReviewArtifactReservationPort.createExclusiveMarker`; safe-relative-path validation;
 `AuthorizationStore.findByAuthorizationId`.
+It also consumes the normalized review `task()` payload, the observed runtime identity from
+Task 3.3, the existing `HookResponse` union and `mergePreToolUseResponses`, and the production
+`JusticePlugin` composition inputs needed to bind the factory ports. The category is only an
+expected-category selector; the durable pending slot remains the source of correlation identity.
 Task 2.2's `AuthorizationStore` strict authoritative-read contract is also consumed:
 malformed, blank, schema-invalid, or otherwise unreadable `.justice/authorizations.json`
 may reject the `readDurableAuthorizations` port. That rejection means
@@ -4847,7 +4863,7 @@ the hook/runtime layer. `src/core/review-dispatch-state.ts` contains no runtime 
 filesystem access; its append ports receive a `Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">`
 from the observed event or the durable source record.
 
-**Produces:** `ReviewRequiredDirective`; durable `null -> pending` and `pending -> claimed` records;
+**Produces:** `ReviewRequiredDirective`; `ReviewDirectiveDelivery`; durable `null -> pending` and `pending -> claimed` records;
 `TaskCallBinding`; Design §4.10 `ReviewArtifactReservation`; `claimReviewDispatch(input):
 Promise<ClaimReviewDispatchOutcome>`; `projectReviewDispatchSlots(records)`; `projectTaskCallBindings(records)`;
 and an in-memory cache
@@ -4892,6 +4908,13 @@ function that appends a dispatch transition and returns either
 `{ readonly kind: "failed" }`.
 `createReviewDispatchState(dependencies)` returns the Review Dispatch operations used by the hook/runtime
 layer; no module-level log, Authorization, filesystem, notifier, or directive singleton is permitted.
+The Task 3.4 production composition stores exactly one returned state instance on `JusticePlugin`,
+binds every port to the shared boundary, `AuthorizationStore`, `ObservationLogStore`, artifact
+reservation adapter, advisory append path, and hook-response delivery sink, and injects its
+within-parent cancellation capability into `PlanBridge` before initialization. The production
+PreToolUse route uses that instance and the existing `HookResponse` merger; it never falls back
+to `PlanBridge` for a review category. PostToolUse completion routing and
+`consumeReviewCompletion` are explicitly deferred to Task 3.6.
 `withAuthorizationReviewBoundary<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T>` is
 the injected, parent-session keyed queue shared with Authorization, Gate, and artifact completion. The
 internal `withReviewDispatchParentSessionClaim<T>(parentSessionId: string, operation: () => Promise<T>):
@@ -5452,8 +5475,11 @@ it("offers one pending slot and one directive after a durable lifecycle notifica
   await appendReviewPendingLifecycleFixture(firstReviewPending);
   expect(trace).toEqual(["commit-pending", "inject-review-directive"]);
   expect(durableTransitions(null, "pending", firstTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectives()).toEqual([
-    { kind: "review_required", correlation: firstTaskReviewCorrelation },
+  expect(injectedReviewDeliveries()).toEqual([
+    {
+      parentSessionId: firstReviewPending.parentSessionId,
+      directive: { kind: "review_required", correlation: firstTaskReviewCorrelation },
+    },
   ]);
 });
 
@@ -5465,7 +5491,7 @@ it("automatically offers an undispatched second candidate after a pending predec
   await appendTerminalThenRunOfferFixture(firstCompletedTerminal);
 
   expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectivesFor(secondTaskReviewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(secondTaskReviewCorrelation)).toHaveLength(1);
 });
 
 it("automatically offers an undispatched second candidate after a claimed predecessor completes", async () => {
@@ -5476,7 +5502,7 @@ it("automatically offers an undispatched second candidate after a claimed predec
   await appendTerminalThenRunOfferFixture(firstCompletedTerminal);
 
   expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectivesFor(secondTaskReviewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(secondTaskReviewCorrelation)).toHaveLength(1);
 });
 
 it("keeps an undispatched candidate deferred across restart until its predecessor terminalizes", async () => {
@@ -5487,7 +5513,7 @@ it("keeps an undispatched candidate deferred across restart until its predecesso
 
   await appendTerminalThenRunOfferFixture(firstCompletedTerminal);
   expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectivesFor(secondTaskReviewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(secondTaskReviewCorrelation)).toHaveLength(1);
 });
 
 it("rediscovers an undispatched candidate after a terminal-to-offer crash", async () => {
@@ -5497,7 +5523,7 @@ it("rediscovers an undispatched candidate after a terminal-to-offer crash", asyn
   await recoverReviewDispatchesAfterRestart();
 
   expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectivesFor(secondTaskReviewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(secondTaskReviewCorrelation)).toHaveLength(1);
 });
 
 it("restores the task review parent session from the lifecycle record after restart", async () => {
@@ -5506,7 +5532,7 @@ it("restores the task review parent session from the lifecycle record after rest
 
   await recoverReviewDispatchesAfterRestart();
 
-  expect(injectedReviewDirectivesFor(correlation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(correlation)).toHaveLength(1);
 });
 
 it("restores the Final Review parent session from the lifecycle record after restart", async () => {
@@ -5515,7 +5541,7 @@ it("restores the Final Review parent session from the lifecycle record after res
 
   await recoverReviewDispatchesAfterRestart();
 
-  expect(injectedReviewDirectivesFor(correlation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(correlation)).toHaveLength(1);
 });
 
 it("uses durable queue order across terminalizations and restart", async () => {
@@ -5666,7 +5692,7 @@ it("offers a fresh reapproval while the stale cancellation tombstone is still pe
 
   await offerNextMandatoryReview("parent-1");
 
-  expect(injectedReviewDirectivesFor(authorizationNewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(authorizationNewCorrelation)).toHaveLength(1);
   expect(stalePendingSlotFor(currentAuthorizationId)).toMatchObject({ state: "pending" });
   expect(
     projectReviewDispatchSlots(await readDurableRecords()).some(
@@ -6098,23 +6124,6 @@ it("dispatches an actual final rework at the lifecycle finalReviewRound without 
   expect(nextPendingCorrelation()).not.toMatchObject({ finalReviewRound: 1 });
 });
 
-it("keeps a clean Final Review after actual rework on the lifecycle round through Final Gate", async () => {
-  const rework = await arrangeCurrentFinalReworkLifecycle({
-    finalizationAttemptId: "fresh-finalization-attempt",
-    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
-  });
-  await arrangeCleanFinalReviewFor(rework);
-
-  await consumeReviewCompletion(currentFinalCompletionInput);
-
-  expect(currentFinalReviewCorrelation()).toMatchObject({
-    finalizationAttemptId: rework.finalizationAttemptId,
-    finalReviewRound: rework.finalReviewRound,
-  });
-  expect(projectedFinalizationState()).toBe("final_gate_pending");
-  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
-});
-
 it("increments only the review round for a review-only retry after actual rework", async () => {
   const rework = await arrangeCurrentFinalReworkLifecycle({
     finalizationAttemptId: "fresh-finalization-attempt",
@@ -6166,35 +6175,23 @@ it("recovers a terminal-to-pending crash exactly once and only dispatches after 
     "directive-injected",
   ]);
   expect(durableTransitions(null, "pending", nextFinalReviewCorrelation())).toHaveLength(1);
-  expect(injectedReviewDirectives()).toEqual([
-    { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+  expect(injectedReviewDeliveries()).toEqual([
+    {
+      parentSessionId: currentFinalClaim.parentSessionId,
+      directive: { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+    },
   ]);
 
   await recoverReviewDispatchesAfterRestart();
   expect(durableTransitions(null, "pending", nextFinalReviewCorrelation())).toHaveLength(1);
   expect(durableTransitions("pending", "claimed")).toHaveLength(0);
-  expect(injectedReviewDirectives()).toEqual(
+  expect(injectedReviewDeliveries()).toEqual(
     expect.arrayContaining([
-      { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+      expect.objectContaining({
+        directive: { kind: "review_required", correlation: nextFinalReviewCorrelation() },
+      }),
     ]),
   );
-});
-
-it("replays one current Final Review retry and rejects its old PostToolUse, artifact, and Gate", async () => {
-  failNextReviewPendingAppend();
-  await terminalizeReviewFailure(currentFinalClaim, "lost_conclusive");
-  restartReviewDispatchRepository();
-  await recoverReviewDispatchesAfterRestart();
-
-  expect(currentFinalReviewCorrelation()).toEqual({
-    ...currentFinalClaim.correlation,
-    finalReviewRound: currentFinalClaim.correlation.finalReviewRound + 1,
-  });
-  await consumeReviewCompletion(oldFinalRoundCompletionInput);
-  await evaluateGatePendingAttempt(oldFinalRoundGateContext);
-  expect(readArtifact).not.toHaveBeenCalled();
-  expect(evaluate).not.toHaveBeenCalled();
-  expect(currentFinalReviewCorrelation()).not.toEqual(oldFinalReviewCorrelation);
 });
 
 it("projects a review-only Final Review retry and rejects the old round", async () => {
@@ -6227,7 +6224,7 @@ it("keeps an uncertain recovered claim blocked without redispatch", async () => 
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: FAIL at the offer assertions: the pre-change implementation has no durable candidate selector,
 cannot rediscover an undispatched lifecycle candidate after restart, and does not establish
@@ -6240,6 +6237,185 @@ rejection is not normalized to the existing non-blocking HookResponse. The failu
 undefined advisory, missing helper, invented `PROCEED` type, or invalid matcher.
 
 - [ ] **Step 3: Implement durable dispatch and claim**
+
+The same Step 3 must add the production composition and PreToolUse route below. The code is
+part of the Task 3.4 implementation, not an appendix or a later integration task. Adapter
+details such as the exact authoritative-reader method names are resolved against the existing
+Task 2.2 ports, but every port shown here must be bound to a real shared instance.
+
+```ts
+type ReviewDirectiveSink = {
+  readonly deliver: (delivery: ReviewDirectiveDelivery) => Promise<void>;
+  readonly takeForParentSession: (
+    parentSessionId: string,
+  ) => readonly ReviewDirectiveDelivery[];
+};
+
+function createReviewDirectiveSink(): ReviewDirectiveSink {
+  const deliveriesByParent = new Map<string, ReviewDirectiveDelivery[]>();
+
+  return {
+    async deliver(delivery) {
+      const deliveries = deliveriesByParent.get(delivery.parentSessionId) ?? [];
+      if (
+        deliveries.some((existing) =>
+          sameReviewCorrelation(existing.directive.correlation, delivery.directive.correlation),
+        )
+      ) {
+        return;
+      }
+      deliveriesByParent.set(delivery.parentSessionId, [...deliveries, delivery]);
+    },
+    takeForParentSession(parentSessionId) {
+      const deliveries = deliveriesByParent.get(parentSessionId) ?? [];
+      deliveriesByParent.delete(parentSessionId);
+      return deliveries;
+    },
+  };
+}
+
+class JusticePlugin {
+  private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
+  private readonly reviewDirectiveSink: ReviewDirectiveSink;
+  private readonly writerId: string;
+  private readonly recordReviewAdvisory: (advisory: string, cause?: unknown) => Promise<void>;
+
+  constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
+    const writerId = options.writerId ?? generateWriterId();
+    const authorizationReviewBoundary = createAuthorizationReviewBoundary();
+    const authorizationStore = new AuthorizationStore(
+      fileReader,
+      fileWriter,
+      authorizationReviewBoundary,
+    );
+    const observationLogStore = new ObservationLogStore(fileWriter, fileReader, writerId);
+    const reviewArtifactReservationPort = createReviewArtifactReservationPort(
+      fileReader,
+      fileWriter,
+    );
+    const reviewDirectiveSink = createReviewDirectiveSink();
+
+    this.sessionStateProvider = new SessionStateProvider();
+    this.planBridge = new PlanBridge(
+      fileReader,
+      this.loopHandler,
+      this.tieredWisdomStore,
+      options.notifier,
+      this.telemetry,
+    );
+    this.observationHandler = new ObservationHandler({
+      logStore: observationLogStore,
+      sessionStateProvider: this.sessionStateProvider,
+      projectionCache: new StateProjectionCache(
+        fileWriter,
+        fileReader,
+        ".justice/state.json",
+        options.logger ?? console,
+      ),
+      writerId,
+      workspaceRoot: options.workspaceRoot,
+      logger: options.logger,
+      gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
+    });
+
+    this.writerId = writerId;
+    this.reviewDirectiveSink = reviewDirectiveSink;
+    this.recordReviewAdvisory = (advisory, cause) =>
+      appendReviewDispatchAdvisory(observationLogStore, writerId, advisory, cause);
+    this.reviewDispatchState = createReviewDispatchState({
+      readDurableRecords: () => observationLogStore.readAll(),
+      readDurableAuthorizations: () => authorizationStore.readDurableAuthorizations(),
+      findAuthorizationById: (authorizationId) =>
+        authorizationStore.findByAuthorizationId(authorizationId),
+      appendReviewDispatchTransition: (input) =>
+        appendReviewDispatchTransitionToStore(observationLogStore, input),
+      reserveReviewArtifact: () => reviewArtifactReservationPort.reserve(),
+      injectReviewRequiredDirective: (delivery) => reviewDirectiveSink.deliver(delivery),
+      withAuthorizationReviewBoundary: authorizationReviewBoundary.withParentSession,
+      hydrateAuthorizationsBeforeReviewRecovery: () => authorizationStore.hydrate(),
+      recordAdvisory: this.recordReviewAdvisory,
+    });
+    // Gate and the later Review Completion factory receive this same
+    // authorizationReviewBoundary and observationLogStore.
+    this.planBridge.setReviewDispatchCancellation(
+      this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
+    );
+  }
+}
+```
+
+The production task route must branch before `PlanBridge.handlePreToolUse()` while preserving
+the existing observation handler and response merger. `buildReviewClaimResponse` must use the
+committed binding and reservation only; it must never copy a correlation or artifact path from
+the incoming task payload.
+
+```ts
+async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
+  const observation = await this.observationHandler.handlePreToolUse(event).catch((error: unknown) => {
+    this.options.logger?.warn("review observation pre-tool-use failed", error);
+    return PROCEED;
+  });
+
+  const category =
+    event.payload.toolName === "task"
+      ? resolveMandatoryReviewCategory(event.payload.toolInput)
+      : undefined;
+  if (category !== undefined) {
+    const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
+    const claim = await this.reviewDispatchState
+      .claimReviewDispatch({
+        parentSessionId: event.sessionId,
+        callId: event.callId ?? event.payload.callId,
+        expectedCategory: category,
+        correlation: event.payload.toolInput.correlation,
+        agentId,
+        sessionId: event.sessionId,
+        writerId: this.writerId,
+      })
+      .catch((error: unknown): ClaimReviewDispatchOutcome => {
+        void this.recordReviewAdvisory("review_claim_failed", error);
+        return { kind: "blocked", advisory: "review_claim_failed" };
+      });
+
+    const claimResponse = buildReviewClaimResponse(event, claim);
+    const deliveries = this.reviewDirectiveSink.takeForParentSession(event.sessionId);
+    const directiveResponse = deliveries.reduce(
+      (response, delivery) =>
+        mergePreToolUseResponses(
+          response,
+          { action: "inject", injectedContext: formatReviewDirective(delivery.directive) },
+          (message) => this.warnMergeConflict(message),
+        ),
+      PROCEED,
+    );
+    return mergePreToolUseResponses(
+      observation,
+      mergePreToolUseResponses(claimResponse, directiveResponse, (message) =>
+        this.warnMergeConflict(message),
+      ),
+      (message) => this.warnMergeConflict(message),
+    );
+  }
+
+  const planBridge =
+    event.payload.toolName === "task"
+      ? await this.planBridge.handlePreToolUse(event).catch((error: unknown) => {
+          this.options.logger?.warn("plan-bridge pre-tool-use failed", error);
+          return PROCEED;
+        })
+      : PROCEED;
+  return mergePreToolUseResponses(observation, planBridge, (message) =>
+    this.warnMergeConflict(message),
+  );
+}
+```
+
+`resolveMandatoryReviewCategory` must accept only exact `sp-review` and `sp-final-review`,
+`buildReviewClaimResponse` must produce only the existing `HookResponse` union, and all helper
+failures must remain inside the review branch. A review task must never consume an implementation
+arm or fall through to the PlanBridge route. Task 3.4 ends after this PreToolUse claim path and
+the durable dispatch operations; the PostToolUse completion branch is implemented and wired only
+in Task 3.6.
 
 Persist one `pending` slot per parent session before injecting its `ReviewRequiredDirective`. Inside
 `createReviewDispatchState(dependencies)`, use the injected, domain-specific
@@ -6922,6 +7098,11 @@ type ReviewOfferOutcome =
   | { readonly kind: "offered"; readonly correlation: ReviewCorrelation }
   | { readonly kind: "deferred" | "blocked" | "none" };
 
+export type ReviewDirectiveDelivery = {
+  readonly parentSessionId: string;
+  readonly directive: ReviewRequiredDirective;
+};
+
 type ReviewDispatchDependencies = {
   readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
   readonly readDurableAuthorizations: () => Promise<readonly ApprovedPlanBinding[]>;
@@ -6933,10 +7114,7 @@ type ReviewDispatchDependencies = {
     | { readonly kind: "failed" }
   >;
   readonly reserveReviewArtifact: () => Promise<ReviewArtifactReservation>;
-  readonly injectReviewRequiredDirective: (input: {
-    readonly kind: "review_required";
-    readonly correlation: ReviewCorrelation;
-  }) => Promise<void>;
+  readonly injectReviewRequiredDirective: (delivery: ReviewDirectiveDelivery) => Promise<void>;
   readonly withAuthorizationReviewBoundary: AuthorizationReviewBoundary["withParentSession"];
   readonly hydrateAuthorizationsBeforeReviewRecovery: () => Promise<void>;
   readonly recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>;
@@ -7076,8 +7254,11 @@ async function offerNextMandatoryReviewWithinParentSessionClaim(
     return { kind: "blocked" };
   }
   await injectReviewRequiredDirective({
-    kind: "review_required",
-    correlation: candidate.correlation,
+    parentSessionId,
+    directive: {
+      kind: "review_required",
+      correlation: candidate.correlation,
+    },
   });
   return { kind: "offered", correlation: candidate.correlation };
 }
@@ -7437,8 +7618,11 @@ async function reissuePendingReviewDirectiveAfterRestart(slot: ReviewDispatchSlo
       return;
     }
     await injectReviewRequiredDirective({
-      kind: "review_required",
-      correlation: latest.key.correlation,
+      parentSessionId: latest.key.parentSessionId,
+      directive: {
+        kind: "review_required",
+        correlation: latest.key.correlation,
+      },
     });
   });
 }
@@ -7541,7 +7725,7 @@ async function recoverReviewDispatchesAfterRestart(): Promise<void> {
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
+Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: PASS.
 The unreadable-Authorization assertions must additionally prove:
@@ -7554,12 +7738,12 @@ The unreadable-Authorization assertions must additionally prove:
 - the live mandatory-review PreToolUse integration continues through the existing non-blocking `HookResponse` shape.
 - `tests/core/justice-plugin-routing.test.ts` observes the production plugin path and exactly one
   seeded `null -> pending` transition plus one same-parent `pending -> terminal(cancelled)` transition;
-  it does not use a direct `handleEvent()` or claim-operation mock.
+  it invokes the real `plugin.handleEvent()` and does not mock `handleEvent()` or the claim operation.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
+git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
 git commit -m "feat: durable review dispatchとclaimを追加"
 ```
 
@@ -7649,7 +7833,12 @@ git commit -m "feat: review child bindingをdurableに記録"
 
 ### Task 3.6: Consume a matching review artifact exactly once
 
-**Requirement:** JUS-P0-02, JUS-P0-04, INV-06, INV-13, INV-15 through INV-21, Design §4.8.1, §4.8.2, §4.10, and §4.11.
+**Requirement:** JUS-P0-02, JUS-P0-04, INV-06, INV-13, INV-15 through INV-21, Design §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, and the PostToolUse portion of §12.6.
+
+Task 3.6 owns the purpose-aware review PostToolUse router, the completion-domain call, and
+the composition-root startup wiring that invokes completion recovery before Review Dispatch
+recovery. It consumes the Task 3.4 dispatch state and its within-parent capability; it does
+not reconstruct a second boundary or move PreToolUse claim logic into the completion domain.
 
 **Files:**
 
@@ -7668,6 +7857,15 @@ git commit -m "feat: review child bindingをdurableに記録"
 - Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
 
+`tests/core/justice-plugin-routing.test.ts` is the shared production routing file: Task 3.4
+owns its live PreToolUse claim cases and Task 3.6 adds its matching review PostToolUse cases.
+`tests/hooks/observation-handler-transactional.test.ts` is owned by Task 3.5 for durable child
+binding cases and extended by this task for completion staging, terminalization, and stale-event
+cases. `tests/core/v2/state-projection.test.ts` is extended here only for completion-record
+projection and restart recovery; its dispatch-slot and child-binding cases remain owned by Tasks
+3.4 and 3.5 respectively. `tests/core/justice-plugin.test.ts` is owned here for single-boundary
+composition and startup ordering.
+
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
 `DelegatedExecutionBinding`; Design §4.10 `ReviewArtifactReservation`; durable `AuthorizationStore`
@@ -7679,6 +7877,11 @@ returned boundaries `withReviewDispatchParentSessionClaim`,
 `cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim`, plus the shared
 `sameReviewCorrelation` identity helper and `ReviewPostToolUsePendingRecord` projection from the same
 Review Dispatch domain.
+It also consumes `ReviewDirectiveDelivery` only through the Task 3.4 sink handoff, the durable
+`TaskCallBinding` purpose projection, the normalized `PostToolUseEvent`, the existing
+`HookResponse` union and merger, and the shared `AuthorizationReviewBoundary` instance. Task 3.6
+must resolve purpose and parent identity from durable projection before invoking completion; it
+must not infer either value from category, prompt, artifact path, or worker output.
 `AuthorizationRestorationOutcome` from Task 2.2 is consumed only by the final `JusticePlugin.initialize()`
 control flow to decide whether authorization-dependent positive recovery is allowed; it is not a generic
 startup-state abstraction.
@@ -7707,6 +7910,9 @@ ReviewDispatchTransitionRecord): Promise<void>`;
 `ensureFailedReviewArtifactCleaned(terminal: ReviewDispatchTransitionRecord): Promise<void>`;
 `findMatchingTerminalForStaging(records: readonly PersistedLogRecord[], staged:
 ReviewCompletionStagingRecord): ReviewDispatchTransitionRecord | undefined`;
+`routeTaskPostToolUse(event): Promise<HookResponse>` and the production `JusticePlugin.handleEvent(PostToolUse)`
+purpose branch; plus the `JusticePlugin.initialize()` startup wiring that runs staged completion recovery
+before Task 3.4 Review Dispatch recovery on the same authoritative instance.
 `classifyReviewCompletion(result: ReviewWorkerResultV1): ReviewCompletionClassification`; one composite
 terminal `ReviewDispatchTransitionRecord`; a projected `review_observed` semantic only for an assembled
 artifact; and a gate-evaluation request only for a durable clean-artifact `gate_pending` /
@@ -7843,6 +8049,22 @@ and exactly one AcceptanceDecision, and records zero nested parent-boundary acqu
 integration fixture also drives Authorization, Review Dispatch, Review Completion, and Gate work for one
 parent through the plugin wiring and proves max concurrent parent operations is one, establishing that all
 domains received the one Task 2.2 boundary instance.
+The same production fixture extends `tests/core/justice-plugin-routing.test.ts` with the routing
+assertion below; it must use a real durable review binding and the real plugin, not a mocked
+`consumeReviewCompletion` call.
+
+```ts
+it("routes a matching review PostToolUse to completion before implementation handlers", async () => {
+  const fixture = await arrangeLiveClaimedReviewWithChildBinding();
+
+  await fixture.plugin.handleEvent(fixture.postToolUse);
+
+  expect(fixture.reviewCompletionTerminal()).toHaveLength(1);
+  expect(fixture.planBridgePostToolUse).not.toHaveBeenCalled();
+  expect(fixture.taskFeedbackPostToolUse).not.toHaveBeenCalled();
+  expect(fixture.readArtifact).toHaveBeenCalledTimes(1);
+});
+```
 
 ```ts
 it.each(["task-review", "final-review"] as const)(
@@ -7989,7 +8211,7 @@ it("uses the production PostToolUse terminal path to offer one deferred candidat
   await consumeReviewCompletion(firstMatchingInput);
 
   expect(durableTransitions(null, "pending", secondTaskReviewCorrelation)).toHaveLength(1);
-  expect(injectedReviewDirectivesFor(secondTaskReviewCorrelation)).toHaveLength(1);
+  expect(injectedReviewDeliveriesFor(secondTaskReviewCorrelation)).toHaveLength(1);
 });
 
 it("defers a matching review until its child binding is durable", async () => {
@@ -8464,6 +8686,102 @@ Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/revie
 Expected: FAIL because matching review completion has no composite terminal physical record or ordered Gate request.
 
 - [ ] **Step 3: Implement the fixed protocol**
+
+Wire the production PostToolUse route in this task. `JusticePlugin` must store one
+`reviewCompletionDomain` created from the same `observationLogStore`, `authorizationStore`,
+`authorizationReviewBoundary`, and `reviewDispatchState` used above. Bind every remaining port
+listed in `ReviewCompletionDependencies` to the existing artifact, lifecycle, Gate, advisory, and
+cleanup adapters; no completion port may create a second store or boundary.
+
+```ts
+private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
+
+this.reviewCompletionDomain = createReviewCompletionDomain({
+  ...reviewCompletionDependencies,
+  dispatch: {
+    withReviewDispatchParentSessionClaim:
+      this.reviewDispatchState.withReviewDispatchParentSessionClaim,
+    offerNextMandatoryReviewWithinParentSessionClaim:
+      this.reviewDispatchState.offerNextMandatoryReviewWithinParentSessionClaim,
+    cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim:
+      this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
+  },
+});
+```
+
+Here `reviewCompletionDependencies` is the constructor-local object whose explicit properties
+are the injected ports listed in `ReviewCompletionDependencies`; it is not a service locator or
+runtime singleton. Wire the production PostToolUse route in this task. The route must resolve the durable
+`TaskCallBinding` purpose before invoking any implementation handler. A review-purpose binding
+must never enter `PlanBridge.handlePostToolUse()` or `TaskFeedbackHandler.handlePostToolUse()`.
+The completion domain is constructed with the same dispatch state, parent boundary, log store,
+and authoritative Authorization reader used by Task 3.4.
+
+```ts
+private async routeTaskPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
+  if (event.callId === undefined) return PROCEED;
+
+  const records = await this.observationHandler.getLogStore().readAll();
+  const binding = projectTaskCallBindings(records).find(
+    (candidate): candidate is ReviewTaskCallBinding =>
+      candidate.callId === event.callId && isReviewTaskCallBinding(candidate),
+  );
+  if (binding === undefined) return this.routeImplementationPostToolUse(event);
+
+  const parentSessionId = binding.parentSessionId;
+  const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
+  const outcome = await this.reviewCompletionDomain
+    .consumeReviewCompletion({
+      parentSessionId,
+      callId: event.callId,
+      postToolUse: {
+        type: "PostToolUse",
+        sessionId: event.sessionId,
+        callId: event.callId,
+      },
+      agentId,
+      writerId: this.writerId,
+    })
+    .catch((error: unknown): ReviewCompletionOutcome => {
+      void this.recordReviewAdvisory("review_completion_route_failed", error);
+      return { kind: "blocked" };
+    });
+
+  return reviewCompletionOutcomeToHookResponse(outcome);
+}
+
+private async routeImplementationPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
+  const [observation, planBridge, taskFeedback] = await Promise.all([
+    this.observationHandler.handlePostToolUse(event).catch(() => PROCEED),
+    event.payload.toolName === "task"
+      ? this.planBridge.handlePostToolUse(event).catch(() => PROCEED)
+      : Promise.resolve(PROCEED),
+    event.payload.toolName === "task"
+      ? this.taskFeedback.handlePostToolUse(event).catch(() => PROCEED)
+      : Promise.resolve(PROCEED),
+  ]);
+  return mergePostToolUseResponses([observation, planBridge, taskFeedback], (message) =>
+    this.warnMergeConflict(message),
+  );
+}
+
+case "PostToolUse": {
+  try {
+    if (event.payload.toolName === "task") {
+      return await this.routeTaskPostToolUse(event);
+    }
+    return await this.observationHandler.handlePostToolUse(event).catch(() => PROCEED);
+  } finally {
+    closeSessionTaskWindow(this.sessionStateProvider, event.callId);
+  }
+}
+```
+
+`projectTaskCallBindings(records)` is the durable projection, not a session cache. The lookup
+must preserve the binding's `parentSessionId`, purpose, and trusted correlation; the incoming
+PostToolUse category, prompt, artifact path, and worker result are never used to select the
+completion domain. `routeImplementationPostToolUse` retains the existing non-review behavior,
+while the review branch is the only production caller of `consumeReviewCompletion`.
 
 Implement this exact staging-first sequence: validate claimed parent binding; check
 `artifactReservation.status === "usable"`; validate durable child-session binding; append or reuse exactly
@@ -10474,9 +10792,9 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root semantic-mismatch and progress-only startup ordering; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, PostToolUse §12.6, INV-13 through INV-19 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -10506,10 +10824,11 @@ Before implementation handoff, inspect every implementation step for unresolved 
 
 ## F-037対応追記: Task 3.4 production wiring
 
-これは F-037 の未解決だった production composition と hook routing を Task 3.4 の
-必須完了条件として固定する追記である。`createReviewDispatchState` の unit test が
-GREEN であることだけでは Task 3.4 を完了扱いにしない。以下の production integration
-が実装され、対象テストが GREEN になるまで、Task 3.4 Step 3 は未完了とする。
+これは F-037 の未解決だった production composition と hook routing を実装計画へ固定する
+追記である。`createReviewDispatchState` の unit test が GREEN であることだけでは不十分で、
+Task 3.4 は下記の single composition と review-first PreToolUse route が production test
+で GREEN になるまで未完了とする。purpose-aware PostToolUse と startup recovery の呼び出し
+順序は Task 3.6 の完了条件であり、この追記はその接続契約を明示する。
 
 ### Production composition contract
 
@@ -10555,7 +10874,7 @@ Task 2.2、Task 3.2、Task 3.4、Task 3.6 は同じ boundary と同じ durable l
 使用する。
 
 ```ts
-type ReviewDirectiveDelivery = {
+export type ReviewDirectiveDelivery = {
   readonly parentSessionId: string;
   readonly directive: ReviewRequiredDirective;
 };
@@ -10571,8 +10890,11 @@ artifact path、worker self-report を delivery identity に使用してはな�
 
 ### Startup ordering
 
-`JusticePlugin.initialize()` は既存の Wisdom、Telemetry、projection cache、notifier の
-fail-open を維持しつつ、Authorization-dependent recovery を次の順序で実行する。
+`JusticePlugin.initialize()` の全体 sequence は Task 3.6 が実装する。Task 3.4 は
+`reviewDispatchState.recoverReviewDispatchesAfterRestart()` と PlanBridge cancellation
+capability を提供し、Task 3.6 が同じ production instance を使って既存の Wisdom、Telemetry、
+projection cache、notifier の fail-open を維持しつつ、Authorization-dependent recovery を
+次の順序で実行する。
 
 1. `PlanBridge.restoreActivePlans()` を通じて authoritative `AuthorizationStore.hydrate()`
    を完了し、`AuthorizationRestorationOutcome` を readiness として保持する。
@@ -10661,16 +10983,19 @@ route が最終 wire payload を上書きする。non-review category の caller
   advisory を best-effort に記録した上で `PROCEED` または既存 inject response に縮退する。
   exception を `handleEvent()` の外へ漏らしてはならない。
 
-### PostToolUse routing
+### PostToolUse routing handoff
 
-`PostToolUse` では call ID から durable projection の `TaskCallBinding` を解決し、purpose を
+`PostToolUse` の production routing は Task 3.6 Step 3 に実装する。Task 3.4 は
+`TaskCallBinding`、trusted correlation、child-binding lookup に必要な durable projection と、
+failure terminalization / next-offer capability を提供するだけで、completion consumerを呼ばない。
+Task 3.6 の route は call ID から durable projection の `TaskCallBinding` を解決し、purpose を
 最初に判定する。
 
 - `purpose === "implementation"` は既存の WorkerReported / Evidence / lifecycle path へ渡す。
 - `purpose === "task_review"` または `purpose === "final_review"` は、matching parent
   session、call ID、trusted correlation、expected category、child binding を検証した後、
-  Task 3.6 の `consumeReviewCompletion` へ渡す。failure は Task 3.4 の
-  `terminalizeReviewFailure` へ渡し、caller が retry correlation を構成しない。
+  Task 3.6 の `consumeReviewCompletion` へ渡す。failure は Task 3.4 が提供する
+  `terminalizeReviewFailure` capabilityへ渡し、callerがretry correlationを構成しない。
 - stale event、purpose mismatch、old round、unknown child relation は advisory-only とし、
   artifact I/O、ReviewArtifact、Gate、Acceptance、Progress に影響させない。
 - review purpose の PostToolUse を PlanBridge の implementation feedback、
@@ -10681,6 +11006,7 @@ route が最終 wire payload を上書きする。non-review category の caller
 
 以下は planned test ではなく production path を実際に通す RED/GREEN acceptance criteria
 として扱う。unit-only の `createReviewDispatchState` を直接呼ぶだけでは代替できない。
+テストの追加責務は Task 3.4 / 3.5 / 3.6 の Files、RED、GREEN、git add に合わせる。
 
 - `tests/core/justice-plugin-routing.test.ts` で、実際の `JusticePlugin` composition を構築し、
   valid Authorization と durable `null -> pending` slot を準備する。`sp-review` と
@@ -10695,18 +11021,17 @@ route が最終 wire payload を上書きする。non-review category の caller
   読ませる。`handleEvent()` が reject せず、既存 `HookResponse` union の proceed または
   inject に縮退し、new claim、reservation、Gate、Acceptance、Progress を作らず、同じ
   parent の cancellation tombstone だけを best-effort に試行することを確認する。
-- `tests/hooks/observation-handler-lifecycle.test.ts` で lifecycle transition commit 後に
-  offer が一度だけ呼ばれ、pending commit 前の directive delivery がなく、二重 offer が新しい
-  slot を作らないことを確認する。
-- `tests/hooks/observation-handler-transactional.test.ts` で matching review PostToolUse が
-  completion / terminalization へ進み、implementation feedback path を通らないこと、stale
-  call ID と old round が artifact を読まないことを確認する。
-- `tests/runtime/opencode-adapter-v2.test.ts` で usable path が package から final wire まで
-  byte-for-byte 保持され、unusable path は全境界で省略されること、両 review category の
-  final wire が synchronous であることを確認する。
-- `tests/core/justice-plugin.test.ts` で boundary、AuthorizationStore、ObservationLogStore、
-  Review Dispatch state が各一つであり、initialize が Authorization hydration、projection、
-  staged completion recovery、Review Dispatch recovery の順序を守ることを確認する。
+- `tests/hooks/observation-handler-lifecycle.test.ts` は Task 3.1 が所有し、lifecycle
+  transition commit 後の一度だけの offer、pending commit 前の directive delivery防止、二重
+  offer防止を確認する。
+- `tests/hooks/observation-handler-transactional.test.ts` はTask 3.5のchild-binding casesを
+  維持し、Task 3.6がmatching review PostToolUseのcompletion / terminalization、implementation
+  feedback path非通過、stale call ID / old roundのartifact非読込を追加する。
+- `tests/runtime/opencode-adapter-v2.test.ts` はTask 3.4がreview categoryのsynchronous
+  final-wire casesを追加し、Task 3.5がchild relation casesを追加する。
+- `tests/core/justice-plugin.test.ts` はTask 3.6がboundary、AuthorizationStore、ObservationLogStore、
+  Review Dispatch stateの各一つと、initializeのAuthorization hydration、projection、staged
+  completion recovery、Review Dispatch recovery順序を確認する。
 
 各 production integration test は、実装前に missing routing / missing composition を理由と
 する assertion failure を確認し、undefined symbol や引数型エラーを RED の根拠にしない。
@@ -10715,19 +11040,21 @@ route が最終 wire payload を上書きする。non-review category の caller
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
   tests/core/justice-plugin-routing.test.ts \
-  tests/core/justice-plugin.test.ts \
-  tests/hooks/observation-handler-lifecycle.test.ts \
-  tests/hooks/observation-handler-transactional.test.ts \
   tests/runtime/opencode-adapter-v2.test.ts
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/justice-plugin-routing.test.ts \
+  tests/core/justice-plugin.test.ts \
+  tests/hooks/observation-handler-transactional.test.ts
 bun run test
 bun run typecheck
 bun run lint
 bun run build
 ```
 
-F-037 の reverse traceability は、`JusticePlugin` の single composition、startup recovery
-ordering、review-first PreToolUse routing、purpose-aware PostToolUse routing、既存
-`HookResponse` mapping、fail-open boundary、上記 production integration tests で構成する。
+F-037 の reverse traceability は、`JusticePlugin` の single composition、review-first
+PreToolUse routing、Task 3.6へのpurpose-aware PostToolUse handoff、既存 `HookResponse`
+mapping、fail-open boundary、Task 3.4 / 3.6のproduction integration testsで構成する。
 なお、`ec23694` は計画書だけを変更したため、既存の F-036 記述にある integration test は
 このコミットで実際に追加されたテストではなく、計画上のテスト仕様である。この区別を保った
-まま、実テストの追加と GREEN を Task 3.4 の完了条件にする。
+まま、Task 3.4はPreToolUse/composition、Task 3.6はPostToolUse/startup wiringの実テスト追加と
+GREENをそれぞれの完了条件にする。

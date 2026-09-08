@@ -1721,7 +1721,7 @@ parent session を必要とするため、factory port は directive と routing
 受け取る。
 
 ```ts
-type ReviewDirectiveDelivery = {
+export type ReviewDirectiveDelivery = {
   readonly parentSessionId: string;
   readonly directive: ReviewRequiredDirective;
 };
@@ -1790,6 +1790,13 @@ PostToolUse は call ID から durable `TaskCallBinding` を解決し、purpose 
   artifact read、ReviewArtifact、Gate、Acceptance、Progress を発生させない。
 - review purpose を implementation feedback、implementation completion、generic task summary
   として処理してはならない。side-effecting completion は指定された直列化境界内で行う。
+
+Task ownership is explicit: Task 3.4 owns the single Review Dispatch composition root,
+directive delivery sink, and review-first PreToolUse claim route. Task 3.6 owns the
+purpose-aware review PostToolUse route and the call to `consumeReviewCompletion`; Task 3.4
+must not import or invoke that completion consumer. Task 3.1 owns the lifecycle notification
+that invokes the public `offerNextMandatoryReview(parentSessionId)` boundary. Task 3.5 owns
+the durable child binding that Task 3.6 consumes.
 
 ### 12.5 HookResponse and fail-open contract
 
