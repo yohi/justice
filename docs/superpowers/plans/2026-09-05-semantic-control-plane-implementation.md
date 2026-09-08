@@ -24,6 +24,7 @@
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
+- The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
 - At every Phase or Phase 3 subsection boundary, after the final task's targeted `Confirm GREEN` and before that task's Step 5 commit, run `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build` inside `.devcontainer/`; the full gate must pass before the phase is committed.
 - Ask the user before each commit. The listed `git add` command is the complete commit scope.
 
@@ -2511,6 +2512,8 @@ git commit -m "feat: plan authorizationのcancelを追加"
 - Modify: `src/core/session-state-provider.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/justice-plugin.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/opencode-plugin.ts`
 - Test: `tests/core/task-lifecycle.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
 - Create: `tests/hooks/observation-handler-lifecycle.test.ts`
@@ -5058,7 +5061,7 @@ git commit -m "test: child session correlation runtime境界を検証"
 
 - Create `spikes/review-artifact-linux/probe.c`.
 - Create `spikes/review-artifact-linux/verify.ts`.
-- Modify `.devcontainer/Dockerfile` only to provide `build-essential`, `rustc`, and `cargo` for the supported Linux build.
+- Modify `.devcontainer/Dockerfile` only to provide `build-essential`, `ca-certificates`, and `rustup`; do not install an unpinned apt `rustc` or `cargo`.
 - Create `docs/agents/review-artifact-linux-provider.md` with the exact probe output and the supported deployment statement.
 - Test `tests/runtime/review-artifact-linux-probe.test.ts`.
 
@@ -5068,9 +5071,32 @@ The probe is a hard gate, not a best-effort experiment. It must prove the exact 
 
 **Implementation steps:**
 
-1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews` and `.justice/leases` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
+Before compiling the probe, make the devcontainer provisioning match the pinned toolchain. The Dockerfile must use the following package and rustup setup; it must not install `rustc` or `cargo` from apt:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
+ENV PATH="/home/bun/.cargo/bin:${PATH}"
+RUN rustup toolchain install 1.85.1 \
+    --profile minimal \
+    --component rustfmt \
+    --component clippy \
+    --target x86_64-unknown-linux-gnu
+```
+
+The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values, and the probe command must first assert `rustup show active-toolchain` is `1.85.1-x86_64-unknown-linux-gnu`.
+
+1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews`, `.justice/reviews/.leases`, and `.justice/reviews/.quarantine` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
 2. Configure every descendant open with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, plus `O_DIRECTORY`, `O_CLOEXEC`, and `O_NOFOLLOW` where applicable. Create the artifact leaf with `O_CREAT | O_EXCL | O_NOFOLLOW`, record its `st_dev`/`st_ino`, and create the private lease with `linkat(2)` before returning the reservation.
-3. Exercise these cases in the probe: successful exclusive reservation; second reservation collision; descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor close/reopen; and `renameat2(2)` quarantine followed by identity-checked deletion. A replaced inode must remain retained and must never be deleted by cleanup.
+3. Exercise these cases in the probe: successful exclusive reservation; second reservation collision; descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor close/reopen followed by `openExistingReservation`; and `renameat2(2)` quarantine followed by identity-checked deletion. A replaced inode must be restored with no-clobber semantics when possible, retained in quarantine on restore collision, and never be deleted by cleanup.
 4. Implement `verify.ts` to compile the probe with `cc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -O2`, execute it under a temporary directory, and emit one JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case. The only passing status is `status: "PASS"`; missing `openat2(2)`, missing `renameat2(2)`, a failed security case, or a non-Linux/non-x86_64 environment must produce `status: "BLOCKED"` and a non-zero exit code.
 5. Record the successful supported-environment output in `docs/agents/review-artifact-linux-provider.md`. Record the exact unsupported result and the user-visible `artifact_storage_unavailable` behavior as well; do not describe an unsupported runtime as a P0 exemption.
 
@@ -5108,6 +5134,41 @@ git commit -m "test: gate review artifact provider on Linux primitives"
 
 The implementation must be the concrete provider named by the design: `LinuxOpenat2ReviewArtifactProvider`. The native crate package name is `justice_review_artifact_linux`, and the release build must produce `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`. The TypeScript owner must load only that bundled addon on the supported deployment; it must not silently substitute a generic filesystem backend, `bun:ffi`, or a pathname-based implementation.
 
+**Pinned toolchain and package contract:**
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "1.85.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-gnu"]
+```
+
+```toml
+# native/review-artifact-linux/Cargo.toml
+[package]
+name = "justice_review_artifact_linux"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "=0.2.177"
+napi = { version = "=3.12.2", default-features = false, features = ["napi8"] }
+napi-derive = "=3.6.3"
+
+[build-dependencies]
+napi-build = "=2.4.1"
+```
+
+The package manager must add `"@napi-rs/cli": "3.2.0"` and the exact script
+`"build:native:review-artifact": "bunx --no-install napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js"`.
+The lockfile must resolve that exact CLI version and the exact Cargo versions above.
+
 **Native API:**
 
 Expose these synchronous N-API functions and object methods, with `Buffer` used for artifact bytes and opaque reservation handles used for descriptor ownership:
@@ -5115,13 +5176,28 @@ Expose these synchronous N-API functions and object methods, with `Buffer` used 
 ```text
 openReviewArtifactRoot(rootDir: string) -> ReviewArtifactRootHandle
 ReviewArtifactRootHandle.createExclusiveMarker(artifactPath: string) -> ReservationHandle
+ReviewArtifactRootHandle.openExistingReservation(descriptor: {
+  artifactPath: string,
+  leasePath: string,
+  artifactIdentity: { device: string, inode: string }
+}) -> ReservationHandle
 ReviewArtifactRootHandle.writeExisting(reservation: ReservationHandle, bytes: Buffer) -> void
 ReviewArtifactRootHandle.readOnce(reservation: ReservationHandle) -> Buffer
 ReviewArtifactRootHandle.cleanup(reservation: ReservationHandle) -> CleanupResult
 ReviewArtifactRootHandle.close() -> void
+ReservationHandle.artifactIdentity() -> { device: string, inode: string }
+ReservationHandle.leasePath() -> string
+ReservationHandle.close() -> void
+probeReviewArtifactCapabilities() -> {
+  linux: boolean,
+  x64: boolean,
+  glibc: boolean,
+  openat2: boolean,
+  renameat2: boolean
+}
 ```
 
-`openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the canonical workspace root descriptor. All subsequent paths are validated relative paths under `.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses `O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`. `writeExisting`, `readOnce`, and `cleanup` compare the stored identity against the live descriptor before acting. `cleanup` uses `renameat2(2)` to a random quarantine leaf, verifies the quarantined inode, and deletes only the verified inode. On any mismatch it returns `replacement_retained` and leaves the replacement in place.
+`openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the canonical workspace root descriptor. All subsequent paths are validated relative paths under `.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses `O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`. `openExistingReservation` is the only restart path: it validates the durable descriptor, opens artifact and lease with no-follow, compares both `st_dev`/`st_ino` values to the durable identity, and returns a new handle only when all three identities match. `writeExisting`, `readOnce`, and `cleanup` compare the stored identity against the live descriptor before acting. `cleanup` uses `renameat2(2)` with `RENAME_NOREPLACE` to a random quarantine leaf, verifies the quarantined inode, deletes only the verified inode, and restores an unverified replacement with `RENAME_NOREPLACE` when the original leaf is absent. A restore collision leaves the quarantine entry and returns `replacement_retained`; it never overwrites or deletes the replacement.
 
 The provider object owns the root descriptor for the lifetime of the initialized
 `OpenCodeAdapter`; `close()` is called by the adapter's teardown path when the host exposes one,
@@ -5129,18 +5205,1060 @@ and the native process boundary closes the descriptor on process exit. No reserv
 outlive its root handle. Tests must call `close()` explicitly and assert that subsequent native
 operations fail closed without touching the artifact or replacement path.
 
-The Rust crate must use `napi = "3.12.2"`, `napi-derive = "3.6.3"`, `napi-build = "2.4.1"`, and `libc = "0.2"`. `build.rs` must call `napi_build::setup()`. The package script must invoke the exact target build:
+The Rust crate must use the exact manifest above. `build.rs` must call `napi_build::setup()`. The package script must invoke the exact target build:
 
 ```bash
 bunx napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js
 ```
 
+- [ ] **Step 1: Write the failing native-provider tests**
+
+Create `tests/runtime/linux-review-artifact-provider.test.ts` with the complete supported-path and
+publication contract below. The helper builds only a trusted `ReviewArtifactReservation` from the
+provider's marker result; it never fabricates inode identity or calls generic filesystem I/O for the
+artifact.
+
+```ts
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createLinuxOpenat2ReviewArtifactProvider,
+  isSupportedLinuxOpenat2Environment,
+  type LinuxOpenat2RuntimeEnvironment,
+} from "../../src/runtime/linux-review-artifact-provider";
+
+type UsableReservation = {
+  readonly status: "usable";
+  readonly artifactId: string;
+  readonly artifactPath: string;
+  readonly leasePath: string;
+  readonly artifactIdentity: { readonly device: string; readonly inode: string };
+};
+const roots: string[] = [];
+
+const unsupportedRuntimes = [
+  { platform: "darwin", arch: "x64", glibc: true, openat2: true, renameat2: true },
+  { platform: "linux", arch: "arm64", glibc: true, openat2: true, renameat2: true },
+  { platform: "linux", arch: "x64", glibc: false, openat2: true, renameat2: true },
+  { platform: "linux", arch: "x64", glibc: true, openat2: false, renameat2: true },
+  { platform: "linux", arch: "x64", glibc: true, openat2: true, renameat2: false },
+] as const satisfies readonly LinuxOpenat2RuntimeEnvironment[];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function arrangeProvider(): Promise<{
+  readonly root: string;
+  readonly provider: NonNullable<ReturnType<typeof createLinuxOpenat2ReviewArtifactProvider>>;
+  readonly reservation: UsableReservation;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "justice-review-artifact-"));
+  roots.push(root);
+  const provider = createLinuxOpenat2ReviewArtifactProvider(root);
+  if (provider === undefined) throw new Error("supported Linux provider was not published");
+  const artifactPath = ".justice/reviews/review-1.json";
+  const marker = await provider.createExclusiveMarker(artifactPath);
+  if (marker.kind !== "created") throw new Error("test artifact unexpectedly occupied");
+  return {
+    root,
+    provider,
+    reservation: {
+      status: "usable",
+      artifactId: "review-1",
+      artifactPath,
+      leasePath: marker.leasePath,
+      artifactIdentity: marker.artifactIdentity,
+    },
+  };
+}
+
+async function replaceLeaf(root: string, relativePath: string, content: string): Promise<void> {
+  const absolutePath = join(root, relativePath);
+  await unlink(absolutePath);
+  await writeFile(absolutePath, content, "utf8");
+}
+
+describe("LinuxOpenat2ReviewArtifactProvider publication", () => {
+  it.each(unsupportedRuntimes)(
+    "publishes no capability for unsupported runtime %j",
+    (runtime) => {
+      expect(isSupportedLinuxOpenat2Environment(runtime)).toBe(false);
+    },
+  );
+
+  it("publishes marker and reserved I/O only on the supported built-addon runtime", async () => {
+    const fixture = await arrangeProvider();
+    expect(fixture.provider.createExclusiveMarker).toBeTypeOf("function");
+    expect(fixture.provider.reservedReviewArtifactIo).toBeDefined();
+    fixture.provider.close();
+  });
+});
+
+describe("LinuxOpenat2ReviewArtifactProvider operations", () => {
+  it("creates one artifact/lease inode and reports the second create as occupied", async () => {
+    const fixture = await arrangeProvider();
+    const second = await fixture.provider.createExclusiveMarker(fixture.reservation.artifactPath);
+    expect(second).toEqual({ kind: "occupied" });
+    expect(fixture.reservation.leasePath).toContain(".justice/reviews/.leases/");
+    fixture.provider.close();
+  });
+
+  it("writes and reads exact bytes through the same reservation", async () => {
+    const fixture = await arrangeProvider();
+    const io = fixture.provider.reservedReviewArtifactIo;
+    await io.writeExisting(fixture.reservation, "{\"complete\":true}");
+    await expect(io.readOnce(fixture.reservation)).resolves.toBe("{\"complete\":true}");
+    fixture.provider.close();
+  });
+
+  it("reopens the root and rehydrates the durable reservation identity", async () => {
+    const fixture = await arrangeProvider();
+    await fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "durable");
+    fixture.provider.close();
+
+    const reopened = createLinuxOpenat2ReviewArtifactProvider(fixture.root);
+    if (reopened === undefined) throw new Error("provider did not reopen");
+    await expect(reopened.reservedReviewArtifactIo.readOnce(fixture.reservation)).resolves.toBe("durable");
+    await replaceLeaf(fixture.root, fixture.reservation.artifactPath, "replacement");
+    await expect(reopened.reservedReviewArtifactIo.readOnce(fixture.reservation)).rejects.toThrow();
+    reopened.close();
+  });
+
+  it("fails closed after close without mutating the artifact", async () => {
+    const fixture = await arrangeProvider();
+    fixture.provider.close();
+    await expect(
+      fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "must-not-write"),
+    ).rejects.toThrow();
+    await expect(readFile(join(fixture.root, fixture.reservation.artifactPath), "utf8")).resolves.toBe("");
+  });
+});
+```
+
+Create `tests/runtime/linux-review-artifact-provider-security.test.ts` with the real filesystem race
+and replacement cases below. These tests must run against the built addon, not a mock capability.
+
+```ts
+import { mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile, rename } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createLinuxOpenat2ReviewArtifactProvider } from "../../src/runtime/linux-review-artifact-provider";
+
+type UsableReservation = {
+  readonly status: "usable";
+  readonly artifactId: string;
+  readonly artifactPath: string;
+  readonly leasePath: string;
+  readonly artifactIdentity: { readonly device: string; readonly inode: string };
+};
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function arrangeSecurityFixture(): Promise<{
+  readonly root: string;
+  readonly provider: NonNullable<ReturnType<typeof createLinuxOpenat2ReviewArtifactProvider>>;
+  readonly reservation: UsableReservation;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "justice-review-artifact-security-"));
+  roots.push(root);
+  const provider = createLinuxOpenat2ReviewArtifactProvider(root);
+  if (provider === undefined) throw new Error("supported Linux provider was not published");
+  const artifactPath = ".justice/reviews/security.json";
+  const marker = await provider.createExclusiveMarker(artifactPath);
+  if (marker.kind !== "created") throw new Error("test artifact unexpectedly occupied");
+  return {
+    root,
+    provider,
+    reservation: {
+      status: "usable",
+      artifactId: "security",
+      artifactPath,
+      leasePath: marker.leasePath,
+      artifactIdentity: marker.artifactIdentity,
+    },
+  };
+}
+
+describe("LinuxOpenat2ReviewArtifactProvider security boundaries", () => {
+  it("rejects final-leaf replacement before write or read", async () => {
+    const fixture = await arrangeSecurityFixture();
+    await unlink(join(fixture.root, fixture.reservation.artifactPath));
+    await writeFile(join(fixture.root, fixture.reservation.artifactPath), "replacement", "utf8");
+    await expect(
+      fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "forged"),
+    ).rejects.toThrow();
+    await expect(fixture.provider.reservedReviewArtifactIo.readOnce(fixture.reservation)).rejects.toThrow();
+    await expect(readFile(join(fixture.root, fixture.reservation.artifactPath), "utf8")).resolves.toBe(
+      "replacement",
+    );
+    fixture.provider.close();
+  });
+
+  it("rejects artifact symlink replacement without touching the target", async () => {
+    const fixture = await arrangeSecurityFixture();
+    const outside = await mkdtemp(join(tmpdir(), "justice-review-artifact-outside-"));
+    roots.push(outside);
+    await writeFile(join(outside, "target"), "outside", "utf8");
+    await unlink(join(fixture.root, fixture.reservation.artifactPath));
+    await symlink(join(outside, "target"), join(fixture.root, fixture.reservation.artifactPath));
+    await expect(
+      fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "forged"),
+    ).rejects.toThrow();
+    await expect(readFile(join(outside, "target"), "utf8")).resolves.toBe("outside");
+    fixture.provider.close();
+  });
+
+  it("rejects lease symlink replacement without touching the target", async () => {
+    const fixture = await arrangeSecurityFixture();
+    const outside = await mkdtemp(join(tmpdir(), "justice-review-artifact-lease-outside-"));
+    roots.push(outside);
+    await writeFile(join(outside, "target"), "outside", "utf8");
+    await unlink(join(fixture.root, fixture.reservation.leasePath));
+    await symlink(join(outside, "target"), join(fixture.root, fixture.reservation.leasePath));
+    await expect(
+      fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "forged"),
+    ).rejects.toThrow();
+    await expect(readFile(join(outside, "target"), "utf8")).resolves.toBe("outside");
+    fixture.provider.close();
+  });
+
+  it("keeps an ancestor swap anchored to the original directory descriptor", async () => {
+    const fixture = await arrangeSecurityFixture();
+    const outside = await mkdtemp(join(tmpdir(), "justice-review-artifact-ancestor-"));
+    roots.push(outside);
+    await writeFile(join(outside, "security.json"), "outside", "utf8");
+    const reviews = join(fixture.root, ".justice", "reviews");
+    await rename(reviews, `${reviews}.original`);
+    await symlink(outside, reviews);
+    await expect(fixture.provider.reservedReviewArtifactIo.readOnce(fixture.reservation)).resolves.toBe("");
+    await expect(
+      fixture.provider.reservedReviewArtifactIo.writeExisting(fixture.reservation, "inside"),
+    ).resolves.toBeUndefined();
+    await expect(readFile(join(`${reviews}.original`, "security.json"), "utf8")).resolves.toBe("inside");
+    await expect(readFile(join(outside, "security.json"), "utf8")).resolves.toBe("outside");
+    fixture.provider.close();
+  });
+
+  it("retains and restores a replacement during identity-safe cleanup", async () => {
+    const fixture = await arrangeSecurityFixture();
+    await unlink(join(fixture.root, fixture.reservation.artifactPath));
+    await writeFile(join(fixture.root, fixture.reservation.artifactPath), "replacement", "utf8");
+    await expect(fixture.provider.reservedReviewArtifactIo.cleanup(fixture.reservation)).resolves.toBe(
+      "replacement_retained",
+    );
+    await expect(readFile(join(fixture.root, fixture.reservation.artifactPath), "utf8")).resolves.toBe(
+      "replacement",
+    );
+    await expect(readdir(join(fixture.root, ".justice", "reviews", ".quarantine"))).resolves.toEqual([]);
+    fixture.provider.close();
+  });
+
+  it("retains a lease replacement and never deletes its replacement bytes", async () => {
+    const fixture = await arrangeSecurityFixture();
+    await unlink(join(fixture.root, fixture.reservation.leasePath));
+    await writeFile(join(fixture.root, fixture.reservation.leasePath), "lease-replacement", "utf8");
+    await expect(fixture.provider.reservedReviewArtifactIo.cleanup(fixture.reservation)).resolves.toBe(
+      "replacement_retained",
+    );
+    await expect(readFile(join(fixture.root, fixture.reservation.leasePath), "utf8")).resolves.toBe(
+      "lease-replacement",
+    );
+    await expect(readFile(join(fixture.root, fixture.reservation.artifactPath), "utf8")).resolves.toBe("");
+    fixture.provider.close();
+  });
+});
+```
+
+The two files above are the RED source. Before running RED, Step 1 also creates the smallest typed
+compile scaffold for `src/runtime/linux-review-artifact-provider.ts`, the optional `NodeFileSystem`
+capability members, and the native-addon module shape used by the tests. The scaffold must implement the
+real root open plus exclusive marker/lease identity path needed to arrange a reservation, without fabricating
+an identity or using generic pathname I/O; its unimplemented read/write/cleanup operations may return a
+deterministic `artifact_storage_unavailable` error. It must not contain a pathname fallback or a fake
+successful operation. Step 3 replaces the scaffold's operation bodies with the production implementation in
+place. Every fixture must compile using only the planned public signatures and must fail on behavior assertions,
+not on a missing symbol, malformed fixture, unsupported matcher, or unavailable import. The test runner must
+load the native addon for the supported Linux cases; unsupported publication is covered by the pure
+environment guard matrix and must not be silently skipped.
+
+- [ ] **Step 2: Confirm RED**
+
+Run:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu"'
+devcontainer exec --workspace-folder . bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+```
+
+Expected RED is behavioral: the test files compile, then fail because the native addon/provider body is
+not implemented. A missing import, undefined symbol, invalid N-API binding, malformed fixture, unsupported
+matcher, or a skipped supported-platform suite is an invalid RED and must be fixed before implementation.
+
+- [ ] **Step 3: Implement the production provider**
+
+Implement the following files exactly. No pathname fallback, `bun:ffi`, generic storage abstraction, or
+second provider is allowed.
+
+**Native build files:**
+
+```rust
+// native/review-artifact-linux/build.rs
+fn main() {
+    napi_build::setup();
+}
+```
+
+```rust
+// native/review-artifact-linux/src/lib.rs
+#![deny(unsafe_op_in_unsafe_fn)]
+
+use std::ffi::CString;
+use std::mem::size_of;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::sync::Mutex;
+
+use libc::{c_int, c_long, c_uint, mode_t, off_t, stat, AT_FDCWD};
+use napi::bindgen_prelude::Buffer;
+use napi::{Error, Result, Status};
+use napi_derive::napi;
+
+const SYS_OPENAT2: c_long = 437;
+const SYS_RENAMEAT2: c_long = 316;
+const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+const RESOLVE_BENEATH: u64 = 0x08;
+const OPEN_RESOLVE: u64 = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS;
+const RENAME_NOREPLACE: c_uint = 1;
+
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+#[napi(object)]
+pub struct NativeIdentity {
+    pub device: String,
+    pub inode: String,
+}
+
+#[napi(object)]
+pub struct NativeReservationDescriptor {
+    pub artifact_path: String,
+    pub lease_path: String,
+    pub artifact_identity: NativeIdentity,
+}
+
+#[napi(object)]
+pub struct NativeCleanupResult {
+    pub status: String,
+}
+
+#[napi(object)]
+pub struct NativeCapabilities {
+    pub linux: bool,
+    pub x64: bool,
+    pub glibc: bool,
+    pub openat2: bool,
+    pub renameat2: bool,
+}
+
+struct RootState {
+    _root: OwnedFd,
+    reviews: OwnedFd,
+    leases: OwnedFd,
+    quarantine: OwnedFd,
+    next_quarantine_id: u64,
+}
+
+#[napi]
+pub struct NativeReservationHandle {
+    root_token: u64,
+    artifact_path: String,
+    lease_path: String,
+    identity: NativeIdentity,
+}
+
+enum QuarantineOutcome {
+    Moved { target_dir: RawFd, target_leaf: String, quarantine_leaf: String },
+    Retained,
+}
+
+#[napi]
+impl NativeReservationHandle {
+    #[napi]
+    pub fn artifact_identity(&self) -> NativeIdentity {
+        NativeIdentity { device: self.identity.device.clone(), inode: self.identity.inode.clone() }
+    }
+
+    #[napi]
+    pub fn lease_path(&self) -> String {
+        self.lease_path.clone()
+    }
+
+    #[napi]
+    pub fn close(self) {}
+}
+
+#[napi]
+pub struct NativeReviewArtifactRoot {
+    root_token: u64,
+    state: Mutex<Option<RootState>>,
+}
+
+#[napi]
+impl NativeReviewArtifactRoot {
+    #[napi]
+    pub fn create_exclusive_marker(&self, artifact_path: String) -> Result<NativeReservationHandle> {
+        let mut state = self.lock_open()?;
+        let artifact_leaf = artifact_leaf(&artifact_path)?;
+        let artifact_fd = openat2(
+            state.reviews.as_raw_fd(),
+            &artifact_leaf,
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+            OPEN_RESOLVE,
+        )?;
+        let identity = match fstat_identity(artifact_fd.as_raw_fd()) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
+                return Err(error);
+            }
+        };
+        let lease_leaf = format!("{artifact_leaf}.lease");
+        if let Err(error) = linkat(
+            state.reviews.as_raw_fd(),
+            &artifact_leaf,
+            state.leases.as_raw_fd(),
+            &lease_leaf,
+        ) {
+            let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
+            return Err(error);
+        }
+        let lease_fd = match openat2(
+            state.leases.as_raw_fd(),
+            &lease_leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        ) {
+            Ok(fd) => fd,
+            Err(error) => {
+                let _ = unlinkat(state.leases.as_raw_fd(), &lease_leaf, 0);
+                let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
+                return Err(error);
+            }
+        };
+        if let Err(error) = verify_identity(lease_fd.as_raw_fd(), &identity) {
+            let _ = unlinkat(state.leases.as_raw_fd(), &lease_leaf, 0);
+            let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
+            return Err(error);
+        }
+        Ok(NativeReservationHandle {
+            root_token: self.root_token,
+            artifact_path,
+            lease_path: format!(".justice/reviews/.leases/{lease_leaf}"),
+            identity,
+        })
+    }
+
+    #[napi]
+    pub fn open_existing_reservation(
+        &self,
+        descriptor: NativeReservationDescriptor,
+    ) -> Result<NativeReservationHandle> {
+        let state = self.lock_open()?;
+        let artifact_leaf = artifact_leaf(&descriptor.artifact_path)?;
+        let lease_leaf = lease_leaf(&descriptor.lease_path)?;
+        let artifact_fd = openat2(
+            state.reviews.as_raw_fd(),
+            &artifact_leaf,
+            libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        )?;
+        let expected = descriptor.artifact_identity;
+        let actual = fstat_identity(artifact_fd.as_raw_fd())?;
+        if !same_identity(&actual, &expected) {
+            return Err(error(Status::InvalidArg, "artifact_identity_mismatch", libc::EINVAL));
+        }
+        let lease_fd = openat2(
+            state.leases.as_raw_fd(),
+            &lease_leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        )?;
+        verify_identity(lease_fd.as_raw_fd(), &expected)?;
+        Ok(NativeReservationHandle {
+            root_token: self.root_token,
+            artifact_path: descriptor.artifact_path,
+            lease_path: descriptor.lease_path,
+            identity: expected,
+        })
+    }
+
+    #[napi]
+    pub fn write_existing(&self, reservation: &NativeReservationHandle, bytes: Buffer) -> Result<()> {
+        let state = self.lock_open()?;
+        self.verify_handle(reservation)?;
+        let (artifact_fd, _lease_fd) = open_reservation_pair(&state, reservation)?;
+        let length = i64::try_from(bytes.len()).map_err(|_| error(Status::InvalidArg, "content_too_large", libc::EFBIG))?;
+        check_errno(unsafe { libc::ftruncate(artifact_fd.as_raw_fd(), length as off_t) }, "ftruncate")?;
+        write_all(artifact_fd.as_raw_fd(), bytes.as_ref())?;
+        Ok(())
+    }
+
+    #[napi]
+    pub fn read_once(&self, reservation: &NativeReservationHandle) -> Result<Buffer> {
+        let state = self.lock_open()?;
+        self.verify_handle(reservation)?;
+        let (artifact_fd, _lease_fd) = open_reservation_pair(&state, reservation)?;
+        let size = fstat_size(artifact_fd.as_raw_fd())?;
+        let mut bytes = vec![0_u8; size];
+        read_exact(artifact_fd.as_raw_fd(), &mut bytes)?;
+        Ok(Buffer::from(bytes))
+    }
+
+    #[napi]
+    pub fn cleanup(&self, reservation: &NativeReservationHandle) -> Result<NativeCleanupResult> {
+        let mut state = self.lock_open()?;
+        self.verify_handle(reservation)?;
+        let artifact_leaf = artifact_leaf(&reservation.artifact_path)?;
+        let lease_leaf = lease_leaf(&reservation.lease_path)?;
+        let reviews_fd = state.reviews.as_raw_fd();
+        let leases_fd = state.leases.as_raw_fd();
+        let artifact = quarantine_one(
+            &mut state,
+            reviews_fd,
+            &artifact_leaf,
+            &reservation.identity,
+            "artifact",
+        );
+        let lease = quarantine_one(
+            &mut state,
+            leases_fd,
+            &lease_leaf,
+            &reservation.identity,
+            "lease",
+        );
+        let status = match (artifact, lease) {
+            (
+                QuarantineOutcome::Moved {
+                    target_dir: artifact_dir,
+                    target_leaf: artifact_target,
+                    quarantine_leaf: artifact_quarantine,
+                },
+                QuarantineOutcome::Moved {
+                    target_dir: lease_dir,
+                    target_leaf: lease_target,
+                    quarantine_leaf: lease_quarantine,
+                },
+            ) => {
+                if delete_quarantine(&state, &artifact_quarantine, &reservation.identity)
+                    && delete_quarantine(&state, &lease_quarantine, &reservation.identity)
+                {
+                    "cleaned"
+                } else {
+                    restore_quarantine(&state, artifact_dir, &artifact_target, &artifact_quarantine);
+                    restore_quarantine(&state, lease_dir, &lease_target, &lease_quarantine);
+                    "replacement_retained"
+                }
+            }
+            (QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf }, QuarantineOutcome::Retained) => {
+                restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                "replacement_retained"
+            }
+            (QuarantineOutcome::Retained, QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf }) => {
+                restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                "replacement_retained"
+            }
+            (QuarantineOutcome::Retained, QuarantineOutcome::Retained) => "replacement_retained",
+        };
+        Ok(NativeCleanupResult { status: status.to_string() })
+    }
+
+    fn lock_open(&self) -> Result<std::sync::MutexGuard<'_, Option<RootState>>> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| error(Status::GenericFailure, "root_lock_poisoned", libc::EIO))?;
+        if guard.is_none() {
+            return Err(error(Status::GenericFailure, "root_closed", libc::EBADF));
+        }
+        Ok(guard)
+    }
+
+    fn verify_handle(&self, reservation: &NativeReservationHandle) -> Result<()> {
+        if reservation.root_token != self.root_token {
+            return Err(error(Status::InvalidArg, "root_closed", libc::EBADF));
+        }
+        Ok(())
+    }
+
+    #[napi]
+    pub fn close(&self) -> Result<()> {
+        let mut guard = self.state.lock().map_err(|_| error(Status::GenericFailure, "root_lock_poisoned", libc::EIO))?;
+        *guard = None;
+        Ok(())
+    }
+}
+
+#[napi(js_name = "openReviewArtifactRoot")]
+pub fn open_review_artifact_root(root_dir: String) -> Result<NativeReviewArtifactRoot> {
+    let root = open_root_directory(&root_dir)?;
+    let justice = open_or_create_dir(&root, ".justice")?;
+    let reviews = open_or_create_dir(&justice, "reviews")?;
+    let leases = open_or_create_dir(&reviews, ".leases")?;
+    let quarantine = open_or_create_dir(&reviews, ".quarantine")?;
+    let token = random_token()?;
+    Ok(NativeReviewArtifactRoot {
+        root_token: token,
+        state: Mutex::new(Some(RootState { _root: root, reviews, leases, quarantine, next_quarantine_id: 0 })),
+    })
+}
+
+#[napi(js_name = "probeReviewArtifactCapabilities")]
+pub fn probe_review_artifact_capabilities() -> Result<NativeCapabilities> {
+    Ok(NativeCapabilities {
+        linux: cfg!(target_os = "linux"),
+        x64: cfg!(target_arch = "x86_64"),
+        glibc: cfg!(target_env = "gnu"),
+        openat2: probe_openat2(),
+        renameat2: probe_renameat2(),
+    })
+}
+
+fn artifact_leaf(path: &str) -> Result<String> {
+    safe_leaf(path, ".justice/reviews/")
+}
+
+fn lease_leaf(path: &str) -> Result<String> {
+    safe_leaf(path, ".justice/reviews/.leases/")
+}
+
+fn safe_leaf(path: &str, prefix: &str) -> Result<String> {
+    let leaf = path
+        .strip_prefix(prefix)
+        .filter(|value| {
+            !value.is_empty()
+                && *value != "."
+                && *value != ".."
+                && !value.contains('/')
+                && !value.contains('\\')
+        })
+        .ok_or_else(|| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    CString::new(leaf)
+        .map(|_| leaf.to_string())
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))
+}
+
+fn open_reservation_pair(
+    state: &RootState,
+    reservation: &NativeReservationHandle,
+) -> Result<(OwnedFd, OwnedFd)> {
+    let artifact = artifact_leaf(&reservation.artifact_path)?;
+    let lease = lease_leaf(&reservation.lease_path)?;
+    let artifact_fd = openat2(
+        state.reviews.as_raw_fd(),
+        &artifact,
+        libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+        )?;
+    verify_identity(
+        artifact_fd.as_raw_fd(),
+        &reservation.identity,
+    )?;
+    let lease_fd = openat2(
+        state.leases.as_raw_fd(),
+        &lease,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    )?;
+    verify_identity(lease_fd.as_raw_fd(), &reservation.identity)?;
+    Ok((artifact_fd, lease_fd))
+}
+
+fn openat2(
+    dir: RawFd,
+    path: &str,
+    flags: c_int,
+    mode: mode_t,
+    resolve: u64,
+) -> Result<OwnedFd> {
+    let path = CString::new(path)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let how = OpenHow { flags: flags as u64, mode: mode as u64, resolve };
+    let result = unsafe {
+        libc::syscall(
+            SYS_OPENAT2,
+            dir,
+            path.as_ptr(),
+            &how as *const OpenHow,
+            size_of::<OpenHow>(),
+        )
+    };
+    if result < 0 {
+        return Err(error_for_errno("openat2", current_errno()));
+    }
+    let fd = c_int::try_from(result)
+        .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn renameat2(from_dir: RawFd, from: &str, to_dir: RawFd, to: &str, flags: c_uint) -> Result<()> {
+    let from = CString::new(from)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let to = CString::new(to)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let result = unsafe {
+        libc::syscall(
+            SYS_RENAMEAT2,
+            from_dir,
+            from.as_ptr(),
+            to_dir,
+            to.as_ptr(),
+            flags,
+        )
+    };
+    check_errno(result as c_int, "renameat2")
+}
+
+fn linkat(from_dir: RawFd, from: &str, to_dir: RawFd, to: &str) -> Result<()> {
+    let from = CString::new(from)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let to = CString::new(to)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let result = unsafe { libc::linkat(from_dir, from.as_ptr(), to_dir, to.as_ptr(), 0) };
+    check_errno(result, "linkat")
+}
+
+fn unlinkat(dir: RawFd, path: &str, flags: c_int) -> Result<()> {
+    let path = CString::new(path)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let result = unsafe { libc::unlinkat(dir, path.as_ptr(), flags) };
+    check_errno(result, "unlinkat")
+}
+
+fn fstat_identity(fd: RawFd) -> Result<NativeIdentity> {
+    let mut value: stat = unsafe { std::mem::zeroed() };
+    check_errno(unsafe { libc::fstat(fd, &mut value) }, "fstat")?;
+    Ok(NativeIdentity { device: value.st_dev.to_string(), inode: value.st_ino.to_string() })
+}
+
+fn verify_identity(fd: RawFd, expected: &NativeIdentity) -> Result<()> {
+    let actual = fstat_identity(fd)?;
+    if same_identity(&actual, expected) {
+        Ok(())
+    } else {
+        Err(error(Status::InvalidArg, "artifact_identity_mismatch", libc::EINVAL))
+    }
+}
+
+fn same_identity(left: &NativeIdentity, right: &NativeIdentity) -> bool {
+    left.device == right.device && left.inode == right.inode
+}
+
+fn quarantine_one(
+    state: &mut RootState,
+    target_dir: RawFd,
+    target_leaf: &str,
+    expected: &NativeIdentity,
+    label: &str,
+) -> QuarantineOutcome {
+    let current = match openat2(
+        target_dir,
+        target_leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    ) {
+        Ok(fd) => fd,
+        Err(_) => return QuarantineOutcome::Retained,
+    };
+    if verify_identity(current.as_raw_fd(), expected).is_err() {
+        return QuarantineOutcome::Retained;
+    }
+    let token = match random_token() {
+        Ok(token) => token,
+        Err(_) => return QuarantineOutcome::Retained,
+    };
+    let quarantine_leaf = format!(".{label}-{token:x}-{}", state.next_quarantine_id);
+    state.next_quarantine_id = state.next_quarantine_id.wrapping_add(1);
+    if renameat2(
+        target_dir,
+        target_leaf,
+        state.quarantine.as_raw_fd(),
+        &quarantine_leaf,
+        RENAME_NOREPLACE,
+    )
+    .is_err()
+    {
+        return QuarantineOutcome::Retained;
+    }
+    let quarantined = match openat2(
+        state.quarantine.as_raw_fd(),
+        &quarantine_leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    ) {
+        Ok(fd) => fd,
+        Err(_) => {
+            restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf);
+            return QuarantineOutcome::Retained;
+        }
+    };
+    if verify_identity(quarantined.as_raw_fd(), expected).is_err() {
+        restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf);
+        return QuarantineOutcome::Retained;
+    }
+    QuarantineOutcome::Moved {
+        target_dir,
+        target_leaf: target_leaf.to_string(),
+        quarantine_leaf,
+    }
+}
+
+fn restore_quarantine(state: &RootState, target_dir: RawFd, target_leaf: &str, quarantine_leaf: &str) {
+    let _ = renameat2(
+        state.quarantine.as_raw_fd(),
+        quarantine_leaf,
+        target_dir,
+        target_leaf,
+        RENAME_NOREPLACE,
+    );
+}
+
+fn delete_quarantine(state: &RootState, quarantine_leaf: &str, expected: &NativeIdentity) -> bool {
+    let fd = match openat2(
+        state.quarantine.as_raw_fd(),
+        quarantine_leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    ) {
+        Ok(fd) => fd,
+        Err(_) => return false,
+    };
+    if verify_identity(fd.as_raw_fd(), expected).is_err() {
+        return false;
+    }
+    unlinkat(state.quarantine.as_raw_fd(), quarantine_leaf, 0).is_ok()
+}
+
+fn write_all(fd: RawFd, bytes: &[u8]) -> Result<()> {
+    let mut written = 0_usize;
+    while written < bytes.len() {
+        let count = unsafe {
+            libc::pwrite(
+                fd,
+                bytes[written..].as_ptr().cast(),
+                bytes.len() - written,
+                written as off_t,
+            )
+        };
+        if count < 0 {
+            return Err(error_for_errno("pwrite", current_errno()));
+        }
+        if count == 0 {
+            return Err(error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO));
+        }
+        written += usize::try_from(count)
+            .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
+    }
+    Ok(())
+}
+
+fn read_exact(fd: RawFd, bytes: &mut [u8]) -> Result<()> {
+    let mut read = 0_usize;
+    while read < bytes.len() {
+        let count = unsafe {
+            libc::pread(
+                fd,
+                bytes[read..].as_mut_ptr().cast(),
+                bytes.len() - read,
+                read as off_t,
+            )
+        };
+        if count < 0 {
+            return Err(error_for_errno("pread", current_errno()));
+        }
+        if count == 0 {
+            return Err(error(Status::GenericFailure, "artifact_read_failed", libc::EIO));
+        }
+        read += usize::try_from(count)
+            .map_err(|_| error(Status::GenericFailure, "artifact_read_failed", libc::EIO))?;
+    }
+    Ok(())
+}
+
+fn fstat_size(fd: RawFd) -> Result<usize> {
+    let mut value: stat = unsafe { std::mem::zeroed() };
+    check_errno(unsafe { libc::fstat(fd, &mut value) }, "fstat")?;
+    if value.st_size < 0 {
+        return Err(error(Status::GenericFailure, "artifact_read_failed", libc::EIO));
+    }
+    usize::try_from(value.st_size)
+        .map_err(|_| error(Status::GenericFailure, "artifact_read_failed", libc::EFBIG))
+}
+
+fn open_root_directory(path: &str) -> Result<OwnedFd> {
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
+    let canonical = CString::new(canonical.as_os_str().as_bytes())
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let fd = unsafe { libc::open(canonical.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW) };
+    if fd < 0 {
+        return Err(error_for_errno("open_root", current_errno()));
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn open_or_create_dir(parent: &OwnedFd, leaf: &str) -> Result<OwnedFd> {
+    let leaf = CString::new(leaf)
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), leaf.as_ptr(), 0o700) };
+    if created < 0 && current_errno() != libc::EEXIST {
+        return Err(error_for_errno("mkdirat", current_errno()));
+    }
+    let leaf = leaf
+        .to_str()
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    openat2(
+        parent.as_raw_fd(),
+        leaf,
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        0,
+        OPEN_RESOLVE,
+    )
+}
+
+fn random_token() -> Result<u64> {
+    let mut token = 0_u64;
+    let count = unsafe {
+        libc::getrandom(
+            (&mut token as *mut u64).cast(),
+            size_of::<u64>(),
+            0,
+        )
+    };
+    if count == size_of::<u64>() as isize {
+        Ok(token)
+    } else {
+        Err(error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))
+    }
+}
+
+fn probe_openat2() -> bool {
+    let result = unsafe {
+        libc::syscall(
+            SYS_OPENAT2,
+            AT_FDCWD,
+            std::ptr::null::<libc::c_char>(),
+            std::ptr::null::<OpenHow>(),
+            0,
+        )
+    };
+    if result >= 0 {
+        return true;
+    }
+    let errno = current_errno();
+    errno != libc::ENOSYS && errno != libc::EINVAL
+}
+
+fn probe_renameat2() -> bool {
+    let result = unsafe {
+        libc::syscall(
+            SYS_RENAMEAT2,
+            -1,
+            std::ptr::null::<libc::c_char>(),
+            -1,
+            std::ptr::null::<libc::c_char>(),
+            0,
+        )
+    };
+    if result >= 0 {
+        return true;
+    }
+    let errno = current_errno();
+    errno != libc::ENOSYS && errno != libc::EINVAL
+}
+
+fn check_errno(result: c_int, operation: &str) -> Result<()> {
+    if result < 0 {
+        Err(error_for_errno(operation, current_errno()))
+    } else {
+        Ok(())
+    }
+}
+
+fn current_errno() -> c_int {
+    unsafe { *libc::__errno_location() }
+}
+
+fn error_for_errno(operation: &str, errno: c_int) -> Error {
+    let code = match (operation, errno) {
+        // `openat2` is O_EXCL only for marker creation; `linkat` is used only
+        // for the corresponding lease creation. Other EEXIST values (notably
+        // renameat2 quarantine collisions) remain storage/retention failures.
+        ("openat2" | "linkat", libc::EEXIST) => "artifact_occupied",
+        (_, libc::ENOENT) => "artifact_missing",
+        (_, libc::EBADF) => "root_closed",
+        (_, libc::EACCES | libc::EPERM) => "artifact_permission_denied",
+        (_, libc::ELOOP | libc::EXDEV | libc::EINVAL | libc::ENOTDIR) => "artifact_path_invalid",
+        _ => "artifact_storage_unavailable",
+    };
+    let status = match code {
+        "artifact_missing" => Status::GenericFailure,
+        "artifact_path_invalid" => Status::InvalidArg,
+        "artifact_permission_denied" => Status::GenericFailure,
+        _ => Status::GenericFailure,
+    };
+    error(status, code, errno)
+}
+
+fn error(status: Status, code: &str, errno: c_int) -> Error {
+    Error::new(status, format!("{code}:{errno}"))
+}
+```
+
+The code above is the complete native implementation contract, not a placeholder: every helper body names
+the syscall, validation, ownership, and error behavior that must be copied into the implementation commit.
+`RootState._root`, every `OwnedFd`, and every reservation handle must be closed by Rust ownership or
+`close()`; no raw descriptor may cross into TypeScript. `openat2` must
+use `O_CLOEXEC`, `O_NOFOLLOW`, `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, and
+descriptor-relative directory fds. `quarantine_one` must use `renameat2(..., RENAME_NOREPLACE)`, verify
+the quarantine fd identity before `unlinkat`, and restore an unverified replacement only with another
+`RENAME_NOREPLACE`. It must return `replacement_retained` on mismatch, missing entry, restore collision,
+or verification error without deleting either candidate.
+
+Native errors have this fixed mapping: `EEXIST` from marker creation is `artifact_occupied`; `ENOENT`
+from an existing-reservation open is `artifact_missing`; `ELOOP`, `EXDEV`, `EINVAL`, and `ENOTDIR` are
+`artifact_path_invalid`; `EBADF` or `root.close()` is `root_closed`; `EACCES` and `EPERM` are
+`artifact_permission_denied`; `ENOSYS` and unsupported `EINVAL` from capability probing make the provider
+undefined; all other errors are `artifact_storage_unavailable`. Error messages may contain only the
+stable code and errno, never absolute paths or file contents.
+
 **TypeScript adapter:**
 
 `src/runtime/linux-review-artifact-provider.ts` must expose
 `createLinuxOpenat2ReviewArtifactProvider(rootDir: string): LinuxOpenat2ReviewArtifactProvider | undefined`,
-where `LinuxOpenat2ReviewArtifactProvider` contains both the optional
-`FileWriter.createExclusiveMarker` callback and the `ReservedReviewArtifactIo` value. It must first
+where a supported `LinuxOpenat2ReviewArtifactProvider` contains the required
+`FileWriter.createExclusiveMarker` callback and the `ReservedReviewArtifactIo` value. The
+`NodeFileSystem` adapter exposes the callback as optional because unsupported construction omits it. It must first
 verify `process.platform === "linux"`, `process.arch === "x64"`, glibc availability, and the native
 capability probe. It returns `undefined` for every failed condition. `OpenCodeAdapter` passes the
 returned provider into `NodeFileSystem`; that class exposes the marker callback and
@@ -5150,14 +6268,226 @@ reservation handles to the existing `ReservedReviewArtifactIo` contract without 
 and native operation errors must be converted to the existing safe fallback and must not escape a
 hook or adapter boundary.
 
+```ts
+// src/runtime/linux-review-artifact-provider.ts
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import type { FileWriter } from "../core/types";
+import type { ReservedReviewArtifactIo } from "../core/review-artifact";
+
+type NativeIdentity = Readonly<{ device: string; inode: string }>;
+type NativeCapabilities = Readonly<{
+  linux: boolean;
+  x64: boolean;
+  glibc: boolean;
+  openat2: boolean;
+  renameat2: boolean;
+}>;
+type NativeHandle = Readonly<{
+  artifactIdentity(): NativeIdentity;
+  leasePath(): string;
+  close(): void;
+}>;
+type NativeRoot = Readonly<{
+  createExclusiveMarker(path: string): NativeHandle;
+  openExistingReservation(descriptor: {
+    artifact_path: string;
+    lease_path: string;
+    artifact_identity: NativeIdentity;
+  }): NativeHandle;
+  writeExisting(handle: NativeHandle, bytes: Buffer): void;
+  readOnce(handle: NativeHandle): Buffer;
+  cleanup(handle: NativeHandle): { readonly status: "cleaned" | "replacement_retained" };
+  close(): void;
+}>;
+type NativeAddon = Readonly<{
+  openReviewArtifactRoot(rootDir: string): NativeRoot;
+  probeReviewArtifactCapabilities(): NativeCapabilities;
+}>;
+
+export type LinuxOpenat2RuntimeEnvironment = Readonly<{
+  platform: NodeJS.Platform;
+  arch: string;
+  glibc: boolean;
+  openat2: boolean;
+  renameat2: boolean;
+}>;
+
+export type LinuxOpenat2ReviewArtifactProvider = Readonly<{
+  readonly createExclusiveMarker: NonNullable<FileWriter["createExclusiveMarker"]>;
+  readonly reservedReviewArtifactIo: ReservedReviewArtifactIo;
+  readonly close: () => void;
+}>;
+
+const NATIVE_ADDON_FILE = "justice_review_artifact_linux.linux-x64-gnu.node";
+
+export function isSupportedLinuxOpenat2Environment(
+  environment: LinuxOpenat2RuntimeEnvironment,
+): boolean {
+  return (
+    environment.platform === "linux" &&
+    environment.arch === "x64" &&
+    environment.glibc &&
+    environment.openat2 &&
+    environment.renameat2
+  );
+}
+
+export function createLinuxOpenat2ReviewArtifactProvider(
+  rootDir: string,
+): LinuxOpenat2ReviewArtifactProvider | undefined {
+  if (process.platform !== "linux" || process.arch !== "x64" || !hasGlibcRuntime()) return undefined;
+  const addon = loadNativeAddon();
+  if (addon === undefined) return undefined;
+
+  let capabilities: NativeCapabilities;
+  try {
+    capabilities = addon.probeReviewArtifactCapabilities();
+  } catch {
+    return undefined;
+  }
+
+  const environment: LinuxOpenat2RuntimeEnvironment = {
+    platform: process.platform,
+    arch: process.arch,
+    glibc: true,
+    openat2: capabilities.openat2,
+    renameat2: capabilities.renameat2,
+  };
+  if (
+    !capabilities.linux ||
+    !capabilities.x64 ||
+    !capabilities.glibc ||
+    !isSupportedLinuxOpenat2Environment(environment)
+  ) {
+    return undefined;
+  }
+
+  let root: NativeRoot;
+  try {
+    root = addon.openReviewArtifactRoot(rootDir);
+  } catch {
+    return undefined;
+  }
+
+  const createExclusiveMarker: NonNullable<FileWriter["createExclusiveMarker"]> = async (path) => {
+    let handle: NativeHandle | undefined;
+    try {
+      handle = root.createExclusiveMarker(path);
+      return {
+        kind: "created",
+        leasePath: handle.leasePath(),
+        artifactIdentity: handle.artifactIdentity(),
+      };
+    } catch (cause: unknown) {
+      if (nativeErrorCode(cause) === "artifact_occupied") return { kind: "occupied" };
+      throw safeNativeError("artifact_storage_unavailable", cause);
+    } finally {
+      handle?.close();
+    }
+  };
+
+  const openHandle = (
+    reservation: Extract<
+      Parameters<ReservedReviewArtifactIo["readOnce"]>[0],
+      { readonly status: "usable" }
+    >,
+  ): NativeHandle =>
+    root.openExistingReservation({
+      artifact_path: reservation.artifactPath,
+      lease_path: reservation.leasePath,
+      artifact_identity: reservation.artifactIdentity,
+    });
+
+  const reservedReviewArtifactIo: ReservedReviewArtifactIo = {
+    writeExisting: async (reservation, content) => {
+      let handle: NativeHandle | undefined;
+      try {
+        handle = openHandle(reservation);
+        root.writeExisting(handle, Buffer.from(content, "utf8"));
+      } catch (cause: unknown) {
+        throw safeNativeError("artifact_write_failed", cause);
+      } finally {
+        handle?.close();
+      }
+    },
+    readOnce: async (reservation) => {
+      let handle: NativeHandle | undefined;
+      try {
+        handle = openHandle(reservation);
+        return root.readOnce(handle).toString("utf8");
+      } catch (cause: unknown) {
+        throw safeNativeError("artifact_read_failed", cause);
+      } finally {
+        handle?.close();
+      }
+    },
+    cleanup: async (reservation) => {
+      let handle: NativeHandle | undefined;
+      try {
+        handle = openHandle(reservation);
+        return root.cleanup(handle).status;
+      } catch (cause: unknown) {
+        throw safeNativeError("artifact_cleanup_failed", cause);
+      } finally {
+        handle?.close();
+      }
+    },
+  };
+
+  let closed = false;
+  return {
+    createExclusiveMarker,
+    reservedReviewArtifactIo,
+    close: () => {
+      if (closed) return;
+      closed = true;
+      try {
+        root.close();
+      } catch {
+        // Teardown is fail-open; the native process still owns descriptor cleanup.
+      }
+    },
+  };
+}
+
+function loadNativeAddon(): NativeAddon | undefined {
+  try {
+    const require = createRequire(import.meta.url);
+    const addonPath = fileURLToPath(new URL(`../../dist/native/${NATIVE_ADDON_FILE}`, import.meta.url));
+    return require(addonPath) as NativeAddon;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasGlibcRuntime(): boolean {
+  try {
+    const report = process.report?.getReport() as
+      | { readonly header?: { readonly glibcVersionRuntime?: unknown } }
+      | undefined;
+    return typeof report?.header?.glibcVersionRuntime === "string";
+  } catch {
+    return false;
+  }
+}
+
+function nativeErrorCode(cause: unknown): string | undefined {
+  if (!(cause instanceof Error)) return undefined;
+  const code = cause.message.split(":", 1)[0];
+  return /^[a-z][a-z0-9_]*$/u.test(code) ? code : undefined;
+}
+
+function safeNativeError(fallbackCode: string, cause: unknown): Error {
+  const code = nativeErrorCode(cause) ?? fallbackCode;
+  return new Error(code);
+}
+```
+
 **Verification:**
 
 ```bash
-bun run build:native:review-artifact
-bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
-bun run typecheck
-bun run lint
-bun run build
+devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
 ```
 
 The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity, descriptor-relative writes/reads, symlink rejection, ancestor replacement, restart, replacement-retaining cleanup, and `close()` descriptor release. The unsupported-platform test must verify `undefined` capability rather than a fallback provider. Mock filesystem tests remain unchanged and continue to cover ordinary plugin behavior.
@@ -5165,8 +6495,8 @@ The runtime tests must run against the built addon on Linux x86_64 and cover exc
 **Commit:**
 
 ```bash
-git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
-git commit -m "feat: add Linux openat2 review artifact provider"
+GIT_MASTER=1 git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 ```
 
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
@@ -6904,10 +8234,10 @@ Add only this optional runtime input to the existing `JusticePluginOptions`; it 
 capability, not a debug interface and not a new `FileWriter` requirement.
 
 ```ts
-export type JusticePluginOptions = {
+export interface JusticePluginOptions {
   // Existing options remain unchanged.
   readonly reservedReviewArtifactIo?: ReservedReviewArtifactIo;
-};
+}
 ```
 
 The sole production composition owner is `OpenCodeAdapter.#runInit()` in
@@ -8474,6 +9804,7 @@ git commit -m "feat: durable review dispatchとclaimを追加"
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
+- Create: `tests/helpers/captured-runtime-events.ts`
 
 **Consumes:** the exact runtime event/API and field paths recorded by Task 3.3; projected claimed dispatch slot; `TaskCallBinding`; trusted `ReviewCorrelation`.
 The adapter and observation handler provide the runtime event and append operations as injected
@@ -8481,6 +9812,22 @@ boundaries; core projection and binding logic must not import OpenCode runtime t
 filesystem directly.
 
 **Produces:** `DelegatedExecutionRelationObserved` from the adapter and a durable `DelegatedExecutionBinding` whose `ExecutionScope` is derived from the claimed slot, never from worker input.
+
+It also exports the projection helper used by Task 3.6:
+`projectObservedReviewExecution(records, delegatedBinding, postToolUse): ObservedReviewExecutionV1 | undefined`.
+The helper selects the single durable, observed relation record that produced the binding, copies its stable
+runtime event ID, and derives `parentSessionId`, parent `callId`, child session, and trusted correlation from
+the binding/current claimed slot. It returns `undefined` for missing, duplicate, stale, or declared-only
+relations; it never derives provenance from `PostToolUse` payload, artifact path, category, prompt, or worker
+output.
+
+`tests/helpers/captured-runtime-events.ts` exports `capturedRuntimeEvents(category, parentCallId,
+childSessionId)`. It contains the exact successful Task 3.3 runtime event/API field paths and returns
+fresh event objects for each test. It must throw when the required parent-call/child-session relation is
+absent; it must not synthesize a relation from worker-provided metadata or return an empty array.
+It also exports `CapturedReviewKind = "task-review" | "final-review"`; the helper's category argument
+accepts the exact runtime categories `"sp-review" | "sp-final-review"` and maps them to that kind only
+after the relation fixture has been validated.
 
 - [ ] **Step 1: Write failing adapter and durable-binding tests from the spike fixtures**
 
@@ -8536,7 +9883,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
+git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/helpers/captured-runtime-events.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
 git commit -m "feat: review child bindingをdurableに記録"
 ```
 
@@ -8554,6 +9901,7 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Create: `src/core/review-artifact.ts`
 - Modify: `src/core/review-dispatch-state.ts`
 - Modify: `src/core/session-state-provider.ts`
+- Modify: `src/core/types.ts`
 - Modify: `src/core/v2/observation-model.ts`
 - Modify: `src/core/v2/state-projection.ts`
 - Modify: `src/hooks/observation-handler.ts`
@@ -8565,6 +9913,8 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
+- Create: `tests/helpers/review-artifact-e2e-fixture.ts`
 - Test: `tests/integration/review-artifact-linux-e2e.test.ts`
 
 `tests/core/justice-plugin-routing.test.ts` is the shared production routing file: Task 3.4
@@ -8589,13 +9939,23 @@ symlink cases are rejected before JSON parsing; the terminal record is durable b
 and cleanup retains a replacement with `replacement_retained` and an advisory. Run the same flow for
 `sp-final-review`, including its finalization identity and stale-round rejection.
 
+The current OpenCode adapter method is `onToolExecuteBefore(...): Promise<void>` and its host-facing output
+contract currently exposes only mutable `output.args`; it silently returns after an internal `{ action: "skip" }`.
+The implementation must change that method to return the internal `HookResponse`, then have the plugin wrapper
+throw a dedicated cancellation error only for the committed review-artifact skip. OpenCode's documented
+`tool.execute.before` hook permits that throw to prevent the built-in tool from executing. Ordinary adapter and
+I/O failures remain fail-open. `tests/runtime/opencode-adapter-v2.test.ts` and the Linux E2E must prove both
+the returned skip and that the normal filesystem writer is not entered; neither test may bypass the adapter
+with a direct child `JusticePlugin.handleEvent()` call.
+
 Before the existing PostToolUse routing, add the review-artifact write branch to the same
 `JusticePlugin.handleEvent(PreToolUse)` route. It must resolve the child session through the durable
 `DelegatedExecutionBinding`, then resolve the claimed `TaskCallBinding` and its usable reservation.
 For `toolName === "write"`, accept only a string `toolInput.filePath` that equals the committed
 `artifactPath` after the existing safe-relative-path validation, and a string `toolInput.content`.
 Call the injected `ReservedReviewArtifactIo.writeExisting(reservation, content)` and return
-`{ action: "skip" }` only after that write commits; the normal OpenCode write tool must not run. A
+`{ action: "skip", reason: "review_artifact_write_committed" }` only after that write commits; the normal
+OpenCode write tool must not run. A
 missing/stale child binding, path mismatch, invalid content, identity mismatch, or provider error
 returns `{ action: "skip" }` after recording a fail-closed advisory and leaves the review slot without
 trusted completion evidence. Non-review writes and writes from unrelated child sessions retain the
@@ -8689,6 +10049,13 @@ payload after strict parse, classification, digest calculation, and observed-exe
 purpose, trusted correlation, and `ObservedReviewExecutionV1`. Restart recovery must compare all of these
 values with the current claimed slot and durable child binding before rereading an artifact or terminalizing;
 any mismatch is rejected as stale/advisory.
+
+The artifact `write` is a child-session `PreToolUse` operation and is handled by the review-artifact write
+branch before the normal write tool runs. Completion consumption is triggered by the parent `task` tool's
+matching `PostToolUse` event, whose `callId` is the claimed parent call ID and whose normalized
+`sessionId`/observed execution points at the durable child binding. Do not pass the child write call ID to
+`consumeReviewCompletion`, and do not use the worker's artifact path, category, prompt, or output as a
+binding selector. The E2E test must exercise both calls in this order.
 All artifact reads, durable appends, Authorization lookups, cleanup, lifecycle transitions, and Gate
 requests in this task are injected ports. The core module must not import `ObservationLogStore`,
 `AuthorizationStore`, OpenCode adapter types, or notifier implementations directly. The injected
@@ -9365,9 +10732,16 @@ async function arrangeReviewArtifactCompletionFixture(
     recordAdvisory: async (advisory) => recordAdvisory(advisory),
   });
   const readAndAssembleMatchingArtifact: ReviewCompletionDependenciesForTest["readAndAssembleMatchingArtifact"] =
-    async (postToolUse, binding, delegatedBinding, trustedCorrelation) => {
+    async (postToolUse, binding, delegatedBinding, trustedCorrelation, observedExecution) => {
       const content = await readReservedArtifact(binding.artifactReservation);
-      return parseAndAssemble(postToolUse, binding, delegatedBinding, trustedCorrelation, content);
+      return parseAndAssemble(
+        postToolUse,
+        binding,
+        delegatedBinding,
+        trustedCorrelation,
+        observedExecution,
+        content,
+      );
     };
   const cleanupArtifact: ReviewCompletionDependenciesForTest["cleanupArtifact"] = async (usableReservation) => {
     const outcome = await baseArtifactIo.cleanup(usableReservation);
@@ -9416,26 +10790,27 @@ async function arrangeReviewArtifactCompletionFixture(
     sessionId: childSessionId,
     callId,
   };
+  const observedExecution: ObservedReviewExecutionV1 = {
+    schemaVersion: 1,
+    provenance: "observed",
+    reviewExecutionEventId: "review-artifact-execution",
+    parentSessionId,
+    callId,
+    childSessionId,
+    correlation,
+  };
   const consume = (): Promise<ReviewCompletionOutcome> =>
     completion.consumeReviewCompletion({
       parentSessionId,
       callId,
       postToolUse,
+      observedExecution,
       agentId,
       writerId,
     });
   let staged: ReviewCompletionStagingRecord | undefined;
   let terminal: ReviewDispatchTransitionRecord | undefined;
   if (mode === "terminalized") {
-    const observedExecution: ObservedReviewExecutionV1 = {
-      schemaVersion: 1,
-      provenance: "observed",
-      reviewExecutionEventId: "review-artifact-execution",
-      parentSessionId,
-      callId,
-      childSessionId,
-      correlation,
-    };
     const reviewArtifact: CleanReviewArtifactV1 = {
       schemaVersion: 1,
       reviewKind: "task-review",
@@ -10184,11 +11559,407 @@ it.each([
 });
 ```
 
+The Linux production E2E is also part of Step 1, not a later smoke test. Create
+`tests/integration/review-artifact-linux-e2e.test.ts` with the following composition. The fixture helpers
+are test-only and are specified below; they seed durable files before `OpenCodeAdapter.ensureInitialized()`
+and return a `readDurableRecords()` probe. They must use the real `NodeFileSystem`, `AuthorizationStore`,
+`ObservationLogStore`, and `AuthorizationStore.approve()` contract. They must not inject a fake
+`JusticePlugin`, call a private production method, or return an empty runtime-event list.
+
+Create `tests/helpers/review-artifact-e2e-fixture.ts` with this seed contract. The helper is deliberately
+separate from the integration test so the same durable setup can be reused for task-review and final-review
+round assertions without a mock store:
+
+```ts
+export type CapturedReviewKind = "task-review" | "final-review";
+
+export type ReviewArtifactE2ESeed = {
+  readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
+};
+
+export async function seedDurableReviewLifecycle(
+  root: string,
+  kind: CapturedReviewKind,
+): Promise<ReviewArtifactE2ESeed> {
+  const files = new NodeFileSystem(root);
+  const boundary = createAuthorizationReviewBoundary();
+  const authorizationStore = new AuthorizationStore(files, files, boundary);
+  const writerId = `writer-review-artifact-e2e-${kind}`;
+  const logStore = new ObservationLogStore(files, files, writerId);
+  const parentSessionId = "parent-review-artifact-e2e";
+  const planPath = `docs/review-artifact-${kind}.md`;
+  const planContent = "## Review artifact E2E\n- [ ] verify review completion\n";
+  const taskId = "task-1";
+  const taskExecutionRef = {
+    authorizationId: "pending",
+    taskId,
+    attemptId: "attempt-review-artifact-e2e",
+  } as const;
+
+  await files.writeFile(planPath, planContent);
+  const authorization = await authorizationStore.approve({
+    sessionId: parentSessionId,
+    planPath,
+    canonicalSnapshot: buildCanonicalSnapshot(planContent, [taskId]),
+    planFingerprint: computePlanFingerprint(planContent, [taskId]),
+    approvedAt: "2026-09-05T00:00:00.000Z",
+  });
+  if (authorization === null || authorization.status !== "active") {
+    throw new Error("E2E fixture could not seed an active Authorization");
+  }
+
+  const resolvedTaskExecutionRef = { ...taskExecutionRef, authorizationId: authorization.authorizationId };
+  const correlation =
+    kind === "task-review"
+      ? ({
+          reviewKind: "task-review",
+          taskExecutionRef: resolvedTaskExecutionRef,
+          reviewRound: 1,
+        } as const)
+      : ({
+          reviewKind: "final-review",
+          planPath,
+          authorizationId: authorization.authorizationId,
+          planFingerprint: authorization.planFingerprint,
+          finalizationAttemptId: "finalization-review-artifact-e2e",
+          finalReviewRound: 1,
+        } as const);
+  const shard = { agentId: "atlas", sessionId: parentSessionId, writerId } as const;
+  const envelope = {
+    schemaVersion: 1,
+    timestamp: "2026-09-05T00:00:01.000Z",
+    agentId: shard.agentId,
+    sessionId: shard.sessionId,
+    writerId: shard.writerId,
+    recordType: "observation",
+  } as const;
+  const append = (record: PendingLogRecord): Promise<number> => logStore.append(shard, record);
+
+  if (kind === "task-review") {
+    await append({
+      ...envelope,
+      kind: "task_lifecycle_transition",
+      parentSessionId,
+      taskExecutionRef: resolvedTaskExecutionRef,
+      from: "evidence_pending",
+      to: "review_pending",
+    });
+  } else {
+    await append({
+      ...envelope,
+      kind: "plan_finalization_transition",
+      parentSessionId,
+      planPath,
+      authorizationId: authorization.authorizationId,
+      finalizationAttemptId: "finalization-review-artifact-e2e",
+      finalReviewRound: 1,
+      from: "all_tasks_accepted",
+      to: "final_review_pending",
+    });
+  }
+  await append({
+    ...envelope,
+    kind: "review_dispatch_transition",
+    transitionId: `pending-${kind}`,
+    parentSessionId,
+    correlation,
+    expectedCategory: kind === "task-review" ? "sp-review" : "sp-final-review",
+    from: null,
+    to: "pending",
+  });
+
+  return { readDurableRecords: () => logStore.readAll() };
+}
+```
+
+The helper imports the existing `AuthorizationStore`, `createAuthorizationReviewBoundary`, canonical
+snapshot/fingerprint helpers, `PendingLogRecord`/`PersistedLogRecord`, `NodeFileSystem`, and
+`ObservationLogStore`. The placeholder `authorizationId: "pending"` is never persisted: it is replaced
+before the lifecycle record is appended. The final-review seed must preserve the same
+`finalizationAttemptId` and `finalReviewRound` in both the lifecycle transition and trusted correlation.
+
+```ts
+import { lstat, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HookResponse } from "../../src/core/types";
+import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
+import { NodeFileSystem } from "../../src/runtime/node-file-system";
+import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
+import {
+  capturedRuntimeEvents,
+  type CapturedReviewKind,
+} from "../helpers/captured-runtime-events";
+import {
+  seedDurableReviewLifecycle,
+  type ReviewArtifactE2ESeed,
+} from "../helpers/review-artifact-e2e-fixture";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function arrangeProductionAdapter(root: string): Promise<{
+  readonly adapter: OpenCodeAdapter;
+  readonly justice: NonNullable<ReturnType<OpenCodeAdapter["getJustice"]>>;
+  readonly genericWrite: ReturnType<typeof vi.spyOn>;
+  readonly writeReviewArtifact: (
+    sessionId: string,
+    callId: string,
+    artifactPath: string,
+    content: string,
+  ) => Promise<HookResponse>;
+}> {
+  const genericWrite = vi.spyOn(NodeFileSystem.prototype, "writeFile");
+  const adapter = new OpenCodeAdapter({
+    project: { name: "justice-review-artifact-e2e", root },
+    client: { app: { log: async () => undefined } },
+    $: () => undefined,
+    worktree: root,
+  });
+  await adapter.ensureInitialized();
+  const justice = adapter.getJustice();
+  if (justice === null) throw new Error("supported native provider did not initialize JusticePlugin");
+  const writeReviewArtifact = (
+    sessionId: string,
+    callId: string,
+    artifactPath: string,
+    content: string,
+  ): Promise<HookResponse> =>
+    adapter.onToolExecuteBefore(
+      { tool: "write", sessionID: sessionId, callID: callId },
+      { args: { filePath: artifactPath, content } },
+    );
+  return { adapter, justice, genericWrite, writeReviewArtifact };
+}
+
+function countRecords(
+  records: readonly PersistedLogRecord[],
+  predicate: (record: PersistedLogRecord) => boolean,
+): number {
+  return records.filter(predicate).length;
+}
+
+async function runCleanFlow(kind: CapturedReviewKind): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "justice-review-artifact-e2e-"));
+  roots.push(root);
+  const seed: ReviewArtifactE2ESeed = await seedDurableReviewLifecycle(root, kind);
+  const fixture = await arrangeProductionAdapter(root);
+  const category = kind === "task-review" ? "sp-review" : "sp-final-review";
+  const parentSessionId = "parent-review-artifact-e2e";
+  const parentCallId = `call-${kind}`;
+  const childSessionId = `child-${kind}`;
+  const writeCallId = `write-${kind}`;
+  const taskArgs: Record<string, unknown> = {
+    category,
+    ...(kind === "task-review" ? { task_id: "task-1" } : {}),
+    prompt: "run the mandatory review",
+    run_in_background: true,
+  };
+
+  await fixture.adapter.onToolExecuteBefore(
+    { tool: "task", sessionID: parentSessionId, callID: parentCallId },
+    { args: taskArgs },
+  );
+  expect(taskArgs.run_in_background).toBe(false);
+  const artifactPath = taskArgs.artifact_path;
+  if (typeof artifactPath !== "string") throw new Error("claim did not expose committed artifact path");
+  expect(artifactPath).toMatch(/^\.justice\/reviews\/[A-Za-z0-9-]+\.json$/u);
+
+  for (const event of capturedRuntimeEvents(category, parentCallId, childSessionId)) {
+    await fixture.adapter.onEvent(event);
+  }
+
+  const writeResponse = await fixture.writeReviewArtifact(
+    childSessionId,
+    writeCallId,
+    artifactPath,
+    JSON.stringify({ schemaVersion: 1, complete: true, findings: [] }),
+  );
+  expect(writeResponse).toEqual(
+    expect.objectContaining({ action: "skip", reason: "review_artifact_write_committed" }),
+  );
+  expect(fixture.genericWrite.mock.calls.filter(([path]) => path === artifactPath)).toHaveLength(0);
+
+  await fixture.adapter.onToolExecuteAfter(
+    {
+      tool: "write",
+      sessionID: childSessionId,
+      callID: writeCallId,
+      args: { filePath: artifactPath },
+    },
+    { output: "written", metadata: {} },
+  );
+  const firstRecords = await seed.readDurableRecords();
+  expect(
+    countRecords(firstRecords, (record) => record.kind === "review_artifact_read_attempt"),
+  ).toBe(1);
+  expect(
+    countRecords(
+      firstRecords,
+      (record) => record.kind === "review_dispatch_transition" && record.to === "terminal",
+    ),
+  ).toBe(1);
+  const terminalSequence = firstRecords.find(
+    (record) => record.kind === "review_dispatch_transition" && record.to === "terminal",
+  )?.sequence;
+  if (terminalSequence === undefined) throw new Error("missing durable terminal transition");
+  const decisionSequences = firstRecords
+    .filter(
+      (record) =>
+        record.recordType === "decision" &&
+        ("gateType" in record ||
+          ("kind" in record &&
+            (record.kind === "task-acceptance" || record.kind === "plan-acceptance"))),
+    )
+    .map((record) => record.sequence);
+  expect(decisionSequences.every((sequence) => sequence > terminalSequence)).toBe(true);
+  await expect(readFile(join(root, artifactPath), "utf8")).rejects.toThrow();
+
+  await fixture.adapter.onToolExecuteAfter(
+    {
+      tool: "write",
+      sessionID: childSessionId,
+      callID: writeCallId,
+      args: { filePath: artifactPath },
+    },
+    { output: "duplicate", metadata: {} },
+  );
+  const duplicateRecords = await seed.readDurableRecords();
+  expect(
+    countRecords(duplicateRecords, (record) => record.kind === "review_artifact_read_attempt"),
+  ).toBe(1);
+
+  if (kind === "final-review") {
+    await fixture.adapter.onToolExecuteAfter(
+      {
+        tool: "write",
+        sessionID: childSessionId,
+        callID: `${writeCallId}-stale-round`,
+        args: { filePath: artifactPath },
+      },
+      { output: "stale", metadata: {} },
+    );
+    const staleRecords = await seed.readDurableRecords();
+    expect(
+      countRecords(staleRecords, (record) => record.kind === "review_artifact_read_attempt"),
+    ).toBe(1);
+  }
+}
+
+describe("Linux review-artifact production composition", () => {
+  it.each(["task-review", "final-review"] as const)(
+    "runs the real %s flow without a generic filesystem artifact write",
+    async (kind) => {
+      if (process.platform !== "linux" || process.arch !== "x64") {
+        throw new Error("unsupported setup: Linux x86_64 is required for the P0 E2E");
+      }
+      await runCleanFlow(kind);
+    },
+  );
+
+  it("rejects a symlink replacement and retains it during cleanup", async () => {
+    if (process.platform !== "linux" || process.arch !== "x64") {
+      throw new Error("unsupported setup: Linux x86_64 is required for the P0 E2E");
+    }
+    const root = await mkdtemp(join(tmpdir(), "justice-review-artifact-symlink-e2e-"));
+    roots.push(root);
+    const seed = await seedDurableReviewLifecycle(root, "task-review");
+    const fixture = await arrangeProductionAdapter(root);
+    const parentSessionId = "parent-review-artifact-e2e";
+    const parentCallId = "call-task-review";
+    const childSessionId = "child-task-review";
+    const writeCallId = "write-task-review";
+    const taskArgs: Record<string, unknown> = {
+      category: "sp-review",
+      task_id: "task-1",
+      prompt: "run the mandatory review",
+      run_in_background: false,
+    };
+    await fixture.adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: parentSessionId, callID: parentCallId },
+      { args: taskArgs },
+    );
+    const artifactPath = taskArgs.artifact_path;
+    if (typeof artifactPath !== "string") throw new Error("missing committed artifact path");
+    for (const event of capturedRuntimeEvents("sp-review", parentCallId, childSessionId)) {
+      await fixture.adapter.onEvent(event);
+    }
+
+    const outside = await mkdtemp(join(tmpdir(), "justice-review-artifact-outside-e2e-"));
+    roots.push(outside);
+    const outsideTarget = join(outside, "target");
+    await writeFile(outsideTarget, "outside", "utf8");
+    await unlink(join(root, artifactPath));
+    await symlink(outsideTarget, join(root, artifactPath));
+
+    await expect(
+      fixture.writeReviewArtifact(childSessionId, writeCallId, artifactPath, "forged"),
+    ).resolves.toEqual(
+      expect.objectContaining({ action: "skip", reason: "review_artifact_write_committed" }),
+    );
+    expect(fixture.genericWrite.mock.calls.filter(([path]) => path === artifactPath)).toHaveLength(0);
+
+    await fixture.adapter.onToolExecuteAfter(
+      { tool: "write", sessionID: childSessionId, callID: writeCallId, args: { filePath: artifactPath } },
+      { output: "write failed", metadata: { error: true } },
+    );
+    await expect(readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    await expect(readFile(join(root, artifactPath), "utf8")).resolves.toContain("outside");
+    await expect(lstat(join(root, artifactPath)).then((entry) => entry.isSymbolicLink())).resolves.toBe(true);
+    const records = await seed.readDurableRecords();
+    expect(countRecords(records, (record) => record.kind === "review_artifact_read_attempt")).toBe(1);
+    expect(
+      countRecords(
+        records,
+        (record) => record.kind === "review_dispatch_transition" && record.to === "terminal",
+      ),
+    ).toBe(1);
+    expect(
+      records.filter(
+        (record) =>
+          record.recordType === "decision" &&
+          ("gateType" in record ||
+            ("kind" in record &&
+              (record.kind === "task-acceptance" || record.kind === "plan-acceptance"))),
+      ),
+    ).toHaveLength(0);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          errorKind: "lifecycle_advisory",
+          message: "review_artifact_identity_mismatch",
+        }),
+      ]),
+    );
+  });
+});
+```
+
+The E2E must not use `describe.skip`, a platform skip helper, a mocked provider, a direct
+`consumeReviewCompletion` call, or a fake `JusticePlugin`. Unsupported platform/probe setup is a hard test
+failure. The clean flow must assert exactly one durable read attempt, one terminal transition, no Gate or
+Acceptance decision before that terminal, and unchanged read-attempt count after duplicate and stale events.
+The replacement flow must assert that the normal filesystem writer is never called, JSON parsing/Gate/Acceptance
+are not reached, the outside target remains unchanged, the symlink remains retained, and the durable advisory is
+`review_artifact_identity_mismatch`.
+
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts`
+Run:
 
-Expected: FAIL because matching review completion has no composite terminal physical record or ordered Gate request.
+```bash
+devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts'
+```
+
+Expected: FAIL behaviorally because matching review completion has no composite terminal physical record or
+ordered Gate request. The Linux x86_64 E2E must load the built addon and fail on completion assertions; a
+provider-unavailable setup failure, skipped supported-platform case, missing helper, or missing-symbol/type
+error is an invalid RED.
 
 - [ ] **Step 3: Implement the fixed protocol**
 
@@ -10198,11 +11969,42 @@ Wire the production PostToolUse route in this task. `JusticePlugin` must store o
 listed in `ReviewCompletionDependencies` to the existing artifact, lifecycle, Gate, advisory, and
 cleanup adapters; no completion port may create a second store or boundary.
 
+Before wiring the child-write branch, preserve the host cancellation contract. OpenCode's documented
+`tool.execute.before` behavior allows the hook to throw to prevent the built-in tool from executing. Change
+`OpenCodeAdapter.onToolExecuteBefore()` to return the internal `HookResponse` while preserving its existing
+fail-open handling for ordinary errors. The production plugin wrapper must translate only the review-artifact
+`{ action: "skip" }` response, after `writeExisting` commits, into a dedicated cancellation error that is
+allowed to escape the hook; all unrelated adapter/I/O errors still degrade to `PROCEED` and never throw.
+The E2E helper must call this real adapter path and assert `{ action: "skip" }`; it must not bypass the
+adapter with a direct child `JusticePlugin.handleEvent()` call. Add an adapter/plugin test proving the normal
+OpenCode write tool is not entered after the cancellation error.
+
+The adapter/plugin boundary is explicit:
+
+```ts
+const response = await adapter.onToolExecuteBefore(input, output);
+if (response.action === "skip" && response.reason === "review_artifact_write_committed") {
+  throw new ReviewArtifactWriteCancelled();
+}
+```
+
+The cancellation response must carry a non-user-facing reason discriminant so unrelated `skip` responses are
+not converted into host cancellation. Add the optional internal `SkipResponse.reason` literal
+`"review_artifact_write_committed"`; all other skip responses omit it. The wrapper must not catch
+`ReviewArtifactWriteCancelled`; the adapter's
+ordinary outer catch must continue to catch and log all other failures.
+`OpenCodeAdapter.onToolExecuteBefore()` must therefore return `PROCEED` for every existing early-return and
+ordinary-error path, return the actual `HookResponse` from `JusticePlugin.handleEvent()` after any in-place
+payload merge, and preserve the existing `justice_*` early return as `PROCEED`. The OpenCode plugin wrapper
+must throw only the dedicated cancellation error through the SDK hook boundary without changing fail-open
+behavior for unrelated tools.
+
 Create the two artifact adapters in this composition block, before creating the completion domain. Both take
 the durable `ReviewTaskCallBinding` or its usable reservation; neither receives an `artifactPath` from
 `PostToolUseEvent`, the task payload, or worker output. `assembleReviewCompletionStaging` is the Task 3.6
 pure helper that already owns strict JSON parsing, schema validation, digest calculation, classification, and
-observed-execution assembly.
+artifact assembly. Its explicit `observedExecution: ObservedReviewExecutionV1` argument is copied into the
+assembled artifact; it must never fabricate observed provenance from the worker JSON or artifact path.
 
 ```ts
 private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
@@ -10213,6 +12015,7 @@ const readAndAssembleMatchingArtifact: ReviewCompletionDependencies["readAndAsse
   binding,
   delegatedBinding,
   correlation,
+  observedExecution,
 ) => {
   if (binding.artifactReservation.status !== "usable" || reservedReviewArtifactIo === undefined) {
     return { kind: "failure", reason: "artifact_read_failed" };
@@ -10226,7 +12029,14 @@ const readAndAssembleMatchingArtifact: ReviewCompletionDependencies["readAndAsse
   }
   try {
     // JSON and schema failures are values in this union, not exceptions to be collapsed to I/O.
-    return assembleReviewCompletionStaging(postToolUse, binding, delegatedBinding, correlation, content);
+    return assembleReviewCompletionStaging(
+      postToolUse,
+      binding,
+      delegatedBinding,
+      correlation,
+      observedExecution,
+      content,
+    );
   } catch (cause: unknown) {
     await this.recordReviewAdvisory("review_artifact_assembly_failed", cause);
     return { kind: "failure", reason: "artifact_read_failed" };
@@ -10269,26 +12079,45 @@ and authoritative Authorization reader used by Task 3.4.
 
 ```ts
 private async routeTaskPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
-  if (event.callId === undefined) return PROCEED;
+  if (event.payload.toolName !== "write" || event.callId === undefined) {
+    return this.routeImplementationPostToolUse(event);
+  }
 
   const records = await this.observationHandler.getLogStore().readAll();
+  const delegatedBinding = projectDelegatedExecutionBindings(records).find(
+    (candidate) => candidate.childSessionId === event.sessionId,
+  );
+  if (delegatedBinding === undefined) return this.routeImplementationPostToolUse(event);
+
   const binding = projectTaskCallBindings(records).find(
     (candidate): candidate is ReviewTaskCallBinding =>
-      candidate.callId === event.callId && isReviewTaskCallBinding(candidate),
+      candidate.callId === delegatedBinding.parentCallId && isReviewTaskCallBinding(candidate),
   );
   if (binding === undefined) return this.routeImplementationPostToolUse(event);
+  if (binding.artifactReservation.status !== "usable") {
+    return this.routeImplementationPostToolUse(event);
+  }
+
+  const filePath = readStringRecordValue(event.payload.toolInput, "filePath");
+  if (filePath !== binding.artifactReservation.artifactPath) {
+    return this.routeImplementationPostToolUse(event);
+  }
+
+  const observedExecution = projectObservedReviewExecution(records, delegatedBinding, event);
+  if (observedExecution === undefined) {
+    await this.recordReviewAdvisory("review_observed_execution_missing");
+    return { action: "skip" };
+  }
 
   const parentSessionId = binding.parentSessionId;
+  const parentCallId = binding.callId;
   const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
   const outcome = await this.reviewCompletionDomain
     .consumeReviewCompletion({
       parentSessionId,
-      callId: event.callId,
-      postToolUse: {
-        type: "PostToolUse",
-        sessionId: event.sessionId,
-        callId: event.callId,
-      },
+      callId: parentCallId,
+      postToolUse: event,
+      observedExecution,
       agentId,
       writerId: this.writerId,
     })
@@ -10298,6 +12127,26 @@ private async routeTaskPostToolUse(event: PostToolUseEvent): Promise<HookRespons
     });
 
   return reviewCompletionOutcomeToHookResponse(outcome);
+}
+
+function readStringRecordValue(value: unknown, key: string): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = (value as Record<string, unknown>)[key];
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+private async reviewParentSessionIdForPostToolUse(event: PostToolUseEvent): Promise<string> {
+  if (event.payload.toolName !== "write") return event.sessionId;
+  try {
+    const records = await this.observationHandler.getLogStore().readAll();
+    return (
+      projectDelegatedExecutionBindings(records).find(
+        (candidate) => candidate.childSessionId === event.sessionId,
+      )?.parentSessionId ?? event.sessionId
+    );
+  } catch {
+    return event.sessionId;
+  }
 }
 
 private async routeImplementationPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
@@ -10343,15 +12192,15 @@ private async mergePostToolUseWithReviewDeliveries(
 case "PostToolUse": {
   let response: HookResponse = PROCEED;
   try {
-    response =
-      event.payload.toolName === "task"
-        ? await this.routeTaskPostToolUse(event)
-        : await this.observationHandler.handlePostToolUse(event).catch(() => PROCEED);
+    response = await this.routeTaskPostToolUse(event);
   } catch (error: unknown) {
     await this.recordReviewAdvisory("post_tool_use_route_failed", error).catch(() => undefined);
   }
   try {
-    return await this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
+    return await this.mergePostToolUseWithReviewDeliveries(
+      await this.reviewParentSessionIdForPostToolUse(event),
+      response,
+    );
   } finally {
     closeSessionTaskWindow(this.sessionStateProvider, event.callId);
   }
@@ -10522,6 +12371,7 @@ export type ReviewCompletionInput = {
   readonly parentSessionId: string;
   readonly callId: string;
   readonly postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId">;
+  readonly observedExecution: ObservedReviewExecutionV1;
   readonly agentId: ObservationAgentId;
   readonly writerId: string;
 };
@@ -10603,9 +12453,28 @@ function matchesReviewPostToolUseIdentity(
 ): boolean {
   return (
     postToolUse.type === "PostToolUse" &&
+    postToolUse.sessionId.length > 0 &&
+    postToolUse.callId.length > 0 &&
     slot.key.parentSessionId === parentSessionId &&
-    slot.callId === callId &&
-    postToolUse.callId === callId
+    slot.callId === callId
+  );
+}
+
+function observedExecutionMatchesReview(
+  observed: ObservedReviewExecutionV1,
+  parentSessionId: string,
+  parentCallId: string,
+  childSessionId: string,
+  correlation: ReviewCorrelation,
+): boolean {
+  return (
+    observed.schemaVersion === 1 &&
+    observed.provenance === "observed" &&
+    observed.reviewExecutionEventId.length > 0 &&
+    observed.parentSessionId === parentSessionId &&
+    observed.callId === parentCallId &&
+    observed.childSessionId === childSessionId &&
+    sameReviewCorrelation(observed.correlation, correlation)
   );
 }
 
@@ -10616,6 +12485,8 @@ function matchesReviewPostToolUse(
   binding: DelegatedExecutionBinding,
 ): boolean {
   return (
+    postToolUse.type === "PostToolUse" &&
+    postToolUse.callId.length > 0 &&
     postToolUse.sessionId === binding.childSessionId &&
     reviewTaskCallBindingMatchesSlot(taskCallBinding, slot) &&
     delegatedBindingMatchesSlot(binding, slot)
@@ -10678,6 +12549,7 @@ type ReviewCompletionDependencies = {
     binding: ReviewTaskCallBinding,
     delegatedBinding: DelegatedExecutionBinding,
     correlation: ReviewCorrelation,
+    observedExecution: ObservedReviewExecutionV1,
   ) => Promise<ReviewCompletionStaging | ReviewArtifactReadFailure>;
   readonly cleanupArtifact: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
@@ -10942,7 +12814,7 @@ async function recoverPendingReviewCompletionsForBinding(
           delegatedBindingMatchesSlot(candidate, slot),
       );
       if (slot === undefined || delegatedBinding === undefined) return;
-      if (marker.sessionId !== delegatedBinding.childSessionId) {
+      if (marker.childSessionId !== delegatedBinding.childSessionId) {
         await recordAdvisory("review_pending_completion_stale");
         return;
       }
@@ -10951,9 +12823,10 @@ async function recoverPendingReviewCompletionsForBinding(
         callId: marker.callId,
         postToolUse: {
           type: "PostToolUse",
-          sessionId: marker.sessionId,
+          sessionId: marker.childSessionId,
           callId: marker.callId,
         },
+        observedExecution: marker.observedExecution,
         agentId: marker.agentId,
         writerId: marker.writerId,
       });
@@ -10995,9 +12868,15 @@ async function consumeReviewCompletionWithinParentSessionClaim(
               existingStaging.staging.correlation,
             ),
         );
-        return input.postToolUse.callId === existingStaging.staging.callId &&
-          input.postToolUse.sessionId ===
-            existingStaging.staging.observedExecution.childSessionId &&
+        return input.postToolUse.type === "PostToolUse" &&
+          input.postToolUse.sessionId === existingStaging.staging.observedExecution.childSessionId &&
+          observedExecutionMatchesReview(
+            input.observedExecution,
+            input.parentSessionId,
+            input.callId,
+            existingStaging.staging.observedExecution.childSessionId,
+            existingStaging.staging.correlation,
+          ) &&
           stagedBinding !== undefined
           ? recoverStagedReviewCompletion(existingStaging)
           : { kind: "stale" };
@@ -11008,8 +12887,8 @@ async function consumeReviewCompletionWithinParentSessionClaim(
         input.callId,
       );
       if (existingFailureStaging !== undefined) {
-        return input.postToolUse.callId === existingFailureStaging.callId &&
-          input.postToolUse.sessionId === existingFailureStaging.sessionId
+        return input.postToolUse.type === "PostToolUse" &&
+          input.postToolUse.sessionId === input.observedExecution.childSessionId
           ? recoverStagedArtifactFailure(existingFailureStaging)
           : { kind: "stale" };
       }
@@ -11045,6 +12924,17 @@ async function consumeReviewCompletionWithinParentSessionClaim(
       ) {
         return { kind: "stale" };
       }
+      if (
+        !observedExecutionMatchesReview(
+          input.observedExecution,
+          input.parentSessionId,
+          input.callId,
+          input.postToolUse.sessionId,
+          slot.key.correlation,
+        )
+      ) {
+        return { kind: "stale" };
+      }
       if (!(await isCurrentActiveAuthorization(slot.key.correlation, findAuthorizationById))) {
         await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
           input.parentSessionId,
@@ -11064,7 +12954,10 @@ async function consumeReviewCompletionWithinParentSessionClaim(
         input.parentSessionId,
         input.callId,
       );
-      if (pendingPostToolUse !== undefined && pendingPostToolUse.sessionId !== input.postToolUse.sessionId) {
+      if (
+        pendingPostToolUse !== undefined &&
+        pendingPostToolUse.childSessionId !== input.postToolUse.sessionId
+      ) {
         return { kind: "stale" };
       }
       if (pendingPostToolUse === undefined) {
@@ -11078,6 +12971,10 @@ async function consumeReviewCompletionWithinParentSessionClaim(
           kind: "review_post_tooluse_pending",
           parentSessionId: input.parentSessionId,
           callId: input.callId,
+          childSessionId: input.postToolUse.sessionId,
+          purpose: taskCallBinding.purpose,
+          trustedCorrelation: slot.key.correlation,
+          observedExecution: input.observedExecution,
         });
         if (pending.kind !== "committed") {
           await recordAdvisory("review_completion_pending_append_failed");
@@ -11133,6 +13030,7 @@ async function consumeReviewCompletionWithinParentSessionClaim(
           taskCallBinding,
           delegatedBinding,
           slot.key.correlation,
+          input.observedExecution,
         );
       } catch (error) {
         await recordAdvisory("review_artifact_read_unhandled", error);
@@ -11853,14 +13751,20 @@ Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `run
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts`
+Run:
 
-Expected: PASS.
+```bash
+devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts'
+```
+
+Expected: PASS, including both task-review and final-review production flows, exact-once read/terminal
+assertions, no generic artifact write, stale final-round rejection, symlink replacement retention, and the
+`review_artifact_identity_mismatch` advisory.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts
+git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/review-artifact-linux-e2e.test.ts
 git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
 ```
 
