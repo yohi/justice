@@ -5052,7 +5052,7 @@ git commit -m "test: child session correlation runtime境界を検証"
 
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
-**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.3, §12.5, and the PreToolUse portion of §12.6.
+**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, and the PreToolUse portion of §12.6.
 
 Task 3.4 owns Review Dispatch composition, directive delivery, and review-first PreToolUse
 claiming. It does not import or invoke Task 3.6's completion consumer and does not own the
@@ -5070,6 +5070,7 @@ purpose-aware review PostToolUse branch; Task 3.6 owns that branch and its compl
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/runtime/node-file-system.ts`
 - Modify: `src/core/justice-plugin.ts`
+- Modify: `tests/helpers/mock-file-system.ts`
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
@@ -5089,8 +5090,8 @@ PostToolUse completion routing. The completion-specific transactional test is ow
 not this task.
 
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
-`TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the injected
-the injected `FileWriter.createExclusiveMarker` runtime capability; safe-relative-path validation;
+`TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the optional injected
+`FileWriter.createExclusiveMarker` runtime capability; safe-relative-path validation;
 `AuthorizationStore.findByAuthorizationId`.
 It also consumes the normalized review `task()` payload, the observed runtime identity from
 Task 3.3, the existing `HookResponse` union and `mergePreToolUseResponses`, and the production
@@ -5128,7 +5129,7 @@ never-rejecting port.
 `claimed_unusable` carries the trusted durable call binding while its `artifactReservation.status` is
 `unusable`; the runtime continues the task fail-open with no artifact path and never treats that binding as
 review completion authority. A `blocked` outcome exposes neither `callId` nor `artifactId` as authority.
-`FileWriter.createExclusiveMarker(path)` returns `"created"` with a JSON-safe
+`FileWriter.createExclusiveMarker?.(path)` returns `"created"` with a JSON-safe
 `ReviewArtifactInodeIdentity` and private `leasePath`, or `"occupied"`. The runtime adapter implements
 it with a unique same-directory temporary marker, the existing atomic `FileWriter.link` destination
 operation, and a retained private hard-link lease to the created inode; it maps only `EEXIST` to
@@ -6091,6 +6092,20 @@ it("reserves a safe unused artifact path", async () => {
   });
 });
 
+it("returns unusable without a marker capability or unsafe fallback", async () => {
+  const writer = createMockFileWriter();
+  delete writer.createExclusiveMarker;
+  const reserve = createReviewArtifactReservationPort(fileReader, writer, recordAdvisory).reserve;
+
+  await expect(reserve()).resolves.toEqual({
+    status: "unusable",
+    reason: "artifact_storage_unavailable",
+  });
+  expect(fileReader.fileExists).not.toHaveBeenCalled();
+  expect(writer.writeFile).not.toHaveBeenCalled();
+  expect(workerInput).not.toContain(".justice/reviews/");
+});
+
 it("rejects artifact replacement before parsing and never unlinks the replacement", async () => {
   const reservation = await reserveReviewArtifact();
   replaceArtifactLeafWithDifferentInode(reservation);
@@ -6109,7 +6124,13 @@ it("accepts writes and reads only through the reserved no-follow inode", async (
 });
 
 it("retries a colliding artifact candidate with a fresh UUID and path", async () => {
-  createExclusiveMarker.mockResolvedValueOnce("occupied").mockResolvedValueOnce("created");
+  createExclusiveMarker
+    .mockResolvedValueOnce({ kind: "occupied" })
+    .mockResolvedValueOnce({
+      kind: "created",
+      leasePath: ".justice/reviews/.leases/second.lease",
+      artifactIdentity: { device: "1", inode: "2" },
+    });
   await expect(reserveReviewArtifact()).resolves.toMatchObject({ status: "usable" });
   expect(uuid).toHaveBeenCalledTimes(2);
   expect(recordAdvisory).toHaveBeenCalledWith("review_unexpected_existing_artifact");
@@ -6489,9 +6510,12 @@ Task 2.2 ports, but every port shown here must be bound to a real shared instanc
 ```ts
 type ReviewDirectiveSink = {
   readonly deliver: (delivery: ReviewDirectiveDelivery) => Promise<void>;
-  readonly takeForParentSession: (
+  readonly drainForParentSession: (
     parentSessionId: string,
-  ) => readonly ReviewDirectiveDelivery[];
+    decide: (
+      delivery: ReviewDirectiveDelivery,
+    ) => Promise<"inject" | "discard" | "retain">,
+  ) => Promise<readonly ReviewDirectiveDelivery[]>;
 };
 
 // Task 3.4 owns these shapes because its append adapter and claim protocol compile
@@ -6503,6 +6527,20 @@ type ReviewTaskCallBinding =
 
 function createReviewDirectiveSink(): ReviewDirectiveSink {
   const deliveriesByParent = new Map<string, ReviewDirectiveDelivery[]>();
+  const restoreWithoutDuplicates = (
+    parentSessionId: string,
+    deliveries: readonly ReviewDirectiveDelivery[],
+  ): void => {
+    const existing = deliveriesByParent.get(parentSessionId) ?? [];
+    const restored = [...deliveries, ...existing].filter(
+      (delivery, index, all) =>
+        all.findIndex(
+          (candidate) =>
+            sameReviewCorrelation(candidate.directive.correlation, delivery.directive.correlation),
+        ) === index,
+    );
+    if (restored.length > 0) deliveriesByParent.set(parentSessionId, restored);
+  };
 
   return {
     async deliver(delivery) {
@@ -6516,13 +6554,93 @@ function createReviewDirectiveSink(): ReviewDirectiveSink {
       }
       deliveriesByParent.set(delivery.parentSessionId, [...deliveries, delivery]);
     },
-    takeForParentSession(parentSessionId) {
+    async drainForParentSession(parentSessionId, decide) {
       const deliveries = deliveriesByParent.get(parentSessionId) ?? [];
       deliveriesByParent.delete(parentSessionId);
-      return deliveries;
+      const inject: ReviewDirectiveDelivery[] = [];
+      const retain: ReviewDirectiveDelivery[] = [];
+      try {
+        for (const delivery of deliveries) {
+          const decision = await decide(delivery);
+          switch (decision) {
+            case "inject":
+              inject.push(delivery);
+              break;
+            case "retain":
+              retain.push(delivery);
+              break;
+            case "discard":
+              break;
+            default: {
+              const _exhaustive: never = decision;
+              return _exhaustive;
+            }
+          }
+        }
+      } catch (cause: unknown) {
+        // A failed validation is uncertain, not proof that a directive is stale.
+        restoreWithoutDuplicates(parentSessionId, deliveries);
+        throw cause;
+      }
+      if (retain.length > 0) restoreWithoutDuplicates(parentSessionId, retain);
+      return inject;
     },
   };
 }
+
+// src/core/review-dispatch-state.ts
+export type QueuedReviewDirectiveValidation = "inject" | "discard" | "retain";
+
+// This is a Review Dispatch operation, not a generic queue-validation pipeline.
+// Define it inside createReviewDispatchState(dependencies); its caller already owns
+// the shared parent-session boundary.
+async function validateQueuedReviewDirectiveWithinParentSessionClaim(
+  delivery: ReviewDirectiveDelivery,
+): Promise<QueuedReviewDirectiveValidation> {
+  try {
+    const records = await dependencies.readDurableRecords();
+    const slots = projectReviewDispatchSlots(records).filter(
+      (slot) =>
+        slot.key.parentSessionId === delivery.parentSessionId &&
+        sameReviewCorrelation(slot.key.correlation, delivery.directive.correlation),
+    );
+    if (slots.length !== 1) return "discard";
+    const slot = slots[0];
+    if (slot === undefined || slot.state !== "pending") return "discard";
+
+    const authorizations = await dependencies.readDurableAuthorizations();
+    const authorization = authorizations.find(
+      (candidate) =>
+        candidate.authorizationId === authorizationIdFor(slot.key.correlation) &&
+        candidate.status === "active",
+    );
+    if (authorization === undefined) return "discard";
+    if (!reviewCorrelationUsesAuthorizationSnapshot(slot.key.correlation, authorization)) {
+      return "discard";
+    }
+    if (!(
+      await isCurrentActiveAuthorization(slot.key.correlation, dependencies.findAuthorizationById)
+    )) {
+      return "discard";
+    }
+    const lifecycle = project(records, new Date().toISOString()).lifecycle;
+    return reviewCorrelationMatchesCurrentLifecycle(
+      slot.key.correlation,
+      lifecycle,
+      records,
+      authorizations,
+    )
+      ? "inject"
+      : "discard";
+  } catch (cause: unknown) {
+    await recordAdvisorySafely(dependencies, "review_directive_delivery_unreadable", cause);
+    return "retain";
+  }
+}
+
+// Include this function in the object returned by createReviewDispatchState.
+// It is called only by the composition root while that root holds the same
+// AuthorizationReviewBoundary parent-session claim used by claim/cancellation.
 
 class JusticePlugin {
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
@@ -6579,12 +6697,21 @@ committed binding and reservation only; it must never copy a correlation or arti
 the incoming task payload.
 
 ```ts
-private mergePreToolUseWithReviewDeliveries(
+private async mergePreToolUseWithReviewDeliveries(
   parentSessionId: string,
   response: HookResponse,
-): HookResponse {
-  return this.reviewDirectiveSink
-    .takeForParentSession(parentSessionId)
+): Promise<HookResponse> {
+  const deliveries = await this.authorizationReviewBoundary
+    .withParentSession(parentSessionId, () =>
+      this.reviewDirectiveSink.drainForParentSession(parentSessionId, (delivery) =>
+        this.reviewDispatchState.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+      ),
+    )
+    .catch(async (cause: unknown): Promise<readonly ReviewDirectiveDelivery[]> => {
+      await this.recordReviewAdvisory("review_directive_delivery_validation_failed", cause);
+      return [];
+    });
+  return deliveries
     .reduce(
       (merged, delivery) =>
         mergePreToolUseResponses(
@@ -6664,7 +6791,7 @@ case "PreToolUse": {
       }
     }
   }
-  return this.mergePreToolUseWithReviewDeliveries(
+  return await this.mergePreToolUseWithReviewDeliveries(
     event.sessionId,
     response,
   );
@@ -6679,18 +6806,30 @@ the durable dispatch operations; the PostToolUse completion branch is implemente
 in Task 3.6.
 
 The PostToolUse composition in Task 3.6 must drain the same sink after every parallel handler has
-settled, then merge the drained deliveries into the response returned for that very event. The
-sink is not drained only by the PreToolUse branch, and no individual domain handler may consume it.
-The response merger must preserve the existing observation, PlanBridge, TaskFeedback, and Gate
-contexts while adding each review directive as an ordinary `inject` response:
+settled, then merge only current-pending-authority deliveries into the response returned for that
+very event. The root route invokes the Review Dispatch validator while holding the existing shared
+parent-session boundary; `inject` and stale `discard` items leave the sink, while unreadable /
+uncertain items are retained for the next matching root hook. The sink is not drained only by the
+PreToolUse branch, and no individual domain handler may consume it. The response merger must
+preserve the existing observation, PlanBridge, TaskFeedback, and Gate contexts while adding each
+validated review directive as an ordinary `inject` response:
 
 ```ts
-private mergePostToolUseWithReviewDeliveries(
+private async mergePostToolUseWithReviewDeliveries(
   parentSessionId: string,
   response: HookResponse,
-): HookResponse {
-  const directiveResponses: readonly HookResponse[] = this.reviewDirectiveSink
-    .takeForParentSession(parentSessionId)
+): Promise<HookResponse> {
+  const deliveries = await this.authorizationReviewBoundary
+    .withParentSession(parentSessionId, () =>
+      this.reviewDirectiveSink.drainForParentSession(parentSessionId, (delivery) =>
+        this.reviewDispatchState.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+      ),
+    )
+    .catch(async (cause: unknown): Promise<readonly ReviewDirectiveDelivery[]> => {
+      await this.recordReviewAdvisory("review_directive_delivery_validation_failed", cause);
+      return [];
+    });
+  const directiveResponses: readonly HookResponse[] = deliveries
     .map((delivery) => ({
       action: "inject" as const,
       injectedContext: formatReviewDirective(delivery.directive),
@@ -6710,7 +6849,7 @@ const response = await (
   void this.recordReviewAdvisory("post_tool_use_route_failed", error);
   return PROCEED;
 });
-return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
+return await this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
 ```
 
 This drain occurs after Task 3.6 has run `consumeReviewCompletion` and after any Task 3.1
@@ -6788,7 +6927,9 @@ Authorization lookup or state mutation.
 `reserveReviewArtifact` uses the fixed P0 constant
 `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3`. For each attempt it generates a fresh UUID, builds
 `.justice/reviews/<artifactId>.json`, validates it with `normalizeSafeRelativePath`, ensures the review
-directory exists, and calls the injected `FileWriter.createExclusiveMarker` before dispatch.
+directory exists, and calls the injected optional `FileWriter.createExclusiveMarker` before dispatch.
+When that capability is absent, reservation returns `artifact_storage_unavailable` before directory creation,
+`fileExists`, or `writeFile`; it never falls back to check-then-use creation.
 The port creates the destination atomically and reports `"occupied"` for an existing file or symlink;
 there is no `fileExists` check-then-use window. A collision records
 `review_unexpected_existing_artifact` and retries with a new UUID. All three collisions return
@@ -8046,7 +8187,7 @@ The unreadable-Authorization assertions must additionally prove:
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
+git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/helpers/mock-file-system.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
 git commit -m "feat: durable review dispatchとclaimを追加"
 ```
 
@@ -8430,19 +8571,56 @@ it("reissues startup recovery delivery at the next Controller-facing hook exactl
   expect(fixture.takePendingDeliveries()).toEqual([]);
 });
 
-it("does not re-inject an old directive after its durable pending slot is claimed", async () => {
+it("does not re-inject startup delivery when the first matching hook claims it", async () => {
   const fixture = await arrangeStartupRecoveryWithPendingReviewDelivery();
   await fixture.plugin.initialize();
 
-  await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
   const claimResponse = await fixture.plugin.handleEvent(fixture.matchingReviewPreToolUse);
   const laterResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+  const claimContext = claimResponse.action === "inject" ? claimResponse.injectedContext : "";
 
-  expect(claimResponse).toEqual(expect.objectContaining({ action: "inject" }));
-  expect(fixture.durableClaimedDispatches()).toHaveLength(1);
+  expect(claimContext).toContain("REVIEW DISPATCH CLAIMED");
+  expect(claimContext).not.toContain("REVIEW REQUIRED");
+  expect(fixture.durableTransitions("pending", "claimed")).toHaveLength(1);
+  expect(fixture.projectedReviewTaskCallBindings()).toHaveLength(1);
+  expect(fixture.projectedArtifactReservations()).toHaveLength(1);
+  expect(fixture.takePendingDeliveries()).toEqual([]);
+  expect(fixture.reviewDispatchOffer).toHaveBeenCalledTimes(0);
   expect(laterResponse).not.toEqual(
     expect.objectContaining({ injectedContext: expect.stringContaining("REVIEW REQUIRED") }),
   );
+});
+
+it("drops a startup delivery whose dispatch becomes terminal before root drain", async () => {
+  const fixture = await arrangeStartupRecoveryWithPendingReviewDelivery();
+  await fixture.plugin.initialize();
+  await fixture.terminalizeQueuedReviewDispatch();
+
+  const response = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+
+  expect(response).not.toEqual(
+    expect.objectContaining({ injectedContext: expect.stringContaining("REVIEW REQUIRED") }),
+  );
+  expect(fixture.takePendingDeliveries()).toEqual([]);
+});
+
+it("retains an unreadable startup delivery without injecting a positive directive", async () => {
+  const fixture = await arrangeStartupRecoveryWithPendingReviewDelivery();
+  await fixture.plugin.initialize();
+  fixture.rejectNextDirectiveAuthorityRead();
+
+  const uncertainResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+
+  expect(uncertainResponse).not.toEqual(
+    expect.objectContaining({ injectedContext: expect.stringContaining("REVIEW REQUIRED") }),
+  );
+  expect(fixture.pendingDeliveries()).toHaveLength(1);
+  await fixture.restoreDirectiveAuthority();
+  const recoveredResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+  expect(recoveredResponse).toEqual(
+    expect.objectContaining({ injectedContext: expect.stringContaining("REVIEW REQUIRED") }),
+  );
+  expect(fixture.pendingDeliveries()).toEqual([]);
 });
 ```
 
@@ -9145,12 +9323,21 @@ private async routeImplementationPostToolUse(event: PostToolUseEvent): Promise<H
   );
 }
 
-private mergePostToolUseWithReviewDeliveries(
+private async mergePostToolUseWithReviewDeliveries(
   parentSessionId: string,
   response: HookResponse,
-): HookResponse {
-  const directiveResponses: readonly HookResponse[] = this.reviewDirectiveSink
-    .takeForParentSession(parentSessionId)
+): Promise<HookResponse> {
+  const deliveries = await this.authorizationReviewBoundary
+    .withParentSession(parentSessionId, () =>
+      this.reviewDirectiveSink.drainForParentSession(parentSessionId, (delivery) =>
+        this.reviewDispatchState.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+      ),
+    )
+    .catch(async (cause: unknown): Promise<readonly ReviewDirectiveDelivery[]> => {
+      await this.recordReviewAdvisory("review_directive_delivery_validation_failed", cause);
+      return [];
+    });
+  const directiveResponses: readonly HookResponse[] = deliveries
     .map((delivery) => ({
       action: "inject" as const,
       injectedContext: formatReviewDirective(delivery.directive),
@@ -9172,7 +9359,7 @@ case "PostToolUse": {
     await this.recordReviewAdvisory("post_tool_use_route_failed", error).catch(() => undefined);
   }
   try {
-    return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
+    return await this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
   } finally {
     closeSessionTaskWindow(this.sessionStateProvider, event.callId);
   }
@@ -11124,7 +11311,8 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | legacy Gate non-authority                                     | 3.2                     | current Gate lookup excludes legacy task Gate; legacy-only input neither generates Acceptance nor promotes `gate_pending`                                                                                                          |
 | new task/plan Gate replay                                      | 3.2                     | strict validation and authoritative lookup accept the new task and plan Gate variants, while rejecting mixed plan/task identity                                                                                                  |
 | new task/plan Acceptance replay                                | 3.2                     | strict validation and lookup accept the new task and plan Acceptance variants, while rejecting mixed plan/task identity                                                                                                           |
-| artifact reservation anti-replay                               | 3.4                     | safe path, collision retry with fresh UUID, bounded collision exhaustion, exists/directory I/O failure, invalid path, internal failure, unusable durable reservation and advisory                                                |
+| artifact reservation anti-replay                               | 3.4                     | safe path, optional-marker absence -> unusable with no `fileExists` / `writeFile` fallback, collision retry with fresh UUID, bounded collision exhaustion, directory I/O failure, invalid path, internal failure, unusable durable reservation and advisory |
+| FileWriter marker capability compatibility                     | 3.4                     | unrelated `FileWriter` implementations remain type-compatible; shared production-routing mock supplies deterministic created/occupied marker behavior |
 | synchronous mandatory review execution                         | 3.4                     | explicit true is forced to false by package, hook normalization, and final adapter wire guard for both review categories; non-review categories preserve caller value              |
 | artifact inode lease and no-follow consumption                 | 3.4, 3.6                | retained private lease, durable device/inode identity, existing-inode write, replacement/symlink rejection, descriptor-relative read, replacement-safe cleanup                    |
 | unusable reservation blocks before Acceptance                   | 3.4, 3.6                | fail-open review task execution, worker input without artifact path, no filesystem read or ReviewArtifact, no AcceptanceDecision                                                                                             |
@@ -11132,6 +11320,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | same-parent review claim serialization                         | 3.4                     | 2-call claim race and barrier-controlled overlapping 3-call race permit one critical section and exactly one claimed transition, binding, reservation, and authoritative call/artifact identity                                  |
 | one outstanding dispatch per parent                            | 3.4                     | active-authorized pending / claimed cardinality permits zero or one; stale terminal/missing/uncertain Authorization slots are excluded from the limit but remain unclaimable; corrupt multiple active outstanding input is advisory, creates no pending, claim, reservation, directive, or AcceptanceDecision |
 | deferred ReviewPending liveness                                | 3.1, 3.4, 3.6           | a second lifecycle candidate receives exactly one dispatch and directive from the production terminalization path without a second manual request                                                                                |
+| queued directive drain-time authority                          | 3.4, 3.6                | root drain validates same-parent current pending slot and current active Authorization inside the shared boundary; claimed, terminal, cancelled, missing, and stale deliveries are removed without injection; unreadable authority retains delivery without positive injection |
 | deferred candidate restart recovery                            | 3.4                     | an undispatched current lifecycle candidate with no dispatch record is rediscovered after restart and offered exactly once                                                                                                       |
 | deterministic eligible review candidate selection              | 3.4                     | `selectNextEligibleReviewCandidate` code uses `orderEventsForProjection`; retry candidates precede ordinary candidates and each category retains source order                                                                    |
 | Canonical Snapshot membership                                  | 3.4                     | multi-Authorization fixture proves task-B is accepted only through authorization-B's durable `canonicalSnapshot`, never a global snapshot cache                                                                                  |
@@ -11192,9 +11381,9 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036, F-040, F-041 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; drain-time queued-delivery validator with deliver/discard/retain outcomes; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; optional exclusive-marker capability with missing-capability unusable result, shared mock support, inode lease, and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, PostToolUse §12.6, INV-13 through INV-19 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, PostToolUse §12.6, INV-13 through INV-19, F-040 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -11213,6 +11402,16 @@ The named executable coverage is the four unreadable-Authorization unit tests in
 `keeps live mandatory-review PreToolUse fail-open when Authorization is unreadable` in
 `tests/core/justice-plugin-routing.test.ts`; the latter uses concrete durable-log projections
 and the existing `HookResponse` union rather than test-only authority or response helpers.
+F-040 reverse traceability is explicit: Task 3.4 owns the narrow Review Dispatch validator and
+the root-only sink primitive, while Task 3.6 owns the production PostToolUse drain and the
+startup-first matching PreToolUse regression. Both invoke validation under the one shared parent
+boundary, inject only an active current pending slot, discard terminal / claimed / stale deliveries,
+and retain unreadable-authority deliveries with zero positive directive.
+F-041 reverse traceability is explicit: Task 3.4 makes `createExclusiveMarker` an optional
+`FileWriter` capability; the reservation port turns capability absence into an unusable result with
+no check-then-use fallback, NodeFileSystem provides the sole production capability, and the shared
+production-routing helper supplies deterministic marker behavior without forcing unrelated writers
+or inline test doubles to change.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
@@ -11403,12 +11602,116 @@ preserves the input envelope identity. `buildReviewClaimResponse` removes incomi
 fields, then copies only the durable usable reservation path into the worker payload; it never treats an incoming
 correlation, category, or artifact path as authority.
 The exhaustive switch intentionally keeps future outcome variants from silently becoming a Runtime fallback.
-- `FileWriter` gains the runtime-boundary operation
-  `createExclusiveMarker(path: string): Promise<{ readonly kind: "created"; readonly leasePath: string; readonly artifactIdentity: ReviewArtifactInodeIdentity } | { readonly kind: "occupied" }>`.
-  `NodeFileSystem.createExclusiveMarker` validates the safe relative path, creates a unique
-  same-directory marker, installs the destination with the existing atomic `link` operation, captures
-  the destination inode with `fstat`, and retains the private lease hard link. It maps only `EEXIST`
-  to `occupied`; it never uses `fileExists` followed by `writeFile`.
+`FileWriter` gains only the optional runtime-boundary capability below. Existing unrelated writers,
+including `NoOpPersistence` and tests that do not reserve review artifacts, remain type-compatible.
+
+```ts
+// src/core/types.ts
+export interface FileWriter {
+  // Existing writeFile, rename, mkdir, rmdir, deleteFile, and link members remain unchanged.
+  createExclusiveMarker?(
+    path: string,
+  ): Promise<
+    | {
+        readonly kind: "created";
+        readonly leasePath: string;
+        readonly artifactIdentity: ReviewArtifactInodeIdentity;
+      }
+    | { readonly kind: "occupied" }
+  >;
+}
+```
+
+`NodeFileSystem.createExclusiveMarker` is the only production implementation required by Task 3.4.
+Add `randomUUID` from `node:crypto`, `constants` from `node:fs`, `open` plus `lstat` from
+`node:fs/promises`, and the `ReviewArtifactInodeIdentity` type import. Then add the following members to
+`NodeFileSystem`. `FileHandle.stat()` is the required fstat operation. The only `EEXIST` mapped to
+`occupied` is the destination hard-link install; marker, lease, identity, or cleanup failures are storage
+failures and must not create a usable reservation.
+
+```ts
+private async readNoFollowInodeIdentity(path: string): Promise<ReviewArtifactInodeIdentity> {
+  // The descriptor is opened with O_NOFOLLOW before fstat, so a symlink cannot become a reservation.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile()) throw new Error(`Review artifact is not a regular file: ${path}`);
+    return { device: String(fileStat.dev), inode: String(fileStat.ino) };
+  } finally {
+    await handle.close();
+  }
+}
+
+private async removeIfMatchingInode(
+  path: string,
+  expected: ReviewArtifactInodeIdentity,
+): Promise<void> {
+  try {
+    const entry = await lstat(path);
+    if (
+      entry.isSymbolicLink() ||
+      String(entry.dev) !== expected.device ||
+      String(entry.ino) !== expected.inode
+    ) {
+      return;
+    }
+    await unlink(path);
+  } catch (cause: unknown) {
+    if (!(cause instanceof Error) || (cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+  }
+}
+
+async createExclusiveMarker(
+  path: string,
+): Promise<
+  | {
+      readonly kind: "created";
+      readonly leasePath: string;
+      readonly artifactIdentity: ReviewArtifactInodeIdentity;
+    }
+  | { readonly kind: "occupied" }
+> {
+  const destination = await this.resolveSafelyForWrite(path);
+  const markerPath = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.marker`);
+  const leaseRelativePath = join(dirname(path), ".leases", `${basename(path)}.lease`);
+  const leasePath = await this.resolveSafelyForWrite(leaseRelativePath);
+  let installedIdentity: ReviewArtifactInodeIdentity | undefined;
+
+  await fsMkdir(dirname(destination), { recursive: true });
+  await fsMkdir(dirname(leasePath), { recursive: true });
+  const marker = await open(
+    markerPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  await marker.close();
+
+  try {
+    try {
+      await fsLink(markerPath, destination);
+    } catch (cause: unknown) {
+      if (cause instanceof Error && (cause as NodeJS.ErrnoException).code === "EEXIST") {
+        return { kind: "occupied" };
+      }
+      throw cause;
+    }
+    installedIdentity = await this.readNoFollowInodeIdentity(destination);
+    await fsLink(destination, leasePath);
+    return {
+      kind: "created",
+      leasePath: leaseRelativePath,
+      artifactIdentity: installedIdentity,
+    };
+  } catch (cause: unknown) {
+    if (installedIdentity !== undefined) {
+      await this.removeIfMatchingInode(destination, installedIdentity).catch(() => undefined);
+    }
+    throw cause;
+  } finally {
+    await this.bestEffortDelete(() => unlink(markerPath));
+  }
+}
+```
 - `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter, recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation, bounded collision retry, and exclusive marker creation. `createExclusiveMarker` is a runtime filesystem capability, not a second composition dependency.
 
 Define the reservation port and helper before the production RED/GREEN tests. The helper below is the
@@ -11440,6 +11743,11 @@ export function createReviewArtifactReservationPort(
 
   return {
     async reserve(): Promise<ReviewArtifactReservation> {
+      const createExclusiveMarker = fileWriter.createExclusiveMarker;
+      if (createExclusiveMarker === undefined) {
+        await recordAdvisorySafely("artifact_reservation_storage_unavailable");
+        return { status: "unusable", reason: "artifact_storage_unavailable" };
+      }
       for (let attempt = 0; attempt < MAX_ARTIFACT_RESERVATION_ATTEMPTS; attempt += 1) {
         let artifactId: string;
         try {
@@ -11460,7 +11768,7 @@ export function createReviewArtifactReservationPort(
 
         try {
           await fileWriter.mkdir(".justice/reviews", true);
-          const marker = await fileWriter.createExclusiveMarker(safeArtifactPath);
+          const marker = await createExclusiveMarker.call(fileWriter, safeArtifactPath);
           if (marker.kind === "occupied") {
             await recordAdvisorySafely("review_unexpected_existing_artifact");
             continue;
@@ -11484,10 +11792,87 @@ export function createReviewArtifactReservationPort(
 }
 ```
 
-The `FileWriter` type change and `NodeFileSystem.createExclusiveMarker` implementation are part of
-Task 3.4's Files list. Every test writer mock must implement the capability; tests must assert that
-`fileExists` is never used for reservation, that a collision retries with a fresh UUID, and that
-marker, identity, or lease failures return the exact unusable reason without exposing a path.
+The optional `FileWriter` type change and `NodeFileSystem.createExclusiveMarker` implementation are part of
+Task 3.4's Files list. Capability absence is an explicit `artifact_storage_unavailable` unusable result:
+it invokes neither `fileExists` nor `writeFile` and exposes no worker artifact path. The shared
+`createMockFileWriter()` must implement the capability because Task 3.4's production routing fixture constructs
+`JusticePlugin` with that writer and requires a usable reservation; `createMockFileSystem()` inherits it by
+spreading that writer. `createMemFs().writer` and unrelated inline writer doubles remain unchanged unless their own test exercises
+reservation. The shared mock's minimum semantics are first create -> created, same destination -> occupied,
+deterministic JSON-safe device/inode identity, lease path, and no overwrite on collision. Runtime inode and
+no-follow security semantics remain owned by `tests/runtime/node-file-system.test.ts`. Tests must assert that
+`fileExists` is never used for reservation, that a collision retries with a fresh UUID, and that marker,
+identity, lease, or missing-capability failures return the exact unusable reason without exposing a path.
+
+Extend the existing `node:path` import with `basename` and add a type-only import for
+`ReviewArtifactInodeIdentity`. Add this state beside `writtenFiles` in `createMockFileWriter()`, and add the
+method to its returned `MockFileWriter` object. This helper is intentionally a deterministic reservation double,
+not a replacement for the Node runtime's no-follow implementation.
+
+```ts
+let nextMockInode = 1;
+const markerIdentities = new Map<string, ReviewArtifactInodeIdentity>();
+
+createExclusiveMarker: vi.fn(async (path: string) => {
+  if (path in writtenFiles) return { kind: "occupied" as const };
+  const identity = { device: "mock-device", inode: String(nextMockInode) };
+  nextMockInode += 1;
+  const leasePath = `${dirname(path)}/.leases/${basename(path)}.lease`;
+  writtenFiles[path] = "";
+  writtenFiles[leasePath] = "";
+  markerIdentities.set(path, identity);
+  return { kind: "created" as const, leasePath, artifactIdentity: identity };
+}),
+```
+
+`createMockFileSystem()` spreads this writer and therefore inherits the capability. Add a focused assertion in
+`tests/core/review-artifact-reservation.test.ts` that the production routing fixture receives a usable
+reservation through `createMockFileWriter()`; the test must also assert a second call for the same destination
+returns `{ kind: "occupied" }` without replacing its existing content.
+
+Add `mkdtemp` and `rm` from `node:fs/promises`, `tmpdir` from `node:os`, and `join` from `node:path` if
+they are not already present, then add these real-filesystem cases to `tests/runtime/node-file-system.test.ts`.
+They own platform inode and no-follow behavior rather than the shared mock helper.
+
+```ts
+it("creates an exclusive marker with a retained JSON-safe lease identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justice-marker-"));
+  try {
+    const fs = new NodeFileSystem(root);
+    const createExclusiveMarker = fs.createExclusiveMarker;
+    if (createExclusiveMarker === undefined) throw new Error("marker capability is missing");
+    const result = await createExclusiveMarker.call(fs, ".justice/reviews/one.json");
+
+    expect(result).toMatchObject({
+      kind: "created",
+      leasePath: ".justice/reviews/.leases/one.json.lease",
+      artifactIdentity: { device: expect.any(String), inode: expect.any(String) },
+    });
+    if (result.kind !== "created") throw new Error("marker was not created");
+    expect(await fs.fileExists(".justice/reviews/one.json")).toBe(true);
+    expect(await fs.fileExists(result.leasePath)).toBe(true);
+    expect(() => JSON.stringify(result.artifactIdentity)).not.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("reports an occupied destination without overwriting it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justice-marker-"));
+  try {
+    const fs = new NodeFileSystem(root);
+    const destination = ".justice/reviews/existing.json";
+    await fs.writeFile(destination, "existing artifact");
+    const createExclusiveMarker = fs.createExclusiveMarker;
+    if (createExclusiveMarker === undefined) throw new Error("marker capability is missing");
+
+    await expect(createExclusiveMarker.call(fs, destination)).resolves.toEqual({ kind: "occupied" });
+    await expect(fs.readFile(destination)).resolves.toBe("existing artifact");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+```
 - `resolveMandatoryReviewCategory(toolInput: Readonly<Record<string, unknown>>): "sp-review" | "sp-final-review" | undefined` returns a value only for exact canonical categories after the existing task-input normalizer has run.
 - `buildReviewClaimResponse(event: PreToolUseEvent, outcome: ClaimReviewDispatchOutcome): HookResponse` maps only a committed `TaskCallBinding` / explicit blocked outcome to the existing `HookResponse` union; it never copies correlation or artifact identity from `event.payload`.
 - `formatReviewDirective(directive: ReviewRequiredDirective): string` is the single pure formatter for the Controller-facing review directive.
@@ -11517,7 +11902,11 @@ Review Dispatch factory の `injectReviewRequiredDirective` port はこの
 event の response に一度だけ merge し、startup recovery では次の Controller-facing hook
 へ再発行できる domain-specific pending delivery として保持する。delivery は
 `parentSessionId + sameReviewCorrelation` で重複排除する。notifier、prompt text、category、
-artifact path、worker self-report を delivery identity に使用してはならない。
+artifact path、worker self-report を delivery identity に使用してはならない。sink 内の delivery
+だけでは inject authority にならない。root drain は同じ parent の current `pending` slot、current
+active Authorization、current lifecycle を Review Dispatch validator で確認し、claimed / terminal /
+cancelled / missing / stale item を削除して inject しない。Authorization または durable read が
+uncertain の item は削除せず、次の matching root hook で再検証する。
 
 ### Startup ordering
 

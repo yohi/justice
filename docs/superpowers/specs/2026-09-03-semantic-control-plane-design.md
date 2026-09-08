@@ -1111,6 +1111,7 @@ export type ReviewArtifactInodeIdentity = {
 - cleanup は同じ inode 検証を行い、一致する artifactPath だけを削除する。差し替え後の path は削除せず advisory とし、private lease は元の inode を保持したまま best-effort で削除する。
 - dispatch 前にこの exclusive marker 作成を行う。`occupied` の場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。marker 作成の path validation は create 操作と同じ safe-relative-path boundary で行い、symlink 経由の destination を許可しない。
 - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
+- `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。`FileWriter` が capability を提供しない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。exclusive create、inode identity、private lease、no-follow 操作を完全に提供できる writer だけが `usable` reservation を返せる。
   - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
 - `usable` の場合、`claimReviewDispatch` の committed outcome に含まれる
   `TaskCallBinding.artifactReservation.artifactPath` を、その claim outcome から task-payload
@@ -1790,8 +1791,23 @@ point であり、PostToolUse では observation、completion、PlanBridge、Tas
 生成した directive は、その PostToolUse response に含まれ、次の無関係な PreToolUse を待たない。
 startup recovery のように現在の hook response がない場合だけ、delivery は同じ parent session
 の pending queue に保持し、次の Controller-facing PreToolUse または PostToolUse で一度だけ
-再発行する。個別の domain handler が sink を drain してはならず、handler failure 時も root
-route の fail-open drain-and-merge を経由して delivery を捨てない。durable `pending -> claimed`
+再発行する。sink 内の delivery 自体は durable authority ではない。root drain は、同じ
+parent session と `ReviewCorrelation` の current durable slot が `pending` であり、
+その correlation の
+Authorization が current active である場合だけ directive を inject できる。slot が `claimed`、
+`terminal`、`cancelled`、missing、または current lifecycle / Authorization と一致しない場合は
+stale delivery として inject せず sink から削除する。
+
+drain-time validation、sink からの delivered / stale item の確定的除去、及び同じ parent の
+claim / cancellation との順序付けは、既存の `AuthorizationReviewBoundary` 内で線形化する。
+したがって restart 後に最初の matching hook 自身が Review PreToolUse で
+`pending -> claimed` を commit した場合、その correlation の startup delivery は同じ response に
+再injectされない。
+Authorization または durable dispatch read が unreadable / uncertain の場合は positive directive
+を inject しない。この場合は stale と断定せず delivery を sink に保持し、次の matching root
+hook で再検証する。個別の domain handler が sink を drain してはならず、handler failure 時も
+root route の fail-open drain-and-merge を経由して delivery を捨てない。durable
+`pending -> claimed`
 commit 後は旧 directive を queue に再投入せず、recovery も claimed slot を delivery しない。
 
 ### 12.3 Review-first PreToolUse
@@ -1859,12 +1875,16 @@ variant を追加しない。
 - observation、normal context、gate advisory の既存 merge semantics を保持する。
 - claim、reservation、projection、delivery、completion の例外は hook boundary 内で捕捉し、
   advisory を best-effort に記録したうえで非ブロッキング response に縮退する。
-- `JusticePlugin.handleEvent(PreToolUse)` は review claim / observation response と drained
-  directive responses を `mergePreToolUseResponses` で一度だけ合成する。
+- `JusticePlugin.handleEvent(PreToolUse)` は review claim / observation response と、
+  current pending authority を確認済みの drained directive responses を
+  `mergePreToolUseResponses` で
+  一度だけ合成する。
 - `JusticePlugin.handleEvent(PostToolUse)` は observation、PlanBridge、TaskFeedback、Gate の
-  response を先に `mergePostToolUseResponses` で合成し、その後に同じ parent session の sink
-  deliveries を `inject` response として追加合成する。sink drain が PreToolUse にしか存在しない
-  実装は、lifecycle offer の directive delivery を失うため不適合である。
+  response を先に `mergePostToolUseResponses` で合成し、その後に同じ parent session の
+  current-pending-authority を確認済み sink deliveries を `inject` response として
+  追加合成する。sink drain が PreToolUse にしか存在しない実装は、lifecycle offer の
+  directive delivery を失うため
+  不適合である。
 
 ### 12.6 Acceptance criteria
 
@@ -1883,6 +1903,11 @@ Task 3.4 の acceptance は、unit factory testsに加えて、実際の `Justic
   その PostToolUse の返却 `HookResponse` に実際に含まれ、notifier-only の副作用に留まらない。
 - initialization が Authorization hydration、projection、staged completion recovery、
   Review Dispatch recovery の順序を守り、recovered claimed call を再発行しない。
+- startup recovery が queue した pending directive に対し、最初の matching root hook が
+  review PreToolUse で claim した場合、claim transition / binding は各一件で、同じ response と
+  後続 hook に
+  古い `REVIEW REQUIRED` directive が含まれない。terminal / cancelled slot は inject せず、
+  unreadable / uncertain authority は delivery を保持したまま positive directive を inject しない。
 
 `ec23694` のように設計・計画書だけを変更したコミットでは、テストコードが追加されたとは
 みなさない。計画上の fixture と実際に実行可能な production integration test を区別し、
