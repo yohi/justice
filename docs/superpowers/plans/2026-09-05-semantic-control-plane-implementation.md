@@ -5065,20 +5065,200 @@ must not be `"skip"`, and may be either the existing non-blocking `"proceed"` re
 `"inject"` response. If it is `"inject"`, assert that its context contains
 `review_authorization_unreadable`; do not add a new `PROCEED` type.
 
-```ts
-it("keeps live mandatory-review PreToolUse fail-open when Authorization is unreadable", async () => {
-  const { plugin, event } = await arrangeLiveMandatoryReviewWithUnreadableAuthorization();
+Define the fixture locally in `justice-plugin-routing.test.ts`; do not call the unit-only
+`createReviewDispatchState` factory from this integration test. The fixture uses the production
+`JusticePlugin` composition (including its strict `AuthorizationStore`) and only uses a separate
+`AuthorizationStore` instance to seed the valid authoritative file before constructing the plugin.
+The pending dispatch record is seeded directly through the existing `ObservationLogStore` so the
+test enters the claim path without mocking `handleEvent()` or any claim operation. After
+`plugin.initialize()` has restored the valid binding, overwrite only
+`.justice/authorizations.json` with malformed JSON. This makes the failure occur in the plugin's
+own live `readDurableAuthorizations` path, not in a test replacement.
 
-  const response = await plugin.handleEvent(event);
+Extend the existing imports in `tests/core/justice-plugin-routing.test.ts` with the following
+production values and shared types; keep its existing `JusticePlugin`, `PreToolUseEvent`, and
+mock-helper imports:
+
+```ts
+import { PlanParser } from "../../src/core/plan-parser";
+import {
+  buildCanonicalSnapshot,
+  computePlanFingerprint,
+} from "../../src/core/plan-fingerprint";
+import {
+  AuthorizationStore,
+  createAuthorizationReviewBoundary,
+} from "../../src/core/plan-authorization";
+import {
+  projectReviewDispatchSlots,
+  projectTaskCallBindings,
+} from "../../src/core/review-dispatch-state";
+import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import type { ShardId, TaskExecutionRef, TaskReviewCorrelation } from "../../src/core/types";
+import type {
+  PendingLogRecord,
+  PersistedLogRecord,
+} from "../../src/core/v2/observation-model";
+import { createMockFileSystem, type MockFileSystem } from "../helpers/mock-file-system";
+```
+
+```ts
+type LiveMandatoryReviewFixture = {
+  readonly plugin: JusticePlugin;
+  readonly event: PreToolUseEvent;
+  readonly files: MockFileSystem;
+  readonly parentSessionId: string;
+  readonly planPath: string;
+  readonly planContent: string;
+  readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
+};
+
+async function arrangeLiveMandatoryReviewWithUnreadableAuthorization(): Promise<LiveMandatoryReviewFixture> {
+  const files = createMockFileSystem();
+  const parentSessionId = "parent-live";
+  const planPath = "docs/live-review.md";
+  const planContent = "## Task 1: live review\n- [ ] execute live review\n";
+  const writerId = "writer-live";
+  const shard: ShardId = { agentId: "atlas", sessionId: parentSessionId, writerId };
+  const approvedTaskIds = new PlanParser().parse(planContent).map((task) => task.id);
+  if (approvedTaskIds.length !== 1 || approvedTaskIds[0] !== "task-1") {
+    throw new Error("fixture plan did not produce the expected approved task ID");
+  }
+
+  await files.writeFile(planPath, planContent);
+  const seedStore = new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
+  const activeAuthorization = await seedStore.approve({
+    sessionId: parentSessionId,
+    planPath,
+    canonicalSnapshot: buildCanonicalSnapshot(planContent, approvedTaskIds),
+    planFingerprint: computePlanFingerprint(planContent, approvedTaskIds),
+    approvedAt: "2026-09-05T00:00:00.000Z",
+  });
+  if (activeAuthorization === null || activeAuthorization.status !== "active") {
+    throw new Error("fixture did not create an active Authorization");
+  }
+
+  const taskExecutionRef: TaskExecutionRef = {
+    authorizationId: activeAuthorization.authorizationId,
+    taskId: "task-1",
+    attemptId: "attempt-live",
+  };
+  const correlation: TaskReviewCorrelation = {
+    reviewKind: "task-review",
+    taskExecutionRef,
+    reviewRound: 1,
+  };
+  const reviewLog = new ObservationLogStore(files, files, writerId);
+  const pendingDispatch: PendingLogRecord = {
+    schemaVersion: 1,
+    timestamp: "2026-09-05T00:00:01.000Z",
+    agentId: shard.agentId,
+    sessionId: shard.sessionId,
+    writerId: shard.writerId,
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: "dispatch-pending",
+    parentSessionId,
+    correlation,
+    expectedCategory: "sp-review",
+    from: null,
+    to: "pending",
+  };
+  await reviewLog.append(shard, pendingDispatch);
+
+  const plugin = new JusticePlugin(files, files, { writerId, workspaceRoot: "." });
+  await plugin.initialize();
+  await files.writeFile(".justice/authorizations.json", "{");
+
+  const event: PreToolUseEvent = {
+    type: "PreToolUse",
+    sessionId: parentSessionId,
+    callId: "review-call",
+    payload: {
+      toolName: "task",
+      callId: "review-call",
+      toolInput: {
+        category: "sp-review",
+        prompt: "review the current task",
+        run_in_background: false,
+      },
+    },
+  };
+
+  return {
+    plugin,
+    event,
+    files,
+    parentSessionId,
+    planPath,
+    planContent,
+    readDurableRecords: () => reviewLog.readAll(),
+  };
+}
+
+it("keeps live mandatory-review PreToolUse fail-open when Authorization is unreadable", async () => {
+  const fixture = await arrangeLiveMandatoryReviewWithUnreadableAuthorization();
+
+  const response = await fixture.plugin.handleEvent(fixture.event);
 
   expect(response.action).not.toBe("skip");
   expect(["proceed", "inject"]).toContain(response.action);
   if (response.action === "inject") {
     expect(response.injectedContext).toContain("review_authorization_unreadable");
   }
-  expect(authoritativeReviewClaims()).toHaveLength(0);
-  expect(authoritativeArtifactReservations()).toHaveLength(0);
-  expect(durablePositiveGateAndAcceptanceTransitions()).toEqual([]);
+
+  const records = await fixture.readDurableRecords();
+  const dispatchTransitions = records.filter(
+    (record) =>
+      record.kind === "review_dispatch_transition" &&
+      record.parentSessionId === fixture.parentSessionId,
+  );
+  expect(dispatchTransitions).toHaveLength(2);
+  expect(dispatchTransitions.filter((record) => record.from === null && record.to === "pending"))
+    .toHaveLength(1);
+  expect(dispatchTransitions.filter((record) => record.from === "pending" && record.to === "claimed"))
+    .toHaveLength(0);
+  expect(
+    dispatchTransitions.filter(
+      (record) =>
+        record.from === "pending" &&
+        record.to === "terminal" &&
+        record.terminalReason === "cancelled",
+    ),
+  ).toHaveLength(1);
+  expect(
+    dispatchTransitions.filter(
+      (record) => record.to === "terminal" && record.terminalReason !== "cancelled",
+    ),
+  ).toEqual([]);
+
+  const slots = projectReviewDispatchSlots(records);
+  expect(
+    slots.filter(
+      (slot) =>
+        slot.key.parentSessionId === fixture.parentSessionId && slot.state === "claimed",
+    ),
+  ).toEqual([]);
+  expect(
+    slots.filter(
+      (slot) =>
+        slot.key.parentSessionId === fixture.parentSessionId &&
+        slot.artifactReservation !== undefined,
+    ),
+  ).toEqual([]);
+  expect(
+    projectTaskCallBindings(records).filter((binding) => binding.callId === fixture.event.callId),
+  ).toEqual([]);
+  expect(records.filter((record) => record.recordType === "decision")).toEqual([]);
+  expect(
+    records.filter(
+      (record) =>
+        record.kind === "task_lifecycle_transition" ||
+        record.kind === "plan_finalization_transition",
+    ),
+  ).toEqual([]);
+  await expect(fixture.files.readFile(".justice/authorizations.json")).resolves.toBe("{");
+  await expect(fixture.files.readFile(fixture.planPath)).resolves.toBe(fixture.planContent);
 });
 ```
 
@@ -5107,7 +5287,17 @@ it("invalidates and cancels in one parent-boundary operation", async () => {
   ]);
   expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
   expect(durableCancelledTombstones()).toHaveLength(1);
-  expect(durablePositiveReviewProgress()).toEqual([]);
+  const records = await readDurableRecords();
+  expect(
+    records.filter(
+      (record) =>
+        record.recordType === "decision" ||
+        (record.kind === "task_lifecycle_transition" &&
+          (record.to === "gate_pending" || record.to === "accepted")) ||
+        (record.kind === "plan_finalization_transition" &&
+          (record.to === "final_gate_pending" || record.to === "complete")),
+    ),
+  ).toEqual([]);
 });
 
 it("invalidates a missing startup plan, cancels its review, and does not revive authority", async () => {
@@ -7362,6 +7552,9 @@ The unreadable-Authorization assertions must additionally prove:
 - existing same-parent `pending | claimed` slots receive only a best-effort cancellation-tombstone attempt and remain unclaimable;
 - cancellation uses the already-held parent boundary with zero nested acquisition;
 - the live mandatory-review PreToolUse integration continues through the existing non-blocking `HookResponse` shape.
+- `tests/core/justice-plugin-routing.test.ts` observes the production plugin path and exactly one
+  seeded `null -> pending` transition plus one same-parent `pending -> terminal(cancelled)` transition;
+  it does not use a direct `handleEvent()` or claim-operation mock.
 
 - [ ] **Step 5: Commit after approval**
 
@@ -10297,6 +10490,11 @@ F-036 reverse traceability is explicit: Task 3.4 covers both initial and reread 
 reads, maps rejection to blocked outcomes and `review_authorization_unreadable`, performs only
 best-effort same-parent cancellation/advisory recording, and verifies that no positive dispatch,
 claim, reservation, Gate, Acceptance, or Progress state leaks through the runtime integration path.
+The named executable coverage is the four unreadable-Authorization unit tests in
+`tests/core/review-dispatch-state.test.ts` plus
+`keeps live mandatory-review PreToolUse fail-open when Authorization is unreadable` in
+`tests/core/justice-plugin-routing.test.ts`; the latter uses concrete durable-log projections
+and the existing `HookResponse` union rather than test-only authority or response helpers.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
