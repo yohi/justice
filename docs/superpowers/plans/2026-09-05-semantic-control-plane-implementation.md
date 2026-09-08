@@ -426,7 +426,7 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
 
-**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`.
+**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`; Task 2.1's `computePlanFingerprint(planContent, approvedTaskIds)`; and `binding.canonicalSnapshot.tasks.map((task) => task.taskId)` as the validation-time approved task set. `restoreActivePlans()` must not derive a replacement approval task set from `PlanParser.parse(planContent)`.
 
 **Produces:** the Design §4.2 discriminated `ApprovedPlanBinding`, including
 `invalidationReason: "plan_superseded"` only on a superseded invalid binding;
@@ -1062,9 +1062,10 @@ it("invalidates a confirmed-missing startup plan inside one parent boundary", as
   expect(boundary.nestedAcquiresFor("s1")).toBe(0);
 });
 
-it("restores only a still-active binding whose startup plan exists", async () => {
-  const active = await store.approve(inputFor("s1", "docs/existing.md"));
-  await writePlanFixture(files, "docs/existing.md");
+it("restores an unchanged semantic startup plan only after current fingerprint validation", async () => {
+  const plan = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const active = await approvePlanContent(store, "s1", "docs/existing.md", plan);
+  await files.writeFile("docs/existing.md", plan);
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
 
   await expect(bridge.restoreActivePlans()).resolves.toBe("authoritative");
@@ -1073,6 +1074,39 @@ it("restores only a still-active binding whose startup plan exists", async () =>
   await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toMatchObject({
     status: "active",
   });
+});
+
+it("terminalizes a semantic startup fingerprint mismatch without restoring its cache", async () => {
+  const approved = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const changed = planFixture("## Task 1: changed requirement\n- [ ] implement\n");
+  const active = await approvePlanContent(store, "s1", "docs/changed.md", approved);
+  await files.writeFile("docs/changed.md", changed);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("authoritative");
+
+  await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toMatchObject({
+    status: "invalidated",
+  });
+  await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toHaveProperty(
+    "invalidatedAt",
+  );
+  expect(bridge.getActivePlan("s1")).toBeNull();
+});
+
+it("retains startup authorization for an approved-task progress-only checkbox update", async () => {
+  const approved = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const progressOnly = planFixture("## Task 1: approved\n- [x] implement\n");
+  const active = await approvePlanContent(store, "s1", "docs/progress.md", approved);
+  await files.writeFile("docs/progress.md", progressOnly);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("authoritative");
+
+  await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toMatchObject({
+    status: "active",
+  });
+  expect(bridge.getActivePlan("s1")).toBe("docs/progress.md");
 });
 
 it("marks startup restoration uncertain without invalidating when the plan probe throws", async () => {
@@ -1088,6 +1122,34 @@ it("marks startup restoration uncertain without invalidating when the plan probe
     status: "active",
   });
   expect(bridge.getActivePlan("s1")).toBeNull();
+});
+
+it("marks startup restoration uncertain without mutation when fingerprint calculation fails", async () => {
+  const plan = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const active = await approvePlanContent(store, "s1", "docs/fingerprint-error.md", plan);
+  await files.writeFile("docs/fingerprint-error.md", plan);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  vi.spyOn(planFingerprintModule, "computePlanFingerprint").mockImplementationOnce(() => {
+    throw new Error("fingerprint calculation failed");
+  });
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
+
+  await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toMatchObject({
+    status: "active",
+  });
+  expect(bridge.getActivePlan("s1")).toBeNull();
+  expect(authorizationPersistenceOf(store).saveAtomicWithLock).not.toHaveBeenCalled();
+});
+
+it("marks startup restoration uncertain when authoritative authorization hydration fails", async () => {
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  vi.spyOn(store, "hydrate").mockRejectedValueOnce(new Error("authorization hydration failed"));
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
+
+  expect(bridge.getActivePlan("s1")).toBeNull();
+  expect(authorizationPersistenceOf(store).saveAtomicWithLock).not.toHaveBeenCalled();
 });
 
 it("does not restore authority when confirmed-missing invalidation cannot persist", async () => {
@@ -1214,9 +1276,10 @@ failure, missing methods, accidental deletion of existing initialization, or a d
 failures are: canonical snapshot persistence/hydration, fresh-ID supersession, terminal-dominant merge,
 same-parent approval serialization, real version-mismatch merge/retry, loser return semantics, explicit
 PlanBridge cache wiring, failed-save non-publication, post-save reread failure fail-closed behavior,
-existing-plan restoration, confirmed-missing durable invalidation without `plan_superseded`, plan-probe
-uncertainty, invalidation persistence uncertainty, authorization restoration invocation, and restoration failure
-isolation from the existing plugin initialization path.
+unchanged semantic-plan restoration after fingerprint validation, semantic-mismatch durable invalidation,
+progress-only fingerprint preservation, fingerprint and hydration uncertainty, confirmed-missing durable
+invalidation without `plan_superseded`, plan-probe uncertainty, invalidation persistence uncertainty,
+authorization restoration invocation, and restoration failure isolation from the existing plugin initialization path.
 
 - [ ] **Step 3: Implement the authorization store**
 
@@ -1237,11 +1300,19 @@ status, and performs exactly one `saveAtomicWithLock` that changes only that bin
 `invalidatedAt: at`. It does not set `invalidationReason`, mutate `planPath`, acquire a boundary, update a
 cache, or turn any terminal binding active. It returns the existing deterministic `not_found`, `wrong_parent`,
 `already_terminal`, `failed`, or `uncertain` result as applicable; only `saved` is terminal success. On plugin
-initialization, hydrate active bindings from the authoritative array but use `PlanBridge.readPlanFile()` before
-any cache restoration: only an existing plan with a still-active exact durable binding restores its `planPath`.
-`readPlanFile() === null` is confirmed missing and follows the focused invalidation path; a thrown probe returns
-an `uncertain` restoration outcome without mutation. Terminal bindings and any read/parse/validation failure
-restore no active binding. Do not add a transaction framework. `findByAuthorizationId` reads only the authoritative binding
+initialization, `AuthorizationStore.hydrate()` reads only the authoritative array and never treats the conflict
+journal as authority. A hydrate read / parse / validation failure must propagate to `PlanBridge.restoreActivePlans()`;
+it must not be converted to `[]` and then treated as an authoritative empty startup state. For each hydrated active
+binding, `restoreActivePlans()` uses `PlanBridge.readPlanFile()` and, when content exists, computes the Task 2.1
+canonical current fingerprint with `computePlanFingerprint(planContent, binding.canonicalSnapshot.tasks.map((task) => task.taskId))`
+before any cache restoration. It must not derive a replacement task set by parsing the current plan. Only a
+within-boundary `fingerprint_current` result followed by an exact same-parent, still-active authoritative reread restores
+the cache. A mismatch uses `invalidateForFingerprintWithinAuthorizationReviewBoundary`, then cancellation and cache clear
+inside that same parent boundary. `readPlanFile() === null` is confirmed missing and follows the focused invalidation
+path; a thrown probe, hydrate failure, parser/canonicalization/approved-task mapping failure, fingerprint calculation
+failure, or failed/uncertain invalidation returns `"uncertain"` without irreversible mutation unless a mismatch was
+successfully terminalized. Terminal bindings and every uncertainty restore no active binding and permit no positive
+authorization-dependent recovery. Do not add a transaction framework. `findByAuthorizationId` reads only the authoritative binding
 array and returns the exact matching binding or `null`; callers treat `null`, a read failure, or a persistence
 conflict as non-active. It must never read `.justice/authorizations.conflict.json` or infer authority from the
 active-plan cache.
@@ -1252,6 +1323,11 @@ active-plan cache.
 PlanBridge path does not call this wrapper; it already owns the same parent boundary and passes its explicit
 cache reconciler to the inner operation. The complete class body below is the implementation source of truth
 for the approval, authoritative reread, and hydrate behavior.
+
+`src/hooks/plan-bridge.ts` imports `computePlanFingerprint` from Task 2.1's
+`src/core/plan-fingerprint.ts` and the shared `PlanFingerprint` type from `src/core/types.ts`. The startup
+test module imports the same function as a module namespace only to make the required calculation-failure test
+throw; production code receives no new fingerprint service or validation pipeline.
 
 Add an explicit authorization dependency setter to the existing PlanBridge construction path so the existing
 non-authorization constructor arguments remain unchanged while the production plugin wires the shared objects
@@ -1297,7 +1373,12 @@ private reconcileActivePlan(
 async restoreActivePlans(): Promise<AuthorizationRestorationOutcome> {
   const dependencies = this.authorizationDependencies;
   if (dependencies === null) return "authoritative";
-  const bindings = await dependencies.authorizationStore.hydrate();
+  let bindings: readonly ApprovedPlanBinding[];
+  try {
+    bindings = await dependencies.authorizationStore.hydrate();
+  } catch {
+    return "uncertain";
+  }
   for (const binding of bindings) {
     if (binding.status !== "active") continue;
     let planContent: string | null;
@@ -1307,12 +1388,65 @@ async restoreActivePlans(): Promise<AuthorizationRestorationOutcome> {
       return "uncertain";
     }
     if (planContent !== null) {
-      const current = await dependencies.authorizationReviewBoundary.withParentSession(
-        binding.sessionId,
-        () => dependencies.authorizationStore.findByAuthorizationId(binding.authorizationId),
-      );
-      if (current?.status === "active" && current.sessionId === binding.sessionId) {
-        this.reconcileActivePlan(binding.sessionId, current);
+      try {
+        const restoration = await dependencies.authorizationReviewBoundary.withParentSession(
+          binding.sessionId,
+          async () => {
+            let currentFingerprint: PlanFingerprint;
+            try {
+              const approvedTaskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
+              currentFingerprint = computePlanFingerprint(planContent, approvedTaskIds);
+            } catch {
+              return "uncertain" as const;
+            }
+            const mutation = await dependencies.authorizationStore
+              .invalidateForFingerprintWithinAuthorizationReviewBoundary(
+                binding.sessionId,
+                binding.authorizationId,
+                currentFingerprint,
+                new Date().toISOString(),
+              );
+            if (mutation.kind === "fingerprint_current") {
+              const current = await dependencies.authorizationStore.findByAuthorizationId(binding.authorizationId);
+              if (current?.status === "active" && current.sessionId === binding.sessionId) {
+                this.reconcileActivePlan(binding.sessionId, current);
+                return "current" as const;
+              }
+              this.reconcileActivePlan(binding.sessionId, null);
+              return "uncertain" as const;
+            }
+            if (
+              mutation.kind === "not_found" ||
+              mutation.kind === "wrong_parent" ||
+              mutation.kind === "already_terminal"
+            ) {
+              const latest = await dependencies.authorizationStore.findByAuthorizationId(binding.authorizationId);
+              this.reconcileActivePlan(binding.sessionId, null);
+              return latest === null || latest.status !== "active"
+                ? ("terminalized" as const)
+                : ("uncertain" as const);
+            }
+            if (mutation.kind !== "saved") {
+              this.reconcileActivePlan(binding.sessionId, null);
+              return "uncertain" as const;
+            }
+            const cancellation = this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim;
+            if (cancellation === null) {
+              this.reconcileActivePlan(binding.sessionId, null);
+              return "uncertain" as const;
+            }
+            try {
+              await cancellation(binding.sessionId, binding.authorizationId);
+            } catch {
+              // The durable terminal remains authoritative; restart converges the cancelled tombstone.
+            }
+            this.reconcileActivePlan(binding.sessionId, null);
+            return "terminalized" as const;
+          },
+        );
+        if (restoration === "uncertain") return "uncertain";
+      } catch {
+        return "uncertain";
       }
       continue;
     }
@@ -1330,7 +1464,7 @@ async restoreActivePlans(): Promise<AuthorizationRestorationOutcome> {
         const cancellation = this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim;
         if (cancellation === null) {
           this.reconcileActivePlan(binding.sessionId, null);
-          throw new Error("PlanBridge review-dispatch cancellation is not configured");
+          return { kind: "uncertain" };
         }
         try {
           await cancellation(binding.sessionId, binding.authorizationId);
@@ -1726,12 +1860,8 @@ export class AuthorizationStore {
   }
 
   async hydrate(): Promise<readonly ApprovedPlanBinding[]> {
-    try {
-      const current = await this.authorizationPersistence.loadWithLock();
-      return current.data;
-    } catch {
-      return [];
-    }
+    const current = await this.authorizationPersistence.loadWithLock();
+    return current.data;
   }
 
   async findByAuthorizationId(authorizationId: string): Promise<ApprovedPlanBinding | null> {
@@ -4542,8 +4672,8 @@ Promise<void>` counterpart is returned for Task 3.6 and injected once into PlanB
 parent-session critical section. It reads the latest durable projection, best-effort appends `cancelled` only for
 the current pending or claimed slot of that authorization, and treats an existing terminal slot as a no-op. These
 are the only cancellation helpers; callers must not choose lock behavior dynamically. The public wrapper is
-never called by PlanBridge while it owns the boundary: explicit cancel, fingerprint invalidation, and startup
-confirmed-missing invalidation use their corresponding Authorization and cancellation within-boundary helpers in
+never called by PlanBridge while it owns the boundary: explicit cancel, runtime fingerprint invalidation, startup fingerprint
+mismatch invalidation, and startup confirmed-missing invalidation use their corresponding Authorization and cancellation within-boundary helpers in
 one outer operation. Queue-owning claim, failure, retry, and recovery operations call the within-parent helper
 directly. The Task 3.4 composition root injects the exact returned helper before `initialize()`; no optional
 runtime fallback or second queue is permitted.
@@ -4614,6 +4744,26 @@ it("invalidates a missing startup plan, cancels its review, and does not revive 
   expect(durableAcceptanceDecisionsForInvalidAuthorization()).toHaveLength(0);
 });
 
+it("invalidates a semantically changed startup plan, cancels its review, and does not revive authority", async () => {
+  await arrangeActiveAuthorizationWithSemanticStartupMutationAndPendingReview("parent-1");
+  await bridge.restoreActivePlans();
+
+  expect(trace).toEqual([
+    "boundary-enter",
+    "current-fingerprint-computed",
+    "authorization-invalidated-durable",
+    "review-cancelled-tombstone-attempt",
+    "active-plan-cache-clear",
+    "boundary-release",
+  ]);
+  expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+  expect(durableCancelledTombstones()).toHaveLength(1);
+  expect(reissuedReviewDirectives()).toHaveLength(0);
+  expect(newPendingReviewOffersForInvalidAuthorization()).toHaveLength(0);
+  expect(reviewClaimsForInvalidAuthorization()).toHaveLength(0);
+  expect(durableAcceptanceDecisionsForInvalidAuthorization()).toHaveLength(0);
+});
+
 it("does not cancel, restore cache, or reissue when missing-plan invalidation is uncertain", async () => {
   await arrangeActiveAuthorizationWithMissingPlanAndPendingReview("parent-1");
   authorizationStore.invalidateMissingPlanWithinAuthorizationReviewBoundary.mockResolvedValueOnce({
@@ -4627,6 +4777,22 @@ it("does not cancel, restore cache, or reissue when missing-plan invalidation is
   expect(reissuedReviewDirectives()).toHaveLength(0);
   expect(newPendingReviewOffersForInvalidAuthorization()).toHaveLength(0);
   expect(reviewClaimsForInvalidAuthorization()).toHaveLength(0);
+});
+
+it("does not cancel, restore cache, or positively recover when startup fingerprint invalidation is uncertain", async () => {
+  await arrangeActiveAuthorizationWithSemanticStartupMutationAndPendingReview("parent-1");
+  authorizationStore.invalidateForFingerprintWithinAuthorizationReviewBoundary.mockResolvedValueOnce({
+    kind: "uncertain",
+  });
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
+
+  expect(cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim).not.toHaveBeenCalled();
+  expect(activePlanCacheFor("parent-1")).toBeNull();
+  expect(reissuedReviewDirectives()).toHaveLength(0);
+  expect(newPendingReviewOffersForInvalidAuthorization()).toHaveLength(0);
+  expect(reviewClaimsForInvalidAuthorization()).toHaveLength(0);
+  expect(durableAcceptanceDecisionsForInvalidAuthorization()).toHaveLength(0);
 });
 
 it("retains missing-plan terminality and clears cache when cancellation append fails", async () => {
@@ -6937,7 +7103,10 @@ the code never reads a store singleton. Use Task 3.2's shared authorization help
 
 Replace only the Task 2.2 authorization-restoration portion of the existing `JusticePlugin.initialize()` with
 the following final control flow. `authorizationRecoveryReady` is a local boolean, not a field or lifecycle
-abstraction. A returned `"uncertain"` outcome, a rejected restoration, a plan probe I/O error, or a
+abstraction. `"authoritative"` means every startup active binding has completed missing-plan and current semantic
+fingerprint validation, and every binding still eligible for positive recovery is the latest durable active binding.
+A returned `"uncertain"` outcome, a rejected restoration, an authorization hydration read / parse / validation failure,
+a plan probe I/O error, a fingerprint calculation failure, a fingerprint invalidation persistence uncertainty, or a
 confirmed-missing invalidation that did not save all leave it false. Wisdom, Telemetry, durable projection, and
 notifier initialization retain their existing fail-open isolation. Staged completion and Review Dispatch recovery
 run only after projection and only when it is true.
@@ -7059,6 +7228,37 @@ it("runs startup recovery in authoritative order after a missing-plan terminaliz
   expect(newPendingReviewOffersForInvalidAuthorization()).toEqual([]);
   expect(durableGateDecisionsForInvalidAuthorization()).toEqual([]);
   expect(durableAcceptanceDecisionsForInvalidAuthorization()).toEqual([]);
+});
+
+it("terminalizes a stale semantic startup authorization before any positive recovery", async () => {
+  await arrangeApprovedPlanAtFingerprintThenMutateSemantics("F1", "F2");
+  await plugin.initialize();
+
+  expect(trace).toEqual([
+    "authorization-hydration",
+    "current-fingerprint-computed",
+    "authorization-invalidated-durable",
+    "review-cancelled-tombstone-attempt",
+    "active-plan-cache-clear",
+    "observation-projection",
+    "staged-completion-recovery",
+    "review-dispatch-recovery",
+  ]);
+  expect(durableAuthorizationFor("parent-1")).toMatchObject({ status: "invalidated" });
+  expect(reissuedReviewDirectives()).toEqual([]);
+  expect(newPendingReviewOffersForInvalidAuthorization()).toEqual([]);
+  expect(reviewClaimsForInvalidAuthorization()).toEqual([]);
+  expect(durableGateDecisionsForInvalidAuthorization()).toEqual([]);
+  expect(durableAcceptanceDecisionsForInvalidAuthorization()).toEqual([]);
+});
+
+it("allows normal startup recovery for a progress-only semantic-equivalent plan", async () => {
+  await arrangeApprovedPlanAtFingerprintThenUpdateApprovedTaskProgressOnly();
+  await plugin.initialize();
+
+  expect(durableAuthorizationFor("parent-1")).toMatchObject({ status: "active" });
+  expect(recoverStagedReviewCompletionsAfterRestart).toHaveBeenCalledOnce();
+  expect(recoverReviewDispatchesAfterRestart).toHaveBeenCalledOnce();
 });
 
 it("continues base initialization but skips positive recovery when restoration is uncertain", async () => {
@@ -9483,14 +9683,21 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2                | routing decision, applied, mismatch, effective pinned-command precedence, template output                                                                                                                                        |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
-| JUS-P0-02 semantic fingerprint and canonical snapshot          | 2.1, 2.2                | semantic mutation, snapshot persistence, hydration, fresh reapproval ID, terminal merge protection                                                                                                                               |
+| JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
+| JUS-P0-02-06 progress-only mutation preserves authorization    | 2.1, 2.2                | approved-task checkbox-only progress produces an equal fingerprint, retains the active binding, and restores cache                                                                                                                 |
+| JUS-P0-02-07 canonical fingerprint reuse                       | 2.1, 2.2                | startup validation uses the same `computePlanFingerprint` with durable approved snapshot task IDs                                                                                                                                |
+| restart fingerprint validation                                  | 2.2                     | cache restore occurs only after current fingerprint validation and exact same-parent active reread                                                                                                                               |
+| startup fingerprint invalidation boundary                       | 2.2, 3.4                | current fingerprint -> durable invalidation -> cancellation attempt -> cache clear -> boundary release                                                                                                                          |
+| fingerprint validation uncertainty                              | 2.2, 3.6                | hydrate/read/parse/canonicalization/fingerprint or invalidation uncertainty returns `uncertain` and skips positive recovery                                                                                                     |
+| terminal Authorization restart dominance                        | 3.4, 3.6                | startup fingerprint terminalization permits no stale Review, Gate, or Acceptance revival                                                                                                                                        |
+| startup recovery readiness                                      | 2.2, 3.6                | `authoritative` only after every startup active binding passes missing-plan and fingerprint validation                                                                                                                          |
 | typed `error_annotation` provenance and exact line migration   | 2.1                     | persisted observation validation/replay, plan-path and raw-snapshot scoping, line number / occurrence / digest matching, cross-plan and unknown-provenance retention                                                          |
 | authorization sequential supersession                          | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation                                                                                |
 | same-process approval serialization                            | 2.2                     | one store plus one injected boundary: concurrent same-parent approvals have maximum mutation-body concurrency one, do not deadlock, retain one active binding, terminalize losers, and publish the final durable active cache |
 | cross-process authorization conflict                           | 2.2                     | two stores plus independent boundaries and shared persistence: fresh approvals traverse real `AtomicPersistence` version mismatch and `mergeAuthorizationBindings` retry, retain one active binding, terminalize the losing fresh ID as `plan_superseded`, preserve other-session active binding |
 | post-merge own-ID authority                                    | 2.2                     | authoritative reread returns the own fresh-ID winner, returns `null` for a merge loser, reconciles loser cache to durable winner / `null`, and never arms the requested loser plan |
-| authorization startup hydration                                | 2.2                     | only an authoritative active binding with an existing plan and a still-active exact reread restores the `PlanBridge` active plan; terminal bindings and hydrate read/parse/validation failures restore no active plan |
-| missing plan startup invalidation                              | 2.2                     | confirmed missing (`readPlanFile() === null`) performs durable active -> invalidated; an existing plan remains active and restores normally |
+| authorization startup hydration                                | 2.2                     | `hydrate()` reads only authoritative bindings and reports read/parse/validation failure; only a current-fingerprint-equal, same-parent still-active durable binding restores the `PlanBridge` active plan |
+| missing plan startup invalidation                              | 2.2                     | confirmed missing (`readPlanFile() === null`) performs durable active -> invalidated; an existing plan proceeds to current fingerprint validation rather than restoring by existence alone |
 | missing-plan invalidation reason                               | 2.2                     | missing-plan terminalization records `invalidatedAt` and never records `plan_superseded` |
 | missing-plan boundary ownership                                | 2.2, 3.4                | one parent boundary owns exact reread, invalidation, cancellation, and cache clear; inner acquire count is zero |
 | missing-plan invalidation -> review cancellation               | 2.2, 3.4                | durable invalidation -> cancelled tombstone attempt -> cache clear -> boundary release; cancellation failure never rolls back invalidation |
@@ -9500,7 +9707,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | authorization active-plan callback matrix                      | 2.2                     | initial-read/save failure has no callback and retains cache; winner returns own binding; loser returns `null` and reconciles winner / `null`; post-save reread failure callbacks `null` and never arms |
 | JusticePlugin existing initialization preservation              | 2.2                     | `plugin.initialize()` keeps `TieredWisdomStore.loadAll()`, telemetry load, projection cache initialization, notifier invocation, notifier isolation, and initialization logging |
 | authorization restoration failure isolation                     | 2.2, 3.6                | rejected or uncertain `restoreActivePlans()` does not reject `plugin.initialize()` and does not prevent Wisdom, Telemetry, projection, or notifier initialization, but prevents positive authorization-dependent recovery |
-| startup recovery ordering                                       | 2.2, 3.4, 3.6           | composition-root test proves authorization hydration -> projection -> staged completion recovery -> review dispatch recovery; missing-plan success exposes terminal Authorization and uncertainty skips both positive recovery phases |
+| startup recovery ordering                                       | 2.2, 3.4, 3.6           | composition-root test proves authorization hydration -> fingerprint terminalization when needed -> projection -> staged completion recovery -> review dispatch recovery; terminal Authorization exposes no stale positive transition and uncertainty skips both positive recovery phases |
 | Authorization public/inner mutation split                      | 2.2                     | public release and fingerprint invalidation acquire the boundary once; their within-boundary counterparts acquire it zero times; wrong parent causes no durable mutation                                                                                                       |
 | `AuthorizationReviewBoundary` implementation                  | 2.2                     | same-parent exclusion, rejected-predecessor recovery, A -> B -> C conditional-tail cleanup, and different-parent progress                                                                                                       |
 | shared boundary singleton wiring                               | 2.2, 3.2, 3.4, 3.6      | plugin construction calls the factory once; cross-domain same-parent integration proves max concurrency one                                                                                                                      |
@@ -9508,7 +9715,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | staged recovery -> Gate lock ownership                         | 3.2, 3.6                | Task and Final Review restart recovery complete without nested parent acquisition and append one GateDecision / AcceptanceDecision                                                                                               |
 | release -> cancellation critical section                       | 2.2, 3.4                | one outer parent operation orders durable release, cancellation attempt, cache update, and boundary release; failed or uncertain release has no cancellation or terminal cache publication                                                                                      |
 | invalidation -> cancellation critical section                  | 2.2, 3.4                | fingerprint and confirmed-missing invalidation each use one outer parent operation ordering durable invalidation, cancellation attempt, cache clear, and boundary release; failed or uncertain invalidation has no cancellation or terminal cache publication |
-| terminal Authorization restart dominance                        | 3.4, 3.6                | missing-plan terminal Authorization permits no directive, offer, claim, staged completion promotion, Gate, or Acceptance revival after restart |
+| missing-plan terminal restart dominance                         | 3.4, 3.6                | missing-plan terminal Authorization permits no directive, offer, claim, staged completion promotion, Gate, or Acceptance revival after restart |
 | review completion next-offer lock ownership                    | 3.4, 3.6                | parent-boundary completion and recovery paths use only `offerNextMandatoryReviewWithinParentSessionClaim`; the public offer entry is boundary-external and nested parent acquisition remains zero                                                                             |
 | public Gate operation                                          | 3.2                     | direct call acquires the shared parent boundary and terminal concurrent Authorization prevents positive decision                                                                                                                  |
 | within-boundary Gate operation                                 | 3.2, 3.6                | inner call skips parent acquisition while retaining decision-identity serialization                                                                                                                                            |
@@ -9592,14 +9799,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary, typed `error_annotation` persistence/replay, exact plan/line identity migration tests                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality, shared boundary, missing-plan terminality, and JusticePlugin initialization preservation | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, callback matrix and cache/durable agreement, failed-save cache retention, post-save reread failure cache clearing, existing-plan exact reread restoration, confirmed-missing active -> invalidated without `plan_superseded`, missing-plan one-boundary/zero-inner-acquire, probe uncertainty and persistence uncertainty, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, one-factory construction contract, existing initialization preservation, and restoration failure isolation tests |
+| 2.2       | JUS-P0-02-05 through JUS-P0-02-07, Design §4.2 and §5.2, INV-03, INV-04, INV-12, authorization cardinality, shared boundary, missing-plan terminality, and JusticePlugin initialization preservation | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, callback matrix and cache/durable agreement, failed-save cache retention, post-save reread failure cache clearing, unchanged semantic restore, semantic mismatch terminalization, progress-only preservation, fingerprint and hydration uncertainty, confirmed-missing active -> invalidated without `plan_superseded`, one-boundary/zero-inner-acquire, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, one-factory construction contract, existing initialization preservation, and restoration failure isolation tests |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; startup missing-plan terminalization injects no directive, offer, or claim; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | uncertain authorization restoration keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root startup ordering; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; composition-root semantic-mismatch and progress-only startup ordering; unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
