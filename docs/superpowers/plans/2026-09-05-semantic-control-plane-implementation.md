@@ -433,12 +433,15 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always generates a fresh authorizationId and
 leaves at most one active binding per session; `AuthorizationStore.release(authorizationId, at):
 Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`;
-`AuthorizationStore.findByAuthorizationId(authorizationId): Promise<ApprovedPlanBinding | null>`; and the
+`AuthorizationStore.findByAuthorizationId(authorizationId): Promise<ApprovedPlanBinding | null>`;
+`AuthorizationReviewBoundary`; `createAuthorizationReviewBoundary(): AuthorizationReviewBoundary`; and the
 domain-private `mergeAuthorizationBindings(mine: ReadonlyArray<ApprovedPlanBinding>,
 theirs: ReadonlyArray<ApprovedPlanBinding>): ReadonlyArray<ApprovedPlanBinding>` used only as this
 store's `AtomicPersistence.merge` hook. It is exported from this source module only so its array
-contract can be tested; it is not re-exported by a package barrel and is not a public Justice API.
-It also produces one injected `AuthorizationReviewBoundary` shared by the Authorization, PlanBridge,
+contract can be tested; it is not re-exported by a package barrel and is not a public Justice API. It also
+produces public boundary-acquiring `AuthorizationStore.release` / fingerprint invalidation operations and
+their explicitly named `WithinAuthorizationReviewBoundary` counterparts. It produces one injected
+`AuthorizationReviewBoundary` shared by the Authorization, PlanBridge,
 review-dispatch, review-completion, and Gate domains. `ApprovedPlanBinding.sessionId` and review
 `parentSessionId` use the same boundary key; the boundary serializes the durable commit and all
 dependent state changes, but is not a generic transaction or mutex framework.
@@ -630,6 +633,73 @@ it("does not publish a superseding binding when the single authoritative save fa
   expect(await store.hydrate()).toEqual([planA]);
   expect(bridge.activePlanFor("s1")).toBe("docs/a.md");
 });
+
+it("serializes same-parent operations while another parent can proceed", async () => {
+  const enteredA = deferred<void>();
+  const releaseA = deferred<void>();
+  const boundary = createAuthorizationReviewBoundary();
+  let concurrent = 0;
+  let maximumConcurrent = 0;
+  const a = boundary.withParentSession("s1", async () => {
+    concurrent += 1;
+    maximumConcurrent = Math.max(maximumConcurrent, concurrent);
+    enteredA.resolve();
+    await releaseA.promise;
+    concurrent -= 1;
+  });
+  await enteredA.promise;
+  const b = boundary.withParentSession("s1", async () => {
+    concurrent += 1;
+    maximumConcurrent = Math.max(maximumConcurrent, concurrent);
+    concurrent -= 1;
+  });
+  let differentParentStarted = false;
+  await boundary.withParentSession("s2", async () => {
+    differentParentStarted = true;
+  });
+  expect(differentParentStarted).toBe(true);
+  releaseA.resolve();
+  await Promise.all([a, b]);
+  expect(maximumConcurrent).toBe(1);
+});
+
+it("continues a parent queue after a rejected predecessor", async () => {
+  const boundary = createAuthorizationReviewBoundary();
+  await expect(
+    boundary.withParentSession("s1", async () => {
+      throw new Error("expected predecessor failure");
+    }),
+  ).rejects.toThrow("expected predecessor failure");
+  await expect(boundary.withParentSession("s1", async () => "next")).resolves.toBe("next");
+});
+
+it("does not let old cleanup delete a newer same-parent tail", async () => {
+  const boundary = createAuthorizationReviewBoundary();
+  const enteredA = deferred<void>();
+  const releaseA = deferred<void>();
+  const enteredB = deferred<void>();
+  const releaseB = deferred<void>();
+  const order: string[] = [];
+  const a = boundary.withParentSession("s1", async () => {
+    order.push("a");
+    enteredA.resolve();
+    await releaseA.promise;
+  });
+  await enteredA.promise;
+  const b = boundary.withParentSession("s1", async () => {
+    order.push("b");
+    enteredB.resolve();
+    await releaseB.promise;
+  });
+  releaseA.resolve();
+  await enteredB.promise;
+  const c = boundary.withParentSession("s1", async () => {
+    order.push("c");
+  });
+  releaseB.resolve();
+  await Promise.all([a, b, c]);
+  expect(order).toEqual(["a", "b", "c"]);
+});
 ```
 
 - [ ] **Step 2: Confirm RED**
@@ -664,16 +734,24 @@ every remaining active binding from both arrays for each session, including an a
 session and retain all other-session bindings unchanged. This makes the deterministic winner the sole active
 binding without modifying `AtomicPersistence` itself.
 
-Create the injected `AuthorizationReviewBoundary` once during plugin construction. Its
-`withParentSession(parentSessionId, operation)` is the only serialization boundary shared by
-Authorization and review state. `AuthorizationStore.approve`, `release`, and fingerprint-driven
-invalidation acquire the boundary using the binding's `sessionId`; `PlanBridge` keeps that boundary
-through the dependent review cancellation. Task 3.4's offer, claim, failure terminalization, and
-cancellation paths, Task 3.6's artifact read / staging / terminalization paths, and Task 3.2's Gate /
-Acceptance path receive the same boundary instance and hold it through every related durable append and
-directive injection. A standalone authorization recheck outside this boundary is never sufficient to
-authorize a later state change. On restart, durable Authorization terminality and the observation log
-remain authoritative; the process-local boundary is recreated empty.
+Implement `createAuthorizationReviewBoundary` in this module and call it exactly once during plugin
+construction. Its `withParentSession(parentSessionId, operation)` is the only serialization boundary
+shared by Authorization and review state. The plugin passes this same instance to `AuthorizationStore`,
+`PlanBridge`, the Task 3.2 Gate evaluator, the Task 3.4 Review Dispatch factory, and the Task 3.6 Review
+Completion factory; no domain constructs its own map. Task 3.6 adds the cross-domain integration fixture
+that proves operations supplied to those consumers for one parent actually serialize on this instance.
+
+`AuthorizationStore.approve`, public `release`, and public fingerprint invalidation acquire the boundary
+using the immutable binding `sessionId`. Each public mutation delegates to an explicitly named domain
+operation that assumes ownership is already held: `releaseWithinAuthorizationReviewBoundary` and
+`invalidateForFingerprintWithinAuthorizationReviewBoundary`. Those inner operations re-read durable state,
+perform only their Authorization mutation, and never acquire the boundary. PlanBridge's combined release
+or invalidation path acquires the boundary once, calls the matching inner Authorization operation, then
+Task 3.4's within-boundary review-cancellation helper, then updates its cache, and only then releases the
+boundary. It must never call the public mutation wrapper while it already owns the boundary. A standalone
+authorization recheck outside this boundary is never sufficient to authorize a later state change. On
+restart, durable Authorization terminality and the observation log remain authoritative; the process-local
+boundary is recreated empty.
 
 ```ts
 type ApprovedPlanBindingBase = {
@@ -694,6 +772,54 @@ export type ApprovedPlanBinding =
       readonly invalidationReason?: "plan_superseded";
     })
   | (ApprovedPlanBindingBase & { readonly status: "released"; readonly releasedAt: string });
+
+export type AuthorizationReviewBoundary = {
+  readonly withParentSession: <T>(
+    parentSessionId: string,
+    operation: () => Promise<T>,
+  ) => Promise<T>;
+};
+
+export function createAuthorizationReviewBoundary(): AuthorizationReviewBoundary {
+  const tails = new Map<string, Promise<void>>();
+  return {
+    async withParentSession<T>(parentSessionId: string, operation: () => Promise<T>): Promise<T> {
+      const predecessor = (tails.get(parentSessionId) ?? Promise.resolve()).catch(() => undefined);
+      let releaseCurrent: () => void = () => undefined;
+      const currentCompletion = new Promise<void>((resolve) => {
+        releaseCurrent = resolve;
+      });
+      const currentTail = predecessor.then(() => currentCompletion);
+      tails.set(parentSessionId, currentTail);
+      await predecessor;
+      try {
+        return await operation();
+      } finally {
+        releaseCurrent();
+        if (tails.get(parentSessionId) === currentTail) tails.delete(parentSessionId);
+      }
+    },
+  };
+}
+
+// src/core/justice-plugin.ts -- the one construction site retained by Tasks 3.2, 3.4, and 3.6.
+private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
+
+constructor(options: JusticePluginOptions) {
+  this.authorizationReviewBoundary = createAuthorizationReviewBoundary();
+  this.authorizationStore = new AuthorizationStore(
+    options.fileReader,
+    options.fileWriter,
+    this.authorizationReviewBoundary,
+  );
+  this.planBridge = new PlanBridge({
+    authorizationStore: this.authorizationStore,
+    authorizationReviewBoundary: this.authorizationReviewBoundary,
+  });
+}
+
+// Tasks 3.2, 3.4, and 3.6 pass this same field, never a newly constructed boundary,
+// to the Gate evaluator, Review Dispatch factory, and Review Completion factory respectively.
 
 export function mergeAuthorizationBindings(
   mine: ReadonlyArray<ApprovedPlanBinding>,
@@ -1240,6 +1366,12 @@ git commit -m "feat: lifecycle replayをidempotentに処理"
 **Consumes:** `GateScope = "task" | "plan"`; `GateTrigger`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; durable `PersistedLogRecord` decision records; `AuthorizationStore.findByAuthorizationId` for the gate correlation's authorizationId.
 
 **Produces:** durable `DecisionRecord` with four new authoritative discriminated payload variants (`task` / `plan` GateDecision and `task-acceptance` / `plan-acceptance` AcceptanceDecision); `GateDecision = TaskGateDecision | PlanGateDecision`; `AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision`; `GatePendingAttemptContext = { readonly scope: "task"; readonly trigger: "task_complete" | "tool_observed"; readonly parentSessionId: string; readonly taskExecutionRef: TaskExecutionRef; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string } | { readonly scope: "plan"; readonly trigger: "final_review_complete"; readonly parentSessionId: string; readonly authorizationId: string; readonly planPath: string; readonly finalizationAttemptId: FinalizationAttemptId; readonly finalReviewRound: number; readonly agentId: ObservationAgentId; readonly sessionId: string; readonly writerId: string }`; `GatePendingAttemptResult = { readonly kind: "not_applicable" } | { readonly kind: "decided"; readonly decision: GateDecisionPayload } | { readonly kind: "blocked"; readonly advisory: string }`; `GateDecisionLookup` and `AcceptanceDecisionLookup` results that distinguish `missing`, `found`, and `conflict`; `findCurrentGateDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): GateDecisionLookup`; `findCurrentAcceptanceDecision(records: readonly PersistedLogRecord[], correlation: ReviewCorrelation): AcceptanceDecisionLookup`; `evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>`; `deriveAcceptanceDecision(gate: GateDecision): AcceptanceDecisionPayload`; `evaluate(gates, evidence, context)` returns a `GateDecisionPayload` containing either `taskExecutionRef` or the complete plan finalization identity; and the exported pure/helper functions `authorizationIdFor(correlation)` / `isCurrentActiveAuthorization(correlation, findAuthorizationById)`. The orchestration boundary is `createGatePendingAttemptEvaluator(dependencies)`, which returns `evaluateGatePendingAttempt(context)` and owns the injected ports. `DecisionRecord` remains the source used by the existing `PersistedLogRecord` alias; no second persistence union or projection subsystem is introduced.
+The Gate evaluator produces two distinct entries: public
+`evaluateGatePendingAttempt(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>` and
+internal orchestration-only
+`evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context: GatePendingAttemptContext): Promise<GatePendingAttemptResult>`.
+The latter is passed only to Task 3.6 and is not re-exported as a public Justice API.
+
 The four variants above are the new authoritative variants. Add the separate read-only
 `LegacyTaskGateDecisionPayload` for the pre-existing `schemaVersion: 1` task Gate shape that lacks
 `taskExecutionRef`; it remains in `DecisionPayload` / `DecisionRecord` so persisted records are
@@ -1271,10 +1403,15 @@ Define `GateEvaluationDependencies` as the explicit injected boundary with `read
 `appendPlanFinalizationTransition`, `evaluateRules`, and `recordAdvisory` ports. Export only pure
 lookup / identity functions, including `isLegacyTaskGateDecisionRecord`, `authorizationIdFor`,
 `sameReviewCorrelation`, and the port-parameterized `isCurrentActiveAuthorization`. The internal factory
-`createGatePendingAttemptEvaluator(dependencies)` closes over the ports, returns only
-`{ evaluateGatePendingAttempt }`, and owns one private decision-identity tail map. Every public evaluation
-first enters the shared `withAuthorizationReviewBoundary(parentSessionId, operation)` and keeps it through
-the decision-identity operation, all durable reads/appends, lifecycle application, and Acceptance handling.
+`createGatePendingAttemptEvaluator(dependencies)` closes over the ports, returns a public
+`evaluateGatePendingAttempt` and an internal orchestration-only
+`evaluateGatePendingAttemptWithinAuthorizationReviewBoundary`, and owns one private decision-identity tail
+map. The public evaluation first enters the shared
+`withAuthorizationReviewBoundary(parentSessionId, operation)` and keeps it through the inner
+decision-identity operation, all durable reads/appends, lifecycle application, and Acceptance handling. The
+within-boundary capability never acquires the parent boundary; Task 3.6 receives only that capability for
+live completion, staged recovery, and post-terminal outcome recovery. Neither capability is re-exported as
+a public Justice API.
 Helpers that perform
 I/O receive the same explicit dependency object; pure lookup, identity, and payload helpers remain
 module-private. The hook/runtime layer creates exactly one evaluator with its log, Authorization, lifecycle,
@@ -1352,6 +1489,10 @@ export function createGatePendingAttemptEvaluator(
   readonly evaluateGatePendingAttempt: (
     context: GatePendingAttemptContext,
   ) => Promise<GatePendingAttemptResult>;
+  // Internal orchestration capability. It is supplied only to callers that already own the parent boundary.
+  readonly evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (
+    context: GatePendingAttemptContext,
+  ) => Promise<GatePendingAttemptResult>;
 } {
   const decisionTails = new Map<string, Promise<void>>();
 
@@ -1377,14 +1518,22 @@ export function createGatePendingAttemptEvaluator(
     }
   }
 
-  const evaluateGatePendingAttempt = (context: GatePendingAttemptContext) =>
-    dependencies.withAuthorizationReviewBoundary(context.parentSessionId, () =>
-      serializeDecisionIdentity(decisionIdentityForContext(context), () =>
-        evaluateGatePendingAttemptWithinDecisionIdentity(context, dependencies),
-      ),
+  const evaluateGatePendingAttemptWithinAuthorizationReviewBoundary = (
+    context: GatePendingAttemptContext,
+  ) =>
+    serializeDecisionIdentity(decisionIdentityForContext(context), () =>
+      evaluateGatePendingAttemptWithinDecisionIdentity(context, dependencies),
     );
 
-  return { evaluateGatePendingAttempt };
+  const evaluateGatePendingAttempt = (context: GatePendingAttemptContext) =>
+    dependencies.withAuthorizationReviewBoundary(context.parentSessionId, () =>
+      evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context),
+    );
+
+  return {
+    evaluateGatePendingAttempt,
+    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
+  };
 }
 ```
 All log reads, decision appends, Authorization lookups, lifecycle appends, and advisory writes in this
@@ -1394,8 +1543,32 @@ runtime adapters, persistence implementations, or notifier implementations direc
 - [ ] **Step 1: Write the failing task/Final Gate and recovery tests**
 
 The test setup constructs one `gateEvaluator` with the existing log, Authorization, lifecycle, rule, and
-advisory mocks, then destructures its returned `evaluateGatePendingAttempt`; no test calls an unbound
-module-level evaluator.
+advisory mocks, then destructures its returned public and within-boundary entries; no test calls an
+unbound module-level evaluator. A direct public call must acquire the shared boundary and serialize with a
+concurrent release/invalidation for the same parent. A within-boundary call must acquire no parent boundary,
+must retain decision-identity serialization, and must not append a positive decision after terminal
+Authorization.
+
+```ts
+it("acquires the parent boundary for a direct public Gate call", async () => {
+  await evaluateGatePendingAttempt(currentTaskGateContext);
+  expect(parentBoundary.callsFor("parent-1")).toBe(1);
+});
+
+it("serializes a public Gate call with terminal authorization mutation", async () => {
+  await arrangeReleaseBetweenGateAuthorizationChecks();
+  await evaluateGatePendingAttempt(currentTaskGateContext);
+  expect(durablePositiveDecisionsFor(currentTaskExecutionRef)).toEqual([]);
+});
+
+it("keeps decision serialization without reacquiring the parent boundary", async () => {
+  await parentBoundary.withParentSession("parent-1", async () => {
+    await evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(currentTaskGateContext);
+  });
+  expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+  expect(durableGateDecisionsFor(currentTaskExecutionRef)).toHaveLength(1);
+});
+```
 
 ```ts
 const currentTaskExecutionRef: TaskExecutionRef = {
@@ -3249,9 +3422,10 @@ queue-acquiring wrapper for PlanBridge, fingerprint invalidation, and startup en
 Promise<void>` counterpart is returned for Task 3.6, never acquires the queue, and is callable only while the caller already owns that
 parent-session critical section. It reads the latest durable projection, best-effort appends `cancelled` only for
 the current pending or claimed slot of that authorization, and treats an existing terminal slot as a no-op. These
-are the only cancellation helpers; callers must not choose lock behavior dynamically. The public wrapper is called
-after Task 2.3 has committed a cancel or the fingerprint check has committed invalidation; queue-owning claim,
-failure, retry, and recovery operations call the within-parent helper directly.
+are the only cancellation helpers; callers must not choose lock behavior dynamically. The public wrapper is
+called only by boundary-external startup entry points; PlanBridge's explicit cancel and fingerprint paths use
+the corresponding Authorization and cancellation within-boundary helpers in their one outer operation.
+Queue-owning claim, failure, retry, and recovery operations call the within-parent helper directly.
 
 - [ ] **Step 1: Write the failing dispatch, claim, offer, and recovery tests**
 
@@ -3259,6 +3433,28 @@ The test setup constructs one `reviewDispatchState` with the existing injected p
 its returned operations (`claimReviewDispatch`, `offerNextMandatoryReview`, `terminalizeReviewFailure`,
 the cancellation boundary, and restart recovery). Queue tests use the returned
 `withReviewDispatchParentSessionClaim`; they do not access closure state.
+
+```ts
+it("releases and cancels in one parent-boundary operation", async () => {
+  await bridge.handleImplementationArm("parent-1", cancelRequest);
+  expect(trace).toEqual([
+    "boundary-enter",
+    "authorization-release-durable",
+    "review-cancelled-tombstone-attempt",
+    "active-plan-cache-update",
+    "boundary-release",
+  ]);
+  expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+  await expect(claimReviewDispatch(claimInput)).resolves.toMatchObject({ kind: "blocked" });
+});
+
+it("invalidates and cancels in one parent-boundary operation", async () => {
+  await invalidatePlanFingerprint("parent-1", changedFingerprint);
+  expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+  expect(durableCancelledTombstones()).toHaveLength(1);
+  expect(durablePositiveReviewProgress()).toEqual([]);
+});
+```
 
 Final Review fixtures must persist the current lifecycle's `finalReviewRound` as the source of the initial
 candidate. The actual-rework fixture must persist a fresh `finalizationAttemptId` with `finalReviewRound + 1`,
@@ -4221,11 +4417,16 @@ directive. The shared boundary serializes this domain-specific check with claim,
 retry-pending append, directive injection, and cancellation terminalization, so an operation that observes a newly
 terminal Authorization cannot publish later review progress.
 
-In this Task only, extend `PlanBridge.handleImplementationArm` after Task 2.3's successful durable release, and
-the existing fingerprint-invalidation path after its durable invalidation, to call
-`cancelReviewDispatchesForTerminalAuthorization` while holding the same shared
-`AuthorizationReviewBoundary` used by review dispatch. The release / invalidation is never rolled back when the
-dependent tombstone append fails, but the boundary remains held until that attempt and all cache updates finish.
+In this Task only, replace Task 2.3's release-after-return orchestration with one PlanBridge outer
+`AuthorizationReviewBoundary` operation. For explicit cancel, it calls
+`releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)`, then
+`cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(parentSessionId, authorizationId)`,
+then updates the active-plan cache before releasing the boundary. The fingerprint-invalidation path uses the
+same order with `invalidateForFingerprintWithinAuthorizationReviewBoundary`. PlanBridge must not call public
+`AuthorizationStore.release`, public fingerprint invalidation, or public
+`cancelReviewDispatchesForTerminalAuthorization` while it owns this boundary. The release / invalidation is
+never rolled back when the dependent tombstone append fails, but the boundary remains held until that attempt
+and all cache updates finish.
 On recovery, the same helper rechecks durable Authorization and retries a missing `cancelled` tombstone without
 reissuing or claiming the slot. The helper reads the latest projection under the shared parent-session boundary,
 identifies only current slots whose correlation resolves to the supplied authorizationId, appends
@@ -5392,7 +5593,8 @@ git commit -m "feat: review child bindingをdurableに記録"
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
 `DelegatedExecutionBinding`; Design §4.10 `ReviewArtifactReservation`; durable `AuthorizationStore`
-`findByAuthorizationId`; `evaluateGatePendingAttempt` from Task 3.2; `terminalizeReviewFailure`; the Task 3.4
+`findByAuthorizationId`; internal `evaluateGatePendingAttemptWithinAuthorizationReviewBoundary` from Task 3.2;
+`terminalizeReviewFailure`; the Task 3.4
 imported `authorizationIdFor` and `isCurrentActiveAuthorization` helpers from Task 3.2; and the Task 3.4
 returned boundaries `withReviewDispatchParentSessionClaim`,
 `offerNextMandatoryReviewWithinParentSessionClaim`, and
@@ -5402,6 +5604,9 @@ Review Dispatch domain.
 All returned operations use the shared `withAuthorizationReviewBoundary` through the Task 3.4
 parent-session boundary; no completion operation performs an Authorization check and later append
 outside that boundary.
+`consumeReviewCompletion`, staged-completion recovery, and post-terminal outcome recovery already own that
+parent boundary. They must call only Task 3.2's within-boundary Gate capability, which retains
+decision-identity serialization but never reacquires the parent boundary.
 The completion consumer receives the normalized `PostToolUseEvent` plus its observed
 `parentSessionId` / `callId`; it resolves the claimed slot, `TaskCallBinding`, and
 `DelegatedExecutionBinding` from the durable projection rather than trusting correlation,
@@ -5483,6 +5688,44 @@ the code never reads a store singleton. Use Task 3.2's shared authorization help
 The test setup constructs one `reviewCompletionDomain` with the existing artifact, log, lifecycle, Gate,
 Authorization, advisory, and `reviewDispatchState` ports, then destructures the returned completion
 operations. No completion test reads a store singleton or calls an unbound module-level consumer.
+The fixture's deterministic parent-boundary probe records entered operations and rejects a second acquisition
+for the active parent instead of relying on wall-clock timeouts. It covers live clean Task and Final Review
+completion plus staged-restart Task and Final Review recovery: each resolves, records exactly one GateDecision
+and exactly one AcceptanceDecision, and records zero nested parent-boundary acquisitions. A construction-level
+integration fixture also drives Authorization, Review Dispatch, Review Completion, and Gate work for one
+parent through the plugin wiring and proves max concurrent parent operations is one, establishing that all
+domains received the one Task 2.2 boundary instance.
+
+```ts
+it.each(["task-review", "final-review"] as const)(
+  "moves live clean %s completion to Gate without nested parent acquisition",
+  async (reviewKind) => {
+    await arrangeCleanClaimedReview(reviewKind);
+    await consumeReviewCompletion(completionInputFor(reviewKind));
+    expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+    expect(durableGateDecisionsForCurrentIdentity(reviewKind)).toHaveLength(1);
+    expect(durableAcceptanceDecisionsForCurrentIdentity(reviewKind)).toHaveLength(1);
+  },
+);
+
+it.each(["task-review", "final-review"] as const)(
+  "recovers staged clean %s completion to Gate without nested parent acquisition",
+  async (reviewKind) => {
+    await arrangeCleanTerminalOrGatePendingForRestart(reviewKind);
+    await recoverStagedReviewCompletionsAfterRestart();
+    expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+    expect(durableGateDecisionsForCurrentIdentity(reviewKind)).toHaveLength(1);
+    expect(durableAcceptanceDecisionsForCurrentIdentity(reviewKind)).toHaveLength(1);
+  },
+);
+
+it("wires one shared boundary across Authorization, dispatch, completion, and Gate", async () => {
+  await runCrossDomainSameParentOverlapFixture();
+  expect(parentBoundary.maximumConcurrentOperationsFor("parent-1")).toBe(1);
+  expect(parentBoundary.factoryCalls).toBe(1);
+  expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
+});
+```
 
 All staging fixtures used by these tests, projection fixtures, and restart fixtures must construct the Design
 §4.8.1 shape exactly: `kind: "review_completion_staged"`, top-level `parentSessionId`, and the nested
@@ -6032,7 +6275,7 @@ does not redeclare or mutate Task 3.4's cancellation helper: it invokes the retu
 parent-session claim, then performs matching staged-artifact cleanup after a durable cancellation tombstone.
 Task 3.4 has no import from Task 3.6 and remains independently GREEN. Task 3.6
 consumes `projectTaskCallBindings` from Task 3.4, `projectDelegatedExecutionBindings` from Task 3.5, and
-`evaluateGatePendingAttempt` from Task 3.2. Startup runs authorization hydration, durable record projection,
+Task 3.2's `evaluateGatePendingAttemptWithinAuthorizationReviewBoundary`. Startup runs authorization hydration, durable record projection,
 `recoverStagedReviewCompletionsAfterRestart`, then Task 3.4's `recoverReviewDispatchesAfterRestart` in that order.
 
 After every successful composite terminal append, and whenever recovery finds that matching terminal, call
@@ -6325,9 +6568,9 @@ type ReviewCompletionDependencies = {
   readonly cleanupArtifact: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
   ) => Promise<void>;
-  readonly evaluateGatePendingAttempt: ReturnType<
+  readonly evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: ReturnType<
     typeof createGatePendingAttemptEvaluator
-  >["evaluateGatePendingAttempt"];
+  >["evaluateGatePendingAttemptWithinAuthorizationReviewBoundary"];
   readonly appendTaskLifecycleTransition: GateEvaluationDependencies["appendTaskLifecycleTransition"];
   readonly appendPlanFinalizationTransition: GateEvaluationDependencies["appendPlanFinalizationTransition"];
   readonly recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>;
@@ -6351,7 +6594,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     appendReviewDispatchTransition,
     readAndAssembleMatchingArtifact,
     cleanupArtifact,
-    evaluateGatePendingAttempt,
+    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
     appendTaskLifecycleTransition,
     appendPlanFinalizationTransition,
     recordAdvisory,
@@ -7325,7 +7568,7 @@ async function ensureTerminalReviewOutcomeApplied(
         authorizations,
       );
       if (gateContext !== undefined) {
-        const gateOutcome = await evaluateGatePendingAttempt(gateContext);
+        const gateOutcome = await evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(gateContext);
         if (gateOutcome.kind === "blocked") return { kind: "blocked" };
         if (gateOutcome.kind === "not_applicable") return { kind: "stale" };
         return { kind: "terminalized" };
@@ -7893,6 +8136,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | authorization sequential supersession                          | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation                                                                                |
 | authorization concurrent supersession                          | 2.2                     | barrier-coordinated fresh-ID approvals traverse `AtomicPersistence` version mismatch and merge/retry, retain exactly one same-session active binding, terminalize old and losing bindings, preserve other-session active binding |
 | authorization terminal dominance and cache consistency         | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value                                                                                       |
+| `AuthorizationReviewBoundary` implementation                  | 2.2                     | same-parent exclusion, rejected-predecessor recovery, A -> B -> C conditional-tail cleanup, and different-parent progress                                                                                                       |
+| shared boundary singleton wiring                               | 2.2, 3.2, 3.4, 3.6      | plugin construction calls the factory once; cross-domain same-parent integration proves max concurrency one                                                                                                                      |
+| review completion -> Gate lock ownership                       | 3.2, 3.6                | live clean Task and Final Review reach Gate without nested parent acquisition and append one GateDecision / AcceptanceDecision                                                                                                  |
+| staged recovery -> Gate lock ownership                         | 3.2, 3.6                | Task and Final Review restart recovery complete without nested parent acquisition and append one GateDecision / AcceptanceDecision                                                                                               |
+| release -> cancellation critical section                       | 2.2, 3.4                | one outer parent operation orders durable release, cancellation attempt, cache update, and boundary release                                                                                                                      |
+| invalidation -> cancellation critical section                  | 2.2, 3.4                | one outer parent operation orders durable invalidation, cancellation attempt, cache update, and boundary release                                                                                                                |
+| public Gate operation                                          | 3.2                     | direct call acquires the shared parent boundary and terminal concurrent Authorization prevents positive decision                                                                                                                  |
+| within-boundary Gate operation                                 | 3.2, 3.6                | inner call skips parent acquisition while retaining decision-identity serialization                                                                                                                                            |
 | JUS-P0-02 session-scoped cancel                                | 2.3, 3.4                | pathless parser, invalid flag combinations, durable release, no-binding idempotence, release-before-cancelled ordering, pending/claimed cancellation tombstone                                                                   |
 | terminal Authorization blocks review dispatch                  | 2.3, 3.4                | cancel or invalidation prevents initial/reissued directive and claim; restart does not revive a pending slot; tombstone failure remains fail-closed and later converges                                                          |
 | terminal Authorization blocks review retry                     | 3.4                     | `review_execution_failed` and `lost_conclusive` terminal followed by cancel/restart creates no next pending, directive, or Acceptance progress                                                                                   |
@@ -7973,14 +8224,14 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary, typed `error_annotation` persistence/replay, exact plan/line identity migration tests                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality                       | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache-retention tests                                                                                                                                                                                                                                                                                                |
+| 2.2       | JUS-P0-02, Design §4.2 and §5.2, INV-03, INV-12, authorization cardinality and shared boundary    | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, cache/durable agreement, failed-save cache retention, same-parent boundary exclusion, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, and one-factory construction contract tests |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
-| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
+| 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21 | deterministic selector and parent-session candidate projector; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/invalidation plus cancellation critical section; authorization guard before initial/reissued directive, claim, failure terminal, retry pending, and restart recovery; category-aware synchronous wire normalization; inode lease and no-follow replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | unusable no-read blocked path, authorization guard, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay tests                                                                                                                                                                                              |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, INV-13 through INV-19           | unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
