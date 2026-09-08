@@ -2638,6 +2638,33 @@ it("keeps a committed transition when the notification callback fails", async ()
   expect(lifecycle.advisories()).toContain("review_pending_offer_failed");
 });
 
+it.each(["task", "final"] as const)(
+  "uses the stored callback for the actual %s PostToolUse lifecycle path",
+  async (kind) => {
+    const fixture = await arrangeObservationHandlerLifecycle(kind);
+    const offer = vi.fn(async (_parentSessionId: string) => undefined);
+    fixture.handler.setReviewPendingCommittedHandler(offer);
+
+    await fixture.handler.handlePostToolUse(fixture.postToolUse);
+
+    expect(offer).toHaveBeenCalledTimes(1);
+    expect(offer).toHaveBeenCalledWith(fixture.parentSessionId);
+    expect(fixture.durableReviewPendingTransition()).toHaveLength(1);
+  },
+);
+
+it("keeps the actual durable lifecycle transition when the stored callback rejects", async () => {
+  const fixture = await arrangeObservationHandlerLifecycle("task");
+  fixture.handler.setReviewPendingCommittedHandler(async () => {
+    throw new Error("offer failed");
+  });
+
+  await expect(fixture.handler.handlePostToolUse(fixture.postToolUse)).resolves.toEqual(PROCEED);
+
+  expect(fixture.durableReviewPendingTransition()).toHaveLength(1);
+  expect(fixture.durableAdvisories()).toContain("review_pending_offer_failed");
+});
+
 it("starts rework with a fresh attempt and reviewRound 1", async () => {
   const next = await startImplementationAttempt(reworkRequiredTask);
   expect(next.taskExecutionRef.attemptId).not.toBe(oldAttemptId);
@@ -2973,8 +3000,9 @@ this.observationHandler = new ObservationHandler({
 ```
 
 The lifecycle handler receives `onReviewPendingCommitted` through its existing injected
-dependencies. Task 3.1 adds the following one-time setter to `ObservationHandler`; it stores the
-callback in the handler's private lifecycle dependency and does not invoke it during construction:
+dependencies. The handler's private field is the callback SSOT: Task 3.1 adds the following one-time
+setter and derives a fresh dependency snapshot only when it calls a lifecycle operation. No constructor
+dependency or second callback storage is retained:
 
 ```ts
 private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
@@ -2982,10 +3010,54 @@ private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
 setReviewPendingCommittedHandler(handler: ReviewPendingCommittedHandler): void {
   this.reviewPendingCommittedHandler = handler;
 }
+
+private lifecycleNotificationDependencies(): LifecycleNotificationDependencies {
+  return {
+    onReviewPendingCommitted: this.reviewPendingCommittedHandler,
+    recordAdvisory: (advisory, cause) => this.appendLifecycleAdvisory(advisory, cause),
+  };
+}
+
+private async appendLifecycleAdvisory(advisory: string, cause?: unknown): Promise<void> {
+  void cause;
+  try {
+    const agentId: ObservationAgentId = "system";
+    const sessionId = "lifecycle";
+    await this.options.logStore.append(
+      { agentId, sessionId, writerId: this.options.writerId },
+      buildSessionErrorRecord({
+        envelope: {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId,
+          writerId: this.options.writerId,
+          recordType: "observation",
+        },
+        errorKind: "lifecycle_advisory",
+        message: advisory,
+      }),
+    );
+  } catch {
+    // Advisory persistence must not change the already-committed lifecycle result.
+  }
+}
+
+// In the real ObservationHandler PostToolUse lifecycle route. Each existing branch retains
+// its input construction and passes this one snapshot only to its applicable operation.
+const dependencies = this.lifecycleNotificationDependencies();
+// Task-review branch:
+await requestCurrentTaskReview(taskReviewInput, dependencies);
+// All-tasks-accepted branch:
+await advanceFinalizationAfterAllTasksAccepted(finalizationInput, dependencies);
 ```
 
-Task 3.4 calls this setter after its state instance exists; Task 3.1 must not construct a Review
-Dispatch state or a second authorization boundary.
+`appendLifecycleAdvisory` uses the existing `ObservationLogStore.append()` and redaction path while
+persisting only the advisory code, never the raw cause; it swallows its own failure. Task 3.4 calls this
+setter after its state instance exists; Task 3.1 must
+not construct a Review Dispatch state or a second authorization boundary. The Task 3.1 RED/GREEN
+fixture above must exercise this actual `ObservationHandler.handlePostToolUse()` route rather than
+passing an ad-hoc dependency directly to a lifecycle helper.
 
 - [ ] **Step 4: Confirm GREEN**
 
@@ -6422,6 +6494,13 @@ type ReviewDirectiveSink = {
   ) => readonly ReviewDirectiveDelivery[];
 };
 
+// Task 3.4 owns these shapes because its append adapter and claim protocol compile
+// independently; Task 3.6 imports them for completion consumption.
+type PendingReviewDispatchTransitionRecord = Omit<ReviewDispatchTransitionRecord, "sequence">;
+type ReviewTaskCallBinding =
+  | Extract<TaskCallBinding, { readonly purpose: "task_review" }>
+  | Extract<TaskCallBinding, { readonly purpose: "final_review" }>;
+
 function createReviewDirectiveSink(): ReviewDirectiveSink {
   const deliveriesByParent = new Map<string, ReviewDirectiveDelivery[]>();
 
@@ -6517,7 +6596,11 @@ private mergePreToolUseWithReviewDeliveries(
     );
 }
 
-async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
+case "PreToolUse": {
+  // Preserve the existing callId-keyed window lifecycle for every task call. Review
+  // calls have no implementation task ID, so only the non-review branch re-registers it.
+  openSessionTaskWindow(this.sessionStateProvider, event);
+  const capturedGeneration = this.sessionStateProvider.getSessionGeneration(event.sessionId);
   const observation = await this.observationHandler.handlePreToolUse(event).catch((error: unknown) => {
     this.options.logger?.warn("review observation pre-tool-use failed", error);
     return PROCEED;
@@ -6527,47 +6610,63 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
     event.payload.toolName === "task"
       ? resolveMandatoryReviewCategory(event.payload.toolInput)
       : undefined;
-  if (category !== undefined) {
+  const isReviewRoute = category !== undefined;
+  let delegated: HookResponse = PROCEED;
+  if (isReviewRoute) {
     const callId = event.callId;
     if (callId === undefined || callId.trim().length === 0) {
       await this.recordReviewAdvisory("review_call_id_missing");
-      return this.mergePreToolUseWithReviewDeliveries(event.sessionId, observation);
+    } else {
+      const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
+      const claim = await this.reviewDispatchState
+        .claimReviewDispatch({
+          parentSessionId: event.sessionId,
+          callId,
+          expectedCategory: category,
+          agentId,
+          sessionId: event.sessionId,
+          writerId: this.writerId,
+        })
+        .catch((error: unknown): ClaimReviewDispatchOutcome => {
+          void this.recordReviewAdvisory("review_claim_failed", error);
+          return { kind: "blocked", advisory: "review_claim_failed" };
+        });
+      delegated = buildReviewClaimResponse(event, claim);
     }
-    const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
-    const claim = await this.reviewDispatchState
-      .claimReviewDispatch({
-        parentSessionId: event.sessionId,
-        callId,
-        expectedCategory: category,
-        correlation: event.payload.toolInput.correlation,
-        agentId,
-        sessionId: event.sessionId,
-        writerId: this.writerId,
-      })
-      .catch((error: unknown): ClaimReviewDispatchOutcome => {
-        void this.recordReviewAdvisory("review_claim_failed", error);
-        return { kind: "blocked", advisory: "review_claim_failed" };
-      });
-
-    const claimResponse = buildReviewClaimResponse(event, claim);
-    const response = mergePreToolUseResponses(
-      observation,
-      claimResponse,
-      (message) => this.warnMergeConflict(message),
-    );
-    return this.mergePreToolUseWithReviewDeliveries(event.sessionId, response);
+  } else if (event.payload.toolName === "task") {
+    delegated = await this.planBridge.handlePreToolUse(event).catch((error: unknown) => {
+      this.options.logger?.warn("plan-bridge pre-tool-use failed", error);
+      return PROCEED;
+    });
   }
 
-  const planBridge =
-    event.payload.toolName === "task"
-      ? await this.planBridge.handlePreToolUse(event).catch((error: unknown) => {
-          this.options.logger?.warn("plan-bridge pre-tool-use failed", error);
-          return PROCEED;
-        })
-      : PROCEED;
+  const response = mergePreToolUseResponses(
+    observation,
+    delegated,
+    (message) => this.warnMergeConflict(message),
+  );
+  if (!isReviewRoute) {
+    const taskId = resolveTaskIdFromModifiedPayload(
+      response.action === "inject" ? response.modifiedPayload : undefined,
+    );
+    const planPath = this.planBridge.getActivePlan(event.sessionId);
+    if (event.payload.toolName === "task" && taskId !== undefined && planPath !== null) {
+      this.taskFeedback.setActivePlan(event.sessionId, planPath, taskId);
+    }
+    if (event.callId !== undefined && taskId !== undefined) {
+      try {
+        const currentGeneration = this.sessionStateProvider.getSessionGeneration(event.sessionId);
+        if (capturedGeneration !== undefined && currentGeneration === capturedGeneration) {
+          this.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
+        }
+      } catch (error) {
+        this.options.logger?.warn("failed to set active task window", error);
+      }
+    }
+  }
   return this.mergePreToolUseWithReviewDeliveries(
     event.sessionId,
-    mergePreToolUseResponses(observation, planBridge, (message) => this.warnMergeConflict(message)),
+    response,
   );
 }
 ```
@@ -6680,8 +6779,8 @@ selection, reservation, claim, append of a new pending/claimed state, or directi
 rejected result with `[]`; an unreadable Authorization is not an authoritative empty state. The cancellation and
 advisory attempts are themselves best-effort and must not turn this blocked outcome into a rejection.
 
-`ClaimInput.correlation` is untrusted echo data and is ignored by Review Dispatch.
-`claimReviewDispatch` first selects the durable pending slot, then uses only `pending.key.correlation` for every
+`ClaimInput` は correlation field を持たない。`claimReviewDispatch` first selects the durable pending slot,
+then uses only `pending.key.correlation` for every
 Authorization lookup, cancellation authorization ID, claimed transition, binding, and artifact-reservation
 association. A missing, multiple, or category-mismatched slot returns `review_claim_unavailable` before any
 Authorization lookup or state mutation.
@@ -6843,7 +6942,6 @@ type ClaimInput = {
   readonly parentSessionId: string;
   readonly callId: string;
   readonly expectedCategory: "sp-review" | "sp-final-review";
-  readonly correlation?: unknown;
   readonly agentId: ObservationAgentId;
   readonly sessionId: string;
   readonly writerId: string;
@@ -8283,6 +8381,12 @@ it("drains a lifecycle offer created during PostToolUse into that same response"
 
   const response = await fixture.plugin.handleEvent(fixture.postToolUse);
 
+  expect(fixture.reviewPendingCommittedCallback).toHaveBeenCalledTimes(1);
+  expect(fixture.reviewDispatchOffer).toHaveBeenCalledWith(fixture.parentSessionId);
+  expect(fixture.durablePendingDispatches()).toHaveLength(1);
+  expect(fixture.durablePendingDispatches()[0]?.correlation).toEqual(
+    fixture.durableReviewPendingCorrelation(),
+  );
   expect(response).toEqual(
     expect.objectContaining({
       action: "inject",
@@ -8290,6 +8394,7 @@ it("drains a lifecycle offer created during PostToolUse into that same response"
     }),
   );
   expect(fixture.takePendingDeliveries()).toEqual([]);
+  expect(fixture.reviewPreToolUse).not.toHaveBeenCalled();
 });
 
 it("retains a pending delivery when a PostToolUse handler fails", async () => {
@@ -8321,6 +8426,22 @@ it("reissues startup recovery delivery at the next Controller-facing hook exactl
   );
   expect(secondResponse).not.toEqual(
     expect.objectContaining({ injectedContext: expect.stringContaining("[JUSTICE") }),
+  );
+  expect(fixture.takePendingDeliveries()).toEqual([]);
+});
+
+it("does not re-inject an old directive after its durable pending slot is claimed", async () => {
+  const fixture = await arrangeStartupRecoveryWithPendingReviewDelivery();
+  await fixture.plugin.initialize();
+
+  await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+  const claimResponse = await fixture.plugin.handleEvent(fixture.matchingReviewPreToolUse);
+  const laterResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+
+  expect(claimResponse).toEqual(expect.objectContaining({ action: "inject" }));
+  expect(fixture.durableClaimedDispatches()).toHaveLength(1);
+  expect(laterResponse).not.toEqual(
+    expect.objectContaining({ injectedContext: expect.stringContaining("REVIEW REQUIRED") }),
   );
 });
 ```
@@ -9230,16 +9351,14 @@ type PersistedReviewPostToolUseRecord = PersistedEnvelope & ReviewPostToolUsePen
 type PersistedReviewArtifactReadAttemptRecord = PersistedEnvelope & ReviewArtifactReadAttemptRecord;
 type PersistedReviewArtifactFailureStagingRecord = PersistedEnvelope & ReviewArtifactFailureStagingRecord;
 
-type ReviewTaskCallBinding =
-  | Extract<TaskCallBinding, { readonly purpose: "task_review" }>
-  | Extract<TaskCallBinding, { readonly purpose: "final_review" }>;
+// Imported from Task 3.4. Task 3.6 consumes these types and does not redeclare them.
+// - ReviewTaskCallBinding
+// - PendingReviewDispatchTransitionRecord
 
 type ClaimedReviewDispatchSlot = ReviewDispatchSlot & {
   readonly state: "claimed";
   readonly callId: string;
 };
-
-type PendingReviewDispatchTransitionRecord = Omit<ReviewDispatchTransitionRecord, "sequence">;
 
 function isReviewTaskCallBinding(binding: TaskCallBinding): binding is ReviewTaskCallBinding {
   return binding.purpose === "task_review" || binding.purpose === "final_review";
@@ -11156,8 +11275,134 @@ the following exact contracts; implementation must define them before the produc
 tests are run. None of these names may be treated as an implicit global or an API invented only
 inside a test.
 
-- `appendReviewDispatchAdvisory(logStore: ObservationLogStore, writerId: string, advisory: string, cause?: unknown): Promise<void>` appends the redacted advisory through the existing durable observation-log path and swallows its own I/O failure.
-- `appendReviewDispatchTransitionToStore(logStore: ObservationLogStore, input: PendingReviewDispatchTransitionRecord): Promise<{ readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord } | { readonly kind: "failed" }>` is the only physical dispatch-transition append adapter and preserves the input envelope identity.
+The following module-private helpers belong in `src/core/justice-plugin.ts`, beside the production
+composition. They import `normalizeTaskToolInput` and `resolveTaskIdFromModifiedPayload` from
+`src/core/task-packager.ts`, `buildSessionErrorRecord` from `src/core/v2/record-builder.ts`, and the
+planned Review Dispatch types from their owner modules. `cause` is never serialized; the existing log
+persistence redaction remains the final storage boundary.
+
+```ts
+async function appendReviewDispatchAdvisory(
+  logStore: ObservationLogStore,
+  writerId: string,
+  advisory: string,
+  cause?: unknown,
+): Promise<void> {
+  void cause;
+  try {
+    const agentId: ObservationAgentId = "system";
+    const sessionId = "review-dispatch";
+    await logStore.append(
+      { agentId, sessionId, writerId },
+      buildSessionErrorRecord({
+        envelope: {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId,
+          writerId,
+          recordType: "observation",
+        },
+        errorKind: "review_dispatch_advisory",
+        message: advisory,
+      }),
+    );
+  } catch {
+    // Durable advisories are best-effort. Never replace them with logger-only behavior.
+  }
+}
+
+async function appendReviewDispatchTransitionToStore(
+  logStore: ObservationLogStore,
+  input: PendingReviewDispatchTransitionRecord,
+): Promise<
+  | { readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord }
+  | { readonly kind: "failed" }
+> {
+  try {
+    const sequence = await logStore.append(
+      { agentId: input.agentId, sessionId: input.sessionId, writerId: input.writerId },
+      input,
+    );
+    return { kind: "committed", record: { ...input, sequence } };
+  } catch {
+    return { kind: "failed" };
+  }
+}
+
+function resolveMandatoryReviewCategory(
+  toolInput: Readonly<Record<string, unknown>>,
+): "sp-review" | "sp-final-review" | undefined {
+  const category = normalizeTaskToolInput(toolInput).category;
+  return category === "sp-review" || category === "sp-final-review" ? category : undefined;
+}
+
+function buildReviewClaimResponse(
+  event: PreToolUseEvent,
+  outcome: ClaimReviewDispatchOutcome,
+): HookResponse {
+  switch (outcome.kind) {
+    case "claimed": {
+      const reservation = outcome.taskCallBinding.artifactReservation;
+      if (reservation.status !== "usable") {
+        return {
+          action: "inject",
+          injectedContext: "[JUSTICE] REVIEW ARTIFACT RESERVATION UNUSABLE",
+        };
+      }
+      const args = normalizeTaskToolInput(event.payload.toolInput);
+      delete args.correlation;
+      delete args.artifact_path;
+      delete args.artifactPath;
+      return {
+        action: "inject",
+        injectedContext: "[JUSTICE] REVIEW DISPATCH CLAIMED",
+        modifiedPayload: {
+          args: {
+            ...args,
+            artifact_path: reservation.artifactPath,
+            run_in_background: false,
+          },
+        },
+      };
+    }
+    case "claimed_unusable":
+      return {
+        action: "inject",
+        injectedContext: `[JUSTICE] ${outcome.advisory.toUpperCase()}`,
+      };
+    case "blocked":
+      return { action: "proceed" };
+    default: {
+      const _exhaustive: never = outcome;
+      return _exhaustive;
+    }
+  }
+}
+
+function formatReviewDirective(directive: ReviewRequiredDirective): string {
+  if (directive.correlation.reviewKind === "task-review") {
+    return [
+      "[JUSTICE] REVIEW REQUIRED",
+      "category: sp-review",
+      `task_id: ${directive.correlation.taskExecutionRef.taskId}`,
+      `attempt_id: ${directive.correlation.taskExecutionRef.attemptId}`,
+    ].join("\n");
+  }
+  return [
+    "[JUSTICE] FINAL REVIEW REQUIRED",
+    "category: sp-final-review",
+    `finalization_attempt_id: ${directive.correlation.finalizationAttemptId}`,
+    `final_review_round: ${directive.correlation.finalReviewRound}`,
+  ].join("\n");
+}
+```
+
+`appendReviewDispatchTransitionToStore` is the only physical dispatch-transition append adapter and
+preserves the input envelope identity. `buildReviewClaimResponse` removes incoming correlation and artifact-path
+fields, then copies only the durable usable reservation path into the worker payload; it never treats an incoming
+correlation, category, or artifact path as authority.
+The exhaustive switch intentionally keeps future outcome variants from silently becoming a Runtime fallback.
 - `FileWriter` gains the runtime-boundary operation
   `createExclusiveMarker(path: string): Promise<{ readonly kind: "created"; readonly leasePath: string; readonly artifactIdentity: ReviewArtifactInodeIdentity } | { readonly kind: "occupied" }>`.
   `NodeFileSystem.createExclusiveMarker` validates the safe relative path, creates a unique
@@ -11326,8 +11571,7 @@ recovery は同じ offer boundary を使用する。すでに parent boundary �
    category、artifact path、worker report から推測しない。
 4. `ClaimInput` を構成し、`parentSessionId`、`callId`、`expectedCategory`、`agentId`、
    `sessionId`、`writerId` を渡して `reviewDispatchState.claimReviewDispatch()` を呼ぶ。
-   `ClaimInput.correlation` が存在する場合も untrusted echo として無視し、durable pending
-   slot の correlation を使用する。
+   `ClaimInput` は correlation field を持たず、durable pending slot の correlation だけを使用する。
 5. claim が commit されるまで `TaskCallBinding`、`ReviewArtifactReservation`、worker path、
    `SessionStateProvider` の positive binding cache を公開しない。
 
@@ -11402,9 +11646,36 @@ Task 3.6 の route は call ID から durable projection の `TaskCallBinding` �
 - 同じテストで runtime `event.callId` が欠落または空の場合、payload の optional な `callId` を
   fallback にせず、claim、binding、reservation、artifact path を生成しない fail-open
   response になることを確認する。
+- `tests/core/review-dispatch-state.test.ts` に compile-only assertion を置き、正しい
+  `ClaimInput` は type-check される一方、`correlation` property を含む object literal には
+  `@ts-expect-error` が必要であることを確認する。test-only input、sanitizer、validator を
+  追加せず、production input type 自体を authority boundary とする。`ClaimInput` を export する
+  必要はなく、production return value から input type を取得する。
+
+  ```ts
+  type ProductionClaimInput = Parameters<
+    ReturnType<typeof createReviewDispatchState>["claimReviewDispatch"]
+  >[0];
+
+  const validClaimInput: ProductionClaimInput = fixture.claimInput;
+  void validClaimInput;
+
+  // @ts-expect-error ClaimInput intentionally has no untrusted correlation surface.
+  const forgedCorrelation: ProductionClaimInput = {
+    ...fixture.claimInput,
+    correlation: { reviewKind: "task-review" },
+  };
+  void forgedCorrelation;
+  ```
 - 同じテストで review task が implementation arm を消費せず、PlanBridge の
   `implementation_unauthorized` または implementation context を返さないことを確認する。
   pending slot がない場合は binding / reservation / path なしで blocked / advisory となる。
+- 同じテストで review PreToolUse は `PlanBridge.handlePreToolUse()`、
+  `TaskFeedbackHandler.setActivePlan()`、implementation task window の再登録を一度も呼ばない一方、
+  non-review task は既存どおり `openSessionTaskWindow`、modified payload からの task ID 解決、
+  active-plan 設定、session generation 再確認後の window 再登録を通ることを確認する。
+  session removal を Promise 待機中に発生させた fixture では、non-review 再登録がゼロであることを
+  assert し、review route 追加が既存 race guard を失わせないことを証明する。
 - 同じテストで `arrangeLiveMandatoryReviewWithUnreadableAuthorization()` を使い、strict な
   real Authorization persistence adapter の malformed JSON を production plugin 初期化後に
   読ませる。`handleEvent()` が reject せず、既存 `HookResponse` union の proceed または

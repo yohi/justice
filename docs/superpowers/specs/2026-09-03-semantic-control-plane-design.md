@@ -1775,6 +1775,11 @@ export type ReviewPendingCommittedHandler = (
 - 実行時の callback は composition root が同一 `reviewDispatchState` の
   `offerNextMandatoryReview(parentSessionId)` に束縛する。startup recovery と terminalization は
   同じ instance の within-parent capability を使用し、別の queue や wrapper を作らない。
+- `ObservationHandler` が callback の唯一の production owner である。setter が保存する private
+  fieldを、各 lifecycle append 呼出時に生成する `LifecycleNotificationDependencies` へそのまま渡す。
+  constructor dependency と setter field を並存させず、callback を取り出す別 registry や queue を作らない。
+  したがって lifecycle commit から callback、同一 `reviewDispatchState` の offer、durable pending、
+  sink delivery までの live path は一つだけである。
 
 Directive injection は notifier-only の副作用ではない。Review Dispatch が pending commit
 後に `ReviewDirectiveSink.deliver(ReviewDirectiveDelivery)` を完了させた場合、同じ
@@ -1786,7 +1791,8 @@ point であり、PostToolUse では observation、completion、PlanBridge、Tas
 startup recovery のように現在の hook response がない場合だけ、delivery は同じ parent session
 の pending queue に保持し、次の Controller-facing PreToolUse または PostToolUse で一度だけ
 再発行する。個別の domain handler が sink を drain してはならず、handler failure 時も root
-route の fail-open drain-and-merge を経由して delivery を捨てない。
+route の fail-open drain-and-merge を経由して delivery を捨てない。durable `pending -> claimed`
+commit 後は旧 directive を queue に再投入せず、recovery も claimed slot を delivery しない。
 
 ### 12.3 Review-first PreToolUse
 
@@ -1808,6 +1814,10 @@ implementation `PlanBridge` より先に判定する。
 5. review route は `PlanBridge.handlePreToolUse()` と `consumeImplementationArm()` を呼ばない。
    pending slot 不在、複数、category mismatch、authorization uncertainty、claim failure は
    implementation route へ fallback せず blocked / stale advisory とする。
+
+`ClaimInput` は correlation field を持たない。production caller は untrusted tool input の
+`correlation` を claim API へ転送せず、型境界で durable pending slot だけを correlation authority
+にする。
 
 usable claim の worker input は committed `TaskCallBinding.artifactReservation.artifactPath`
 をそのまま使用する。hook や adapter は再生成・再正規化・別 path 選択をしてはならない。
