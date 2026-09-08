@@ -419,14 +419,16 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 
 **Files:**
 
+- Modify: `src/core/atomic-persistence.ts`
 - Create: `src/core/plan-authorization.ts`
 - Modify: `src/core/justice-plugin.ts`
 - Modify: `src/hooks/plan-bridge.ts`
+- Test: `tests/core/atomic-persistence.test.ts`
 - Test: `tests/core/plan-authorization.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
 
-**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`; Task 2.1's `buildCanonicalSnapshot(planContent, approvedTaskIds)` and `computePlanFingerprint(planContent, approvedTaskIds)`; approval-time `PlanParser.parse(planContent).map((task) => task.id)`; and the approved task IDs persisted in `binding.canonicalSnapshot.tasks.map((task) => task.taskId)` as the validation-time approved task set. `restoreActivePlans()` must not derive a replacement approval task set from `PlanParser.parse(planContent)`.
+**Consumes:** the existing `AtomicPersistence.loadWithLock()` default contract, where `ENOENT`, an existing blank file, and parse/deserialize failures become `emptyValue()` while non-ENOENT read I/O failures still throw; the Design §4.2 requirement for strict authoritative Authorization reads; `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`; Task 2.1's `buildCanonicalSnapshot(planContent, approvedTaskIds)` and `computePlanFingerprint(planContent, approvedTaskIds)`; approval-time `PlanParser.parse(planContent).map((task) => task.id)`; and the approved task IDs persisted in `binding.canonicalSnapshot.tasks.map((task) => task.taskId)` as the validation-time approved task set. `restoreActivePlans()` must not derive a replacement approval task set from `PlanParser.parse(planContent)`.
 
 **Produces:** the Design §4.2 discriminated `ApprovedPlanBinding`, including
 `invalidationReason: "plan_superseded"` only on a superseded invalid binding;
@@ -460,7 +462,10 @@ review-dispatch, review-completion, and Gate domains. `ApprovedPlanBinding.sessi
 dependent state changes, but is not a generic transaction or mutex framework. The PlanBridge owns the
 active-plan cache; AuthorizationStore receives no PlanBridge instance. Its approval inner operation invokes
 the injected `AuthorizationActivePlanReconciler` according to the callback matrix below. The callback never
-changes the approval return semantics.
+changes the approval return semantics. The task also produces one narrow optional
+`AtomicPersistenceConfig.strictReadValidation` opt-in, with omitted/`false` preserving the existing
+fail-open malformed-payload behavior; only `AuthorizationStore` enables it. No generic persistence policy,
+error taxonomy, validator registry, or separate authorization persistence implementation is introduced.
 
 | outcome | save | `reconcileActivePlan` | `approve()` | cache / arm behavior |
 | --- | --- | --- | --- | --- |
@@ -471,6 +476,65 @@ changes the approval return semantics.
 | save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
+
+First extend `tests/core/atomic-persistence.test.ts`. Keep the existing default corrupted-JSON
+assertion unchanged so the generic persistence contract remains executable. Add focused strict-mode
+coverage using the same injected mock file system:
+
+```ts
+it("treats only ENOENT as an absent state in strict mode", async () => {
+  const strict = new AtomicPersistence(createMockFileReader({}), createMockFileWriter(), {
+    ...config(),
+    strictReadValidation: true,
+  });
+
+  await expect(strict.loadWithLock()).resolves.toEqual({
+    data: [],
+    lockMeta: { version: 0 },
+  });
+});
+
+it("rejects an existing blank file in strict mode", async () => {
+  const strict = new AtomicPersistence(
+    createMockFileReader({ "state.json": "" }),
+    createMockFileWriter(),
+    { ...config(), strictReadValidation: true },
+  );
+
+  await expect(strict.loadWithLock()).rejects.toThrow();
+});
+
+it("rejects malformed JSON in strict mode", async () => {
+  const strict = new AtomicPersistence(
+    createMockFileReader({ "state.json": "{" }),
+    createMockFileWriter(),
+    { ...config(), strictReadValidation: true },
+  );
+
+  await expect(strict.loadWithLock()).rejects.toThrow();
+});
+
+it("propagates domain deserialization failure in strict mode", async () => {
+  const strict = new AtomicPersistence(
+    createMockFileReader({
+      "state.json": JSON.stringify({ version: 4, data: { invalid: true } }),
+    }),
+    createMockFileWriter(),
+    {
+      ...config(),
+      strictReadValidation: true,
+      deserialize: () => {
+        throw new Error("invalid domain schema");
+      },
+    },
+  );
+
+  await expect(strict.loadWithLock()).rejects.toThrow("invalid domain schema");
+});
+```
+
+The default compatibility test must continue to prove that an omitted
+`strictReadValidation` still converts corrupted JSON to `emptyValue()` with version `0`.
 
 The test module imports the Task 2.1 production functions directly and imports the
 fingerprint module as a namespace only for the calculation-failure test. Keep the
@@ -565,6 +629,7 @@ function createAuthorizationAtomic(
     deserialize: deserializeAuthorizationBindings,
     merge: mergeAuthorizationBindings,
     emptyValue: () => [],
+    strictReadValidation: true,
   });
 }
 
@@ -730,6 +795,38 @@ it("hydrates an active binding and rejects a changed fingerprint", async () => {
   const binding = await store.approve(input);
   expect((await store.hydrate())[0]?.status).toBe("active");
   expect(isBindingActiveFor(binding!, "s1", "docs/p.md", changedFingerprint)).toBe(false);
+});
+
+it("rejects malformed authoritative persistence during hydration", async () => {
+  await files.writeFile(".justice/authorizations.json", "{");
+
+  await expect(store.hydrate()).rejects.toThrow();
+});
+
+it("rejects schema-invalid authoritative persistence during hydration", async () => {
+  await files.writeFile(".justice/authorizations.json", JSON.stringify([{}]));
+
+  await expect(store.hydrate()).rejects.toThrow("Invalid authorization binding array");
+});
+
+it("does not overwrite malformed authority during initial approval", async () => {
+  const malformed = "{";
+  await files.writeFile(".justice/authorizations.json", malformed);
+  const writes = trackAuthorizationWrites(files);
+
+  await expect(store.approve(input)).resolves.toBeNull();
+  expect(writes.count()).toBe(0);
+  await expect(files.readFile(".justice/authorizations.json")).resolves.toBe(malformed);
+});
+
+it("does not classify malformed authority as deterministic not_found", async () => {
+  await files.writeFile(".justice/authorizations.json", "{");
+  const writes = trackAuthorizationWrites(files);
+
+  await expect(store.release("missing-id", "2026-09-05T00:00:00.000Z")).resolves.toEqual({
+    kind: "failed",
+  });
+  expect(writes.count()).toBe(0);
 });
 
 it("never hydrates or authorizes from the non-authoritative conflict journal", async () => {
@@ -1201,6 +1298,26 @@ it("marks startup restoration uncertain when authoritative authorization hydrati
   });
 });
 
+/*
+ * Also add this test to tests/hooks/plan-bridge-authorization.test.ts using the real persistence
+ * path rather than mocking AuthorizationStore.hydrate(). Keep the mocked hydration-failure test
+ * above as coverage for PlanBridge's direct catch behavior. This test owns the
+ * AtomicPersistence -> AuthorizationStore -> PlanBridge propagation and must not replace the
+ * existing PlanBridge/Store wiring with a stub.
+ */
+it("returns uncertain for malformed authoritative authorization persistence", async () => {
+  const files = new MockFileSystem();
+  await files.writeFile(".justice/authorizations.json", "{");
+  const boundary = createAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  const writes = trackAuthorizationWrites(files);
+
+  await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
+  expect(bridge.getActivePlan("s1")).toBeNull();
+  expect(writes.count()).toBe(0);
+});
+
 it("does not restore authority when confirmed-missing invalidation cannot persist", async () => {
   const active = await store.approve(inputFor("s1", "docs/missing-save-failure.md"));
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
@@ -1314,26 +1431,38 @@ boundary, and the PlanBridge that receives that Store explicitly.
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts`
+Run:
 
-Before running RED, add only the compile-only typed scaffold required by the exact `AuthorizationStore`,
-`PlanBridge.setAuthorizationDependencies`, and `PlanBridge.restoreActivePlans` signatures in **Produces**
-and the new `JusticePlugin` tests if the new module or methods do not yet exist. The scaffold is created
-after the tests are written, is not a fallback boundary, and is replaced by Step 3 before any commit. RED
-must therefore fail on intended behavioral assertions rather than module resolution, constructor compile
-failure, missing test helpers/imports, matcher misuse, accidental deletion of existing initialization, or a
-deadlock. The expected result is:
+```sh
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/atomic-persistence.test.ts \
+  tests/core/plan-authorization.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts \
+  tests/core/justice-plugin.test.ts
+```
+
+Before running RED, add only the compile-only typed scaffold required by the exact `AtomicPersistenceConfig`
+`strictReadValidation` property, `AuthorizationStore`, `PlanBridge.setAuthorizationDependencies`, and
+`PlanBridge.restoreActivePlans` signatures in **Produces**, and the new `JusticePlugin` tests if the new
+module or methods do not yet exist. The scaffold is created after the tests are written, does not change
+runtime read behavior, is not a fallback boundary, and is replaced by Step 3 before any commit. RED must
+therefore fail on intended behavioral assertions rather than module resolution, constructor compile failure,
+missing test helpers/imports, matcher misuse, accidental deletion of existing initialization, or a deadlock.
+The expected result is:
 
 ```text
 RED:
-- all three test files compile after the typed scaffold is added;
-- legacy tests remain executable;
-- the five startup fingerprint/hydration cases reach behavioral assertions;
-- new startup tests fail only because the Step 3 behavior is not implemented yet;
-- no failure is caused by an undefined helper, undefined module namespace, or invalid call-count matcher.
+- all four test files compile after the typed scaffold is added;
+- the existing default AtomicPersistence corruption behavior remains executable;
+- strict ENOENT behavior remains green, while strict blank/malformed/schema-validation tests fail because
+  the runtime strict opt-in is not implemented yet;
+- the malformed Authorization hydrate test fails because corruption is currently converted to `[]`;
+- the corrupt initial approval test fails because current code proceeds as if authority were empty;
+- no RED is caused by an undefined helper, undefined module namespace, or invalid call-count matcher.
 ```
 
-The intended behavioral failures are: canonical snapshot persistence/hydration, fresh-ID supersession,
+The intended behavioral failures are: default/strict AtomicPersistence read behavior, canonical snapshot
+persistence/hydration, fresh-ID supersession,
 terminal-dominant merge, same-parent approval serialization, real version-mismatch merge/retry, loser return
 semantics, explicit PlanBridge cache wiring, failed-save non-publication, post-save reread failure fail-closed
 behavior, unchanged semantic-plan restoration after fingerprint validation, semantic-mismatch durable
@@ -1341,10 +1470,25 @@ invalidation, progress-only fingerprint preservation, fingerprint and hydration 
 durable invalidation without `plan_superseded`, plan-probe uncertainty, invalidation persistence uncertainty,
 authorization restoration invocation, and restoration failure isolation from the existing plugin initialization
 path. The Task 2.2 `Files` list above, this RED/GREEN command, and the Step 5 `git add` path set are consistent;
-the `Files` list and `git add` scope contain the same six paths, while the RED/GREEN command contains the same
-three test paths. Task 2.1 modules are consumed dependencies and are not added to the Task 2.2 commit.
+the `Files` list and `git add` scope contain the same eight paths, while the RED/GREEN command contains the same
+four test paths. Task 2.1 modules are consumed dependencies and are not added to the Task 2.2 commit.
 
 - [ ] **Step 3: Implement the authorization store**
+
+First add the smallest strict-read opt-in to `src/core/atomic-persistence.ts`. Extend
+`AtomicPersistenceConfig<T>` with exactly one optional setting:
+
+```ts
+readonly strictReadValidation?: boolean;
+```
+
+Keep the existing behavior when the setting is omitted or `false`: `ENOENT`, an existing blank
+file, JSON parse failure, and deserialize failure return `emptyValue()` with lock version `0`,
+while non-ENOENT read I/O errors still propagate. When it is `true`, keep `ENOENT` as the only
+legitimate absent-state fallback, but throw for an existing blank file and rethrow the original
+JSON parse or deserialize/validation failure. The setting must apply to every `loadWithLock()`
+call, including the authoritative reread inside `saveAtomicWithLock()`; do not change the
+generic default or add a persistence policy/error taxonomy abstraction.
 
 Use exactly `.justice/authorizations.json` and `.justice/authorizations.conflict.json` as the
 `AtomicPersistence` paths. Store only `ReadonlyArray<ApprovedPlanBinding>`. `ApprovePlanInput` must not
@@ -1811,6 +1955,13 @@ review dispatch recovery run only for the authoritative outcome. The final start
 hydration → durable record projection → staged completion recovery → review dispatch recovery, with no new
 startup orchestrator abstraction.
 
+Task 2.2 → Task 3.6 traceability for authoritative persistence is explicit: malformed or schema-invalid
+`.justice/authorizations.json` → strict `AuthorizationStore.hydrate()` failure →
+`restoreActivePlans() === "uncertain"` → `authorizationRecoveryReady = false` → base initialization
+continues while staged-completion and Review Dispatch recovery are skipped. Task 3.6's direct
+`restoreActivePlans()` mock tests retain the readiness-gate coverage; Task 2.2's real malformed-file
+integration test owns the persistence-to-outcome link.
+
 ```ts
 // Tasks 3.2, 3.4, and 3.6 pass this same field, never a newly constructed boundary,
 // to the Gate evaluator, Review Dispatch factory, and Review Completion factory respectively.
@@ -1845,6 +1996,7 @@ export class AuthorizationStore {
       deserialize: deserializeAuthorizationBindings,
       merge: mergeAuthorizationBindings,
       emptyValue: () => [],
+      strictReadValidation: true,
     });
   }
 
@@ -2200,13 +2352,27 @@ function invalidateSuperseded(
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts`
+Run:
+
+```sh
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/atomic-persistence.test.ts \
+  tests/core/plan-authorization.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts \
+  tests/core/justice-plugin.test.ts
+```
 
 Expected:
 
 ```text
 GREEN:
 - all Task 2.2 tests pass with no undefined test helpers/imports;
+- default AtomicPersistence malformed-payload behavior remains unchanged;
+- strict Authorization persistence distinguishes ENOENT from malformed, blank, and invalid payloads;
+- malformed or schema-invalid Authorization hydration propagates failure;
+- PlanBridge returns uncertain for malformed authoritative persistence and restores no positive cache;
+- initial approval against malformed authority returns null and writes nothing;
+- Authorization mutation does not classify malformed authority as deterministic `not_found`;
 - unchanged semantic plans restore the active binding and cache only after fingerprint validation;
 - semantic mismatch durably invalidates the binding, records invalidatedAt, clears the cache, and returns authoritative;
 - progress-only checkbox changes retain Authorization and restore the cache;
@@ -2220,13 +2386,21 @@ GREEN:
 Before Step 5, verify both traceability directions for Task 2.2: Design §5.2 current-fingerprint-before-cache,
 same-parent terminalization, cancellation ordering, and uncertainty semantics each have a named test above; and
 each startup test names the corresponding Design §5.2 contract and Task 2.1 canonical function. Also verify that
-the Task 2.2 `Files` list and `git add` scope remain the same six paths, and the RED/GREEN command remains the
-same three test paths shown in this task.
+the Task 2.2 `Files` list and `git add` scope contain the same eight paths, and the RED/GREEN command contains the
+same four test paths shown in this task.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/plan-authorization.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts
+git add \
+  src/core/atomic-persistence.ts \
+  src/core/plan-authorization.ts \
+  src/core/justice-plugin.ts \
+  src/hooks/plan-bridge.ts \
+  tests/core/atomic-persistence.test.ts \
+  tests/core/plan-authorization.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts \
+  tests/core/justice-plugin.test.ts
 git commit -m "feat: plan authorizationをdurable bindingへ置換"
 ```
 
@@ -9779,6 +9953,12 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | cross-process authorization conflict                           | 2.2                     | two stores plus independent boundaries and shared persistence: fresh approvals traverse real `AtomicPersistence` version mismatch and `mergeAuthorizationBindings` retry, retain one active binding, terminalize the losing fresh ID as `plan_superseded`, preserve other-session active binding |
 | post-merge own-ID authority                                    | 2.2                     | authoritative reread returns the own fresh-ID winner, returns `null` for a merge loser, reconciles loser cache to durable winner / `null`, and never arms the requested loser plan |
 | authorization startup hydration                                | 2.2                     | `hydrate()` reads only authoritative bindings and reports read/parse/validation failure; only a current-fingerprint-equal, same-parent still-active durable binding restores the `PlanBridge` active plan |
+| Design §4.2 initial authoritative read failure                  | 2.2                     | malformed authority -> `approve()` returns `null`, invokes no reconciler, and performs zero authoritative save writes |
+| Design §4.2 hydrate parse/validation failure                    | 2.2                     | malformed or schema-invalid authoritative persistence -> `hydrate()` rejects rather than returning `[]` |
+| Design §4.2 public/inner authoritative reread failure            | 2.2                     | corrupt authority -> mutation returns failed/uncertain, is not classified as deterministic `not_found`, and performs no authoritative mutation |
+| Design §5.2 startup hydration uncertainty                       | 2.2, 3.6                | real malformed authority -> strict hydrate failure -> `restoreActivePlans() === "uncertain"` -> positive startup recovery is skipped |
+| AtomicPersistence backward compatibility                        | 2.2                     | default `loadWithLock()` corruption behavior remains `emptyValue()` with lock version `0` |
+| Authorization strict persistence                              | 2.2                     | strict mode treats ENOENT as empty state and throws for existing blank, malformed, and invalid-schema payloads |
 | missing plan startup invalidation                              | 2.2                     | confirmed missing (`readPlanFile() === null`) performs durable active -> invalidated; an existing plan proceeds to current fingerprint validation rather than restoring by existence alone |
 | missing-plan invalidation reason                               | 2.2                     | missing-plan terminalization records `invalidatedAt` and never records `plan_superseded` |
 | missing-plan boundary ownership                                | 2.2, 3.4                | one parent boundary owns exact reread, invalidation, cancellation, and cache clear; inner acquire count is zero |
@@ -9881,7 +10061,7 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 1.1       | JUS-P0-03, Design §5.3, INV-02, INV-05                                                           | role-to-category mapping tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 1.2       | JUS-P0-03, Design §3.4 and §5.3                                                                  | effective configuration and category-presence tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 2.1       | JUS-P0-02, Design §4.3, INV-04                                                                   | fingerprint boundary, typed `error_annotation` persistence/replay, exact plan/line identity migration tests                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 2.2       | JUS-P0-02-05 through JUS-P0-02-07, Design §4.2 and §5.2, INV-03, INV-04, INV-12, authorization cardinality, shared boundary, missing-plan terminality, and JusticePlugin initialization preservation | authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, callback matrix and cache/durable agreement, failed-save cache retention, post-save reread failure cache clearing, unchanged semantic restore, semantic mismatch terminalization, progress-only preservation, fingerprint and hydration uncertainty, confirmed-missing active -> invalidated without `plan_superseded`, one-boundary/zero-inner-acquire, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, one-factory construction contract, existing initialization preservation, and restoration failure isolation tests |
+| 2.2       | JUS-P0-02-05 through JUS-P0-02-07, Design §4.2 and §5.2, INV-03, INV-04, INV-12, authorization cardinality, shared boundary, strict Authorization persistence, AtomicPersistence backward compatibility, missing-plan terminality, and JusticePlugin initialization preservation | default/strict `AtomicPersistence` read behavior, malformed/schema-invalid hydration rejection, corrupt initial approval returning `null` with zero authoritative writes, malformed mutation not classified as `not_found`, authorization persistence, fresh ID, same-ID terminal merge, sequential supersession, version-mismatch concurrent fresh-ID merge/retry, exactly-one-active, other-session preservation, callback matrix and cache/durable agreement, failed-save cache retention, post-save reread failure cache clearing, unchanged semantic restore, semantic mismatch terminalization, progress-only preservation, fingerprint and hydration uncertainty, confirmed-missing active -> invalidated without `plan_superseded`, one-boundary/zero-inner-acquire, rejected predecessor recovery, A -> B -> C tail cleanup, different-parent progress, one-factory construction contract, existing initialization preservation, and restoration failure isolation tests |
 | 2.3       | JUS-P0-02, Design §4.2, §4.8.1, and §5.2                                                         | pathless cancel parser, durable release, and Task 3.4 cancellation-orchestration boundary tests                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
@@ -9892,6 +10072,12 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+F-035 reverse traceability is also explicit: `AtomicPersistence` strict-read opt-in implements the
+Design §4.2 authoritative-read failure semantics without changing other persistence domains;
+Authorization malformed-persistence tests verify Design §4.2 and §5.2 propagation; and the Task 3.6
+uncertainty gate consumes the `AuthorizationRestorationOutcome` produced by Task 2.2 to keep
+`authorizationRecoveryReady` false and skip positive startup recovery.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
 
