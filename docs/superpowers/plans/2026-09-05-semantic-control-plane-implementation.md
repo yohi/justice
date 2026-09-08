@@ -426,7 +426,7 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
 
-**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`; Task 2.1's `computePlanFingerprint(planContent, approvedTaskIds)`; and `binding.canonicalSnapshot.tasks.map((task) => task.taskId)` as the validation-time approved task set. `restoreActivePlans()` must not derive a replacement approval task set from `PlanParser.parse(planContent)`.
+**Consumes:** `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>`; `CanonicalPlanSnapshot`; `PlanFingerprint`; Task 2.1's `buildCanonicalSnapshot(planContent, approvedTaskIds)` and `computePlanFingerprint(planContent, approvedTaskIds)`; approval-time `PlanParser.parse(planContent).map((task) => task.id)`; and the approved task IDs persisted in `binding.canonicalSnapshot.tasks.map((task) => task.taskId)` as the validation-time approved task set. `restoreActivePlans()` must not derive a replacement approval task set from `PlanParser.parse(planContent)`.
 
 **Produces:** the Design §4.2 discriminated `ApprovedPlanBinding`, including
 `invalidationReason: "plan_superseded"` only on a superseded invalid binding;
@@ -471,6 +471,21 @@ changes the approval return semantics.
 | save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
+
+The test module imports the Task 2.1 production functions directly and imports the
+fingerprint module as a namespace only for the calculation-failure test. Keep the
+existing test imports and add the following names where the Task 2.2 tests are
+placed:
+
+```ts
+import { afterEach } from "vitest";
+import { PlanParser } from "../../src/core/plan-parser";
+import {
+  buildCanonicalSnapshot,
+  computePlanFingerprint,
+} from "../../src/core/plan-fingerprint";
+import * as planFingerprintModule from "../../src/core/plan-fingerprint";
+```
 
 ```ts
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value?: T) => void } {
@@ -592,6 +607,27 @@ function inputFor(
   };
 }
 
+async function approvePlanContent(
+  store: AuthorizationStore,
+  sessionId: string,
+  planPath: string,
+  planContent: string,
+  approvedAt = "2026-09-05T00:00:00.000Z",
+): Promise<Extract<ApprovedPlanBinding, { readonly status: "active" }>> {
+  const approvedTaskIds = new PlanParser().parse(planContent).map((task) => task.id);
+  const binding = await store.approve({
+    sessionId,
+    planPath,
+    canonicalSnapshot: buildCanonicalSnapshot(planContent, approvedTaskIds),
+    planFingerprint: computePlanFingerprint(planContent, approvedTaskIds),
+    approvedAt,
+  });
+  if (binding === null || binding.status !== "active") {
+    throw new Error("approval fixture did not produce an active binding");
+  }
+  return binding;
+}
+
 function freshBindingFor(
   sessionId: string,
   planPath: string,
@@ -665,6 +701,10 @@ beforeEach(() => {
   store = fixture.store;
   input = inputFor("s1", "docs/p.md");
   authorizationAtomic = createAuthorizationAtomic(files);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 const oldActiveBinding = freshBindingFor("s1", "docs/old.md", "old-id");
@@ -1063,7 +1103,7 @@ it("invalidates a confirmed-missing startup plan inside one parent boundary", as
 });
 
 it("restores an unchanged semantic startup plan only after current fingerprint validation", async () => {
-  const plan = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const plan = "## Task 1: approved\n- [ ] implement\n";
   const active = await approvePlanContent(store, "s1", "docs/existing.md", plan);
   await files.writeFile("docs/existing.md", plan);
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
@@ -1077,11 +1117,12 @@ it("restores an unchanged semantic startup plan only after current fingerprint v
 });
 
 it("terminalizes a semantic startup fingerprint mismatch without restoring its cache", async () => {
-  const approved = planFixture("## Task 1: approved\n- [ ] implement\n");
-  const changed = planFixture("## Task 1: changed requirement\n- [ ] implement\n");
+  const approved = "## Task 1: approved\n- [ ] implement\n";
+  const changed = "## Task 1: changed requirement\n- [ ] implement\n";
   const active = await approvePlanContent(store, "s1", "docs/changed.md", approved);
   await files.writeFile("docs/changed.md", changed);
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  bridge.setReviewDispatchCancellation(async () => undefined);
 
   await expect(bridge.restoreActivePlans()).resolves.toBe("authoritative");
 
@@ -1095,8 +1136,8 @@ it("terminalizes a semantic startup fingerprint mismatch without restoring its c
 });
 
 it("retains startup authorization for an approved-task progress-only checkbox update", async () => {
-  const approved = planFixture("## Task 1: approved\n- [ ] implement\n");
-  const progressOnly = planFixture("## Task 1: approved\n- [x] implement\n");
+  const approved = "## Task 1: approved\n- [ ] implement\n";
+  const progressOnly = "## Task 1: approved\n- [x] implement\n";
   const active = await approvePlanContent(store, "s1", "docs/progress.md", approved);
   await files.writeFile("docs/progress.md", progressOnly);
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
@@ -1125,8 +1166,10 @@ it("marks startup restoration uncertain without invalidating when the plan probe
 });
 
 it("marks startup restoration uncertain without mutation when fingerprint calculation fails", async () => {
-  const plan = planFixture("## Task 1: approved\n- [ ] implement\n");
+  const plan = "## Task 1: approved\n- [ ] implement\n";
+  const writes = trackAuthorizationWrites(files);
   const active = await approvePlanContent(store, "s1", "docs/fingerprint-error.md", plan);
+  writes.reset();
   await files.writeFile("docs/fingerprint-error.md", plan);
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
   vi.spyOn(planFingerprintModule, "computePlanFingerprint").mockImplementationOnce(() => {
@@ -1139,17 +1182,23 @@ it("marks startup restoration uncertain without mutation when fingerprint calcul
     status: "active",
   });
   expect(bridge.getActivePlan("s1")).toBeNull();
-  expect(authorizationPersistenceOf(store).saveAtomicWithLock).not.toHaveBeenCalled();
+  expect(writes.count()).toBe(0);
 });
 
 it("marks startup restoration uncertain when authoritative authorization hydration fails", async () => {
+  const writes = trackAuthorizationWrites(files);
+  const active = await store.approve(inputFor("s1", "docs/hydration-error.md"));
+  writes.reset();
   const bridge = createAuthorizationPlanBridge(files, store, boundary);
   vi.spyOn(store, "hydrate").mockRejectedValueOnce(new Error("authorization hydration failed"));
 
   await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
 
   expect(bridge.getActivePlan("s1")).toBeNull();
-  expect(authorizationPersistenceOf(store).saveAtomicWithLock).not.toHaveBeenCalled();
+  expect(writes.count()).toBe(0);
+  await expect(store.findByAuthorizationId(active!.authorizationId)).resolves.toMatchObject({
+    status: "active",
+  });
 });
 
 it("does not restore authority when confirmed-missing invalidation cannot persist", async () => {
@@ -1272,14 +1321,28 @@ Before running RED, add only the compile-only typed scaffold required by the exa
 and the new `JusticePlugin` tests if the new module or methods do not yet exist. The scaffold is created
 after the tests are written, is not a fallback boundary, and is replaced by Step 3 before any commit. RED
 must therefore fail on intended behavioral assertions rather than module resolution, constructor compile
-failure, missing methods, accidental deletion of existing initialization, or a deadlock. The expected
-failures are: canonical snapshot persistence/hydration, fresh-ID supersession, terminal-dominant merge,
-same-parent approval serialization, real version-mismatch merge/retry, loser return semantics, explicit
-PlanBridge cache wiring, failed-save non-publication, post-save reread failure fail-closed behavior,
-unchanged semantic-plan restoration after fingerprint validation, semantic-mismatch durable invalidation,
-progress-only fingerprint preservation, fingerprint and hydration uncertainty, confirmed-missing durable
-invalidation without `plan_superseded`, plan-probe uncertainty, invalidation persistence uncertainty,
-authorization restoration invocation, and restoration failure isolation from the existing plugin initialization path.
+failure, missing test helpers/imports, matcher misuse, accidental deletion of existing initialization, or a
+deadlock. The expected result is:
+
+```text
+RED:
+- all three test files compile after the typed scaffold is added;
+- legacy tests remain executable;
+- the five startup fingerprint/hydration cases reach behavioral assertions;
+- new startup tests fail only because the Step 3 behavior is not implemented yet;
+- no failure is caused by an undefined helper, undefined module namespace, or invalid call-count matcher.
+```
+
+The intended behavioral failures are: canonical snapshot persistence/hydration, fresh-ID supersession,
+terminal-dominant merge, same-parent approval serialization, real version-mismatch merge/retry, loser return
+semantics, explicit PlanBridge cache wiring, failed-save non-publication, post-save reread failure fail-closed
+behavior, unchanged semantic-plan restoration after fingerprint validation, semantic-mismatch durable
+invalidation, progress-only fingerprint preservation, fingerprint and hydration uncertainty, confirmed-missing
+durable invalidation without `plan_superseded`, plan-probe uncertainty, invalidation persistence uncertainty,
+authorization restoration invocation, and restoration failure isolation from the existing plugin initialization
+path. The Task 2.2 `Files` list above, this RED/GREEN command, and the Step 5 `git add` path set are consistent;
+the `Files` list and `git add` scope contain the same six paths, while the RED/GREEN command contains the same
+three test paths. Task 2.1 modules are consumed dependencies and are not added to the Task 2.2 commit.
 
 - [ ] **Step 3: Implement the authorization store**
 
@@ -2139,7 +2202,26 @@ function invalidateSuperseded(
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/core/justice-plugin.test.ts`
 
-Expected: PASS.
+Expected:
+
+```text
+GREEN:
+- all Task 2.2 tests pass with no undefined test helpers/imports;
+- unchanged semantic plans restore the active binding and cache only after fingerprint validation;
+- semantic mismatch durably invalidates the binding, records invalidatedAt, clears the cache, and returns authoritative;
+- progress-only checkbox changes retain Authorization and restore the cache;
+- fingerprint-calculation uncertainty and hydration uncertainty perform zero startup Authorization writes,
+  retain durable active authority, restore no cache, and return uncertain;
+- confirmed-missing startup behavior remains authoritative only after durable invalidation and existing Review cancellation;
+- existing JusticePlugin initialization remains GREEN, and the Task 3.4 terminal critical-section and Task 3.6
+  startup-readiness contracts remain unchanged for their later integration tests.
+```
+
+Before Step 5, verify both traceability directions for Task 2.2: Design §5.2 current-fingerprint-before-cache,
+same-parent terminalization, cancellation ordering, and uncertainty semantics each have a named test above; and
+each startup test names the corresponding Design §5.2 contract and Task 2.1 canonical function. Also verify that
+the Task 2.2 `Files` list and `git add` scope remain the same six paths, and the RED/GREEN command remains the
+same three test paths shown in this task.
 
 - [ ] **Step 5: Commit after approval**
 
