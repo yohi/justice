@@ -6324,7 +6324,10 @@ class JusticePlugin {
       appendReviewDispatchAdvisory(observationLogStore, writerId, advisory, cause);
     this.reviewDispatchState = createReviewDispatchState({
       readDurableRecords: () => observationLogStore.readAll(),
-      readDurableAuthorizations: () => authorizationStore.readDurableAuthorizations(),
+      // `readDurableAuthorizations` is a Review Dispatch port, not an
+      // AuthorizationStore method; the authoritative production implementation
+      // is the existing strict `AuthorizationStore.hydrate()` API.
+      readDurableAuthorizations: () => authorizationStore.hydrate(),
       findAuthorizationById: (authorizationId) =>
         authorizationStore.findByAuthorizationId(authorizationId),
       appendReviewDispatchTransition: (input) =>
@@ -6361,11 +6364,27 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
       ? resolveMandatoryReviewCategory(event.payload.toolInput)
       : undefined;
   if (category !== undefined) {
+    const callId = event.callId;
+    if (callId === undefined || callId.trim().length === 0) {
+      await this.recordReviewAdvisory("review_call_id_missing");
+      const directiveResponse = this.reviewDirectiveSink.takeForParentSession(event.sessionId).reduce(
+        (response, delivery) =>
+          mergePreToolUseResponses(
+            response,
+            { action: "inject", injectedContext: formatReviewDirective(delivery.directive) },
+            (message) => this.warnMergeConflict(message),
+          ),
+        PROCEED,
+      );
+      return mergePreToolUseResponses(observation, directiveResponse, (message) =>
+        this.warnMergeConflict(message),
+      );
+    }
     const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
     const claim = await this.reviewDispatchState
       .claimReviewDispatch({
         parentSessionId: event.sessionId,
-        callId: event.callId ?? event.payload.callId,
+        callId,
         expectedCategory: category,
         correlation: event.payload.toolInput.correlation,
         agentId,
@@ -6416,6 +6435,37 @@ failures must remain inside the review branch. A review task must never consume 
 arm or fall through to the PlanBridge route. Task 3.4 ends after this PreToolUse claim path and
 the durable dispatch operations; the PostToolUse completion branch is implemented and wired only
 in Task 3.6.
+
+The PostToolUse composition in Task 3.6 must drain the same sink after every parallel handler has
+settled, then merge the drained deliveries into the response returned for that very event. The
+sink is not drained only by the PreToolUse branch, and no individual domain handler may consume it.
+The response merger must preserve the existing observation, PlanBridge, TaskFeedback, and Gate
+contexts while adding each review directive as an ordinary `inject` response:
+
+```ts
+const routeResponse = mergePostToolUseResponses(
+  [observation, planBridge, taskFeedback],
+  (message) => this.warnMergeConflict(message),
+);
+const directiveResponses = this.reviewDirectiveSink
+  .takeForParentSession(event.sessionId)
+  .map((delivery) => ({
+    action: "inject" as const,
+    injectedContext: formatReviewDirective(delivery.directive),
+  }));
+return mergePostToolUseResponses(
+  [routeResponse, ...directiveResponses],
+  (message) => this.warnMergeConflict(message),
+);
+```
+
+This drain occurs after Task 3.6 has run `consumeReviewCompletion` and after any Task 3.1
+lifecycle offer performed during the same hook invocation. A directive produced after its durable
+`pending` append therefore reaches the Controller in that PostToolUse `HookResponse`; it is not
+dependent on a later unrelated PreToolUse. If a handler fails, the fail-open catch must still
+return through the same drain-and-merge helper before closing the task window. Startup recovery
+has no current hook response, so it queues the delivery and the next Controller-facing PreToolUse
+or PostToolUse drain reissues it once. The root `JusticePlugin` route is the only sink consumer.
 
 Persist one `pending` slot per parent session before injecting its `ReviewRequiredDirective`. Inside
 `createReviewDispatchState(dependencies)`, use the injected, domain-specific
@@ -10868,6 +10918,27 @@ Task 2.2、Task 3.2、Task 3.4、Task 3.6 は同じ boundary と同じ durable l
   `PlanBridge` へ一度だけ `setReviewDispatchCancellation(...)` で注入する。既存の
   cancellation-only snippet はこの state wiring の代替ではない。
 
+### Concrete helper and port contracts
+
+The identifiers used by the composition and routing snippets below are planned symbols with
+the following exact contracts; implementation must define them before the production RED/GREEN
+tests are run. None of these names may be treated as an implicit global or an API invented only
+inside a test.
+
+- `appendReviewDispatchAdvisory(logStore: ObservationLogStore, writerId: string, advisory: string, cause?: unknown): Promise<void>` appends the redacted advisory through the existing durable observation-log path and swallows its own I/O failure.
+- `appendReviewDispatchTransitionToStore(logStore: ObservationLogStore, input: PendingReviewDispatchTransitionRecord): Promise<{ readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord } | { readonly kind: "failed" }>` is the only physical dispatch-transition append adapter and preserves the input envelope identity.
+- `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation and exclusive marker creation. `createExclusiveMarker` is an implementation detail of that port, not a second composition dependency.
+- `resolveMandatoryReviewCategory(toolInput: Readonly<Record<string, unknown>>): "sp-review" | "sp-final-review" | undefined` returns a value only for exact canonical categories after the existing task-input normalizer has run.
+- `buildReviewClaimResponse(event: PreToolUseEvent, outcome: ClaimReviewDispatchOutcome): HookResponse` maps only a committed `TaskCallBinding` / explicit blocked outcome to the existing `HookResponse` union; it never copies correlation or artifact identity from `event.payload`.
+- `formatReviewDirective(directive: ReviewRequiredDirective): string` is the single pure formatter for the Controller-facing review directive.
+- `JusticePlugin.warnMergeConflict(message: string): void` is the existing guarded logger method used by both response mergers; no free-standing logger callback is introduced.
+
+`readDurableAuthorizations` is also an injected Review Dispatch port, not an
+`AuthorizationStore` method. Its production binding is exactly
+`() => authorizationStore.hydrate()`, and every read remains strict and allowed to reject as
+described above. Do not add `AuthorizationStore.readDurableAuthorizations()` or normalize its
+rejection to an empty array.
+
 `injectReviewRequiredDirective` は notifier-only callback ではなく、hook response へ到達
 する domain-specific sink とする。既存の `ReviewRequiredDirective` の identity は
 `correlation` のみを SSOT として維持し、delivery routing のためだけに次の envelope を
@@ -11013,6 +11084,9 @@ Task 3.6 の route は call ID から durable projection の `TaskCallBinding` �
   `sp-final-review` の PreToolUse がそれぞれ一度だけ claim され、`TaskCallPurpose`、trusted
   correlation、exact artifact path、`run_in_background: false` が production response に
   現れることを確認する。
+- 同じテストで runtime `event.callId` が欠落または空の場合、payload の optional な `callId` を
+  fallback にせず、claim、binding、reservation、artifact path を生成しない fail-open
+  response になることを確認する。
 - 同じテストで review task が implementation arm を消費せず、PlanBridge の
   `implementation_unauthorized` または implementation context を返さないことを確認する。
   pending slot がない場合は binding / reservation / path なしで blocked / advisory となる。
@@ -11024,6 +11098,11 @@ Task 3.6 の route は call ID から durable projection の `TaskCallBinding` �
 - `tests/hooks/observation-handler-lifecycle.test.ts` は Task 3.1 が所有し、lifecycle
   transition commit 後の一度だけの offer、pending commit 前の directive delivery防止、二重
   offer防止を確認する。
+- `tests/core/justice-plugin-routing.test.ts` は Task 3.6 で、実際の PostToolUse route が
+  lifecycle offer / completion consumer が sink に積んだ directive を同じ
+  `HookResponse` に merge すること、PreToolUse だけを drain point にしてもテストが GREEN に
+  ならないことを確認する。handler failure の fail-open path でも delivery を捨てないことを
+  確認する。
 - `tests/hooks/observation-handler-transactional.test.ts` はTask 3.5のchild-binding casesを
   維持し、Task 3.6がmatching review PostToolUseのcompletion / terminalization、implementation
   feedback path非通過、stale call ID / old roundのartifact非読込を追加する。

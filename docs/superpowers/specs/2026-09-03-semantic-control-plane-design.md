@@ -1755,6 +1755,18 @@ candidate correlation を caller から渡してはならず、candidate 選択�
 terminalization、completion、restart recovery は同じ boundary を使用し、within-boundary
 caller が public wrapper を再取得してはならない。
 
+Directive injection は notifier-only の副作用ではない。Review Dispatch が pending commit
+後に `ReviewDirectiveSink.deliver(ReviewDirectiveDelivery)` を完了させた場合、同じ
+`JusticePlugin.handleEvent()` invocation の root route がその delivery を一度だけ drain し、
+その invocation の `HookResponse` に merge する。PreToolUse と PostToolUse の両方が drain
+point であり、PostToolUse では observation、completion、PlanBridge、TaskFeedback の全 handler
+が settle した後に drain する。したがって lifecycle offer / completion が PostToolUse 内で
+生成した directive は、その PostToolUse response に含まれ、次の無関係な PreToolUse を待たない。
+startup recovery のように現在の hook response がない場合だけ、delivery は同じ parent session
+の pending queue に保持し、次の Controller-facing PreToolUse または PostToolUse で一度だけ
+再発行する。個別の domain handler が sink を drain してはならず、handler failure 時も root
+route の fail-open drain-and-merge を経由して delivery を捨てない。
+
 ### 12.3 Review-first PreToolUse
 
 `JusticePlugin.handleEvent(PreToolUse)` は `task()` の review category を既存の
@@ -1765,6 +1777,9 @@ implementation `PlanBridge` より先に判定する。
 2. runtime-observed `parentSessionId`、`callId`、`agentId`、`sessionId`、`writerId` を検証する。
    field path は Task 3.3 の observed runtime contract に固定し、prompt、category、path、
    self-report から補完しない。
+   `ClaimInput.callId` は runtime event の `event.callId` だけから構成し、payload 内の
+   optional な `callId` を fallback に使用しない。runtime `callId` が欠落または空の場合は
+   review claim を実行せず、advisory を記録して既存の fail-open `HookResponse` に縮退する。
 3. `claimReviewDispatch()` は durable pending slot を自ら選択し、入力の correlation を
    authority として使わない。
 4. claim commit 後にのみ `TaskCallPurpose = task_review | final_review`、trusted
@@ -1813,6 +1828,12 @@ variant を追加しない。
 - observation、normal context、gate advisory の既存 merge semantics を保持する。
 - claim、reservation、projection、delivery、completion の例外は hook boundary 内で捕捉し、
   advisory を best-effort に記録したうえで非ブロッキング response に縮退する。
+- `JusticePlugin.handleEvent(PreToolUse)` は review claim / observation response と drained
+  directive responses を `mergePreToolUseResponses` で一度だけ合成する。
+- `JusticePlugin.handleEvent(PostToolUse)` は observation、PlanBridge、TaskFeedback、Gate の
+  response を先に `mergePostToolUseResponses` で合成し、その後に同じ parent session の sink
+  deliveries を `inject` response として追加合成する。sink drain が PreToolUse にしか存在しない
+  実装は、lifecycle offer の directive delivery を失うため不適合である。
 
 ### 12.6 Acceptance criteria
 
@@ -1827,6 +1848,8 @@ Task 3.4 の acceptance は、unit factory testsに加えて、実際の `Justic
   fail-open outcome となり、positive Review / Gate / Acceptance / Progress が作られない。
 - matching review PostToolUse が completion / terminalization に進み、stale event は artifact
   を読まない。
+- lifecycle transition 後の review offer または matching completion が生成した directive が、
+  その PostToolUse の返却 `HookResponse` に実際に含まれ、notifier-only の副作用に留まらない。
 - initialization が Authorization hydration、projection、staged completion recovery、
   Review Dispatch recovery の順序を守り、recovered claimed call を再発行しない。
 
