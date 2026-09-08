@@ -1092,6 +1092,21 @@ export type ReviewArtifactInodeIdentity = {
   readonly device: string;
   readonly inode: string;
 };
+
+// This is intentionally a review-artifact-only runtime boundary. It is not
+// added to the general FileReader or FileWriter contracts.
+export type ReservedReviewArtifactIo = {
+  readonly writeExisting: (
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+    content: string,
+  ) => Promise<void>;
+  readonly readOnce: (
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ) => Promise<string>;
+  readonly cleanup: (
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ) => Promise<"cleaned" | "replacement_retained">;
+};
 ```
 
 - `ReviewArtifactReservation` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で `callId` を確定させたうえで `TaskCallBinding` と `ReviewArtifactReservation` を生成・bind する。
@@ -1106,12 +1121,13 @@ export type ReviewArtifactInodeIdentity = {
 - `artifactPath` は Justice が `ReviewArtifactReservation` ごとに一意な安全な相対 path として生成する。binding identity は `TaskCallBinding` が保持し、path 自体に `callId` / `correlation` を埋め込むことは必須としない。例：`.justice/reviews/<artifactId>.json`。
 - reservation port の `createExclusiveMarker(artifactPath)` は、同じ review directory 内の一意な temporary marker を作成し、既存の `FileWriter.link`（宛先が存在する場合は `EEXIST` で atomic failure）で `artifactPath` に排他的に install する。成功結果は `created`、既存ファイル・symlink を含む占有結果は `occupied` とし、`fileExists` → `writeFile` の check-then-use や非排他的な上書きへの fallback は実装しない。temporary marker は成功・衝突のいずれでも best-effort で削除する。
 - `createExclusiveMarker` の成功時は、作成した artifact inode の `device` / `inode` を fstat で取得し、worker に提示しない private `leasePath`（例：`.justice/reviews/.leases/<artifactId>.lease`）を同じ inode への hard link として保持する。identity取得、lease作成、no-follow検証のいずれかができない場合は `usable` を返さない。lease は terminal cleanup まで保持し、restart 後も reservation の identity と lease path を SSOT とする。
-- worker の書込みは既存の予約済み leaf を `O_NOFOLLOW` / descriptor-relative open 相当で開き、reservation の inode identity と一致する場合だけ行う。rename、unlink 後の再作成、symlink 経由の書込みは許可せず、lease-aware writer を提供できない runtime は reservation を `unusable` とする。
-- Justice の読み取りは pathname の再解決後に通常の `readFile` を呼ばない。review directory を no-follow で開き、artifactPath と private leasePath を開いた file descriptor の `device` / `inode` と、durable reservation の identity が三者一致することを検証してから、検証済み descriptor から一度だけ読む。missing、symlink、差し替え、identity不一致は `artifact_read_failed` として扱い、artifactを権威付けしない。
-- cleanup は同じ inode 検証を行い、一致する artifactPath だけを削除する。差し替え後の path は削除せず advisory とし、private lease は元の inode を保持したまま best-effort で削除する。
+- runtime は予約作成と同時に review-artifact 専用の `ReservedReviewArtifactIo` を提供する。これは一般の `FileReader` / `FileWriter` を拡張しない narrow capability であり、`writeExisting`、`readOnce`、`cleanup` はいずれも path 単体ではなく trusted reservation 全体（`artifactPath`、`leasePath`、`artifactIdentity`）を受け取る。予約作成だけを提供し、この三操作のいずれかを安全に提供できない runtime は reservation を `unusable` とする。
+- worker の書込みを runtime が媒介する場合、`writeExisting` は既存の予約済み leaf を `O_NOFOLLOW` / descriptor-relative open 相当で開き、artifact descriptor と private lease descriptor の identity が durable reservation と一致する場合だけ truncate/write する。rename、unlink 後の再作成、symlink 経由の書込みは許可しない。worker が通常の filesystem tool で path を書き換えた内容は、それ自体では trusted authority ではない。Justice は必ず後述の `readOnce` 検証を通った bytes だけを artifact として受理する。
+- Justice の読み取りは pathname の再解決後に通常の `readFile` を呼ばない。`readOnce` は review directory を no-follow で開き、artifactPath と private leasePath を開いた file descriptor の `device` / `inode` と durable reservation の identity が三者一致することを検証してから、検証済み artifact descriptor から一度だけ読む。missing、symlink、差し替え、identity不一致は `artifact_read_failed` として扱い、artifactを権威付けしない。
+- `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path を削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。private lease は元の inode を保持したまま best-effort で削除する。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
 - dispatch 前にこの exclusive marker 作成を行う。`occupied` の場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。marker 作成の path validation は create 操作と同じ safe-relative-path boundary で行い、symlink 経由の destination を許可しない。
 - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
-- `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。`FileWriter` が capability を提供しない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。exclusive create、inode identity、private lease、no-follow 操作を完全に提供できる writer だけが `usable` reservation を返せる。
+- `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。runtime が exclusive create、inode identity、private lease、および `ReservedReviewArtifactIo` の全操作を完全に提供できない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。
   - `ReviewArtifactReservation` を `TaskCallBinding`（`task_review` / `final_review`）の `artifactReservation` フィールドへ bind する。
 - `usable` の場合、`claimReviewDispatch` の committed outcome に含まれる
   `TaskCallBinding.artifactReservation.artifactPath` を、その claim outcome から task-payload
