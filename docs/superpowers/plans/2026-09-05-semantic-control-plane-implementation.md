@@ -22,6 +22,8 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
+- A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
+- v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - At every Phase or Phase 3 subsection boundary, after the final task's targeted `Confirm GREEN` and before that task's Step 5 commit, run `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build` inside `.devcontainer/`; the full gate must pass before the phase is committed.
 - Ask the user before each commit. The listed `git add` command is the complete commit scope.
 
@@ -5050,6 +5052,123 @@ git add spikes/child-session-correlation/verify.ts spikes/child-session-correlat
 git commit -m "test: child session correlation runtime境界を検証"
 ```
 
+### Task 3.3a: Prove the supported Linux Review Artifact provider before wiring
+
+**Files:**
+
+- Create `spikes/review-artifact-linux/probe.c`.
+- Create `spikes/review-artifact-linux/verify.ts`.
+- Modify `.devcontainer/Dockerfile` only to provide `build-essential`, `rustc`, and `cargo` for the supported Linux build.
+- Create `docs/agents/review-artifact-linux-provider.md` with the exact probe output and the supported deployment statement.
+- Test `tests/runtime/review-artifact-linux-probe.test.ts`.
+
+**Requirement:**
+
+The probe is a hard gate, not a best-effort experiment. It must prove the exact primitives that the production provider will expose before Task 3.3b or Task 3.4 starts. The probe must not use `bun:ffi`, `realpath`-then-path-operation sequences, pathname-only `readFile`/`writeFile`, or a check-then-unlink cleanup fallback.
+
+**Implementation steps:**
+
+1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews` and `.justice/leases` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
+2. Configure every descendant open with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, plus `O_DIRECTORY`, `O_CLOEXEC`, and `O_NOFOLLOW` where applicable. Create the artifact leaf with `O_CREAT | O_EXCL | O_NOFOLLOW`, record its `st_dev`/`st_ino`, and create the private lease with `linkat(2)` before returning the reservation.
+3. Exercise these cases in the probe: successful exclusive reservation; second reservation collision; descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor close/reopen; and `renameat2(2)` quarantine followed by identity-checked deletion. A replaced inode must remain retained and must never be deleted by cleanup.
+4. Implement `verify.ts` to compile the probe with `cc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -O2`, execute it under a temporary directory, and emit one JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case. The only passing status is `status: "PASS"`; missing `openat2(2)`, missing `renameat2(2)`, a failed security case, or a non-Linux/non-x86_64 environment must produce `status: "BLOCKED"` and a non-zero exit code.
+5. Record the successful supported-environment output in `docs/agents/review-artifact-linux-provider.md`. Record the exact unsupported result and the user-visible `artifact_storage_unavailable` behavior as well; do not describe an unsupported runtime as a P0 exemption.
+
+**Verification:**
+
+```bash
+bun spikes/review-artifact-linux/verify.ts
+bun run test -- tests/runtime/review-artifact-linux-probe.test.ts
+```
+
+The first command must pass on the supported Linux x86_64 deployment. The second command must assert that a failed probe blocks provider publication and that no artifact path is handed to a worker. If the first command is `BLOCKED`, stop the implementation plan at this task and do not claim Phase 3 or JUS-P0-04 completion.
+
+**Commit:**
+
+```bash
+git add spikes/review-artifact-linux/probe.c spikes/review-artifact-linux/verify.ts .devcontainer/Dockerfile docs/agents/review-artifact-linux-provider.md tests/runtime/review-artifact-linux-probe.test.ts
+git commit -m "test: gate review artifact provider on Linux primitives"
+```
+
+### Task 3.3b: Implement the production LinuxOpenat2ReviewArtifactProvider
+
+**Files:**
+
+- Create `native/review-artifact-linux/Cargo.toml`.
+- Create `native/review-artifact-linux/build.rs`.
+- Create `native/review-artifact-linux/src/lib.rs`.
+- Create `rust-toolchain.toml` with the pinned supported Rust toolchain used by the addon build.
+- Modify `package.json` to add `@napi-rs/cli` and the `build:native:review-artifact` script.
+- Modify `bun.lock` through the package manager after the package change.
+- Create `src/runtime/linux-review-artifact-provider.ts`.
+- Create `tests/runtime/linux-review-artifact-provider.test.ts`.
+- Create `tests/runtime/linux-review-artifact-provider-security.test.ts`.
+
+**Requirement:**
+
+The implementation must be the concrete provider named by the design: `LinuxOpenat2ReviewArtifactProvider`. The native crate package name is `justice_review_artifact_linux`, and the release build must produce `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`. The TypeScript owner must load only that bundled addon on the supported deployment; it must not silently substitute a generic filesystem backend, `bun:ffi`, or a pathname-based implementation.
+
+**Native API:**
+
+Expose these synchronous N-API functions and object methods, with `Buffer` used for artifact bytes and opaque reservation handles used for descriptor ownership:
+
+```text
+openReviewArtifactRoot(rootDir: string) -> ReviewArtifactRootHandle
+ReviewArtifactRootHandle.createExclusiveMarker(artifactPath: string) -> ReservationHandle
+ReviewArtifactRootHandle.writeExisting(reservation: ReservationHandle, bytes: Buffer) -> void
+ReviewArtifactRootHandle.readOnce(reservation: ReservationHandle) -> Buffer
+ReviewArtifactRootHandle.cleanup(reservation: ReservationHandle) -> CleanupResult
+ReviewArtifactRootHandle.close() -> void
+```
+
+`openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the canonical workspace root descriptor. All subsequent paths are validated relative paths under `.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses `O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`. `writeExisting`, `readOnce`, and `cleanup` compare the stored identity against the live descriptor before acting. `cleanup` uses `renameat2(2)` to a random quarantine leaf, verifies the quarantined inode, and deletes only the verified inode. On any mismatch it returns `replacement_retained` and leaves the replacement in place.
+
+The provider object owns the root descriptor for the lifetime of the initialized
+`OpenCodeAdapter`; `close()` is called by the adapter's teardown path when the host exposes one,
+and the native process boundary closes the descriptor on process exit. No reservation handle may
+outlive its root handle. Tests must call `close()` explicitly and assert that subsequent native
+operations fail closed without touching the artifact or replacement path.
+
+The Rust crate must use `napi = "3.12.2"`, `napi-derive = "3.6.3"`, `napi-build = "2.4.1"`, and `libc = "0.2"`. `build.rs` must call `napi_build::setup()`. The package script must invoke the exact target build:
+
+```bash
+bunx napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js
+```
+
+**TypeScript adapter:**
+
+`src/runtime/linux-review-artifact-provider.ts` must expose
+`createLinuxOpenat2ReviewArtifactProvider(rootDir: string): LinuxOpenat2ReviewArtifactProvider | undefined`,
+where `LinuxOpenat2ReviewArtifactProvider` contains both the optional
+`FileWriter.createExclusiveMarker` callback and the `ReservedReviewArtifactIo` value. It must first
+verify `process.platform === "linux"`, `process.arch === "x64"`, glibc availability, and the native
+capability probe. It returns `undefined` for every failed condition. `OpenCodeAdapter` passes the
+returned provider into `NodeFileSystem`; that class exposes the marker callback and
+`createReservedReviewArtifactIo()` only when the provider is present. The provider maps native
+reservation handles to the existing `ReservedReviewArtifactIo` contract without adding methods to
+`FileReader` or requiring unrelated `FileWriter` implementers to change. Native addon load errors
+and native operation errors must be converted to the existing safe fallback and must not escape a
+hook or adapter boundary.
+
+**Verification:**
+
+```bash
+bun run build:native:review-artifact
+bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+bun run typecheck
+bun run lint
+bun run build
+```
+
+The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity, descriptor-relative writes/reads, symlink rejection, ancestor replacement, restart, replacement-retaining cleanup, and `close()` descriptor release. The unsupported-platform test must verify `undefined` capability rather than a fallback provider. Mock filesystem tests remain unchanged and continue to cover ordinary plugin behavior.
+
+**Commit:**
+
+```bash
+git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+git commit -m "feat: add Linux openat2 review artifact provider"
+```
+
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
 **Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, and the PreToolUse portion of §12.6.
@@ -5091,7 +5210,7 @@ not this task.
 
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the optional injected
-`FileWriter.createExclusiveMarker` runtime capability; safe-relative-path validation;
+the `LinuxOpenat2ReviewArtifactProvider` runtime capability exposed by `NodeFileSystem`; safe-relative-path validation;
 `AuthorizationStore.findByAuthorizationId`.
 It also consumes the normalized review `task()` payload, the observed runtime identity from
 Task 3.3, the existing `HookResponse` union and `mergePreToolUseResponses`, and the production
@@ -5134,8 +5253,9 @@ review completion authority. A `blocked` outcome exposes neither `callId` nor `a
 capability, not a promise that every `FileWriter` can provide it. A runtime may implement it only with
 descriptor-relative or equivalent native operations that bind the review directory and all ancestors
 for the complete operation. `resolveSafely()` followed by an absolute-path `O_NOFOLLOW` open is not
-such an implementation. The current path-only `NodeFileSystem` therefore leaves this capability
-absent until a descriptor-relative adapter is selected and tested. Missing or failed exclusive-create,
+such an implementation. On the supported deployment, `NodeFileSystem` receives the selected
+`LinuxOpenat2ReviewArtifactProvider` and exposes its marker callback plus reserved-artifact I/O. On
+unsupported deployments, both capabilities remain absent. Missing or failed exclusive-create,
 identity capture, or no-follow support returns an unusable reservation with
 `artifact_storage_unavailable`; no `fileExists` → `writeFile` fallback is permitted.
 `ReviewDispatchTransitionRecord` is `PersistedEnvelope` plus the dispatch fields, so every durable
@@ -6791,18 +6911,21 @@ export type JusticePluginOptions = {
 ```
 
 The sole production composition owner is `OpenCodeAdapter.#runInit()` in
-`src/runtime/opencode-adapter.ts`. Immediately after constructing its one `localFs` instance, it calls
-`localFs.createReservedReviewArtifactIo()` exactly once and conditionally passes the returned capability
-to the same `JusticePlugin` constructor that receives `localFs`, the shared `ObservationLogStore`, and
-the shared `AuthorizationStore`. Test compositions pass `createMockReservedReviewArtifactIo(files)`
-explicitly. A runtime that has no review-artifact capability passes no option; reservation is then
-unusable and the artifact path is never included in the worker payload. Do not derive the capability
-from `FileWriter` with `instanceof`, do not add it to unrelated storage interfaces, and do not introduce
-a generic filesystem DI layer.
+`src/runtime/opencode-adapter.ts`. It first calls
+`createLinuxOpenat2ReviewArtifactProvider(root)` exactly once, then passes that provider into the one
+`NodeFileSystem` instance. `NodeFileSystem` exposes the provider's optional
+`createExclusiveMarker` callback and calls `createReservedReviewArtifactIo()` exactly once; the
+returned capability is conditionally passed to the same `JusticePlugin` constructor that receives
+`localFs`, the shared `ObservationLogStore`, and the shared `AuthorizationStore`. Test compositions
+pass `createMockReservedReviewArtifactIo(files)` explicitly. A runtime that has no review-artifact
+capability passes no option; reservation is then unusable and the artifact path is never included in
+the worker payload. Do not derive the capability from `FileWriter` with `instanceof`, do not add it
+to unrelated storage interfaces, and do not introduce a generic filesystem DI layer.
 
 ```ts
 // src/runtime/opencode-adapter.ts, OpenCodeAdapter.#runInit()
-const localFs = new NodeFileSystem(root);
+const reviewArtifactProvider = createLinuxOpenat2ReviewArtifactProvider(root);
+const localFs = new NodeFileSystem(root, reviewArtifactProvider);
 const reservedReviewArtifactIo = localFs.createReservedReviewArtifactIo();
 const reviewArtifactOptions: Pick<JusticePluginOptions, "reservedReviewArtifactIo"> =
   reservedReviewArtifactIo === undefined ? {} : { reservedReviewArtifactIo };
@@ -7063,9 +7186,11 @@ Authorization lookup or state mutation.
 
 `reserveReviewArtifact` uses the fixed P0 constant
 `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3`. For each attempt it generates a fresh UUID, builds
-`.justice/reviews/<artifactId>.json`, validates it with `normalizeSafeRelativePath`, ensures the review
-directory exists, and calls the injected optional `FileWriter.createExclusiveMarker` before dispatch.
-When that capability is absent, reservation returns `artifact_storage_unavailable` before directory creation,
+`.justice/reviews/<artifactId>.json`, validates it with `normalizeSafeRelativePath`, and calls the
+injected optional `FileWriter.createExclusiveMarker` before dispatch. On the supported provider, the
+provider root opens/anchors `.justice/reviews` and `.justice/leases` during capability initialization;
+the reservation port must not call generic `fileWriter.mkdir` for these directories. When that capability
+is absent, reservation returns `artifact_storage_unavailable` before directory creation,
 `fileExists`, or `writeFile`; it never falls back to check-then-use creation.
 The port creates the destination atomically and reports `"occupied"` for an existing file or symlink;
 there is no `fileExists` check-then-use window. A collision records
@@ -7100,11 +7225,11 @@ The reservation and runtime filesystem tests must verify that the worker's exist
 while a deleted-and-recreated leaf, symlink replacement, or replacement with a different hard-linked inode is
 rejected before artifact parsing. The injected reservation port may be usable only when the runtime exposes
 the descriptor-relative/no-follow operation; generic pathname `readFile` / `writeFile` is not sufficient for
-this artifact path. The current path-only `NodeFileSystem` intentionally exposes no review-artifact
-capability, so its production path must return `artifact_storage_unavailable` without creating a worker
-artifact path. If a native descriptor-relative provider is added later, its runtime tests must cover the
-ancestor-swap cases before the provider is enabled. Cleanup must refuse to unlink a replacement path, retain
-an advisory, and remove the private lease only when the runtime can perform identity-verified deletion.
+this artifact path. The supported Linux path uses `LinuxOpenat2ReviewArtifactProvider` through
+`NodeFileSystem`; unsupported runtimes must return `artifact_storage_unavailable` without creating a worker
+artifact path. The provider's probe and runtime tests must cover the ancestor-swap cases before any capability
+is exposed. Cleanup must refuse to unlink a replacement path, retain an advisory, and remove the private lease
+only when the runtime can perform identity-verified deletion.
 
 Do not create `DelegatedExecutionBinding` here: a child session has not yet been authoritatively observed.
 Canonicalize `sp-review` and `sp-final-review` to `run_in_background = false` before the claim. The
@@ -8440,6 +8565,7 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
+- Test: `tests/integration/review-artifact-linux-e2e.test.ts`
 
 `tests/core/justice-plugin-routing.test.ts` is the shared production routing file: Task 3.4
 owns its live PreToolUse claim cases and Task 3.6 adds its matching review PostToolUse cases.
@@ -8449,6 +8575,31 @@ cases. `tests/core/v2/state-projection.test.ts` is extended here only for comple
 projection and restart recovery; its dispatch-slot and child-binding cases remain owned by Tasks
 3.4 and 3.5 respectively. `tests/core/justice-plugin.test.ts` is owned here for single-boundary
 composition and startup ordering.
+
+`tests/integration/review-artifact-linux-e2e.test.ts` is the required production-path test. It runs
+only on the supported Linux x86_64 deployment after `bun run build:native:review-artifact`; on every
+other platform or when the provider probe is unavailable it must fail as unsupported setup rather than
+silently skip the P0 path. It constructs the real `OpenCodeAdapter` and `JusticePlugin`, seeds one
+active Authorization and review-pending lifecycle, drives a `sp-review` PreToolUse claim, and then
+drives the child-session write and matching PostToolUse events. The test must assert all of the
+following through the real composition: the committed artifact path is the only path exposed to the
+worker; `run_in_background` is `false`; the write is mediated by `writeExisting` and does not call the
+generic `FileWriter.writeFile`; the one `readOnce` consumes the matching artifact; replacement and
+symlink cases are rejected before JSON parsing; the terminal record is durable before Gate/Acceptance;
+and cleanup retains a replacement with `replacement_retained` and an advisory. Run the same flow for
+`sp-final-review`, including its finalization identity and stale-round rejection.
+
+Before the existing PostToolUse routing, add the review-artifact write branch to the same
+`JusticePlugin.handleEvent(PreToolUse)` route. It must resolve the child session through the durable
+`DelegatedExecutionBinding`, then resolve the claimed `TaskCallBinding` and its usable reservation.
+For `toolName === "write"`, accept only a string `toolInput.filePath` that equals the committed
+`artifactPath` after the existing safe-relative-path validation, and a string `toolInput.content`.
+Call the injected `ReservedReviewArtifactIo.writeExisting(reservation, content)` and return
+`{ action: "skip" }` only after that write commits; the normal OpenCode write tool must not run. A
+missing/stale child binding, path mismatch, invalid content, identity mismatch, or provider error
+returns `{ action: "skip" }` after recording a fail-closed advisory and leaves the review slot without
+trusted completion evidence. Non-review writes and writes from unrelated child sessions retain the
+existing routing. This is the only worker artifact-write path and is covered by the Linux E2E test.
 
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
@@ -9411,13 +9562,14 @@ it("retains a replacement path during terminal cleanup and records an advisory",
 });
 ```
 
-The real-filesystem Node test first asserts that the current path-only adapter exposes neither review-artifact
-capability. Do not add passing `writeExisting` / `readOnce` / cleanup cases against that adapter: they would
-codify the ancestor-swap vulnerability. If a descriptor-relative native provider is introduced, enable a
-separate provider-specific suite only after it independently proves matching-inode writes and reads, unlink/
-recreate and symlink replacement rejection without changing replacement bytes, identity mismatch rejection
-before JSON parsing, and fail-closed `replacement_retained` cleanup. The provider-specific cleanup test must
-never rely on a racy `lstat` then `unlink` implementation.
+The real-filesystem Node test asserts that an unsupported platform or failed native probe exposes neither
+review-artifact capability. The supported Linux x86_64 suite must exercise the actual
+`LinuxOpenat2ReviewArtifactProvider` through the production `NodeFileSystem` composition; it must prove
+matching-inode writes and reads, unlink/recreate and symlink replacement rejection without changing
+replacement bytes, identity mismatch rejection before JSON parsing, and fail-closed
+`replacement_retained` cleanup. The provider-specific cleanup test must never rely on a racy `lstat` then
+`unlink` implementation. Mock tests remain deterministic capability tests and are not evidence of the native
+provider's security properties.
 
 ```ts
 it.each(["task-review", "final-review"] as const)(
@@ -12227,6 +12379,8 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 3.3a      | JUS-P0-04, Design §4.10, F-043                                                                   | Linux `openat2(2)` / `renameat2(2)` hard-gate probe; exclusive marker, inode/lease identity, descriptor-relative write/read, symlink and ancestor-swap rejection, replacement-retaining cleanup, unsupported-runtime result, and recorded PASS/BLOCKED output |
+| 3.3b      | JUS-P0-04, Design §4.10, INV-21, F-043                                                          | bundled Rust Node-API `LinuxOpenat2ReviewArtifactProvider`; exact addon build, `NodeFileSystem` capability composition, native security tests, unsupported-platform tests, and fail-open capability publication |
 | 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036, F-040, F-041, F-042, F-043 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; drain-time queued-delivery validator with deliver/discard/retain outcomes; startup fixture with normal-hook delivery, review-first claim/no-old-directive, terminal discard, and unreadable-authority retention; `ClaimInput` without correlation, exact unavailable/integrity blocked outcomes, and production routing spoof regression; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; optional exclusive-marker plus separate reserved-artifact I/O capability, unusable missing-capability result, inode lease, matching-inode write, and replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, PostToolUse §12.6, INV-13 through INV-21, F-040, F-043 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, replacement-safe cleanup advisory, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
@@ -12255,11 +12409,31 @@ boundary, inject only an active current pending slot, discard terminal / claimed
 and retain unreadable-authority deliveries with zero positive directive.
 F-041 reverse traceability is explicit: Task 3.4 makes `createExclusiveMarker` an optional
 `FileWriter` capability; the reservation port turns capability absence into an unusable result with
-no check-then-use fallback, the production adapter passes only a verified descriptor-relative
-capability when one exists, and the shared production-routing helper supplies deterministic marker
-behavior without forcing unrelated writers or inline test doubles to change.
+no check-then-use fallback, the production adapter passes only the verified
+`LinuxOpenat2ReviewArtifactProvider` capability on the supported deployment, and the shared
+production-routing helper supplies deterministic marker behavior without forcing unrelated writers or
+inline test doubles to change. Task 3.3a is the hard gate for exposing that provider.
+F-043 reverse traceability is explicit: Design §4.10 names the concrete Rust Node-API addon, supported
+Linux deployment, exact `openat2(2)` / `renameat2(2)` security primitives, and unsupported-runtime
+behavior; Task 3.3a proves those primitives before Task 3.3b/3.4; Task 3.3b builds and tests the real
+provider; Task 3.4 wires the provider through the actual `OpenCodeAdapter` composition; and Task 3.6
+drives a real Linux E2E from review claim through mediated worker write, one read, terminalization,
+Gate/Acceptance ordering, and replacement-safe cleanup. A mock-only GREEN result or a provider probe
+failure cannot satisfy F-043.
 
-Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations. It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization, terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child binding, terminal classification, composite terminal record, staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict new-decision replay described in Task 3.2. A known runtime limitation documents an observation only; it never waives a P0 completion criterion.
+Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations, if Task 3.3a
+cannot produce a supported-provider `PASS`, or if Task 3.3b cannot build and test the concrete addon.
+It is incomplete if lifecycle orchestration, synchronous mandatory review canonicalization,
+terminal-Authorization guard, cancellation tombstone convergence, non-reentrant parent-session
+serialization, concurrent exactly-one claim, usable and unusable reservation branches, durable child
+binding, mediated worker artifact write, terminal classification, composite terminal record,
+staged-completion restart recovery without artifact/worker-output reread, post-terminal lifecycle/Gate
+recovery without terminal reappend, stale-event rejection, conclusive-loss recovery, uncertain-claimed
+blocking, attempt-scoped Gate/Acceptance idempotency, task Gate, Final Gate, or accepted-task progress
+lacks a passing automated test. Gate/Acceptance idempotency specifically requires the concurrent
+decision-identity cases, legacy task Gate shard replay compatibility, legacy non-authority, and strict
+new-decision replay described in Task 3.2. A provider probe `BLOCKED` result is an implementation
+blocker, not a runtime limitation that waives a P0 completion criterion.
 
 <!-- markdownlint-enable MD013 MD060 -->
 
@@ -12495,27 +12669,37 @@ The current `NodeFileSystem` uses path-only `node:fs/promises` operations and mu
 `createExclusiveMarker` or `ReservedReviewArtifactIo` implementations that resolve an absolute path and
 then open, link, or unlink it. Such code leaves an ancestor-swap window between validation and use.
 
-Until a native descriptor-relative provider is selected for the supported deployment platforms, add only
-the explicit unsupported result below. The method is intentionally separate from `FileWriter`; it gives
-the production composition a typed capability probe without turning an unsafe path helper into a review
-artifact boundary.
+The supported deployment uses the concrete `LinuxOpenat2ReviewArtifactProvider` from Task 3.3b. The
+method remains intentionally separate from `FileWriter` for reserved-artifact I/O; it gives the
+production composition a typed capability probe without turning an unsafe path helper into a review
+artifact boundary. Unsupported platforms and failed probes continue to expose no capability.
 
 ```ts
 // src/runtime/node-file-system.ts
+private readonly reviewArtifactProvider?: LinuxOpenat2ReviewArtifactProvider;
+readonly createExclusiveMarker?: NonNullable<FileWriter["createExclusiveMarker"]>;
+
+constructor(
+  root: string,
+  reviewArtifactProvider?: LinuxOpenat2ReviewArtifactProvider,
+) {
+  // Existing root initialization remains unchanged.
+  this.createExclusiveMarker = reviewArtifactProvider?.createExclusiveMarker;
+  this.reviewArtifactProvider = reviewArtifactProvider;
+}
+
 createReservedReviewArtifactIo(): ReservedReviewArtifactIo | undefined {
-  // The public Node filesystem API used by this adapter has no operation that
-  // binds open/link/unlink to the validated ancestor descriptors.
-  return undefined;
+  return this.reviewArtifactProvider?.reservedReviewArtifactIo;
 }
 ```
 
-`NodeFileSystem` must not add `createExclusiveMarker` while this method returns `undefined`. If a future
-native provider is introduced, it must be injected as a separate runtime capability and must hold an open
-directory descriptor for the review root and every ancestor used by marker, lease, read, write, and cleanup.
-Its operations must be descriptor-relative (or a platform-equivalent atomic primitive), compare artifact
-and lease identities before I/O, and be guarded by real-filesystem ancestor-swap tests. The provider must
-be enabled only after those tests pass; otherwise the composition continues to pass no capability and the
-reservation port returns `artifact_storage_unavailable` without creating a directory or exposing a path.
+`NodeFileSystem` exposes `createExclusiveMarker` only when the constructor receives the selected provider.
+The provider holds an open directory descriptor for the review root and every ancestor used by marker,
+lease, read, write, and cleanup. Its operations are descriptor-relative (or a platform-equivalent atomic
+primitive), compare artifact and lease identities before I/O, and are guarded by the Task 3.3a probe and
+Task 3.3b real-filesystem ancestor-swap tests. Unsupported platforms continue to pass no capability and
+the reservation port returns `artifact_storage_unavailable` without creating a directory or exposing a
+path.
 - `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter, reservedReviewArtifactIo: ReservedReviewArtifactIo | undefined, recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation, bounded collision retry, and capability completeness. `createExclusiveMarker` and `ReservedReviewArtifactIo` are runtime capabilities, not general storage interfaces or a second composition dependency.
 
 Define the reservation port and helper before the production RED/GREEN tests. The helper below is the
@@ -12573,7 +12757,6 @@ export function createReviewArtifactReservationPort(
         }
 
         try {
-          await fileWriter.mkdir(".justice/reviews", true);
           const marker = await createExclusiveMarker.call(fileWriter, safeArtifactPath);
           if (marker.kind === "occupied") {
             await recordAdvisorySafely("review_unexpected_existing_artifact");
@@ -12598,11 +12781,10 @@ export function createReviewArtifactReservationPort(
 }
 ```
 
-The optional `FileWriter` type change is part of Task 3.4's Files list. The current `NodeFileSystem`
-implementation adds only `createReservedReviewArtifactIo(): ReservedReviewArtifactIo | undefined`, which
-returns `undefined` until a descriptor-relative native provider is available; it does not add
-`createExclusiveMarker`. `createReservedReviewArtifactIo()` is called once at the composition root.
-Either capability being absent is an explicit `artifact_storage_unavailable` unusable result: it invokes neither
+The optional `FileWriter` type change is part of Task 3.4's Files list. The `NodeFileSystem`
+implementation receives the selected provider, exposes its optional `createExclusiveMarker`, and
+`createReservedReviewArtifactIo()` is called once at the composition root. Either capability being absent
+is an explicit `artifact_storage_unavailable` unusable result: it invokes neither
 `fileExists` nor `writeFile` and exposes no worker artifact path. `createMockFileWriter()` remains compatible;
 the review-artifact tests create a separate deterministic `createMockReservedReviewArtifactIo(files)` alongside
 it. `createMockFileSystem()` uses that explicit test port only when a test constructs
@@ -12610,7 +12792,7 @@ the review composition. `createMemFs().writer` and unrelated inline writer doubl
 own test exercises reservation. The mock I/O port must reject a mismatched/symlink replacement without mutating
 its bytes, read only a matching recorded identity, and return `replacement_retained` instead of deleting a
 replacement. The shared helper owns only deterministic identity bookkeeping; the runtime file test owns the
-unsupported-capability probe and any future native-provider tests. Tests must assert that `fileExists` is never
+unsupported-capability probe and the Linux provider tests own native semantics. Tests must assert that `fileExists` is never
 used for reservation, that a collision retries with a fresh UUID, and that
 marker, identity, lease, or either missing capability returns the exact unusable reason without exposing a path.
 
@@ -12691,22 +12873,23 @@ receives a usable reservation through an explicitly supplied `createMockReserved
 test must also assert a second call for the same destination returns `{ kind: "occupied" }` without replacing
 its existing content.
 
-Add this real-filesystem capability probe to `tests/runtime/node-file-system.test.ts`. It owns the
-runtime capability decision rather than pretending that the shared mock helper proves Node's filesystem
-semantics. Until a descriptor-relative native provider is added, the expected result is unsupported.
+Add the unsupported-platform capability probe to `tests/runtime/node-file-system.test.ts`. It owns the
+runtime capability decision rather than pretending that the shared mock helper proves filesystem semantics.
+The Linux x86_64 provider behavior is tested by `tests/runtime/linux-review-artifact-provider.test.ts`
+and `tests/runtime/linux-review-artifact-provider-security.test.ts` after the native addon build.
 
 ```ts
-it("does not advertise review-artifact I/O without descriptor-relative primitives", () => {
-  const fs = new NodeFileSystem(".");
+it("does not advertise review-artifact I/O when the provider probe is unavailable", () => {
+  const fs = new NodeFileSystem(".", undefined);
 
   expect(fs.createReservedReviewArtifactIo()).toBeUndefined();
   expect("createExclusiveMarker" in fs).toBe(false);
 });
 ```
 
-If a descriptor-relative native provider is later introduced, replace this probe with matching-inode
-`writeExisting` / `readOnce`, ancestor-swap, symlink-replacement, and replacement-retaining cleanup
-tests. Those tests are a prerequisite for enabling the provider, not an optional enhancement.
+The Linux provider suite must additionally prove matching-inode `writeExisting` / `readOnce`,
+ancestor-swap, symlink-replacement, and replacement-retaining cleanup. Those tests are a prerequisite
+for publishing the addon and are not optional coverage.
 - `resolveMandatoryReviewCategory(toolInput: Readonly<Record<string, unknown>>): "sp-review" | "sp-final-review" | undefined` returns a value only for exact canonical categories after the existing task-input normalizer has run.
 - `buildReviewClaimResponse(event: PreToolUseEvent, outcome: ClaimReviewDispatchOutcome): HookResponse` maps only a committed `TaskCallBinding` / explicit blocked outcome to the existing `HookResponse` union; it never copies correlation or artifact identity from `event.payload`.
 - `formatReviewDirective(directive: ReviewRequiredDirective): string` is the single pure formatter for the Controller-facing review directive.
