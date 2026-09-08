@@ -8899,7 +8899,7 @@ it("reissues startup recovery delivery at the next Controller-facing hook exactl
   expect(secondResponse).not.toEqual(
     expect.objectContaining({ injectedContext: expect.stringContaining("[JUSTICE") }),
   );
-  expect(fixture.takePendingDeliveries()).toEqual([]);
+  await expect(fixture.takePendingDeliveries()).resolves.toEqual([]);
 });
 
 it("does not re-inject startup delivery when the first matching hook claims it", async () => {
@@ -8960,16 +8960,36 @@ claimed usable binding through Task 3.4, injects the same `ReservedReviewArtifac
 root, and records JSON parsing through a spy on `assembleReviewCompletionStaging`. It must never call the
 ordinary `FileReader.readFile` for a reserved artifact.
 
+The helper wraps the real mock port operations with `vi.fn`, then injects those exact wrapped functions into the
+completion composition. This makes the interaction assertions type-safe without adding a production test hook.
+
+```ts
+type ReviewArtifactCompletionFixture = {
+  readonly reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>;
+  readonly validReviewWorkerJson: string;
+  readonly writeReservedArtifact: ReturnType<typeof vi.fn>;
+  readonly readReservedArtifact: ReturnType<typeof vi.fn>;
+  readonly genericArtifactRead: ReturnType<typeof vi.fn>;
+  readonly parseAndAssemble: ReturnType<typeof vi.fn>;
+  readonly recordAdvisory: ReturnType<typeof vi.fn>;
+  readonly unlinkArtifactPath: ReturnType<typeof vi.fn>;
+  readonly consume: () => Promise<ReviewCompletionOutcome>;
+  readonly replaceArtifactWithDifferentInode: (content: string) => Promise<void>;
+  readonly ensureCleanup: () => Promise<void>;
+  readonly readReplacementArtifact: () => Promise<string>;
+  readonly durableFailureStaging: () => Promise<ReviewArtifactFailureStagingRecord | undefined>;
+  readonly durableGateDecisions: () => Promise<readonly GateDecisionRecord[]>;
+  readonly durableAcceptanceDecisions: () => Promise<readonly AcceptanceDecisionRecord[]>;
+};
+```
+
 ```ts
 it("reads exactly once from matching artifact, lease, and durable identities", async () => {
   const fixture = await arrangeClaimedUsableReviewCompletion();
-  await fixture.reservedReviewArtifactIo.writeExisting(
-    fixture.reservation,
-    fixture.validReviewWorkerJson,
-  );
+  await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
 
   await expect(fixture.consume()).resolves.toMatchObject({ kind: "completed" });
-  expect(fixture.reservedReviewArtifactIo.readOnce).toHaveBeenCalledTimes(1);
+  expect(fixture.readReservedArtifact).toHaveBeenCalledTimes(1);
   expect(fixture.genericArtifactRead).not.toHaveBeenCalled();
   expect(fixture.parseAndAssemble).toHaveBeenCalledTimes(1);
 });
@@ -8979,12 +8999,12 @@ it("stages artifact_read_failed before parsing when artifact is replaced", async
   await fixture.replaceArtifactWithDifferentInode("replacement artifact");
 
   await expect(fixture.consume()).resolves.toMatchObject({ kind: "blocked" });
-  expect(fixture.durableFailureStaging()).toEqual(
+  await expect(fixture.durableFailureStaging()).resolves.toEqual(
     expect.objectContaining({ reason: "artifact_read_failed" }),
   );
   expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
-  expect(fixture.durableGateDecisions()).toEqual([]);
-  expect(fixture.durableAcceptanceDecisions()).toEqual([]);
+  await expect(fixture.durableGateDecisions()).resolves.toEqual([]);
+  await expect(fixture.durableAcceptanceDecisions()).resolves.toEqual([]);
 });
 
 it("retains a replacement path during terminal cleanup and records an advisory", async () => {
@@ -9651,19 +9671,30 @@ const readAndAssembleMatchingArtifact: ReviewCompletionDependencies["readAndAsse
   if (binding.artifactReservation.status !== "usable" || reservedReviewArtifactIo === undefined) {
     return { kind: "failure", reason: "artifact_read_failed" };
   }
+  let content: string;
   try {
-    const content = await reservedReviewArtifactIo.readOnce(binding.artifactReservation);
-    return assembleReviewCompletionStaging(postToolUse, binding, delegatedBinding, correlation, content);
+    content = await reservedReviewArtifactIo.readOnce(binding.artifactReservation);
   } catch (cause: unknown) {
     await this.recordReviewAdvisory("review_artifact_read_failed", cause);
+    return { kind: "failure", reason: "artifact_read_failed" };
+  }
+  try {
+    // JSON and schema failures are values in this union, not exceptions to be collapsed to I/O.
+    return assembleReviewCompletionStaging(postToolUse, binding, delegatedBinding, correlation, content);
+  } catch (cause: unknown) {
+    await this.recordReviewAdvisory("review_artifact_assembly_failed", cause);
     return { kind: "failure", reason: "artifact_read_failed" };
   }
 };
 const cleanupArtifact: ReviewCompletionDependencies["cleanupArtifact"] = async (reservation) => {
   if (reservedReviewArtifactIo === undefined) return;
-  const outcome = await reservedReviewArtifactIo.cleanup(reservation);
-  if (outcome === "replacement_retained") {
-    await this.recordReviewAdvisory("review_artifact_identity_mismatch");
+  try {
+    const outcome = await reservedReviewArtifactIo.cleanup(reservation);
+    if (outcome === "replacement_retained") {
+      await this.recordReviewAdvisory("review_artifact_identity_mismatch");
+    }
+  } catch (cause: unknown) {
+    await this.recordReviewAdvisory("review_artifact_cleanup_failed", cause);
   }
 };
 
@@ -12084,25 +12115,6 @@ private async readNoFollowInodeIdentity(path: string): Promise<ReviewArtifactIno
   }
 }
 
-private async removeIfMatchingInode(
-  path: string,
-  expected: ReviewArtifactInodeIdentity,
-): Promise<void> {
-  try {
-    const entry = await lstat(path);
-    if (
-      entry.isSymbolicLink() ||
-      String(entry.dev) !== expected.device ||
-      String(entry.ino) !== expected.inode
-    ) {
-      return;
-    }
-    await unlink(path);
-  } catch (cause: unknown) {
-    if (!(cause instanceof Error) || (cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-  }
-}
-
 private async openVerifiedReservedArtifact(
   reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
   flags: number,
@@ -12167,7 +12179,6 @@ createReservedReviewArtifactIo(): ReservedReviewArtifactIo {
     },
     cleanup: async (reservation): Promise<"cleaned" | "replacement_retained"> => {
       const artifactPath = await this.resolveSafelyForWrite(reservation.artifactPath);
-      const leasePath = await this.resolveSafelyForWrite(reservation.leasePath);
       try {
         const artifact = await lstat(artifactPath);
         const matches =
@@ -12175,7 +12186,8 @@ createReservedReviewArtifactIo(): ReservedReviewArtifactIo {
           String(artifact.dev) === reservation.artifactIdentity.device &&
           String(artifact.ino) === reservation.artifactIdentity.inode;
         // Node exposes no unlinkat-by-descriptor primitive. Do not perform a racy
-        // lstat-then-unlink; retaining a matching-looking leaf is safer than deleting a replacement.
+        // lstat-then-unlink for either the artifact or private lease; retaining both
+        // is safer than deleting a replacement.
         if (!matches) return "replacement_retained";
         return "replacement_retained";
       } catch (cause: unknown) {
@@ -12183,8 +12195,6 @@ createReservedReviewArtifactIo(): ReservedReviewArtifactIo {
           return "cleaned";
         }
         throw cause;
-      } finally {
-        await this.removeIfMatchingInode(leasePath, reservation.artifactIdentity).catch(() => undefined);
       }
     },
   };
@@ -12204,7 +12214,6 @@ async createExclusiveMarker(
   const markerPath = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.marker`);
   const leaseRelativePath = join(dirname(path), ".leases", `${basename(path)}.lease`);
   const leasePath = await this.resolveSafelyForWrite(leaseRelativePath);
-  let installedIdentity: ReviewArtifactInodeIdentity | undefined;
 
   await fsMkdir(dirname(destination), { recursive: true });
   await fsMkdir(dirname(leasePath), { recursive: true });
@@ -12224,17 +12233,16 @@ async createExclusiveMarker(
       }
       throw cause;
     }
-    installedIdentity = await this.readNoFollowInodeIdentity(destination);
+    const artifactIdentity = await this.readNoFollowInodeIdentity(destination);
     await fsLink(destination, leasePath);
     return {
       kind: "created",
       leasePath: leaseRelativePath,
-      artifactIdentity: installedIdentity,
+      artifactIdentity,
     };
   } catch (cause: unknown) {
-    if (installedIdentity !== undefined) {
-      await this.removeIfMatchingInode(destination, installedIdentity).catch(() => undefined);
-    }
+    // Node cannot atomically bind identity verification to unlink. Retain an
+    // unusable artifact rather than racing to remove a possible replacement.
     throw cause;
   } finally {
     await this.bestEffortDelete(() => unlink(markerPath));
