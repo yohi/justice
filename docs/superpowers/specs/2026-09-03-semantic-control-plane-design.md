@@ -1289,9 +1289,12 @@ authorization cardinality:
   - 明示的な cancel を要求して新規承認をブロックする挙動は P0 では採用しない。
 
 restart / hydration:
-  - plugin startup / session hydration 時に、`.justice/authorizations.json` 内の active binding から `PlanBridge` の active plan を復元する。
-  - active binding が存在するが plan ファイルがない場合は binding を invalidated とする。
-  - 復元後も fingerprint 不一致チェックは継続して実行する。
+  - plugin startup / session hydration は authoritative `.justice/authorizations.json` の active binding ごとに既存の `PlanBridge.readPlanFile(planPath)` を使って plan を probe する。`readPlanFile(...) === null` は `fileExists(planPath) === false` による confirmed missing だけを表し、probe throw は missing と断定しない I/O uncertainty である。
+  - plan が存在する場合でも shared `AuthorizationReviewBoundary.withParentSession(sessionId)` の内側で exact `authorizationId` を authoritative に再読し、同じ parent の current binding がまだ active である場合だけ active-plan cache を復元する。復元後も fingerprint 不一致チェックは継続して実行する。
+  - confirmed missing の active binding は同じ parent boundary の内側で `invalidateMissingPlanWithinAuthorizationReviewBoundary(sessionId, authorizationId, at)` を呼ぶ。この mutation は current active binding を durable `invalidated` にし、`invalidatedAt` を記録する。`invalidationReason` は付けない。`"plan_superseded"` は superseding approval 専用であり、missing-plan invalidation や一般化した reason taxonomy に流用しない。
+  - missing-plan mutation が `saved` の場合だけ、同じ boundary を保持したまま current pending / claimed Review Dispatch への既存 cancelled tombstone attempt を完了し、その後 stale active-plan cache を clear して boundary を release する。最終 runtime の順序は `boundary-enter → authorization-invalidated-durable → review-cancelled-tombstone-attempt → active-plan-cache-clear → boundary-release` とする。cancellation append failure は durable invalidation を rollback しない。
+  - confirmed missing を検出したが missing-plan mutation が `failed` / `uncertain`、または other deterministic non-success で terminal authority を確認できない場合、cache を active authority として復元せず、cancellation append を試行せず、当該 binding を Review directive reissue、candidate offer、claim、staged completion の Gate / Acceptance promotion、AcceptanceDecision の authority に使用しない。
+  - plan probe が throw した場合は不可逆 invalidation を行わず、その startup authorization restoration を uncertain とする。active-plan cache を復元せず、authorization-dependent positive Review / Gate / Acceptance recovery に進まない。一方で Justice plugin 自体の initialize、Wisdom、Telemetry、durable projection cache の初期化は fail-open で継続してよい。この recovery 可否は `JusticePlugin.initialize()` の小さな local readiness state で保持し、generic startup / lifecycle framework を導入しない。
 ```
 
 - Authorization は最初の Worker Task 実行後も consume しない。
