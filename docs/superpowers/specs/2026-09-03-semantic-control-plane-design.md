@@ -299,6 +299,19 @@ export type AuthorizationReviewBoundary = {
   ): Promise<T>;
 };
 
+export type ApprovePlanInput = {
+  readonly sessionId: string;
+  readonly planPath: string;
+  readonly planFingerprint: PlanFingerprint;
+  readonly canonicalSnapshot: CanonicalPlanSnapshot;
+  readonly approvedAt: string;
+};
+
+export type AuthorizationActivePlanReconciler = (
+  parentSessionId: string,
+  activeBinding: Extract<ApprovedPlanBinding, { readonly status: "active" }> | null,
+) => void;
+
 export type AuthorizationMutationResult =
   | {
       readonly kind: "saved";
@@ -329,6 +342,12 @@ export type AuthorizationMutationResult =
 - boundary は Authorization の durable commit だけでなく、その結果に依存する cancellation、claim、artifact terminalization、Gate / Acceptance append、directive injection が完了するまで保持する。各処理内の active check は defense-in-depth とし、check 後に boundary 外で正の状態変更を行ってはならない。restart 後は durable Authorization と observation log の再読が authority であり、in-memory queue を復元しない。
 - `AuthorizationReviewBoundary` は parent session ごとの非再入 promise-tail queue である。factory は process-local の空 map から開始し、predecessor rejection を吸収し、operation 開始前に current tail を install し、operation の成功・失敗の双方で completion を release する。tail cleanup は map の current tail が自己の tail と一致するときだけ行い、古い operation が後続 tail を削除してはならない。これは durable authority でも generic lock framework でもない。
 - shared boundary を取得する public operation と、すでに同じ parent-session boundary を保持する caller 専用の `WithinAuthorizationReviewBoundary` operation を分離する。後者は boundary を再取得しない。parent boundary 内から public wrapper を呼ぶこと、暗黙の reentrancy、generic reentrant mutex、domain ごとの独立 queue は禁止する。
+- `AuthorizationStore.approve(input)` は `input.sessionId` をキーに shared boundary を一度だけ取得し、`approveWithinAuthorizationReviewBoundary(input, reconcileActivePlan)` へ委譲する。すでに同じ parent-session boundary を保持する PlanBridge は public `approve` を呼ばず、within-boundary operation を直接呼ぶ。`reconcileActivePlan` は PlanBridge が所有する再構築可能な active-plan cache だけを更新する callback であり、durable authority ではない。optional boundary、test-only boundary、暗黙の fallback は追加しない。
+- approval の initial read、candidate 作成、same-session active の `plan_superseded` 化、fresh binding 追加、`saveAtomicWithLock(candidate, loadedLockMeta)` は同じ boundary 内で行う。`AtomicPersistence.saveAtomicWithLock()` の `status: "saved"` は、candidate の配列が merge 後に保存されたことだけを意味し、呼び出し元の fresh `authorizationId` が current active であることを意味しない。
+- `status: "saved"` 後は、同じ boundary を保持したまま authoritative `.justice/authorizations.json` を再読する。再読した配列から同一 session の active bindings を exact に確認し、active が一件で、かつ fresh `authorizationId` と一致した場合だけ `approve()` はその authoritative binding を返す。fresh ID が `invalidated` / `released` になった場合、別の binding が winner であっても、要求した plan の approval は成功扱いにせず `null` を返す。別 plan の winner を requested approval の positive result または armed result として返してはならない。
+- own fresh ID が winner ではないが post-save reread が成功した場合、`reconcileActivePlan` には latest durable active binding（なければ `null`）を渡して cache を reconciliation する。ただし `approve()` の戻り値は `null` のままとし、PlanBridge は request を arm しない。own fresh ID が winner の場合だけ callback に own binding を渡して cache を publish し、PlanBridge は同じ binding を armed result にする。
+- post-save authoritative reread が失敗した場合、fresh candidate を positive authority にせず、`reconcileActivePlan(sessionId, null)` で stale positive cache を clear し、`approve()` は `null` を返す。再読前の cache を fresh candidate として残したり、requested plan を armed にしたりしてはならない。initial read failure、例外、`conflict_diverted` では save が authoritative success ではないため callback を呼ばず、既存 cache を勝手に置換しない。
+- `AuthorizationStore.hydrate()` は authoritative `.justice/authorizations.json` だけを読み、`.justice/authorizations.conflict.json` を読まない。read/parse/validation failure は空の non-active result に縮退し、active-plan restoration はその結果の `status: "active"` binding だけを `PlanBridge.setActivePlan(sessionId, planPath)` に渡す。`invalidated` / `released` binding は復元対象にしない。
 - `AuthorizationStore.release(authorizationId, at)` と fingerprint invalidation の public wrapper は、まず authoritative binding を `authorizationId` の exact match で読み、そこから得た不変 `sessionId` で boundary を一度だけ取得する。binding がない、読込に失敗した、または persistence が uncertain な場合は defined non-success を返し、親 session を推測してはならない。
 - `releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)` と `invalidateForFingerprintWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, currentFingerprint, at)` は、すでに同じ parent-session boundary を保持する caller 専用である。どちらも authoritative array を再読し、exact authorization ID と `binding.sessionId === parentSessionId` を確認する。release は active binding だけを `released` にし、invalidation は active binding の stored fingerprint が `currentFingerprint` と異なる場合だけを `invalidated` にする。terminal binding を active に戻してはならない。
 - inner mutation は一回の `AtomicPersistence.saveAtomicWithLock` だけで durable state を更新し、`status: "saved"` のときだけ `AuthorizationMutationResult` の saved result を返す。missing、wrong parent、already terminal、unchanged fingerprint は deterministic non-success とする。例外は `failed`、claim/version conflict が conflict journal へ divert された場合は `uncertain` とし、いずれも terminal cache や review cancellation の authority にしない。inner mutation 自体は cache を更新しない。
@@ -1180,6 +1199,28 @@ Acceptance criteria:
       → 保存成功 → active
       → conflict_diverted / exception → binding uncertain → 権限なし
 
+approval result / cache semantics:
+  - `saveAtomicWithLock(...)` の `status: "saved"` は merge 後の配列が durable に保存されたことだけを表す。
+    version-mismatch retry 後に fresh `authorizationId` が active であることとは同義ではない。
+  - 保存成功後、同じ `AuthorizationReviewBoundary` を保持したまま authoritative array を再読する。
+    own fresh ID が current active である場合だけ `approve()` はその binding を返し、PlanBridge は
+    requested plan を `armed: true` として active-plan cache へ publish できる。
+  - own fresh ID が `invalidated` / `released` の場合は merge loser である。latest durable active binding
+    が別 plan に存在しても、requested plan の `approve()` は `null`、PlanBridge は `armed: false` とする。
+    cache は latest durable active binding（なければ clear）へ reconcile するが、requested loser plan は publish しない。
+  - post-save authoritative reread が失敗した場合は `null` / `armed: false` とし、fresh candidate を
+    positive authority にしない。stale positive cache は clear し、cache を fresh candidate で置換しない。
+  - `conflict_diverted` / exception は `null` / `armed: false` とし、candidate を cache authority にしない。
+    save が成立していないため、既存 cache は勝手に置換しない。
+
+PlanBridge approval path:
+  - cache owner は PlanBridge であり、AuthorizationStore は PlanBridge を直接所有・生成しない。
+  - PlanBridge は shared boundary 内で `approveWithinAuthorizationReviewBoundary` を呼び、authoritative
+    reread が成功した場合だけ `reconcileActivePlan` callback を受け取る。callback が渡す binding と
+    `approve()` の positive result は同じ durable record でなければならない。
+  - callback が winner binding を受け取っても、`approve()` の return が `null` なら requested call は
+    arm しない。これは winner の cache reconciliation と requested approval の成功を分離するためである。
+
 task() PreToolUse 介入条件:
   binding.status === "active"
   ∧ binding.sessionId === 現 session
@@ -1209,14 +1250,18 @@ authorization merge rule:
   `invalidationReason = "plan_superseded"` へ変換する。通常の approve path は fresh candidate
   を一件だけ生成するが、version mismatch retry では両 merge 側の active candidate を同じ規則で
   比較する。
-  - 異なる session の binding は変更せず保持する。merge result は session ごとに active
-    binding を高々一件にし、version mismatch 後に authoritative save へ成功した candidate が
-    active authorization となる。
+- 異なる session の binding は変更せず保持する。merge result は session ごとに active
+  binding を高々一件にする。version mismatch 後に save へ成功した呼び出し元の candidate が
+  active になるとは限らず、winner は常に上記の deterministic rule から得られる。caller は
+  authoritative reread で own fresh ID の状態を確認してから return / armed / cache を決める。
 
 authorization cardinality:
   - 同一 session に active な `ApprovedPlanBinding` は高々 1 つまでとする（at most one active binding per session）。
   - 新しい plan を approve する際、同一 session に既存 active binding が存在する場合は、同じ authoritative `AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>` save で既存 binding を `invalidated`（`invalidationReason = "plan_superseded"`）とし、新しい `authorizationId` を発行する。save が失敗または `conflict_diverted` の場合、new binding と active-plan cache を authority に昇格してはならない。
-  - version mismatch で retry するときも authorization domain merge は同じ cardinality rule を適用する。したがって concurrent fresh-ID approval の最終 durable state では同一 session の active binding は高々一件であり、cache は `saved` になった merged durable state からだけ更新する。
+- version mismatch で retry するときも authorization domain merge は同じ cardinality rule を適用する。したがって concurrent fresh-ID approval の最終 durable state では同一 session の active binding は高々一件であり、cache は `saved` になった merged durable state からだけ更新する。
+- cache の値は `saved` status や caller の candidate から直接導出せず、post-save authoritative reread で
+  確認した merged durable state の active binding からだけ導出する。own fresh ID が loser の場合は
+  requested plan を armed / active として返さず、winner または `null` に reconcile する。
   - 明示的な cancel を要求して新規承認をブロックする挙動は P0 では採用しない。
 
 restart / hydration:

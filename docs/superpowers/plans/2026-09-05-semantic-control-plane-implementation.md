@@ -429,9 +429,12 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 
 **Produces:** the Design §4.2 discriminated `ApprovedPlanBinding`, including
 `invalidationReason: "plan_superseded"` only on a superseded invalid binding;
-`ApprovePlanInput` without `authorizationId`; `AuthorizationStore.approve(input:
-ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always generates a fresh authorizationId and
-leaves at most one active binding per session; `AuthorizationMutationResult`; public
+`ApprovePlanInput` without `authorizationId`; `AuthorizationActivePlanReconciler`;
+`AuthorizationStore.approve(input: ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always
+generates a fresh authorizationId and leaves at most one active binding per session;
+`AuthorizationStore.approveWithinAuthorizationReviewBoundary(input, reconcileActivePlan):
+Promise<ApprovedPlanBinding | null>` for callers that already hold the shared boundary;
+`AuthorizationMutationResult`; public
 `AuthorizationStore.release(authorizationId, at): Promise<AuthorizationMutationResult>` and
 `AuthorizationStore.invalidateForFingerprint(authorizationId, currentFingerprint, at):
 Promise<AuthorizationMutationResult>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`;
@@ -449,7 +452,10 @@ currentFingerprint, at)`. It produces one injected
 `AuthorizationReviewBoundary` shared by the Authorization, PlanBridge,
 review-dispatch, review-completion, and Gate domains. `ApprovedPlanBinding.sessionId` and review
 `parentSessionId` use the same boundary key; the boundary serializes the durable commit and all
-dependent state changes, but is not a generic transaction or mutex framework.
+dependent state changes, but is not a generic transaction or mutex framework. The PlanBridge owns the
+active-plan cache; AuthorizationStore receives no PlanBridge instance. Its approval inner operation invokes
+the injected `AuthorizationActivePlanReconciler` only after a successful post-save authoritative reread,
+and the callback never changes the approval return semantics.
 
 - [ ] **Step 1: Write the failing persistence and hydration tests**
 
@@ -491,29 +497,188 @@ function trackAuthorizationWrites(files: MockFileSystem): {
   return { count: () => count, reset: () => (count = 0) };
 }
 
-const authorizationAtomic = new AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>(
-  files,
-  files,
-  {
+function createAuthorizationFixture(): {
+  readonly files: MockFileSystem;
+  readonly boundary: AuthorizationReviewBoundary;
+  readonly store: AuthorizationStore;
+} {
+  const files = new MockFileSystem();
+  const boundary = createAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  return { files, boundary, store };
+}
+
+function createAuthorizationAtomic(
+  files: MockFileSystem,
+): AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>> {
+  return new AtomicPersistence(files, files, {
     filePath: ".justice/authorizations.json",
     conflictPath: ".justice/authorizations.conflict.json",
     serialize: (bindings) => JSON.stringify(bindings),
-    deserialize: (raw) => JSON.parse(raw) as ReadonlyArray<ApprovedPlanBinding>,
+    deserialize: deserializeAuthorizationBindings,
     merge: mergeAuthorizationBindings,
     emptyValue: () => [],
-  },
-);
+  });
+}
+
+function fingerprintFor(planPath: string): PlanFingerprint {
+  const encoded = [...planPath]
+    .map((character) => character.charCodeAt(0).toString(16))
+    .join("")
+    .padEnd(64, "0")
+    .slice(0, 64);
+  return { algorithm: "sha256", value: encoded };
+}
+
+function snapshotFor(planPath: string): CanonicalPlanSnapshot {
+  return {
+    schema: "justice-plan-v1",
+    documentDigest: `sha256:${fingerprintFor(planPath).value}`,
+    globalBodyDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    tasks: [
+      {
+        taskId: "task-1",
+        title: planPath,
+        canonicalBody: planPath,
+        digest: `sha256:${fingerprintFor(planPath).value}`,
+      },
+    ],
+  };
+}
+
+function inputFor(
+  sessionId: string,
+  planPath: string,
+  approvedAt = "2026-09-05T00:00:00.000Z",
+): ApprovePlanInput {
+  return {
+    sessionId,
+    planPath,
+    planFingerprint: fingerprintFor(planPath),
+    canonicalSnapshot: snapshotFor(planPath),
+    approvedAt,
+  };
+}
+
+function freshBindingFor(
+  sessionId: string,
+  planPath: string,
+  authorizationId: string,
+): Extract<ApprovedPlanBinding, { readonly status: "active" }> {
+  return {
+    authorizationId,
+    sessionId,
+    planPath,
+    planFingerprint: fingerprintFor(planPath),
+    canonicalSnapshot: snapshotFor(planPath),
+    fingerprintSchema: "justice-plan-v1",
+    approvedAt: "2026-09-05T00:00:00.000Z",
+    status: "active",
+  };
+}
+
+function isBindingActiveFor(
+  binding: ApprovedPlanBinding,
+  sessionId: string,
+  planPath: string,
+  fingerprint: PlanFingerprint,
+): boolean {
+  return (
+    binding.status === "active" &&
+    binding.sessionId === sessionId &&
+    binding.planPath === planPath &&
+    binding.planFingerprint.algorithm === fingerprint.algorithm &&
+    binding.planFingerprint.value === fingerprint.value
+  );
+}
+
+function authorizationPersistenceOf(
+  store: AuthorizationStore,
+): AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>> {
+  return (
+    store as unknown as {
+      readonly authorizationPersistence: AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>;
+    }
+  ).authorizationPersistence;
+}
+
+function createAuthorizationPlanBridge(
+  files: MockFileSystem,
+  authorizationStore: AuthorizationStore,
+  authorizationReviewBoundary: AuthorizationReviewBoundary,
+): PlanBridge {
+  const bridge = new PlanBridge(files);
+  bridge.setAuthorizationDependencies({ authorizationStore, authorizationReviewBoundary });
+  return bridge;
+}
+
+function approveRequestFor(planPath: string): ImplementationArmRequest {
+  return { source: "command", planPath, approved: true };
+}
+
+async function writePlanFixture(files: MockFileSystem, planPath: string): Promise<void> {
+  await files.writeFile(planPath, "# Plan\n\n- [ ] task-1: authorize this plan\n");
+}
+
+let files: MockFileSystem;
+let boundary: AuthorizationReviewBoundary;
+let store: AuthorizationStore;
+let input: ApprovePlanInput;
+let authorizationAtomic: AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>;
+
+beforeEach(() => {
+  const fixture = createAuthorizationFixture();
+  files = fixture.files;
+  boundary = fixture.boundary;
+  store = fixture.store;
+  input = inputFor("s1", "docs/p.md");
+  authorizationAtomic = createAuthorizationAtomic(files);
+});
+
+const oldActiveBinding = freshBindingFor("s1", "docs/old.md", "old-id");
+const staleActive = freshBindingFor("s1", "docs/stale.md", "stale-id");
+const releasedBinding: ApprovedPlanBinding = {
+  ...freshBindingFor("s1", "docs/released.md", "released-id"),
+  status: "released",
+  releasedAt: "2026-09-05T00:00:00.000Z",
+};
+const changedFingerprint = fingerprintFor("docs/changed.md");
+
+// Every Store test uses an explicit boundary. No test creates a Store without its boundary.
 
 it("stores the canonical snapshot in the same authorization record", async () => {
   const binding = await store.approve(input);
-  expect(binding?.canonicalSnapshot.documentDigest).toBe(snapshot.documentDigest);
-  expect((await authorizationAtomic.loadWithLock()).data[0]?.canonicalSnapshot).toEqual(snapshot);
+  expect(binding?.canonicalSnapshot.documentDigest).toBe(input.canonicalSnapshot.documentDigest);
+  expect((await authorizationAtomic.loadWithLock()).data[0]?.canonicalSnapshot).toEqual(
+    input.canonicalSnapshot,
+  );
 });
 
 it("hydrates an active binding and rejects a changed fingerprint", async () => {
-  await store.approve(input);
+  const binding = await store.approve(input);
   expect((await store.hydrate())[0]?.status).toBe("active");
   expect(isBindingActiveFor(binding!, "s1", "docs/p.md", changedFingerprint)).toBe(false);
+});
+
+it("never hydrates or authorizes from the non-authoritative conflict journal", async () => {
+  const conflictBinding = freshBindingFor("s1", "docs/from-conflict.md", "conflict-id");
+  await files.writeFile(
+    ".justice/authorizations.conflict.json",
+    JSON.stringify({
+      version: 1,
+      conflicts: [
+        {
+          version: 1,
+          reason: "version_mismatch",
+          data: [conflictBinding],
+          recordedAt: "2026-09-05T00:00:00.000Z",
+        },
+      ],
+    }),
+  );
+
+  await expect(store.hydrate()).resolves.toEqual([]);
+  await expect(store.findByAuthorizationId("conflict-id")).resolves.toBeNull();
 });
 
 it("reads a durable authorization by identity without treating a missing binding as active", async () => {
@@ -618,11 +783,16 @@ it("serializes same-process same-session approvals without a filesystem conflict
         binding.status === "invalidated",
     ),
   ).toEqual([expect.objectContaining({ invalidationReason: "plan_superseded" })]);
-  expect(bridge.activePlanFor("s1")).toBe(active[0]?.planPath);
+  expect(
+    [a, b].some(
+      (binding) => binding?.authorizationId === active[0]?.authorizationId,
+    ),
+  ).toBe(true);
 });
 
 it("merges a cross-process version conflict through independent boundaries", async () => {
   const firstTwoLinkAttempts = deferred<void>();
+  const firstClaimCompleted = deferred<void>();
   const files = new MockFileSystem();
   const boundaryA = createAuthorizationReviewBoundary();
   const boundaryB = createAuthorizationReviewBoundary();
@@ -635,8 +805,15 @@ it("merges a cross-process version conflict through independent boundaries", asy
     if (!coordinateContenders) return originalLink(target, claimPath);
     linkAttempts += 1;
     if (linkAttempts <= 2) {
-      if (linkAttempts === 2) firstTwoLinkAttempts.resolve();
+      if (linkAttempts === 1) {
+        firstTwoLinkAttempts.resolve();
+        await firstTwoLinkAttempts.promise;
+        await originalLink(target, claimPath);
+        firstClaimCompleted.resolve();
+        return;
+      }
       await firstTwoLinkAttempts.promise;
+      await firstClaimCompleted.promise;
     }
     await originalLink(target, claimPath);
   };
@@ -644,25 +821,40 @@ it("merges a cross-process version conflict through independent boundaries", asy
   const old = await storeA.approve(inputFor("s1", "docs/old.md"));
   const other = await storeA.approve(inputFor("s2", "docs/other.md"));
   coordinateContenders = true;
-  const approvalA = storeA.approve(inputFor("s1", "docs/a.md"));
-  const approvalB = storeB.approve(inputFor("s1", "docs/b.md"));
+  const approvalA = storeA.approve(inputFor("s1", "docs/a.md", "2026-09-05T00:00:02.000Z"));
+  const approvalB = storeB.approve(inputFor("s1", "docs/b.md", "2026-09-05T00:00:01.000Z"));
   await firstTwoLinkAttempts.promise;
   const [a, b] = await Promise.all([approvalA, approvalB]);
   const durable = await storeA.hydrate();
   const active = durable.filter(
     (binding) => binding.sessionId === "s1" && binding.status === "active",
   );
-  const fresh = [a, b].filter((binding): binding is ApprovedPlanBinding => binding !== null);
-  const losingFreshId = fresh.find((binding) => binding.authorizationId !== active[0]?.authorizationId)
-    ?.authorizationId;
+  const freshDurable = durable.filter(
+    (binding) =>
+      binding.sessionId === "s1" &&
+      (binding.planPath === "docs/a.md" || binding.planPath === "docs/b.md"),
+  );
+  const freshWinner = freshDurable.find((binding) => binding.status === "active");
+  const freshLoser = freshDurable.find(
+    (binding) =>
+      binding.status === "invalidated" && binding.invalidationReason === "plan_superseded",
+  );
 
-  expect(linkAttempts).toBeGreaterThanOrEqual(3);
+  // The first two link attempts are coordinated contenders; the third observes the winner's
+  // published version and enters the real version-mismatch merge/retry path.
+  expect(linkAttempts).toBeGreaterThanOrEqual(4);
   expect(active).toHaveLength(1);
-  expect(losingFreshId).toBeDefined();
-  expect(durable.find((binding) => binding.authorizationId === losingFreshId)).toMatchObject({
+  expect(freshDurable.filter((binding) => binding.status === "active")).toHaveLength(1);
+  expect(freshLoser).toBeDefined();
+  expect(freshLoser).toMatchObject({
     status: "invalidated",
     invalidationReason: "plan_superseded",
   });
+  expect(freshWinner).toEqual(active[0]);
+  const winnerResult = freshWinner?.planPath === "docs/a.md" ? a : b;
+  const loserResult = freshLoser?.planPath === "docs/a.md" ? a : b;
+  expect(winnerResult).toEqual(freshWinner);
+  expect(loserResult).toBeNull();
   expect(durable.find((binding) => binding.authorizationId === old?.authorizationId)).toMatchObject({
     status: "invalidated",
     invalidationReason: "plan_superseded",
@@ -760,11 +952,62 @@ it("atomically supersedes only the active binding in the approving session", asy
 
 it("does not publish a superseding binding when the single authoritative save fails", async () => {
   const planA = await store.approve(inputFor("s1", "docs/a.md"));
-  persistence.saveAtomicWithLock.mockResolvedValueOnce({ status: "conflict_diverted", retries: 3 });
+  const persistence = authorizationPersistenceOf(store);
+  vi.spyOn(persistence, "saveAtomicWithLock").mockResolvedValueOnce({
+    status: "conflict_diverted",
+    retries: 3,
+    conflictPath: ".justice/authorizations.conflict.json",
+  });
 
   await expect(store.approve(inputFor("s1", "docs/b.md"))).resolves.toBeNull();
   expect(await store.hydrate()).toEqual([planA]);
-  expect(bridge.activePlanFor("s1")).toBe("docs/a.md");
+});
+
+it("reconciles the explicit PlanBridge cache only from the tested Store authority", async () => {
+  const files = new MockFileSystem();
+  const boundary = createAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  await writePlanFixture(files, "docs/a.md");
+
+  const result = await bridge.handleImplementationArm("s1", approveRequestFor("docs/a.md"));
+  const durable = await store.hydrate();
+  const active = durable.find((binding) => binding.sessionId === "s1" && binding.status === "active");
+
+  expect(result).toMatchObject({ armed: true, planPath: active?.planPath });
+  expect(bridge.getActivePlan("s1")).toBe(active?.planPath);
+});
+
+it("does not arm or retain a positive cache when post-save authoritative reread fails", async () => {
+  const files = new MockFileSystem();
+  const boundary = createAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const bridge = createAuthorizationPlanBridge(files, store, boundary);
+  await writePlanFixture(files, "docs/old.md");
+  await writePlanFixture(files, "docs/new.md");
+  await bridge.handleImplementationArm("s1", approveRequestFor("docs/old.md"));
+
+  let failPostSaveRead = false;
+  const originalReadFile = files.readFile.bind(files);
+  const originalRename = files.rename.bind(files);
+  files.rename = async (from, to) => {
+    await originalRename(from, to);
+    if (to === ".justice/authorizations.json") failPostSaveRead = true;
+  };
+  files.readFile = async (path) => {
+    if (failPostSaveRead && path === ".justice/authorizations.json") {
+      throw new Error("post-save authoritative reread failed");
+    }
+    return originalReadFile(path);
+  };
+
+  const result = await bridge.handleImplementationArm("s1", approveRequestFor("docs/new.md"));
+  failPostSaveRead = false;
+  const durable = await store.hydrate();
+
+  expect(result).toMatchObject({ armed: false });
+  expect(bridge.getActivePlan("s1")).toBeNull();
+  expect(durable.some((binding) => binding.planPath === "docs/new.md" && binding.status === "active")).toBe(true);
 });
 
 it("serializes same-parent operations while another parent can proceed", async () => {
@@ -842,13 +1085,21 @@ releases it, so it verifies serialization without manufacturing a persistence co
 same-boundary contender. The cross-process test uses separate boundaries and a shared filesystem so both
 stores observe the old version. Its forced retry must execute `AtomicPersistence`'s configured
 `mergeAuthorizationBindings` hook, not a test replacement; the durable losing fresh authorization is therefore
-the deterministic `plan_superseded` result of the real merge/retry path.
+the deterministic `plan_superseded` result of the real merge/retry path. Cache assertions are not made in this
+core Store test. The hook integration fixture below constructs the same `AuthorizationStore`, the same shared
+boundary, and the PlanBridge that receives that Store explicitly.
 
 - [ ] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
-Expected: FAIL because authorization persistence, hydration, and terminal-dominant array merge do not exist; after the import resolves, the terminal-dominance assertion fails until the merge implementation is added.
+Before running RED, add only the compile-only typed scaffold required by the exact `AuthorizationStore`
+signatures in **Produces** if the new module does not yet exist. The scaffold is created after the tests are
+written, is not a fallback boundary, and is replaced by Step 3 before any commit. RED must therefore fail on
+intended behavioral assertions rather than module resolution, missing methods, or a deadlock. The expected
+failures are: canonical snapshot persistence/hydration, fresh-ID supersession, terminal-dominant merge,
+same-parent approval serialization, real version-mismatch merge/retry, loser return semantics, explicit
+PlanBridge cache wiring, failed-save non-publication, and post-save reread failure fail-closed behavior.
 
 - [ ] **Step 3: Implement the authorization store**
 
@@ -858,13 +1109,128 @@ accept a caller-provided authorizationId. For approval, load the authoritative a
 replacement array: map only same-session active bindings to `{ status: "invalidated", invalidatedAt,
 invalidationReason: "plan_superseded" }`, retain every terminal and other-session binding, then append one
 fresh active binding. Submit that complete array and the loaded `LockMetadata` through one
-`AtomicPersistence.saveAtomicWithLock` call. Promote the result to the authorization cache and `PlanBridge`
-only if the result is `saved`; on an exception or `conflict_diverted`, return `null`, retain the prior cache,
-and leave enrichment unauthorized. On plugin initialization, hydrate active bindings and restore their
-`planPath` into `PlanBridge`; if the file cannot be read, no binding is active. Do not add a transaction
-framework. `findByAuthorizationId` reads only the authoritative binding array and returns the exact matching
-binding or `null`; callers treat `null`, a read failure, or a persistence conflict as non-active. It must never
-read `.justice/authorizations.conflict.json` or infer authority from the active-plan cache.
+`AtomicPersistence.saveAtomicWithLock` call. A `saved` result is only a durable merge success; it is not a
+positive approval result until the authoritative post-save reread proves that the fresh ID is the sole current
+active binding for the requested session. On `conflict_diverted` or exception, return `null`, do not invoke
+the cache reconciler, retain the prior cache, and leave enrichment unauthorized. On post-save reread failure,
+invoke the reconciler with `null`, clear the local positive cache, return `null`, and leave enrichment
+unauthorized. On plugin initialization, hydrate active bindings from the authoritative array only and restore
+their `planPath` into PlanBridge; terminal bindings and any read/parse/validation failure restore no active
+binding. Do not add a transaction framework. `findByAuthorizationId` reads only the authoritative binding
+array and returns the exact matching binding or `null`; callers treat `null`, a read failure, or a persistence
+conflict as non-active. It must never read `.justice/authorizations.conflict.json` or infer authority from the
+active-plan cache.
+
+`AuthorizationStore.approve` is the boundary-external wrapper and keeps the public
+`Promise<ApprovedPlanBinding | null>` signature. It acquires `AuthorizationReviewBoundary` once using
+`input.sessionId`, then calls `approveWithinAuthorizationReviewBoundary` without acquiring again. The
+PlanBridge path does not call this wrapper; it already owns the same parent boundary and passes its explicit
+cache reconciler to the inner operation. The complete class body below is the implementation source of truth
+for the approval, authoritative reread, and hydrate behavior.
+
+Add an explicit authorization dependency setter to the existing PlanBridge construction path so the existing
+non-authorization constructor arguments remain unchanged while the production plugin wires the shared objects
+exactly once. The setter is not a boundary factory or fallback: an implementation-arm request received before
+this wiring is fail-closed and cannot arm, and authorization tests must call it before exercising approval.
+
+```ts
+export type PlanBridgeAuthorizationDependencies = {
+  readonly authorizationStore: AuthorizationStore;
+  readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
+};
+
+private authorizationDependencies: PlanBridgeAuthorizationDependencies | null = null;
+
+setAuthorizationDependencies(dependencies: PlanBridgeAuthorizationDependencies): void {
+  if (this.authorizationDependencies !== null) {
+    throw new Error("PlanBridge authorization dependencies already configured");
+  }
+  this.authorizationDependencies = dependencies;
+}
+
+private reconcileActivePlan(
+  parentSessionId: string,
+  activeBinding: Extract<ApprovedPlanBinding, { readonly status: "active" }> | null,
+): void {
+  this.setActivePlan(parentSessionId, activeBinding?.planPath ?? null);
+}
+
+async restoreActivePlans(): Promise<void> {
+  const dependencies = this.authorizationDependencies;
+  if (dependencies === null) return;
+  const bindings = await dependencies.authorizationStore.hydrate();
+  for (const binding of bindings) {
+    if (binding.status === "active") {
+      this.reconcileActivePlan(binding.sessionId, binding);
+    }
+  }
+}
+```
+
+Replace the approved branch of `PlanBridge.handleImplementationArm` with this exact path after the existing
+safe-plan read and `request.approved` check:
+
+```ts
+const dependencies = this.authorizationDependencies;
+if (dependencies === null) {
+  return {
+    armed: false,
+    planPath: null,
+    directiveStage: "implementation_arm_required",
+    guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+  };
+}
+
+const planContent = await this.readPlanFile(planPath);
+if (planContent === null) {
+  return {
+    armed: false,
+    planPath: null,
+    directiveStage: "implementation_arm_required",
+    guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+  };
+}
+const approvedTaskIds = this.parser.parse(planContent).map((task) => task.id);
+const approvalInput: ApprovePlanInput = {
+  sessionId,
+  planPath,
+  canonicalSnapshot: buildCanonicalSnapshot(planContent, approvedTaskIds),
+  planFingerprint: computePlanFingerprint(planContent, approvedTaskIds),
+  approvedAt: new Date().toISOString(),
+};
+const approved = await dependencies.authorizationReviewBoundary.withParentSession(sessionId, () =>
+  dependencies.authorizationStore.approveWithinAuthorizationReviewBoundary(
+    approvalInput,
+    (parentSessionId, activeBinding) =>
+      this.reconcileActivePlan(parentSessionId, activeBinding),
+  ),
+);
+if (approved === null) {
+  return {
+    armed: false,
+    planPath: null,
+    directiveStage: "implementation_arm_required",
+    guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+  };
+}
+
+this.implementationArmedSessions.set(sessionId, { planPath: approved.planPath });
+return {
+  armed: true,
+  planPath: approved.planPath,
+  directiveStage: "implementation_arm",
+  guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath: approved.planPath }),
+};
+```
+
+Task 2.1's `buildCanonicalSnapshot` and `computePlanFingerprint` receive the parser-derived task IDs from the
+same raw plan. This validates the safe relative path, builds the `CanonicalPlanSnapshot`, and computes the
+`PlanFingerprint` without accepting or forwarding a caller-supplied `authorizationId`. A losing approval
+returns `null` and never arms the requested plan; its
+reconciler may instead set the cache to the latest durable winner. A save conflict does not invoke the
+reconciler and therefore retains the prior cache. A post-save reread failure invokes the reconciler with
+`null`, clearing the local positive cache. No requested plan is written to `activePlanPaths` outside the
+reconciler.
 
 The `AtomicPersistence.merge` hook must merge the entire binding array, not only two records. It is used both
 by `saveAtomicWithLock(candidate)` when no `LockMetadata` is supplied and by its version-mismatch retry.
@@ -958,18 +1324,35 @@ export function createAuthorizationReviewBoundary(): AuthorizationReviewBoundary
 
 // src/core/justice-plugin.ts -- the one construction site retained by Tasks 3.2, 3.4, and 3.6.
 private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
+private readonly authorizationStore: AuthorizationStore;
 
-constructor(options: JusticePluginOptions) {
+constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
   this.authorizationReviewBoundary = createAuthorizationReviewBoundary();
   this.authorizationStore = new AuthorizationStore(
-    options.fileReader,
-    options.fileWriter,
+    fileReader,
+    fileWriter,
     this.authorizationReviewBoundary,
   );
-  this.planBridge = new PlanBridge({
+  this.planBridge = new PlanBridge(
+    fileReader,
+    this.loopHandler,
+    this.tieredWisdomStore,
+    options.notifier,
+    this.telemetry,
+  );
+  this.planBridge.setAuthorizationDependencies({
     authorizationStore: this.authorizationStore,
     authorizationReviewBoundary: this.authorizationReviewBoundary,
   });
+}
+
+async initialize(): Promise<void> {
+  try {
+    await this.planBridge.restoreActivePlans();
+    // Continue with the existing wisdom, telemetry, projection, and notifier initialization.
+  } catch {
+    // The Store already fails closed; startup restoration must never block plugin initialization.
+  }
 }
 
 // Tasks 3.2, 3.4, and 3.6 pass this same field, never a newly constructed boundary,
@@ -990,7 +1373,7 @@ export type AuthorizationMutationResult =
         | "uncertain";
     };
 
-class AuthorizationStore {
+export class AuthorizationStore {
   private readonly authorizationPersistence: AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>;
 
   constructor(
@@ -1002,10 +1385,93 @@ class AuthorizationStore {
       filePath: ".justice/authorizations.json",
       conflictPath: ".justice/authorizations.conflict.json",
       serialize: (bindings) => JSON.stringify(bindings),
-      deserialize: (raw) => JSON.parse(raw) as ReadonlyArray<ApprovedPlanBinding>,
+      deserialize: deserializeAuthorizationBindings,
       merge: mergeAuthorizationBindings,
       emptyValue: () => [],
     });
+  }
+
+  async approve(input: ApprovePlanInput): Promise<ApprovedPlanBinding | null> {
+    return this.authorizationReviewBoundary.withParentSession(input.sessionId, () =>
+      this.approveWithinAuthorizationReviewBoundary(input, () => undefined),
+    );
+  }
+
+  async approveWithinAuthorizationReviewBoundary(
+    input: ApprovePlanInput,
+    reconcileActivePlan: AuthorizationActivePlanReconciler,
+  ): Promise<ApprovedPlanBinding | null> {
+    let current: Awaited<ReturnType<AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>["loadWithLock"]>>;
+    try {
+      current = await this.authorizationPersistence.loadWithLock();
+    } catch {
+      return null;
+    }
+
+    const fresh: Extract<ApprovedPlanBinding, { readonly status: "active" }> = {
+      authorizationId: randomUUID(),
+      sessionId: input.sessionId,
+      planPath: input.planPath,
+      planFingerprint: input.planFingerprint,
+      canonicalSnapshot: input.canonicalSnapshot,
+      fingerprintSchema: "justice-plan-v1",
+      approvedAt: input.approvedAt,
+      status: "active",
+    };
+    const candidate: ReadonlyArray<ApprovedPlanBinding> = [
+      ...current.data.map((binding) =>
+        binding.sessionId === input.sessionId && binding.status === "active"
+          ? invalidateSuperseded(binding, input.approvedAt)
+          : binding,
+      ),
+      fresh,
+    ];
+
+    let saved: SaveResult;
+    try {
+      saved = await this.authorizationPersistence.saveAtomicWithLock(candidate, current.lockMeta);
+    } catch {
+      return null;
+    }
+    if (saved.status !== "saved") return null;
+
+    let authoritative: Awaited<
+      ReturnType<AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>["loadWithLock"]>
+    >;
+    try {
+      authoritative = await this.authorizationPersistence.loadWithLock();
+    } catch {
+      reconcileActivePlan(input.sessionId, null);
+      return null;
+    }
+
+    const activeBindings = authoritative.data.filter(
+      (binding): binding is Extract<ApprovedPlanBinding, { readonly status: "active" }> =>
+        binding.sessionId === input.sessionId && binding.status === "active",
+    );
+    const active = activeBindings[0];
+    if (activeBindings.length !== 1 || active === undefined) {
+      reconcileActivePlan(input.sessionId, null);
+      return null;
+    }
+
+    const own = authoritative.data.find((binding) => binding.authorizationId === fresh.authorizationId);
+    if (own?.status !== "active" || active.authorizationId !== fresh.authorizationId) {
+      reconcileActivePlan(input.sessionId, active);
+      return null;
+    }
+
+    reconcileActivePlan(input.sessionId, active);
+    return active;
+  }
+
+  async hydrate(): Promise<readonly ApprovedPlanBinding[]> {
+    try {
+      const current = await this.authorizationPersistence.loadWithLock();
+      return current.data;
+    } catch {
+      return [];
+    }
   }
 
   async findByAuthorizationId(authorizationId: string): Promise<ApprovedPlanBinding | null> {
@@ -1113,6 +1579,76 @@ function samePlanFingerprint(left: PlanFingerprint, right: PlanFingerprint): boo
   return left.algorithm === right.algorithm && left.value === right.value;
 }
 
+function deserializeAuthorizationBindings(raw: string): ReadonlyArray<ApprovedPlanBinding> {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every(isApprovedPlanBinding)) {
+    throw new Error("Invalid authorization binding array");
+  }
+  return parsed as ReadonlyArray<ApprovedPlanBinding>;
+}
+
+function isApprovedPlanBinding(value: unknown): value is ApprovedPlanBinding {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.authorizationId !== "string" ||
+    typeof value.sessionId !== "string" ||
+    typeof value.planPath !== "string" ||
+    !isPlanFingerprint(value.planFingerprint) ||
+    !isCanonicalPlanSnapshot(value.canonicalSnapshot) ||
+    value.fingerprintSchema !== "justice-plan-v1" ||
+    typeof value.approvedAt !== "string"
+  ) {
+    return false;
+  }
+
+  switch (value.status) {
+    case "active":
+      return true;
+    case "invalidated":
+      return (
+        typeof value.invalidatedAt === "string" &&
+        (value.invalidationReason === undefined || value.invalidationReason === "plan_superseded")
+      );
+    case "released":
+      return typeof value.releasedAt === "string";
+    default:
+      return false;
+  }
+}
+
+function isPlanFingerprint(value: unknown): value is PlanFingerprint {
+  return (
+    isRecord(value) &&
+    value.algorithm === "sha256" &&
+    typeof value.value === "string"
+  );
+}
+
+function isCanonicalPlanSnapshot(value: unknown): value is CanonicalPlanSnapshot {
+  return (
+    isRecord(value) &&
+    value.schema === "justice-plan-v1" &&
+    typeof value.documentDigest === "string" &&
+    typeof value.globalBodyDigest === "string" &&
+    Array.isArray(value.tasks) &&
+    value.tasks.every(isCanonicalTaskSnapshot)
+  );
+}
+
+function isCanonicalTaskSnapshot(value: unknown): value is CanonicalTaskSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.taskId === "string" &&
+    typeof value.title === "string" &&
+    typeof value.canonicalBody === "string" &&
+    typeof value.digest === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export function mergeAuthorizationBindings(
   mine: ReadonlyArray<ApprovedPlanBinding>,
   theirs: ReadonlyArray<ApprovedPlanBinding>,
@@ -1170,11 +1706,12 @@ function terminalTimestamp(
 
 function invalidateSuperseded(
   binding: Extract<ApprovedPlanBinding, { readonly status: "active" }>,
+  invalidatedAt = new Date().toISOString(),
 ): ApprovedPlanBinding {
   return {
     ...binding,
     status: "invalidated",
-    invalidatedAt: new Date().toISOString(),
+    invalidatedAt,
     invalidationReason: "plan_superseded",
   };
 }
