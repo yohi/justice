@@ -1755,6 +1755,27 @@ candidate correlation を caller から渡してはならず、candidate 選択�
 terminalization、completion、restart recovery は同じ boundary を使用し、within-boundary
 caller が public wrapper を再取得してはならない。
 
+Lifecycle owner と Review Dispatch の接続は、correlation を受け取らない narrow callback port とする。
+
+```ts
+export type ReviewPendingCommittedHandler = (
+  parentSessionId: string,
+) => Promise<void>;
+```
+
+- `parentSessionId` は durable lifecycle transition に記録された Controller session identity
+  から渡し、event session、child session、prompt、category から再構成しない。
+- lifecycle owner は `review_pending` / `final_review_pending` の append 結果が
+  `committed` の場合だけ callback を一度呼ぶ。`failed`、duplicate、invalid transition では呼ばない。
+- callback は directive の内容や correlation を返さず、Review Dispatch が既存の shared boundary
+  内で候補選択、pending commit、directive delivery を行う。lifecycle owner は Review Dispatch
+  の concrete state や filesystem を import しない。
+- callback が失敗しても durable lifecycle commit は維持する。lifecycle owner は失敗を advisory
+  として記録する best-effort の通知処理へ縮退し、例外を hook へ漏らさない。
+- 実行時の callback は composition root が同一 `reviewDispatchState` の
+  `offerNextMandatoryReview(parentSessionId)` に束縛する。startup recovery と terminalization は
+  同じ instance の within-parent capability を使用し、別の queue や wrapper を作らない。
+
 Directive injection は notifier-only の副作用ではない。Review Dispatch が pending commit
 後に `ReviewDirectiveSink.deliver(ReviewDirectiveDelivery)` を完了させた場合、同じ
 `JusticePlugin.handleEvent()` invocation の root route がその delivery を一度だけ drain し、

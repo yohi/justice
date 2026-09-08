@@ -2534,6 +2534,25 @@ The lifecycle appenders also expose the post-Gate outcome transitions as discrim
 Task 3.2 appends these transitions only after the matching AcceptanceDecision is durable; blocked
 Acceptance leaves the lifecycle in `gate_pending` / `final_gate_pending`.
 
+Task 3.1 also owns the lifecycle-to-dispatch seam without importing Review Dispatch. Export the
+following shared callback type from `src/core/types.ts`; Task 3.4 binds it to the single production
+`reviewDispatchState` instance:
+
+```ts
+export type ReviewPendingCommittedHandler = (
+  parentSessionId: string,
+) => Promise<void>;
+```
+
+The lifecycle orchestrator accepts an optional `onReviewPendingCommitted` dependency and an optional
+best-effort advisory writer. The callback receives only the durable parent session identity. It is
+invoked after, and only after, the append returning `kind: "committed"` for `review_pending` or
+`final_review_pending`; duplicate, invalid, and failed appends do not notify. A rejected callback
+does not change the committed transition result and is converted to a swallowed advisory failure.
+The two call sites are the `evidence_pending → review_pending` append in
+`requestCurrentTaskReview` and the `all_tasks_accepted → final_review_pending` append in
+`advanceFinalizationAfterAllTasksAccepted`.
+
 - [ ] **Step 1: Write the failing replay tests**
 
 ```ts
@@ -2579,6 +2598,44 @@ it("records the happy-path lifecycle in order", async () => {
     "review_pending",
     "review-directive",
   ]);
+});
+
+it("notifies Review Dispatch once after a committed task review-pending transition", async () => {
+  const onReviewPendingCommitted = vi.fn(async (_parentSessionId: string) => undefined);
+  await runImplementationLifecycle(currentTask, { onReviewPendingCommitted });
+
+  expect(onReviewPendingCommitted).toHaveBeenCalledTimes(1);
+  expect(onReviewPendingCommitted).toHaveBeenCalledWith(currentTask.parentSessionId);
+});
+
+it("notifies Review Dispatch once after the committed final review-pending transition", async () => {
+  const onReviewPendingCommitted = vi.fn(async (_parentSessionId: string) => undefined);
+  await runFinalizationLifecycle(currentPlan, { onReviewPendingCommitted });
+
+  expect(onReviewPendingCommitted).toHaveBeenCalledTimes(1);
+  expect(onReviewPendingCommitted).toHaveBeenCalledWith(currentPlan.parentSessionId);
+});
+
+it("does not notify for failed or duplicate lifecycle appends", async () => {
+  const onReviewPendingCommitted = vi.fn(async (_parentSessionId: string) => undefined);
+  const lifecycle = createLifecycleTestHarness({ onReviewPendingCommitted });
+
+  await lifecycle.appendReviewPending({ kind: "failed" });
+  await lifecycle.appendReviewPending({ kind: "duplicate" });
+
+  expect(onReviewPendingCommitted).not.toHaveBeenCalled();
+});
+
+it("keeps a committed transition when the notification callback fails", async () => {
+  const onReviewPendingCommitted = vi.fn(async (_parentSessionId: string) => {
+    throw new Error("offer failed");
+  });
+  const lifecycle = createLifecycleTestHarness({ onReviewPendingCommitted });
+
+  await expect(lifecycle.appendReviewPending({ kind: "committed" })).resolves.toMatchObject({
+    kind: "committed",
+  });
+  expect(lifecycle.advisories()).toContain("review_pending_offer_failed");
 });
 
 it("starts rework with a fresh attempt and reviewRound 1", async () => {
@@ -2669,6 +2726,76 @@ finalization `tasks_pending` may enter `all_tasks_accepted`, current `all_tasks_
 Post-Gate transitions must require the exact current `TaskExecutionRef` or finalization identity;
 matching identity plus an already-applied target is a duplicate, while a stale identity is invalid
 and leaves the projected state unchanged.
+
+Use one non-throwing helper at the two lifecycle append sites that reach a review-pending state.
+The helper receives only the durable `parentSessionId`, invokes the injected callback only after a
+committed append, and preserves the append result when callback delivery fails:
+
+```ts
+type LifecycleAppendResult =
+  | { readonly kind: "committed" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "duplicate" }
+  | { readonly kind: "invalid"; readonly advisory: string };
+
+type LifecycleNotificationDependencies = {
+  readonly onReviewPendingCommitted?: ReviewPendingCommittedHandler;
+  readonly recordAdvisory?: (advisory: string, cause?: unknown) => Promise<void>;
+};
+
+async function notifyReviewPendingCommitted(
+  parentSessionId: string,
+  dependencies: LifecycleNotificationDependencies,
+): Promise<void> {
+  if (dependencies.onReviewPendingCommitted === undefined) return;
+  try {
+    await dependencies.onReviewPendingCommitted(parentSessionId);
+  } catch (cause: unknown) {
+    try {
+      await dependencies.recordAdvisory?.("review_pending_offer_failed", cause);
+    } catch {
+      // Advisory persistence is fail-open and must not hide the committed lifecycle transition.
+    }
+  }
+}
+
+async function appendReviewPendingAndNotify(
+  parentSessionId: string,
+  append: () => Promise<LifecycleAppendResult>,
+  dependencies: LifecycleNotificationDependencies,
+): Promise<LifecycleAppendResult> {
+  const result = await append();
+  if (result.kind === "committed") {
+    await notifyReviewPendingCommitted(parentSessionId, dependencies);
+  }
+  return result;
+}
+
+// requestCurrentTaskReview: evidence_pending -> review_pending
+return appendReviewPendingAndNotify(
+  input.parentSessionId,
+  () => appendLifecycleRecord({ kind: "task", ...reviewPendingTransition }),
+  dependencies,
+);
+
+// advanceFinalizationAfterAllTasksAccepted: all_tasks_accepted -> final_review_pending
+return appendReviewPendingAndNotify(
+  input.parentSessionId,
+  () => appendPlanFinalizationTransition({
+    ...input,
+    from: "all_tasks_accepted",
+    to: "final_review_pending",
+  }),
+  dependencies,
+);
+```
+
+`reviewPendingTransition` is the existing local record assembled by
+`requestCurrentTaskReview`; the helper above adds no new public append API. The test-only
+`createLifecycleTestHarness` must inject the same append result union and advisory writer used by
+the production orchestrator, so the RED cases fail on missing callback invocation rather than on an
+undefined test symbol. The existing `runImplementationLifecycle` and `runFinalizationLifecycle`
+fixtures must expose `parentSessionId` and accept `LifecycleNotificationDependencies`.
 
 In the sequential `JusticePlugin` path, select the authorized current task, issue a fresh attemptId only when starting implementation, durably record `authorized → in_progress`, and persist the implementation call binding before accepting its PostToolUse as authoritative. Matching PostToolUse records `worker_reported`, then observed/derived evidence scoped to that same ref, then `evidence_pending → review_pending`; it emits a current-attempt `ReviewRequiredDirective` only after the review-dispatch offer boundary has committed its pending slot. Old-attempt records are advisory-only. On all accepted snapshot task IDs, issue a fresh finalization identity with `finalReviewRound = 1`, durably append `tasks_pending → all_tasks_accepted`, then durably append `all_tasks_accepted → final_review_pending` with the same identity. Do not offer Final Review until the latter append succeeds; if it fails, recovery resumes from `all_tasks_accepted` without issuing a new identity. Task 3.1 neither defines nor projects review-dispatch retry records: review-only failure retry, its current final-review round, and old-round rejection belong exclusively to Task 3.4. `startNextFinalizationAttempt` is reserved for actual `final_rework_required → final_review_pending` and writes the fresh identity transition. `project(...)` remains the only projection boundary: it adds lifecycle-only data under `ProjectedState.lifecycle` and does not define or project GateDecision / AcceptanceDecision. Do not evaluate a Gate in this task; Task 3.2 receives the lifecycle-only projection and queries durable decisions independently.
 
@@ -2815,6 +2942,50 @@ Every lifecycle transition record and append input also carries the durable `par
 Controller session that owns the review dispatch. The append helper preserves that field in the persisted
 record; restart candidate projection reads it from the record rather than deriving it from a child session
 or an unrelated envelope field.
+
+Promote the existing composition-root `writerId` and `ObservationLogStore` locals to fields in this
+task so later tasks can bind every domain to the same durable log. Replace only the current local
+allocation; do not construct a second store in Task 3.4 or Task 3.6:
+
+```ts
+// src/core/justice-plugin.ts -- additive fields on the existing class
+private readonly writerId: string;
+private readonly observationLogStore: ObservationLogStore;
+
+// At the existing ObservationLogStore construction point in the constructor:
+this.writerId = options.writerId ?? generateWriterId();
+this.observationLogStore = new ObservationLogStore(fileWriter, fileReader, this.writerId);
+
+this.observationHandler = new ObservationHandler({
+  logStore: this.observationLogStore,
+  sessionStateProvider: this.sessionStateProvider,
+  projectionCache: new StateProjectionCache(
+    fileWriter,
+    fileReader,
+    ".justice/state.json",
+    options.logger ?? console,
+  ),
+  writerId: this.writerId,
+  workspaceRoot: options.workspaceRoot,
+  logger: options.logger,
+  gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
+});
+```
+
+The lifecycle handler receives `onReviewPendingCommitted` through its existing injected
+dependencies. Task 3.1 adds the following one-time setter to `ObservationHandler`; it stores the
+callback in the handler's private lifecycle dependency and does not invoke it during construction:
+
+```ts
+private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
+
+setReviewPendingCommittedHandler(handler: ReviewPendingCommittedHandler): void {
+  this.reviewPendingCommittedHandler = handler;
+}
+```
+
+Task 3.4 calls this setter after its state instance exists; Task 3.1 must not construct a Review
+Dispatch state or a second authorization boundary.
 
 - [ ] **Step 4: Confirm GREEN**
 
@@ -4847,7 +5018,7 @@ not this task.
 
 **Consumes:** current `TaskExecutionRef` or finalization identity; `ReviewCorrelation`; `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and `findCurrentAcceptanceDecision` from Task 3.2; active `ApprovedPlanBinding` snapshots for current authorization membership and Final Review `planFingerprint`; review
 `TaskCallPurpose`; durable `PersistedLogRecord` read/append and projection; the injected
-`ReviewArtifactReservationPort.createExclusiveMarker`; safe-relative-path validation;
+the injected `FileWriter.createExclusiveMarker` runtime capability; safe-relative-path validation;
 `AuthorizationStore.findByAuthorizationId`.
 It also consumes the normalized review `task()` payload, the observed runtime identity from
 Task 3.3, the existing `HookResponse` union and `mergePreToolUseResponses`, and the production
@@ -4885,7 +5056,7 @@ never-rejecting port.
 `claimed_unusable` carries the trusted durable call binding while its `artifactReservation.status` is
 `unusable`; the runtime continues the task fail-open with no artifact path and never treats that binding as
 review completion authority. A `blocked` outcome exposes neither `callId` nor `artifactId` as authority.
-`ReviewArtifactReservationPort.createExclusiveMarker(path)` returns `"created"` with a JSON-safe
+`FileWriter.createExclusiveMarker(path)` returns `"created"` with a JSON-safe
 `ReviewArtifactInodeIdentity` and private `leasePath`, or `"occupied"`. The runtime adapter implements
 it with a unique same-directory temporary marker, the existing atomic `FileWriter.link` destination
 operation, and a retained private hard-link lease to the created inode; it maps only `EEXIST` to
@@ -6277,74 +6448,50 @@ function createReviewDirectiveSink(): ReviewDirectiveSink {
 class JusticePlugin {
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
   private readonly reviewDirectiveSink: ReviewDirectiveSink;
-  private readonly writerId: string;
   private readonly recordReviewAdvisory: (advisory: string, cause?: unknown) => Promise<void>;
-
-  constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
-    const writerId = options.writerId ?? generateWriterId();
-    const authorizationReviewBoundary = createAuthorizationReviewBoundary();
-    const authorizationStore = new AuthorizationStore(
-      fileReader,
-      fileWriter,
-      authorizationReviewBoundary,
-    );
-    const observationLogStore = new ObservationLogStore(fileWriter, fileReader, writerId);
-    const reviewArtifactReservationPort = createReviewArtifactReservationPort(
-      fileReader,
-      fileWriter,
-    );
-    const reviewDirectiveSink = createReviewDirectiveSink();
-
-    this.sessionStateProvider = new SessionStateProvider();
-    this.planBridge = new PlanBridge(
-      fileReader,
-      this.loopHandler,
-      this.tieredWisdomStore,
-      options.notifier,
-      this.telemetry,
-    );
-    this.observationHandler = new ObservationHandler({
-      logStore: observationLogStore,
-      sessionStateProvider: this.sessionStateProvider,
-      projectionCache: new StateProjectionCache(
-        fileWriter,
-        fileReader,
-        ".justice/state.json",
-        options.logger ?? console,
-      ),
-      writerId,
-      workspaceRoot: options.workspaceRoot,
-      logger: options.logger,
-      gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
-    });
-
-    this.writerId = writerId;
-    this.reviewDirectiveSink = reviewDirectiveSink;
-    this.recordReviewAdvisory = (advisory, cause) =>
-      appendReviewDispatchAdvisory(observationLogStore, writerId, advisory, cause);
-    this.reviewDispatchState = createReviewDispatchState({
-      readDurableRecords: () => observationLogStore.readAll(),
-      // `readDurableAuthorizations` is a Review Dispatch port, not an
-      // AuthorizationStore method; the authoritative production implementation
-      // is the existing strict `AuthorizationStore.hydrate()` API.
-      readDurableAuthorizations: () => authorizationStore.hydrate(),
-      findAuthorizationById: (authorizationId) =>
-        authorizationStore.findByAuthorizationId(authorizationId),
-      appendReviewDispatchTransition: (input) =>
-        appendReviewDispatchTransitionToStore(observationLogStore, input),
-      reserveReviewArtifact: () => reviewArtifactReservationPort.reserve(),
-      injectReviewRequiredDirective: (delivery) => reviewDirectiveSink.deliver(delivery),
-      withAuthorizationReviewBoundary: authorizationReviewBoundary.withParentSession,
-      hydrateAuthorizationsBeforeReviewRecovery: () => authorizationStore.hydrate(),
-      recordAdvisory: this.recordReviewAdvisory,
-    });
-    // Gate and the later Review Completion factory receive this same
-    // authorizationReviewBoundary and observationLogStore.
-    this.planBridge.setReviewDispatchCancellation(
-      this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
-    );
-  }
+  // `writerId`, `observationLogStore`, `authorizationReviewBoundary`, and `authorizationStore`
+  // are the fields created by Tasks 3.1 and 2.2; do not redeclare or recreate them here.
 }
+```
+
+// Insert at the end of the existing JusticePlugin constructor, after the existing
+// ObservationHandler and PlanBridge wiring has completed. This is an additive block, not a
+// replacement constructor:
+```ts
+const reviewDirectiveSink = createReviewDirectiveSink();
+this.recordReviewAdvisory = (advisory, cause) =>
+  appendReviewDispatchAdvisory(this.observationLogStore, this.writerId, advisory, cause);
+const reviewArtifactReservationPort = createReviewArtifactReservationPort(
+  fileReader,
+  fileWriter,
+  this.recordReviewAdvisory,
+);
+
+this.reviewDirectiveSink = reviewDirectiveSink;
+this.reviewDispatchState = createReviewDispatchState({
+  readDurableRecords: () => this.observationLogStore.readAll(),
+  // `readDurableAuthorizations` is a Review Dispatch port, not an
+  // AuthorizationStore method; the authoritative production implementation
+  // is the existing strict `AuthorizationStore.hydrate()` API.
+  readDurableAuthorizations: () => this.authorizationStore.hydrate(),
+  findAuthorizationById: (authorizationId) =>
+    this.authorizationStore.findByAuthorizationId(authorizationId),
+  appendReviewDispatchTransition: (input) =>
+    appendReviewDispatchTransitionToStore(this.observationLogStore, input),
+  reserveReviewArtifact: () => reviewArtifactReservationPort.reserve(),
+  injectReviewRequiredDirective: (delivery) => this.reviewDirectiveSink.deliver(delivery),
+  withAuthorizationReviewBoundary: this.authorizationReviewBoundary.withParentSession,
+  hydrateAuthorizationsBeforeReviewRecovery: () => this.authorizationStore.hydrate(),
+  recordAdvisory: this.recordReviewAdvisory,
+});
+
+// The same state instance owns both dispatch cancellation and the lifecycle offer callback.
+this.planBridge.setReviewDispatchCancellation(
+  this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
+);
+this.observationHandler.setReviewPendingCommittedHandler((parentSessionId) =>
+  this.reviewDispatchState.offerNextMandatoryReview(parentSessionId),
+);
 ```
 
 The production task route must branch before `PlanBridge.handlePreToolUse()` while preserving
@@ -6353,6 +6500,23 @@ committed binding and reservation only; it must never copy a correlation or arti
 the incoming task payload.
 
 ```ts
+private mergePreToolUseWithReviewDeliveries(
+  parentSessionId: string,
+  response: HookResponse,
+): HookResponse {
+  return this.reviewDirectiveSink
+    .takeForParentSession(parentSessionId)
+    .reduce(
+      (merged, delivery) =>
+        mergePreToolUseResponses(
+          merged,
+          { action: "inject", injectedContext: formatReviewDirective(delivery.directive) },
+          (message) => this.warnMergeConflict(message),
+        ),
+      response,
+    );
+}
+
 async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
   const observation = await this.observationHandler.handlePreToolUse(event).catch((error: unknown) => {
     this.options.logger?.warn("review observation pre-tool-use failed", error);
@@ -6367,18 +6531,7 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
     const callId = event.callId;
     if (callId === undefined || callId.trim().length === 0) {
       await this.recordReviewAdvisory("review_call_id_missing");
-      const directiveResponse = this.reviewDirectiveSink.takeForParentSession(event.sessionId).reduce(
-        (response, delivery) =>
-          mergePreToolUseResponses(
-            response,
-            { action: "inject", injectedContext: formatReviewDirective(delivery.directive) },
-            (message) => this.warnMergeConflict(message),
-          ),
-        PROCEED,
-      );
-      return mergePreToolUseResponses(observation, directiveResponse, (message) =>
-        this.warnMergeConflict(message),
-      );
+      return this.mergePreToolUseWithReviewDeliveries(event.sessionId, observation);
     }
     const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
     const claim = await this.reviewDispatchState
@@ -6397,23 +6550,12 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
       });
 
     const claimResponse = buildReviewClaimResponse(event, claim);
-    const deliveries = this.reviewDirectiveSink.takeForParentSession(event.sessionId);
-    const directiveResponse = deliveries.reduce(
-      (response, delivery) =>
-        mergePreToolUseResponses(
-          response,
-          { action: "inject", injectedContext: formatReviewDirective(delivery.directive) },
-          (message) => this.warnMergeConflict(message),
-        ),
-      PROCEED,
-    );
-    return mergePreToolUseResponses(
+    const response = mergePreToolUseResponses(
       observation,
-      mergePreToolUseResponses(claimResponse, directiveResponse, (message) =>
-        this.warnMergeConflict(message),
-      ),
+      claimResponse,
       (message) => this.warnMergeConflict(message),
     );
+    return this.mergePreToolUseWithReviewDeliveries(event.sessionId, response);
   }
 
   const planBridge =
@@ -6423,8 +6565,9 @@ async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
           return PROCEED;
         })
       : PROCEED;
-  return mergePreToolUseResponses(observation, planBridge, (message) =>
-    this.warnMergeConflict(message),
+  return this.mergePreToolUseWithReviewDeliveries(
+    event.sessionId,
+    mergePreToolUseResponses(observation, planBridge, (message) => this.warnMergeConflict(message)),
   );
 }
 ```
@@ -6443,20 +6586,32 @@ The response merger must preserve the existing observation, PlanBridge, TaskFeed
 contexts while adding each review directive as an ordinary `inject` response:
 
 ```ts
-const routeResponse = mergePostToolUseResponses(
-  [observation, planBridge, taskFeedback],
-  (message) => this.warnMergeConflict(message),
-);
-const directiveResponses = this.reviewDirectiveSink
-  .takeForParentSession(event.sessionId)
-  .map((delivery) => ({
-    action: "inject" as const,
-    injectedContext: formatReviewDirective(delivery.directive),
-  }));
-return mergePostToolUseResponses(
-  [routeResponse, ...directiveResponses],
-  (message) => this.warnMergeConflict(message),
-);
+private mergePostToolUseWithReviewDeliveries(
+  parentSessionId: string,
+  response: HookResponse,
+): HookResponse {
+  const directiveResponses: readonly HookResponse[] = this.reviewDirectiveSink
+    .takeForParentSession(parentSessionId)
+    .map((delivery) => ({
+      action: "inject" as const,
+      injectedContext: formatReviewDirective(delivery.directive),
+    }));
+  return mergePostToolUseResponses(
+    [response, ...directiveResponses],
+    (message) => this.warnMergeConflict(message),
+  );
+}
+
+// In the root PostToolUse route, after every handler has settled:
+const response = await (
+  event.payload.toolName === "task"
+    ? this.routeTaskPostToolUse(event)
+    : this.observationHandler.handlePostToolUse(event)
+).catch((error: unknown) => {
+  void this.recordReviewAdvisory("post_tool_use_route_failed", error);
+  return PROCEED;
+});
+return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
 ```
 
 This drain occurs after Task 3.6 has run `consumeReviewCompletion` and after any Task 3.1
@@ -6534,7 +6689,7 @@ Authorization lookup or state mutation.
 `reserveReviewArtifact` uses the fixed P0 constant
 `MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3`. For each attempt it generates a fresh UUID, builds
 `.justice/reviews/<artifactId>.json`, validates it with `normalizeSafeRelativePath`, ensures the review
-directory exists, and calls `ReviewArtifactReservationPort.createExclusiveMarker` before dispatch.
+directory exists, and calls the injected `FileWriter.createExclusiveMarker` before dispatch.
 The port creates the destination atomically and reports `"occupied"` for an existing file or symlink;
 there is no `fileExists` check-then-use window. A collision records
 `review_unexpected_existing_artifact` and retries with a new UUID. All three collisions return
@@ -8055,7 +8210,7 @@ async initialize(): Promise<void> {
         this.warnInitializationRecoveryFailure("staged completion", error);
       }
       try {
-        await this.recoverReviewDispatchesAfterRestart();
+        await this.reviewDispatchState.recoverReviewDispatchesAfterRestart();
       } catch (error) {
         this.warnInitializationRecoveryFailure("review dispatch", error);
       }
@@ -8107,12 +8262,66 @@ assertion below; it must use a real durable review binding and the real plugin, 
 it("routes a matching review PostToolUse to completion before implementation handlers", async () => {
   const fixture = await arrangeLiveClaimedReviewWithChildBinding();
 
-  await fixture.plugin.handleEvent(fixture.postToolUse);
+  const response = await fixture.plugin.handleEvent(fixture.postToolUse);
 
   expect(fixture.reviewCompletionTerminal()).toHaveLength(1);
   expect(fixture.planBridgePostToolUse).not.toHaveBeenCalled();
   expect(fixture.taskFeedbackPostToolUse).not.toHaveBeenCalled();
   expect(fixture.readArtifact).toHaveBeenCalledTimes(1);
+  expect(response).toEqual(
+    expect.objectContaining({
+      action: "inject",
+      injectedContext: expect.stringContaining("[JUSTICE"),
+    }),
+  );
+});
+```
+
+```ts
+it("drains a lifecycle offer created during PostToolUse into that same response", async () => {
+  const fixture = await arrangeImplementationPostToolUseWithReviewOffer();
+
+  const response = await fixture.plugin.handleEvent(fixture.postToolUse);
+
+  expect(response).toEqual(
+    expect.objectContaining({
+      action: "inject",
+      injectedContext: expect.stringContaining("[JUSTICE"),
+    }),
+  );
+  expect(fixture.takePendingDeliveries()).toEqual([]);
+});
+
+it("retains a pending delivery when a PostToolUse handler fails", async () => {
+  const fixture = await arrangePostToolUseWithFailingHandlerAndPendingDelivery();
+
+  const response = await fixture.plugin.handleEvent(fixture.postToolUse);
+
+  expect(response).toEqual(
+    expect.objectContaining({
+      action: "inject",
+      injectedContext: expect.stringContaining("[JUSTICE"),
+    }),
+  );
+  expect(fixture.takePendingDeliveries()).toEqual([]);
+});
+
+it("reissues startup recovery delivery at the next Controller-facing hook exactly once", async () => {
+  const fixture = await arrangeStartupRecoveryWithPendingReviewDelivery();
+  await fixture.plugin.initialize();
+
+  const firstResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+  const secondResponse = await fixture.plugin.handleEvent(fixture.nextControllerPreToolUse);
+
+  expect(firstResponse).toEqual(
+    expect.objectContaining({
+      action: "inject",
+      injectedContext: expect.stringContaining("[JUSTICE"),
+    }),
+  );
+  expect(secondResponse).not.toEqual(
+    expect.objectContaining({ injectedContext: expect.stringContaining("[JUSTICE") }),
+  );
 });
 ```
 
@@ -8815,12 +9024,34 @@ private async routeImplementationPostToolUse(event: PostToolUseEvent): Promise<H
   );
 }
 
+private mergePostToolUseWithReviewDeliveries(
+  parentSessionId: string,
+  response: HookResponse,
+): HookResponse {
+  const directiveResponses: readonly HookResponse[] = this.reviewDirectiveSink
+    .takeForParentSession(parentSessionId)
+    .map((delivery) => ({
+      action: "inject" as const,
+      injectedContext: formatReviewDirective(delivery.directive),
+    }));
+  return mergePostToolUseResponses(
+    [response, ...directiveResponses],
+    (message) => this.warnMergeConflict(message),
+  );
+}
+
 case "PostToolUse": {
+  let response: HookResponse = PROCEED;
   try {
-    if (event.payload.toolName === "task") {
-      return await this.routeTaskPostToolUse(event);
-    }
-    return await this.observationHandler.handlePostToolUse(event).catch(() => PROCEED);
+    response =
+      event.payload.toolName === "task"
+        ? await this.routeTaskPostToolUse(event)
+        : await this.observationHandler.handlePostToolUse(event).catch(() => PROCEED);
+  } catch (error: unknown) {
+    await this.recordReviewAdvisory("post_tool_use_route_failed", error).catch(() => undefined);
+  }
+  try {
+    return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
   } finally {
     closeSessionTaskWindow(this.sessionStateProvider, event.callId);
   }
@@ -10872,10 +11103,10 @@ Before implementation handoff, inspect every implementation step for unresolved 
 
 ---
 
-## F-037対応追記: Task 3.4 production wiring
+## F-037/F-040対応追記: production wiring and root response drain
 
-これは F-037 の未解決だった production composition と hook routing を実装計画へ固定する
-追記である。`createReviewDispatchState` の unit test が GREEN であることだけでは不十分で、
+これは F-037 の未解決だった production composition と F-040 の root response drain を実装計画へ
+固定する追記である。`createReviewDispatchState` の unit test が GREEN であることだけでは不十分で、
 Task 3.4 は下記の single composition と review-first PreToolUse route が production test
 で GREEN になるまで未完了とする。purpose-aware PostToolUse と startup recovery の呼び出し
 順序は Task 3.6 の完了条件であり、この追記はその接続契約を明示する。
@@ -10927,7 +11158,91 @@ inside a test.
 
 - `appendReviewDispatchAdvisory(logStore: ObservationLogStore, writerId: string, advisory: string, cause?: unknown): Promise<void>` appends the redacted advisory through the existing durable observation-log path and swallows its own I/O failure.
 - `appendReviewDispatchTransitionToStore(logStore: ObservationLogStore, input: PendingReviewDispatchTransitionRecord): Promise<{ readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord } | { readonly kind: "failed" }>` is the only physical dispatch-transition append adapter and preserves the input envelope identity.
-- `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation and exclusive marker creation. `createExclusiveMarker` is an implementation detail of that port, not a second composition dependency.
+- `FileWriter` gains the runtime-boundary operation
+  `createExclusiveMarker(path: string): Promise<{ readonly kind: "created"; readonly leasePath: string; readonly artifactIdentity: ReviewArtifactInodeIdentity } | { readonly kind: "occupied" }>`.
+  `NodeFileSystem.createExclusiveMarker` validates the safe relative path, creates a unique
+  same-directory marker, installs the destination with the existing atomic `link` operation, captures
+  the destination inode with `fstat`, and retains the private lease hard link. It maps only `EEXIST`
+  to `occupied`; it never uses `fileExists` followed by `writeFile`.
+- `createReviewArtifactReservationPort(fileReader: FileReader, fileWriter: FileWriter, recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>): ReviewArtifactReservationPort` returns the injected port whose public `reserve(): Promise<ReviewArtifactReservation>` operation owns safe-path validation, bounded collision retry, and exclusive marker creation. `createExclusiveMarker` is a runtime filesystem capability, not a second composition dependency.
+
+Define the reservation port and helper before the production RED/GREEN tests. The helper below is the
+complete core-side retry and classification boundary; inode capture, marker cleanup, and no-follow
+support remain inside the injected `FileWriter.createExclusiveMarker` runtime operation:
+
+```ts
+const MAX_ARTIFACT_RESERVATION_ATTEMPTS = 3;
+
+export type ReviewArtifactReservationPort = {
+  readonly reserve: () => Promise<ReviewArtifactReservation>;
+};
+
+export function createReviewArtifactReservationPort(
+  fileReader: FileReader,
+  fileWriter: FileWriter,
+  recordAdvisory: (advisory: string, cause?: unknown) => Promise<void>,
+): ReviewArtifactReservationPort {
+  // Reservation never uses fileExists: the marker operation is the exclusive create boundary.
+  void fileReader;
+
+  const recordAdvisorySafely = async (advisory: string, cause?: unknown): Promise<void> => {
+    try {
+      await recordAdvisory(advisory, cause);
+    } catch {
+      // Advisory persistence is fail-open.
+    }
+  };
+
+  return {
+    async reserve(): Promise<ReviewArtifactReservation> {
+      for (let attempt = 0; attempt < MAX_ARTIFACT_RESERVATION_ATTEMPTS; attempt += 1) {
+        let artifactId: string;
+        try {
+          artifactId = randomUUID();
+        } catch (cause: unknown) {
+          await recordAdvisorySafely("review_artifact_reservation_internal_error", cause);
+          return { status: "unusable", reason: "reservation_internal_error" };
+        }
+
+        const artifactPath = `.justice/reviews/${artifactId}.json`;
+        let safeArtifactPath: string;
+        try {
+          safeArtifactPath = normalizeSafeRelativePath(artifactPath);
+        } catch (cause: unknown) {
+          await recordAdvisorySafely("review_artifact_path_invalid", cause);
+          return { status: "unusable", reason: "artifact_path_invalid" };
+        }
+
+        try {
+          await fileWriter.mkdir(".justice/reviews", true);
+          const marker = await fileWriter.createExclusiveMarker(safeArtifactPath);
+          if (marker.kind === "occupied") {
+            await recordAdvisorySafely("review_unexpected_existing_artifact");
+            continue;
+          }
+          return {
+            status: "usable",
+            artifactId,
+            artifactPath: safeArtifactPath,
+            leasePath: marker.leasePath,
+            artifactIdentity: marker.artifactIdentity,
+          };
+        } catch (cause: unknown) {
+          await recordAdvisorySafely("artifact_reservation_storage_unavailable", cause);
+          return { status: "unusable", reason: "artifact_storage_unavailable" };
+        }
+      }
+
+      return { status: "unusable", reason: "artifact_path_collision_exhausted" };
+    },
+  };
+}
+```
+
+The `FileWriter` type change and `NodeFileSystem.createExclusiveMarker` implementation are part of
+Task 3.4's Files list. Every test writer mock must implement the capability; tests must assert that
+`fileExists` is never used for reservation, that a collision retries with a fresh UUID, and that
+marker, identity, or lease failures return the exact unusable reason without exposing a path.
 - `resolveMandatoryReviewCategory(toolInput: Readonly<Record<string, unknown>>): "sp-review" | "sp-final-review" | undefined` returns a value only for exact canonical categories after the existing task-input normalizer has run.
 - `buildReviewClaimResponse(event: PreToolUseEvent, outcome: ClaimReviewDispatchOutcome): HookResponse` maps only a committed `TaskCallBinding` / explicit blocked outcome to the existing `HookResponse` union; it never copies correlation or artifact identity from `event.payload`.
 - `formatReviewDirective(directive: ReviewRequiredDirective): string` is the single pure formatter for the Controller-facing review directive.
@@ -11130,9 +11445,10 @@ bun run lint
 bun run build
 ```
 
-F-037 の reverse traceability は、`JusticePlugin` の single composition、review-first
-PreToolUse routing、Task 3.6へのpurpose-aware PostToolUse handoff、既存 `HookResponse`
-mapping、fail-open boundary、Task 3.4 / 3.6のproduction integration testsで構成する。
+F-037/F-040 の reverse traceability は、`JusticePlugin` の single composition、review-first
+PreToolUse routing、Task 3.6へのpurpose-aware PostToolUse handoff、PostToolUse/PreToolUse の
+root sink drain、既存 `HookResponse` mapping、fail-open boundary、Task 3.4 / 3.6のproduction
+integration testsで構成する。
 なお、`ec23694` は計画書だけを変更したため、既存の F-036 記述にある integration test は
 このコミットで実際に追加されたテストではなく、計画上のテスト仕様である。この区別を保った
 まま、Task 3.4はPreToolUse/composition、Task 3.6はPostToolUse/startup wiringの実テスト追加と
