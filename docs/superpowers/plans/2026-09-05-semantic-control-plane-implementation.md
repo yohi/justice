@@ -431,8 +431,10 @@ git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 `invalidationReason: "plan_superseded"` only on a superseded invalid binding;
 `ApprovePlanInput` without `authorizationId`; `AuthorizationStore.approve(input:
 ApprovePlanInput): Promise<ApprovedPlanBinding | null>` that always generates a fresh authorizationId and
-leaves at most one active binding per session; `AuthorizationStore.release(authorizationId, at):
-Promise<boolean>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`;
+leaves at most one active binding per session; `AuthorizationMutationResult`; public
+`AuthorizationStore.release(authorizationId, at): Promise<AuthorizationMutationResult>` and
+`AuthorizationStore.invalidateForFingerprint(authorizationId, currentFingerprint, at):
+Promise<AuthorizationMutationResult>`; `AuthorizationStore.hydrate(): Promise<readonly ApprovedPlanBinding[]>`;
 `AuthorizationStore.findByAuthorizationId(authorizationId): Promise<ApprovedPlanBinding | null>`;
 `AuthorizationReviewBoundary`; `createAuthorizationReviewBoundary(): AuthorizationReviewBoundary`; and the
 domain-private `mergeAuthorizationBindings(mine: ReadonlyArray<ApprovedPlanBinding>,
@@ -440,7 +442,10 @@ theirs: ReadonlyArray<ApprovedPlanBinding>): ReadonlyArray<ApprovedPlanBinding>`
 store's `AtomicPersistence.merge` hook. It is exported from this source module only so its array
 contract can be tested; it is not re-exported by a package barrel and is not a public Justice API. It also
 produces public boundary-acquiring `AuthorizationStore.release` / fingerprint invalidation operations and
-their explicitly named `WithinAuthorizationReviewBoundary` counterparts. It produces one injected
+their explicitly named `WithinAuthorizationReviewBoundary` counterparts:
+`releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)` and
+`invalidateForFingerprintWithinAuthorizationReviewBoundary(parentSessionId, authorizationId,
+currentFingerprint, at)`. It produces one injected
 `AuthorizationReviewBoundary` shared by the Authorization, PlanBridge,
 review-dispatch, review-completion, and Gate domains. `ApprovedPlanBinding.sessionId` and review
 `parentSessionId` use the same boundary key; the boundary serializes the durable commit and all
@@ -455,6 +460,35 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
     resolve = next;
   });
   return { promise, resolve: (value) => resolve?.(value as T) };
+}
+
+function tracedAuthorizationReviewBoundary(): AuthorizationReviewBoundary & {
+  readonly acquiresFor: (parentSessionId: string) => number;
+  readonly reset: () => void;
+} {
+  const boundary = createAuthorizationReviewBoundary();
+  const acquires = new Map<string, number>();
+  return {
+    withParentSession: async (parentSessionId, operation) => {
+      acquires.set(parentSessionId, (acquires.get(parentSessionId) ?? 0) + 1);
+      return boundary.withParentSession(parentSessionId, operation);
+    },
+    acquiresFor: (parentSessionId) => acquires.get(parentSessionId) ?? 0,
+    reset: () => acquires.clear(),
+  };
+}
+
+function trackAuthorizationWrites(files: MockFileSystem): {
+  readonly count: () => number;
+  readonly reset: () => void;
+} {
+  let count = 0;
+  const originalWriteFile = files.writeFile.bind(files);
+  files.writeFile = async (path, content) => {
+    if (path.startsWith(".justice/authorizations.json.tmp.")) count += 1;
+    await originalWriteFile(path, content);
+  };
+  return { count: () => count, reset: () => (count = 0) };
 }
 
 const authorizationAtomic = new AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>(
@@ -537,12 +571,66 @@ it("preserves authorization cardinality through AtomicPersistence initial merge"
   });
 });
 
-it("keeps one active binding when a version-conflicted fresh approval retries", async () => {
+it("serializes same-process same-session approvals without a filesystem conflict", async () => {
+  const boundary = createAuthorizationReviewBoundary();
+  const files = new MockFileSystem();
+  const store = new AuthorizationStore(files, files, boundary);
+  const firstMutationEntered = deferred<void>();
+  const releaseFirstMutation = deferred<void>();
+  const originalWriteFile = files.writeFile.bind(files);
+  let holdFirstAuthorizationWrite = false;
+  let activeMutationBodies = 0;
+  let maximumMutationBodies = 0;
+  files.writeFile = async (path, content) => {
+    if (holdFirstAuthorizationWrite && path.startsWith(".justice/authorizations.json.tmp.")) {
+      activeMutationBodies += 1;
+      maximumMutationBodies = Math.max(maximumMutationBodies, activeMutationBodies);
+      firstMutationEntered.resolve();
+      await releaseFirstMutation.promise;
+      activeMutationBodies -= 1;
+    }
+    await originalWriteFile(path, content);
+  };
+
+  const old = await store.approve(inputFor("s1", "docs/old.md"));
+  holdFirstAuthorizationWrite = true;
+  const approvalA = store.approve(inputFor("s1", "docs/a.md"));
+  await firstMutationEntered.promise;
+  const approvalB = store.approve(inputFor("s1", "docs/b.md"));
+  releaseFirstMutation.resolve();
+  const [a, b] = await Promise.all([approvalA, approvalB]);
+  const durable = await store.hydrate();
+  const active = durable.filter(
+    (binding) => binding.sessionId === "s1" && binding.status === "active",
+  );
+
+  expect(maximumMutationBodies).toBe(1);
+  expect([a, b].filter((binding) => binding !== null)).toHaveLength(2);
+  expect(active).toHaveLength(1);
+  expect(durable.find((binding) => binding.authorizationId === old?.authorizationId)).toMatchObject({
+    status: "invalidated",
+    invalidationReason: "plan_superseded",
+  });
+  expect(
+    durable.filter(
+      (binding) =>
+        (binding.authorizationId === a?.authorizationId || binding.authorizationId === b?.authorizationId) &&
+        binding.status === "invalidated",
+    ),
+  ).toEqual([expect.objectContaining({ invalidationReason: "plan_superseded" })]);
+  expect(bridge.activePlanFor("s1")).toBe(active[0]?.planPath);
+});
+
+it("merges a cross-process version conflict through independent boundaries", async () => {
   const firstTwoLinkAttempts = deferred<void>();
+  const files = new MockFileSystem();
+  const boundaryA = createAuthorizationReviewBoundary();
+  const boundaryB = createAuthorizationReviewBoundary();
+  const storeA = new AuthorizationStore(files, files, boundaryA);
+  const storeB = new AuthorizationStore(files, files, boundaryB);
+  const originalLink = files.link.bind(files);
   let coordinateContenders = false;
   let linkAttempts = 0;
-  const files = new MockFileSystem();
-  const originalLink = files.link.bind(files);
   files.link = async (target, claimPath) => {
     if (!coordinateContenders) return originalLink(target, claimPath);
     linkAttempts += 1;
@@ -552,55 +640,100 @@ it("keeps one active binding when a version-conflicted fresh approval retries", 
     }
     await originalLink(target, claimPath);
   };
-  const store = new AuthorizationStore(files, files);
 
-  const old = await store.approve(inputFor("s1", "docs/old.md"));
-  const other = await store.approve(inputFor("s2", "docs/other.md"));
+  const old = await storeA.approve(inputFor("s1", "docs/old.md"));
+  const other = await storeA.approve(inputFor("s2", "docs/other.md"));
   coordinateContenders = true;
-  linkAttempts = 0;
-  const approvalA = store.approve(inputFor("s1", "docs/a.md"));
-  const approvalB = store.approve(inputFor("s1", "docs/b.md"));
+  const approvalA = storeA.approve(inputFor("s1", "docs/a.md"));
+  const approvalB = storeB.approve(inputFor("s1", "docs/b.md"));
   await firstTwoLinkAttempts.promise;
   const [a, b] = await Promise.all([approvalA, approvalB]);
-  const durable = await store.hydrate();
+  const durable = await storeA.hydrate();
   const active = durable.filter(
     (binding) => binding.sessionId === "s1" && binding.status === "active",
   );
+  const fresh = [a, b].filter((binding): binding is ApprovedPlanBinding => binding !== null);
+  const losingFreshId = fresh.find((binding) => binding.authorizationId !== active[0]?.authorizationId)
+    ?.authorizationId;
 
-  expect([a, b].filter((binding) => binding !== null)).toHaveLength(2);
   expect(linkAttempts).toBeGreaterThanOrEqual(3);
   expect(active).toHaveLength(1);
-  expect(
-    durable.filter((binding) => binding.sessionId === "s1" && binding.status !== "active"),
-  ).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        authorizationId: old?.authorizationId,
-        status: "invalidated",
-        invalidationReason: "plan_superseded",
-      }),
-    ]),
-  );
-  expect(
-    durable.filter(
-      (binding) =>
-        (binding.authorizationId === a?.authorizationId ||
-          binding.authorizationId === b?.authorizationId) &&
-        binding.status === "active",
+  expect(losingFreshId).toBeDefined();
+  expect(durable.find((binding) => binding.authorizationId === losingFreshId)).toMatchObject({
+    status: "invalidated",
+    invalidationReason: "plan_superseded",
+  });
+  expect(durable.find((binding) => binding.authorizationId === old?.authorizationId)).toMatchObject({
+    status: "invalidated",
+    invalidationReason: "plan_superseded",
+  });
+  expect(durable.find((binding) => binding.authorizationId === other?.authorizationId)).toMatchObject({
+    status: "active",
+  });
+});
+
+it("acquires the public release boundary once while the inner release acquires none", async () => {
+  const boundary = tracedAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const active = await store.approve(inputFor("s1", "docs/p.md"));
+  boundary.reset();
+
+  await expect(store.release(active!.authorizationId, "2026-09-05T00:00:00.000Z")).resolves.toMatchObject({
+    kind: "saved",
+  });
+  expect(boundary.acquiresFor("s1")).toBe(1);
+  await expect(
+    store.releaseWithinAuthorizationReviewBoundary(
+      "s1",
+      active!.authorizationId,
+      "2026-09-05T00:00:00.000Z",
     ),
-  ).toHaveLength(1);
-  expect(
-    durable.filter(
-      (binding) =>
-        (binding.authorizationId === a?.authorizationId ||
-          binding.authorizationId === b?.authorizationId) &&
-        binding.status === "invalidated",
+  ).resolves.toMatchObject({ kind: "already_terminal" });
+  expect(boundary.acquiresFor("s1")).toBe(1);
+});
+
+it("rejects a within-boundary release for the wrong parent without durable mutation", async () => {
+  const boundary = createAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const writes = trackAuthorizationWrites(files);
+  const active = await store.approve(inputFor("s1", "docs/p.md"));
+  writes.reset();
+
+  await expect(
+    store.releaseWithinAuthorizationReviewBoundary(
+      "s2",
+      active!.authorizationId,
+      "2026-09-05T00:00:00.000Z",
     ),
-  ).toEqual([expect.objectContaining({ invalidationReason: "plan_superseded" })]);
-  expect(
-    durable.find((binding) => binding.authorizationId === other?.authorizationId),
-  ).toMatchObject({ status: "active" });
-  expect(bridge.activePlanFor("s1")).toBe(active[0]?.planPath);
+  ).resolves.toEqual({ kind: "wrong_parent" });
+  expect(writes.count()).toBe(0);
+  expect((await store.hydrate()).find((binding) => binding.authorizationId === active!.authorizationId))
+    .toMatchObject({ status: "active" });
+});
+
+it("acquires the public fingerprint-invalidation boundary once while the inner mutation acquires none", async () => {
+  const boundary = tracedAuthorizationReviewBoundary();
+  const store = new AuthorizationStore(files, files, boundary);
+  const active = await store.approve(inputFor("s1", "docs/p.md"));
+  boundary.reset();
+
+  await expect(
+    store.invalidateForFingerprint(
+      active!.authorizationId,
+      changedFingerprint,
+      "2026-09-05T00:00:00.000Z",
+    ),
+  ).resolves.toMatchObject({ kind: "saved" });
+  expect(boundary.acquiresFor("s1")).toBe(1);
+  await expect(
+    store.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+      "s1",
+      active!.authorizationId,
+      changedFingerprint,
+      "2026-09-05T00:00:00.000Z",
+    ),
+  ).resolves.toMatchObject({ kind: "already_terminal" });
+  expect(boundary.acquiresFor("s1")).toBe(1);
 });
 
 it("atomically supersedes only the active binding in the approving session", async () => {
@@ -702,6 +835,15 @@ it("does not let old cleanup delete a newer same-parent tail", async () => {
 });
 ```
 
+Every `AuthorizationStore` fixture in this task, including shared `beforeEach` fixtures and both stores in
+the cross-process test, passes an explicit `AuthorizationReviewBoundary`; do not add an optional or test-only
+boundary fallback. The same-process test intentionally holds only the first authorization mutation and then
+releases it, so it verifies serialization without manufacturing a persistence conflict or waiting for a second
+same-boundary contender. The cross-process test uses separate boundaries and a shared filesystem so both
+stores observe the old version. Its forced retry must execute `AtomicPersistence`'s configured
+`mergeAuthorizationBindings` hook, not a test replacement; the durable losing fresh authorization is therefore
+the deterministic `plan_superseded` result of the real merge/retry path.
+
 - [ ] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-authorization.test.ts tests/hooks/plan-bridge-authorization.test.ts`
@@ -742,16 +884,28 @@ Completion factory; no domain constructs its own map. Task 3.6 adds the cross-do
 that proves operations supplied to those consumers for one parent actually serialize on this instance.
 
 `AuthorizationStore.approve`, public `release`, and public fingerprint invalidation acquire the boundary
-using the immutable binding `sessionId`. Each public mutation delegates to an explicitly named domain
-operation that assumes ownership is already held: `releaseWithinAuthorizationReviewBoundary` and
-`invalidateForFingerprintWithinAuthorizationReviewBoundary`. Those inner operations re-read durable state,
-perform only their Authorization mutation, and never acquire the boundary. PlanBridge's combined release
-or invalidation path acquires the boundary once, calls the matching inner Authorization operation, then
-Task 3.4's within-boundary review-cancellation helper, then updates its cache, and only then releases the
-boundary. It must never call the public mutation wrapper while it already owns the boundary. A standalone
-authorization recheck outside this boundary is never sufficient to authorize a later state change. On
-restart, durable Authorization terminality and the observation log remain authoritative; the process-local
-boundary is recreated empty.
+using the immutable binding `sessionId`. The public release and invalidation wrappers first read the
+authoritative binding by exact `authorizationId`; missing or unreadable bindings return their defined
+non-success result without acquiring a guessed parent key. Each public mutation then delegates to an
+explicitly named domain operation that assumes ownership is already held:
+`releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)` and
+`invalidateForFingerprintWithinAuthorizationReviewBoundary(parentSessionId, authorizationId,
+currentFingerprint, at)`. Those inner operations re-read durable state, exact-match the authorization ID,
+require `binding.sessionId === parentSessionId`, perform only their Authorization mutation, and never
+acquire the boundary. Release changes only an active binding to `released`; fingerprint invalidation changes
+only an active binding whose stored fingerprint differs from `currentFingerprint` to `invalidated`. Missing,
+wrong-parent, already-terminal, and unchanged-fingerprint cases are deterministic non-successes. Each inner
+operation performs one `AtomicPersistence.saveAtomicWithLock` call; only `saved` returns a saved result,
+while an exception returns `failed` and conflict diversion returns `uncertain`. Neither inner operation
+updates a cache or restores a terminal binding to active.
+
+PlanBridge's combined release or invalidation path acquires the boundary once, calls the matching inner
+Authorization operation, requires its `saved` result, then calls Task 3.4's within-boundary
+review-cancellation helper, updates the active-plan cache, and only then releases the boundary. A non-saved
+terminal mutation returns fail-closed before cancellation or cache publication. It must never call a public
+mutation wrapper while it already owns the boundary. A standalone authorization recheck outside this boundary
+is never sufficient to authorize a later state change. On restart, durable Authorization terminality and the
+observation log remain authoritative; the process-local boundary is recreated empty.
 
 ```ts
 type ApprovedPlanBindingBase = {
@@ -820,6 +974,144 @@ constructor(options: JusticePluginOptions) {
 
 // Tasks 3.2, 3.4, and 3.6 pass this same field, never a newly constructed boundary,
 // to the Gate evaluator, Review Dispatch factory, and Review Completion factory respectively.
+
+export type AuthorizationMutationResult =
+  | {
+      readonly kind: "saved";
+      readonly binding: Exclude<ApprovedPlanBinding, { readonly status: "active" }>;
+    }
+  | {
+      readonly kind:
+        | "not_found"
+        | "wrong_parent"
+        | "already_terminal"
+        | "fingerprint_current"
+        | "failed"
+        | "uncertain";
+    };
+
+class AuthorizationStore {
+  private readonly authorizationPersistence: AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>;
+
+  constructor(
+    private readonly fileReader: FileReader,
+    private readonly fileWriter: FileWriter,
+    private readonly authorizationReviewBoundary: AuthorizationReviewBoundary,
+  ) {
+    this.authorizationPersistence = new AtomicPersistence(fileReader, fileWriter, {
+      filePath: ".justice/authorizations.json",
+      conflictPath: ".justice/authorizations.conflict.json",
+      serialize: (bindings) => JSON.stringify(bindings),
+      deserialize: (raw) => JSON.parse(raw) as ReadonlyArray<ApprovedPlanBinding>,
+      merge: mergeAuthorizationBindings,
+      emptyValue: () => [],
+    });
+  }
+
+  async findByAuthorizationId(authorizationId: string): Promise<ApprovedPlanBinding | null> {
+    const current = await this.authorizationPersistence.loadWithLock();
+    return current.data.find((binding) => binding.authorizationId === authorizationId) ?? null;
+  }
+
+  async release(authorizationId: string, at: string): Promise<AuthorizationMutationResult> {
+    let binding: ApprovedPlanBinding | null;
+    try {
+      binding = await this.findByAuthorizationId(authorizationId);
+    } catch {
+      return { kind: "failed" };
+    }
+    if (binding === null) return { kind: "not_found" };
+    return this.authorizationReviewBoundary.withParentSession(binding.sessionId, () =>
+      this.releaseWithinAuthorizationReviewBoundary(binding.sessionId, authorizationId, at),
+    );
+  }
+
+  async releaseWithinAuthorizationReviewBoundary(
+    parentSessionId: string,
+    authorizationId: string,
+    at: string,
+  ): Promise<AuthorizationMutationResult> {
+    try {
+      const current = await this.authorizationPersistence.loadWithLock();
+      const binding = current.data.find((candidate) => candidate.authorizationId === authorizationId);
+      if (binding === undefined) return { kind: "not_found" };
+      if (binding.sessionId !== parentSessionId) return { kind: "wrong_parent" };
+      if (binding.status !== "active") return { kind: "already_terminal" };
+      const released: Extract<ApprovedPlanBinding, { readonly status: "released" }> = {
+        ...binding,
+        status: "released",
+        releasedAt: at,
+      };
+      const saved = await this.authorizationPersistence.saveAtomicWithLock(
+        current.data.map((candidate) =>
+          candidate.authorizationId === authorizationId ? released : candidate,
+        ),
+        current.lockMeta,
+      );
+      return saved.status === "saved" ? { kind: "saved", binding: released } : { kind: "uncertain" };
+    } catch {
+      return { kind: "failed" };
+    }
+  }
+
+  async invalidateForFingerprint(
+    authorizationId: string,
+    currentFingerprint: PlanFingerprint,
+    at: string,
+  ): Promise<AuthorizationMutationResult> {
+    let binding: ApprovedPlanBinding | null;
+    try {
+      binding = await this.findByAuthorizationId(authorizationId);
+    } catch {
+      return { kind: "failed" };
+    }
+    if (binding === null) return { kind: "not_found" };
+    return this.authorizationReviewBoundary.withParentSession(binding.sessionId, () =>
+      this.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+        binding.sessionId,
+        authorizationId,
+        currentFingerprint,
+        at,
+      ),
+    );
+  }
+
+  async invalidateForFingerprintWithinAuthorizationReviewBoundary(
+    parentSessionId: string,
+    authorizationId: string,
+    currentFingerprint: PlanFingerprint,
+    at: string,
+  ): Promise<AuthorizationMutationResult> {
+    try {
+      const current = await this.authorizationPersistence.loadWithLock();
+      const binding = current.data.find((candidate) => candidate.authorizationId === authorizationId);
+      if (binding === undefined) return { kind: "not_found" };
+      if (binding.sessionId !== parentSessionId) return { kind: "wrong_parent" };
+      if (binding.status !== "active") return { kind: "already_terminal" };
+      if (samePlanFingerprint(binding.planFingerprint, currentFingerprint)) {
+        return { kind: "fingerprint_current" };
+      }
+      const invalidated: Extract<ApprovedPlanBinding, { readonly status: "invalidated" }> = {
+        ...binding,
+        status: "invalidated",
+        invalidatedAt: at,
+      };
+      const saved = await this.authorizationPersistence.saveAtomicWithLock(
+        current.data.map((candidate) =>
+          candidate.authorizationId === authorizationId ? invalidated : candidate,
+        ),
+        current.lockMeta,
+      );
+      return saved.status === "saved" ? { kind: "saved", binding: invalidated } : { kind: "uncertain" };
+    } catch {
+      return { kind: "failed" };
+    }
+  }
+}
+
+function samePlanFingerprint(left: PlanFingerprint, right: PlanFingerprint): boolean {
+  return left.algorithm === right.algorithm && left.value === right.value;
+}
 
 export function mergeAuthorizationBindings(
   mine: ReadonlyArray<ApprovedPlanBinding>,
@@ -915,7 +1207,8 @@ git commit -m "feat: plan authorizationをdurable bindingへ置換"
 - Test: `tests/runtime/opencode-adapter.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
 
-**Consumes:** `parseJusticeImplementCommandArguments(argumentsString)`; `AuthorizationStore.release(authorizationId, at)`.
+**Consumes:** `parseJusticeImplementCommandArguments(argumentsString)`; public
+`AuthorizationStore.release(authorizationId, at): Promise<AuthorizationMutationResult>`.
 
 **Produces:** `ImplementationArmRequest` discriminated union with `{ readonly source: "command"; readonly action: "approve"; readonly planPath: string; readonly approved: boolean }` and `{ readonly source: "command"; readonly action: "cancel" }`.
 
@@ -968,7 +1261,7 @@ Expected: FAIL because `--cancel` is rejected.
 
 - [ ] **Step 3: Implement cancellation**
 
-Accept exactly one of `--approved` and `--cancel`. Approve requires exactly one safe `--plan`; cancel forbids `--plan`. Reject both flags, duplicate flags, missing approve plan, and unsafe paths. In `PlanBridge.handleImplementationArm`, branch on `action` before resolving a plan path. For cancel, resolve only the current session's single active binding, persist `active -> released`, and clear the active plan cache only after durable success. With no active binding, return the deterministic non-armed no-op result without persistence I/O. After either successful release or no-op, later `handlePreToolUse` returns the existing unauthorized advisory. Task 2.3 owns parsing and durable Authorization release only. Task 3.4 is the sole owner of connecting successful terminalization, and fingerprint-driven invalidation, to the existing Review Dispatch `cancelled` transition after that module exists; it must not be anticipated here with a Phase 3 dependency or a second cancellation mechanism.
+Accept exactly one of `--approved` and `--cancel`. Approve requires exactly one safe `--plan`; cancel forbids `--plan`. Reject both flags, duplicate flags, missing approve plan, and unsafe paths. In `PlanBridge.handleImplementationArm`, branch on `action` before resolving a plan path. For cancel, resolve only the current session's single active binding and call public `release`; only its `saved` result persists `active -> released` and clears the active plan cache. Every non-saved result is non-armed and fail-closed. With no active binding, return the deterministic non-armed no-op result without persistence I/O. After either successful release or no-op, later `handlePreToolUse` returns the existing unauthorized advisory. Task 2.3 owns parsing and durable Authorization release only. Task 3.4 replaces this cache path with its one outer release-plus-cancellation operation after Review Dispatch exists; it is the sole owner of connecting successful terminalization, and fingerprint-driven invalidation, to the existing Review Dispatch `cancelled` transition. Do not anticipate it here with a Phase 3 dependency or a second cancellation mechanism.
 
 ```ts
 if (cancel) return { source: "command", action: "cancel" };
@@ -3450,9 +3743,38 @@ it("releases and cancels in one parent-boundary operation", async () => {
 
 it("invalidates and cancels in one parent-boundary operation", async () => {
   await invalidatePlanFingerprint("parent-1", changedFingerprint);
+  expect(trace).toEqual([
+    "boundary-enter",
+    "authorization-invalidation-durable",
+    "review-cancelled-tombstone-attempt",
+    "active-plan-cache-update",
+    "boundary-release",
+  ]);
   expect(parentBoundary.nestedAcquiresFor("parent-1")).toBe(0);
   expect(durableCancelledTombstones()).toHaveLength(1);
   expect(durablePositiveReviewProgress()).toEqual([]);
+});
+
+it("does not cancel or publish cache when the within-boundary parent is wrong", async () => {
+  await runTerminalAuthorizationPath({
+    parentSessionId: "parent-2",
+    authorizationId: activeAuthorization.authorizationId,
+    kind: "release",
+  });
+
+  expect(authorizationDurableMutations()).toHaveLength(0);
+  expect(cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim).not.toHaveBeenCalled();
+  expect(updateActivePlanCache).not.toHaveBeenCalled();
+});
+
+it("does not cancel or publish cache when the terminal authorization save fails", async () => {
+  authorizationStore.releaseWithinAuthorizationReviewBoundary.mockResolvedValueOnce({ kind: "failed" });
+
+  await bridge.handleImplementationArm("parent-1", cancelRequest);
+
+  expect(cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim).not.toHaveBeenCalled();
+  expect(updateActivePlanCache).not.toHaveBeenCalled();
+  expect(durableCancelledTombstones()).toEqual([]);
 });
 ```
 
@@ -4426,7 +4748,45 @@ same order with `invalidateForFingerprintWithinAuthorizationReviewBoundary`. Pla
 `AuthorizationStore.release`, public fingerprint invalidation, or public
 `cancelReviewDispatchesForTerminalAuthorization` while it owns this boundary. The release / invalidation is
 never rolled back when the dependent tombstone append fails, but the boundary remains held until that attempt
-and all cache updates finish.
+and all cache updates finish. If the inner Authorization mutation is any non-saved result, PlanBridge returns
+fail-closed without attempting cancellation and without publishing a terminal active-plan cache value.
+
+```ts
+await withAuthorizationReviewBoundary(parentSessionId, async () => {
+  const result = await authorizationStore.releaseWithinAuthorizationReviewBoundary(
+    parentSessionId,
+    authorizationId,
+    at,
+  );
+  if (result.kind !== "saved") {
+    await recordAdvisory("authorization_terminal_mutation_not_saved");
+    return;
+  }
+  await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+    parentSessionId,
+    authorizationId,
+  );
+  updateActivePlanCache(parentSessionId, null);
+});
+
+await withAuthorizationReviewBoundary(parentSessionId, async () => {
+  const result = await authorizationStore.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+    parentSessionId,
+    authorizationId,
+    currentFingerprint,
+    at,
+  );
+  if (result.kind !== "saved") {
+    await recordAdvisory("authorization_terminal_mutation_not_saved");
+    return;
+  }
+  await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+    parentSessionId,
+    authorizationId,
+  );
+  updateActivePlanCache(parentSessionId, null);
+});
+```
 On recovery, the same helper rechecks durable Authorization and retries a missing `cancelled` tombstone without
 reissuing or claiming the slot. The helper reads the latest projection under the shared parent-session boundary,
 identifies only current slots whose correlation resolves to the supplied authorizationId, appends
@@ -6280,7 +6640,10 @@ Task 3.2's `evaluateGatePendingAttemptWithinAuthorizationReviewBoundary`. Startu
 
 After every successful composite terminal append, and whenever recovery finds that matching terminal, call
 `ensureTerminalReviewOutcomeApplied`, then `ensureConsumedReviewArtifactCleaned(staging, terminal)`, then the
-Task 3.4 `offerNextMandatoryReview(parentSessionId)` boundary. The cleanup helper is a small Review Dispatch
+Task 3.4 `offerNextMandatoryReviewWithinParentSessionClaim(parentSessionId)` operation. These Task 3.6 paths
+already hold the parent-session claim; they must use the within-parent operation and must not reacquire the
+non-reentrant boundary. Public `offerNextMandatoryReview(parentSessionId)` is exclusively a boundary-external
+Review Dispatch entry point. The cleanup helper is a small Review Dispatch
 domain helper in `review-dispatch-state.ts`, not a generic cleanup framework. It reprojects the matching staging,
 terminal consume marker, and reservation; it reads neither artifact content nor worker output. It performs
 best-effort / idempotent cleanup only when `findMatchingTerminalForStaging` finds a durable `completed`,
@@ -6342,7 +6705,7 @@ durable current `active` binding. Recheck the same binding after staging is comm
 the composite terminal append, lifecycle advance, and Gate request. If it is released, invalidated, missing,
 unreadable, conflict-diverted, or otherwise uncertain, do not consume an artifact authoritatively, do not
 append a clean / findings / incomplete terminal, do not invoke Gate, and do not generate Acceptance. Instead,
-call Task 3.4's `cancelReviewDispatchesForTerminalAuthorization` for the current slot and return a blocked /
+call Task 3.4's `cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim` for the current slot and return a blocked /
 stale advisory. That cancellation path invokes `ensureConsumedReviewArtifactCleaned` only after a matching
 `cancelled` tombstone is durably committed; a tombstone append failure leaves staging and artifact intact for
 restart convergence. A cancel after staging therefore gives the terminal Authorization precedence: the staging
@@ -6370,15 +6733,17 @@ For each staging record, `recoverStagedReviewCompletion` first reads durable rec
 it matches a claimed `cancelled` terminal by the same parent/call/correlation plus the durable claimed binding's
 artifact ID. When that terminal exists, recovery reads neither the artifact nor worker output, does not require the slot to remain
 `claimed`, does not append a terminal record, and calls `ensureTerminalReviewOutcomeApplied(existingTerminal)`,
-`ensureConsumedReviewArtifactCleaned(staged, existingTerminal)`, and then `offerNextMandatoryReview`.
+`ensureConsumedReviewArtifactCleaned(staged, existingTerminal)`, and then
+`offerNextMandatoryReviewWithinParentSessionClaim`.
 When no matching terminal exists, it verifies that the parent session / callId / correlation slot remains current
 `claimed`, that its `TaskCallBinding` and `DelegatedExecutionBinding` still match, and that the
 `staged.staging.artifactConsumption` ID and digest match the staged composite payload. It then checks current active
 Authorization and retries exactly the one composite terminal append using only `staged.staging.artifactConsumption`,
 `staged.staging.reviewArtifact`, and `staged.staging.observedExecution`; it never reads the artifact path, fetches worker output,
 creates a reservation or dispatch, or changes either review-round field. Only a successful terminal append calls
-`ensureTerminalReviewOutcomeApplied`, `ensureConsumedReviewArtifactCleaned`, and `offerNextMandatoryReview` for
-the same terminal. A failed append leaves the slot `claimed` plus staging durable, with no AcceptanceDecision. A
+`ensureTerminalReviewOutcomeApplied`, `ensureConsumedReviewArtifactCleaned`, and
+`offerNextMandatoryReviewWithinParentSessionClaim` for the same terminal. A failed append leaves the slot
+`claimed` plus staging durable, with no AcceptanceDecision. A
 mismatch is stale/advisory with no state mutation.
 
 `consumeReviewCompletion` must first validate the PostToolUse parent/call identity against the
@@ -6577,7 +6942,6 @@ type ReviewCompletionDependencies = {
   readonly dispatch: Pick<
     ReturnType<typeof createReviewDispatchState>,
     | "withReviewDispatchParentSessionClaim"
-    | "offerNextMandatoryReview"
     | "offerNextMandatoryReviewWithinParentSessionClaim"
     | "cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim"
   >;
@@ -6601,7 +6965,6 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
   } = dependencies;
   const {
     withReviewDispatchParentSessionClaim,
-    offerNextMandatoryReview,
     offerNextMandatoryReviewWithinParentSessionClaim,
     cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
   } = dependencies.dispatch;
@@ -8134,14 +8497,17 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | JUS-P0-02 semantic fingerprint and canonical snapshot          | 2.1, 2.2                | semantic mutation, snapshot persistence, hydration, fresh reapproval ID, terminal merge protection                                                                                                                               |
 | typed `error_annotation` provenance and exact line migration   | 2.1                     | persisted observation validation/replay, plan-path and raw-snapshot scoping, line number / occurrence / digest matching, cross-plan and unknown-provenance retention                                                          |
 | authorization sequential supersession                          | 2.2                     | same-session A→B atomic supersession, durable `plan_superseded`, exactly one active binding, old authorization rejection, other-session isolation                                                                                |
-| authorization concurrent supersession                          | 2.2                     | barrier-coordinated fresh-ID approvals traverse `AtomicPersistence` version mismatch and merge/retry, retain exactly one same-session active binding, terminalize old and losing bindings, preserve other-session active binding |
+| same-process approval serialization                            | 2.2                     | one store plus one injected boundary: concurrent same-parent approvals have maximum mutation-body concurrency one, do not deadlock, retain one active binding, terminalize losers, and publish the final durable active cache |
+| cross-process authorization conflict                           | 2.2                     | two stores plus independent boundaries and shared persistence: fresh approvals traverse real `AtomicPersistence` version mismatch and `mergeAuthorizationBindings` retry, retain one active binding, terminalize the losing fresh ID as `plan_superseded`, preserve other-session active binding |
 | authorization terminal dominance and cache consistency         | 2.2                     | same-ID terminal never resurrects; conflict-diverted candidate never updates cache; saved merged durable active binding is the cache value                                                                                       |
+| Authorization public/inner mutation split                      | 2.2                     | public release and fingerprint invalidation acquire the boundary once; their within-boundary counterparts acquire it zero times; wrong parent causes no durable mutation                                                                                                       |
 | `AuthorizationReviewBoundary` implementation                  | 2.2                     | same-parent exclusion, rejected-predecessor recovery, A -> B -> C conditional-tail cleanup, and different-parent progress                                                                                                       |
 | shared boundary singleton wiring                               | 2.2, 3.2, 3.4, 3.6      | plugin construction calls the factory once; cross-domain same-parent integration proves max concurrency one                                                                                                                      |
 | review completion -> Gate lock ownership                       | 3.2, 3.6                | live clean Task and Final Review reach Gate without nested parent acquisition and append one GateDecision / AcceptanceDecision                                                                                                  |
 | staged recovery -> Gate lock ownership                         | 3.2, 3.6                | Task and Final Review restart recovery complete without nested parent acquisition and append one GateDecision / AcceptanceDecision                                                                                               |
-| release -> cancellation critical section                       | 2.2, 3.4                | one outer parent operation orders durable release, cancellation attempt, cache update, and boundary release                                                                                                                      |
-| invalidation -> cancellation critical section                  | 2.2, 3.4                | one outer parent operation orders durable invalidation, cancellation attempt, cache update, and boundary release                                                                                                                |
+| release -> cancellation critical section                       | 2.2, 3.4                | one outer parent operation orders durable release, cancellation attempt, cache update, and boundary release; failed or uncertain release has no cancellation or terminal cache publication                                                                                      |
+| invalidation -> cancellation critical section                  | 2.2, 3.4                | one outer parent operation orders durable invalidation, cancellation attempt, cache update, and boundary release; failed or uncertain invalidation has no cancellation or terminal cache publication                                                                          |
+| review completion next-offer lock ownership                    | 3.4, 3.6                | parent-boundary completion and recovery paths use only `offerNextMandatoryReviewWithinParentSessionClaim`; the public offer entry is boundary-external and nested parent acquisition remains zero                                                                             |
 | public Gate operation                                          | 3.2                     | direct call acquires the shared parent boundary and terminal concurrent Authorization prevents positive decision                                                                                                                  |
 | within-boundary Gate operation                                 | 3.2, 3.6                | inner call skips parent acquisition while retaining decision-identity serialization                                                                                                                                            |
 | JUS-P0-02 session-scoped cancel                                | 2.3, 3.4                | pathless parser, invalid flag combinations, durable release, no-binding idempotence, release-before-cancelled ordering, pending/claimed cancellation tombstone                                                                   |

@@ -298,6 +298,21 @@ export type AuthorizationReviewBoundary = {
     operation: () => Promise<T>,
   ): Promise<T>;
 };
+
+export type AuthorizationMutationResult =
+  | {
+      readonly kind: "saved";
+      readonly binding: Exclude<ApprovedPlanBinding, { readonly status: "active" }>;
+    }
+  | {
+      readonly kind:
+        | "not_found"
+        | "wrong_parent"
+        | "already_terminal"
+        | "fingerprint_current"
+        | "failed"
+        | "uncertain";
+    };
 ```
 
 - `authorizationId` は承認単位の不変 identity。同一 `authorizationId` では `active → invalidated|released` は不可逆とする。
@@ -314,7 +329,11 @@ export type AuthorizationReviewBoundary = {
 - boundary は Authorization の durable commit だけでなく、その結果に依存する cancellation、claim、artifact terminalization、Gate / Acceptance append、directive injection が完了するまで保持する。各処理内の active check は defense-in-depth とし、check 後に boundary 外で正の状態変更を行ってはならない。restart 後は durable Authorization と observation log の再読が authority であり、in-memory queue を復元しない。
 - `AuthorizationReviewBoundary` は parent session ごとの非再入 promise-tail queue である。factory は process-local の空 map から開始し、predecessor rejection を吸収し、operation 開始前に current tail を install し、operation の成功・失敗の双方で completion を release する。tail cleanup は map の current tail が自己の tail と一致するときだけ行い、古い operation が後続 tail を削除してはならない。これは durable authority でも generic lock framework でもない。
 - shared boundary を取得する public operation と、すでに同じ parent-session boundary を保持する caller 専用の `WithinAuthorizationReviewBoundary` operation を分離する。後者は boundary を再取得しない。parent boundary 内から public wrapper を呼ぶこと、暗黙の reentrancy、generic reentrant mutex、domain ごとの独立 queue は禁止する。
+- `AuthorizationStore.release(authorizationId, at)` と fingerprint invalidation の public wrapper は、まず authoritative binding を `authorizationId` の exact match で読み、そこから得た不変 `sessionId` で boundary を一度だけ取得する。binding がない、読込に失敗した、または persistence が uncertain な場合は defined non-success を返し、親 session を推測してはならない。
+- `releaseWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, at)` と `invalidateForFingerprintWithinAuthorizationReviewBoundary(parentSessionId, authorizationId, currentFingerprint, at)` は、すでに同じ parent-session boundary を保持する caller 専用である。どちらも authoritative array を再読し、exact authorization ID と `binding.sessionId === parentSessionId` を確認する。release は active binding だけを `released` にし、invalidation は active binding の stored fingerprint が `currentFingerprint` と異なる場合だけを `invalidated` にする。terminal binding を active に戻してはならない。
+- inner mutation は一回の `AtomicPersistence.saveAtomicWithLock` だけで durable state を更新し、`status: "saved"` のときだけ `AuthorizationMutationResult` の saved result を返す。missing、wrong parent、already terminal、unchanged fingerprint は deterministic non-success とする。例外は `failed`、claim/version conflict が conflict journal へ divert された場合は `uncertain` とし、いずれも terminal cache や review cancellation の authority にしない。inner mutation 自体は cache を更新しない。
 - Authorization release / fingerprint invalidation と dependent review cancellation は一つの outer boundary operation とする。PlanBridge は public `release` / invalidation wrapper を boundary 内から呼ばず、対応する within-boundary mutation、review cancellation の within-boundary helper、cache update をこの順で実行してから boundary を release する。terminal Authorization の durable commit は cancellation 失敗時にも rollback しないが、その cancellation attempt が終わるまで gap を作らない。
+- PlanBridge は inner mutation が `saved` でない限り cancellation tombstone を試行せず、terminal active-plan cache を publish しない。saved の場合だけ review cancellation を試行し、その attempt と cache update が完了するまで outer boundary を保持する。
 - Gate evaluator の public entry は parent boundary を取得してから decision-identity serialization を取得する。review completion、staged recovery、post-terminal outcome recovery のように parent boundary をすでに保持する path は、parent boundary を再取得せず、同じ decision-identity serialization を保持する within-boundary Gate capability だけを使用する。
 
 ### 4.3 Plan Fingerprint
