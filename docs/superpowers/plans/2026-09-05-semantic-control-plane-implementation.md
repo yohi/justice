@@ -5164,10 +5164,13 @@ override). The CLI and workspace write checks must be in the same command, not m
 layer:
 
 The OpenCode CLI is provisioned in this same Dockerfile layer, not downloaded by the runtime spike or
-installed opportunistically during a test. `BUN_INSTALL` and `PATH` must point at the `bun` user's global
-bin directory, and `bun add --global --exact opencode-ai@1.18.29` plus the version assertion above must
-fail the image build if the exact host CLI is unavailable. Task 3.3c consumes this already-installed binary;
-it must not introduce a second installer, a floating version, or a host-version compatibility range.
+installed opportunistically during a test. `BUN_INSTALL=/opt/justice/bun`,
+`RUSTUP_HOME=/opt/justice/rustup`, `CARGO_HOME=/opt/justice/cargo`, and
+`PATH=/opt/justice/bun/bin:/opt/justice/cargo/bin:${PATH}` are the sole supported shared,
+root-owned toolchain locations. `bun add --global --exact opencode-ai@1.18.29` plus the version
+assertion above must fail the image build if the exact host CLI is unavailable. Task 3.3c consumes
+this already-installed binary; it must not introduce a second installer, a floating OpenCode version,
+a `/home/bun` runtime toolchain, a user-home global bin, or a host-version compatibility range.
 
 ```bash
 test "$(whoami)" = "root"
@@ -5678,6 +5681,35 @@ The second call must discover the artifact as already absent and delete only the
 lease quarantine. Add the test name to the native `cargo test` hard gate and assert that no replacement leaf
 was created, overwritten, or deleted during either call.
 
+Add a deterministic cross-reservation test to the native security suite and the Linux integration suite:
+
+```rust
+#[test]
+fn cleanup_isolation_does_not_cross_reservations() -> Result<()> {
+    let fixture = arrange_two_reservation_cleanup_fixture()?;
+    force_replacement_and_quarantine(&fixture.first)?;
+    force_replacement_and_quarantine(&fixture.second)?;
+    assert_ne!(
+        quarantine_namespace(&fixture.first),
+        quarantine_namespace(&fixture.second),
+    );
+
+    cleanup(&fixture.first)?;
+    assert!(!quarantined_replacement_exists(&fixture.first)?);
+    assert!(quarantined_replacement_exists(&fixture.second)?);
+    assert_matching_and_replacement_state_unchanged(&fixture.second)?;
+    Ok(())
+}
+```
+
+The equivalent TypeScript/native-provider test must use two durable reservation IDs and two validated
+safe target leaves. It must prove that A's residual quarantine does not alter B's Matching or Replacement
+classification, and that B cleanup never opens, restores, or unlinks A's subtree. The cleanup sequence is
+fixed: move artifact, move lease, verify artifact identity, verify lease identity, verify both original
+slots are absent, then begin deletion; unlink artifact before unlinking lease. Any verification failure
+has delete count zero. A one-sided unlink failure returns `cleanup_incomplete`, and retry looks only in
+the same reservation's subtree.
+
 The two files above are the RED source. Before running RED, Step 1 must materialize a complete buildable
 scaffold, not a prose placeholder. Use the complete `lib.rs` implementation listing in Step 3 as the source
 for the scaffold, materialize it before RED, and replace only `writeExisting`, `readOnce`, and `cleanup`
@@ -5862,8 +5894,7 @@ struct RootState {
     _root: OwnedFd,
     reviews: OwnedFd,
     leases: OwnedFd,
-    quarantine: OwnedFd,
-    next_quarantine_id: u64,
+    quarantine_root: OwnedFd,
     #[cfg(test)]
     faults: CleanupFaults,
 }
@@ -5903,6 +5934,7 @@ enum DeleteOutcome {
 struct MovedQuarantineLeaf {
     target_dir: RawFd,
     target_leaf: String,
+    quarantine_dir: RawFd,
     quarantine_leaf: String,
 }
 
@@ -6241,8 +6273,7 @@ pub fn open_review_artifact_root(root_dir: String) -> Result<NativeReviewArtifac
             _root: root,
             reviews,
             leases,
-            quarantine,
-            next_quarantine_id: 0,
+            quarantine_root: quarantine,
             #[cfg(test)]
             faults: CleanupFaults::default(),
         })),
@@ -6402,8 +6433,18 @@ fn quarantine_one(
     target_leaf: &str,
     expected: &NativeIdentity,
     label: &str,
+    safe_target_leaf: &str,
+    reservation_id: &str,
 ) -> QuarantineOutcome {
-    let existing_quarantine = match find_matching_quarantine(state, label, expected) {
+    let reservation_quarantine = match open_reservation_quarantine(
+        state,
+        safe_target_leaf,
+        reservation_id,
+    ) {
+        Ok(directory) => directory,
+        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
+    };
+    let existing_quarantine = match find_matching_quarantine(&reservation_quarantine, label, expected) {
         Ok(ExistingQuarantine::None) => None,
         Ok(ExistingQuarantine::Matching(leaf)) => Some(leaf),
         Ok(ExistingQuarantine::Replacement) => {
@@ -6449,12 +6490,11 @@ fn quarantine_one(
         Ok(token) => token,
         Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
     };
-    let quarantine_leaf = format!(".{label}-{token:x}-{}", state.next_quarantine_id);
-    state.next_quarantine_id = state.next_quarantine_id.wrapping_add(1);
+    let quarantine_leaf = format!("{label}-{token:x}");
     if renameat2(
         target_dir,
         target_leaf,
-        state.quarantine.as_raw_fd(),
+        reservation_quarantine.as_raw_fd(),
         &quarantine_leaf,
         RENAME_NOREPLACE,
     )
@@ -6463,7 +6503,7 @@ fn quarantine_one(
         return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
     }
     let quarantined = match openat2(
-        state.quarantine.as_raw_fd(),
+        reservation_quarantine.as_raw_fd(),
         &quarantine_leaf,
         libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0,
@@ -6471,7 +6511,7 @@ fn quarantine_one(
     ) {
         Ok(fd) => fd,
         Err(_) => {
-            let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+            let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
                 RestoreOutcome::Collision => RetentionReason::Replacement,
                 RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
             };
@@ -6481,7 +6521,7 @@ fn quarantine_one(
     let quarantine_matches = match identity_matches(quarantined.as_raw_fd(), expected) {
         Ok(matches) => matches,
         Err(_) => {
-            let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+            let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
                 RestoreOutcome::Collision => RetentionReason::Replacement,
                 RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
             };
@@ -6489,7 +6529,7 @@ fn quarantine_one(
         }
     };
     if !quarantine_matches {
-        let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+        let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
             RestoreOutcome::Collision => RetentionReason::Replacement,
             RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
         };
@@ -6498,24 +6538,25 @@ fn quarantine_one(
     QuarantineOutcome::Moved {
         target_dir,
         target_leaf: target_leaf.to_string(),
+        quarantine_dir: reservation_quarantine.as_raw_fd(),
         quarantine_leaf,
     }
 }
 
 fn find_matching_quarantine(
-    state: &RootState,
+    reservation_quarantine: &OwnedFd,
     label: &str,
     expected: &NativeIdentity,
 ) -> Result<ExistingQuarantine> {
-    let prefix = format!(".{label}-");
+    let prefix = format!("{label}-");
     let mut matching: Option<String> = None;
     let mut saw_replacement = false;
-    for leaf in read_directory_entries(state.quarantine.as_raw_fd())? {
+    for leaf in read_directory_entries(reservation_quarantine.as_raw_fd())? {
         if !leaf.starts_with(&prefix) {
             continue;
         }
         let fd = match openat2(
-            state.quarantine.as_raw_fd(),
+            reservation_quarantine.as_raw_fd(),
             &leaf,
             libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0,
@@ -6543,12 +6584,14 @@ fn find_matching_quarantine(
     })
 }
 
-`find_matching_quarantine` must sort directory entries before inspection and apply the following fail-closed
-classification: exactly one expected-identity leaf is `Matching`; two expected-identity leaves are
-`cleanup_incomplete`; any non-matching leaf with the same reservation label is `Replacement`; and an
-unreadable entry is `cleanup_incomplete`. It must never choose the first matching name, delete all entries by
-prefix, or treat a name collision as proof of identity. A retry calls this function again and may delete only
-the one identity-verified residual leaf selected by the returned outcome.
+`open_reservation_quarantine` opens only
+`.justice/reviews/.quarantine/<safe-target-leaf>/<reservation-id>` beneath the trusted root descriptor;
+both components are validated before lookup. `find_matching_quarantine` sorts entries and applies the
+fail-closed classification only inside that descriptor: exactly one expected-identity leaf is `Matching`,
+two are `cleanup_incomplete`, any non-matching leaf with the same label is `Replacement`, and an unreadable
+entry is `cleanup_incomplete`. It must never scan the global quarantine root, infer ownership from a name,
+or consume another reservation's entries. A retry reopens the same reservation-local descriptor and may
+delete only the one identity-verified residual leaf selected by the returned outcome.
 
 fn read_directory_entries(dir: RawFd) -> Result<Vec<String>> {
     let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 0) };
@@ -6611,9 +6654,9 @@ enum RestoreOutcome {
     Failed,
 }
 
-fn restore_quarantine(state: &RootState, target_dir: RawFd, target_leaf: &str, quarantine_leaf: &str) -> RestoreOutcome {
+fn restore_quarantine(quarantine_dir: &OwnedFd, target_dir: RawFd, target_leaf: &str, quarantine_leaf: &str) -> RestoreOutcome {
     match renameat2(
-        state.quarantine.as_raw_fd(),
+        quarantine_dir.as_raw_fd(),
         quarantine_leaf,
         target_dir,
         target_leaf,
@@ -6631,7 +6674,7 @@ fn verify_quarantine_leaf(
     expected: &NativeIdentity,
 ) -> std::result::Result<VerifiedQuarantineLeaf, DeleteOutcome> {
     let fd = match openat2(
-        state.quarantine.as_raw_fd(),
+        moved.quarantine_dir,
         &moved.quarantine_leaf,
         libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0,
@@ -6664,7 +6707,7 @@ fn delete_verified_quarantine(
     }
     #[cfg(not(test))]
     let _ = label;
-    match unlinkat(state.quarantine.as_raw_fd(), &verified.moved.quarantine_leaf, 0) {
+    match unlinkat(verified.moved.quarantine_dir, &verified.moved.quarantine_leaf, 0) {
         Ok(()) => DeleteOutcome::Deleted,
         Err(_) => DeleteOutcome::Incomplete,
     }
@@ -7277,8 +7320,9 @@ The command runs with the temporary workspace as its current directory. The temp
 <tmp>/workspace/.justice/reviews/<case>.json -> <tmp>/outside/<case>.json
 ```
 
-`opencode.json` contains the exact model string and an absolute plugin entry for the copied fixture. It never
-contains a credential. The fixture records only `input.callID`, the mutated task fields, the runtime event field
+`opencode.json` contains only the schema and exact model string; it has no `plugin` array or explicit plugin
+path. The copied fixture is loaded exactly once through workspace auto-discovery at
+`.opencode/plugins/justice-host-contract.ts`. It never contains a credential. The fixture records only `input.callID`, the mutated task fields, the runtime event field
 paths selected by the preceding child-correlation spike, and the count/result of the built-in write hook. A
 missing or ambiguous runtime path is a contract failure; prompt text, category, artifact path, and worker
 self-report are not identity sources.
@@ -7660,7 +7704,10 @@ async function main(): Promise<void> {
     await copyFile(new URL("./justice-host-contract.ts", import.meta.url), join(pluginDir, "justice-host-contract.ts"));
     await writeFile(
       join(workspace, "opencode.json"),
-      JSON.stringify({ $schema: "https://opencode.ai/config.json", model }),
+      JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        model,
+      }),
       "utf8",
     );
     report.failureClass = "contract";
@@ -7672,7 +7719,7 @@ async function main(): Promise<void> {
         await mkdir(join(workspace, ".justice", "reviews"), { recursive: true });
         await writeFile(outsideTarget, "outside", "utf8");
         await symlink(outsideTarget, artifact);
-        const caseResult = await verifyCase(workspace, model, reviewCase, outsideTarget);
+        const caseResult = await verifyCase(workspace, model, reviewCase, outsideTarget, hostEnvironment);
         if (reviewCase === "task-review") {
           report.taskReview = caseResult.trace;
         } else {
@@ -13812,13 +13859,54 @@ it("fails closed when two reasoned skips conflict", () => {
   expect(warnings).toHaveLength(1);
 });
 
+function taskInput(overrides: Partial<PreToolUseEvent> = {}): PreToolUseEvent {
+  return {
+    type: "PreToolUse",
+    toolName: "task",
+    sessionId: "parent-1",
+    callId: "call-1",
+    input: { category: "sp-review", run_in_background: true },
+    ...overrides,
+  };
+}
+
+function taskOutput(overrides: Partial<PostToolUseEvent> = {}): PostToolUseEvent {
+  return {
+    type: "PostToolUse",
+    toolName: "task",
+    sessionId: "parent-1",
+    callId: "call-1",
+    output: {},
+    ...overrides,
+  };
+}
+
+async function arrangeAdapterReturning(response: HookResponse) {
+  const adapter = createMockAdapter();
+  adapter.handlePreToolUse = vi.fn(async () => response);
+  return adapter;
+}
+
+async function arrangeAdapterThrowing(cause: unknown = new Error("adapter failure")) {
+  const adapter = createMockAdapter();
+  adapter.handlePreToolUse = vi.fn(async () => {
+    throw cause;
+  });
+  return adapter;
+}
+
+async function arrangePluginWithAdapter(adapter: ReturnType<typeof createMockAdapter>) {
+  const fixture = await fakeInit({ adapter });
+  return { ...fixture, plugin: OpenCodePlugin(fixture.init), adapter };
+}
+
 it("does not convert a reasonless skip or an ordinary adapter failure into cancellation", async () => {
-  const adapter = arrangeAdapterReturning({ action: "skip" });
+  const adapter = await arrangeAdapterReturning({ action: "skip" });
   await expect(adapter.onToolExecuteBefore(taskInput, taskOutput)).resolves.toEqual({ action: "skip" });
   const wrapper = await arrangePluginWithAdapter(adapter);
   await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
 
-  const failingAdapter = arrangeAdapterThrowing(new Error("ordinary adapter failure"));
+  const failingAdapter = await arrangeAdapterThrowing(new Error("ordinary adapter failure"));
   const failOpenWrapper = await arrangePluginWithAdapter(failingAdapter);
   await expect(failOpenWrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
 });
@@ -13827,7 +13915,7 @@ it.each([
   "review_artifact_write_committed",
   "review_artifact_write_rejected",
 ] as const)("throws only the dedicated cancellation for %s", async (reason) => {
-  const adapter = arrangeAdapterReturning({ action: "skip", reason });
+  const adapter = await arrangeAdapterReturning({ action: "skip", reason });
   const wrapper = await arrangePluginWithAdapter(adapter);
   await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).rejects.toMatchObject({
     name: "ReviewArtifactWriteCancelled",
@@ -13840,6 +13928,12 @@ it.each([
 `OpenCodePlugin` factory with only the adapter injection seam already used by existing integration tests;
 they must not call `JusticePlugin.handleEvent()` directly. The final two cases also assert that the host
 fixture's built-in writer spy has zero calls after the rejection.
+
+The definitions above are executable RED-fixture code, not illustrative pseudocode. Adapt only the local
+`PreToolUseEvent`, `PostToolUseEvent`, `HookResponse`, `createMockAdapter`, `fakeInit`, and
+`OpenCodePlugin` signatures already used by the integration seam. The fixture must typecheck before RED
+and fail only on behavioral assertions. Every call to the async `arrangePluginWithAdapter` helper must
+use `await`.
 
 Create the two artifact adapters in this composition block, before creating the completion domain. Both take
 the durable `ReviewTaskCallBinding` or its usable reservation; neither receives an `artifactPath` from
