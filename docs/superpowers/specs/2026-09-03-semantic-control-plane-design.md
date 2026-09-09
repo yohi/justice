@@ -187,14 +187,24 @@ export type ControllerApplicationMethod = "pinned-command" | "runtime-api" | "no
 
 export type ControllerObservationSource = "chat.params" | "message.updated" | "both" | "none";
 
-// Runtime observations may include custom or unknown agent identifiers.
-export type ObservationAgentId = string;
+// Controller-runtime observations may contain custom or future agent identifiers.
+// This type is intentionally distinct from src/core/types.ts::ObservationAgentId,
+// which remains the closed physical-shard / persisted-envelope identity type.
+export type ControllerObservedAgentId = string;
 
 export type ControllerRoutingStatus = "applied" | "unapplied" | "unsupported" | "mismatch";
 
 export type ControllerRoutingUnappliedReason = "application_not_configured" | "actual_not_observed";
 
 export type ControllerRoutingUnsupportedReason = "runtime_capability_unsupported";
+
+export type ControllerRoutingEvaluationInput = {
+  readonly decision: ControllerRoutingDecision;
+  readonly applicationMethod: ControllerApplicationMethod;
+  readonly chatParamsActualController?: ControllerObservedAgentId;
+  readonly finalizedMessageActualController?: ControllerObservedAgentId;
+  readonly runtimeCapabilitySupported: boolean;
+};
 
 export type ControllerRoutingObservation =
   | {
@@ -207,7 +217,7 @@ export type ControllerRoutingObservation =
   | {
       readonly routingStatus: "mismatch";
       readonly desiredController: ControllerAgent;
-      readonly actualController: ObservationAgentId;
+      readonly actualController: ControllerObservedAgentId;
       readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
       readonly observationSource: "message.updated" | "both";
     }
@@ -224,7 +234,7 @@ export type ControllerRoutingObservation =
       readonly desiredController: ControllerAgent;
       readonly applicationMethod: "none";
       readonly observationSource: "message.updated" | "both";
-      readonly actualController: ObservationAgentId;
+      readonly actualController: ControllerObservedAgentId;
       readonly reason: "application_not_configured";
     }
   | {
@@ -243,16 +253,75 @@ export type ControllerRoutingObservation =
       readonly actualController?: never;
       readonly reason: "runtime_capability_unsupported";
     };
+
+export function evaluateControllerRoutingObservation(
+  input: ControllerRoutingEvaluationInput,
+): ControllerRoutingObservation;
 ```
 
-- `applied` とするには `message.updated` で actual controller が desired と一致している必要がある。
-- `chat.params` 一致だけでは `applied` にしない。`message.updated` がない場合は、`applicationMethod: "none"` なら `application_not_configured`、設定済みの application method なら `actual_not_observed` として、いずれも `observationSource: "none"` に正規化する。
-- `actualController` は `ObservationAgentId`（`"unknown"` を含む）で表現し、unknown agent 観測時も `mismatch` として記録する。
-- `unsupported` は将来 OpenCode に runtime 適用 API が追加された場合の予約値。現行 API では発生しない。
-- 各 status は必須フィールドを区別する discriminated union とし、`applied` 状態で `reason` を持たせたり、`unapplied` で `actualController` を必須にしたりするような illegal state は表現できない。
-- `mismatch` は runtime execution の観測結果なので、`observationSource` は `message.updated` または `both` に限定する。`chat.params` だけの場合は、`applicationMethod: "none"` なら `application_not_configured`、設定済み方式なら `actual_not_observed` へ誘導する。
-- `application_not_configured` は `applicationMethod: "none"` に限定する。`message.updated` / `both` で実際のagentが観測された場合だけ `actualController` を持ち、`chat.params` だけ、または観測なしの場合は `observationSource: "none"` かつ `actualController` なしで正規化する。
-- `actual_not_observed` は `applicationMethod: "none"` 以外の設定済み適用方式と `observationSource: "none"` の組み合わせに限定する。`chat.params` だけの入力はこの形へ正規化し、`applicationMethod: "none"` の入力はこの形にしない。
+Evaluation is deterministic and uses only the normalized runtime facts above.
+
+- A finalized `message.updated` actual controller is the only positive application observation. If both
+  `chat.params` and finalized `message.updated` were observed, `observationSource = "both"`; otherwise a
+  finalized message uses `"message.updated"`.
+- `applicationMethod === "runtime-api" && runtimeCapabilitySupported === false` returns the reserved
+  `unsupported/runtime_capability_unsupported` value. This does not require implementing a runtime API in v4.0.0.
+- `applicationMethod === "none"` always returns `unapplied/application_not_configured`. When a finalized
+  message actual exists it is retained as `actualController`; otherwise the normalized source is `"none"`.
+- For a configured method, absence of a finalized `message.updated` actual returns
+  `unapplied/actual_not_observed` with `observationSource = "none"`. A `chat.params` value alone never produces
+  `applied` and is not copied into the durable observation as an actual execution result.
+- For a configured method with a finalized message actual, exact equality with the desired controller returns
+  `applied`; any other non-empty string, including custom/future/unknown identifiers, returns `mismatch`.
+- `src/core/types.ts::ObservationAgentId = AgentId | "system" | "unknown"` remains unchanged. It is the
+  physical shard / persisted envelope identity and MUST NOT be widened to arbitrary `string` merely to represent
+  a controller-runtime actual agent.
+
+The controller-routing domain observation is persisted as a flattened, audit-only observation record:
+
+```ts
+// src/core/v2/observation-model.ts
+export type ControllerRoutingObservedRecord = {
+  readonly recordType: "observation";
+  readonly kind: "controller_routing_observed";
+  readonly workflow: string;
+} & ControllerRoutingObservation;
+
+export type PendingObservationRecord =
+  | ExistingPendingObservationVariants
+  | (PendingEnvelope & ControllerRoutingObservedRecord);
+
+export type ObservationRecord = PendingObservationRecord & { readonly sequence: number };
+```
+
+`ExistingPendingObservationVariants` above is specification shorthand only: implementation extends the existing
+closed `PendingObservationRecord` union with exactly one `PendingEnvelope & ControllerRoutingObservedRecord`
+member and does not introduce a generic event framework.
+
+Persistence semantics are normative:
+
+- The persisted record is **flattened**. `workflow`, `routingStatus`, `desiredController`, optional
+  `actualController`, `applicationMethod`, `observationSource`, and status-specific `reason` are direct durable
+  record fields; there is no nested duplicate payload.
+- The producer uses the same `schemaVersion: 1` `PendingEnvelope` contract as existing observations. Adding this
+  kind must not invalidate any previously valid schemaVersion 1 record.
+- `validateRecordSchema()` recognizes `controller_routing_observed` explicitly and validates the same
+  discriminated-union combinations as `ControllerRoutingObservation`. Unknown status, illegal reason/status
+  combinations, missing required actual controller, empty workflow/controller strings, or a forbidden field for
+  the selected variant are rejected on replay. Custom non-empty actual-controller strings are valid only where the
+  domain observation permits them.
+- `redactPendingLogRecord()` contains an explicit `controller_routing_observed` branch. The record contains no raw
+  command body, raw configuration object, model/provider payload, prompt, credential, environment value, or tool
+  payload. Free-form `workflow` and custom `actualController` strings pass through the existing persistence
+  redaction primitive before append; enum/literal fields are preserved.
+- `ObservationLogStore.append()` remains the only append boundary. The new record is appended as a normal
+  `PendingLogRecord`; restart/replay reads it through the existing `validateRecordSchema()` path.
+- This record is **audit-only**. It does not provide Evidence, does not satisfy Gate or Acceptance preconditions,
+  does not open or advance task/plan lifecycle, and does not become authorization authority. Main state projection
+  must leave task/evidence/Gate/Acceptance state unchanged when this kind is replayed. An explicit no-op/skip in the
+  existing projector is permitted; no new projection subsystem is introduced.
+- Mismatch may produce the existing L0 advisory/status visibility, but that advisory does not change execution or
+  acceptance authority.
 
 ### 4.2 Plan Authorization
 
@@ -1422,32 +1491,44 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 ```text
 workflow 起動 (command / skill 検出)
   → WorkflowRouter.resolveController(workflow)
-  → routing-decision.ts: createControllerRoutingDecision(workflow_rule)
-  → controller-routing.ts:
-      applicationMethod === "none" かつ message.updated が観測済み
-        → unapplied (reason: application_not_configured, observationSource: message.updated | both)
-      applicationMethod === "none" かつ message.updated が未観測
-        → unapplied (reason: application_not_configured, observationSource: none)
-      applicationMethod === "runtime-api" かつ runtime capability unavailable
-        → unsupported (reason: runtime_capability_unsupported)
-      applicationMethod === "pinned-command"
-        → configured method として actual を観測
-      applicationMethod === "runtime-api" かつ runtime capability available
-        → runtime-api で適用後、actual を観測
-      上記の configured method で message.updated が観測された場合:
+  → routing-decision.ts: createControllerRoutingDecision(workflow, controller, workflow_rule)
+  → controller-routing.ts: evaluateControllerRoutingObservation(input)
+      runtime-api && capability unavailable
+        → unsupported (reserved value; v4.0.0 runtime API implementation is not required)
+      applicationMethod === none
+        → unapplied / application_not_configured
+      configured method + finalized message.updated not observed
+        → unapplied / actual_not_observed / observationSource=none
+      configured method + finalized message.updated observed
         actual === desired → applied
-        actual !== desired → mismatch
-      configured method で message.updated が観測されない場合
-        → unapplied (reason: actual_not_observed, observationSource: none)
-  → ControllerRoutingObservation を durable log へ記録
+        actual !== desired (known or custom string) → mismatch
+  → record-builder.ts: flattened ControllerRoutingObservedRecord を生成
+      kind=controller_routing_observed
+      workflow + desired/actual/status/applicationMethod/source/reason を直接保持
+  → ObservationLogStore.append()
+      → redactPendingLogRecord(controller_routing_observed)
+      → schemaVersion:1 observation として durable append
+  → restart / replay
+      → validateRecordSchema(controller_routing_observed)
+      → audit-only record として復元
+      → task lifecycle / Evidence / Gate / Acceptance authority には使用しない
   → mismatch 時は L0 advisory + justice_review / status で可視化
 ```
 
 Acceptance criteria:
 
-- `brainstorming` / `writing-plans` / `executing-plans` → `desiredController = sisyphus`
-- `subagent-driven-development` → `desiredController = atlas`
-- Core が Atlas を返しても Runtime が Sisyphus のままなら `routingStatus !== applied`
+- `brainstorming` / `writing-plans` / `executing-plans` → `desiredController = sisyphus`.
+- `subagent-driven-development` → `desiredController = atlas`.
+- A matching finalized `message.updated` actual is required for `applied`; `chat.params` alone normalizes to
+  `unapplied/actual_not_observed` for a configured method.
+- A different known controller and a custom/unknown non-empty actual-controller string both persist as `mismatch`.
+- `applicationMethod = none` persists as `unapplied/application_not_configured` and never becomes `applied`, even
+  if an actual controller was observed.
+- A valid `controller_routing_observed` record survives append → persisted read → restart/replay unchanged except
+  for the canonical persistence redaction of free-form strings.
+- Existing valid schemaVersion 1 observation/decision records remain replay-compatible.
+- Controller routing observations are audit-only and cannot create lifecycle, Gate, Acceptance, authorization, or
+  progress authority.
 
 ### 5.2 JUS-P0-02 Plan-Scoped Authorization
 
@@ -1763,15 +1844,17 @@ review finds issue
 
 | テストファイル                                  | 対象                                                                                                                                                                                                |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/core/controller-routing.test.ts`         | desired/actual evaluation、applied/mismatch/unapplied、observation source 優先                                                                                                                      |
+| `tests/core/controller-routing.test.ts`         | exact evaluator input/signature、finalized message matching、known/custom mismatch、chat.params-only normalization、application-not-configured                                                     |
 | `tests/core/plan-authorization.test.ts`         | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否                                                                                             |
 | `tests/core/plan-fingerprint.test.ts`           | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化                       |
-| `tests/core/v2/observation-model.test.ts`      | `error_annotation` の typed observation schema、plan identity、line number / occurrence、unknown provenance の replay                                              |
-| `tests/runtime/validation.test.ts`             | `error_annotation` の safe path、digest、positive line identity、invalid shape の strict validation                                                                |
+| `tests/core/v2/observation-model.test.ts`      | `error_annotation` と `controller_routing_observed` の typed durable observation schema、closed union assignability、legacy schemaVersion:1 compatibility                                          |
+| `tests/runtime/validation.test.ts`             | `error_annotation` と `controller_routing_observed` の strict validation、routing status/payload discriminants、custom actual agent、legacy schemaVersion:1 replay compatibility                     |
 | `tests/core/routing-decision.test.ts`           | 7→7 全射、deep→sp-deep、architecture→sp-architecture、低 category へのパス不存在                                                                                                                    |
 | `tests/core/task-lifecycle.test.ts`             | full lifecycle order、WorkerReported≠accepted、fresh rework attempt、restart current-attempt reconstruction、Final Review 未了で PlanComplete=false、attempt scoping で古い evidence の再利用を防ぐ |
 | `tests/core/review-dispatch-state.test.ts`      | durable pending / claimed / terminal、CAS claim、restart recovery、conclusive loss、stale PostToolUse、terminal tombstone の再利用禁止                                                              |
 | `tests/core/v2/state-projection.test.ts`        | one terminal physical record から consumption / authoritative review / review-observed semantic を同一に replay し、partial terminal state を投影しない                                             |
+| `tests/core/v2/persistence-redaction.test.ts`    | `controller_routing_observed` の free-form field redaction、raw config/command/prompt/secret 非永続化                                                                                               |
+| `tests/runtime/observation-log-store.test.ts`     | `controller_routing_observed` の append → persisted read/replay、既存 schemaVersion:1 record 互換                                                                                                   |
 | `tests/core/acceptance-decision.test.ts`        | PASS/WARN/FAIL/unavailable それぞれの遷移、GateDecision の後だけ AcceptanceDecision を生成、evidence provenance 判定                                                                                |
 | `tests/core/doctor-categories.test.ts`          | `justice doctor` が 7 `sp-*` category の欠落を effective category view から検出                                                                                                                     |
 | `tests/core/justice-doctor-config.test.ts`      | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics                                                                                         |
@@ -1938,6 +2021,8 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 34. review-owned write の secure success は `review_artifact_write_committed`、secure rejection / provider failure は `review_artifact_write_rejected` となり、両方とも built-in writer を実行しない。
 35. supported OpenCode CLI `1.18.29` の実host boundaryで、`run_in_background = false` と committed artifact path が実際の TaskTool executionへ届くことを観測できる。
 36. N-API descriptorのJavaScript field naming、root reopen、reservation identity、Rust toolchain、native addon buildが同一の実行可能契約として検証される。
+37. `controller_routing_observed` が typed schema / validator / redaction / append-replay 境界を通る durable audit record として復元でき、custom actual controller を shard identity widening なしで保持する。
+38. Controller routing observation は audit-only であり、task lifecycle / Evidence / Gate / Acceptance / Authorization / Progress authority を獲得しない。
 
 ---
 

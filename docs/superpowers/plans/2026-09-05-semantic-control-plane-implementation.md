@@ -4,6 +4,9 @@
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
+**Spec:** `docs/superpowers/specs/2026-09-03-semantic-control-plane-design.md`  
+**Requirements:** `REQUIREMENTS_2026-09-03.md`
+
 **Architecture:** The append-only observation/decision log is the durable source for lifecycle, review dispatch, completion staging, artifact consumption, review observation, Gate, and Acceptance. `.justice/authorizations.json` is the sole authoritative-state exception: it stores only `ApprovedPlanBinding`, including its `CanonicalPlanSnapshot`; `.justice/authorizations.conflict.json` is an `AtomicPersistence` failure journal and never an authorization input. Runtime code remains fail-open; an unavailable or unverified acceptance precondition remains blocked.
 
 **Tech Stack:** TypeScript, Bun, Vitest, Zod, `AtomicPersistence`, `ObservationLogStore`, `StateProjectionCache`, and injected mock file systems.
@@ -26,6 +29,7 @@
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
 - At every Phase or Phase 3 subsection boundary, after the final task's targeted `Confirm GREEN` and before that task's Step 5 commit, run `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build` inside `.devcontainer/`; the full gate must pass before the phase is committed.
+- From Task 3.3b onward, a supported Linux x86_64 Phase 3 production-provider boundary additionally requires `bun run build:native:review-artifact`, exact existence of `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`, addon-loading provider tests, and package/tarball inclusion verification before the generic full gate. Unsupported local platforms may run ordinary non-native gates but cannot satisfy the supported-provider Phase 3 Definition of Done.
 - Ask the user before each commit. The listed `git add` command is the complete commit scope.
 
 ---
@@ -5239,6 +5243,8 @@ GIT_MASTER=1 git commit -m "test: gate review artifact provider on Linux primiti
 - Create `rust-toolchain.toml` with the pinned supported Rust toolchain used by the addon build.
 - Modify `package.json` to add `@napi-rs/cli` and the `build:native:review-artifact` script.
 - Modify `bun.lock` through the package manager after the package change.
+- Modify `.github/workflows/ci.yml` to build and verify the supported Linux addon before addon-dependent tests.
+- Modify `.github/workflows/release.yml` to build, inspect, publish, and upload a package that contains the exact addon.
 - Create `src/runtime/linux-review-artifact-provider.ts`.
 - Create `tests/runtime/linux-review-artifact-provider.test.ts`.
 - Create `tests/runtime/linux-review-artifact-provider-security.test.ts`.
@@ -7795,10 +7801,101 @@ descriptor-relative writes/reads, symlink rejection, ancestor replacement, resta
 The unsupported-platform test must verify `undefined` capability rather than a fallback provider. Mock filesystem
 tests remain unchanged and continue to cover ordinary plugin behavior.
 
+#### CI / release / package delivery contract
+
+The native provider is not complete when only a local/devcontainer build succeeds. Because the supported v4.0.0
+provider is the bundled file `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`, CI and release must
+materialize and verify that exact file before addon-dependent tests or publishing.
+
+**CI (`.github/workflows/ci.yml`)**
+
+Keep the existing ordinary CI behavior, but add the minimum supported Linux x86_64 native path. Do not generalize
+this into a cross-platform matrix. The supported native path must execute in this order:
+
+```text
+checkout
+→ Bun setup
+→ build prerequisites (`build-essential`)
+→ rustup toolchain install/select from rust-toolchain.toml (Rust 1.85.1, x86_64-unknown-linux-gnu)
+→ bun install --frozen-lockfile
+→ bun run build:native:review-artifact
+→ test -f dist/native/justice_review_artifact_linux.linux-x64-gnu.node
+→ addon-dependent native/provider tests
+→ existing lint/typecheck/test/build/dist/integration gates
+```
+
+Use the repository's `rust-toolchain.toml` as the version SSOT and assert before native build:
+
+```bash
+active_toolchain="$(rustup show active-toolchain)"
+test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu"
+bun run build:native:review-artifact
+test -f dist/native/justice_review_artifact_linux.linux-x64-gnu.node
+bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+```
+
+A supported-provider test must not be skipped and counted as success when the addon is missing or cannot load.
+Ordinary unsupported developer environments may continue to run non-native gates, but such a run does not satisfy
+the supported Linux Phase 3 production-provider Definition of Done.
+
+**Release (`.github/workflows/release.yml`)**
+
+The release-created path must execute this order before publication/upload:
+
+```text
+checkout release tag
+→ Node/Bun setup
+→ build prerequisites
+→ pinned Rust 1.85.1 toolchain selection/assertion
+→ bun install --frozen-lockfile
+→ bun run build:native:review-artifact
+→ exact .node existence assertion
+→ bun run build
+→ npm package/tarball inspection
+→ npm publish --ignore-scripts
+→ upload the already-inspected package/release artifact
+```
+
+The workflow currently publishes with `npm publish --ignore-scripts`; therefore native generation MUST NOT depend
+on `prepublishOnly`, `prepare`, or another npm lifecycle script. Build the addon explicitly before packaging and
+publishing.
+
+Create and inspect the tarball before publish using one deterministic path check, for example:
+
+```bash
+PACKAGE_FILE="$(npm pack --ignore-scripts --silent)"
+tar -tzf "$PACKAGE_FILE" | grep -Fx \
+  'package/dist/native/justice_review_artifact_linux.linux-x64-gnu.node'
+echo "PACKAGE_FILE=$PACKAGE_FILE" >> "$GITHUB_ENV"
+```
+
+Expected: the exact path above exists once in the package listing. A successful native build alone is not release
+artifact evidence. Publish with `npm publish --ignore-scripts` only after this inspection passes, and upload the
+same inspected `$PACKAGE_FILE` as the release asset rather than silently creating a different unverified tarball.
+
+**Task/phase verification**
+
+Task 3.3b GREEN and every supported-Linux Phase 3 boundary after Task 3.3b must include, before the generic full
+phase gate, at least:
+
+```bash
+bun run build:native:review-artifact
+test -f dist/native/justice_review_artifact_linux.linux-x64-gnu.node
+bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+PACKAGE_FILE="$(npm pack --ignore-scripts --silent)"
+tar -tzf "$PACKAGE_FILE" | grep -Fx 'package/dist/native/justice_review_artifact_linux.linux-x64-gnu.node'
+rm -f "$PACKAGE_FILE"
+```
+
+Expected: addon build succeeds, the exact output file exists and is loadable by provider tests, and the exact addon
+path exists in the generated package. Then run the existing `bun run test`, `bun run typecheck`, `bun run lint`, and
+`bun run build` phase gate. The native verification is mandatory for supported production completion, but must not
+be imposed as an unconditional success criterion on unrelated unsupported local platforms.
+
 **Commit:**
 
 ```bash
-GIT_MASTER=1 git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
+GIT_MASTER=1 git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts .github/workflows/ci.yml .github/workflows/release.yml
 GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 ```
 
@@ -16891,7 +16988,7 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 ## Phase 4: Controller Routing — JUS-P0-01
 
-### Task 4.1: Preserve workflow identity in routing decisions
+### Task 4.1: Preserve workflow identity and evaluate controller observations
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
@@ -16905,52 +17002,165 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 **Consumes:** `WorkflowRouter.resolveController(workflow)`; `ControllerAgent`.
 
-**Produces:** `ControllerRoutingDecision = { readonly kind: "controller"; readonly workflow: string; readonly controller: ControllerAgent; readonly reason: RoutingReason }`; `createControllerRoutingDecision(workflow, controller, reason)`.
-
-- [ ] **Step 1: Write the failing workflow-identity tests**
+**Produces:**
 
 ```ts
+export type ControllerObservedAgentId = string;
+
+export type ControllerRoutingEvaluationInput = {
+  readonly decision: ControllerRoutingDecision;
+  readonly applicationMethod: ControllerApplicationMethod;
+  readonly chatParamsActualController?: ControllerObservedAgentId;
+  readonly finalizedMessageActualController?: ControllerObservedAgentId;
+  readonly runtimeCapabilitySupported: boolean;
+};
+
+export function evaluateControllerRoutingObservation(
+  input: ControllerRoutingEvaluationInput,
+): ControllerRoutingObservation;
+```
+
+`ControllerObservedAgentId` belongs only to `src/core/controller-routing.ts`. Do not widen or redefine the
+existing `src/core/types.ts::ObservationAgentId`, which remains the physical-shard/envelope identity.
+
+- [ ] **Step 1: Write the complete failing routing/evaluator tests**
+
+Define the fixtures before the tests; do not use undeclared `appliedInput`-style globals.
+
+```ts
+const sisyphusDecision = createControllerRoutingDecision(
+  "writing-plans",
+  "sisyphus",
+  "workflow_rule",
+);
+
+const appliedInput: ControllerRoutingEvaluationInput = {
+  decision: sisyphusDecision,
+  applicationMethod: "pinned-command",
+  chatParamsActualController: "sisyphus",
+  finalizedMessageActualController: "sisyphus",
+  runtimeCapabilitySupported: false,
+};
+
+const knownMismatchInput: ControllerRoutingEvaluationInput = {
+  ...appliedInput,
+  finalizedMessageActualController: "atlas",
+};
+
+const customMismatchInput: ControllerRoutingEvaluationInput = {
+  ...appliedInput,
+  finalizedMessageActualController: "custom-controller-v2",
+};
+
+const chatParamsOnlyInput: ControllerRoutingEvaluationInput = {
+  decision: sisyphusDecision,
+  applicationMethod: "pinned-command",
+  chatParamsActualController: "sisyphus",
+  runtimeCapabilitySupported: false,
+};
+
+const unconfiguredInput: ControllerRoutingEvaluationInput = {
+  decision: sisyphusDecision,
+  applicationMethod: "none",
+  runtimeCapabilitySupported: false,
+};
+
 it("retains workflow when two workflows select the same controller", () => {
   expect(
     createControllerRoutingDecision("brainstorming", "sisyphus", "workflow_rule").workflow,
   ).toBe("brainstorming");
-  expect(
-    createControllerRoutingDecision("writing-plans", "sisyphus", "workflow_rule").workflow,
-  ).toBe("writing-plans");
+  expect(sisyphusDecision.workflow).toBe("writing-plans");
 });
 
-it("reports applied, mismatch, and unapplied controller observations", () => {
-  expect(evaluateControllerRoutingObservation(appliedInput).routingStatus).toBe("applied");
-  expect(evaluateControllerRoutingObservation(mismatchInput).routingStatus).toBe("mismatch");
-  expect(evaluateControllerRoutingObservation(unappliedInput).routingStatus).toBe("unapplied");
+it("reports applied only from a matching finalized message.updated observation", () => {
+  expect(evaluateControllerRoutingObservation(appliedInput)).toMatchObject({
+    routingStatus: "applied",
+    desiredController: "sisyphus",
+    actualController: "sisyphus",
+    applicationMethod: "pinned-command",
+    observationSource: "both",
+  });
+});
+
+it("reports mismatch for a different known controller", () => {
+  expect(evaluateControllerRoutingObservation(knownMismatchInput)).toMatchObject({
+    routingStatus: "mismatch",
+    actualController: "atlas",
+  });
+});
+
+it("reports mismatch for a custom or future controller identifier", () => {
+  expect(evaluateControllerRoutingObservation(customMismatchInput)).toMatchObject({
+    routingStatus: "mismatch",
+    actualController: "custom-controller-v2",
+  });
+});
+
+it("normalizes chat.params-only configured routing to actual_not_observed", () => {
+  expect(evaluateControllerRoutingObservation(chatParamsOnlyInput)).toEqual({
+    routingStatus: "unapplied",
+    desiredController: "sisyphus",
+    applicationMethod: "pinned-command",
+    observationSource: "none",
+    reason: "actual_not_observed",
+  });
+});
+
+it("reports application_not_configured when no application method is configured", () => {
+  expect(evaluateControllerRoutingObservation(unconfiguredInput)).toEqual({
+    routingStatus: "unapplied",
+    desiredController: "sisyphus",
+    applicationMethod: "none",
+    observationSource: "none",
+    reason: "application_not_configured",
+  });
 });
 ```
+
+Do not add a runtime-API adapter or runtime mutation mechanism. `unsupported` remains a reserved pure-domain
+result for `applicationMethod: "runtime-api"` with unavailable capability; current production wiring does not
+select that method.
 
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts`
+Run:
 
-Expected: FAIL because controller routing decisions discard workflow identity.
-
-- [ ] **Step 3: Implement typed routing identity and observation evaluation**
-
-Move only the controller union member in `RoutingDecision` to include `workflow`; preserve the union in `src/core/types.ts`. Change the factory signature and all callers. Implement `evaluateControllerRoutingObservation` in `src/core/controller-routing.ts`; only a matching `message.updated` observation can return `applied`, and `chat.params` alone returns `unapplied` with `actual_not_observed`.
-
-```ts
-export function createControllerRoutingDecision(
-  workflow: string,
-  controller: ControllerAgent,
-  reason: RoutingReason,
-): Extract<RoutingDecision, { readonly kind: "controller" }> {
-  return { kind: "controller", workflow, controller, reason };
-}
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/routing-decision.test.ts \
+  tests/core/controller-routing.test.ts
 ```
+
+Expected: FAIL behaviorally because workflow-preserving controller decisions and the evaluator/input contract are
+not implemented. Missing fixture declarations, missing imports caused by an incomplete test scaffold, or malformed
+test setup are not acceptable RED evidence.
+
+- [ ] **Step 3: Implement the exact evaluator contract**
+
+1. Add `workflow` to only the controller member of the existing routing decision union and update
+   `createControllerRoutingDecision(workflow, controller, reason)` plus callers.
+2. Define `ControllerObservedAgentId`, `ControllerRoutingEvaluationInput`, and the existing Design §4.1
+   discriminated `ControllerRoutingObservation` in `src/core/controller-routing.ts`.
+3. Implement this exact evaluation order:
+   - if `applicationMethod === "runtime-api" && runtimeCapabilitySupported === false`, return reserved
+     `unsupported/runtime_capability_unsupported`;
+   - derive a finalized-message source only from `finalizedMessageActualController`; if it exists, source is
+     `"both"` when `chatParamsActualController` also exists, otherwise `"message.updated"`;
+   - if `applicationMethod === "none"`, return `unapplied/application_not_configured`, retaining a finalized
+     actual only when one exists;
+   - for a configured method with no finalized actual, return `unapplied/actual_not_observed` with source `none`
+     and no `actualController`;
+   - for a configured method with finalized actual equal to desired, return `applied`;
+   - otherwise return `mismatch` and preserve the custom/known actual string.
+4. Do not change `src/core/types.ts::ObservationAgentId` except for unrelated existing caller updates needed by
+   the routing decision factory; specifically do not widen it to `string`.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts`
+Run the same command as Step 2.
 
-Expected: PASS.
+Expected: PASS for workflow identity, matching finalized observation, known mismatch, custom mismatch,
+chat.params-only normalization, and unconfigured application.
 
 - [ ] **Step 5: Commit after approval**
 
@@ -16961,10 +17171,14 @@ GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保�
 
 ### Task 4.2: Persist controller routing observations and doctor diagnostics
 
-**Requirement:** JUS-P0-01, Design §3.3, §3.4, §5.1, and §7.3.
+**Requirement:** JUS-P0-01, Design §3.3, §3.4, §4.1, §5.1, §7.3.
 
 **Files:**
 
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/record-builder.ts`
+- Modify: `src/runtime/validation.ts`
+- Modify: `src/core/v2/persistence-redaction.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/doctor-categories.ts`
@@ -16972,144 +17186,145 @@ GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保�
 - Modify: `src/runtime/doctor-cli.ts`
 - Modify: `README.md`
 - Modify: `SPEC.md`
+- Test: `tests/core/v2/observation-model.test.ts`
+- Test: `tests/runtime/validation.test.ts`
+- Test: `tests/core/v2/persistence-redaction.test.ts`
+- Test: `tests/runtime/observation-log-store.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
 - Test: `tests/hooks/observation-handler-gate.test.ts`
 - Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; `DoctorEffectiveConfigView.effectiveCommandDefinitions` from Task 1.2.
+**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; existing `PendingEnvelope`,
+`PendingObservationRecord`, `ObservationLogStore.append()`, `validateRecordSchema()`, and
+`redactPendingLogRecord()`; `DoctorEffectiveConfigView.effectiveCommandDefinitions` from Task 1.2.
 
-**Produces:** durable `controller_routing_observed` observation carrying workflow, desired controller,
-actual controller, status, application method, and source;
-`checkPinnedCommandPresence(commandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition>):
-PinnedCommandPresenceResult`; `justice doctor` output containing the complete missing, missing-agent, or
-mismatched-agent pinned-command templates; README and release documentation describing the required
-v4.0.0 configuration and its manual-install boundary.
-
-- [ ] **Step 1: Write the failing runtime and doctor tests**
+**Produces:**
 
 ```ts
-it("persists mismatch when the observed controller differs", async () => {
-  await adapter.handleMessageUpdated(messageUpdatedFor("sisyphus"));
-  expect(await readRoutingObservation()).toMatchObject({
-    workflow: "subagent-driven-development",
-    routingStatus: "mismatch",
-  });
-});
+export type ControllerRoutingObservedRecord = {
+  readonly recordType: "observation";
+  readonly kind: "controller_routing_observed";
+  readonly workflow: string;
+} & ControllerRoutingObservation;
+```
 
-it("accepts each required pinned command with its expected agent", () => {
-  const definitions = new Map(
-    Object.entries(REQUIRED_PINNED_COMMAND_AGENTS).map(
-      ([name, agent]) => [name, { agent }] as const,
-    ),
-  );
-  expect(checkPinnedCommandPresence(definitions)).toEqual({ ok: true, diagnostics: [] });
+The record is flattened and added as exactly one new member of the existing closed
+`PendingObservationRecord` union. It is a schemaVersion 1, non-authoritative audit observation.
+
+- [ ] **Step 1: Write the complete failing durable-schema, replay, redaction, projection, runtime, and doctor tests**
+
+Add concrete fixtures in the owning test files. At minimum, encode all of the following assertions:
+
+```ts
+const routingEnvelope = {
+  schemaVersion: 1 as const,
+  timestamp: "2026-09-09T00:00:00.000Z",
+  agentId: "system" as const,
+  sessionId: "controller-routing",
+  writerId: "w-1",
+  recordType: "observation" as const,
+};
+
+const validCustomMismatch = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "subagent-driven-development",
+  routingStatus: "mismatch" as const,
+  desiredController: "atlas" as const,
+  actualController: "custom-controller-v2",
+  applicationMethod: "pinned-command" as const,
+  observationSource: "message.updated" as const,
+};
+
+it("accepts the valid custom-controller mismatch durable record", () => {
+  expect(() => validateRecordSchema({ ...validCustomMismatch, sequence: 1 })).not.toThrow();
 });
 
 it.each([
-  ["missing command", new Map(), "missing"],
-  ["missing agent", new Map([["justice-implement-brainstorming", {}]]), "missing_agent"],
-  ["empty agent", new Map([["justice-implement-brainstorming", { agent: "" }]]), "missing_agent"],
-  [
-    "unrecognized agent",
-    new Map([["justice-implement-brainstorming", { agent: "prometheus" }]]),
-    "missing_agent",
-  ],
-  [
-    "wrong agent without raw configuration leakage",
-    new Map([
-      [
-        "justice-implement-brainstorming",
-        { agent: "atlas", template: "secret-template", token: "secret-value" },
-      ],
-    ]),
-    "mismatched_agent",
-  ],
-] as const)("reports %s without copying raw command configuration", (_name, definitions, kind) => {
-  const result = checkPinnedCommandPresence(definitions);
-  expect(result).toMatchObject({ ok: false, diagnostics: [expect.objectContaining({ kind })] });
-  expect(JSON.stringify(result)).not.toContain("template");
-  expect(JSON.stringify(result)).not.toContain("secret-value");
-});
-
-it("rejects a higher-priority source that replaces a correct agent with a wrong agent", () => {
-  const effective = buildDoctorEffectiveConfigView([
-    scanConfigText(
-      "global",
-      '{ command: { "justice-implement-brainstorming": { agent: "sisyphus" } } }',
-    ),
-    scanConfigText(
-      "project",
-      '{ command: { "justice-implement-brainstorming": { agent: "atlas" } } }',
-    ),
-  ]);
-  expect(
-    checkPinnedCommandPresence(effective.effectiveCommandDefinitions).diagnostics,
-  ).toContainEqual(
-    expect.objectContaining({
-      kind: "mismatched_agent",
-      expectedAgent: "sisyphus",
-      actualAgent: "atlas",
-    }),
-  );
-});
-
-it("accepts a higher-priority source that replaces a wrong agent with the expected agent", () => {
-  const effective = buildDoctorEffectiveConfigView([
-    scanConfigText(
-      "global",
-      '{ command: { "justice-implement-brainstorming": { agent: "atlas" } } }',
-    ),
-    scanConfigText(
-      "project",
-      '{ command: { "justice-implement-brainstorming": { agent: "sisyphus" } } }',
-    ),
-  ]);
-  expect(
-    checkPinnedCommandPresence(effective.effectiveCommandDefinitions).diagnostics,
-  ).not.toContainEqual(expect.objectContaining({ commandName: "justice-implement-brainstorming" }));
-});
-
-it("renders the expected agent for every diagnostic template", () => {
-  expect(
-    formatPinnedCommandTemplates([
-      {
-        kind: "mismatched_agent",
-        commandName: "justice-implement-brainstorming",
-        expectedAgent: "sisyphus",
-        actualAgent: "atlas",
-      },
-    ]),
-  ).toContain('"agent": "sisyphus"');
+  [{ ...validCustomMismatch, routingStatus: "applied", reason: "actual_not_observed" }],
+  [{ ...validCustomMismatch, routingStatus: "mismatch", actualController: undefined }],
+  [{ ...validCustomMismatch, routingStatus: "unapplied", reason: "actual_not_observed", actualController: "atlas" }],
+])("rejects an illegal controller-routing persisted shape", (record) => {
+  expect(() => validateRecordSchema({ ...record, sequence: 1 })).toThrow();
 });
 ```
 
+In `tests/runtime/observation-log-store.test.ts`, append a valid pending routing record through the real
+`ObservationLogStore.append()` boundary, call `readAll()`, and assert that the replayed record preserves
+`workflow`, status, desired/actual controller, application method, source, and sequence. In the same test file,
+append/read an existing valid legacy schemaVersion 1 observation fixture to prove backward compatibility; do not
+rewrite or migrate the legacy record.
+
+In `tests/core/v2/persistence-redaction.test.ts`, construct a routing record whose free-form workflow/custom actual
+contains an existing redaction-test secret/path pattern. Assert that `redactPendingLogRecord()` retains the routing
+status/enum fields while no raw secret/config/prompt/tool payload is persisted. The producer must never accept or
+copy a raw command definition or configuration object into the routing record.
+
+In `tests/core/v2/state-projection.test.ts`, replay the durable routing observation together with an otherwise empty
+log and assert that no task, evidence, Gate, Acceptance, lifecycle, or progress authority is created. Use the
+existing main projection; do not create a new routing projection subsystem.
+
+Runtime integration coverage must include:
+
+- finalized matching `message.updated` → durable `applied`;
+- finalized different known agent → durable `mismatch`;
+- finalized custom/unknown actual agent string → durable `mismatch`;
+- configured method + `chat.params` only → durable `unapplied/actual_not_observed` with source `none`;
+- application not configured → durable `unapplied/application_not_configured`;
+- mismatch remains L0 advisory/visibility only and never blocks execution or creates Acceptance authority.
+
+Keep the existing pinned-command tests from this task: correct agent, missing command, missing/empty/unrecognized
+agent, mismatched agent, both precedence directions, complete corrected template output, and raw-config redaction.
+
 - [ ] **Step 2: Confirm RED**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
+Run:
 
-Expected: FAIL because routing observations and pinned-command diagnostics are absent.
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/v2/observation-model.test.ts \
+  tests/runtime/validation.test.ts \
+  tests/core/v2/persistence-redaction.test.ts \
+  tests/runtime/observation-log-store.test.ts \
+  tests/core/v2/state-projection.test.ts \
+  tests/runtime/opencode-adapter-v2.test.ts \
+  tests/hooks/observation-handler-gate.test.ts \
+  tests/core/justice-doctor-config.test.ts \
+  tests/runtime/doctor-cli.test.ts
+```
 
-- [ ] **Step 3: Implement observation and diagnostics**
+Expected: FAIL behaviorally because the persisted routing kind, validator/redaction branches, append/replay
+contract, runtime persistence, and pinned-command diagnostics are not all implemented. Unknown-symbol failures
+caused only by an incomplete test scaffold are not acceptable RED evidence; define fixtures/types before running.
 
-Translate `chat.params` and finalized `message.updated` agent values through the existing adapter event path.
-Have ObservationHandler append the typed routing observation after evaluating the desired decision. Do not make a
-routing mismatch block execution. In `doctor-categories.ts`, define the exact P0 mapping:
-`justice-implement-brainstorming`, `justice-implement-writing-plans`, and
-`justice-implement-executing-plans` require `sisyphus`; `justice-implement-subagent-driven-development`
-requires `atlas`. Consume only `DoctorEffectiveConfigView.effectiveCommandDefinitions`; a name-only checker
-is forbidden. Treat an entry as pinned only when `isPinnedControllerCommand(definition)` succeeds, so an
-empty or unrecognized `agent` produces `missing_agent` rather than counting as a configured command. For
-every required entry, emit exactly one diagnostic discriminant:
-`{ kind: "missing"; commandName; expectedAgent }`, `{ kind: "missing_agent"; commandName;
-expectedAgent }`, or `{ kind: "mismatched_agent"; commandName; expectedAgent; actualAgent }`.
-`PinnedCommandPresenceResult` is `{ readonly ok: boolean; readonly diagnostics: readonly
-PinnedCommandDiagnostic[] }` and contains neither raw command objects nor configuration values other than
-the agent necessary for the comparison. Format every diagnostic as a complete corrected `command` object
-with `template`, `description`, and that diagnostic's `expectedAgent`; exit non-zero. Do not parse a second
-configuration path or union source names. Document the same four command definitions and the v4.0.0
-migration in `README.md` and `SPEC.md`; state that users register the commands and Justice only observes the
-result.
+- [ ] **Step 3: Implement the fixed durable observation contract and runtime wiring**
+
+1. In `src/core/v2/observation-model.ts`, add `ControllerRoutingObservedRecord` exactly as Design §4.1 specifies
+   and extend `PendingObservationRecord` with one `PendingEnvelope & ControllerRoutingObservedRecord` variant.
+   Keep `schemaVersion: 1`; do not add a generic event abstraction.
+2. In `src/core/v2/record-builder.ts`, add one typed builder that accepts `PendingEnvelope`, `workflow`, and a
+   `ControllerRoutingObservation`, returns the flattened pending record, and copies no raw config/command/prompt.
+3. In `src/runtime/validation.ts`, add a closed `controller_routing_observed` branch validating every status-specific
+   required/forbidden field combination. Accept any non-empty custom actual-controller string only in variants that
+   permit an actual controller. Preserve all existing valid schemaVersion 1 branches unchanged.
+4. In `src/core/v2/persistence-redaction.ts`, add an explicit branch. Preserve literal enum/status fields and apply
+   the existing persistence redaction primitive to free-form `workflow` and custom `actualController` strings.
+5. Keep the main state projection audit-only: the routing record contributes no task/evidence/lifecycle/Gate/
+   Acceptance authority. If the current projection already no-ops because the record has no task identity, retain
+   that implementation and prove it with the test; only add an explicit existing-projector skip if required for
+   exhaustiveness. Do not add a new projection subsystem.
+6. Translate `chat.params` and finalized `message.updated` values through the existing adapter event path. Only a
+   finalized message actual is passed as `finalizedMessageActualController`. ObservationHandler resolves the desired
+   decision, calls the Task 4.1 evaluator, builds the typed durable record, and appends it through the existing log.
+7. Routing observation append/validation/redaction failure remains fail-open for execution and produces no positive
+   authority. A routing mismatch remains advisory/status visibility only.
+8. Implement the existing exact P0 pinned-command map and diagnostics in `doctor-categories.ts` using only
+   `DoctorEffectiveConfigView.effectiveCommandDefinitions`; do not parse a second config path or expose raw values.
+9. Document the same four required commands and v4.0.0 manual-install boundary in `README.md` and `SPEC.md`.
+
+Use this exact P0 map:
 
 ```ts
 export const REQUIRED_PINNED_COMMAND_AGENTS = {
@@ -17118,39 +17333,26 @@ export const REQUIRED_PINNED_COMMAND_AGENTS = {
   "justice-implement-subagent-driven-development": "atlas",
   "justice-implement-executing-plans": "sisyphus",
 } as const;
-
-export function checkPinnedCommandPresence(
-  commandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition>,
-): PinnedCommandPresenceResult {
-  const diagnostics = Object.entries(REQUIRED_PINNED_COMMAND_AGENTS).flatMap(
-    ([commandName, expectedAgent]) => {
-      const definition = commandDefinitions.get(commandName);
-      if (definition === undefined) return [{ kind: "missing", commandName, expectedAgent }];
-      if (!isPinnedControllerCommand(definition))
-        return [{ kind: "missing_agent", commandName, expectedAgent }];
-      return definition.agent === expectedAgent
-        ? []
-        : [{ kind: "mismatched_agent", commandName, expectedAgent, actualAgent: definition.agent }];
-    },
-  );
-  return { ok: diagnostics.length === 0, diagnostics };
-}
 ```
+
+`PinnedCommandPresenceResult` remains `{ readonly ok: boolean; readonly diagnostics: readonly
+PinnedCommandDiagnostic[] }`, with one of `missing | missing_agent | mismatched_agent` per failing required command
+and no raw command/config values beyond the compared agent identifier.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
+Run the same command as Step 2.
 
-Expected: PASS.
+Expected: PASS, including typed schema assignability, strict validation, custom mismatch acceptance, malformed
+record rejection, schemaVersion 1 replay compatibility, append/read replay, persistence redaction, audit-only
+projection, applied/mismatch/unapplied runtime persistence, and all pinned-command diagnostics.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-GIT_MASTER=1 git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git add src/core/v2/observation-model.ts src/core/v2/record-builder.ts src/runtime/validation.ts src/core/v2/persistence-redaction.ts src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/observation-log-store.test.ts tests/core/v2/state-projection.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
 GIT_MASTER=1 git commit -m "feat: controller routing observationとdoctor診断を追加"
 ```
-
----
 
 ## Traceability and Definition of Done
 
@@ -17160,7 +17362,8 @@ GIT_MASTER=1 git commit -m "feat: controller routing observationとdoctor診断�
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2                | routing decision, applied, mismatch, effective pinned-command precedence, template output                                                                                                                                        |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2                | evaluator input/signature, applied, known/custom mismatch, chat.params-only/unconfigured normalization, durable record schema, validator, redaction, append/replay, audit-only projection, adapter/ObservationHandler integration, effective pinned-command precedence, template output |
+| Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
 | JUS-P0-02-06 progress-only mutation preserves authorization    | 2.1, 2.2                | approved-task checkbox-only progress produces an equal fingerprint, retains the active binding, and restores cache                                                                                                                 |
