@@ -1147,6 +1147,27 @@ export type ReviewArtifactReservationDescriptor = {
   readonly artifactIdentity: ReviewArtifactInodeIdentity;
 };
 
+#### Reopen preconditions for read/write versus cleanup
+
+`writeExisting` / `readOnce` and `cleanup` deliberately have different reopen preconditions.
+
+- `writeExisting` / `readOnce` reopen the durable descriptor through the strict
+  `openExistingReservation(descriptor)` path. Both original `artifactPath` and `leasePath` MUST exist,
+  both descriptor-relative opens MUST be no-follow, and both identities MUST match the durable
+  `artifactIdentity` before a handle is returned.
+- `cleanup` accepts the same durable `ReviewArtifactReservationDescriptor` as trusted input but MUST be
+  startable when either or both original leaves are already absent. Cleanup validates the descriptor,
+  reconstructs the safe artifact leaf and existing durable `artifactId`, opens only that reservation's
+  descriptor-relative quarantine namespace, and lets the cleanup state machine classify the original
+  target and residual quarantine state.
+- A cleanup retry MUST NOT call `openExistingReservation()` as a prerequisite, because
+  `cleanup_incomplete` explicitly permits a prior attempt to have already removed one or both original
+  leaves. Restart recovery therefore needs no old `NativeReservationHandle`; the durable descriptor is
+  sufficient.
+- This weaker existence precondition applies only to cleanup. It does not permit pathname fallback,
+  global quarantine enumeration, identity-check omission, or any relaxation of the strict read/write
+  reopen boundary.
+
 // This is intentionally a review-artifact-only runtime boundary. It is not
 // added to the general FileReader or FileWriter contracts.
 export type ReservedReviewArtifactIo = {
@@ -1186,11 +1207,29 @@ export type ReviewArtifactWriteSkipReason =
 - Justice の読み取りは pathname の再解決後に通常の `readFile` を呼ばない。`readOnce` は review directory を no-follow で開き、artifactPath と private leasePath を開いた file descriptor の `device` / `inode` と durable reservation の identity が三者一致することを検証してから、検証済み artifact descriptor から一度だけ読む。missing、symlink、差し替え、identity不一致は `artifact_read_failed` として扱い、artifactを権威付けしない。
 - `resolveSafely()` / `resolveSafelyForWrite()` で canonical な絶対パスを得てから `O_NOFOLLOW` 付きの pathname 操作を行う実装は、ancestor を検証後に差し替えられるため descriptor-relative open 相当とはみなさない。これらの汎用 path helper は review-artifact の read / write / cleanup の安全性を満たす根拠にしてはならない。
 - v4.0.0 の supported production provider は `LinuxOpenat2ReviewArtifactProvider` に固定する。provider の TypeScript owner は `src/runtime/linux-review-artifact-provider.ts`、native owner は `native/review-artifact-linux/src/lib.rs`、N-API addon の出力は `dist/native/justice_review_artifact_linux.linux-x64-gnu.node` とする。これは Bun の Node-API addon loading (`require()` / `process.dlopen`) を使用し、`bun:ffi` は experimental のため使用しない。supported deployment は Bun 1.x、Linux x86_64、glibc、Linux kernel 5.6 以上、`openat2(2)` と `renameat2(2)` が利用可能な環境に限定する。Node-API addon のロード失敗、Linux 以外、x86_64 以外、glibc 以外、kernel primitive の `ENOSYS` / `EINVAL`、または capability probe の不一致は unsupported deployment とする。
-- provider の native API は `openReviewArtifactRoot(rootDir)`、`NativeReviewArtifactRoot.createExclusiveMarker(artifactPath)`、`NativeReviewArtifactRoot.openExistingReservation(descriptor)`、`NativeReviewArtifactRoot.writeExisting(reservation, bytes)`、`NativeReviewArtifactRoot.readOnce(reservation)`、`NativeReviewArtifactRoot.cleanup(reservation)`、`NativeReviewArtifactRoot.close()` に固定する。`openExistingReservation` は restart 後に durable な `artifactPath`、`leasePath`、`artifactIdentity` から新しい reservation handle を再構築し、両 leaf の descriptor-relative identity を検証できない場合は handle を返さない。native root object は workspace root の directory descriptor を保持し、restart 後は同じ canonical root から新しい descriptorを開く。TypeScript factory `createLinuxOpenat2ReviewArtifactProvider(rootDir)` は、optional `FileWriter.createExclusiveMarker` callback と `ReservedReviewArtifactIo` を一つの runtime provider object として返す。`NodeFileSystem` は supported provider がある場合だけその二つを公開し、他の `FileReader` / `FileWriter` implementerには要求しない。
+- provider の native API は `openReviewArtifactRoot(rootDir)`、`NativeReviewArtifactRoot.createExclusiveMarker(artifactPath)`、`NativeReviewArtifactRoot.openExistingReservation(descriptor)`、`NativeReviewArtifactRoot.writeExisting(reservation, bytes)`、`NativeReviewArtifactRoot.readOnce(reservation)`、`NativeReviewArtifactRoot.cleanupExistingReservation(descriptor)`、`NativeReviewArtifactRoot.close()` に固定する。`openExistingReservation` は restart 後に durable な `artifactPath`、`leasePath`、`artifactIdentity` から新しい reservation handle を再構築し、両 leaf の descriptor-relative identity を検証できない場合は handle を返さない。native root object は workspace root の directory descriptor を保持し、restart 後は同じ canonical root から新しい descriptorを開く。TypeScript factory `createLinuxOpenat2ReviewArtifactProvider(rootDir)` は、optional `FileWriter.createExclusiveMarker` callback と `ReservedReviewArtifactIo` を一つの runtime provider object として返す。`NodeFileSystem` は supported provider がある場合だけその二つを公開し、他の `FileReader` / `FileWriter` implementerには要求しない。
+- `openExistingReservation(descriptor)` は write/read 専用の strict reopen boundary とする。元の
+  artifact / lease 両 leaf が存在し、descriptor-relative no-follow open と durable
+  `artifactIdentity` の一致を確認できる場合だけ `NativeReservationHandle` を返す。
+  `cleanupExistingReservation(descriptor)` は cleanup 専用の narrow entry point とし、同じ durable
+  descriptor から safe artifact leaf、lease leaf、existing durable `artifactId` を再構築した後、
+  original pair を事前openせず reservation-local cleanup state machineへ入る。write/read の strict
+  preconditionをcleanupのために緩和してはならず、generic reopen-mode enumも追加しない。
+
 - provider は Linux `openat2(2)` の `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` と directory descriptor を使い、workspace root、`.justice`、`reviews`、`.leases`、`.quarantine` を各操作で descriptor-relative にanchorする。exclusive leaf は `O_CREAT | O_EXCL | O_NOFOLLOW` で作成し、`fstat` の `st_dev` / `st_ino` を取得した後、`linkat(2)` で private leaseを同じinodeへ作成する。`writeExisting` / `readOnce` は各操作で現在の artifact leaf と lease leaf を no-follow で開き、両 descriptor のidentityを durable reservation と比較してから descriptorへ書込み・読込みを行い、pathname `readFile` / `writeFile` を使用しない。
 - `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをrandomなprivate quarantineへ原子的に退避し、quarantine descriptorのidentityを検証する。一致した元inodeだけをquarantineから `unlinkat(2)` で削除する。差し替えinode、identity検証エラー、またはquarantineへの退避後に元leafが再作成された場合は、quarantine leafを元pathへ `RENAME_NOREPLACE` で戻す。restore先が占有されている場合はquarantine leafを保持し、どのreplacementも上書き・削除せず `replacement_retained` と advisoryを返す。private leaseも同じidentity-safe手順で扱い、check-then-unlink fallbackは持たない。artifactとleaseの両方をquarantineへ移し、両方のquarantine descriptorを再検証するまでは、いずれのquarantine leafも削除してはならない。片方のquarantine、再検証、またはrestoreが失敗した場合は、移動済みleafを全て `RENAME_NOREPLACE` で戻す。restore競合・replacement検出は `replacement_retained`、それ以外の不確実性は `cleanup_incomplete` として返し、未検証leafとquarantine leafを保持する。
 - runtime は review-artifact capability を、上記providerが予約作成・identity取得・private lease・`writeExisting`・`readOnce`・`cleanup` の全てを提供できる場合にだけ公開する。provider probeが失敗した場合、`createExclusiveMarker` と `ReservedReviewArtifactIo` は公開せず、reservation portは `artifact_storage_unavailable` の `unusable` reservationを返す。workerにはartifact pathを渡さず、通常のplugin処理はfail-openで継続する。このunsupported runtimeはP0 completion criterionの免除ではなく、supported production deploymentでproviderが利用可能であることをv4.0.0の必須完了条件とする。
 - `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path と private lease のいずれも削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。runtime が原子的な identity-verified deletion を提供する場合に限り、private lease は元の inode を保持したまま best-effort で削除してよい。`cleanup` の結果は、artifactとleaseの両方をidentity検証済みで削除できた場合だけ `cleaned`、replacementまたはrestore競合でreplacement/quarantineを保持した場合は `replacement_retained`、一方だけ削除済み・削除失敗・検証不能などpaired cleanupの完了を証明できない場合は `cleanup_incomplete` とする。`cleanup_incomplete` からの再試行は残存するreservation/quarantineだけを対象にし、既に削除したleafの存在を仮定せず、replacementを上書き・削除しない。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
+- `cleanup_incomplete` recovery は same-process / process-restart の両方で durable
+  `ReviewArtifactReservationDescriptor` だけから再開可能でなければならない。old
+  `NativeReservationHandle` の再利用を前提にせず、`cleanupExistingReservation(descriptor)` が original
+  pair の事前openなしに own reservation namespaceを再列挙する。one-sided unlink後に artifact
+  original / lease original がともに absent で lease quarantineだけが残る状態でも、次回cleanupは
+  strict read/write reopen由来の `artifact_missing` で終了せず、residual leaseをidentity検証して
+  `cleaned` へ収束する。cross-reservation recoveryでは A の residual が存在したままrootをreopenして
+  B をcleanupしても A namespaceをopenせず、その後A retryもB namespaceをopenしないことを
+  native/provider testsで証明する。
+
 - `cleanup` の native state machine は次の4段階に固定する。(1) artifact と lease それぞれについて、既存の matching quarantine leaf を identity 検証付きで一件だけ探索する。(2) 残存していない対象だけを、対象 leaf の identity を検証してから `RENAME_NOREPLACE` で quarantine へ移す。(3) artifact/lease の両方の quarantine descriptor を開き、期待 identity と一致すること、対応する元 leaf が absent であること、candidate が重複していないことを確認する。(4) 段階 (3) が完全に成功した後に限り、検証済みの quarantine leaf を unlink する。段階 (3) の完了前に片側を削除してはならず、片側の unlink が成功してもう片側が失敗した場合は `cleanup_incomplete` とし、既に削除した leaf を復元しようとせず、残存する検証可能な quarantine/reservation leaf だけを次回に再試行する。
 - 一方の移動・再検証・restore が失敗した場合、まだ unlink は行わず、移動済み leaf を `RENAME_NOREPLACE` で戻す。restore 先が占有されている場合は `replacement_retained`、restore のその他の失敗または検証不能は `cleanup_incomplete` とし、quarantine leaf を保持する。quarantine の同一 identity 候補が複数、期待 identity 以外の候補、または列挙結果が不確実な場合は、候補を削除せず同じ fail-closed outcome を返す。再試行は名前の推測や全件削除ではなく、descriptor-relative に再列挙して identity が一意に一致する残存 leaf だけを対象にする。
 - native test-only fault injection は `#[cfg(test)]` の `CleanupFaults { fail_next_unlink_label: Option<CleanupLabel> }` に限定し、公開 N-API、環境変数、汎用 syscall registry には露出させない。lease quarantine の unlink を一度だけ失敗させるテストは、最初の結果が `cleanup_incomplete`、artifact が削除済み、lease quarantine が残存すること、二回目が lease 残存だけを削除して `cleaned` になること、および replacement を再作成・上書き・削除しないことを確認する。
