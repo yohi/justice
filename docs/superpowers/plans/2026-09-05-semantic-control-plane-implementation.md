@@ -5197,8 +5197,19 @@ download or install OpenCode/Rust from the runtime spike or a test.
 
 1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews`, `.justice/reviews/.leases`, and `.justice/reviews/.quarantine` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
 2. Configure every descendant open with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, plus `O_DIRECTORY`, `O_CLOEXEC`, and `O_NOFOLLOW` where applicable. Create the artifact leaf with `O_CREAT | O_EXCL | O_NOFOLLOW`, record its `st_dev`/`st_ino`, and create the private lease with `linkat(2)` before returning the reservation.
-3. Exercise these cases in the probe: successful exclusive reservation; second reservation collision; descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor close/reopen followed by `openExistingReservation`; and `renameat2(2)` quarantine followed by identity-checked deletion. A replaced inode must be restored with no-clobber semantics when possible, retained in quarantine on restore collision, and never be deleted by cleanup.
-4. Implement `verify.ts` to compile the probe with `cc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -O2`, execute it under a temporary directory, and emit one JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case. The only passing status is `status: "PASS"`; missing `openat2(2)`, missing `renameat2(2)`, a failed security case, or a non-Linux/non-x86_64 environment must produce `status: "BLOCKED"` and a non-zero exit code.
+3. Exercise these cases in the probe: successful exclusive reservation; second reservation collision;
+descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after
+reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor
+close/reopen followed by `openExistingReservation`; reservation-local `renameat2(2)` quarantine; and a
+post-verification quarantine-name replacement race. The production-equivalent cleanup case MUST NOT call
+`unlinkat(dirfd, verified_name)` after verification. The race case passes only when the replacement inode is
+not deleted or overwritten and the outcome is fail-closed retention.
+4. Implement `verify.ts` to compile the probe with
+`cc -D_GNU_SOURCE -std=c11 -Wall -Wextra -Werror -O2`, execute it under a temporary directory, and emit one
+JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case.
+The only passing status is `status: "PASS"`. Missing `openat2(2)` / `renameat2(2)` still blocks the provider,
+but absence of an identity-bound unlink-by-handle primitive is **not** a reason to use name-only unlink:
+the supported behavior is `quarantine_retained`. The race result must prove replacement deletion count zero.
 5. Record the successful supported-environment output in `docs/agents/review-artifact-linux-provider.md`. Record the exact unsupported result and the user-visible `artifact_storage_unavailable` behavior as well; do not describe an unsupported runtime as a P0 exemption.
 
 **Verification:**
@@ -5322,11 +5333,13 @@ probeReviewArtifactCapabilities() -> {
 ```
 
 `CleanupResult.status` is the exact `ReviewArtifactCleanupStatus` union from Design §4.10:
-`"cleaned"`, `"replacement_retained"`, or `"cleanup_incomplete"`. `"cleaned"` is allowed only
-after both the artifact and private lease have been identity-verified and deleted. A replacement or
-restore collision returns `"replacement_retained"`; any paired-cleanup state that cannot prove both
-leaves were handled, including a one-sided delete, returns `"cleanup_incomplete"` and leaves every
-remaining quarantine or replacement leaf untouched.
+`"cleaned"`, `"quarantine_retained"`, `"replacement_retained"`, or `"cleanup_incomplete"`.
+`"cleaned"` is allowed only when no reservation-owned original or quarantine leaf remains.
+On the supported v4.0.0 Linux provider, a normal matching cleanup moves artifact and lease into the
+reservation-local quarantine, verifies both identities and both absent originals, performs **no**
+name-only `unlinkat`, and returns `"quarantine_retained"`. A target/quarantine replacement or restore
+collision returns `"replacement_retained"`; an uncertain/partial state returns `"cleanup_incomplete"`.
+`"quarantine_retained"` is terminal physical retention and is not an automatic retry signal.
 
 The JavaScript descriptor is exactly `{ artifactPath, leasePath, artifactIdentity }`. Rust may keep
 `artifact_path`, `lease_path`, and `artifact_identity` internally, but the N-API generated JavaScript
@@ -5335,7 +5348,23 @@ the runtime call against the pinned `napi` version; if that version does not per
 use its explicit field-name mapping rather than changing the TypeScript adapter to snake_case. The direct
 addon test below is the authoritative ABI check.
 
-`openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the canonical workspace root descriptor. All subsequent paths are validated relative paths under `.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses `O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`. `openExistingReservation` is the strict write/read restart path: it validates the durable descriptor, opens the original artifact and lease with no-follow, compares both `st_dev`/`st_ino` values to the durable identity, and returns a new handle only when all three identities match. `writeExisting` and `readOnce` act only through that verified handle. `cleanupExistingReservation` is the cleanup restart path: it validates the same durable descriptor, derives the artifact leaf, lease leaf, and existing durable `artifactId`, and enters the reservation-local cleanup state machine without requiring the original pair to exist. That state machine uses `renameat2(2)` with `RENAME_NOREPLACE`, verifies quarantined inode identity before deletion, treats an already-absent original as cleanup state rather than a strict reopen failure, and restores an unverified replacement with `RENAME_NOREPLACE` when appropriate. A restore collision leaves the quarantine entry and returns `replacement_retained`; it never overwrites or deletes the replacement.
+`openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the
+canonical workspace root descriptor. All subsequent paths are validated relative paths under
+`.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with
+`RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses
+`O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`.
+`openExistingReservation` remains the strict write/read restart path. `cleanupExistingReservation` remains
+the descriptor-only cleanup restart path and does not require the original pair to exist.
+
+For cleanup, `renameat2(..., RENAME_NOREPLACE)` may move a currently matching artifact/lease into its
+reservation-local quarantine, and `openat2`/`fstat` verifies the moved inode. The supported v4.0.0 Linux
+primitive set does **not** provide an unlink operation that atomically targets that verified file descriptor:
+`unlinkat(dirfd, name)` resolves the name again. Therefore the production cleanup path MUST NOT invoke
+name-only `unlinkat` on a verified quarantine leaf. After both moved leaves and both absent original slots
+are verified, the provider retains those quarantine leaves and returns `quarantine_retained`. Replacement
+or restore collision remains `replacement_retained`; uncertainty remains `cleanup_incomplete`.
+The quarantine is "private" only in the API/reservation-local sense; `0700` is not treated as a same-UID
+process isolation boundary.
 
 The provider object owns the root descriptor for the lifetime of the initialized
 `OpenCodeAdapter`; `close()` is called by the adapter's teardown path when the host exposes one,
@@ -5387,7 +5416,7 @@ type NativeAddonForTest = {
       readonly artifactPath: string;
       readonly leasePath: string;
       readonly artifactIdentity: { readonly device: string; readonly inode: string };
-    }) => { readonly status: "cleaned" | "replacement_retained" | "cleanup_incomplete" };
+    }) => { readonly status: "cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete" };
     readonly close: () => void;
   };
 };
@@ -5508,7 +5537,7 @@ describe("LinuxOpenat2ReviewArtifactProvider operations", () => {
         leasePath: fixture.reservation.leasePath,
         artifactIdentity: fixture.reservation.artifactIdentity,
       }),
-    ).toEqual({ status: "cleaned" });
+    ).toEqual({ status: "quarantine_retained" });
     root.close();
   });
 
@@ -5518,7 +5547,9 @@ describe("LinuxOpenat2ReviewArtifactProvider operations", () => {
 
     const reopened = createLinuxOpenat2ReviewArtifactProvider(fixture.root);
     if (reopened === undefined) throw new Error("provider did not reopen");
-    await expect(reopened.reservedReviewArtifactIo.cleanup(fixture.reservation)).resolves.toBe("cleaned");
+    await expect(reopened.reservedReviewArtifactIo.cleanup(fixture.reservation)).resolves.toBe(
+      "quarantine_retained",
+    );
     reopened.close();
   });
 
@@ -5677,26 +5708,27 @@ describe("LinuxOpenat2ReviewArtifactProvider security boundaries", () => {
 ```
 
 The deterministic native cleanup tests are part of the complete
-`#[cfg(test)] mod cleanup_fault_tests` in the `lib.rs` listing below and MUST be materialized unchanged in the
-RED scaffold before `cargo test` runs. That module fully defines `arrange_native_cleanup_fixture`,
-`arrange_two_reservation_cleanup_fixture`, reservation-namespace inspection, test-only one-sided unlink fault
-injection, residual quarantine inspection, and namespace-open tracing; there are no illustrative or undefined
-fixture helpers.
+`#[cfg(test)] mod cleanup_fault_tests` in the `lib.rs` listing below and MUST be materialized unchanged in
+the RED scaffold before `cargo test` runs. The module defines reservation-local namespace inspection,
+durable-descriptor reopen coverage, and the narrow post-verification replacement seam; there are no
+illustrative or undefined fixture helpers.
 
 The module contains these required behavioral tests:
 
-- `one_sided_quarantine_unlink_failure_keeps_residual_for_retry`: artifact unlink succeeds, lease unlink fails
-  once, `cleanup_incomplete` is returned, and retry removes only the same reservation's verified residual.
-- `cleanup_isolation_does_not_cross_reservations`: reservation A retains a one-sided residual while reservation
-  B cleans successfully; B opens only B's namespace, then A retries successfully.
-- `concurrent_residual_retries_remain_isolated`: A and B both retain residuals concurrently and each retry
-  opens and consumes only its own namespace.
-
-- `cleanup_retry_survives_root_reopen`: one-sided residual state is persisted, the old root is closed, and a
-  new root consumes only the durable descriptor to reach `cleaned`; the old `NativeReservationHandle` is not
-  reused.
-- `cross_reservation_cleanup_isolation_survives_root_reopen`: reservation A leaves a residual, the root is
-  reopened, B cleans without opening A's namespace, then A cleans without opening B's namespace.
+- `normal_cleanup_retains_verified_quarantine_without_unlink`: a normal matching artifact/lease pair is
+  moved to its reservation-local quarantine, both identities and absent original slots are verified, no
+  physical quarantine unlink occurs, and the result is `quarantine_retained`.
+- `post_verify_name_replacement_is_never_unlinked`: after quarantine identity verification completes, the
+  test-only narrow seam replaces the same quarantine name with a different inode; cleanup performs zero
+  physical delete, returns `quarantine_retained`, and the replacement bytes remain.
+- `retained_quarantine_survives_root_reopen`: after `quarantine_retained`, the old root is closed and a new
+  root consumes only the durable descriptor; it opens only the same reservation namespace and returns
+  `quarantine_retained` without deleting retained leaves.
+- `retained_quarantine_isolation_does_not_cross_reservations`: A and B each retain only their own
+  reservation-local quarantine, and re-evaluating either reservation never opens the other's namespace.
+- `cross_reservation_retention_isolation_survives_root_reopen`: reservation A is retained, the root is
+  reopened, B is processed without opening A's namespace, then A is re-evaluated without opening B's
+  namespace.
 
 The equivalent TypeScript/native-provider coverage must use two durable `artifactId` identities reconstructed
 from two validated artifact leaves. Any verification failure has delete count zero, and no test-only state is
@@ -5916,8 +5948,8 @@ enum ExistingQuarantine {
     Replacement,
 }
 
-enum DeleteOutcome {
-    Deleted,
+enum VerificationOutcome {
+    Verified,
     ReplacementRetained,
     Incomplete,
 }
@@ -5929,20 +5961,10 @@ struct MovedQuarantineLeaf {
     quarantine_leaf: String,
 }
 
-struct VerifiedQuarantineLeaf<'a> {
-    moved: &'a MovedQuarantineLeaf,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CleanupLabel {
-    Artifact,
-    Lease,
-}
-
 #[cfg(test)]
 #[derive(Default)]
 struct CleanupFaults {
-    fail_next_unlink_label: Option<CleanupLabel>,
+    replace_after_verify_label: Option<String>,
     opened_quarantine_namespaces: Vec<(String, String)>,
 }
 
@@ -6190,10 +6212,10 @@ fn cleanup_descriptor(
         },
         (QuarantineOutcome::AlreadyAbsent, QuarantineOutcome::AlreadyAbsent) => "cleaned",
         (QuarantineOutcome::AlreadyAbsent, QuarantineOutcome::Moved(moved)) => {
-            cleanup_residual_leaf(state, moved, expected, CleanupLabel::Lease)
+            cleanup_residual_leaf(state, moved, expected, "lease")
         }
         (QuarantineOutcome::Moved(moved), QuarantineOutcome::AlreadyAbsent) => {
-            cleanup_residual_leaf(state, moved, expected, CleanupLabel::Artifact)
+            cleanup_residual_leaf(state, moved, expected, "artifact")
         }
         (
             QuarantineOutcome::AlreadyAbsent,
@@ -6619,9 +6641,9 @@ fn find_matching_quarantine(
 both components are validated before lookup. `find_matching_quarantine` sorts entries and applies the
 fail-closed classification only inside that descriptor: exactly one expected-identity leaf is `Matching`,
 two are `cleanup_incomplete`, any non-matching leaf with the same label is `Replacement`, and an unreadable
-entry is `cleanup_incomplete`. It must never scan the global quarantine root, infer ownership from a name,
-or consume another reservation's entries. A retry reopens the same reservation-local descriptor and may
-delete only the one identity-verified residual leaf selected by the returned outcome.
+entry is `cleanup_incomplete`. It must never scan the global quarantine root or infer ownership from a name.
+On the supported v4.0.0 provider, revalidation of a matching residual can return `quarantine_retained` but
+does not authorize a later name-only unlink.
 
 fn read_directory_entries(dir: RawFd) -> Result<Vec<String>> {
     let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 0) };
@@ -6698,10 +6720,12 @@ fn restore_quarantine(quarantine_dir: &OwnedFd, target_dir: RawFd, target_leaf: 
     }
 }
 
-fn verify_quarantine_leaf<'a>(
-    moved: &'a MovedQuarantineLeaf,
+fn verify_quarantine_leaf(
+    state: &mut RootState,
+    moved: &MovedQuarantineLeaf,
     expected: &NativeIdentity,
-) -> std::result::Result<VerifiedQuarantineLeaf<'a>, DeleteOutcome> {
+    label: &str,
+) -> VerificationOutcome {
     let fd = match openat2(
         moved.quarantine_dir.as_raw_fd(),
         &moved.quarantine_leaf,
@@ -6710,40 +6734,71 @@ fn verify_quarantine_leaf<'a>(
         OPEN_RESOLVE,
     ) {
         Ok(fd) => fd,
-        Err(_) => return Err(DeleteOutcome::Incomplete),
+        Err(_) => return VerificationOutcome::Incomplete,
     };
     if verify_identity(fd.as_raw_fd(), expected).is_err() {
-        return Err(DeleteOutcome::ReplacementRetained);
+        return VerificationOutcome::ReplacementRetained;
     }
     match target_is_absent(moved.target_dir, &moved.target_leaf) {
         Ok(true) => {}
-        Ok(false) => return Err(DeleteOutcome::ReplacementRetained),
-        Err(_) => return Err(DeleteOutcome::Incomplete),
+        Ok(false) => return VerificationOutcome::ReplacementRetained,
+        Err(_) => return VerificationOutcome::Incomplete,
     }
 
-    Ok(VerifiedQuarantineLeaf { moved })
-}
-
-fn delete_verified_quarantine(
-    state: &mut RootState,
-    verified: VerifiedQuarantineLeaf<'_>,
-    label: CleanupLabel,
-) -> DeleteOutcome {
     #[cfg(test)]
-    if state.faults.fail_next_unlink_label == Some(label) {
-        state.faults.fail_next_unlink_label = None;
-        return DeleteOutcome::Incomplete;
+    if state.faults.replace_after_verify_label.as_deref() == Some(label) {
+        state.faults.replace_after_verify_label = None;
+        if replace_verified_quarantine_for_test(moved, label).is_err() {
+            return VerificationOutcome::Incomplete;
+        }
     }
     #[cfg(not(test))]
-    let _ = label;
-    match unlinkat(
-        verified.moved.quarantine_dir.as_raw_fd(),
-        &verified.moved.quarantine_leaf,
-        0,
+    let _ = (state, label);
+
+    VerificationOutcome::Verified
+}
+
+#[cfg(test)]
+fn replace_verified_quarantine_for_test(
+    moved: &MovedQuarantineLeaf,
+    label: &str,
+) -> Result<()> {
+    let token = random_token()?;
+    let saved_leaf = format!("race-saved-{label}-{token:x}");
+    let replacement_leaf = format!("race-replacement-{label}-{token:x}");
+    let replacement = openat2(
+        moved.quarantine_dir.as_raw_fd(),
+        &replacement_leaf,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0o600,
+        OPEN_RESOLVE,
+    )?;
+    write_all(replacement.as_raw_fd(), b"replacement-after-verify")?;
+
+    renameat2(
+        moved.quarantine_dir.as_raw_fd(),
+        &moved.quarantine_leaf,
+        moved.quarantine_dir.as_raw_fd(),
+        &saved_leaf,
+        RENAME_NOREPLACE,
+    )?;
+    if let Err(error) = renameat2(
+        moved.quarantine_dir.as_raw_fd(),
+        &replacement_leaf,
+        moved.quarantine_dir.as_raw_fd(),
+        &moved.quarantine_leaf,
+        RENAME_NOREPLACE,
     ) {
-        Ok(()) => DeleteOutcome::Deleted,
-        Err(_) => DeleteOutcome::Incomplete,
+        let _ = renameat2(
+            moved.quarantine_dir.as_raw_fd(),
+            &saved_leaf,
+            moved.quarantine_dir.as_raw_fd(),
+            &moved.quarantine_leaf,
+            RENAME_NOREPLACE,
+        );
+        return Err(error);
     }
+    Ok(())
 }
 
 fn restore_moved_after_peer_failure(
@@ -6757,12 +6812,8 @@ fn restore_moved_after_peer_failure(
         &moved.quarantine_leaf,
     );
     match (peer_reason, restore) {
-        (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
-            "replacement_retained"
-        }
-        (_, RestoreOutcome::Failed) | (RetentionReason::Incomplete, RestoreOutcome::Restored) => {
-            "cleanup_incomplete"
-        }
+        (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => "replacement_retained",
+        (_, RestoreOutcome::Failed) | (RetentionReason::Incomplete, RestoreOutcome::Restored) => "cleanup_incomplete",
     }
 }
 
@@ -6772,41 +6823,18 @@ fn cleanup_moved_pair(
     lease: MovedQuarantineLeaf,
     expected: &NativeIdentity,
 ) -> &'static str {
-    // Verify both quarantine leaves and both absent target leaves before either unlink.
-    let artifact_verified = verify_quarantine_leaf(&artifact, expected);
-    let lease_verified = verify_quarantine_leaf(&lease, expected);
+    let artifact_verified = verify_quarantine_leaf(state, &artifact, expected, "artifact");
+    let lease_verified = verify_quarantine_leaf(state, &lease, expected, "lease");
     match (artifact_verified, lease_verified) {
-        (Ok(artifact_verified), Ok(lease_verified)) => {
-            let artifact_delete =
-                delete_verified_quarantine(state, artifact_verified, CleanupLabel::Artifact);
-            let lease_delete = if matches!(artifact_delete, DeleteOutcome::Deleted) {
-                delete_verified_quarantine(state, lease_verified, CleanupLabel::Lease)
-            } else {
-                DeleteOutcome::Incomplete
-            };
-            match (artifact_delete, lease_delete) {
-                (DeleteOutcome::Deleted, DeleteOutcome::Deleted) => "cleaned",
-                (DeleteOutcome::ReplacementRetained, _) | (_, DeleteOutcome::ReplacementRetained) => {
-                    "replacement_retained"
-                }
-                _ => "cleanup_incomplete",
-            }
-        }
+        (VerificationOutcome::Verified, VerificationOutcome::Verified) => "quarantine_retained",
         (artifact_result, lease_result) => {
-            let replacement_detected =
-                matches!(&artifact_result, Err(DeleteOutcome::ReplacementRetained))
-                    || matches!(&lease_result, Err(DeleteOutcome::ReplacementRetained));
+            let replacement_detected = matches!(artifact_result, VerificationOutcome::ReplacementRetained)
+                || matches!(lease_result, VerificationOutcome::ReplacementRetained);
             let artifact_restore = restore_quarantine(
-                &artifact.quarantine_dir,
-                artifact.target_dir,
-                &artifact.target_leaf,
-                &artifact.quarantine_leaf,
+                &artifact.quarantine_dir, artifact.target_dir, &artifact.target_leaf, &artifact.quarantine_leaf,
             );
             let lease_restore = restore_quarantine(
-                &lease.quarantine_dir,
-                lease.target_dir,
-                &lease.target_leaf,
-                &lease.quarantine_leaf,
+                &lease.quarantine_dir, lease.target_dir, &lease.target_leaf, &lease.quarantine_leaf,
             );
             if replacement_detected
                 || matches!(artifact_restore, RestoreOutcome::Collision)
@@ -6824,16 +6852,12 @@ fn cleanup_residual_leaf(
     state: &mut RootState,
     moved: MovedQuarantineLeaf,
     expected: &NativeIdentity,
-    label: CleanupLabel,
+    label: &str,
 ) -> &'static str {
-    match verify_quarantine_leaf(&moved, expected) {
-        Ok(verified) => match delete_verified_quarantine(state, verified, label) {
-            DeleteOutcome::Deleted => "cleaned",
-            DeleteOutcome::ReplacementRetained => "replacement_retained",
-            DeleteOutcome::Incomplete => "cleanup_incomplete",
-        },
-        Err(DeleteOutcome::ReplacementRetained) => "replacement_retained",
-        Err(DeleteOutcome::Incomplete) | Err(DeleteOutcome::Deleted) => "cleanup_incomplete",
+    match verify_quarantine_leaf(state, &moved, expected, label) {
+        VerificationOutcome::Verified => "quarantine_retained",
+        VerificationOutcome::ReplacementRetained => "replacement_retained",
+        VerificationOutcome::Incomplete => "cleanup_incomplete",
     }
 }
 
@@ -7060,20 +7084,14 @@ mod cleanup_fault_tests {
     }
 
     fn create_test_root(label: &str) -> Result<(PathBuf, NativeReviewArtifactRoot)> {
-        let path = std::env::temp_dir().join(format!(
-            "justice-review-artifact-{label}-{:x}",
-            random_token()?,
-        ));
+        let path = std::env::temp_dir().join(format!("justice-review-artifact-{label}-{:x}", random_token()?));
         std::fs::create_dir(&path)
             .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
         let root = open_review_artifact_root(path.to_string_lossy().into_owned())?;
         Ok((path, root))
     }
 
-    fn create_test_reservation(
-        root: &NativeReviewArtifactRoot,
-        artifact_id: &str,
-    ) -> Result<NativeReservationHandle> {
+    fn create_test_reservation(root: &NativeReviewArtifactRoot, artifact_id: &str) -> Result<NativeReservationHandle> {
         validate_reservation_id(artifact_id)?;
         root.create_exclusive_marker(format!(".justice/reviews/{artifact_id}.json"))
     }
@@ -7086,10 +7104,7 @@ mod cleanup_fault_tests {
         }
     }
 
-    fn cleanup_reservation(
-        root: &NativeReviewArtifactRoot,
-        reservation: &NativeReservationHandle,
-    ) -> Result<NativeCleanupResult> {
+    fn cleanup_reservation(root: &NativeReviewArtifactRoot, reservation: &NativeReservationHandle) -> Result<NativeCleanupResult> {
         root.cleanup_existing_reservation(descriptor_for(reservation))
     }
 
@@ -7106,271 +7121,155 @@ mod cleanup_fault_tests {
         Ok(TwoReservationCleanupFixture { root_path, root, first, second })
     }
 
-    fn reservation_namespace(
-        reservation: &NativeReservationHandle,
-    ) -> Result<(String, String)> {
+    fn reservation_namespace(reservation: &NativeReservationHandle) -> Result<(String, String)> {
         let safe_target_leaf = artifact_leaf(&reservation.artifact_path)?;
         let reservation_id = reservation_id_from_artifact_leaf(&safe_target_leaf)?;
         Ok((safe_target_leaf, reservation_id))
     }
 
-    fn fail_next_unlink(root: &NativeReviewArtifactRoot, label: CleanupLabel) -> Result<()> {
+    fn replace_after_verify_once(root: &NativeReviewArtifactRoot, label: &str) -> Result<()> {
         let mut guard = root.lock_open()?;
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
-        state.faults.fail_next_unlink_label = Some(label);
+        let state = guard.as_mut().ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        state.faults.replace_after_verify_label = Some(label.to_string());
         Ok(())
     }
 
-    fn take_opened_quarantine_namespaces(
-        root: &NativeReviewArtifactRoot,
-    ) -> Result<Vec<(String, String)>> {
+    fn take_opened_quarantine_namespaces(root: &NativeReviewArtifactRoot) -> Result<Vec<(String, String)>> {
         let mut guard = root.lock_open()?;
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        let state = guard.as_mut().ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         Ok(std::mem::take(&mut state.faults.opened_quarantine_namespaces))
     }
 
-    fn quarantine_entry_count(
-        root: &NativeReviewArtifactRoot,
-        reservation: &NativeReservationHandle,
-        label: CleanupLabel,
-    ) -> Result<usize> {
+    fn quarantine_entry_count(root: &NativeReviewArtifactRoot, reservation: &NativeReservationHandle, label: &str) -> Result<usize> {
         let (safe_target_leaf, reservation_id) = reservation_namespace(reservation)?;
         let mut guard = root.lock_open()?;
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        let state = guard.as_mut().ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         let directory = open_reservation_quarantine(state, &safe_target_leaf, &reservation_id)?;
-        let prefix = match label {
-            CleanupLabel::Artifact => "artifact-",
-            CleanupLabel::Lease => "lease-",
-        };
-        Ok(read_directory_entries(directory.as_raw_fd())?
-            .into_iter()
-            .filter(|leaf| leaf.starts_with(prefix))
-            .count())
+        let prefix = format!("{label}-");
+        Ok(read_directory_entries(directory.as_raw_fd())?.into_iter().filter(|leaf| leaf.starts_with(&prefix)).count())
     }
 
-    fn target_exists(
-        root: &NativeReviewArtifactRoot,
-        reservation: &NativeReservationHandle,
-    ) -> Result<(bool, bool)> {
+    fn quarantine_leaf_contents(root: &NativeReviewArtifactRoot, reservation: &NativeReservationHandle, label: &str) -> Result<String> {
+        let (safe_target_leaf, reservation_id) = reservation_namespace(reservation)?;
+        let mut guard = root.lock_open()?;
+        let state = guard.as_mut().ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        let directory = open_reservation_quarantine(state, &safe_target_leaf, &reservation_id)?;
+        let prefix = format!("{label}-");
+        let leaves: Vec<String> = read_directory_entries(directory.as_raw_fd())?
+            .into_iter().filter(|leaf| leaf.starts_with(&prefix)).collect();
+        if leaves.len() != 1 {
+            return Err(error(Status::GenericFailure, "cleanup_incomplete", libc::EIO));
+        }
+        let fd = openat2(directory.as_raw_fd(), &leaves[0], libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0, OPEN_RESOLVE)?;
+        let size = fstat_size(fd.as_raw_fd())?;
+        let mut bytes = vec![0_u8; size];
+        read_exact(fd.as_raw_fd(), &mut bytes)?;
+        String::from_utf8(bytes).map_err(|_| error(Status::GenericFailure, "cleanup_incomplete", libc::EILSEQ))
+    }
+
+    fn target_exists(root: &NativeReviewArtifactRoot, reservation: &NativeReservationHandle) -> Result<(bool, bool)> {
         let artifact = artifact_leaf(&reservation.artifact_path)?;
         let lease = lease_leaf(&reservation.lease_path)?;
         let mut guard = root.lock_open()?;
-        let state = guard
-            .as_mut()
-            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
-        Ok((
-            !target_is_absent(state.reviews.as_raw_fd(), &artifact)?,
-            !target_is_absent(state.leases.as_raw_fd(), &lease)?,
-        ))
+        let state = guard.as_mut().ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        Ok((!target_is_absent(state.reviews.as_raw_fd(), &artifact)?, !target_is_absent(state.leases.as_raw_fd(), &lease)?))
     }
 
-    fn assert_only_namespace_opened(
-        opened: &[(String, String)],
-        expected: &(String, String),
-    ) {
+    fn assert_only_namespace_opened(opened: &[(String, String)], expected: &(String, String)) {
         assert!(!opened.is_empty());
         assert!(opened.iter().all(|namespace| namespace == expected));
     }
 
     #[test]
-    fn one_sided_quarantine_unlink_failure_keeps_residual_for_retry() -> Result<()> {
+    fn normal_cleanup_retains_verified_quarantine_without_unlink() -> Result<()> {
         let fixture = arrange_native_cleanup_fixture()?;
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        let first = cleanup_reservation(&fixture.root, &fixture.reservation)?;
-        assert_eq!(first.status, "cleanup_incomplete");
+        let result = cleanup_reservation(&fixture.root, &fixture.reservation)?;
+        assert_eq!(result.status, "quarantine_retained");
         assert_eq!(target_exists(&fixture.root, &fixture.reservation)?, (false, false));
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.reservation, CleanupLabel::Lease)?,
-            1,
-        );
-        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
-        let second = cleanup_reservation(&fixture.root, &fixture.reservation)?;
-        assert_eq!(second.status, "cleaned");
-        let expected_namespace = reservation_namespace(&fixture.reservation)?;
-        let opened = take_opened_quarantine_namespaces(&fixture.root)?;
-        assert_only_namespace_opened(&opened, &expected_namespace);
+        assert_eq!(quarantine_entry_count(&fixture.root, &fixture.reservation, "artifact")?, 1);
+        assert_eq!(quarantine_entry_count(&fixture.root, &fixture.reservation, "lease")?, 1);
         Ok(())
     }
 
     #[test]
-    fn cleanup_retry_survives_root_reopen() -> Result<()> {
+    fn post_verify_name_replacement_is_never_unlinked() -> Result<()> {
+        let fixture = arrange_native_cleanup_fixture()?;
+        replace_after_verify_once(&fixture.root, "artifact")?;
+        let result = cleanup_reservation(&fixture.root, &fixture.reservation)?;
+        assert_eq!(result.status, "quarantine_retained");
+        assert_eq!(target_exists(&fixture.root, &fixture.reservation)?, (false, false));
+        assert_eq!(quarantine_leaf_contents(&fixture.root, &fixture.reservation, "artifact")?, "replacement-after-verify");
+        assert_eq!(quarantine_entry_count(&fixture.root, &fixture.reservation, "lease")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_quarantine_survives_root_reopen() -> Result<()> {
         let fixture = arrange_native_cleanup_fixture()?;
         let durable = descriptor_for(&fixture.reservation);
         let expected_namespace = reservation_namespace(&fixture.reservation)?;
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.reservation)?.status,
-            "cleanup_incomplete",
-        );
-        assert_eq!(target_exists(&fixture.root, &fixture.reservation)?, (false, false));
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.reservation, CleanupLabel::Lease)?,
-            1,
-        );
-
+        assert_eq!(cleanup_reservation(&fixture.root, &fixture.reservation)?.status, "quarantine_retained");
         fixture.root.close()?;
-        let reopened =
-            open_review_artifact_root(fixture.root_path.to_string_lossy().into_owned())?;
-        assert_eq!(
-            reopened.cleanup_existing_reservation(durable)?.status,
-            "cleaned",
-        );
-        let opened = take_opened_quarantine_namespaces(&reopened)?;
-        assert_only_namespace_opened(&opened, &expected_namespace);
-        assert_eq!(
-            quarantine_entry_count(&reopened, &fixture.reservation, CleanupLabel::Lease)?,
-            0,
-        );
+        let reopened = open_review_artifact_root(fixture.root_path.to_string_lossy().into_owned())?;
+        let _ = take_opened_quarantine_namespaces(&reopened)?;
+        assert_eq!(reopened.cleanup_existing_reservation(durable)?.status, "quarantine_retained");
+        assert_only_namespace_opened(&take_opened_quarantine_namespaces(&reopened)?, &expected_namespace);
+        assert_eq!(quarantine_entry_count(&reopened, &fixture.reservation, "artifact")?, 1);
+        assert_eq!(quarantine_entry_count(&reopened, &fixture.reservation, "lease")?, 1);
         reopened.close()?;
         Ok(())
     }
 
     #[test]
-    fn cleanup_isolation_does_not_cross_reservations() -> Result<()> {
+    fn retained_quarantine_isolation_does_not_cross_reservations() -> Result<()> {
         let fixture = arrange_two_reservation_cleanup_fixture()?;
         let first_namespace = reservation_namespace(&fixture.first)?;
         let second_namespace = reservation_namespace(&fixture.second)?;
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.first)?.status,
-            "cleanup_incomplete",
-        );
+        assert_eq!(cleanup_reservation(&fixture.root, &fixture.first)?.status, "quarantine_retained");
         let _ = take_opened_quarantine_namespaces(&fixture.root)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.second)?.status,
-            "cleaned",
-        );
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&fixture.root)?,
-            &second_namespace,
-        );
+        assert_eq!(cleanup_reservation(&fixture.root, &fixture.second)?.status, "quarantine_retained");
+        assert_only_namespace_opened(&take_opened_quarantine_namespaces(&fixture.root)?, &second_namespace);
+        assert_eq!(quarantine_entry_count(&fixture.root, &fixture.first, "artifact")?, 1);
         let _ = take_opened_quarantine_namespaces(&fixture.root)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.first)?.status,
-            "cleaned",
-        );
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&fixture.root)?,
-            &first_namespace,
-        );
+        assert_eq!(cleanup_reservation(&fixture.root, &fixture.first)?.status, "quarantine_retained");
+        assert_only_namespace_opened(&take_opened_quarantine_namespaces(&fixture.root)?, &first_namespace);
         Ok(())
     }
 
     #[test]
-    fn concurrent_residual_retries_remain_isolated() -> Result<()> {
-        let fixture = arrange_two_reservation_cleanup_fixture()?;
-        let first_namespace = reservation_namespace(&fixture.first)?;
-        let second_namespace = reservation_namespace(&fixture.second)?;
-
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.first)?.status,
-            "cleanup_incomplete",
-        );
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.second)?.status,
-            "cleanup_incomplete",
-        );
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
-            1,
-        );
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.second, CleanupLabel::Lease)?,
-            1,
-        );
-
-        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
-        assert_eq!(cleanup_reservation(&fixture.root, &fixture.second)?.status, "cleaned");
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&fixture.root)?,
-            &second_namespace,
-        );
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
-            1,
-        );
-
-        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
-        assert_eq!(cleanup_reservation(&fixture.root, &fixture.first)?.status, "cleaned");
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&fixture.root)?,
-            &first_namespace,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn cross_reservation_cleanup_isolation_survives_root_reopen() -> Result<()> {
+    fn cross_reservation_retention_isolation_survives_root_reopen() -> Result<()> {
         let fixture = arrange_two_reservation_cleanup_fixture()?;
         let first_descriptor = descriptor_for(&fixture.first);
         let second_descriptor = descriptor_for(&fixture.second);
         let first_namespace = reservation_namespace(&fixture.first)?;
         let second_namespace = reservation_namespace(&fixture.second)?;
-
-        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
-        assert_eq!(
-            cleanup_reservation(&fixture.root, &fixture.first)?.status,
-            "cleanup_incomplete",
-        );
-        assert_eq!(
-            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
-            1,
-        );
-
+        assert_eq!(cleanup_reservation(&fixture.root, &fixture.first)?.status, "quarantine_retained");
         fixture.root.close()?;
-        let reopened =
-            open_review_artifact_root(fixture.root_path.to_string_lossy().into_owned())?;
+        let reopened = open_review_artifact_root(fixture.root_path.to_string_lossy().into_owned())?;
         let _ = take_opened_quarantine_namespaces(&reopened)?;
-        assert_eq!(
-            reopened.cleanup_existing_reservation(second_descriptor)?.status,
-            "cleaned",
-        );
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&reopened)?,
-            &second_namespace,
-        );
-        assert_eq!(
-            quarantine_entry_count(&reopened, &fixture.first, CleanupLabel::Lease)?,
-            1,
-        );
-
+        assert_eq!(reopened.cleanup_existing_reservation(second_descriptor)?.status, "quarantine_retained");
+        assert_only_namespace_opened(&take_opened_quarantine_namespaces(&reopened)?, &second_namespace);
+        assert_eq!(quarantine_entry_count(&reopened, &fixture.first, "artifact")?, 1);
         let _ = take_opened_quarantine_namespaces(&reopened)?;
-        assert_eq!(
-            reopened.cleanup_existing_reservation(first_descriptor)?.status,
-            "cleaned",
-        );
-        assert_only_namespace_opened(
-            &take_opened_quarantine_namespaces(&reopened)?,
-            &first_namespace,
-        );
+        assert_eq!(reopened.cleanup_existing_reservation(first_descriptor)?.status, "quarantine_retained");
+        assert_only_namespace_opened(&take_opened_quarantine_namespaces(&reopened)?, &first_namespace);
         reopened.close()?;
         Ok(())
     }
 }
 ```
 
-The code above is the complete native implementation contract, not a placeholder: every helper body names
-the syscall, validation, ownership, and error behavior that must be copied into the implementation commit.
-`RootState._root`, every `OwnedFd`, and every reservation handle must be closed by Rust ownership or
-`close()`; no raw descriptor may cross into TypeScript. In particular, a reservation-local quarantine
-directory opened inside `quarantine_one()` is owned by `MovedQuarantineLeaf.quarantine_dir: OwnedFd` and is
-never returned as a borrowed/dangling `RawFd`. `VerifiedQuarantineLeaf` borrows that moved object only for
-the synchronous verify/delete phase. `openat2` must
-use `O_CLOEXEC`, `O_NOFOLLOW`, `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, and
-descriptor-relative directory fds. `quarantine_one` must use `renameat2(..., RENAME_NOREPLACE)`, verify
-the quarantine fd identity before `unlinkat`, scan the private quarantine directory by descriptor and
-identity when a prior cleanup left a quarantine leaf, and restore an unverified replacement only with
-another `RENAME_NOREPLACE`. A target missing with no matching quarantine is `AlreadyAbsent`; a target or
-quarantine lookup/verification uncertainty is `cleanup_incomplete`; a mismatch or restore collision is
-`replacement_retained`. No outcome may delete an unverified target or quarantine candidate.
+The code above is the complete native implementation contract, not a placeholder. Every directory
+descriptor and reservation-local quarantine descriptor remains owned by `OwnedFd`. `openat2` uses
+`O_CLOEXEC`, `O_NOFOLLOW`, and the documented resolve flags. `quarantine_one` uses
+`renameat2(..., RENAME_NOREPLACE)`, reopens and checks the quarantine inode identity, and never scans outside
+the reservation namespace.
+
+Most importantly, the supported v4.0.0 cleanup path contains **no physical unlink of a quarantine leaf**.
+An opened/fstat-verified fd is not evidence that a later `unlinkat(dirfd, name)` removes that same inode.
+Therefore `verify_quarantine_leaf` returns only a classification; it does not return a capability authorizing
+name-based deletion. Both verified leaves are retained as `quarantine_retained`. The test-only
+`replace_after_verify_label` seam swaps the name after verification and proves the replacement bytes survive.
 
 `cleanupExistingReservation(descriptor)` is the only production cleanup entry point. It validates the
 descriptor and enters `cleanup_descriptor` without calling `openExistingReservation`; therefore ENOENT for
@@ -7435,7 +7334,7 @@ type NativeRoot = Readonly<{
     leasePath: string;
     artifactIdentity: NativeIdentity;
   }): {
-    readonly status: "cleaned" | "replacement_retained" | "cleanup_incomplete";
+    readonly status: "cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete";
   };
   close(): void;
 }>;
@@ -7625,15 +7524,14 @@ function safeNativeError(fallbackCode: string, cause: unknown): Error {
 
 The built-addon test above MUST assert both camelCase descriptor APIs against the real `.node` addon:
 `openExistingReservation` remains the strict read/write reopen ABI, while
-`cleanupExistingReservation` accepts the same durable descriptor and returns `cleaned` for a normal
-reservation without creating a second reservation identity. The provider operations suite above MUST also
-close and reopen the provider and call `ReservedReviewArtifactIo.cleanup(reservation)` successfully from the
-durable reservation data. Deterministic one-sided unlink failure remains Rust-only under `#[cfg(test)]`;
-do not expose fault injection through N-API. `cleanup_retry_survives_root_reopen` is the proof that
-`cleanup_incomplete` with both original leaves absent is reachable after restart through only the durable
-descriptor. `cross_reservation_cleanup_isolation_survives_root_reopen` proves A/B namespace isolation across
-that restart boundary. Together with the provider implementation listing, these tests prove production
-cleanup delegates through the descriptor ABI rather than `openHandle()`.
+`cleanupExistingReservation` accepts the same durable descriptor and returns `quarantine_retained` for a
+normal matching reservation because the supported provider intentionally performs no name-only quarantine
+unlink. The provider operations suite MUST close and reopen the provider and call
+`ReservedReviewArtifactIo.cleanup(reservation)` from the durable reservation data, preserving the same
+reservation-local retained state. The post-verification replacement race remains Rust-only under
+`#[cfg(test)]`; do not expose fault injection through N-API. Together, these tests prove that production
+cleanup delegates through the descriptor ABI rather than `openHandle()` and that restart reachability does
+not reintroduce physical deletion.
 
 **F-048 cleanup recovery traceability:**
 
@@ -7641,13 +7539,14 @@ cleanup delegates through the descriptor ABI rather than `openHandle()`.
 |---|---|---|
 | Design §4.10 strict read/write reopen | Task 3.3b | `openExistingReservation` requires original artifact + lease pair |
 | Design §4.10 cleanup descriptor reopen | Task 3.3b | `cleanupExistingReservation` enters cleanup with originals absent |
-| `cleanup_incomplete` same-process retry | Task 3.3b | one-sided fault → second descriptor cleanup → `cleaned` |
-| `cleanup_incomplete` restart retry | Task 3.3b | one-sided fault → root close/reopen → durable descriptor → `cleaned` |
-| concurrent residual isolation | Task 3.3b | A+B residuals → each descriptor retry opens only its own namespace |
-| cross-reservation restart isolation | Task 3.3b | A residual → reopen → B cleanup → A retry; namespace trace remains isolated |
-| built-addon cleanup ABI | Task 3.3b | real `.node` exposes camelCase `cleanupExistingReservation` and returns `cleaned` |
+| no verify→name-only unlink | Task 3.3b | production listing contains no `delete_verified_quarantine` / quarantine `unlinkat` path |
+| normal fail-closed retention | Task 3.3b | matching pair → verify both → physical delete count zero → `quarantine_retained` |
+| post-verification replacement race | Task 3.3b | verify → replace same quarantine name → replacement bytes remain → `quarantine_retained` |
+| retained restart reachability | Task 3.3b | `quarantine_retained` → root close/reopen → durable descriptor → same namespace retained |
+| cross-reservation restart isolation | Task 3.3b | A retained → reopen → B cleanup → A re-evaluation; namespace trace remains isolated |
+| built-addon cleanup ABI | Task 3.3b | real `.node` exposes camelCase `cleanupExistingReservation` and returns `quarantine_retained` |
 | provider cleanup composition | Task 3.3b | reopened provider calls `ReservedReviewArtifactIo.cleanup` through descriptor API |
-| Task 3.6 cleanup recovery | Task 3.6 | existing `ReservedReviewArtifactIo.cleanup` consumes the corrected runtime provider only |
+| Task 3.6 cleanup retention | Task 3.6 | `quarantine_retained` records `review_artifact_cleanup_retained` without Gate/Acceptance rollback |
 
 **Verification:**
 
@@ -12945,7 +12844,9 @@ async function arrangeReviewArtifactCompletionFixture(
     };
   const cleanupArtifact: ReviewCompletionDependenciesForTest["cleanupArtifact"] = async (usableReservation) => {
     const outcome = await baseArtifactIo.cleanup(usableReservation);
-    if (outcome === "replacement_retained") {
+    if (outcome === "quarantine_retained") {
+      await recordAdvisory("review_artifact_cleanup_retained");
+    } else if (outcome === "replacement_retained") {
       await recordAdvisory("review_artifact_identity_mismatch");
     } else if (outcome === "cleanup_incomplete") {
       await recordAdvisory("review_artifact_cleanup_incomplete");
@@ -13164,13 +13065,14 @@ it("reports incomplete paired cleanup and retries only the residual lease", asyn
 
 The real-filesystem Node test asserts that an unsupported platform or failed native probe exposes neither
 review-artifact capability. The supported Linux x86_64 suite must exercise the actual
-`LinuxOpenat2ReviewArtifactProvider` through the production `NodeFileSystem` composition; it must prove
+`LinuxOpenat2ReviewArtifactProvider` through production `NodeFileSystem` composition; it must prove
 matching-inode writes and reads, unlink/recreate and symlink replacement rejection without changing
-replacement bytes, identity mismatch rejection before JSON parsing, fail-closed
-`replacement_retained` cleanup, and a one-sided unlink that returns `cleanup_incomplete` and retries only the
-residual reservation/quarantine leaf. The provider-specific cleanup test must never rely on a racy `lstat` then
-`unlink` implementation. Mock tests remain deterministic capability tests and are not evidence of the native
-provider's security properties.
+replacement bytes, identity mismatch rejection before JSON parsing, normal `quarantine_retained` cleanup
+with no physical quarantine unlink, durable root reopen, and reservation-local A/B isolation. The native
+Rust race test is the authoritative proof for the verify→name-replacement window: replacement deletion and
+overwrite counts remain zero and replacement bytes remain. The provider-specific cleanup test must never
+rely on `lstat`/`fstat` followed by name-only `unlink`. Mock tests remain deterministic capability tests and
+are not evidence of the native provider's security properties.
 
 ```ts
 it.each(["task-review", "final-review"] as const)(
@@ -14508,7 +14410,9 @@ const cleanupArtifact: ReviewCompletionDependencies["cleanupArtifact"] = async (
   if (reservedReviewArtifactIo === undefined) return;
   try {
     const outcome = await reservedReviewArtifactIo.cleanup(reservation);
-    if (outcome === "replacement_retained") {
+    if (outcome === "quarantine_retained") {
+      await this.recordReviewAdvisory("review_artifact_cleanup_retained");
+    } else if (outcome === "replacement_retained") {
       await this.recordReviewAdvisory("review_artifact_identity_mismatch");
     } else if (outcome === "cleanup_incomplete") {
       await this.recordReviewAdvisory("review_artifact_cleanup_incomplete");
@@ -16865,12 +16769,13 @@ keeping the lockfile SDK at `1.14.21`; Task 3.3c is the hard-gate runtime probe 
 hook dispatch, TaskTool execution, child-session correlation, mutable `run_in_background` and artifact-path
 propagation, and host cancellation; Task 3.6 consumes those recorded field paths in a separate supported-host
 production E2E. Direct adapter tests remain composition coverage only and cannot satisfy F-047.
-F-048 reverse traceability is explicit: Design §4.10 defines paired artifact/lease quarantine, identity
-revalidation, `replacement_retained`, and `cleanup_incomplete`; Task 3.3b implements and tests those
-native outcomes, Task 3.4 carries the narrow cleanup status through the reservation capability, and
-Task 3.6 retries only residual reservation/quarantine leaves after cleanup failure without rereading,
-restoring over, or deleting a replacement. The mock, native security, composition, and restart tests
-must cover replacement retention and one-sided cleanup before F-048 is complete.
+F-048 reverse traceability is explicit: Design §4.10 defines paired artifact/lease quarantine,
+identity revalidation, `quarantine_retained`, `replacement_retained`, and `cleanup_incomplete`; Task 3.3b
+implements the no-name-only-unlink retention policy and the post-verification replacement race; Task 3.4
+carries the narrow cleanup status through the reservation capability; and Task 3.6 records
+`review_artifact_cleanup_retained` without rereading, rolling back Gate/Acceptance, restoring over, or
+deleting a replacement. Native security, provider reopen, composition, and restart tests must cover
+fail-closed retention and cross-reservation isolation before F-048 is complete.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations, if Task 3.3a
 cannot produce a supported-provider `PASS`, or if Task 3.3b cannot build and test the concrete addon.
@@ -17111,7 +17016,7 @@ export type ReservedReviewArtifactIo = {
   ) => Promise<string>;
   readonly cleanup: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ) => Promise<"cleaned" | "replacement_retained" | "cleanup_incomplete">;
+  ) => Promise<"cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete">;
 };
 ```
 
@@ -17312,7 +17217,7 @@ function createMockReservedReviewArtifactIo(
     },
     cleanup: async (
       reservation,
-    ): Promise<"cleaned" | "replacement_retained" | "cleanup_incomplete"> => {
+    ): Promise<"cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete"> => {
       if (
         !isCleanable(reservation.artifactPath, reservation) ||
         !isCleanable(reservation.leasePath, reservation)

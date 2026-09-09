@@ -1104,6 +1104,12 @@ retained and the operation returns a non-positive cleanup outcome/advisory; the 
 deleted. Artifact and lease cleanup remain independently retryable without crossing reservation
 boundaries.
 
+For this contract, **private quarantine** means reservation-local, descriptor-relative, and never
+presented as a worker path. It does **not** mean that a same-UID process is prevented by the OS from
+renaming or replacing entries. Directory mode `0700` is not an isolation boundary against another process
+running as the same Unix user, so permission bits or a random leaf name MUST NOT be used as proof that a
+verified directory entry cannot change before deletion.
+
 The Linux provider probe and production tests MUST verify that cleanup of one independently
 replaced/quarantined reservation leaves another reservation's quarantine state untouched.
 
@@ -1135,6 +1141,7 @@ export type ReviewArtifactInodeIdentity = {
 
 export type ReviewArtifactCleanupStatus =
   | "cleaned"
+  | "quarantine_retained"
   | "replacement_retained"
   | "cleanup_incomplete";
 
@@ -1217,22 +1224,55 @@ export type ReviewArtifactWriteSkipReason =
   preconditionをcleanupのために緩和してはならず、generic reopen-mode enumも追加しない。
 
 - provider は Linux `openat2(2)` の `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` と directory descriptor を使い、workspace root、`.justice`、`reviews`、`.leases`、`.quarantine` を各操作で descriptor-relative にanchorする。exclusive leaf は `O_CREAT | O_EXCL | O_NOFOLLOW` で作成し、`fstat` の `st_dev` / `st_ino` を取得した後、`linkat(2)` で private leaseを同じinodeへ作成する。`writeExisting` / `readOnce` は各操作で現在の artifact leaf と lease leaf を no-follow で開き、両 descriptor のidentityを durable reservation と比較してから descriptorへ書込み・読込みを行い、pathname `readFile` / `writeFile` を使用しない。
-- `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをrandomなprivate quarantineへ原子的に退避し、quarantine descriptorのidentityを検証する。一致した元inodeだけをquarantineから `unlinkat(2)` で削除する。差し替えinode、identity検証エラー、またはquarantineへの退避後に元leafが再作成された場合は、quarantine leafを元pathへ `RENAME_NOREPLACE` で戻す。restore先が占有されている場合はquarantine leafを保持し、どのreplacementも上書き・削除せず `replacement_retained` と advisoryを返す。private leaseも同じidentity-safe手順で扱い、check-then-unlink fallbackは持たない。artifactとleaseの両方をquarantineへ移し、両方のquarantine descriptorを再検証するまでは、いずれのquarantine leafも削除してはならない。片方のquarantine、再検証、またはrestoreが失敗した場合は、移動済みleafを全て `RENAME_NOREPLACE` で戻す。restore競合・replacement検出は `replacement_retained`、それ以外の不確実性は `cleanup_incomplete` として返し、未検証leafとquarantine leafを保持する。
+- `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは
+  `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをreservation-local quarantineへ原子的に退避し、
+  quarantine descriptorから `openat2(2)` / `fstat(2)` で期待 `st_dev` / `st_ino` を検証する。
+  ただし v4.0.0 の supported Linux primitive set (`openat2` / `renameat2` / `unlinkat`) には、
+  検証済み file descriptor の inode identity と **その後に削除される directory entry** を
+  原子的に結び付ける unlink-by-handle primitive がない。`openat2` / `fstat` 後の
+  `unlinkat(dirfd, name)` は name を再解決するため、identity-verified deletion の証明にはならない。
+  したがって supported provider は quarantine leaf を物理unlinkしない。artifact/lease の両方を
+  quarantineへ移し、両identityと両original targetのabsenceを確認できた場合は、そのverified
+  quarantine leavesを保持して `quarantine_retained` と advisoryを返す。差し替えinode、
+  identity検証エラー、またはrestore競合は従来どおりreplacementを削除せず
+  `replacement_retained` / `cleanup_incomplete` へfail closedする。将来、actual removal targetと
+  verified inodeをatomicにbindingできるprimitiveを別途証明した場合だけ、このphysical retention
+  policyをDesign/Plan/tests同時変更で見直してよい。
 - runtime は review-artifact capability を、上記providerが予約作成・identity取得・private lease・`writeExisting`・`readOnce`・`cleanup` の全てを提供できる場合にだけ公開する。provider probeが失敗した場合、`createExclusiveMarker` と `ReservedReviewArtifactIo` は公開せず、reservation portは `artifact_storage_unavailable` の `unusable` reservationを返す。workerにはartifact pathを渡さず、通常のplugin処理はfail-openで継続する。このunsupported runtimeはP0 completion criterionの免除ではなく、supported production deploymentでproviderが利用可能であることをv4.0.0の必須完了条件とする。
-- `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path と private lease のいずれも削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。runtime が原子的な identity-verified deletion を提供する場合に限り、private lease は元の inode を保持したまま best-effort で削除してよい。`cleanup` の結果は、artifactとleaseの両方をidentity検証済みで削除できた場合だけ `cleaned`、replacementまたはrestore競合でreplacement/quarantineを保持した場合は `replacement_retained`、一方だけ削除済み・削除失敗・検証不能などpaired cleanupの完了を証明できない場合は `cleanup_incomplete` とする。`cleanup_incomplete` からの再試行は残存するreservation/quarantineだけを対象にし、既に削除したleafの存在を仮定せず、replacementを上書き・削除しない。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
+- `cleanup` の結果は、reservation-owned artifact / lease / quarantine が既に存在しない場合だけ
+  `cleaned`、両方のmatching quarantineをidentity検証できたがsupported providerに
+  identity-bound deletion primitiveがないため物理削除せず保持した場合は `quarantine_retained`、
+  replacementまたはrestore競合を保持した場合は `replacement_retained`、検証不能・移動/restore失敗
+  などpaired cleanup stateを確定できない場合は `cleanup_incomplete` とする。
+  `quarantine_retained` は terminalなfail-closed physical-retention outcomeであり、
+  Gate / Acceptance authorityをrollbackせず、通常のautomatic cleanup retry対象にしない。
+  `cleanup_incomplete` は残存するreservation-local stateだけをdescriptorから再評価してよいが、
+  name-only unlinkへfallbackしてはならない。cleanup failureまたはretentionはGate/Acceptanceを
+  rollbackせず、replacementを上書き・削除しない。
 - `cleanup_incomplete` recovery は same-process / process-restart の両方で durable
   `ReviewArtifactReservationDescriptor` だけから再開可能でなければならない。old
-  `NativeReservationHandle` の再利用を前提にせず、`cleanupExistingReservation(descriptor)` が original
-  pair の事前openなしに own reservation namespaceを再列挙する。one-sided unlink後に artifact
-  original / lease original がともに absent で lease quarantineだけが残る状態でも、次回cleanupは
-  strict read/write reopen由来の `artifact_missing` で終了せず、residual leaseをidentity検証して
-  `cleaned` へ収束する。cross-reservation recoveryでは A の residual が存在したままrootをreopenして
-  B をcleanupしても A namespaceをopenせず、その後A retryもB namespaceをopenしないことを
+  `NativeReservationHandle` の再利用を前提にせず、`cleanupExistingReservation(descriptor)` が
+  original pairの事前openなしにown reservation namespaceを再列挙する。matching residualを
+  再検証できた場合、v4.0.0 supported providerは物理unlinkせず `quarantine_retained` に収束する。
+  cross-reservation recoveryではAのretained quarantineが存在したままrootをreopenしてBをcleanup
+  してもA namespaceをopenせず、その後Aを再評価してもB namespaceをopenしないことを
   native/provider testsで証明する。
-
-- `cleanup` の native state machine は次の4段階に固定する。(1) artifact と lease それぞれについて、既存の matching quarantine leaf を identity 検証付きで一件だけ探索する。(2) 残存していない対象だけを、対象 leaf の identity を検証してから `RENAME_NOREPLACE` で quarantine へ移す。(3) artifact/lease の両方の quarantine descriptor を開き、期待 identity と一致すること、対応する元 leaf が absent であること、candidate が重複していないことを確認する。(4) 段階 (3) が完全に成功した後に限り、検証済みの quarantine leaf を unlink する。段階 (3) の完了前に片側を削除してはならず、片側の unlink が成功してもう片側が失敗した場合は `cleanup_incomplete` とし、既に削除した leaf を復元しようとせず、残存する検証可能な quarantine/reservation leaf だけを次回に再試行する。
+- `cleanup` の native state machine は次の4段階に固定する。(1) artifact と lease
+  それぞれについて、既存のmatching quarantine leafをidentity検証付きで一件だけ探索する。
+  (2) 対象が残存する場合は、そのtarget leafのidentityを検証してから `RENAME_NOREPLACE` で
+  quarantineへ移す。(3) artifact/lease両方のquarantine leafをdescriptor-relativeに開き、
+  期待identityと一致すること、対応する元leafがabsentであること、candidateが重複していないことを
+  確認する。(4) 段階(3)が完全に成功しても、supported v4.0.0 Linux providerは
+  `unlinkat(dirfd, name)` を呼ばず、両quarantine leafを保持して `quarantine_retained` を返す。
+  verification後に同名entryが別inodeへ差し替わってもphysical deletion countは0でなければならない。
 - 一方の移動・再検証・restore が失敗した場合、まだ unlink は行わず、移動済み leaf を `RENAME_NOREPLACE` で戻す。restore 先が占有されている場合は `replacement_retained`、restore のその他の失敗または検証不能は `cleanup_incomplete` とし、quarantine leaf を保持する。quarantine の同一 identity 候補が複数、期待 identity 以外の候補、または列挙結果が不確実な場合は、候補を削除せず同じ fail-closed outcome を返す。再試行は名前の推測や全件削除ではなく、descriptor-relative に再列挙して identity が一意に一致する残存 leaf だけを対象にする。
-- native test-only fault injection は `#[cfg(test)]` の `CleanupFaults { fail_next_unlink_label: Option<CleanupLabel> }` に限定し、公開 N-API、環境変数、汎用 syscall registry には露出させない。lease quarantine の unlink を一度だけ失敗させるテストは、最初の結果が `cleanup_incomplete`、artifact が削除済み、lease quarantine が残存すること、二回目が lease 残存だけを削除して `cleaned` になること、および replacement を再作成・上書き・削除しないことを確認する。
+- native test-only race seamは `#[cfg(test)]` のcleanup専用
+  `CleanupFaults { replace_after_verify_label: Option<String> }` に限定し、公開N-API、環境変数、
+  汎用syscall registryには露出させない。テストはquarantine identity verification完了後、
+  old implementationならname-only `unlinkat`を呼ぶ位置で同名leafをreplacement inodeへ
+  差し替え、replacement deletion=0、result=`quarantine_retained`、replacement bytesが残存することを
+  real native filesystemで確認する。通常cleanup、root reopen、A/B cross-reservation isolationも
+  `quarantine_retained` とreservation-local retentionを期待する。
 - dispatch 前にこの exclusive marker 作成を行う。`occupied` の場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。marker 作成の path validation は create 操作と同じ safe-relative-path boundary で行い、symlink 経由の destination を許可しない。
 - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
 - `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。runtime が exclusive create、inode identity、private lease、および `ReservedReviewArtifactIo` の全操作を完全に提供できない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。
