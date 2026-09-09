@@ -743,10 +743,12 @@ export type ReviewPostToolUsePendingRecord = {
   readonly kind: "review_post_tooluse_pending";
   readonly parentSessionId: string;
   readonly callId: string;
-  readonly childSessionId: string;
   readonly purpose: "task_review" | "final_review";
   readonly trustedCorrelation: ReviewCorrelation;
-  readonly observedExecution: ObservedReviewExecutionV1;
+  // These fields are omitted when the parent task PostToolUse wins the race
+  // against durable child-session binding.
+  readonly childSessionId?: string;
+  readonly observedExecution?: ObservedReviewExecutionV1;
 };
 
 export type ReviewArtifactReadAttemptRecord = {
@@ -846,7 +848,7 @@ export type ReviewDispatchSlot = {
   `reviewArtifact`、`observedExecution` を要求しない。
 
 - P0 では `ReviewDispatchId` を導入しない。slot の identity は `parentSessionId` と canonical な `ReviewCorrelation` の組み合わせであり、`transitionId` は個々の durable record の event identity に限る。
-- `ReviewDispatchTransitionRecord`、`ReviewCompletionStagingRecord`、`ReviewArtifactFailureStagingRecord`、`ReviewArtifactReadAttemptRecord`、および `ReviewPostToolUsePendingRecord` は review dispatch state の durable SSOT である。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこれらの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`ReviewPostToolUsePendingRecord` は matching event の parent session、call、child-session、purpose、trusted correlation、`ObservedReviewExecutionV1` を保持し、binding 前の到着だけでなく terminalization 前の recovery marker としても使用する。recovery はこれらすべてを current slot / binding と照合し、一つでも不一致なら artifact read や terminalization を再開せず advisory に収束させる。artifact path と worker output は保持しない。`ReviewArtifactReadAttemptRecord` は trusted artifact identity と一回限りの read lease だけを保持し、artifact content は保持しない。`ReviewArtifactFailureStagingRecord` は artifact read / validation failure の terminalReason と trusted identity だけを保持し、artifact content は保持しない。`terminalReason: "completed"` は `artifactConsumption` と組み立て済み `CleanReviewArtifactV1` を必須とする。findings を持つ完了 review は `completed_with_findings`、未完了 result は `review_incomplete` とし、いずれも artifact を durable に保持して restart 後の rework / blocked 判定を再構築できるようにする。
+- `ReviewDispatchTransitionRecord`、`ReviewCompletionStagingRecord`、`ReviewArtifactFailureStagingRecord`、`ReviewArtifactReadAttemptRecord`、および `ReviewPostToolUsePendingRecord` は review dispatch state の durable SSOT である。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこれらの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`ReviewPostToolUsePendingRecord` は matching parent task event の parent session、call、purpose、trusted correlation を必ず保持し、child-session binding が既に durable な場合だけ child-session と `ObservedReviewExecutionV1` を追加で保持する。binding より先に到着した場合は child fields を省略し、binding append 後または restart 時に current slot / call identity と durable binding / observed execution を再検証して同じ completion path を一度だけ再開する。一つでも不一致なら artifact read や terminalization を再開せず advisory に収束させる。artifact path と worker output は保持しない。`ReviewArtifactReadAttemptRecord` は trusted artifact identity と一回限りの read lease だけを保持し、artifact content は保持しない。`ReviewArtifactFailureStagingRecord` は artifact read / validation failure の terminalReason と trusted identity だけを保持し、artifact content は保持しない。`terminalReason: "completed"` は `artifactConsumption` と組み立て済み `CleanReviewArtifactV1` を必須とする。findings を持つ完了 review は `completed_with_findings`、未完了 result は `review_incomplete` とし、いずれも artifact を durable に保持して restart 後の rework / blocked 判定を再構築できるようにする。
 - **terminal physical record** は `ReviewDispatchTransitionRecord { from: "claimed"; to: "terminal" }` 一件とする。既存 `ObservationLogStore.append()` の一回の physical append が atomicity boundary であり、generic transaction / appendBatch は導入しない。terminal reason に応じて、worker outcome (`completed` / `completed_with_findings` / `review_incomplete`) の variant は `parentSessionId`、`transitionId`、trusted `correlation`、`expectedCategory`、`callId`、`terminalReason`、`artifactConsumption { artifactId, digest }`、assembled `ReviewArtifactV1` を一体として保持し、`reviewArtifact.observedExecution` が observed execution provenance を保持する。一方、claimed からの operational failure / unusable / cancellation / artifact read-validation failure (`review_execution_failed` / `lost_conclusive` / `artifact_reservation_unusable` / `cancelled` / `ReviewArtifactFailureReason`) は artifactなしを許可し、pending からの `cancelled` tombstone も `callId`、`artifactConsumption`、`reviewArtifact` を持たない。
 - `review_observed` は別 physical record ではない。terminal physical record の `reviewArtifact` から state projection が導出する review-observed semantic である。したがって replay は terminal record 一件から dispatch terminal state、artifact consumption、authoritative review、review summary を同じ順序で再構築し、`consumed=true / artifact missing` の partial state を表現しない。
 - `null → pending` は directive 発行前、`pending → claimed` は PreToolUse の atomic claim、`claimed → terminal` は matching PostToolUse、conclusive な失敗、unusable reservation、または artifact の read / JSON parse / schema validation failure を staging-first で durable に収束させた後にだけ許可する。Authorization cancellation では `claimed → terminal` と `pending → terminal` の両方を `cancelled` tombstone として許可する。`terminal` record は変更・削除・再利用しない。
@@ -870,7 +872,7 @@ record は追加しない。
 | complete with findings      | `completed_with_findings`  | `ReviewArtifactWithFindingsV1` | `task: rework_required`; `final: final_rework_required`                                   | 実行しない。既知の findings は Gate に委ねず、AcceptanceDecision も発行しない | `task`: 次の implementation で fresh `TaskExecutionRef` / `reviewRound = 1`; `final`: fixes 後に fresh `finalizationAttemptId` / `finalReviewRound + 1` |
 | incomplete                  | `review_incomplete`        | `IncompleteReviewArtifactV1`   | 対応する `review_pending` を blocked のまま保持する                                       | 実行しない                                     | 自動 retry/rework なし                                                                                                                                  |
 | unusable artifact reservation | `artifact_reservation_unusable` | なし                         | `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 retry/rework なし。別 candidate だけを再評価する                                                                                                   |
-| artifact missing            | `artifact_missing`         | なし                         | 対応する `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 review retry / rework / round変更なし。terminal後にcleanupはno-op                                                                                     |
+| artifact missing            | `artifact_missing`         | なし                         | 対応する `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 review retry / rework / round変更なし。terminal後はartifact leafをskipし、identity-validなmatching leaseだけcleanupする |
 | artifact read failure       | `artifact_read_failed`     | なし                         | 対応する `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 review retry / rework / round変更なし。terminal成功後のみcleanupを再試行する                                                                           |
 | artifact JSON invalid       | `artifact_json_invalid`    | なし                         | 対応する `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 review retry / rework / round変更なし。terminal成功後のみcleanupを再試行する                                                                           |
 | artifact schema invalid     | `artifact_schema_invalid`  | なし                         | 対応する `review_pending` / `final_review_pending` を blocked のまま保持する。claimed slot は terminalize する | 実行しない                         | 自動 review retry / rework / round変更なし。terminal成功後のみcleanupを再試行する                                                                           |
@@ -966,14 +968,16 @@ rework だけが fresh `TaskExecutionRef` と `reviewRound = 1` を発行する�
    `task()` 実行は fail-open で継続するが、mandatory review の completion と Acceptance の
    precondition は成立させず、`AcceptanceDecision` を発行しない。protocol violation / binding failure を advisory として記録する。claim
    失敗時は pending slot を消費せず、同じ slot の retry は durable state を再確認してから行う。
-5. matching `PostToolUse` は、parent session、`callId`、purpose、trusted correlation、必要な
-   child-session binding、`ObservedReviewExecutionV1` がすべて一致する場合だけ受理する。parent session と
-   `callId` が current claimed slot に一致する event は、artifact I/O の前に
+5. matching `PostToolUse` は、parent session と `callId` を current claimed slot に照合してから受理する。
+   purpose と trusted correlation は event から読まず、slot と durable `TaskCallBinding` から解決する。
+   parent session と `callId` が一致する parent `task` event は、artifact I/O の前に
    `ReviewPostToolUsePendingRecord` として既存 observation log に一度だけ記録する。child-session binding
-   がまだ durable でない場合は artifact を読まずに `awaiting_child_binding` として返し、binding append
-   成功後、または restart recovery 時にこの pending record を再投影して同じ completion path を実行する。
-   slot / parent / call identity が一致しない event は stale advisory のみとし、pending marker を作らない。
-   binding が durable になった後、Justice は terminalization 前に
+   または `ObservedReviewExecutionV1` がまだ durable でない場合は artifact を読まずに
+   `awaiting_child_binding` として返し、binding append 成功後、または restart recovery 時にこの pending
+   record を再投影して同じ completion path を実行する。binding が durable になった後、Justice は
+   child-session identity と observed execution を current slot / call identity に照合してから
+   authoritative completion として扱う。slot / parent / call identity が一致しない event は stale advisory
+   のみとし、pending marker を作らない。binding が durable になった後、Justice は terminalization 前に
    `ReviewCompletionStagingRecord` として `ReviewCompletionStaging` を durable に記録する。artifact の consume marker、
    assembled `ReviewArtifactV1`、`claimed → terminal` transition を含む terminal physical record は同一の
    durable commit とし、projection が `review_observed` semantic を導出する前に Acceptance の入力へ結果を渡さない。最終 commit が失敗した場合は
@@ -1026,7 +1030,7 @@ artifact reservation の SSOT にはしない。
   `cancelled` tombstone の場合も、同じ staging / reservation identity を持つ場合だけ tombstone の durable
   success 後に cleanup する。tombstone append が失敗した場合は cleanup せず staging と artifact を保持する。
   cleanup failure は immutable terminal、Gate、Acceptance を rollback しない。
-- `callId`、parent session、purpose、trusted correlation、child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
+- `callId`、parent session、purpose、trusted correlation、または durable child-session binding のいずれかが current claimed slot と一致しない `PostToolUse` は stale event として advisory のみを記録する。parent session / `callId` だけが一致し child-session binding がまだない event は、例外として `ReviewPostToolUsePendingRecord` に保持し、artifact を消費せず `awaiting_child_binding` のままにする。artifact を消費せず、`ReviewArtifactV1`、Gate、Acceptance、current review round に影響させない。
 - log の読み込み・投影・復元に失敗した場合、Runtime は fail-open で継続するが、未復元の binding や review completion を authoritative とせず、Acceptance / Plan completion の precondition を未成立にする。この pre-Gate condition で `AcceptanceDecision` は発行しない。
 - completion staging が durable でも Authorization terminality が優先する。terminal Authorization を検出した recovery / completion は staged artifact を `accepted` / `complete` に昇格せず、対応 slot を `cancelled` として閉じる。staging artifact の cleanup は terminal tombstone の durable success 後に限る best-effort / idempotent operation とし、reapproval の新しい authorizationId へ移植しない。
 - **Post-terminal outcome application**: matching terminal physical record が既に durable であっても、対応する downstream lifecycle outcome が durable / projected でなければ、recovery は terminal record を再appendせず outcome mapping だけを同一 parent-session operation で再開する。`completed` は durable current `active` Authorization の場合だけ task を `review_pending → gate_pending`、final を `final_review_pending → final_gate_pending` へ一度だけ遷移させ、current identity の既存 Gate path を再開する。`completed_with_findings` は Gate を呼ばず、`rework_required` または `final_rework_required` が未成立の場合だけ一度だけ成立させる。`review_incomplete` と artifact read / validation failure は blocked が正規状態であり、lifecycle、Gate、rework、retry の追加 mutation を行わない。terminal / missing / uncertain Authorization はこの mapping より優先し、terminal review record を保持したまま Gate、Acceptance、Progress、positive lifecycle transition を生成しない。
@@ -1093,6 +1097,11 @@ export type ReviewArtifactInodeIdentity = {
   readonly inode: string;
 };
 
+export type ReviewArtifactCleanupStatus =
+  | "cleaned"
+  | "replacement_retained"
+  | "cleanup_incomplete";
+
 // The descriptor is the only durable input accepted when a provider is
 // reopened after process restart. It deliberately excludes status and
 // review-correlation fields.
@@ -1114,7 +1123,7 @@ export type ReservedReviewArtifactIo = {
   ) => Promise<string>;
   readonly cleanup: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ) => Promise<"cleaned" | "replacement_retained">;
+  ) => Promise<ReviewArtifactCleanupStatus>;
 };
 
 // This reason is an internal host-boundary discriminant. It is not user-facing
@@ -1143,9 +1152,9 @@ export type ReviewArtifactWriteSkipReason =
 - v4.0.0 の supported production provider は `LinuxOpenat2ReviewArtifactProvider` に固定する。provider の TypeScript owner は `src/runtime/linux-review-artifact-provider.ts`、native owner は `native/review-artifact-linux/src/lib.rs`、N-API addon の出力は `dist/native/justice_review_artifact_linux.linux-x64-gnu.node` とする。これは Bun の Node-API addon loading (`require()` / `process.dlopen`) を使用し、`bun:ffi` は experimental のため使用しない。supported deployment は Bun 1.x、Linux x86_64、glibc、Linux kernel 5.6 以上、`openat2(2)` と `renameat2(2)` が利用可能な環境に限定する。Node-API addon のロード失敗、Linux 以外、x86_64 以外、glibc 以外、kernel primitive の `ENOSYS` / `EINVAL`、または capability probe の不一致は unsupported deployment とする。
 - provider の native API は `openReviewArtifactRoot(rootDir)`、`NativeReviewArtifactRoot.createExclusiveMarker(artifactPath)`、`NativeReviewArtifactRoot.openExistingReservation(descriptor)`、`NativeReviewArtifactRoot.writeExisting(reservation, bytes)`、`NativeReviewArtifactRoot.readOnce(reservation)`、`NativeReviewArtifactRoot.cleanup(reservation)`、`NativeReviewArtifactRoot.close()` に固定する。`openExistingReservation` は restart 後に durable な `artifactPath`、`leasePath`、`artifactIdentity` から新しい reservation handle を再構築し、両 leaf の descriptor-relative identity を検証できない場合は handle を返さない。native root object は workspace root の directory descriptor を保持し、restart 後は同じ canonical root から新しい descriptorを開く。TypeScript factory `createLinuxOpenat2ReviewArtifactProvider(rootDir)` は、optional `FileWriter.createExclusiveMarker` callback と `ReservedReviewArtifactIo` を一つの runtime provider object として返す。`NodeFileSystem` は supported provider がある場合だけその二つを公開し、他の `FileReader` / `FileWriter` implementerには要求しない。
 - provider は Linux `openat2(2)` の `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` と directory descriptor を使い、workspace root、`.justice`、`reviews`、`.leases`、`.quarantine` を各操作で descriptor-relative にanchorする。exclusive leaf は `O_CREAT | O_EXCL | O_NOFOLLOW` で作成し、`fstat` の `st_dev` / `st_ino` を取得した後、`linkat(2)` で private leaseを同じinodeへ作成する。`writeExisting` / `readOnce` は各操作で現在の artifact leaf と lease leaf を no-follow で開き、両 descriptor のidentityを durable reservation と比較してから descriptorへ書込み・読込みを行い、pathname `readFile` / `writeFile` を使用しない。
-- `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをrandomなprivate quarantineへ原子的に退避し、quarantine descriptorのidentityを検証する。一致した元inodeだけをquarantineから `unlinkat(2)` で削除する。差し替えinode、identity検証エラー、またはquarantineへの退避後に元leafが再作成された場合は、quarantine leafを元pathへ `RENAME_NOREPLACE` で戻す。restore先が占有されている場合はquarantine leafを保持し、どのreplacementも上書き・削除せず `replacement_retained` と advisoryを返す。private leaseも同じidentity-safe手順で扱い、check-then-unlink fallbackは持たない。artifactとleaseのどちらか一方でも検証不能またはrestore競合になった場合、未検証leafは全て保持する。
+- `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをrandomなprivate quarantineへ原子的に退避し、quarantine descriptorのidentityを検証する。一致した元inodeだけをquarantineから `unlinkat(2)` で削除する。差し替えinode、identity検証エラー、またはquarantineへの退避後に元leafが再作成された場合は、quarantine leafを元pathへ `RENAME_NOREPLACE` で戻す。restore先が占有されている場合はquarantine leafを保持し、どのreplacementも上書き・削除せず `replacement_retained` と advisoryを返す。private leaseも同じidentity-safe手順で扱い、check-then-unlink fallbackは持たない。artifactとleaseの両方をquarantineへ移し、両方のquarantine descriptorを再検証するまでは、いずれのquarantine leafも削除してはならない。片方のquarantine、再検証、またはrestoreが失敗した場合は、移動済みleafを全て `RENAME_NOREPLACE` で戻す。restore競合・replacement検出は `replacement_retained`、それ以外の不確実性は `cleanup_incomplete` として返し、未検証leafとquarantine leafを保持する。
 - runtime は review-artifact capability を、上記providerが予約作成・identity取得・private lease・`writeExisting`・`readOnce`・`cleanup` の全てを提供できる場合にだけ公開する。provider probeが失敗した場合、`createExclusiveMarker` と `ReservedReviewArtifactIo` は公開せず、reservation portは `artifact_storage_unavailable` の `unusable` reservationを返す。workerにはartifact pathを渡さず、通常のplugin処理はfail-openで継続する。このunsupported runtimeはP0 completion criterionの免除ではなく、supported production deploymentでproviderが利用可能であることをv4.0.0の必須完了条件とする。
-- `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path と private lease のいずれも削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。runtime が原子的な identity-verified deletion を提供する場合に限り、private lease は元の inode を保持したまま best-effort で削除してよい。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
+- `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path と private lease のいずれも削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。runtime が原子的な identity-verified deletion を提供する場合に限り、private lease は元の inode を保持したまま best-effort で削除してよい。`cleanup` の結果は、artifactとleaseの両方をidentity検証済みで削除できた場合だけ `cleaned`、replacementまたはrestore競合でreplacement/quarantineを保持した場合は `replacement_retained`、一方だけ削除済み・削除失敗・検証不能などpaired cleanupの完了を証明できない場合は `cleanup_incomplete` とする。`cleanup_incomplete` からの再試行は残存するreservation/quarantineだけを対象にし、既に削除したleafの存在を仮定せず、replacementを上書き・削除しない。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
 - dispatch 前にこの exclusive marker 作成を行う。`occupied` の場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。marker 作成の path validation は create 操作と同じ safe-relative-path boundary で行い、symlink 経由の destination を許可しない。
 - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
 - `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。runtime が exclusive create、inode identity、private lease、および `ReservedReviewArtifactIo` の全操作を完全に提供できない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。
@@ -1917,12 +1926,21 @@ canonical package、hook、final wire の全境界で `run_in_background = false
 PostToolUse は call ID から durable `TaskCallBinding` を解決し、purpose を最初に分岐する。
 
 - `implementation` は WorkerReported、Evidence、implementation lifecycle の path に進む。
-- `task_review` / `final_review` は matching parent、call、trusted correlation、category、
-  child binding を検証し、Review Completion の artifact consume / terminalization path に進む。
+- `task_review` / `final_review` は matching parent、call、trusted correlation、category を
+  durable projectionから検証し、child binding が存在する場合だけ Review Completion の artifact
+  consume / terminalization path に進む。binding がまだない場合は pending marker を残して
+  `awaiting_child_binding` で止める。
 - stale call、old round、purpose mismatch、unknown child relation は advisory-only であり、
   artifact read、ReviewArtifact、Gate、Acceptance、Progress を発生させない。
 - review purpose を implementation feedback、implementation completion、generic task summary
   として処理してはならない。side-effecting completion は指定された直列化境界内で行う。
+
+Review completion is triggered by the parent `task` tool's matching `PostToolUse` event
+(`parentSessionId` plus the claimed parent `callId`). The child worker's artifact `write` is a
+separate `PreToolUse` operation, and its `PostToolUse` event is never passed to the completion
+consumer. If the parent `PostToolUse` arrives before `DelegatedExecutionBinding`, the pending
+record omits child-specific fields and the consumer returns `awaiting_child_binding` without
+reading the artifact.
 
 Task ownership is explicit: Task 3.4 owns the single Review Dispatch composition root,
 directive delivery sink, and review-first PreToolUse claim route. Task 3.6 owns the

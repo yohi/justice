@@ -125,8 +125,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts
-git commit -m "feat: execution roleをsp categoryへ完全対応"
+GIT_MASTER=1 git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts
+GIT_MASTER=1 git commit -m "feat: execution roleをsp categoryへ完全対応"
 ```
 
 ### Task 1.2: Check required `sp-*` categories in doctor
@@ -248,8 +248,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
-git commit -m "feat: doctorでsp category設定を検査"
+GIT_MASTER=1 git add src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git commit -m "feat: doctorでsp category設定を検査"
 ```
 
 ---
@@ -412,8 +412,8 @@ The commit scope explicitly includes the shared `src/core/types.ts` exports for
 that type contract to a later task or commit.
 
 ```bash
-git add src/core/plan-fingerprint.ts src/core/error-annotation.ts src/core/types.ts src/core/v2/observation-model.ts src/runtime/validation.ts tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts
-git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
+GIT_MASTER=1 git add src/core/plan-fingerprint.ts src/core/error-annotation.ts src/core/types.ts src/core/v2/observation-model.ts src/runtime/validation.ts tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts
+GIT_MASTER=1 git commit -m "feat: semantic plan fingerprintとcanonical snapshotを追加"
 ```
 
 ### Task 2.2: Persist and hydrate the single authorization record
@@ -2395,7 +2395,7 @@ same four test paths shown in this task.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add \
+GIT_MASTER=1 git add \
   src/core/atomic-persistence.ts \
   src/core/plan-authorization.ts \
   src/core/justice-plugin.ts \
@@ -2404,7 +2404,7 @@ git add \
   tests/core/plan-authorization.test.ts \
   tests/hooks/plan-bridge-authorization.test.ts \
   tests/core/justice-plugin.test.ts
-git commit -m "feat: plan authorizationをdurable bindingへ置換"
+GIT_MASTER=1 git commit -m "feat: plan authorizationをdurable bindingへ置換"
 ```
 
 ### Task 2.3: Parse and execute explicit authorization cancellation
@@ -2491,8 +2491,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/implement-command.ts src/core/types.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
-git commit -m "feat: plan authorizationのcancelを追加"
+GIT_MASTER=1 git add src/core/implement-command.ts src/core/types.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
+GIT_MASTER=1 git commit -m "feat: plan authorizationのcancelを追加"
 ```
 
 ---
@@ -3073,8 +3073,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/task-lifecycle.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts
-git commit -m "feat: lifecycle replayをidempotentに処理"
+GIT_MASTER=1 git add src/core/task-lifecycle.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts
+GIT_MASTER=1 git commit -m "feat: lifecycle replayをidempotentに処理"
 ```
 
 ### Task 3.2: Add task and plan-scoped Gate evaluation
@@ -5013,8 +5013,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/acceptance-decision.ts src/core/v2/decision-model.ts src/core/v2/gate-definition.ts src/core/v2/default-gates.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/core/v2/state-projection.ts src/core/v2/persistence-redaction.ts src/runtime/validation.ts src/hooks/observation-handler.ts src/runtime/justice-tools.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts
-git commit -m "feat: Final Gateをplan scopeで評価"
+GIT_MASTER=1 git add src/core/acceptance-decision.ts src/core/v2/decision-model.ts src/core/v2/gate-definition.ts src/core/v2/default-gates.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/core/v2/state-projection.ts src/core/v2/persistence-redaction.ts src/runtime/validation.ts src/hooks/observation-handler.ts src/runtime/justice-tools.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts
+GIT_MASTER=1 git commit -m "feat: Final Gateをplan scopeで評価"
 ```
 
 ---
@@ -5051,8 +5051,8 @@ Record the observed event/API name, exact parent-call field path, exact child-se
 - [ ] **Step 4: Commit after approval**
 
 ```bash
-git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md
-git commit -m "test: child session correlation runtime境界を検証"
+GIT_MASTER=1 git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md
+GIT_MASTER=1 git commit -m "test: child session correlation runtime境界を検証"
 ```
 
 ### Task 3.3a: Prove the supported Linux Review Artifact provider before wiring
@@ -5066,9 +5066,9 @@ git commit -m "test: child session correlation runtime境界を検証"
 - Create `docs/agents/review-artifact-linux-provider.md` with the exact probe output and the supported deployment statement.
 - Test `tests/runtime/review-artifact-linux-probe.test.ts`.
 
-**Requirement:**
+**Requirement:** F-045, F-047.
 
-The probe is a hard gate, not a best-effort experiment. It must prove the exact primitives that the production provider will expose before Task 3.3b or Task 3.4 starts. The probe must not use `bun:ffi`, `realpath`-then-path-operation sequences, pathname-only `readFile`/`writeFile`, or a check-then-unlink cleanup fallback.
+The probe is a hard gate, not a best-effort experiment. It must prove the exact primitives that the production provider will expose before Task 3.3b or Task 3.4 starts. The probe must not use `bun:ffi`, `realpath`-then-path-operation sequences, pathname-only `readFile`/`writeFile`, or a check-then-unlink cleanup fallback. The same task owns the supported host CLI provisioning: the built image must contain exactly `opencode-ai@1.18.29` under the `bun` user's global bin, and the image verification must fail if `opencode --version` is not exactly `1.18.29`.
 
 **Implementation steps:**
 
@@ -5097,9 +5097,13 @@ WORKDIR /workspace
 RUN chown -R "$USERNAME:$USERNAME" /workspace
 
 USER $USERNAME
+ENV BUN_INSTALL=/home/bun/.bun
 ENV RUSTUP_HOME=/home/bun/.rustup
 ENV CARGO_HOME=/home/bun/.cargo
-ENV PATH=/home/bun/.cargo/bin:${PATH}
+ENV PATH=/home/bun/.bun/bin:/home/bun/.cargo/bin:${PATH}
+
+RUN bun add --global --exact opencode-ai@1.18.29
+RUN test "$(opencode --version)" = "1.18.29"
 
 RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
     | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
@@ -5145,6 +5149,12 @@ The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values. E
 run as `bun` and must verify the toolchain token (rustup may append a source suffix for a directory
 override):
 
+The OpenCode CLI is provisioned in this same Dockerfile layer, not downloaded by the runtime spike or
+installed opportunistically during a test. `BUN_INSTALL` and `PATH` must point at the `bun` user's global
+bin directory, and `bun add --global --exact opencode-ai@1.18.29` plus the version assertion above must
+fail the image build if the exact host CLI is unavailable. Task 3.3c consumes this already-installed binary;
+it must not introduce a second installer, a floating version, or a host-version compatibility range.
+
 ```bash
 test "$(whoami)" = "bun"
 command -v rustup
@@ -5167,7 +5177,7 @@ evidence for the `bun` execution environment.
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && test "$(rustup show active-toolchain | cut -d" " -f1)" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v opencode && test "$(opencode --version)" = "1.18.29" && command -v rustup && command -v cargo && command -v rustc && test "$(rustup show active-toolchain | cut -d" " -f1)" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version'
 devcontainer exec --workspace-folder . bun spikes/review-artifact-linux/verify.ts
 devcontainer exec --workspace-folder . bun run test -- tests/runtime/review-artifact-linux-probe.test.ts
 ```
@@ -5177,8 +5187,8 @@ The first command must pass on the supported Linux x86_64 deployment. The second
 **Commit:**
 
 ```bash
-git add spikes/review-artifact-linux/probe.c spikes/review-artifact-linux/verify.ts .devcontainer/Dockerfile docs/agents/review-artifact-linux-provider.md tests/runtime/review-artifact-linux-probe.test.ts
-git commit -m "test: gate review artifact provider on Linux primitives"
+GIT_MASTER=1 git add spikes/review-artifact-linux/probe.c spikes/review-artifact-linux/verify.ts .devcontainer/Dockerfile .devcontainer/devcontainer.json docs/agents/review-artifact-linux-provider.md tests/runtime/review-artifact-linux-probe.test.ts
+GIT_MASTER=1 git commit -m "test: gate review artifact provider on Linux primitives"
 ```
 
 ### Task 3.3b: Implement the production LinuxOpenat2ReviewArtifactProvider
@@ -5195,7 +5205,7 @@ git commit -m "test: gate review artifact provider on Linux primitives"
 - Create `tests/runtime/linux-review-artifact-provider.test.ts`.
 - Create `tests/runtime/linux-review-artifact-provider-security.test.ts`.
 
-**Requirement:**
+**Requirement:** JUS-P0-04, INV-21, Design §4.10, F-045, F-048.
 
 The implementation must be the concrete provider named by the design: `LinuxOpenat2ReviewArtifactProvider`. The native crate package name is `justice_review_artifact_linux`, and the release build must produce `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`. The TypeScript owner must load only that bundled addon on the supported deployment; it must not silently substitute a generic filesystem backend, `bun:ffi`, or a pathname-based implementation.
 
@@ -5261,6 +5271,13 @@ probeReviewArtifactCapabilities() -> {
   renameat2: boolean
 }
 ```
+
+`CleanupResult.status` is the exact `ReviewArtifactCleanupStatus` union from Design §4.10:
+`"cleaned"`, `"replacement_retained"`, or `"cleanup_incomplete"`. `"cleaned"` is allowed only
+after both the artifact and private lease have been identity-verified and deleted. A replacement or
+restore collision returns `"replacement_retained"`; any paired-cleanup state that cannot prove both
+leaves were handled, including a one-sided delete, returns `"cleanup_incomplete"` and leaves every
+remaining quarantine or replacement leaf untouched.
 
 The JavaScript descriptor is exactly `{ artifactPath, leasePath, artifactIdentity }`. Rust may keep
 `artifact_path`, `lease_path`, and `artifact_identity` internally, but the N-API generated JavaScript
@@ -5783,9 +5800,27 @@ pub struct NativeReservationHandle {
     identity: NativeIdentity,
 }
 
+enum RetentionReason {
+    Replacement,
+    Incomplete,
+}
+
 enum QuarantineOutcome {
     Moved { target_dir: RawFd, target_leaf: String, quarantine_leaf: String },
-    Retained,
+    AlreadyAbsent,
+    Retained { reason: RetentionReason },
+}
+
+enum ExistingQuarantine {
+    None,
+    Matching(String),
+    Replacement,
+}
+
+enum DeleteOutcome {
+    Deleted,
+    ReplacementRetained,
+    Incomplete,
 }
 
 #[napi]
@@ -5960,25 +5995,99 @@ impl NativeReviewArtifactRoot {
                     quarantine_leaf: lease_quarantine,
                 },
             ) => {
-                if delete_quarantine(&state, &artifact_quarantine, &reservation.identity)
-                    && delete_quarantine(&state, &lease_quarantine, &reservation.identity)
-                {
-                    "cleaned"
+                // Do not restore a pair after one delete: the first delete may have
+                // succeeded, so a later failure is an incomplete paired cleanup.
+                let artifact_delete = delete_quarantine(
+                    &state,
+                    artifact_dir,
+                    &artifact_target,
+                    &artifact_quarantine,
+                    &reservation.identity,
+                );
+                let lease_delete = if matches!(artifact_delete, DeleteOutcome::Deleted) {
+                    delete_quarantine(
+                        &state,
+                        lease_dir,
+                        &lease_target,
+                        &lease_quarantine,
+                        &reservation.identity,
+                    )
                 } else {
-                    restore_quarantine(&state, artifact_dir, &artifact_target, &artifact_quarantine);
-                    restore_quarantine(&state, lease_dir, &lease_target, &lease_quarantine);
-                    "replacement_retained"
+                    DeleteOutcome::Incomplete
+                };
+                match (artifact_delete, lease_delete) {
+                    (DeleteOutcome::Deleted, DeleteOutcome::Deleted) => "cleaned",
+                    (DeleteOutcome::ReplacementRetained, _) | (_, DeleteOutcome::ReplacementRetained) => {
+                        "replacement_retained"
+                    }
+                    _ => "cleanup_incomplete",
                 }
             }
-            (QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf }, QuarantineOutcome::Retained) => {
-                restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
-                "replacement_retained"
+            (
+                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
+                QuarantineOutcome::Retained { reason },
+            ) => {
+                let restore = restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                match (reason, restore) {
+                    (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
+                        "replacement_retained"
+                    }
+                    (_, RestoreOutcome::Failed) => "cleanup_incomplete",
+                    (RetentionReason::Incomplete, RestoreOutcome::Restored) => "cleanup_incomplete",
+                }
             }
-            (QuarantineOutcome::Retained, QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf }) => {
-                restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
-                "replacement_retained"
+            (
+                QuarantineOutcome::Retained { reason },
+                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
+            ) => {
+                let restore = restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                match (reason, restore) {
+                    (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
+                        "replacement_retained"
+                    }
+                    (_, RestoreOutcome::Failed) => "cleanup_incomplete",
+                    (RetentionReason::Incomplete, RestoreOutcome::Restored) => "cleanup_incomplete",
+                }
             }
-            (QuarantineOutcome::Retained, QuarantineOutcome::Retained) => "replacement_retained",
+            (
+                QuarantineOutcome::Retained { reason: artifact_reason },
+                QuarantineOutcome::Retained { reason: lease_reason },
+            ) => match (artifact_reason, lease_reason) {
+                (RetentionReason::Replacement, _) | (_, RetentionReason::Replacement) => {
+                    "replacement_retained"
+                }
+                _ => "cleanup_incomplete",
+            },
+            (QuarantineOutcome::AlreadyAbsent, QuarantineOutcome::AlreadyAbsent) => "cleaned",
+            (
+                QuarantineOutcome::AlreadyAbsent,
+                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
+            )
+            | (
+                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
+                QuarantineOutcome::AlreadyAbsent,
+            ) => match delete_quarantine(
+                &state,
+                target_dir,
+                &target_leaf,
+                &quarantine_leaf,
+                &reservation.identity,
+            ) {
+                DeleteOutcome::Deleted => "cleaned",
+                DeleteOutcome::ReplacementRetained => "replacement_retained",
+                DeleteOutcome::Incomplete => "cleanup_incomplete",
+            },
+            (
+                QuarantineOutcome::AlreadyAbsent,
+                QuarantineOutcome::Retained { reason },
+            )
+            | (
+                QuarantineOutcome::Retained { reason },
+                QuarantineOutcome::AlreadyAbsent,
+            ) => match reason {
+                RetentionReason::Replacement => "replacement_retained",
+                RetentionReason::Incomplete => "cleanup_incomplete",
+            },
         };
         Ok(NativeCleanupResult { status: status.to_string() })
     }
@@ -6166,6 +6275,10 @@ fn same_identity(left: &NativeIdentity, right: &NativeIdentity) -> bool {
     left.device == right.device && left.inode == right.inode
 }
 
+fn identity_matches(fd: RawFd, expected: &NativeIdentity) -> Result<bool> {
+    Ok(same_identity(&fstat_identity(fd)?, expected))
+}
+
 fn quarantine_one(
     state: &mut RootState,
     target_dir: RawFd,
@@ -6173,6 +6286,14 @@ fn quarantine_one(
     expected: &NativeIdentity,
     label: &str,
 ) -> QuarantineOutcome {
+    let existing_quarantine = match find_matching_quarantine(state, label, expected) {
+        Ok(ExistingQuarantine::None) => None,
+        Ok(ExistingQuarantine::Matching(leaf)) => Some(leaf),
+        Ok(ExistingQuarantine::Replacement) => {
+            return QuarantineOutcome::Retained { reason: RetentionReason::Replacement };
+        }
+        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
+    };
     let current = match openat2(
         target_dir,
         target_leaf,
@@ -6180,15 +6301,36 @@ fn quarantine_one(
         0,
         OPEN_RESOLVE,
     ) {
-        Ok(fd) => fd,
-        Err(_) => return QuarantineOutcome::Retained,
+        Ok(fd) => {
+            if existing_quarantine.is_some() {
+                return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
+            }
+            fd
+        }
+        Err(_) if current_errno() == libc::ENOENT => {
+            return match existing_quarantine {
+                Some(quarantine_leaf) => QuarantineOutcome::Moved {
+                    target_dir,
+                    target_leaf: target_leaf.to_string(),
+                    quarantine_leaf,
+                },
+                None => QuarantineOutcome::AlreadyAbsent,
+            };
+        }
+        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
     };
-    if verify_identity(current.as_raw_fd(), expected).is_err() {
-        return QuarantineOutcome::Retained;
+    match identity_matches(current.as_raw_fd(), expected) {
+        Ok(true) => {}
+        Ok(false) => {
+            return QuarantineOutcome::Retained { reason: RetentionReason::Replacement };
+        }
+        Err(_) => {
+            return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
+        }
     }
     let token = match random_token() {
         Ok(token) => token,
-        Err(_) => return QuarantineOutcome::Retained,
+        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
     };
     let quarantine_leaf = format!(".{label}-{token:x}-{}", state.next_quarantine_id);
     state.next_quarantine_id = state.next_quarantine_id.wrapping_add(1);
@@ -6201,7 +6343,7 @@ fn quarantine_one(
     )
     .is_err()
     {
-        return QuarantineOutcome::Retained;
+        return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
     }
     let quarantined = match openat2(
         state.quarantine.as_raw_fd(),
@@ -6212,13 +6354,29 @@ fn quarantine_one(
     ) {
         Ok(fd) => fd,
         Err(_) => {
-            restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf);
-            return QuarantineOutcome::Retained;
+            let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+                RestoreOutcome::Collision => RetentionReason::Replacement,
+                RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
+            };
+            return QuarantineOutcome::Retained { reason };
         }
     };
-    if verify_identity(quarantined.as_raw_fd(), expected).is_err() {
-        restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf);
-        return QuarantineOutcome::Retained;
+    let quarantine_matches = match identity_matches(quarantined.as_raw_fd(), expected) {
+        Ok(matches) => matches,
+        Err(_) => {
+            let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+                RestoreOutcome::Collision => RetentionReason::Replacement,
+                RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
+            };
+            return QuarantineOutcome::Retained { reason };
+        }
+    };
+    if !quarantine_matches {
+        let reason = match restore_quarantine(state, target_dir, target_leaf, &quarantine_leaf) {
+            RestoreOutcome::Collision => RetentionReason::Replacement,
+            RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
+        };
+        return QuarantineOutcome::Retained { reason };
     }
     QuarantineOutcome::Moved {
         target_dir,
@@ -6227,17 +6385,128 @@ fn quarantine_one(
     }
 }
 
-fn restore_quarantine(state: &RootState, target_dir: RawFd, target_leaf: &str, quarantine_leaf: &str) {
-    let _ = renameat2(
+fn find_matching_quarantine(
+    state: &RootState,
+    label: &str,
+    expected: &NativeIdentity,
+) -> Result<ExistingQuarantine> {
+    let prefix = format!(".{label}-");
+    let mut matching: Option<String> = None;
+    let mut saw_replacement = false;
+    for leaf in read_directory_entries(state.quarantine.as_raw_fd())? {
+        if !leaf.starts_with(&prefix) {
+            continue;
+        }
+        let fd = match openat2(
+            state.quarantine.as_raw_fd(),
+            &leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        ) {
+            Ok(fd) => fd,
+            Err(_) if current_errno() == libc::ENOENT => continue,
+            Err(error) => return Err(error),
+        };
+        let actual = fstat_identity(fd.as_raw_fd())?;
+        if same_identity(&actual, expected) {
+            if matching.replace(leaf).is_some() {
+                return Err(error(Status::GenericFailure, "cleanup_incomplete", libc::EIO));
+            }
+        } else {
+            saw_replacement = true;
+        }
+    }
+    if saw_replacement {
+        return Ok(ExistingQuarantine::Replacement);
+    }
+    Ok(match matching {
+        Some(leaf) => ExistingQuarantine::Matching(leaf),
+        None => ExistingQuarantine::None,
+    })
+}
+
+fn read_directory_entries(dir: RawFd) -> Result<Vec<String>> {
+    let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(error_for_errno("fcntl", current_errno()));
+    }
+    let duplicate = unsafe { OwnedFd::from_raw_fd(duplicate) };
+    let mut buffer = vec![0_u8; 8192];
+    let mut entries = Vec::new();
+    const DIRENT64_HEADER_SIZE: usize = size_of::<u64>() + size_of::<i64>() + size_of::<u16>() + size_of::<u8>();
+    loop {
+        let count = unsafe {
+            libc::syscall(
+                libc::SYS_getdents64,
+                duplicate.as_raw_fd(),
+                buffer.as_mut_ptr(),
+                buffer.len(),
+            )
+        };
+        if count == 0 {
+            return Ok(entries);
+        }
+        if count < 0 {
+            return Err(error_for_errno("getdents64", current_errno()));
+        }
+        let count = usize::try_from(count)
+            .map_err(|_| error(Status::GenericFailure, "cleanup_incomplete", libc::EIO))?;
+        let mut offset = 0_usize;
+        while offset < count {
+            if count - offset < DIRENT64_HEADER_SIZE {
+                return Err(error(Status::GenericFailure, "cleanup_incomplete", libc::EIO));
+            }
+            let record_length = usize::from(u16::from_ne_bytes([
+                buffer[offset + 16],
+                buffer[offset + 17],
+            ]));
+            if record_length < DIRENT64_HEADER_SIZE || offset + record_length > count {
+                return Err(error(Status::GenericFailure, "cleanup_incomplete", libc::EIO));
+            }
+            let name_bytes =
+                &buffer[offset + DIRENT64_HEADER_SIZE..offset + record_length];
+            let name_end = name_bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .ok_or_else(|| error(Status::GenericFailure, "cleanup_incomplete", libc::EIO))?;
+            let name = std::str::from_utf8(&name_bytes[..name_end])
+                .map_err(|_| error(Status::GenericFailure, "cleanup_incomplete", libc::EILSEQ))?;
+            if name != "." && name != ".." {
+                entries.push(name.to_string());
+            }
+            offset += record_length;
+        }
+    }
+}
+
+enum RestoreOutcome {
+    Restored,
+    Collision,
+    Failed,
+}
+
+fn restore_quarantine(state: &RootState, target_dir: RawFd, target_leaf: &str, quarantine_leaf: &str) -> RestoreOutcome {
+    match renameat2(
         state.quarantine.as_raw_fd(),
         quarantine_leaf,
         target_dir,
         target_leaf,
         RENAME_NOREPLACE,
-    );
+    ) {
+        Ok(()) => RestoreOutcome::Restored,
+        Err(_) if current_errno() == libc::EEXIST => RestoreOutcome::Collision,
+        Err(_) => RestoreOutcome::Failed,
+    }
 }
 
-fn delete_quarantine(state: &RootState, quarantine_leaf: &str, expected: &NativeIdentity) -> bool {
+fn delete_quarantine(
+    state: &RootState,
+    target_dir: RawFd,
+    target_leaf: &str,
+    quarantine_leaf: &str,
+    expected: &NativeIdentity,
+) -> DeleteOutcome {
     let fd = match openat2(
         state.quarantine.as_raw_fd(),
         quarantine_leaf,
@@ -6246,12 +6515,34 @@ fn delete_quarantine(state: &RootState, quarantine_leaf: &str, expected: &Native
         OPEN_RESOLVE,
     ) {
         Ok(fd) => fd,
-        Err(_) => return false,
+        Err(_) => return DeleteOutcome::Incomplete,
     };
     if verify_identity(fd.as_raw_fd(), expected).is_err() {
-        return false;
+        return DeleteOutcome::ReplacementRetained;
     }
-    unlinkat(state.quarantine.as_raw_fd(), quarantine_leaf, 0).is_ok()
+    match target_is_absent(target_dir, target_leaf) {
+        Ok(true) => {}
+        Ok(false) => return DeleteOutcome::ReplacementRetained,
+        Err(_) => return DeleteOutcome::Incomplete,
+    }
+    match unlinkat(state.quarantine.as_raw_fd(), quarantine_leaf, 0) {
+        Ok(()) => DeleteOutcome::Deleted,
+        Err(_) => DeleteOutcome::Incomplete,
+    }
+}
+
+fn target_is_absent(target_dir: RawFd, target_leaf: &str) -> Result<bool> {
+    match openat2(
+        target_dir,
+        target_leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    ) {
+        Ok(_) => Ok(false),
+        Err(_) if current_errno() == libc::ENOENT => Ok(true),
+        Err(error) => Err(error),
+    }
 }
 
 fn write_all(fd: RawFd, bytes: &[u8]) -> Result<()> {
@@ -6436,9 +6727,11 @@ the syscall, validation, ownership, and error behavior that must be copied into 
 `close()`; no raw descriptor may cross into TypeScript. `openat2` must
 use `O_CLOEXEC`, `O_NOFOLLOW`, `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, and
 descriptor-relative directory fds. `quarantine_one` must use `renameat2(..., RENAME_NOREPLACE)`, verify
-the quarantine fd identity before `unlinkat`, and restore an unverified replacement only with another
-`RENAME_NOREPLACE`. It must return `replacement_retained` on mismatch, missing entry, restore collision,
-or verification error without deleting either candidate.
+the quarantine fd identity before `unlinkat`, scan the private quarantine directory by descriptor and
+identity when a prior cleanup left a quarantine leaf, and restore an unverified replacement only with
+another `RENAME_NOREPLACE`. A target missing with no matching quarantine is `AlreadyAbsent`; a target or
+quarantine lookup/verification uncertainty is `cleanup_incomplete`; a mismatch or restore collision is
+`replacement_retained`. No outcome may delete an unverified target or quarantine candidate.
 
 Native errors have this fixed mapping: `EEXIST` from marker creation is `artifact_occupied`; `ENOENT`
 from an existing-reservation open is `artifact_missing`; `ELOOP`, `EXDEV`, `EINVAL`, and `ENOTDIR` are
@@ -6492,7 +6785,9 @@ type NativeRoot = Readonly<{
   }): NativeHandle;
   writeExisting(handle: NativeHandle, bytes: Buffer): void;
   readOnce(handle: NativeHandle): Buffer;
-  cleanup(handle: NativeHandle): { readonly status: "cleaned" | "replacement_retained" };
+  cleanup(handle: NativeHandle): {
+    readonly status: "cleaned" | "replacement_retained" | "cleanup_incomplete";
+  };
   close(): void;
 }>;
 type NativeAddon = Readonly<{
@@ -6700,7 +6995,7 @@ GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 
 ### Task 3.3c: Prove the supported OpenCode host mutation and cancellation boundary
 
-**Requirement:** JUS-P0-04, INV-20, INV-22, INV-23, Design §4.10, §12.5, §12.6, §12.7, F-047.
+**Requirement:** JUS-P0-04, INV-20, INV-22, INV-23, Design §4.10, §12.5, §12.6, §12.7, F-046, F-047.
 
 **Files:**
 
@@ -6710,6 +7005,11 @@ GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 
 **Consumes:** the installed OpenCode CLI, the host plugin loader, the real `tool.execute.before` and
 `tool.execute.after` dispatch, the built-in `task` and `write` tools, and the runtime child-session events.
+
+Task 3.3a is the sole owner of installing and version-checking the CLI in the devcontainer. Task 3.3c
+must use the preinstalled `opencode` executable and may only record its version; it must not run `bun add`,
+`bunx`, `npm install`, or any network-dependent installer. A missing executable or version mismatch is
+`BLOCKED` before the host fixture is created.
 
 **Produces:** a committed host acceptance report with the exact OpenCode CLI version, SDK version, hook
 dispatch shape, mutable-args field path, actual TaskTool execution observation, throw-cancellation behavior,
@@ -6771,7 +7071,7 @@ the real host acceptance path for the final task-review and final-review E2E.
 
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
-**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, and the PreToolUse portion of §12.6.
+**Requirement:** JUS-P0-02, JUS-P0-04, INV-11, INV-16, INV-17, INV-19, INV-20, INV-21, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, F-043, F-045, F-048, and the PreToolUse portion of §12.6.
 
 Task 3.4 owns Review Dispatch composition, directive delivery, and review-first PreToolUse
 claiming. It does not import or invoke Task 3.6's completion consumer and does not own the
@@ -10052,8 +10352,8 @@ The unreadable-Authorization assertions must additionally prove:
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/helpers/mock-file-system.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
-git commit -m "feat: durable review dispatchとclaimを追加"
+GIT_MASTER=1 git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/helpers/mock-file-system.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
+GIT_MASTER=1 git commit -m "feat: durable review dispatchとclaimを追加"
 ```
 
 ---
@@ -10084,7 +10384,7 @@ filesystem directly.
 **Produces:** `DelegatedExecutionRelationObserved` from the adapter and a durable `DelegatedExecutionBinding` whose `ExecutionScope` is derived from the claimed slot, never from worker input.
 
 It also exports the projection helper used by Task 3.6:
-`projectObservedReviewExecution(records, delegatedBinding, postToolUse): ObservedReviewExecutionV1 | undefined`.
+`projectObservedReviewExecution(records, delegatedBinding): ObservedReviewExecutionV1 | undefined`.
 The helper selects the single durable, observed relation record that produced the binding, copies its stable
 runtime event ID, and derives `parentSessionId`, parent `callId`, child session, and trusted correlation from
 the binding/current claimed slot. It returns `undefined` for missing, duplicate, stale, or declared-only
@@ -10153,13 +10453,13 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/helpers/captured-runtime-events.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
-git commit -m "feat: review child bindingをdurableに記録"
+GIT_MASTER=1 git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/helpers/captured-runtime-events.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
+GIT_MASTER=1 git commit -m "feat: review child bindingをdurableに記録"
 ```
 
 ### Task 3.6: Consume a matching review artifact exactly once
 
-**Requirement:** JUS-P0-02, JUS-P0-04, INV-06, INV-13, INV-15 through INV-21, Design §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, and the PostToolUse portion of §12.6.
+**Requirement:** JUS-P0-02, JUS-P0-04, INV-06, INV-13, INV-15 through INV-21, Design §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.7, F-043, F-045, F-046, F-047, F-048, and the PostToolUse portion of §12.6.
 
 Task 3.6 owns the purpose-aware review PostToolUse router, the completion-domain call, and
 the composition-root startup wiring that invokes completion recovery before Review Dispatch
@@ -10205,8 +10505,8 @@ composition and startup ordering.
 It runs only on the supported Linux x86_64 deployment after `bun run build:native:review-artifact`; on every
 other platform or when the provider probe is unavailable it must fail as unsupported setup rather than
 silently skip the P0 path. It constructs the real `OpenCodeAdapter` and `JusticePlugin`, seeds one active
-Authorization and review-pending lifecycle, drives a `sp-review` PreToolUse claim, and then drives the
-child-session write and matching PostToolUse events. It proves composition behavior only: the committed
+Authorization and review-pending lifecycle, drives a `sp-review` PreToolUse claim, and then drives the child-session
+write followed by the parent task's matching PostToolUse event. It proves composition behavior only: the committed
 artifact path is the only path exposed to the adapter; `run_in_background` is `false`; the write is mediated
 by `writeExisting` and does not call the generic `FileWriter.writeFile`; the one `readOnce` consumes the
 matching artifact; replacement and symlink cases are rejected before JSON parsing; the terminal record is
@@ -10218,7 +10518,7 @@ rejection. This direct adapter test is not host acceptance evidence.
 must invoke the exact supported OpenCode CLI `1.18.29`, load the built Justice plugin through the real host
 plugin loader, and execute both task-review and final-review flows through actual `task` and `write` tool
 dispatch. It must observe the actual child worker receiving `run_in_background = false` and the exact committed
-artifact path, then observe secure artifact write, matching PostToolUse, Gate, and Acceptance. The rejected
+artifact path, then observe secure artifact write, the parent task's matching PostToolUse, Gate, and Acceptance. The rejected
 symlink and inode replacement cases must throw the dedicated cancellation through the host boundary, invoke
 the built-in writer zero times, leave the outside target and replacement unchanged, and never reach JSON
 parsing, Gate, or Acceptance. Direct calls to `OpenCodeAdapter`, `JusticePlugin.handleEvent`, or
@@ -10276,10 +10576,9 @@ outside that boundary.
 `consumeReviewCompletion`, staged-completion recovery, and post-terminal outcome recovery already own that
 parent boundary. They must call only Task 3.2's within-boundary Gate capability, which retains
 decision-identity serialization but never reacquires the parent boundary.
-The completion consumer receives the normalized `PostToolUseEvent` plus its observed
-`parentSessionId` / `callId`; it resolves the claimed slot, `TaskCallBinding`, and
-`DelegatedExecutionBinding` from the durable projection rather than trusting correlation,
-category, artifact path, or worker-provided metadata from the event.
+The completion consumer receives the normalized parent `task` `PostToolUse` identity plus an optional observed
+execution. It resolves the claimed slot, `TaskCallBinding`, and `DelegatedExecutionBinding` from the durable
+projection rather than trusting correlation, category, artifact path, or worker-provided metadata from the event.
 Its input also carries the already-resolved `ObservationAgentId` and `writerId` used only for the
 new persisted envelope; the correlation and artifact identity always come from the durable claimed
 slot and binding.
@@ -10335,17 +10634,19 @@ accepts the failure staging shape, and `appendReviewPostToolUsePending` accepts 
 `appendReviewDispatchTransition` physical append boundary, which is the only boundary that assigns the
 persisted sequence. `readAndAssembleMatchingArtifact` returns the nested `ReviewCompletionStaging`
 payload after strict parse, classification, digest calculation, and observed-execution construction.
-`ReviewPostToolUsePendingRecord` also persists the observed child-session identity, task-review/final-review
-purpose, trusted correlation, and `ObservedReviewExecutionV1`. Restart recovery must compare all of these
-values with the current claimed slot and durable child binding before rereading an artifact or terminalizing;
-any mismatch is rejected as stale/advisory.
+`ReviewPostToolUsePendingRecord` persists the parent session / call identity, purpose, and trusted correlation.
+It optionally persists the observed child-session identity and `ObservedReviewExecutionV1` when the durable child
+binding is already available; those fields are omitted when the parent task event wins the binding race. Restart
+recovery must compare every present field with the current claimed slot and durable child binding before rereading
+an artifact or terminalizing; any mismatch is rejected as stale/advisory.
 
 The artifact `write` is a child-session `PreToolUse` operation and is handled by the review-artifact write
-branch before the normal write tool runs. Completion consumption is triggered by the parent `task` tool's
-matching `PostToolUse` event, whose `callId` is the claimed parent call ID and whose normalized
-`sessionId`/observed execution points at the durable child binding. Do not pass the child write call ID to
-`consumeReviewCompletion`, and do not use the worker's artifact path, category, prompt, or output as a
-binding selector. The E2E test must exercise both calls in this order.
+branch before the normal write tool runs. Completion consumption is triggered only by the parent `task` tool's
+matching `PostToolUse` event, whose `sessionId` and `callId` are the claimed parent identity. The observed
+execution supplied to the completion domain is resolved from the durable child binding; it is not inferred from
+the parent event. Do not pass the child write call ID to `consumeReviewCompletion`, and do not use the worker's
+artifact path, category, prompt, or output as a binding selector. The E2E test must exercise the child write
+followed by the parent task PostToolUse in this order.
 All artifact reads, durable appends, Authorization lookups, cleanup, lifecycle transitions, and Gate
 requests in this task are injected ports. The core module must not import `ObservationLogStore`,
 `AuthorizationStore`, OpenCode adapter types, or notifier implementations directly. The injected
@@ -10818,6 +11119,9 @@ type ReviewArtifactCompletionFixture = {
   readonly unlinkArtifactPath: ReturnType<typeof vi.fn>;
   readonly consume: () => Promise<ReviewCompletionOutcome>;
   readonly replaceArtifactWithDifferentInode: (content: string) => Promise<void>;
+  readonly failNextLeaseDelete: () => void;
+  readonly artifactExists: () => Promise<boolean>;
+  readonly leaseExists: () => Promise<boolean>;
   readonly ensureCleanup: () => Promise<void>;
   readonly readReplacementArtifact: () => Promise<string>;
   readonly durableFailureStaging: () => Promise<
@@ -10911,7 +11215,14 @@ async function arrangeReviewArtifactCompletionFixture(
   files.reviewArtifactIdentities.set(leasePath, artifactIdentity);
 
   const originalDeleteFile = files.deleteFile.bind(files);
-  const unlinkArtifactPath = vi.fn(originalDeleteFile);
+  let failLeaseDelete = false;
+  const unlinkArtifactPath = vi.fn(async (path: string): Promise<void> => {
+    if (failLeaseDelete && path === leasePath) {
+      failLeaseDelete = false;
+      throw new Error("mock lease unlink failure");
+    }
+    await originalDeleteFile(path);
+  });
   files.deleteFile = unlinkArtifactPath;
   const baseArtifactIo = createMockReservedReviewArtifactIo(files);
   const writeReservedArtifact = vi.fn(baseArtifactIo.writeExisting.bind(baseArtifactIo));
@@ -11037,6 +11348,8 @@ async function arrangeReviewArtifactCompletionFixture(
     const outcome = await baseArtifactIo.cleanup(usableReservation);
     if (outcome === "replacement_retained") {
       await recordAdvisory("review_artifact_identity_mismatch");
+    } else if (outcome === "cleanup_incomplete") {
+      await recordAdvisory("review_artifact_cleanup_incomplete");
     }
   };
   const completion = createReviewCompletionDomain({
@@ -11077,7 +11390,7 @@ async function arrangeReviewArtifactCompletionFixture(
   const validReviewWorkerJson = JSON.stringify({ schemaVersion: 1, complete: true, findings: [] });
   const postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId"> = {
     type: "PostToolUse",
-    sessionId: childSessionId,
+    sessionId: parentSessionId,
     callId,
   };
   const observedExecution: ObservedReviewExecutionV1 = {
@@ -11153,6 +11466,11 @@ async function arrangeReviewArtifactCompletionFixture(
         inode: "review-artifact-replacement",
       });
     },
+    failNextLeaseDelete: () => {
+      failLeaseDelete = true;
+    },
+    artifactExists: () => files.fileExists(reservation.artifactPath),
+    leaseExists: () => files.fileExists(reservation.leasePath),
     ensureCleanup: async () => {
       if (staged === undefined || terminal === undefined) {
         throw new Error("terminalized completion fixture was not initialized");
@@ -11225,14 +11543,33 @@ it("retains a replacement path during terminal cleanup and records an advisory",
   expect(fixture.unlinkArtifactPath).not.toHaveBeenCalled();
   expect(fixture.recordAdvisory).toHaveBeenCalledWith("review_artifact_identity_mismatch");
 });
+
+it("reports incomplete paired cleanup and retries only the residual lease", async () => {
+  const fixture = await arrangeTerminalizedReviewWithUsableReservation();
+  fixture.failNextLeaseDelete();
+
+  await fixture.ensureCleanup();
+
+  expect(fixture.unlinkArtifactPath).toHaveBeenCalledTimes(2);
+  await expect(fixture.artifactExists()).resolves.toBe(false);
+  await expect(fixture.leaseExists()).resolves.toBe(true);
+  expect(fixture.recordAdvisory).toHaveBeenCalledWith("review_artifact_cleanup_incomplete");
+
+  await fixture.ensureCleanup();
+
+  expect(fixture.unlinkArtifactPath).toHaveBeenCalledTimes(3);
+  await expect(fixture.artifactExists()).resolves.toBe(false);
+  await expect(fixture.leaseExists()).resolves.toBe(false);
+});
 ```
 
 The real-filesystem Node test asserts that an unsupported platform or failed native probe exposes neither
 review-artifact capability. The supported Linux x86_64 suite must exercise the actual
 `LinuxOpenat2ReviewArtifactProvider` through the production `NodeFileSystem` composition; it must prove
 matching-inode writes and reads, unlink/recreate and symlink replacement rejection without changing
-replacement bytes, identity mismatch rejection before JSON parsing, and fail-closed
-`replacement_retained` cleanup. The provider-specific cleanup test must never rely on a racy `lstat` then
+replacement bytes, identity mismatch rejection before JSON parsing, fail-closed
+`replacement_retained` cleanup, and a one-sided unlink that returns `cleanup_incomplete` and retries only the
+residual reservation/quarantine leaf. The provider-specific cleanup test must never rely on a racy `lstat` then
 `unlink` implementation. Mock tests remain deterministic capability tests and are not evidence of the native
 provider's security properties.
 
@@ -12358,6 +12695,8 @@ const cleanupArtifact: ReviewCompletionDependencies["cleanupArtifact"] = async (
     const outcome = await reservedReviewArtifactIo.cleanup(reservation);
     if (outcome === "replacement_retained") {
       await this.recordReviewAdvisory("review_artifact_identity_mismatch");
+    } else if (outcome === "cleanup_incomplete") {
+      await this.recordReviewAdvisory("review_artifact_cleanup_incomplete");
     }
   } catch (cause: unknown) {
     await this.recordReviewAdvisory("review_artifact_cleanup_failed", cause);
@@ -12389,45 +12728,66 @@ and authoritative Authorization reader used by Task 3.4.
 
 ```ts
 private async routeTaskPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
-  if (event.payload.toolName !== "write" || event.callId === undefined) {
+  const inputCategory = readStringRecordValue(event.payload.toolInput, "category");
+  const isReviewCategory = inputCategory === "sp-review" || inputCategory === "sp-final-review";
+  if (
+    event.payload.toolName !== "task" ||
+    event.callId === undefined ||
+    event.callId.trim().length === 0
+  ) {
+    if (isReviewCategory) {
+      await this.recordReviewAdvisory("review_parent_call_identity_missing");
+      return PROCEED;
+    }
     return this.routeImplementationPostToolUse(event);
   }
 
   const records = await this.observationHandler.getLogStore().readAll();
-  const delegatedBinding = projectDelegatedExecutionBindings(records).find(
-    (candidate) => candidate.childSessionId === event.sessionId,
-  );
-  if (delegatedBinding === undefined) return this.routeImplementationPostToolUse(event);
-
   const binding = projectTaskCallBindings(records).find(
     (candidate): candidate is ReviewTaskCallBinding =>
-      candidate.callId === delegatedBinding.parentCallId && isReviewTaskCallBinding(candidate),
+      candidate.parentSessionId === event.sessionId &&
+      candidate.callId === event.callId &&
+      isReviewTaskCallBinding(candidate),
   );
-  if (binding === undefined) return this.routeImplementationPostToolUse(event);
-  if (binding.artifactReservation.status !== "usable") {
+  if (binding === undefined) {
+    if (isReviewCategory) {
+      await this.recordReviewAdvisory("review_task_binding_missing");
+      return PROCEED;
+    }
     return this.routeImplementationPostToolUse(event);
   }
-
-  const filePath = readStringRecordValue(event.payload.toolInput, "filePath");
-  if (filePath !== binding.artifactReservation.artifactPath) {
-    return this.routeImplementationPostToolUse(event);
+  const slot = projectReviewDispatchSlots(records).find(
+    (candidate): candidate is ClaimedReviewDispatchSlot =>
+      candidate.key.parentSessionId === event.sessionId &&
+      candidate.state === "claimed" &&
+      candidate.callId === event.callId &&
+      reviewTaskCallBindingMatchesSlot(binding, candidate),
+  );
+  if (slot === undefined) {
+    await this.recordReviewAdvisory("review_dispatch_slot_stale");
+    return PROCEED;
   }
-
-  const observedExecution = projectObservedReviewExecution(records, delegatedBinding, event);
-  if (observedExecution === undefined) {
-    await this.recordReviewAdvisory("review_observed_execution_missing");
-    return { action: "skip" };
-  }
-
-  const parentSessionId = binding.parentSessionId;
-  const parentCallId = binding.callId;
+  const delegatedBinding = projectDelegatedExecutionBindings(records).find(
+    (candidate) =>
+      candidate.parentSessionId === event.sessionId &&
+      candidate.parentCallId === event.callId &&
+      delegatedBindingMatchesSlot(candidate, slot),
+  );
+  const observedExecution =
+    delegatedBinding === undefined
+      ? undefined
+      : projectObservedReviewExecution(records, delegatedBinding);
   const agentId = this.sessionStateProvider.getAgentId(event.sessionId);
   const outcome = await this.reviewCompletionDomain
     .consumeReviewCompletion({
-      parentSessionId,
-      callId: parentCallId,
-      postToolUse: event,
-      observedExecution,
+      parentSessionId: event.sessionId,
+      callId: event.callId,
+      postToolUse: {
+        type: "PostToolUse",
+        sessionId: event.sessionId,
+        callId: event.callId,
+      },
+      ...(observedExecution === undefined ? {} : { observedExecution }),
       agentId,
       writerId: this.writerId,
     })
@@ -12445,18 +12805,8 @@ function readStringRecordValue(value: unknown, key: string): string | undefined 
   return typeof candidate === "string" ? candidate : undefined;
 }
 
-private async reviewParentSessionIdForPostToolUse(event: PostToolUseEvent): Promise<string> {
-  if (event.payload.toolName !== "write") return event.sessionId;
-  try {
-    const records = await this.observationHandler.getLogStore().readAll();
-    return (
-      projectDelegatedExecutionBindings(records).find(
-        (candidate) => candidate.childSessionId === event.sessionId,
-      )?.parentSessionId ?? event.sessionId
-    );
-  } catch {
-    return event.sessionId;
-  }
+private reviewParentSessionIdForPostToolUse(event: PostToolUseEvent): string {
+  return event.sessionId;
 }
 
 private async routeImplementationPostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
@@ -12523,10 +12873,12 @@ PostToolUse category, prompt, artifact path, and worker result are never used to
 completion domain. `routeImplementationPostToolUse` retains the existing non-review behavior,
 while the review branch is the only production caller of `consumeReviewCompletion`.
 
-Implement this exact staging-first sequence: validate claimed parent binding; check
-`artifactReservation.status === "usable"`; validate durable child-session binding; append or reuse exactly
-one `ReviewPostToolUsePendingRecord`; append exactly one `ReviewArtifactReadAttemptRecord` before any
-artifact I/O; then read the usable artifact once. If the read, JSON parse, or strict
+Implement this exact staging-first sequence: validate the claimed parent binding; check
+`artifactReservation.status === "usable"`; append or reuse exactly one `ReviewPostToolUsePendingRecord` for the
+parent event; if the durable child-session binding is absent, return `awaiting_child_binding` without artifact I/O;
+then validate the durable child-session binding and observed execution; append exactly one
+`ReviewArtifactReadAttemptRecord` before any artifact I/O; then read the usable artifact once. If the read, JSON
+parse, or strict
 `ReviewWorkerResultV1` schema validation fails, classify the corresponding Design §4.10
 `ReviewArtifactFailureReason`, append `ReviewArtifactFailureStagingRecord` first, and append exactly one
 no-artifact failure terminal from that staging. If recovery finds a read-attempt marker without completion
@@ -12595,7 +12947,8 @@ retain the claimed slot and durable marker and retry the same staging / terminal
 read-attempt marker without a staging record is treated as an interrupted `artifact_read_failed` attempt;
 recovery never rereads the artifact. After a durable failure terminal, never reread or reappend it. Cleanup
 then uses the trusted claimed reservation only, is best-effort / idempotent, treats `artifact_missing` as a
-no-op, and retries cleanup alone after a cleanup failure. A different eligible candidate may still be offered.
+artifact-leaf no-op while still cleaning the matching lease when its identity is valid, and retries cleanup
+alone after a cleanup failure. A different eligible candidate may still be offered.
 
 Review failure entry points must call Task 3.4's `terminalizeReviewFailure`; they must not construct a retry
 correlation, read either round field, append a retry pending transition, or inject a retry directive themselves.
@@ -12677,11 +13030,17 @@ type ReviewCompletionOutcome =
   | { readonly kind: "blocked" }
   | { readonly kind: "stale" };
 
+type MatchingReviewParentPostToolUse = {
+  readonly type: "PostToolUse";
+  readonly sessionId: string;
+  readonly callId: string;
+};
+
 export type ReviewCompletionInput = {
   readonly parentSessionId: string;
   readonly callId: string;
-  readonly postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId">;
-  readonly observedExecution: ObservedReviewExecutionV1;
+  readonly postToolUse: MatchingReviewParentPostToolUse;
+  readonly observedExecution?: ObservedReviewExecutionV1;
   readonly agentId: ObservationAgentId;
   readonly writerId: string;
 };
@@ -12756,7 +13115,7 @@ function reviewTaskCallBindingMatchesCorrelation(
 }
 
 function matchesReviewPostToolUseIdentity(
-  postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId">,
+  postToolUse: MatchingReviewParentPostToolUse,
   parentSessionId: string,
   callId: string,
   slot: ClaimedReviewDispatchSlot,
@@ -12765,6 +13124,8 @@ function matchesReviewPostToolUseIdentity(
     postToolUse.type === "PostToolUse" &&
     postToolUse.sessionId.length > 0 &&
     postToolUse.callId.length > 0 &&
+    postToolUse.sessionId === parentSessionId &&
+    postToolUse.callId === callId &&
     slot.key.parentSessionId === parentSessionId &&
     slot.callId === callId
   );
@@ -12789,7 +13150,7 @@ function observedExecutionMatchesReview(
 }
 
 function matchesReviewPostToolUse(
-  postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId">,
+  postToolUse: MatchingReviewParentPostToolUse,
   slot: ClaimedReviewDispatchSlot,
   taskCallBinding: ReviewTaskCallBinding,
   binding: DelegatedExecutionBinding,
@@ -12797,7 +13158,8 @@ function matchesReviewPostToolUse(
   return (
     postToolUse.type === "PostToolUse" &&
     postToolUse.callId.length > 0 &&
-    postToolUse.sessionId === binding.childSessionId &&
+    postToolUse.sessionId === slot.key.parentSessionId &&
+    postToolUse.callId === slot.callId &&
     reviewTaskCallBindingMatchesSlot(taskCallBinding, slot) &&
     delegatedBindingMatchesSlot(binding, slot)
   );
@@ -12855,7 +13217,7 @@ type ReviewCompletionDependencies = {
   ) => Promise<{ readonly kind: "committed" } | { readonly kind: "failed" }>;
   readonly appendReviewDispatchTransition: ReviewDispatchDependencies["appendReviewDispatchTransition"];
   readonly readAndAssembleMatchingArtifact: (
-    postToolUse: Pick<PostToolUseEvent, "type" | "sessionId" | "callId">,
+    postToolUse: MatchingReviewParentPostToolUse,
     binding: ReviewTaskCallBinding,
     delegatedBinding: DelegatedExecutionBinding,
     correlation: ReviewCorrelation,
@@ -13114,7 +13476,10 @@ async function recoverPendingReviewCompletionsForBinding(
         (candidate): candidate is ClaimedReviewDispatchSlot =>
           candidate.key.parentSessionId === parentSessionId &&
           candidate.state === "claimed" &&
-          candidate.callId === callId,
+          candidate.callId === callId &&
+          candidate.expectedCategory ===
+            (marker.purpose === "task_review" ? "sp-review" : "sp-final-review") &&
+          sameReviewCorrelation(candidate.key.correlation, marker.trustedCorrelation),
       );
       const delegatedBinding = projectDelegatedExecutionBindings(records).find(
         (candidate) =>
@@ -13124,8 +13489,17 @@ async function recoverPendingReviewCompletionsForBinding(
           delegatedBindingMatchesSlot(candidate, slot),
       );
       if (slot === undefined || delegatedBinding === undefined) return;
-      if (marker.childSessionId !== delegatedBinding.childSessionId) {
+      if (
+        marker.childSessionId !== undefined &&
+        marker.childSessionId !== delegatedBinding.childSessionId
+      ) {
         await recordAdvisory("review_pending_completion_stale");
+        return;
+      }
+      const observedExecution =
+        marker.observedExecution ?? projectObservedReviewExecution(records, delegatedBinding);
+      if (observedExecution === undefined) {
+        await recordAdvisory("review_observed_execution_missing");
         return;
       }
       await consumeReviewCompletionWithinParentSessionClaim({
@@ -13133,10 +13507,10 @@ async function recoverPendingReviewCompletionsForBinding(
         callId: marker.callId,
         postToolUse: {
           type: "PostToolUse",
-          sessionId: marker.childSessionId,
+          sessionId: marker.parentSessionId,
           callId: marker.callId,
         },
-        observedExecution: marker.observedExecution,
+        observedExecution,
         agentId: marker.agentId,
         writerId: marker.writerId,
       });
@@ -13179,14 +13553,16 @@ async function consumeReviewCompletionWithinParentSessionClaim(
             ),
         );
         return input.postToolUse.type === "PostToolUse" &&
-          input.postToolUse.sessionId === existingStaging.staging.observedExecution.childSessionId &&
-          observedExecutionMatchesReview(
-            input.observedExecution,
-            input.parentSessionId,
-            input.callId,
-            existingStaging.staging.observedExecution.childSessionId,
-            existingStaging.staging.correlation,
-          ) &&
+          input.postToolUse.sessionId === input.parentSessionId &&
+          input.postToolUse.callId === input.callId &&
+          (input.observedExecution === undefined ||
+            observedExecutionMatchesReview(
+              input.observedExecution,
+              input.parentSessionId,
+              input.callId,
+              existingStaging.staging.observedExecution.childSessionId,
+              existingStaging.staging.correlation,
+            )) &&
           stagedBinding !== undefined
           ? recoverStagedReviewCompletion(existingStaging)
           : { kind: "stale" };
@@ -13198,7 +13574,8 @@ async function consumeReviewCompletionWithinParentSessionClaim(
       );
       if (existingFailureStaging !== undefined) {
         return input.postToolUse.type === "PostToolUse" &&
-          input.postToolUse.sessionId === input.observedExecution.childSessionId
+          input.postToolUse.sessionId === input.parentSessionId &&
+          input.postToolUse.callId === input.callId
           ? recoverStagedArtifactFailure(existingFailureStaging)
           : { kind: "stale" };
       }
@@ -13234,17 +13611,6 @@ async function consumeReviewCompletionWithinParentSessionClaim(
       ) {
         return { kind: "stale" };
       }
-      if (
-        !observedExecutionMatchesReview(
-          input.observedExecution,
-          input.parentSessionId,
-          input.callId,
-          input.postToolUse.sessionId,
-          slot.key.correlation,
-        )
-      ) {
-        return { kind: "stale" };
-      }
       if (!(await isCurrentActiveAuthorization(slot.key.correlation, findAuthorizationById))) {
         await cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
           input.parentSessionId,
@@ -13266,7 +13632,14 @@ async function consumeReviewCompletionWithinParentSessionClaim(
       );
       if (
         pendingPostToolUse !== undefined &&
-        pendingPostToolUse.childSessionId !== input.postToolUse.sessionId
+        (!sameReviewCorrelation(
+          pendingPostToolUse.trustedCorrelation,
+          slot.key.correlation,
+        ) ||
+          pendingPostToolUse.purpose !== taskCallBinding.purpose ||
+          (pendingPostToolUse.childSessionId !== undefined &&
+            delegatedBinding !== undefined &&
+            pendingPostToolUse.childSessionId !== delegatedBinding.childSessionId))
       ) {
         return { kind: "stale" };
       }
@@ -13275,16 +13648,20 @@ async function consumeReviewCompletionWithinParentSessionClaim(
           schemaVersion: 1,
           timestamp: new Date().toISOString(),
           agentId: input.agentId,
-          sessionId: input.postToolUse.sessionId,
+          sessionId: input.parentSessionId,
           writerId: input.writerId,
           recordType: "observation",
           kind: "review_post_tooluse_pending",
           parentSessionId: input.parentSessionId,
           callId: input.callId,
-          childSessionId: input.postToolUse.sessionId,
           purpose: taskCallBinding.purpose,
           trustedCorrelation: slot.key.correlation,
-          observedExecution: input.observedExecution,
+          ...(delegatedBinding === undefined || input.observedExecution === undefined
+            ? {}
+            : {
+                childSessionId: delegatedBinding.childSessionId,
+                observedExecution: input.observedExecution,
+              }),
         });
         if (pending.kind !== "committed") {
           await recordAdvisory("review_completion_pending_append_failed");
@@ -13293,6 +13670,19 @@ async function consumeReviewCompletionWithinParentSessionClaim(
       }
       if (delegatedBinding === undefined) {
         return { kind: "awaiting_child_binding" };
+      }
+      const observedExecution = input.observedExecution;
+      if (
+        observedExecution === undefined ||
+        !observedExecutionMatchesReview(
+          observedExecution,
+          input.parentSessionId,
+          input.callId,
+          delegatedBinding.childSessionId,
+          slot.key.correlation,
+        )
+      ) {
+        return { kind: "stale" };
       }
       if (!matchesReviewPostToolUse(input.postToolUse, slot, taskCallBinding, delegatedBinding)) {
         return { kind: "stale" };
@@ -13340,7 +13730,7 @@ async function consumeReviewCompletionWithinParentSessionClaim(
           taskCallBinding,
           delegatedBinding,
           slot.key.correlation,
-          input.observedExecution,
+          observedExecution,
         );
       } catch (error) {
         await recordAdvisory("review_artifact_read_unhandled", error);
@@ -13534,7 +13924,6 @@ async function ensureFailedReviewArtifactCleaned(
   terminal: ReviewDispatchTransitionRecord,
 ): Promise<void> {
   if (!isArtifactFailureTerminal(terminal) && terminal.terminalReason !== "cancelled") return;
-  if (terminal.terminalReason === "artifact_missing") return;
   const records = await readDurableRecords();
   const reservation = findClaimedUsableReservationForTerminal(records, terminal);
   if (reservation === undefined) {
@@ -14179,8 +14568,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/progress-updater.ts src/hooks/task-feedback.ts src/core/justice-plugin.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts
-git commit -m "feat: accepted decision後だけplan progressを更新"
+GIT_MASTER=1 git add src/core/progress-updater.ts src/hooks/task-feedback.ts src/core/justice-plugin.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts
+GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更新"
 ```
 
 ---
@@ -14251,8 +14640,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/types.ts src/core/routing-decision.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
-git commit -m "feat: controller routingにworkflow identityを保持"
+GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
+GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保持"
 ```
 
 ### Task 4.2: Persist controller routing observations and doctor diagnostics
@@ -14442,8 +14831,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
-git commit -m "feat: controller routing observationとdoctor診断を追加"
+GIT_MASTER=1 git add src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git commit -m "feat: controller routing observationとdoctor診断を追加"
 ```
 
 ---
@@ -14597,12 +14986,12 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.1       | JUS-P0-04, Design §3.3, §4.4, §5.4, §5.5, INV-06, INV-09, INV-14                                 | lifecycle orchestration; initial finalization and actual-rework fresh identity tests; no Review Dispatch schema, retry projection, or old-round test dependency                                                                                                                                                                                                                                                                                                                                                                                   |
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.3a      | JUS-P0-04, Design §4.10, F-043                                                                   | Linux `openat2(2)` / `renameat2(2)` hard-gate probe; exclusive marker, inode/lease identity, descriptor-relative write/read, symlink and ancestor-swap rejection, replacement-retaining cleanup, unsupported-runtime result, and recorded PASS/BLOCKED output |
-| 3.3b      | JUS-P0-04, Design §4.10, INV-21, F-043                                                          | bundled Rust Node-API `LinuxOpenat2ReviewArtifactProvider`; exact addon build, camelCase descriptor ABI, root reopen identity, `NodeFileSystem` capability composition, native security tests, unsupported-platform tests, and fail-open capability publication |
-| 3.3c      | JUS-P0-04, Design §12.5, §12.6, §12.7, INV-20, INV-22, INV-23, F-047                         | exact OpenCode CLI hard gate; actual host plugin dispatch; mutable task-args propagation into TaskTool and child execution; runtime call/child correlation; secure-write and rejection cancellation; zero built-in writer calls; unrelated-write control; redacted evidence report |
-| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036, F-040, F-041, F-042, F-043 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; drain-time queued-delivery validator with deliver/discard/retain outcomes; startup fixture with normal-hook delivery, review-first claim/no-old-directive, terminal discard, and unreadable-authority retention; `ClaimInput` without correlation, exact unavailable/integrity blocked outcomes, and production routing spoof regression; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; optional exclusive-marker plus separate reserved-artifact I/O capability, unusable missing-capability result, inode lease, matching-inode write, and replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
+| 3.3a      | JUS-P0-04, Design §4.10, F-043, F-045, F-047                                                    | Linux `openat2(2)` / `renameat2(2)` hard-gate probe; exact CLI provisioning; exclusive marker, inode/lease identity, descriptor-relative write/read, symlink and ancestor-swap rejection, paired cleanup semantics, unsupported-runtime result, and recorded PASS/BLOCKED output |
+| 3.3b      | JUS-P0-04, Design §4.10, INV-21, F-043, F-045, F-048                                           | bundled Rust Node-API `LinuxOpenat2ReviewArtifactProvider`; exact addon build, camelCase descriptor ABI, root reopen identity, `NodeFileSystem` capability composition, native security tests, `replacement_retained` / `cleanup_incomplete` behavior, unsupported-platform tests, and fail-open capability publication |
+| 3.3c      | JUS-P0-04, Design §12.5, §12.6, §12.7, INV-20, INV-22, INV-23, F-046, F-047                | exact OpenCode CLI hard gate; actual host plugin dispatch; mutable task-args propagation into TaskTool and child execution; runtime call/child correlation; secure-write and rejection cancellation; zero built-in writer calls; unrelated-write control; redacted evidence report |
+| 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036, F-040, F-041, F-042, F-043, F-045, F-048 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; drain-time queued-delivery validator with deliver/discard/retain outcomes; startup fixture with normal-hook delivery, review-first claim/no-old-directive, terminal discard, and unreadable-authority retention; `ClaimInput` without correlation, exact unavailable/integrity blocked outcomes, and production routing spoof regression; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; optional exclusive-marker plus separate reserved-artifact I/O capability, unusable missing-capability result, inode lease, matching-inode write, and replacement rejection; paired cleanup status propagation; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-046, F-047 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, replacement-safe cleanup advisory, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -14637,8 +15026,13 @@ Linux deployment, exact `openat2(2)` / `renameat2(2)` security primitives, and u
 behavior; Task 3.3a proves those primitives before Task 3.3b/3.4; Task 3.3b builds and tests the real
 provider; Task 3.4 wires the provider through the actual `OpenCodeAdapter` composition; and Task 3.6
 drives a real Linux E2E from review claim through mediated worker write, one read, terminalization,
-Gate/Acceptance ordering, and replacement-safe cleanup. A mock-only GREEN result or a provider probe
-failure cannot satisfy F-043.
+Gate/Acceptance ordering, and replacement-safe paired cleanup. A mock-only GREEN result or a provider
+probe failure cannot satisfy F-043.
+F-045 reverse traceability is explicit: Task 3.3a is the hard gate for the supported Linux provider and
+its exact runtime prerequisites; Task 3.3b owns the concrete native/TypeScript implementation and
+restart ABI; and Task 3.4 exposes the provider only as the narrow reservation capability without a
+pathname fallback. The Task 3.3a probe, Task 3.3b native security suite, and Task 3.4 reservation
+tests must all pass before the review completion path can be authoritative.
 F-046 reverse traceability is explicit: Design §12.5 defines the two-value
 `ReviewArtifactWriteSkipReason` contract; Task 3.6 changes the response merger to retain that reason,
 returns `review_artifact_write_committed` only after `writeExisting` commits, returns
@@ -14652,6 +15046,12 @@ keeping the lockfile SDK at `1.14.21`; Task 3.3c is the hard-gate runtime probe 
 hook dispatch, TaskTool execution, child-session correlation, mutable `run_in_background` and artifact-path
 propagation, and host cancellation; Task 3.6 consumes those recorded field paths in a separate supported-host
 production E2E. Direct adapter tests remain composition coverage only and cannot satisfy F-047.
+F-048 reverse traceability is explicit: Design §4.10 defines paired artifact/lease quarantine, identity
+revalidation, `replacement_retained`, and `cleanup_incomplete`; Task 3.3b implements and tests those
+native outcomes, Task 3.4 carries the narrow cleanup status through the reservation capability, and
+Task 3.6 retries only residual reservation/quarantine leaves after cleanup failure without rereading,
+restoring over, or deleting a replacement. The mock, native security, composition, and restart tests
+must cover replacement retention and one-sided cleanup before F-048 is complete.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations, if Task 3.3a
 cannot produce a supported-provider `PASS`, or if Task 3.3b cannot build and test the concrete addon.
@@ -14892,7 +15292,7 @@ export type ReservedReviewArtifactIo = {
   ) => Promise<string>;
   readonly cleanup: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ) => Promise<"cleaned" | "replacement_retained">;
+  ) => Promise<"cleaned" | "replacement_retained" | "cleanup_incomplete">;
 };
 ```
 
@@ -15072,6 +15472,13 @@ function createMockReservedReviewArtifactIo(
       identity.inode === reservation.artifactIdentity.inode;
     return matches(artifact) && matches(lease);
   };
+  const isCleanable = (
+    path: string,
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ): boolean => {
+    if (!(path in files.writtenFiles)) return !files.reviewArtifactIdentities.has(path);
+    return matches(files.reviewArtifactIdentities.get(path));
+  };
   const failure = (reason: "artifact_write_failed" | "artifact_read_failed"): Error =>
     Object.assign(new Error("mock review artifact identity mismatch"), { reason });
 
@@ -15084,12 +15491,31 @@ function createMockReservedReviewArtifactIo(
       if (!isCurrent(reservation)) throw failure("artifact_read_failed");
       return files.readFile(reservation.artifactPath);
     },
-    cleanup: async (reservation): Promise<"cleaned" | "replacement_retained"> => {
-      if (!isCurrent(reservation)) return "replacement_retained";
-      await files.deleteFile(reservation.artifactPath);
-      await files.deleteFile(reservation.leasePath);
-      files.reviewArtifactIdentities.delete(reservation.artifactPath);
-      files.reviewArtifactIdentities.delete(reservation.leasePath);
+    cleanup: async (
+      reservation,
+    ): Promise<"cleaned" | "replacement_retained" | "cleanup_incomplete"> => {
+      if (
+        !isCleanable(reservation.artifactPath, reservation) ||
+        !isCleanable(reservation.leasePath, reservation)
+      ) {
+        return "replacement_retained";
+      }
+      try {
+        if (reservation.artifactPath in files.writtenFiles) {
+          await files.deleteFile(reservation.artifactPath);
+          files.reviewArtifactIdentities.delete(reservation.artifactPath);
+        }
+      } catch {
+        return "cleanup_incomplete";
+      }
+      try {
+        if (reservation.leasePath in files.writtenFiles) {
+          await files.deleteFile(reservation.leasePath);
+          files.reviewArtifactIdentities.delete(reservation.leasePath);
+        }
+      } catch {
+        return "cleanup_incomplete";
+      }
       return "cleaned";
     },
   };
