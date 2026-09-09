@@ -4,7 +4,7 @@
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-semantic-control-plane-design.md`  
+**Spec:** `docs/superpowers/specs/2026-09-03-semantic-control-plane-design.md`
 **Requirements:** `REQUIREMENTS_2026-09-03.md`
 
 **Architecture:** The append-only observation/decision log is the durable source for lifecycle, review dispatch, completion staging, artifact consumption, review observation, Gate, and Acceptance. `.justice/authorizations.json` is the sole authoritative-state exception: it stores only `ApprovedPlanBinding`, including its `CanonicalPlanSnapshot`; `.justice/authorizations.conflict.json` is an `AtomicPersistence` failure journal and never an authorization input. Runtime code remains fail-open; an unavailable or unverified acceptance precondition remains blocked.
@@ -7851,27 +7851,42 @@ checkout release tag
 → bun run build:native:review-artifact
 → exact .node existence assertion
 → bun run build
-→ npm package/tarball inspection
-→ npm publish --ignore-scripts
-→ upload the already-inspected package/release artifact
+→ npm pack --ignore-scripts
+→ inspect the exact generated tarball
+→ npm publish the same inspected tarball with --ignore-scripts
+→ upload the same inspected tarball as the release asset
 ```
 
 The workflow currently publishes with `npm publish --ignore-scripts`; therefore native generation MUST NOT depend
-on `prepublishOnly`, `prepare`, or another npm lifecycle script. Build the addon explicitly before packaging and
-publishing.
+on `prepublishOnly`, `prepare`, or another npm lifecycle script. Build the addon explicitly before packaging.
+Registry publication and release upload both consume the already-inspected tarball; neither command may silently
+re-pack the package directory after verification.
 
-Create and inspect the tarball before publish using one deterministic path check, for example:
+Create one normalized relative tarball path and inspect it before publish:
 
 ```bash
 PACKAGE_FILE="$(npm pack --ignore-scripts --silent)"
-tar -tzf "$PACKAGE_FILE" | grep -Fx \
+PACKAGE_PATH="./${PACKAGE_FILE#./}"
+test -f "$PACKAGE_PATH"
+tar -tzf "$PACKAGE_PATH" | grep -Fx \
   'package/dist/native/justice_review_artifact_linux.linux-x64-gnu.node'
-echo "PACKAGE_FILE=$PACKAGE_FILE" >> "$GITHUB_ENV"
+echo "PACKAGE_PATH=$PACKAGE_PATH" >> "$GITHUB_ENV"
 ```
 
-Expected: the exact path above exists once in the package listing. A successful native build alone is not release
-artifact evidence. Publish with `npm publish --ignore-scripts` only after this inspection passes, and upload the
-same inspected `$PACKAGE_FILE` as the release asset rather than silently creating a different unverified tarball.
+Expected: `PACKAGE_PATH` names the exact generated `.tgz`, and the addon path above exists once in its listing.
+A successful native build alone is not release artifact evidence.
+
+After that inspection, publish and upload that exact file:
+
+```bash
+npm publish "$PACKAGE_PATH" --ignore-scripts
+gh release upload "${{ steps.release.outputs.tag_name }}" "$PACKAGE_PATH"
+```
+
+If publish and upload are separate workflow steps, use the `PACKAGE_PATH` written to `$GITHUB_ENV`; do not run a
+second `npm pack`. `npm publish . --ignore-scripts`, bare `npm publish --ignore-scripts`, or any later implicit
+re-pack is not the verified release path. No checksum service, artifact registry abstraction, or new release
+framework is introduced.
 
 **Task/phase verification**
 
@@ -16988,6 +17003,99 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 ## Phase 4: Controller Routing — JUS-P0-01
 
+### Task 4.0: Verify supported-host controller-routing correlation signals
+
+**Requirement:** JUS-P0-01, Design §3.3, §4.1, §5.1.
+
+**Files:**
+
+- Create: `docs/spikes/2026-09-controller-routing-runtime-signals.md`
+
+No production source, test source, workflow, package, or native file is modified by this spike. Temporary probe files
+must live outside the repository and must be deleted after the trace is captured.
+
+**Consumes:** the resolved `@opencode-ai/plugin` / `@opencode-ai/sdk` contracts; existing
+`tests/types/command-execute-before.contract-fixture.ts`; supported OpenCode host.
+
+**Produces:** a bounded spike report containing the exact observed host paths for:
+
+```text
+command.execute.before → input.command + input.sessionID
+chat.params            → input.agent + input.sessionID
+message.updated        → event.properties.info.sessionID
+                       → event.properties.info.agent
+                       → event.properties.info.role
+                       → event.properties.info.time.completed
+```
+
+The report contains only hook name, command name, session ID, role, agent ID, message ID, and a boolean/presence
+indicator for `time.completed`. Do not record prompts, arguments, message content, credentials, model/provider
+payloads, or arbitrary config.
+
+- [ ] **Step 1: Re-confirm the resolved SDK contracts without modifying source**
+
+Run the existing type contract suite first:
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run tests/types/command-execute-before.contract.test.ts
+```
+
+Then inspect the resolved SDK declaration used by the lockfile and record in the spike report that
+`message.updated.properties.info` is an assistant/user `Message`, with assistant `agent` and optional
+`time.completed`. Do not replace this with documentation from a different installed version.
+
+Expected: the command hook still exposes exactly `command`, `sessionID`, `arguments`; the resolved message type
+contains `info.sessionID`, `info.agent` for assistant messages, and optional `info.time.completed`.
+
+- [ ] **Step 2: Capture one real supported-host trace with a temporary external probe plugin**
+
+Create a throwaway OpenCode configuration and probe plugin under a temporary directory outside the repository. The
+probe plugin must subscribe only to `command.execute.before`, `chat.params`, and generic `event` for
+`message.updated`, and write one JSONL line per signal containing only the allowlisted fields above. Configure the
+four P0 commands with their expected pinned agents and invoke each command once.
+
+The required trace for every invocation is:
+
+```text
+command.execute.before(command=<exact pinned command>, sessionID=S)
+chat.params(sessionID=S, agent=<raw agent>)
+message.updated(info.sessionID=S, info.role=assistant, info.agent=<raw agent>, info.time.completed=<present>)
+```
+
+At least one invocation must use `justice-implement-writing-plans`; at least one trace must demonstrate the exact
+raw agent string is observable before Justice's closed `ObservationAgentId` normalization. The probe may log an
+artificial/custom agent only if the supported host accepts it; custom-agent host acceptance is not itself a P0
+requirement.
+
+- [ ] **Step 3: Decide the capability result without fallback design**
+
+PASS only when the exact pinned command identity and finalized assistant message can be correlated by the same
+`sessionID`, and the raw agent field is observable. Record the exact successful paths in
+`docs/spikes/2026-09-controller-routing-runtime-signals.md`.
+
+If the pinned command does not reach `command.execute.before`, if the raw agent is unavailable, or if no stable
+completed-assistant signal exists, record `JUS-P0-01 runtime observation = BLOCKED` and stop Phase 4 before Task
+4.1/4.2 implementation. Do not substitute prompt parsing, controller→workflow reverse lookup, generic command
+interception, or a new event framework.
+
+- [ ] **Step 4: Verify the report is redacted and self-contained**
+
+Run:
+
+```bash
+git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
+```
+
+Expected: PASS, and the report contains the SDK/package version, exact field paths, one redacted trace per P0
+command, and PASS/BLOCKED conclusion with no prompt/message/config contents.
+
+- [ ] **Step 5: Commit after approval**
+
+```bash
+GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
+GIT_MASTER=1 git commit -m "docs: verify controller routing runtime signals"
+```
+
 ### Task 4.1: Preserve workflow identity and evaluate controller observations
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
@@ -17005,7 +17113,38 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 **Produces:**
 
 ```ts
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<ControllerPinnedCommand, ControllerWorkflow>>;
+export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
+
 export type ControllerObservedAgentId = string;
+
+export type ControllerActualObservation = {
+  readonly source: "chat.params" | "message.updated";
+  readonly actualController: ControllerObservedAgentId;
+  readonly finalized: boolean;
+};
+
+export type ControllerRoutingSessionContext = {
+  readonly sessionId: string;
+  readonly routingGeneration: number;
+  readonly workflow: ControllerWorkflow;
+  readonly applicationMethod: "pinned-command" | "none";
+  readonly chatParamsActualController?: ControllerObservedAgentId;
+  readonly finalizedMessageActualController?: ControllerObservedAgentId;
+  readonly phase: "collecting" | "finalized";
+};
 
 export type ControllerRoutingEvaluationInput = {
   readonly decision: ControllerRoutingDecision;
@@ -17025,7 +17164,26 @@ existing `src/core/types.ts::ObservationAgentId`, which remains the physical-sha
 
 - [ ] **Step 1: Write the complete failing routing/evaluator tests**
 
-Define the fixtures before the tests; do not use undeclared `appliedInput`-style globals.
+Define the fixtures before the tests; do not use undeclared `appliedInput`-style globals. Also pin the exact
+pinned-command workflow resolver before evaluator fixtures:
+
+```ts
+it.each([
+  ["justice-implement-brainstorming", "brainstorming"],
+  ["/justice-implement-writing-plans", "writing-plans"],
+  ["justice-implement-subagent-driven-development", "subagent-driven-development"],
+  ["justice-implement-executing-plans", "executing-plans"],
+] as const)("maps pinned command %s to workflow %s", (command, workflow) => {
+  expect(resolvePinnedCommandWorkflow(command)).toBe(workflow);
+});
+
+it("does not infer workflow from arbitrary command text", () => {
+  expect(resolvePinnedCommandWorkflow("please-use-sisyphus")).toBeUndefined();
+});
+
+```
+
+Then define the evaluator fixtures:
 
 ```ts
 const sisyphusDecision = createControllerRoutingDecision(
@@ -17139,9 +17297,14 @@ test setup are not acceptable RED evidence.
 
 1. Add `workflow` to only the controller member of the existing routing decision union and update
    `createControllerRoutingDecision(workflow, controller, reason)` plus callers.
-2. Define `ControllerObservedAgentId`, `ControllerRoutingEvaluationInput`, and the existing Design §4.1
+2. In `src/core/controller-routing.ts`, define the four-literal `ControllerWorkflow`, four-literal
+   `ControllerPinnedCommand`, exact `PINNED_COMMAND_WORKFLOW_MAP`, and `resolvePinnedCommandWorkflow(command)`.
+   The resolver removes at most one leading `/` and then performs an exact map lookup; it must not inspect a
+   controller value, prompt, assistant text, or arbitrary skill text.
+3. Define `ControllerObservedAgentId`, `ControllerActualObservation`, `ControllerRoutingSessionContext`,
+   `ControllerRoutingEvaluationInput`, and the existing Design §4.1
    discriminated `ControllerRoutingObservation` in `src/core/controller-routing.ts`.
-3. Implement this exact evaluation order:
+4. Implement this exact evaluation order:
    - if `applicationMethod === "runtime-api" && runtimeCapabilitySupported === false`, return reserved
      `unsupported/runtime_capability_unsupported`;
    - derive a finalized-message source only from `finalizedMessageActualController`; if it exists, source is
@@ -17152,14 +17315,14 @@ test setup are not acceptable RED evidence.
      and no `actualController`;
    - for a configured method with finalized actual equal to desired, return `applied`;
    - otherwise return `mismatch` and preserve the custom/known actual string.
-4. Do not change `src/core/types.ts::ObservationAgentId` except for unrelated existing caller updates needed by
+5. Do not change `src/core/types.ts::ObservationAgentId` except for unrelated existing caller updates needed by
    the routing decision factory; specifically do not widen it to `string`.
 
 - [ ] **Step 4: Confirm GREEN**
 
 Run the same command as Step 2.
 
-Expected: PASS for workflow identity, matching finalized observation, known mismatch, custom mismatch,
+Expected: PASS for exact pinned-command workflow identity, matching finalized observation, known mismatch, custom mismatch,
 chat.params-only normalization, and unconfigured application.
 
 - [ ] **Step 5: Commit after approval**
@@ -17169,12 +17332,17 @@ GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/con
 GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保持"
 ```
 
-### Task 4.2: Persist controller routing observations and doctor diagnostics
+### Task 4.2: Correlate and persist controller routing observations and doctor diagnostics
 
-**Requirement:** JUS-P0-01, Design §3.3, §3.4, §4.1, §5.1, §7.3.
+**Requirement:** JUS-P0-01, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3.
+
+**Precondition:** Task 4.0 is PASS. If Task 4.0 records `JUS-P0-01 runtime observation = BLOCKED`, do not implement
+this task.
 
 **Files:**
 
+- Modify: `src/core/session-state-provider.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Modify: `src/core/v2/observation-model.ts`
 - Modify: `src/core/v2/record-builder.ts`
 - Modify: `src/runtime/validation.ts`
@@ -17186,6 +17354,8 @@ GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保�
 - Modify: `src/runtime/doctor-cli.ts`
 - Modify: `README.md`
 - Modify: `SPEC.md`
+- Test: `tests/core/session-state-provider.test.ts`
+- Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/v2/observation-model.test.ts`
 - Test: `tests/runtime/validation.test.ts`
 - Test: `tests/core/v2/persistence-redaction.test.ts`
@@ -17196,13 +17366,43 @@ GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保�
 - Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** `ControllerRoutingDecision`; `evaluateControllerRoutingObservation`; existing `PendingEnvelope`,
-`PendingObservationRecord`, `ObservationLogStore.append()`, `validateRecordSchema()`, and
-`redactPendingLogRecord()`; `DoctorEffectiveConfigView.effectiveCommandDefinitions` from Task 1.2.
+**Consumes:** Task 4.0 verified field paths; Task 4.1 `ControllerWorkflow`, `resolvePinnedCommandWorkflow()`,
+`ControllerRoutingDecision`, `ControllerActualObservation`, `evaluateControllerRoutingObservation()`; existing
+`SessionStateProvider`, `WorkflowRouter`, `PendingEnvelope`, `PendingObservationRecord`,
+`ObservationLogStore.append()`, `validateRecordSchema()`, `redactPendingLogRecord()`; Task 1.2
+`DoctorEffectiveConfigView.effectiveCommandDefinitions`.
 
 **Produces:**
 
 ```ts
+// src/core/session-state-provider.ts
+beginControllerRoutingContext(
+  sessionId: string,
+  workflow: ControllerWorkflow,
+  applicationMethod: "pinned-command" | "none",
+): ControllerRoutingSessionContext;
+recordControllerActualObservation(
+  sessionId: string,
+  observation: ControllerActualObservation,
+): ControllerRoutingSessionContext | undefined;
+getControllerRoutingContext(sessionId: string): ControllerRoutingSessionContext | undefined;
+finishControllerRoutingContext(sessionId: string, routingGeneration: number): void;
+
+// src/core/justice-plugin.ts
+bindControllerRoutingWorkflow(
+  sessionId: string,
+  workflow: ControllerWorkflow,
+  applicationMethod: "pinned-command" | "none",
+): void;
+observeControllerActual(
+  sessionId: string,
+  observation: ControllerActualObservation,
+): Promise<void>;
+
+// src/hooks/observation-handler.ts
+emitControllerRoutingObservation(context: ControllerRoutingSessionContext): Promise<void>;
+
+// src/core/v2/observation-model.ts
 export type ControllerRoutingObservedRecord = {
   readonly recordType: "observation";
   readonly kind: "controller_routing_observed";
@@ -17210,73 +17410,119 @@ export type ControllerRoutingObservedRecord = {
 } & ControllerRoutingObservation;
 ```
 
-The record is flattened and added as exactly one new member of the existing closed
-`PendingObservationRecord` union. It is a schemaVersion 1, non-authoritative audit observation.
+The session correlation state is ephemeral. Only `ControllerRoutingObservedRecord` is durable. Existing
+`setAgentMapping()` / `getAgentId()` remain unchanged and continue to own physical shard identity.
 
-- [ ] **Step 1: Write the complete failing durable-schema, replay, redaction, projection, runtime, and doctor tests**
+- [ ] **Step 1: Write complete failing session-correlation, runtime-transport, durable, replay, and doctor tests**
 
-Add concrete fixtures in the owning test files. At minimum, encode all of the following assertions:
+Add concrete fixtures before assertions. Runtime/correlation coverage must include all of the following.
 
 ```ts
-const routingEnvelope = {
-  schemaVersion: 1 as const,
-  timestamp: "2026-09-09T00:00:00.000Z",
-  agentId: "system" as const,
-  sessionId: "controller-routing",
-  writerId: "w-1",
-  recordType: "observation" as const,
-};
+it("starts a fresh routing generation and clears stale actuals on workflow switch", () => {
+  const first = state.beginControllerRoutingContext("s1", "brainstorming", "pinned-command");
+  state.recordControllerActualObservation("s1", {
+    source: "chat.params",
+    actualController: "sisyphus",
+    finalized: false,
+  });
+  state.recordControllerActualObservation("s1", {
+    source: "message.updated",
+    actualController: "sisyphus",
+    finalized: true,
+  });
 
-const validCustomMismatch = {
-  ...routingEnvelope,
-  kind: "controller_routing_observed" as const,
-  workflow: "subagent-driven-development",
-  routingStatus: "mismatch" as const,
-  desiredController: "atlas" as const,
-  actualController: "custom-controller-v2",
-  applicationMethod: "pinned-command" as const,
-  observationSource: "message.updated" as const,
-};
-
-it("accepts the valid custom-controller mismatch durable record", () => {
-  expect(() => validateRecordSchema({ ...validCustomMismatch, sequence: 1 })).not.toThrow();
+  const second = state.beginControllerRoutingContext("s1", "writing-plans", "pinned-command");
+  expect(second.routingGeneration).toBeGreaterThan(first.routingGeneration);
+  expect(second).toMatchObject({ workflow: "writing-plans", phase: "collecting" });
+  expect(second.chatParamsActualController).toBeUndefined();
+  expect(second.finalizedMessageActualController).toBeUndefined();
 });
 
-it.each([
-  [{ ...validCustomMismatch, routingStatus: "applied", reason: "actual_not_observed" }],
-  [{ ...validCustomMismatch, routingStatus: "mismatch", actualController: undefined }],
-  [{ ...validCustomMismatch, routingStatus: "unapplied", reason: "actual_not_observed", actualController: "atlas" }],
-])("rejects an illegal controller-routing persisted shape", (record) => {
-  expect(() => validateRecordSchema({ ...record, sequence: 1 })).toThrow();
+it("keeps controller raw identity separate from shard identity", () => {
+  state.setAgentMapping("s-custom", "custom-controller-v2");
+  state.beginControllerRoutingContext("s-custom", "subagent-driven-development", "pinned-command");
+  const routing = state.recordControllerActualObservation("s-custom", {
+    source: "message.updated",
+    actualController: "custom-controller-v2",
+    finalized: true,
+  });
+  expect(state.getAgentId("s-custom")).toBe("unknown");
+  expect(routing?.finalizedMessageActualController).toBe("custom-controller-v2");
+});
+
+it("does not treat non-finalized message.updated as positive application evidence", () => {
+  state.beginControllerRoutingContext("s2", "writing-plans", "pinned-command");
+  const routing = state.recordControllerActualObservation("s2", {
+    source: "message.updated",
+    actualController: "sisyphus",
+    finalized: false,
+  });
+  expect(routing?.phase).toBe("collecting");
+  expect(routing?.finalizedMessageActualController).toBeUndefined();
+});
+
+it("removes routing correlation during session cleanup", () => {
+  state.beginControllerRoutingContext("s3", "brainstorming", "pinned-command");
+  state.removeSession("s3");
+  expect(state.getControllerRoutingContext("s3")).toBeUndefined();
 });
 ```
 
-In `tests/runtime/observation-log-store.test.ts`, append a valid pending routing record through the real
-`ObservationLogStore.append()` boundary, call `readAll()`, and assert that the replayed record preserves
-`workflow`, status, desired/actual controller, application method, source, and sequence. In the same test file,
-append/read an existing valid legacy schemaVersion 1 observation fixture to prove backward compatibility; do not
-rewrite or migrate the legacy record.
+Adapter/JusticePlugin end-to-end tests must drive the actual Task 4.0 verified fields, not call the evaluator
+alone:
 
-In `tests/core/v2/persistence-redaction.test.ts`, construct a routing record whose free-form workflow/custom actual
-contains an existing redaction-test secret/path pattern. Assert that `redactPendingLogRecord()` retains the routing
-status/enum fields while no raw secret/config/prompt/tool payload is persisted. The producer must never accept or
-copy a raw command definition or configuration object into the routing record.
+```text
+command.execute.before command=justice-implement-writing-plans session=S
+chat.params             agent=sisyphus session=S
+finalized message.updated info.agent=sisyphus info.sessionID=S info.time.completed=<present>
+→ latest durable routing record:
+   workflow=writing-plans
+   desiredController=sisyphus
+   actualController=sisyphus
+   routingStatus=applied
+   observationSource=both
+```
 
-In `tests/core/v2/state-projection.test.ts`, replay the durable routing observation together with an otherwise empty
-log and assert that no task, evidence, Gate, Acceptance, lifecycle, or progress authority is created. Use the
-existing main projection; do not create a new routing projection subsystem.
+```text
+command.execute.before command=justice-implement-subagent-driven-development session=S2
+finalized message.updated info.agent=custom-controller-v2 info.sessionID=S2 info.time.completed=<present>
+→ durable mismatch with actualController="custom-controller-v2"
+→ envelope/shard agentId may be "unknown" and MUST NOT replace routing actualController
+```
 
-Runtime integration coverage must include:
+Include the explicit assertion:
 
-- finalized matching `message.updated` → durable `applied`;
-- finalized different known agent → durable `mismatch`;
-- finalized custom/unknown actual agent string → durable `mismatch`;
-- configured method + `chat.params` only → durable `unapplied/actual_not_observed` with source `none`;
-- application not configured → durable `unapplied/application_not_configured`;
-- mismatch remains L0 advisory/visibility only and never blocks execution or creates Acceptance authority.
+```ts
+expect(record.actualController).toBe("custom-controller-v2");
+expect(record.actualController).not.toBe("unknown");
+```
 
-Keep the existing pinned-command tests from this task: correct agent, missing command, missing/empty/unrecognized
-agent, mismatched agent, both precedence directions, complete corrected template output, and raw-config redaction.
+Also cover:
+
+- recognized command accepts an optional single leading `/`, while unrelated command text creates no workflow
+  binding;
+- `chat.params` only with a configured pinned context produces durable `unapplied/actual_not_observed`;
+- non-finalized `message.updated` produces no routing durable record (and therefore no `applied`/`mismatch`);
+- finalized different known agent produces durable `mismatch`;
+- direct core integration with an explicitly bound `applicationMethod: "none"` produces
+  `unapplied/application_not_configured`; adapter tests must prove an absent/unrecognized pinned command does not
+  fabricate this workflow binding;
+- same session `brainstorming` → `writing-plans` switch does not reuse old actuals or workflow;
+- session cleanup removes routing context and a later observation with no new command creates no routing record;
+- routing append/redaction/validation failure remains fail-open and creates no Acceptance authority.
+
+Keep the durable-contract coverage from `7e990a8` unchanged:
+
+- valid custom mismatch passes schema validation;
+- malformed status/reason/required-field combinations are rejected;
+- `ObservationLogStore.append()` → `readAll()` preserves routing payload/sequence;
+- an existing valid schemaVersion 1 fixture still replays unchanged;
+- persistence redaction copies no raw command/config/prompt/secret;
+- state projection gives the routing audit record no lifecycle/Evidence/Gate/Acceptance/Authorization/Progress
+  authority.
+
+Keep the pinned-command doctor tests: correct agent, missing command, missing/empty/unrecognized agent, mismatched
+agent, both source-precedence directions, complete template output, and raw-config redaction.
 
 - [ ] **Step 2: Confirm RED**
 
@@ -17284,6 +17530,9 @@ Run:
 
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/controller-routing.test.ts \
+  tests/core/session-state-provider.test.ts \
+  tests/core/justice-plugin-routing.test.ts \
   tests/core/v2/observation-model.test.ts \
   tests/runtime/validation.test.ts \
   tests/core/v2/persistence-redaction.test.ts \
@@ -17295,63 +17544,95 @@ devcontainer exec --workspace-folder . bun run vitest run \
   tests/runtime/doctor-cli.test.ts
 ```
 
-Expected: FAIL behaviorally because the persisted routing kind, validator/redaction branches, append/replay
-contract, runtime persistence, and pinned-command diagnostics are not all implemented. Unknown-symbol failures
-caused only by an incomplete test scaffold are not acceptable RED evidence; define fixtures/types before running.
+Expected: FAIL behaviorally because the session routing context, exact command binding, raw/source/finalized
+transport, and end-to-end durable append are absent. Missing imports, undeclared fixtures, malformed SDK mock shape,
+or shell/setup errors are not acceptable RED evidence.
 
-- [ ] **Step 3: Implement the fixed durable observation contract and runtime wiring**
+- [ ] **Step 3: Implement the exact runtime correlation and durable observation path**
 
-1. In `src/core/v2/observation-model.ts`, add `ControllerRoutingObservedRecord` exactly as Design §4.1 specifies
-   and extend `PendingObservationRecord` with one `PendingEnvelope & ControllerRoutingObservedRecord` variant.
-   Keep `schemaVersion: 1`; do not add a generic event abstraction.
-2. In `src/core/v2/record-builder.ts`, add one typed builder that accepts `PendingEnvelope`, `workflow`, and a
-   `ControllerRoutingObservation`, returns the flattened pending record, and copies no raw config/command/prompt.
-3. In `src/runtime/validation.ts`, add a closed `controller_routing_observed` branch validating every status-specific
-   required/forbidden field combination. Accept any non-empty custom actual-controller string only in variants that
-   permit an actual controller. Preserve all existing valid schemaVersion 1 branches unchanged.
-4. In `src/core/v2/persistence-redaction.ts`, add an explicit branch. Preserve literal enum/status fields and apply
-   the existing persistence redaction primitive to free-form `workflow` and custom `actualController` strings.
-5. Keep the main state projection audit-only: the routing record contributes no task/evidence/lifecycle/Gate/
-   Acceptance authority. If the current projection already no-ops because the record has no task identity, retain
-   that implementation and prove it with the test; only add an explicit existing-projector skip if required for
-   exhaustiveness. Do not add a new projection subsystem.
-6. Translate `chat.params` and finalized `message.updated` values through the existing adapter event path. Only a
-   finalized message actual is passed as `finalizedMessageActualController`. ObservationHandler resolves the desired
-   decision, calls the Task 4.1 evaluator, builds the typed durable record, and appends it through the existing log.
-7. Routing observation append/validation/redaction failure remains fail-open for execution and produces no positive
-   authority. A routing mismatch remains advisory/status visibility only.
-8. Implement the existing exact P0 pinned-command map and diagnostics in `doctor-categories.ts` using only
-   `DoctorEffectiveConfigView.effectiveCommandDefinitions`; do not parse a second config path or expose raw values.
-9. Document the same four required commands and v4.0.0 manual-install boundary in `README.md` and `SPEC.md`.
+1. **Session correlation ownership — `src/core/session-state-provider.ts`**
+   - Keep `sessionAgentIds`, `setAgentMapping()`, `getAgentId()`, and `resolveAgentId()` behavior unchanged.
+   - Add one session-keyed routing-context map using the Task 4.1 types.
+   - `beginControllerRoutingContext()` increments a fresh routing generation and replaces the previous workflow context with
+     no inherited actual observations.
+   - `recordControllerActualObservation()` stores raw controller strings without `resolveAgentId()`. `chat.params`
+     updates only `chatParamsActualController`; only finalized `message.updated` updates
+     `finalizedMessageActualController` and phase `finalized`.
+   - `finishControllerRoutingContext(sessionId, routingGeneration)` deletes only the same routing generation; a stale completion
+     must not delete a newer workflow context.
+   - Extend existing `removeSession()` to delete the routing context. Do not add another state service/framework.
 
-Use this exact P0 map:
+2. **Workflow binding — `src/runtime/opencode-adapter.ts` + `src/core/justice-plugin.ts`**
+   - In `onCommandExecuteBefore(input, output)`, call `resolvePinnedCommandWorkflow(input.command)` before existing
+     `/justice-start` / `/justice-implement` handling. On exact match, ensure Justice is initialized and call
+     `justice.bindControllerRoutingWorkflow(input.sessionID, workflow, "pinned-command")`; do not change
+     `output.parts` for this routing observation.
+   - Never infer workflow from `WorkflowRouter.resolveController()` output. The three sisyphus workflows remain
+     distinct command bindings.
+   - Unrecognized commands create no controller routing context.
 
-```ts
-export const REQUIRED_PINNED_COMMAND_AGENTS = {
-  "justice-implement-brainstorming": "sisyphus",
-  "justice-implement-writing-plans": "sisyphus",
-  "justice-implement-subagent-driven-development": "atlas",
-  "justice-implement-executing-plans": "sisyphus",
-} as const;
-```
+3. **Lossless actual transport — `src/runtime/opencode-adapter.ts`**
+   - Preserve the existing `AgentMapped` dispatch for persona/shard mapping.
+   - `onChatParams` additionally calls `justice.observeControllerActual(sessionID, { source: "chat.params",
+     actualController: input.agent, finalized: false })` using the raw string.
+   - For `message.updated`, use only Task 4.0 verified `properties.info` fields for routing: assistant role,
+     `info.sessionID`, raw `info.agent`, and `info.time.completed !== undefined`. Do not use the generic
+     `#resolveAgentName()` fallback chain as routing source identity and do not use `info.finish` as finalization
+     authority. Existing non-routing compatibility behavior may retain its fallback logic.
+   - Call `observeControllerActual()` for raw message actuals with `source: "message.updated"` and the exact
+     finalized boolean. Missing agent/session fields do not create routing evidence.
 
-`PinnedCommandPresenceResult` remains `{ readonly ok: boolean; readonly diagnostics: readonly
-PinnedCommandDiagnostic[] }`, with one of `missing | missing_agent | mismatched_agent` per failing required command
-and no raw command/config values beyond the compared agent identifier.
+4. **JusticePlugin correlation entry points — `src/core/justice-plugin.ts`**
+   - `bindControllerRoutingWorkflow()` delegates to `SessionStateProvider.beginControllerRoutingContext()`.
+   - `observeControllerActual()` delegates to `recordControllerActualObservation()`. If no active context exists,
+     return fail-open without routing append.
+   - For `chat.params`, pass the returned snapshot to `ObservationHandler.emitControllerRoutingObservation()` as
+     the provisional audit observation. For non-finalized `message.updated`, update session state but do not append
+     a routing record. For finalized `message.updated`, pass the finalized snapshot to the handler.
+   - After processing a finalized snapshot, call `finishControllerRoutingContext(sessionId, context.routingGeneration)` in a
+     `finally` path so an append failure cannot leave stale correlation reusable.
+
+5. **Desired decision/evaluation/append — `src/hooks/observation-handler.ts`**
+   - `emitControllerRoutingObservation(context)` calls `WorkflowRouter.resolveController(context.workflow)`;
+     undefined is fail-open and emits no record.
+   - Build `createControllerRoutingDecision(context.workflow, desired, "workflow_rule")`.
+   - Build `ControllerRoutingEvaluationInput` only from the current context routing generation.
+   - Evaluate, call the typed `buildControllerRoutingObservedRecord()` from `record-builder.ts`, and append through
+     the existing `ObservationLogStore` using the closed `ObservationAgentId` envelope from
+     `sessionStateProvider.getAgentId(sessionId)`.
+   - On `chat.params`, append the provisional configured/unfinalized audit snapshot. On non-finalized
+     `message.updated`, append no routing record. On finalized message, append the final
+     applied/mismatch snapshot.
+
+6. **Durable boundaries — existing Task 4.2 files from `7e990a8`**
+   - Preserve the exact flattened `ControllerRoutingObservedRecord`, closed observation union, schemaVersion 1
+     validator branch, explicit redaction branch, append/read/replay behavior, and audit-only projection semantics.
+   - Accept any non-empty custom actual-controller string only where the domain variant permits it.
+   - Do not add a generic event, persistence, projection, or DI framework.
+
+7. **Doctor/docs**
+   - Keep the exact required four pinned commands and desired agents. The command names must match
+     `PINNED_COMMAND_WORKFLOW_MAP` exactly; tests assert no drift.
+   - Continue using only `DoctorEffectiveConfigView.effectiveCommandDefinitions` and expose no raw command/config
+     values.
+   - Document the same P0 commands and manual-install boundary in `README.md` and `SPEC.md`.
 
 - [ ] **Step 4: Confirm GREEN**
 
 Run the same command as Step 2.
 
-Expected: PASS, including typed schema assignability, strict validation, custom mismatch acceptance, malformed
-record rejection, schemaVersion 1 replay compatibility, append/read replay, persistence redaction, audit-only
-projection, applied/mismatch/unapplied runtime persistence, and all pinned-command diagnostics.
+Expected: PASS for exact command→workflow binding, source/finalization preservation, custom raw identity retention,
+workflow-generation isolation, session cleanup, applied/mismatch/chat-only/unconfigured behavior, durable schema/
+validation/redaction/replay, audit-only projection, and doctor diagnostics.
+
+Then run the Phase 4 boundary gate required by Global Constraints. Task 4.0 must already be PASS; a unit-test-only
+substitute for the supported-host trace is not sufficient.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-GIT_MASTER=1 git add src/core/v2/observation-model.ts src/core/v2/record-builder.ts src/runtime/validation.ts src/core/v2/persistence-redaction.ts src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/observation-log-store.test.ts tests/core/v2/state-projection.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
-GIT_MASTER=1 git commit -m "feat: controller routing observationとdoctor診断を追加"
+GIT_MASTER=1 git add src/core/session-state-provider.ts src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/record-builder.ts src/runtime/validation.ts src/core/v2/persistence-redaction.ts src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/session-state-provider.test.ts tests/core/justice-plugin-routing.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/observation-log-store.test.ts tests/core/v2/state-projection.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git commit -m "feat: correlate controller routing runtime observations"
 ```
 
 ## Traceability and Definition of Done
@@ -17362,7 +17643,8 @@ GIT_MASTER=1 git commit -m "feat: controller routing observationとdoctor診断�
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.1, 4.2                | evaluator input/signature, applied, known/custom mismatch, chat.params-only/unconfigured normalization, durable record schema, validator, redaction, append/replay, audit-only projection, adapter/ObservationHandler integration, effective pinned-command precedence, template output |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | supported-host command/message signal trace, exact pinned-command→workflow mapping, session routing-generation correlation, raw chat.params + finalized message.updated transport, applied/known/custom mismatch/chat-only tests, durable append/replay, cleanup/isolation |
+| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | `command.execute.before` field verification → exact workflow binding → session routing generation → raw/source/finalized actual capture → WorkflowRouter decision → evaluator → durable builder |
 | Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |

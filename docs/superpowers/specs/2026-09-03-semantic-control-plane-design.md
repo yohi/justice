@@ -72,7 +72,9 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 - `src/core/v2/gate-definition.ts` / `src/core/v2/rule-evaluation-engine.ts`
   - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
 - `src/core/session-state-provider.ts`
-  - `chat.params` / `message.updated` の actual agent/model を記録する用途を維持し、controller routing observation への入力として使う。
+  - 既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持し、custom controller のために widening しない。
+  - Controller Routing 用には別の session-scoped `ControllerRoutingSessionContext` を保持する。pinned-command workflow binding ごとに fresh generation を開始し、raw `chat.params` / finalized `message.updated` actual を `ControllerObservedAgentId` のまま保持する。
+  - workflow 切替時は旧 routing actual を継承せず、`removeSession()` は routing context も削除する。新しい generic session-state framework は作らない。
 
 ### 3.3 Hook / Adapter 接続
 
@@ -81,7 +83,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `task()` PreToolUse 介入条件を「active binding の session/path/fingerprint が一致」に置き換える。
   - fingerprint 不一致検出時に binding を `invalidated` 化する。
 - `src/hooks/observation-handler.ts`
-  - `chat.params` / `message.updated` の actual agent を `ControllerRoutingObservation` へ記録。
+  - `emitControllerRoutingObservation(context)` は current session routing generation だけを入力に、`WorkflowRouter.resolveController(workflow)` → `createControllerRoutingDecision()` → `evaluateControllerRoutingObservation()` → typed record builder → `ObservationLogStore.append()` を実行する。
+  - `chat.params` の provisional observation と finalized `message.updated` の final observationを区別し、raw custom agent stringを shard `ObservationAgentId` へ変換せず routing payload に保持する。
   - Worker 完了・Evidence・Review・Gate 結果を typed lifecycle events として durable log に書き出す。
   - review dispatch の `pending` / `claimed` / `terminal` transition を durable observation として記録する。`pending` は `ReviewRequiredDirective` の inject より先に記録する。
   - `task()` 呼び出しに `TaskCallPurpose` を付与し、PostToolUse で implementation / task_review / final_review を区別する。
@@ -93,6 +96,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - task() payload の正規化 (禁止 field 除去 / `taskId`/`loadSkills`/`runInBackground` の canonicalize) を維持。
   - `sp-deep` / `sp-architecture` も category として通すだけで model/agent は補正しない。
   - `ReviewRequiredDirective` を Controller へ inject するための出力経路を追加。
+  - JUS-P0-01 workflow identity は `command.execute.before.input.command` と `input.sessionID` を使い、4つの pinned command だけを exact workflow map で bind する。desired controller、prompt、assistant自由文から workflow を逆算しない。
+  - routing actual は `chat.params.input.agent` と `message.updated.properties.info.agent` の raw stringを別経路で `JusticePlugin.observeControllerActual()` へ渡す。positive finalization は Task 4.0 で検証した assistant `info.time.completed !== undefined` のみを使い、既存 persona用 `AgentMapped` normalizationとは分離する。
 - `src/core/justice-plugin.ts`
   - `PostToolUse` イベントを **transactional order** で処理する。`observationHandler` / `planBridge` / `taskFeedback` 等の side-effecting handlers を `Promise.all` して並列実行してはならない。
 - implementation task の PreToolUse で current task に fresh `TaskExecutionRef` / `attemptId` を発行し、`authorized → in_progress` を durable に記録してから implementation `TaskCallBinding` を作る。identity allocation と transition は deterministic な transition key で結び、append 結果が不明な場合は同じ key を read-before-retry して既存 identity を再利用する。記録不能な場合も task() は fail-open で継続するが、その call は authoritative worker completion にしない。
@@ -258,6 +263,146 @@ export function evaluateControllerRoutingObservation(
   input: ControllerRoutingEvaluationInput,
 ): ControllerRoutingObservation;
 ```
+
+### Runtime correlation contract
+
+JUS-P0-01 production wiring uses one exact, bounded correlation path. Workflow identity is never inferred from the
+selected controller, assistant prose, prompt text, or arbitrary skill text.
+
+```ts
+// src/core/controller-routing.ts
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<ControllerPinnedCommand, ControllerWorkflow>> = {
+  "justice-implement-brainstorming": "brainstorming",
+  "justice-implement-writing-plans": "writing-plans",
+  "justice-implement-subagent-driven-development": "subagent-driven-development",
+  "justice-implement-executing-plans": "executing-plans",
+};
+
+export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
+
+export type ControllerActualObservation = {
+  readonly source: "chat.params" | "message.updated";
+  readonly actualController: ControllerObservedAgentId;
+  readonly finalized: boolean;
+};
+
+export type ControllerRoutingSessionContext = {
+  readonly sessionId: string;
+  readonly routingGeneration: number;
+  readonly workflow: ControllerWorkflow;
+  readonly applicationMethod: "pinned-command" | "none";
+  readonly chatParamsActualController?: ControllerObservedAgentId;
+  readonly finalizedMessageActualController?: ControllerObservedAgentId;
+  readonly phase: "collecting" | "finalized";
+};
+```
+
+`resolvePinnedCommandWorkflow()` removes at most one leading `/` and then performs an exact lookup in
+`PINNED_COMMAND_WORKFLOW_MAP`. It accepts no aliases and no fuzzy/prompt/skill-text matching. The map is the
+workflow-identity SSOT for the four P0 pinned commands. `WorkflowRouter.resolveController(workflow)` remains the
+separate workflow → desired-controller SSOT; the controller value is never used to recover the workflow.
+
+The supported OpenCode runtime fields are:
+
+- workflow binding: `command.execute.before` → `input.command` + `input.sessionID`;
+- chat parameter observation: `chat.params` → `input.sessionID` + raw `input.agent`;
+- message execution observation: `message.updated` → `event.properties.info.sessionID`, raw
+  `event.properties.info.agent`, `event.properties.info.role`, and `event.properties.info.time.completed`;
+- a positive finalized message observation requires `info.role === "assistant"` and
+  `info.time.completed !== undefined`. `info.finish` is not the JUS-P0-01 finalization authority.
+
+Before production wiring, Task 4.0 must verify these exact fields against the resolved SDK contract and one
+supported-host trace for a configured custom pinned command. If the host does not expose the command identity and
+finalized message fields above with a common `sessionID`, Task 4.2 is blocked. The fallback is not prompt parsing or
+a generic command-interception framework.
+
+`SessionStateProvider` keeps two intentionally separate identity domains:
+
+- `setAgentMapping()` / `getAgentId()` retain the existing closed `ObservationAgentId` mapping used for physical
+  shard/envelope identity; arbitrary controller strings continue to normalize to `"unknown"` there;
+- controller routing uses a separate `Map<sessionId, ControllerRoutingSessionContext>` and never converts
+  `ControllerObservedAgentId` through `resolveAgentId()`.
+
+The routing-context API is fixed to the following responsibilities (method spelling may be implemented exactly as
+shown; do not introduce a second state framework):
+
+```ts
+beginControllerRoutingContext(
+  sessionId: string,
+  workflow: ControllerWorkflow,
+  applicationMethod: "pinned-command" | "none",
+): ControllerRoutingSessionContext;
+
+recordControllerActualObservation(
+  sessionId: string,
+  observation: ControllerActualObservation,
+): ControllerRoutingSessionContext | undefined;
+
+getControllerRoutingContext(sessionId: string): ControllerRoutingSessionContext | undefined;
+finishControllerRoutingContext(sessionId: string, routingGeneration: number): void;
+```
+
+`beginControllerRoutingContext()` stores the supplied `sessionId`, creates a fresh monotonically increasing routing generation, and clears every
+actual observation from the previous workflow binding. A new pinned workflow therefore cannot inherit the old
+workflow, `chat.params` actual, or finalized message actual. `removeSession(sessionId)` removes this routing context
+in addition to the existing persona/task-window state.
+
+`recordControllerActualObservation()` preserves the raw string unchanged. For `chat.params`, it updates only
+`chatParamsActualController`. For `message.updated`, a non-finalized observation never populates
+`finalizedMessageActualController`; it updates no positive routing evidence and does not trigger a routing-record
+append. A finalized observation stores the raw string there and moves the context to `phase = "finalized"`.
+
+The adapter-to-core ownership is explicit and narrow:
+
+```ts
+JusticePlugin.bindControllerRoutingWorkflow(
+  sessionId: string,
+  workflow: ControllerWorkflow,
+  applicationMethod: "pinned-command" | "none",
+): void;
+
+JusticePlugin.observeControllerActual(
+  sessionId: string,
+  observation: ControllerActualObservation,
+): Promise<void>;
+```
+
+`OpenCodeAdapter.onCommandExecuteBefore()` calls `resolvePinnedCommandWorkflow(input.command)` before the existing
+Justice command handling. A match calls `bindControllerRoutingWorkflow(input.sessionID, workflow,
+"pinned-command")` and does not mutate command output. `chat.params` and `message.updated` continue their existing
+persona mapping, but additionally call `observeControllerActual()` with the unnormalized raw agent string and exact
+source/finalized fields above. The existing `AgentMapped` path is not repurposed as controller authority.
+
+`JusticePlugin.observeControllerActual()` writes the routing-specific session state, obtains the resulting current
+routing-generation snapshot, and asks `ObservationHandler.emitControllerRoutingObservation(snapshot)` to resolve
+`WorkflowRouter.resolveController(snapshot.workflow)`, create the `ControllerRoutingDecision`, construct the Task
+4.1 evaluator input, build the typed durable record, and append through `ObservationLogStore`.
+
+- A `chat.params` observation with an active configured context emits a provisional durable
+  `unapplied/actual_not_observed` audit snapshot. A later finalized `message.updated` may append the final
+  `applied`/`mismatch` snapshot; both are audit history, not authority.
+- A non-finalized `message.updated` never emits `applied` or `mismatch` and never finalizes the context.
+- A finalized `message.updated` emits the final snapshot and then calls `finishControllerRoutingContext()` for the
+  same routing generation. Later stale events cannot reuse that completed binding.
+- An actual observation with no active workflow context produces no routing record. Justice does not guess the
+  workflow.
+- `applicationMethod: "none"` remains a valid domain/handler integration state for explicit core callers and
+  produces `application_not_configured`; the production adapter MUST NOT fabricate a missing pinned-command
+  invocation merely to create that record. Missing pinned commands remain a doctor/configuration diagnosis.
+- Append/redaction/validation failure stays fail-open and still finalizes an already-completed ephemeral routing
+  context; a failed audit write is never retried by reusing stale workflow state.
 
 Evaluation is deterministic and uses only the normalized runtime facts above.
 
@@ -1489,43 +1634,85 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 ### 5.1 JUS-P0-01 Controller Routing
 
 ```text
-workflow 起動 (command / skill 検出)
+supported-host signal verification (Task 4.0)
+  command.execute.before: input.command + input.sessionID
+  chat.params: input.agent + input.sessionID
+  message.updated: properties.info.agent + properties.info.sessionID + properties.info.time.completed
+  → any required signal missing/unstable => Task 4.2 BLOCKED
+
+recognized pinned command invocation
+  → normalize at most one leading "/"
+  → resolvePinnedCommandWorkflow(command)
+      justice-implement-brainstorming              → brainstorming
+      justice-implement-writing-plans              → writing-plans
+      justice-implement-subagent-driven-development → subagent-driven-development
+      justice-implement-executing-plans             → executing-plans
+  → SessionStateProvider.beginControllerRoutingContext(sessionID, workflow, "pinned-command")
+      fresh generation
+      clear prior workflow/raw actual values
   → WorkflowRouter.resolveController(workflow)
-  → routing-decision.ts: createControllerRoutingDecision(workflow, controller, workflow_rule)
-  → controller-routing.ts: evaluateControllerRoutingObservation(input)
-      runtime-api && capability unavailable
-        → unsupported (reserved value; v4.0.0 runtime API implementation is not required)
-      applicationMethod === none
-        → unapplied / application_not_configured
-      configured method + finalized message.updated not observed
-        → unapplied / actual_not_observed / observationSource=none
-      configured method + finalized message.updated observed
-        actual === desired → applied
-        actual !== desired (known or custom string) → mismatch
-  → record-builder.ts: flattened ControllerRoutingObservedRecord を生成
-      kind=controller_routing_observed
-      workflow + desired/actual/status/applicationMethod/source/reason を直接保持
-  → ObservationLogStore.append()
-      → redactPendingLogRecord(controller_routing_observed)
-      → schemaVersion:1 observation として durable append
-  → restart / replay
-      → validateRecordSchema(controller_routing_observed)
-      → audit-only record として復元
-      → task lifecycle / Evidence / Gate / Acceptance authority には使用しない
-  → mismatch 時は L0 advisory + justice_review / status で可視化
+  → createControllerRoutingDecision(workflow, desiredController, workflow_rule)
+
+chat.params for the same session
+  → preserve raw input.agent as ControllerObservedAgentId
+  → record source="chat.params"
+  → do NOT route through resolveAgentId() for controller state
+  → configured context with no finalized message actual
+      → evaluateControllerRoutingObservation(...)
+      → provisional durable unapplied / actual_not_observed / observationSource=none
+
+message.updated for the same session
+  → read raw properties.info.agent
+  → finalized := info.role === "assistant" && info.time.completed !== undefined
+  → non-finalized: never applied/mismatch, keep context collecting
+  → finalized:
+      preserve raw actual string
+      → actual === desired → applied
+      → actual !== desired, including custom string → mismatch
+      → source=both iff chat.params was already observed, else message.updated
+      → build flattened ControllerRoutingObservedRecord
+      → ObservationLogStore.append()
+          → redactPendingLogRecord(controller_routing_observed)
+          → schemaVersion:1 durable audit append
+      → finishControllerRoutingContext(sessionID, same routing generation)
+
+session.deleted / Justice session cleanup
+  → remove existing persona/task-window state
+  → remove controller-routing session context
+
+next pinned workflow in the same session
+  → begin fresh routing generation before collecting actuals
+  → no workflow/actual state from the previous routing generation is reusable
+
+restart / replay
+  → validateRecordSchema(controller_routing_observed)
+  → audit-only recordとして復元
+  → task lifecycle / Evidence / Gate / Acceptance / Authorization / Progress authorityには使用しない
 ```
 
 Acceptance criteria:
 
-- `brainstorming` / `writing-plans` / `executing-plans` → `desiredController = sisyphus`.
-- `subagent-driven-development` → `desiredController = atlas`.
+- `command.execute.before.input.command` and `input.sessionID` are the only P0 workflow-binding host fields. No
+  controller-to-workflow reverse lookup, prompt heuristic, assistant-text parsing, or generic skill-text parser is
+  permitted.
+- The four exact pinned commands map one-to-one to the four `ControllerWorkflow` values. A leading `/` is the only
+  normalization; any other command is not a workflow signal.
+- Task 4.0 proves on the supported host that a configured pinned command reaches `command.execute.before` with the
+  expected command/session fields and that `message.updated.properties.info.time.completed` marks a completed
+  assistant message carrying the raw `info.agent`. Failure of this proof blocks Task 4.2.
+- Existing `ObservationAgentId = AgentId | "system" | "unknown"` remains the physical-shard identity. A custom
+  controller such as `custom-controller-v2` may still map to `"unknown"` for the shard envelope, but its routing
+  payload `actualController` remains exactly `"custom-controller-v2"`.
 - A matching finalized `message.updated` actual is required for `applied`; `chat.params` alone normalizes to
   `unapplied/actual_not_observed` for a configured method.
+- A non-finalized `message.updated` does not append a routing observation and cannot create `applied` or `mismatch`.
 - A different known controller and a custom/unknown non-empty actual-controller string both persist as `mismatch`.
-- `applicationMethod = none` persists as `unapplied/application_not_configured` and never becomes `applied`, even
-  if an actual controller was observed.
+- A new workflow binding in the same session clears the previous routing correlation before any new observation.
+- Session cleanup removes the ephemeral routing context.
+- `applicationMethod = none` remains a pure-domain/explicit-core state; production does not invent a workflow when
+  the required pinned command is absent. Doctor reports the missing configuration.
 - A valid `controller_routing_observed` record survives append → persisted read → restart/replay unchanged except
-  for the canonical persistence redaction of free-form strings.
+  for canonical persistence redaction of free-form strings.
 - Existing valid schemaVersion 1 observation/decision records remain replay-compatible.
 - Controller routing observations are audit-only and cannot create lifecycle, Gate, Acceptance, authorization, or
   progress authority.
