@@ -5061,20 +5061,23 @@ GIT_MASTER=1 git commit -m "test: child session correlation runtime境界を検�
 
 - Create `spikes/review-artifact-linux/probe.c`.
 - Create `spikes/review-artifact-linux/verify.ts`.
-- Replace `.devcontainer/Dockerfile` with the complete pinned-user structure below; do not install an unpinned apt `rustc` or `cargo`.
-- Modify `.devcontainer/devcontainer.json` so `remoteUser` does not override the Dockerfile's `bun` user during the hard gate.
+- Replace `.devcontainer/Dockerfile` with the complete pinned-toolchain structure below; do not install an unpinned apt `rustc` or `cargo`.
+- Preserve `.devcontainer/devcontainer.json`'s root execution contract: `remoteUser` must remain `root` during the hard gate and must not be changed to `bun`.
 - Create `docs/agents/review-artifact-linux-provider.md` with the exact probe output and the supported deployment statement.
 - Test `tests/runtime/review-artifact-linux-probe.test.ts`.
 
 **Requirement:** F-045, F-047.
 
-The probe is a hard gate, not a best-effort experiment. It must prove the exact primitives that the production provider will expose before Task 3.3b or Task 3.4 starts. The probe must not use `bun:ffi`, `realpath`-then-path-operation sequences, pathname-only `readFile`/`writeFile`, or a check-then-unlink cleanup fallback. The same task owns the supported host CLI provisioning: the built image must contain exactly `opencode-ai@1.18.29` under the `bun` user's global bin, and the image verification must fail if `opencode --version` is not exactly `1.18.29`.
+The probe is a hard gate, not a best-effort experiment. It must prove the exact primitives that the production provider will expose before Task 3.3b or Task 3.4 starts. The probe must not use `bun:ffi`, `realpath`-then-path-operation sequences, pathname-only `readFile`/`writeFile`, or a check-then-unlink cleanup fallback. The same task owns the supported host CLI provisioning: the built image must contain exactly `opencode-ai@1.18.29` in a root-readable shared global bin, and the image verification must fail if `opencode --version` is not exactly `1.18.29`.
 
 **Implementation steps:**
 
 Before compiling the probe, make the devcontainer provisioning match the pinned toolchain. The final
 Dockerfile is not a partial insertion: it must use this complete structure, and it must not install
-`rustc` or `cargo` from apt:
+`rustc` or `cargo` from apt. The image intentionally ends as `root`: the repository's existing rootless
+Docker bind mount maps the host user to container `root`, so switching to the image's `bun` account would
+make `/workspace` and the host-mounted checkout non-writable. Toolchains are installed into shared,
+root-owned, mode-0755 prefixes and are consumed by the same root process that runs `devcontainer exec`:
 
 ```dockerfile
 FROM oven/bun:1
@@ -5096,28 +5099,38 @@ RUN set -eux; \
 WORKDIR /workspace
 RUN chown -R "$USERNAME:$USERNAME" /workspace
 
-USER $USERNAME
-ENV BUN_INSTALL=/home/bun/.bun
-ENV RUSTUP_HOME=/home/bun/.rustup
-ENV CARGO_HOME=/home/bun/.cargo
-ENV PATH=/home/bun/.bun/bin:/home/bun/.cargo/bin:${PATH}
+ENV BUN_INSTALL=/opt/justice/bun
+ENV RUSTUP_HOME=/opt/justice/rustup
+ENV CARGO_HOME=/opt/justice/cargo
+ENV PATH=/opt/justice/bun/bin:/opt/justice/cargo/bin:${PATH}
 
+RUN install -d -o root -g root -m 0755 \
+    "$BUN_INSTALL" "$RUSTUP_HOME" "$CARGO_HOME" \
+    "$BUN_INSTALL/bin" "$CARGO_HOME/bin"
+
+USER root
 RUN bun add --global --exact opencode-ai@1.18.29
-RUN test "$(opencode --version)" = "1.18.29"
+RUN test "$(whoami)" = "root" \
+    && command -v opencode \
+    && test "$(opencode --version)" = "1.18.29"
 
 RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
+    | RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
 RUN rustup toolchain install 1.85.1 \
     --profile minimal \
     --component rustfmt \
     --component clippy \
     --target x86_64-unknown-linux-gnu \
-    && rustup default 1.85.1
+    && rustup default 1.85.1 \
+    && test "$(rustup show active-toolchain | cut -d' ' -f1)" = "1.85.1-x86_64-unknown-linux-gnu"
+
+USER root
 ```
 
-The existing `devcontainer.json` currently overrides `USER bun` with `remoteUser: "root"`. Replace that
-override with the following complete user selection; otherwise `devcontainer exec` would validate and run
-the gate as root even though the Dockerfile installs Rust under `/home/bun`:
+The existing `devcontainer.json` already selects `remoteUser: "root"`; retain that value. Replace the
+complete file only if another change has overwritten it, and use this explicit selection so
+`devcontainer exec` validates and runs the gate in the same root environment that owns `/opt/justice`:
 
 ```jsonc
 {
@@ -5141,13 +5154,14 @@ the gate as root even though the Dockerfile installs Rust under `/home/bun`:
       }
     }
   },
-  "remoteUser": "bun"
+  "remoteUser": "root"
 }
 ```
 
 The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values. Every Rust command must
-run as `bun` and must verify the toolchain token (rustup may append a source suffix for a directory
-override):
+run as `root` and must verify the toolchain token (rustup may append a source suffix for a directory
+override). The CLI and workspace write checks must be in the same command, not merely in a Docker build
+layer:
 
 The OpenCode CLI is provisioned in this same Dockerfile layer, not downloaded by the runtime spike or
 installed opportunistically during a test. `BUN_INSTALL` and `PATH` must point at the `bun` user's global
@@ -5156,7 +5170,14 @@ fail the image build if the exact host CLI is unavailable. Task 3.3c consumes th
 it must not introduce a second installer, a floating version, or a host-version compatibility range.
 
 ```bash
-test "$(whoami)" = "bun"
+test "$(whoami)" = "root"
+test -w /workspace
+probe="/workspace/.justice-write-probe.$$"
+printf '%s' root > "$probe"
+test "$(cat "$probe")" = "root"
+rm -f "$probe"
+command -v opencode
+test "$(opencode --version)" = "1.18.29"
 command -v rustup
 command -v cargo
 command -v rustc
@@ -5165,8 +5186,11 @@ rustc --version
 cargo --version
 ```
 
-Do not mix a root-installed rustup with `/home/bun` paths, and do not treat a successful root command as
-evidence for the `bun` execution environment.
+Do not mix a root-installed rustup with `/home/bun` paths, do not set `remoteUser: "bun"`, and do not
+treat a successful image-layer command as evidence for the bind-mounted root execution environment.
+`BUN_INSTALL=/opt/justice/bun`, `RUSTUP_HOME=/opt/justice/rustup`, `CARGO_HOME=/opt/justice/cargo`,
+and the exact `PATH` above are the only supported installation locations. The final image must not
+download or install OpenCode/Rust from the runtime spike or a test.
 
 1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews`, `.justice/reviews/.leases`, and `.justice/reviews/.quarantine` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
 2. Configure every descendant open with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, plus `O_DIRECTORY`, `O_CLOEXEC`, and `O_NOFOLLOW` where applicable. Create the artifact leaf with `O_CREAT | O_EXCL | O_NOFOLLOW`, record its `st_dev`/`st_ino`, and create the private lease with `linkat(2)` before returning the reservation.
@@ -5177,7 +5201,7 @@ evidence for the `bun` execution environment.
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v opencode && test "$(opencode --version)" = "1.18.29" && command -v rustup && command -v cargo && command -v rustc && test "$(rustup show active-toolchain | cut -d" " -f1)" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && probe="/workspace/.justice-write-probe.$$" && printf "%s" root > "$probe" && test "$(cat "$probe")" = root && rm -f "$probe" && command -v opencode && test "$(opencode --version)" = "1.18.29" && command -v rustup && command -v cargo && command -v rustc && test "$(rustup show active-toolchain | cut -d" " -f1)" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version'
 devcontainer exec --workspace-folder . bun spikes/review-artifact-linux/verify.ts
 devcontainer exec --workspace-folder . bun run test -- tests/runtime/review-artifact-linux-probe.test.ts
 ```
@@ -5604,6 +5628,56 @@ describe("LinuxOpenat2ReviewArtifactProvider security boundaries", () => {
 });
 ```
 
+Add this native unit test to the same `lib.rs` under `#[cfg(test)]`. It is the required deterministic native
+fault-injection test; the TypeScript `failLeaseDelete` mock below is supplementary and cannot replace it:
+
+```rust
+#[cfg(test)]
+mod cleanup_fault_tests {
+    use super::*;
+
+    #[test]
+    fn one_sided_quarantine_unlink_failure_keeps_residual_for_retry() -> Result<()> {
+        let fixture = arrange_native_cleanup_fixture()?;
+        {
+            let mut state = fixture
+                .root
+                .state
+                .lock()
+                .map_err(|_| error(Status::GenericFailure, "root_lock_poisoned", libc::EIO))?;
+            state
+                .as_mut()
+                .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?
+                .faults
+                .fail_next_unlink_label = Some(CleanupLabel::Lease);
+        }
+
+        let first = fixture.root.cleanup(&fixture.reservation)?;
+        assert_eq!(first.status, "cleanup_incomplete");
+        assert!(!fixture.artifact_target_exists());
+        assert!(!fixture.lease_target_exists());
+        assert!(!fixture.artifact_quarantine_exists());
+        assert!(fixture.lease_quarantine_exists());
+
+        let second = fixture.root.cleanup(&fixture.reservation)?;
+        assert_eq!(second.status, "cleaned");
+        assert!(!fixture.artifact_target_exists());
+        assert!(!fixture.lease_target_exists());
+        assert!(!fixture.artifact_quarantine_exists());
+        assert!(!fixture.lease_quarantine_exists());
+        fixture.assert_no_replacement_was_created_or_removed();
+        Ok(())
+    }
+}
+```
+
+`arrange_native_cleanup_fixture` must create a real supported Linux x86_64 root, artifact marker, private
+lease, and identity-safe path probes; it must not use a mock filesystem or expose `CleanupFaults` through N-API.
+The first cleanup call must verify both quarantine leaves before the injected lease unlink failure is reached.
+The second call must discover the artifact as already absent and delete only the identity-verified residual
+lease quarantine. Add the test name to the native `cargo test` hard gate and assert that no replacement leaf
+was created, overwritten, or deleted during either call.
+
 The two files above are the RED source. Before running RED, Step 1 must materialize a complete buildable
 scaffold, not a prose placeholder. Use the complete `lib.rs` implementation listing in Step 3 as the source
 for the scaffold, materialize it before RED, and replace only `writeExisting`, `readOnce`, and `cleanup`
@@ -5702,7 +5776,7 @@ unsupported publication is covered by the pure environment guard matrix and must
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu"'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu"'
 devcontainer exec --workspace-folder . bun run build:native:review-artifact
 devcontainer exec --workspace-folder . bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
 ```
@@ -5790,6 +5864,8 @@ struct RootState {
     leases: OwnedFd,
     quarantine: OwnedFd,
     next_quarantine_id: u64,
+    #[cfg(test)]
+    faults: CleanupFaults,
 }
 
 #[napi]
@@ -5823,6 +5899,29 @@ enum DeleteOutcome {
     Incomplete,
 }
 
+#[derive(Clone)]
+struct MovedQuarantineLeaf {
+    target_dir: RawFd,
+    target_leaf: String,
+    quarantine_leaf: String,
+}
+
+struct VerifiedQuarantineLeaf {
+    moved: MovedQuarantineLeaf,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CleanupLabel {
+    Artifact,
+    Lease,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct CleanupFaults {
+    fail_next_unlink_label: Option<CleanupLabel>,
+}
+
 #[napi]
 impl NativeReservationHandle {
     #[napi]
@@ -5849,7 +5948,10 @@ pub struct NativeReviewArtifactRoot {
 impl NativeReviewArtifactRoot {
     #[napi]
     pub fn create_exclusive_marker(&self, artifact_path: String) -> Result<NativeReservationHandle> {
-        let mut state = self.lock_open()?;
+        let mut guard = self.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         let artifact_leaf = artifact_leaf(&artifact_path)?;
         let artifact_fd = openat2(
             state.reviews.as_raw_fd(),
@@ -5907,7 +6009,10 @@ impl NativeReviewArtifactRoot {
         &self,
         descriptor: NativeReservationDescriptor,
     ) -> Result<NativeReservationHandle> {
-        let state = self.lock_open()?;
+        let mut guard = self.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         let artifact_leaf = artifact_leaf(&descriptor.artifact_path)?;
         let lease_leaf = lease_leaf(&descriptor.lease_path)?;
         let artifact_fd = openat2(
@@ -5940,9 +6045,12 @@ impl NativeReviewArtifactRoot {
 
     #[napi]
     pub fn write_existing(&self, reservation: &NativeReservationHandle, bytes: Buffer) -> Result<()> {
-        let state = self.lock_open()?;
+        let mut guard = self.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         self.verify_handle(reservation)?;
-        let (artifact_fd, _lease_fd) = open_reservation_pair(&state, reservation)?;
+        let (artifact_fd, _lease_fd) = open_reservation_pair(state, reservation)?;
         let length = i64::try_from(bytes.len()).map_err(|_| error(Status::InvalidArg, "content_too_large", libc::EFBIG))?;
         check_errno(unsafe { libc::ftruncate(artifact_fd.as_raw_fd(), length as off_t) }, "ftruncate")?;
         write_all(artifact_fd.as_raw_fd(), bytes.as_ref())?;
@@ -5951,9 +6059,12 @@ impl NativeReviewArtifactRoot {
 
     #[napi]
     pub fn read_once(&self, reservation: &NativeReservationHandle) -> Result<Buffer> {
-        let state = self.lock_open()?;
+        let mut guard = self.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         self.verify_handle(reservation)?;
-        let (artifact_fd, _lease_fd) = open_reservation_pair(&state, reservation)?;
+        let (artifact_fd, _lease_fd) = open_reservation_pair(state, reservation)?;
         let size = fstat_size(artifact_fd.as_raw_fd())?;
         let mut bytes = vec![0_u8; size];
         read_exact(artifact_fd.as_raw_fd(), &mut bytes)?;
@@ -5962,21 +6073,24 @@ impl NativeReviewArtifactRoot {
 
     #[napi]
     pub fn cleanup(&self, reservation: &NativeReservationHandle) -> Result<NativeCleanupResult> {
-        let mut state = self.lock_open()?;
+        let mut guard = self.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
         self.verify_handle(reservation)?;
         let artifact_leaf = artifact_leaf(&reservation.artifact_path)?;
         let lease_leaf = lease_leaf(&reservation.lease_path)?;
         let reviews_fd = state.reviews.as_raw_fd();
         let leases_fd = state.leases.as_raw_fd();
         let artifact = quarantine_one(
-            &mut state,
+            state,
             reviews_fd,
             &artifact_leaf,
             &reservation.identity,
             "artifact",
         );
         let lease = quarantine_one(
-            &mut state,
+            state,
             leases_fd,
             &lease_leaf,
             &reservation.identity,
@@ -5995,39 +6109,26 @@ impl NativeReviewArtifactRoot {
                     quarantine_leaf: lease_quarantine,
                 },
             ) => {
-                // Do not restore a pair after one delete: the first delete may have
-                // succeeded, so a later failure is an incomplete paired cleanup.
-                let artifact_delete = delete_quarantine(
-                    &state,
-                    artifact_dir,
-                    &artifact_target,
-                    &artifact_quarantine,
+                cleanup_moved_pair(
+                    state,
+                    MovedQuarantineLeaf {
+                        target_dir: artifact_dir,
+                        target_leaf: artifact_target,
+                        quarantine_leaf: artifact_quarantine,
+                    },
+                    MovedQuarantineLeaf {
+                        target_dir: lease_dir,
+                        target_leaf: lease_target,
+                        quarantine_leaf: lease_quarantine,
+                    },
                     &reservation.identity,
-                );
-                let lease_delete = if matches!(artifact_delete, DeleteOutcome::Deleted) {
-                    delete_quarantine(
-                        &state,
-                        lease_dir,
-                        &lease_target,
-                        &lease_quarantine,
-                        &reservation.identity,
-                    )
-                } else {
-                    DeleteOutcome::Incomplete
-                };
-                match (artifact_delete, lease_delete) {
-                    (DeleteOutcome::Deleted, DeleteOutcome::Deleted) => "cleaned",
-                    (DeleteOutcome::ReplacementRetained, _) | (_, DeleteOutcome::ReplacementRetained) => {
-                        "replacement_retained"
-                    }
-                    _ => "cleanup_incomplete",
-                }
+                )
             }
             (
                 QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
                 QuarantineOutcome::Retained { reason },
             ) => {
-                let restore = restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                let restore = restore_quarantine(state, target_dir, &target_leaf, &quarantine_leaf);
                 match (reason, restore) {
                     (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
                         "replacement_retained"
@@ -6040,7 +6141,7 @@ impl NativeReviewArtifactRoot {
                 QuarantineOutcome::Retained { reason },
                 QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
             ) => {
-                let restore = restore_quarantine(&state, target_dir, &target_leaf, &quarantine_leaf);
+                let restore = restore_quarantine(state, target_dir, &target_leaf, &quarantine_leaf);
                 match (reason, restore) {
                     (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
                         "replacement_retained"
@@ -6062,21 +6163,29 @@ impl NativeReviewArtifactRoot {
             (
                 QuarantineOutcome::AlreadyAbsent,
                 QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
-            )
-            | (
+            ) => cleanup_residual_leaf(
+                state,
+                MovedQuarantineLeaf {
+                    target_dir,
+                    target_leaf,
+                    quarantine_leaf,
+                },
+                &reservation.identity,
+                CleanupLabel::Lease,
+            ),
+            (
                 QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
                 QuarantineOutcome::AlreadyAbsent,
-            ) => match delete_quarantine(
-                &state,
-                target_dir,
-                &target_leaf,
-                &quarantine_leaf,
+            ) => cleanup_residual_leaf(
+                state,
+                MovedQuarantineLeaf {
+                    target_dir,
+                    target_leaf,
+                    quarantine_leaf,
+                },
                 &reservation.identity,
-            ) {
-                DeleteOutcome::Deleted => "cleaned",
-                DeleteOutcome::ReplacementRetained => "replacement_retained",
-                DeleteOutcome::Incomplete => "cleanup_incomplete",
-            },
+                CleanupLabel::Artifact,
+            ),
             (
                 QuarantineOutcome::AlreadyAbsent,
                 QuarantineOutcome::Retained { reason },
@@ -6128,7 +6237,15 @@ pub fn open_review_artifact_root(root_dir: String) -> Result<NativeReviewArtifac
     let token = random_token()?;
     Ok(NativeReviewArtifactRoot {
         root_token: token,
-        state: Mutex::new(Some(RootState { _root: root, reviews, leases, quarantine, next_quarantine_id: 0 })),
+        state: Mutex::new(Some(RootState {
+            _root: root,
+            reviews,
+            leases,
+            quarantine,
+            next_quarantine_id: 0,
+            #[cfg(test)]
+            faults: CleanupFaults::default(),
+        })),
     })
 }
 
@@ -6426,6 +6543,13 @@ fn find_matching_quarantine(
     })
 }
 
+`find_matching_quarantine` must sort directory entries before inspection and apply the following fail-closed
+classification: exactly one expected-identity leaf is `Matching`; two expected-identity leaves are
+`cleanup_incomplete`; any non-matching leaf with the same reservation label is `Replacement`; and an
+unreadable entry is `cleanup_incomplete`. It must never choose the first matching name, delete all entries by
+prefix, or treat a name collision as proof of identity. A retry calls this function again and may delete only
+the one identity-verified residual leaf selected by the returned outcome.
+
 fn read_directory_entries(dir: RawFd) -> Result<Vec<String>> {
     let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 0) };
     if duplicate < 0 {
@@ -6445,6 +6569,7 @@ fn read_directory_entries(dir: RawFd) -> Result<Vec<String>> {
             )
         };
         if count == 0 {
+            entries.sort_unstable();
             return Ok(entries);
         }
         if count < 0 {
@@ -6500,34 +6625,116 @@ fn restore_quarantine(state: &RootState, target_dir: RawFd, target_leaf: &str, q
     }
 }
 
-fn delete_quarantine(
+fn verify_quarantine_leaf(
     state: &RootState,
-    target_dir: RawFd,
-    target_leaf: &str,
-    quarantine_leaf: &str,
+    moved: MovedQuarantineLeaf,
     expected: &NativeIdentity,
-) -> DeleteOutcome {
+) -> std::result::Result<VerifiedQuarantineLeaf, DeleteOutcome> {
     let fd = match openat2(
         state.quarantine.as_raw_fd(),
-        quarantine_leaf,
+        &moved.quarantine_leaf,
         libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0,
         OPEN_RESOLVE,
     ) {
         Ok(fd) => fd,
-        Err(_) => return DeleteOutcome::Incomplete,
+        Err(_) => return Err(DeleteOutcome::Incomplete),
     };
     if verify_identity(fd.as_raw_fd(), expected).is_err() {
-        return DeleteOutcome::ReplacementRetained;
+        return Err(DeleteOutcome::ReplacementRetained);
     }
-    match target_is_absent(target_dir, target_leaf) {
+    match target_is_absent(moved.target_dir, &moved.target_leaf) {
         Ok(true) => {}
-        Ok(false) => return DeleteOutcome::ReplacementRetained,
-        Err(_) => return DeleteOutcome::Incomplete,
+        Ok(false) => return Err(DeleteOutcome::ReplacementRetained),
+        Err(_) => return Err(DeleteOutcome::Incomplete),
     }
-    match unlinkat(state.quarantine.as_raw_fd(), quarantine_leaf, 0) {
+
+    Ok(VerifiedQuarantineLeaf { moved })
+}
+
+fn delete_verified_quarantine(
+    state: &mut RootState,
+    verified: VerifiedQuarantineLeaf,
+    label: CleanupLabel,
+) -> DeleteOutcome {
+    #[cfg(test)]
+    if state.faults.fail_next_unlink_label == Some(label) {
+        state.faults.fail_next_unlink_label = None;
+        return DeleteOutcome::Incomplete;
+    }
+    #[cfg(not(test))]
+    let _ = label;
+    match unlinkat(state.quarantine.as_raw_fd(), &verified.moved.quarantine_leaf, 0) {
         Ok(()) => DeleteOutcome::Deleted,
         Err(_) => DeleteOutcome::Incomplete,
+    }
+}
+
+fn cleanup_moved_pair(
+    state: &mut RootState,
+    artifact: MovedQuarantineLeaf,
+    lease: MovedQuarantineLeaf,
+    expected: &NativeIdentity,
+) -> &'static str {
+    // Verify both quarantine leaves and both absent target leaves before either unlink.
+    let artifact_verified = verify_quarantine_leaf(state, artifact.clone(), expected);
+    let lease_verified = verify_quarantine_leaf(state, lease.clone(), expected);
+    match (artifact_verified, lease_verified) {
+        (Ok(artifact), Ok(lease)) => {
+            let artifact_delete = delete_verified_quarantine(state, artifact, CleanupLabel::Artifact);
+            let lease_delete = if matches!(artifact_delete, DeleteOutcome::Deleted) {
+                delete_verified_quarantine(state, lease, CleanupLabel::Lease)
+            } else {
+                DeleteOutcome::Incomplete
+            };
+            match (artifact_delete, lease_delete) {
+                (DeleteOutcome::Deleted, DeleteOutcome::Deleted) => "cleaned",
+                (DeleteOutcome::ReplacementRetained, _) | (_, DeleteOutcome::ReplacementRetained) => {
+                    "replacement_retained"
+                }
+                _ => "cleanup_incomplete",
+            }
+        }
+        (artifact_result, lease_result) => {
+            let artifact_restore = restore_quarantine(
+                state,
+                artifact.target_dir,
+                &artifact.target_leaf,
+                &artifact.quarantine_leaf,
+            );
+            let lease_restore = restore_quarantine(
+                state,
+                lease.target_dir,
+                &lease.target_leaf,
+                &lease.quarantine_leaf,
+            );
+            if matches!(artifact_restore, RestoreOutcome::Collision)
+                || matches!(lease_restore, RestoreOutcome::Collision)
+                || matches!(artifact_result, Err(DeleteOutcome::ReplacementRetained))
+                || matches!(lease_result, Err(DeleteOutcome::ReplacementRetained))
+            {
+                "replacement_retained"
+            } else {
+                "cleanup_incomplete"
+            }
+        }
+    }
+}
+
+fn cleanup_residual_leaf(
+    state: &mut RootState,
+    moved: MovedQuarantineLeaf,
+    expected: &NativeIdentity,
+    label: CleanupLabel,
+) -> &'static str {
+    match verify_quarantine_leaf(state, moved, expected) {
+        Ok(verified) => match delete_verified_quarantine(state, verified, label) {
+            DeleteOutcome::Deleted => "cleaned",
+            DeleteOutcome::ReplacementRetained => "replacement_retained",
+            DeleteOutcome::Incomplete => "cleanup_incomplete",
+        },
+        Err(DeleteOutcome::ReplacementRetained) => "replacement_retained",
+        Err(DeleteOutcome::Incomplete) | Err(DeleteOutcome::Deleted) => "cleanup_incomplete",
     }
 }
 
@@ -6977,7 +7184,7 @@ function safeNativeError(fallbackCode: string, cause: unknown): Error {
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && cargo test --manifest-path native/review-artifact-linux/Cargo.toml one_sided_quarantine_unlink_failure_keeps_residual_for_retry && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
 ```
 
 The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity,
@@ -7000,6 +7207,9 @@ GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 **Files:**
 
 - Create `spikes/opencode-host-review-contract/verify.ts`.
+- Create `spikes/opencode-host-review-contract/justice-host-contract.ts` as the complete spike-only
+  `Plugin` fixture loaded by the real host. `verify.ts` copies this file into the temporary
+  `.opencode/plugins/` directory; it is not an inline mock or a direct adapter call.
 - Create `spikes/opencode-host-review-contract/README.md` with redacted host traces and exact field paths.
 - Test `tests/integration/opencode-host-review-contract.test.ts`.
 
@@ -7045,10 +7255,618 @@ The report must contain separate `hookArgs`, `taskExecutionArgs`, `childBinding`
 when the host drops a mutation, rewrites `run_in_background`, loses the exact artifact path, swallows the
 cancellation throw, invokes the built-in writer after rejection, or changes an outside target.
 
+The model/provider setup is explicit and does not install anything. `JUSTICE_HOST_TEST_MODEL` must contain the
+already configured `provider/model` selected for this probe. Provider configuration and credentials are supplied
+by the host's existing configuration or an allowlisted provider environment variable; they are never copied into
+the temporary `opencode.json`, written to the trace, or printed in a failure report. The child environment is an
+allowlist containing `PATH`, `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `JUSTICE_HOST_TEST_MODEL`, and only
+the provider variables declared by the local test runner. Missing model/provider setup is `failureClass:
+"setup"`, not a contract failure. The exact non-interactive invocation for each case is:
+
+```text
+opencode run --format json --model "$JUSTICE_HOST_TEST_MODEL" "$PROMPT"
+```
+
+The command runs with the temporary workspace as its current directory. The temporary layout is fixed:
+
+```text
+<tmp>/workspace/opencode.json
+<tmp>/workspace/.opencode/plugins/justice-host-contract.ts
+<tmp>/workspace/.justice-host-contract/<case>.trace.jsonl
+<tmp>/workspace/.justice-host-contract/<case>.report.json
+<tmp>/workspace/.justice/reviews/<case>.json -> <tmp>/outside/<case>.json
+```
+
+`opencode.json` contains the exact model string and an absolute plugin entry for the copied fixture. It never
+contains a credential. The fixture records only `input.callID`, the mutated task fields, the runtime event field
+paths selected by the preceding child-correlation spike, and the count/result of the built-in write hook. A
+missing or ambiguous runtime path is a contract failure; prompt text, category, artifact path, and worker
+self-report are not identity sources.
+
+`verify.ts` must be the complete executable below. The helper `readCapped` consumes the process streams with a
+64 KiB cap, the timeout kills the child before returning `BLOCKED`, and `finally` removes the temporary tree.
+The `process.exitCode` assignment is the only exit decision; no setup or contract failure is swallowed.
+
+```ts
+import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const HOST_VERSION = "1.18.29";
+const SDK_VERSION = "1.14.21";
+const MAX_OUTPUT_BYTES = 64 * 1024;
+const TIMEOUT_MS = 120_000;
+const CASES = ["task-review", "final-review"] as const;
+type ReviewCase = (typeof CASES)[number];
+
+type ProcessResult = {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+};
+
+type TraceRecord = Readonly<Record<string, unknown>>;
+type HostTrace = {
+  readonly hookArgs: {
+    readonly parentCallId: string;
+    readonly runInBackground: false;
+    readonly artifactPath: string;
+  };
+  readonly taskExecutionArgs: {
+    readonly runInBackground: false;
+    readonly artifactPath: string;
+  };
+  readonly childBinding: {
+    readonly parentCallId: string;
+    readonly childSessionId: string;
+    readonly parentCallFieldPath: string;
+    readonly childSessionFieldPath: string;
+  };
+};
+
+type HostReport = {
+  readonly status: "PASS" | "BLOCKED";
+  readonly failureClass?: "setup" | "contract";
+  readonly failureCode?:
+    | "host_missing"
+    | "host_version_mismatch"
+    | "model_unconfigured"
+    | "host_run_failed"
+    | "plugin_load_failed"
+    | "host_contract_paths_unconfigured"
+    | "task_mutation_dropped"
+    | "child_correlation_missing"
+    | "write_cancellation_failed"
+    | "unrelated_write_regressed"
+    | "unknown_failure";
+  readonly hostVersion: string;
+  readonly sdkVersion: string;
+  readonly taskReview: HostTrace;
+  readonly finalReview: HostTrace;
+  readonly writeCancellation: Readonly<Record<string, unknown>>;
+  readonly unrelatedWrite: Readonly<Record<string, unknown>>;
+};
+
+type HostCaseResult = {
+  readonly trace: HostTrace;
+  readonly writeCancellation: Readonly<Record<string, unknown>>;
+  readonly unrelatedWrite: Readonly<Record<string, unknown>>;
+};
+
+type MutableHostReport = { -readonly [Key in keyof HostReport]: HostReport[Key] };
+
+const emptyTrace = (): HostTrace => ({
+  hookArgs: { parentCallId: "", runInBackground: false, artifactPath: "" },
+  taskExecutionArgs: { runInBackground: false, artifactPath: "" },
+  childBinding: {
+    parentCallId: "",
+    childSessionId: "",
+    parentCallFieldPath: "",
+    childSessionFieldPath: "",
+  },
+});
+
+async function readCapped(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (stream === null) return "";
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const remaining = MAX_OUTPUT_BYTES - size;
+      if (remaining <= 0) continue;
+      const chunk = next.value.subarray(0, remaining);
+      chunks.push(chunk);
+      size += chunk.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return decoder.decode(bytes);
+}
+
+async function runProcess(
+  argv: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+): Promise<ProcessResult> {
+  const process = Bun.spawn(argv, { cwd, env, stdout: "pipe", stderr: "pipe" });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    process.kill();
+  }, TIMEOUT_MS);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      readCapped(process.stdout),
+      readCapped(process.stderr),
+    ]);
+    return { exitCode, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function redact(value: string): string {
+  return value
+    .replace(/(sk|key|token|secret)[-_A-Za-z0-9]*\s*[:=]\s*[^\s,}]+/giu, "$1=<redacted>")
+    .replace(/\/home\/[^\s/]+/gu, "$HOME")
+    .slice(0, MAX_OUTPUT_BYTES);
+}
+
+function requiredModel(): string {
+  const model = process.env.JUSTICE_HOST_TEST_MODEL?.trim();
+  if (model === undefined || model.length === 0 || !model.includes("/")) {
+    throw new Error("setup:model_unconfigured");
+  }
+  return model;
+}
+
+function requiredContractPath(name: string): string {
+  const value = process.env[name]?.trim();
+  if (value === undefined || !/^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/u.test(value)) {
+    throw new Error("contract:host_contract_paths_unconfigured");
+  }
+  return value;
+}
+
+function allowedEnvironment(
+  model: string,
+  extra: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const names = [
+    "PATH",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "JUSTICE_HOST_TEST_MODEL",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+  ];
+  const environment: Record<string, string> = { JUSTICE_HOST_TEST_MODEL: model, ...extra };
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return environment;
+}
+
+function parseTrace(text: string): readonly TraceRecord[] {
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as TraceRecord);
+}
+
+function recordByKind(records: readonly TraceRecord[], kind: string): TraceRecord {
+  const record = records.find((candidate) => candidate.kind === kind);
+  if (record === undefined) throw new Error(`contract:${kind}_missing`);
+  return record;
+}
+
+function stringField(record: TraceRecord, key: string): string {
+  const value = record[key];
+  if (typeof value !== "string" || value.length === 0) throw new Error(`contract:${key}_missing`);
+  return value;
+}
+
+function booleanField(record: TraceRecord, key: string, expected: boolean): false | true {
+  if (record[key] !== expected) throw new Error(`contract:${key}_mismatch`);
+  return expected;
+}
+
+async function verifyCase(
+  workspace: string,
+  model: string,
+  reviewCase: ReviewCase,
+  outsideTarget: string,
+): Promise<HostCaseResult> {
+  const stateDir = join(workspace, ".justice-host-contract");
+  const tracePath = join(stateDir, `${reviewCase}.trace.jsonl`);
+  const artifactPath = `.justice/reviews/${reviewCase}.json`;
+  const prompt = [
+    `Invoke exactly one task tool call for category ${reviewCase === "task-review" ? "sp-review" : "sp-final-review"}.`,
+    "Set run_in_background to true so the host hook must canonicalize it.",
+    `In the child worker, write JSON to ${artifactPath}, then write ordinary text to .justice/unrelated.txt.`,
+    "Do not report success unless both tool calls were actually attempted.",
+  ].join(" ");
+  const childSessionFieldPath = requiredContractPath("JUSTICE_HOST_CHILD_SESSION_FIELD_PATH");
+  const runtimeParentCallFieldPath = requiredContractPath("JUSTICE_HOST_PARENT_CALL_FIELD_PATH");
+  const result = await runProcess(
+    ["opencode", "run", "--format", "json", "--model", model, prompt],
+    workspace,
+    allowedEnvironment(model, {
+      JUSTICE_HOST_TRACE_PATH: tracePath,
+      JUSTICE_HOST_ARTIFACT_PATH: artifactPath,
+      JUSTICE_HOST_CATEGORY: reviewCase === "task-review" ? "sp-review" : "sp-final-review",
+      JUSTICE_HOST_CHILD_SESSION_FIELD_PATH: childSessionFieldPath,
+      JUSTICE_HOST_PARENT_CALL_FIELD_PATH: runtimeParentCallFieldPath,
+    }),
+  );
+  if (result.timedOut || result.exitCode !== 0) {
+    const failureCode = /plugin|load/iu.test(result.stderr) ? "plugin_load_failed" : "host_run_failed";
+    throw new Error(`setup:${failureCode}`);
+  }
+  const records = parseTrace(await readFile(tracePath, "utf8"));
+  const hook = recordByKind(records, "hook_args");
+  const execution = recordByKind(records, "task_execution_args");
+  const binding = recordByKind(records, "child_binding");
+  const cancellation = recordByKind(records, "write_cancellation");
+  const unrelated = recordByKind(records, "unrelated_write");
+  const expectedParentCallId = stringField(hook, "parentCallId");
+  const expectedArtifactPath = stringField(hook, "artifactPath");
+  if (expectedArtifactPath !== artifactPath) throw new Error("contract:artifact_path_mismatch");
+  booleanField(hook, "runInBackground", false);
+  booleanField(execution, "runInBackground", false);
+  if (stringField(execution, "artifactPath") !== expectedArtifactPath) {
+    throw new Error("contract:task_artifact_path_dropped");
+  }
+  if (stringField(binding, "parentCallId") !== expectedParentCallId) {
+    throw new Error("contract:parent_call_correlation_mismatch");
+  }
+  if (stringField(cancellation, "reason") !== "review_artifact_write_rejected") {
+    throw new Error("contract:write_cancellation_reason_mismatch");
+  }
+  booleanField(cancellation, "builtInWriterInvocations", false);
+  if (records.some((record) => record.kind === "write_after")) {
+    throw new Error("contract:built_in_writer_invoked_after_cancellation");
+  }
+  if ((await readFile(outsideTarget, "utf8")) !== "outside") {
+    throw new Error("contract:outside_target_changed");
+  }
+  const artifactEntry = await lstat(join(workspace, artifactPath));
+  if (!artifactEntry.isSymbolicLink()) throw new Error("contract:replacement_symlink_changed");
+  booleanField(cancellation, "outsideTargetUnchanged", true);
+  booleanField(unrelated, "builtInWriterInvocations", true);
+  const trace: HostTrace = {
+    hookArgs: {
+      parentCallId: expectedParentCallId,
+      runInBackground: false,
+      artifactPath: expectedArtifactPath,
+    },
+    taskExecutionArgs: {
+      runInBackground: false,
+      artifactPath: stringField(execution, "artifactPath"),
+    },
+    childBinding: {
+      parentCallId: stringField(binding, "parentCallId"),
+      childSessionId: stringField(binding, "childSessionId"),
+      parentCallFieldPath: stringField(binding, "parentCallFieldPath"),
+      childSessionFieldPath: stringField(binding, "childSessionFieldPath"),
+    },
+  };
+  const resultByKind = (kind: string): Readonly<Record<string, unknown>> =>
+    recordByKind(records, kind);
+  const caseResult: HostCaseResult = {
+    trace,
+    writeCancellation: resultByKind("write_cancellation"),
+    unrelatedWrite: resultByKind("unrelated_write"),
+  };
+  await writeFile(
+    join(stateDir, `${reviewCase}.report.json`),
+    `${JSON.stringify(caseResult)}\n`,
+    "utf8",
+  );
+  return caseResult;
+}
+
+type FailureCode = NonNullable<HostReport["failureCode"]>;
+
+function normalizeFailureCode(failureClass: string, rawCode: string): FailureCode {
+  const known: readonly FailureCode[] = [
+    "host_missing",
+    "host_version_mismatch",
+    "model_unconfigured",
+    "host_run_failed",
+    "plugin_load_failed",
+    "host_contract_paths_unconfigured",
+    "task_mutation_dropped",
+    "child_correlation_missing",
+    "write_cancellation_failed",
+    "unrelated_write_regressed",
+    "unknown_failure",
+  ];
+  if (known.includes(rawCode as FailureCode)) return rawCode as FailureCode;
+  if (failureClass === "contract") {
+    if (/artifact|background|hook_args|task_execution_args/u.test(rawCode)) {
+      return "task_mutation_dropped";
+    }
+    if (/parent|child|binding|correlation/u.test(rawCode)) return "child_correlation_missing";
+    if (/write|outside|replacement/u.test(rawCode)) return "write_cancellation_failed";
+    if (/unrelated/u.test(rawCode)) return "unrelated_write_regressed";
+  }
+  return "unknown_failure";
+}
+
+async function main(): Promise<void> {
+  let hostVersion = "";
+  let model = "";
+  let workspace = "";
+  const report: MutableHostReport = {
+    status: "BLOCKED",
+    failureClass: "setup",
+    failureCode: "host_missing",
+    hostVersion,
+    sdkVersion: SDK_VERSION,
+    taskReview: emptyTrace(),
+    finalReview: emptyTrace(),
+    writeCancellation: {},
+    unrelatedWrite: {},
+  };
+  try {
+    let version: ProcessResult;
+    try {
+      version = await runProcess(["opencode", "--version"], process.cwd(), allowedEnvironment("probe/probe"));
+    } catch {
+      report.failureCode = "host_missing";
+      throw new Error("setup:host_missing");
+    }
+    hostVersion = version.stdout.trim();
+    report.hostVersion = hostVersion;
+    if (version.timedOut || version.exitCode !== 0 || hostVersion !== HOST_VERSION) {
+      report.failureCode = "host_version_mismatch";
+      throw new Error("setup:host_version_mismatch");
+    }
+    model = requiredModel();
+    workspace = await mkdtemp(join(tmpdir(), "justice-opencode-host-contract-"));
+    const stateDir = join(workspace, ".justice-host-contract");
+    const pluginDir = join(workspace, ".opencode", "plugins");
+    await mkdir(pluginDir, { recursive: true });
+    await mkdir(stateDir, { recursive: true });
+    await copyFile(new URL("./justice-host-contract.ts", import.meta.url), join(pluginDir, "justice-host-contract.ts"));
+    await writeFile(
+      join(workspace, "opencode.json"),
+      JSON.stringify({ $schema: "https://opencode.ai/config.json", model, plugin: [join(pluginDir, "justice-host-contract.ts")] }),
+      "utf8",
+    );
+    report.failureClass = "contract";
+    for (const reviewCase of CASES) {
+      const outside = await mkdtemp(join(tmpdir(), `justice-opencode-outside-${reviewCase}-`));
+      try {
+        const outsideTarget = join(outside, `${reviewCase}.json`);
+        const artifact = join(workspace, ".justice", "reviews", `${reviewCase}.json`);
+        await mkdir(join(workspace, ".justice", "reviews"), { recursive: true });
+        await writeFile(outsideTarget, "outside", "utf8");
+        await symlink(outsideTarget, artifact);
+        const caseResult = await verifyCase(workspace, model, reviewCase, outsideTarget);
+        if (reviewCase === "task-review") {
+          report.taskReview = caseResult.trace;
+        } else {
+          report.finalReview = caseResult.trace;
+        }
+        report.writeCancellation = caseResult.writeCancellation;
+        report.unrelatedWrite = caseResult.unrelatedWrite;
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    }
+    report.status = "PASS";
+    delete report.failureClass;
+    delete report.failureCode;
+  } catch (cause: unknown) {
+    const message = cause instanceof Error ? cause.message : "unknown_failure";
+    const [failureClass, failureCode] = message.split(":", 2);
+    report.failureClass = failureClass === "contract" ? "contract" : "setup";
+    report.failureCode = normalizeFailureCode(report.failureClass, failureCode ?? "unknown_failure");
+    if (workspace.length > 0) {
+      await appendFile(
+        join(workspace, ".justice-host-contract", "failure-report.json"),
+        `${JSON.stringify({ ...report, hostVersion, diagnostic: redact(message) })}\n`,
+        "utf8",
+      ).catch(() => undefined);
+    }
+    process.exitCode = 1;
+  } finally {
+    console.log(JSON.stringify(report));
+    if (workspace.length > 0) await rm(workspace, { recursive: true, force: true });
+  }
+  if (report.status === "PASS") process.exitCode = 0;
+}
+
+await main();
+```
+
+The committed `justice-host-contract.ts` must contain the full plugin fixture used above. Its runtime field
+paths are not guessed: Task 3.3's successful correlation spike supplies the exact paths as constants, and an
+empty or ambiguous path lookup writes `child_binding` with no identity and fails the probe. The fixture must
+record these records and nothing else:
+
+```ts
+import { appendFile } from "node:fs/promises";
+import type { Plugin } from "@opencode-ai/plugin";
+
+type JsonRecord = Record<string, unknown>;
+const tracePath = process.env.JUSTICE_HOST_TRACE_PATH;
+const expectedArtifactPath = process.env.JUSTICE_HOST_ARTIFACT_PATH;
+const expectedCategory = process.env.JUSTICE_HOST_CATEGORY;
+const parentCallFieldPath = "tool.execute.before.input.callID";
+const childSessionFieldPath = process.env.JUSTICE_HOST_CHILD_SESSION_FIELD_PATH ?? "";
+const runtimeParentCallFieldPath = process.env.JUSTICE_HOST_PARENT_CALL_FIELD_PATH ?? "";
+
+function required(value: string | undefined, name: string): string {
+  if (value === undefined || value.length === 0) throw new Error(`fixture:${name}_missing`);
+  return value;
+}
+
+async function record(kind: string, fields: JsonRecord): Promise<void> {
+  await appendFile(required(tracePath, "trace_path"), `${JSON.stringify({ kind, ...fields })}\n`, "utf8");
+}
+
+function readStringAt(value: unknown, path: readonly string[]): string | undefined {
+  let current: unknown = value;
+  for (const key of path) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as JsonRecord)[key];
+  }
+  return typeof current === "string" && current.length > 0 ? current : undefined;
+}
+
+export const JusticeHostContractFixture: Plugin = async () => ({
+  "tool.execute.before": async (input, output) => {
+    const args = output.args as JsonRecord;
+    if (input.tool === "task" && args.category === expectedCategory) {
+      const parentCallId = required(input.callID, "parent_call_id");
+      args.run_in_background = false;
+      args.artifact_path = required(expectedArtifactPath, "artifact_path");
+      await record("hook_args", {
+        parentCallId,
+        runInBackground: args.run_in_background,
+        artifactPath: args.artifact_path,
+      });
+      return;
+    }
+    if (input.tool === "write" && args.filePath === expectedArtifactPath) {
+      await record("write_cancellation", {
+        reason: "review_artifact_write_rejected",
+        builtInWriterInvocations: false,
+        outsideTargetUnchanged: true,
+      });
+      throw new Error("ReviewArtifactWriteCancelled:review_artifact_write_rejected");
+    }
+  },
+  "tool.execute.after": async (input) => {
+    if (input.tool === "task" && input.args.category === expectedCategory) {
+      await record("task_execution_args", {
+        runInBackground: input.args.run_in_background,
+        artifactPath: input.args.artifact_path,
+      });
+    }
+    if (input.tool === "write" && input.args.filePath === expectedArtifactPath) {
+      await record("write_after", { builtInWriterInvocations: true });
+    }
+    if (input.tool === "write" && input.args.filePath === ".justice/unrelated.txt") {
+      await record("unrelated_write", { builtInWriterInvocations: true });
+    }
+  },
+  event: async ({ event }) => {
+    if (event.type !== "session.created") return;
+    const childSessionId = readStringAt(event.properties, childSessionFieldPath.split("."));
+    const parentCallId = readStringAt(event.properties, runtimeParentCallFieldPath.split("."));
+    if (childSessionId === undefined || parentCallId === undefined) return;
+    await record("child_binding", {
+      parentCallId,
+      childSessionId,
+      parentCallFieldPath,
+      childSessionFieldPath: `event.properties.${childSessionFieldPath}`,
+    });
+  },
+});
+
+export default JusticeHostContractFixture;
+```
+
+The fixture source above is deliberately narrow: it does not fake `JusticePlugin`, call an adapter method,
+or synthesize child identities. The actual `task`/`write` execution, hook throw, and `session.created` event
+must come from the installed host. The integration test must launch `verify.ts`, parse the generated report,
+assert the exact schema from Design §12.7, and fail on a non-zero probe exit or any `BLOCKED` report; it may not
+replace the CLI with a mocked `Bun.spawn`.
+
+The complete integration test is:
+
+```ts
+import { describe, expect, it } from "vitest";
+
+describe("OpenCode host review contract", () => {
+  it("runs the real CLI and accepts only a complete PASS report", async () => {
+    if ((process.env.JUSTICE_HOST_TEST_MODEL ?? "").includes("/") === false) {
+      throw new Error("unsupported setup: JUSTICE_HOST_TEST_MODEL=provider/model is required");
+    }
+    for (const name of [
+      "JUSTICE_HOST_CHILD_SESSION_FIELD_PATH",
+      "JUSTICE_HOST_PARENT_CALL_FIELD_PATH",
+    ]) {
+      if ((process.env[name] ?? "").trim().length === 0) {
+        throw new Error(`unsupported setup: ${name} must come from Task 3.3 correlation evidence`);
+      }
+    }
+    const child = Bun.spawn(["bun", "spikes/opencode-host-review-contract/verify.ts"], {
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, discardedStderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    void discardedStderr;
+    const reportLine = stdout.trim().split("\n").at(-1);
+    if (reportLine === undefined || reportLine.length === 0) {
+      throw new Error("OpenCode host contract probe emitted no report");
+    }
+    const report = JSON.parse(reportLine) as {
+      readonly status: string;
+      readonly hostVersion: string;
+      readonly sdkVersion: string;
+      readonly taskReview: { readonly childBinding: { readonly childSessionId: string } };
+      readonly finalReview: { readonly childBinding: { readonly childSessionId: string } };
+      readonly writeCancellation: {
+        readonly reason: string;
+        readonly builtInWriterInvocations: boolean;
+      };
+      readonly unrelatedWrite: { readonly builtInWriterInvocations: boolean };
+    };
+    if (exitCode !== 0) throw new Error(`OpenCode host contract probe blocked: ${report.status}`);
+    expect(report).toMatchObject({
+      status: "PASS",
+      hostVersion: "1.18.29",
+      sdkVersion: "1.14.21",
+      writeCancellation: {
+        reason: "review_artifact_write_rejected",
+        builtInWriterInvocations: false,
+      },
+      unrelatedWrite: { builtInWriterInvocations: true },
+    });
+    expect(report.taskReview.childBinding.childSessionId).not.toBe("");
+    expect(report.finalReview.childBinding.childSessionId).not.toBe("");
+  });
+});
+```
+
+`spikes/opencode-host-review-contract/README.md` must be written from the successful probe output before
+the spike commit. It must contain the exact `opencode --version` and SDK version, the two field-path
+environment values copied from the committed Task 3.3 correlation report, the redacted `task-review` and
+`sp-final-review` traces, the mutable-args path, the cancellation reason and zero-writer assertion, and the
+unrelated-write assertion. It must not contain prompts, worker text, credentials, provider values, absolute
+host paths, or guessed field paths. A missing or ambiguous correlation value keeps the report `BLOCKED` and
+prevents the README and Task 3.3c commit from being marked complete.
+
 **Step 2: Run the runtime hard gate**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && test "$(opencode --version)" = "1.18.29"'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && test "$(opencode --version)" = "1.18.29"'
 devcontainer exec --workspace-folder . bun spikes/opencode-host-review-contract/verify.ts
 devcontainer exec --workspace-folder . bun run vitest run tests/integration/opencode-host-review-contract.test.ts
 ```
@@ -7061,7 +7879,7 @@ failure, skipped case, or absent child correlation is `BLOCKED` and stops Phase 
 **Step 3: Commit after approval**
 
 ```bash
-GIT_MASTER=1 git add spikes/opencode-host-review-contract/verify.ts spikes/opencode-host-review-contract/README.md tests/integration/opencode-host-review-contract.test.ts
+GIT_MASTER=1 git add spikes/opencode-host-review-contract/verify.ts spikes/opencode-host-review-contract/justice-host-contract.ts spikes/opencode-host-review-contract/README.md tests/integration/opencode-host-review-contract.test.ts
 GIT_MASTER=1 git commit -m "test: OpenCode host境界のreview契約を検証"
 ```
 
@@ -8927,8 +9745,21 @@ case "PreToolUse": {
     });
   }
 
+  const reviewWrite =
+    event.payload.toolName === "write"
+      ? await this.handleReviewArtifactWrite(event).catch(async (error: unknown) => {
+          await this.recordReviewAdvisory("review_artifact_write_rejected", error).catch(
+            () => undefined,
+          );
+          return { action: "skip" as const, reason: "review_artifact_write_rejected" as const };
+        })
+      : undefined;
   const response = mergePreToolUseResponses(
-    observation,
+    mergePreToolUseResponses(
+      observation,
+      reviewWrite ?? PROCEED,
+      (message) => this.warnMergeConflict(message),
+    ),
     delegated,
     (message) => this.warnMergeConflict(message),
   );
@@ -10476,6 +11307,7 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Modify: `src/core/v2/state-projection.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/justice-plugin.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
 - Test: `tests/core/review-artifact.test.ts`
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/session-state-provider.test.ts`
@@ -10536,6 +11368,209 @@ adapter and I/O failures remain fail-open. `tests/runtime/opencode-adapter-v2.te
 the returned reason, reason preservation, narrow throw, and zero normal filesystem-writer invocations;
 none may bypass the adapter with a direct child `JusticePlugin.handleEvent()` call.
 
+The following are the complete boundary edits. They are not pseudocode: the implementation must preserve the
+existing imports and normal inject/proceed behavior while applying these exact response and cancellation rules.
+First extend `src/core/types.ts` before the `HookResponse` alias:
+
+```ts
+export type ReviewArtifactWriteSkipReason =
+  | "review_artifact_write_committed"
+  | "review_artifact_write_rejected";
+
+export interface SkipResponse {
+  readonly action: "skip";
+  readonly reason?: ReviewArtifactWriteSkipReason;
+}
+
+export type HookResponse = ProceedResponse | SkipResponse | InjectResponse;
+```
+
+Replace `src/core/hook-response-merger.ts` with the same existing merge logic plus this complete reason
+preservation path. A reasoned skip always wins over inject/proceed, a reasonless skip remains reasonless,
+and two distinct reasons fail closed to `review_artifact_write_rejected`:
+
+```ts
+import type {
+  HookResponse,
+  InjectResponse,
+  ReviewArtifactWriteSkipReason,
+  SkipResponse,
+} from "./types";
+
+export type HookResponseConflictLogger = (message: string) => void;
+
+function mergeSkipResponses(
+  responses: readonly HookResponse[],
+  onConflict?: HookResponseConflictLogger,
+): SkipResponse {
+  const reasons = responses.flatMap((response) =>
+    response.action === "skip" && response.reason !== undefined ? [response.reason] : [],
+  );
+  const uniqueReasons = [...new Set<ReviewArtifactWriteSkipReason>(reasons)];
+  if (uniqueReasons.length > 1) {
+    onConflict?.("Conflicting review-artifact skip reasons; rejecting the host write");
+    return { action: "skip", reason: "review_artifact_write_rejected" };
+  }
+  const reason = uniqueReasons[0];
+  return reason === undefined ? { action: "skip" } : { action: "skip", reason };
+}
+
+export function mergePreToolUseResponses(
+  a: HookResponse,
+  b: HookResponse,
+  onConflict?: HookResponseConflictLogger,
+): HookResponse {
+  if (a.action === "skip" || b.action === "skip") {
+    return mergeSkipResponses([a, b], onConflict);
+  }
+  if (a.action === "inject" && b.action === "inject") {
+    const contexts = [a.injectedContext, b.injectedContext].filter((context) => context !== "");
+    const base: InjectResponse = {
+      action: "inject",
+      injectedContext: contexts.join("\n\n---\n\n"),
+    };
+    const result: InjectResponse =
+      a.variant === "gate_advisory" || b.variant === "gate_advisory"
+        ? { ...base, variant: "gate_advisory" }
+        : base;
+    if (a.modifiedPayload !== undefined && b.modifiedPayload !== undefined) {
+      onConflict?.("Conflict detected in pre-tool-use modifiedPayload; using the first response");
+    }
+    if (a.modifiedPayload !== undefined) return { ...result, modifiedPayload: a.modifiedPayload };
+    if (b.modifiedPayload !== undefined) return { ...result, modifiedPayload: b.modifiedPayload };
+    return result;
+  }
+  if (a.action === "inject") return { ...a };
+  if (b.action === "inject") return { ...b };
+  return { action: "proceed" };
+}
+
+export function mergePostToolUseResponses(
+  responses: readonly HookResponse[],
+  onConflict?: HookResponseConflictLogger,
+): HookResponse {
+  if (responses.some((response) => response.action === "skip")) {
+    return mergeSkipResponses(responses, onConflict);
+  }
+  const injects = responses.filter(
+    (response): response is InjectResponse => response.action === "inject",
+  );
+  if (injects.length === 0) return { action: "proceed" };
+  const contexts = injects.map((inject) => inject.injectedContext).filter((context) => context !== "");
+  const normalContexts = injects
+    .map(
+      (inject) =>
+        inject.normalInjectedContext ??
+        (inject.variant === "gate_advisory" ? "" : inject.injectedContext),
+    )
+    .filter((context) => context !== "");
+  const gateContexts = injects
+    .map(
+      (inject) =>
+        inject.gateAdvisoryContext ??
+        (inject.variant === "gate_advisory" ? inject.injectedContext : ""),
+    )
+    .filter((context) => context !== "");
+  const base: InjectResponse = {
+    action: "inject",
+    injectedContext: contexts.join("\n\n---\n\n"),
+  };
+  const normalInjectedContext = normalContexts.join("\n\n---\n\n");
+  const gateAdvisoryContext = gateContexts.join("\n\n---\n\n");
+  const result: InjectResponse = {
+    ...base,
+    ...(normalInjectedContext.length === 0 ? {} : { normalInjectedContext }),
+    ...(gateAdvisoryContext.length === 0 ? {} : { gateAdvisoryContext }),
+    ...(gateAdvisoryContext.length === 0 ? {} : { variant: "gate_advisory" }),
+  };
+  const modifieds = injects.filter((inject) => inject.modifiedPayload !== undefined);
+  if (modifieds.length > 1) {
+    onConflict?.("Conflict detected in post-tool-use modifiedPayload; using the first response");
+  }
+  const single = modifieds[0];
+  return single === undefined ? result : { ...result, modifiedPayload: single.modifiedPayload };
+}
+```
+
+`src/runtime/opencode-adapter.ts` must return the actual internal response. Its complete method body keeps
+the old in-place argument merge and normal fail-open catch; every old `return;` becomes `return PROCEED` or
+`return response` as shown:
+
+```ts
+const PROCEED: HookResponse = { action: "proceed" };
+
+async onToolExecuteBefore(
+  input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
+  output: { args: Record<string, unknown> },
+): Promise<HookResponse> {
+  try {
+    if (input.tool === "task") normalizeTaskToolInputInPlace(output.args);
+    if (this.#noOp) return PROCEED;
+    if (input.tool.startsWith("justice_")) return PROCEED;
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (justice === null) return PROCEED;
+
+    const response = await justice.handleEvent({
+      type: "PreToolUse",
+      sessionId: input.sessionID,
+      callId: input.callID,
+      payload: { toolName: input.tool, callId: input.callID, toolInput: output.args },
+    });
+    if (response.action !== "inject") return response;
+
+    const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
+    output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
+    const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
+    if (modified?.args !== undefined) {
+      for (const [key, value] of Object.entries(modified.args)) {
+        if (key !== "prompt") output.args[key] = value;
+      }
+      if (input.tool === "task") normalizeTaskToolInputInPlace(output.args);
+    }
+    return response;
+  } catch (error: unknown) {
+    await this.log("error", "[Justice] onToolExecuteBefore failure", error);
+    return PROCEED;
+  }
+}
+```
+
+Define `ReviewArtifactWriteCancelled` in the runtime/plugin boundary, not in `src/core`, and do not catch it
+in the wrapper. `src/opencode-plugin.ts` imports `ReviewArtifactWriteSkipReason` as a type from
+`src/core/types.ts`; the adapter continues to import only core-safe types and does not import the plugin
+wrapper error:
+
+```ts
+export class ReviewArtifactWriteCancelled extends Error {
+  readonly reason: ReviewArtifactWriteSkipReason;
+
+  constructor(reason: ReviewArtifactWriteSkipReason) {
+    super(`review artifact write cancelled: ${reason}`);
+    this.name = "ReviewArtifactWriteCancelled";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+function cancellationReason(response: HookResponse): ReviewArtifactWriteSkipReason | undefined {
+  if (response.action !== "skip") return undefined;
+  return response.reason;
+}
+
+"tool.execute.before": async (input, output): Promise<void> => {
+  const response = await adapter.onToolExecuteBefore(
+    input as { tool: string; sessionID: string; callID: string },
+    output as { args: Record<string, unknown> },
+  );
+  const reason = cancellationReason(response);
+  if (reason !== undefined) throw new ReviewArtifactWriteCancelled(reason);
+  if (!adapter.getJustice() && !adapter.isNoOp()) {
+    debugLog("Justice: Prompt ignored by TriggerDetector (Justice not initialized or no delegation intent found).");
+  }
+};
+```
+
 Before the existing PostToolUse routing, add the review-artifact write branch to the same
 `JusticePlugin.handleEvent(PreToolUse)` route. It must resolve the child session through the durable
 `DelegatedExecutionBinding`, then resolve the claimed `TaskCallBinding` and its usable reservation.
@@ -10550,6 +11585,86 @@ leaves the review slot without trusted completion evidence. The plugin wrapper m
 writer for both reasons. Non-review writes and writes from unrelated child sessions retain the existing
 routing. This is the only worker artifact-write path and is covered by both the adapter composition test and
 the supported-host E2E.
+
+The production `JusticePlugin` route is also concrete. It is called from the existing PreToolUse route after
+observation and before any generic writer can run. `resolveReviewArtifactWriteContext` returns
+`{ kind: "not_review" }` for unrelated writes, and returns a review context for an observed child session;
+missing binding, stale binding, path mismatch, invalid content, identity mismatch, or provider failure all
+return the rejected reason:
+
+```ts
+type ReviewArtifactWriteContext =
+  | { readonly kind: "not_review" }
+  | { readonly kind: "review"; readonly binding?: ReviewTaskCallBinding };
+
+private async resolveReviewArtifactWriteContext(
+  childSessionId: string,
+): Promise<ReviewArtifactWriteContext> {
+  const records = await this.observationHandler.getLogStore().readAll();
+  const delegated = projectDelegatedExecutionBindings(records).find(
+    (candidate) => candidate.childSessionId === childSessionId,
+  );
+  if (delegated === undefined) return { kind: "not_review" };
+  const slot = projectReviewDispatchSlots(records).find(
+    (candidate) =>
+      candidate.state === "claimed" &&
+      candidate.key.parentSessionId === delegated.parentSessionId &&
+      candidate.callId === delegated.parentCallId &&
+      isReviewDispatchSlot(candidate),
+  );
+  const binding = projectTaskCallBindings(records).find(
+    (candidate): candidate is ReviewTaskCallBinding =>
+      isReviewTaskCallBinding(candidate) &&
+      slot !== undefined &&
+      candidate.parentSessionId === delegated.parentSessionId &&
+      candidate.callId === delegated.parentCallId &&
+      reviewTaskCallBindingMatchesSlot(candidate, slot),
+  );
+  return binding === undefined ? { kind: "review" } : { kind: "review", binding };
+}
+
+private async handleReviewArtifactWrite(event: PreToolUseEvent): Promise<HookResponse | undefined> {
+  if (event.payload.toolName !== "write" || event.sessionId === undefined) return undefined;
+  const context = await this.resolveReviewArtifactWriteContext(event.sessionId);
+  if (context.kind === "not_review") return undefined;
+  const binding = context.binding;
+  const input = event.payload.toolInput;
+  const filePath = readStringRecordValue(input, "filePath");
+  const content = readStringRecordValue(input, "content");
+  if (
+    binding === undefined ||
+    binding.artifactReservation.status !== "usable" ||
+    filePath === undefined ||
+    content === undefined ||
+    normalizeSafeRelativePath(filePath) !== binding.artifactReservation.artifactPath
+  ) {
+    await this.recordReviewAdvisory("review_artifact_write_rejected").catch(() => undefined);
+    return { action: "skip", reason: "review_artifact_write_rejected" };
+  }
+  try {
+    const reservedIo = this.options.reservedReviewArtifactIo;
+    if (reservedIo === undefined) {
+      await this.recordReviewAdvisory("review_artifact_write_rejected").catch(() => undefined);
+      return { action: "skip", reason: "review_artifact_write_rejected" };
+    }
+    await reservedIo.writeExisting(binding.artifactReservation, content);
+    await this.recordReviewAdvisory("review_artifact_write_committed").catch(() => undefined);
+    return { action: "skip", reason: "review_artifact_write_committed" };
+  } catch (error: unknown) {
+    await this.recordReviewAdvisory("review_artifact_write_rejected", error).catch(() => undefined);
+    return { action: "skip", reason: "review_artifact_write_rejected" };
+  }
+}
+```
+
+The `PreToolUse` route above invokes `handleReviewArtifactWrite` for `write` events and merges its
+response with observation and delegation responses before the host can run the built-in writer. The
+review-write branch is not a second route or a direct adapter call.
+
+The `writeExisting` call above is the only review-owned writer. It must not call `FileWriter.writeFile`,
+`readFile`, or any generic path helper after the reservation has been resolved. The helper must return
+`not_review` only when the durable projection proves that the session is not an observed review child; an
+observed review child with no current binding is rejected, not passed to the built-in writer.
 
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
@@ -12575,7 +13690,7 @@ are not reached, the outside target remains unchanged, the symlink remains retai
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
 Expected: FAIL behaviorally because matching review completion has no composite terminal physical record or
@@ -12645,6 +13760,74 @@ each reason after in-place argument merge and returns `PROCEED` for ordinary err
 converts an arbitrary `skip` or ordinary failure into a throw. The composition E2E and supported-host E2E must
 each cover one committed write and one rejected replacement, with the rejected flow producing no
 `tool.execute.after` evidence for the built-in writer.
+
+The required unit and boundary cases are concrete:
+
+```ts
+it.each([
+  "review_artifact_write_committed",
+  "review_artifact_write_rejected",
+] as const)("preserves %s through every PreToolUse merge", (reason) => {
+  const warnings: string[] = [];
+  expect(
+    mergePreToolUseResponses(
+      { action: "skip", reason },
+      { action: "inject", injectedContext: "observation" },
+      (message) => warnings.push(message),
+    ),
+  ).toEqual({ action: "skip", reason });
+  expect(
+    mergePostToolUseResponses(
+      [
+        { action: "skip", reason },
+        { action: "proceed" },
+      ],
+      (message) => warnings.push(message),
+    ),
+  ).toEqual({ action: "skip", reason });
+  expect(warnings).toEqual([]);
+});
+
+it("fails closed when two reasoned skips conflict", () => {
+  const warnings: string[] = [];
+  expect(
+    mergePreToolUseResponses(
+      { action: "skip", reason: "review_artifact_write_committed" },
+      { action: "skip", reason: "review_artifact_write_rejected" },
+      (message) => warnings.push(message),
+    ),
+  ).toEqual({ action: "skip", reason: "review_artifact_write_rejected" });
+  expect(warnings).toHaveLength(1);
+});
+
+it("does not convert a reasonless skip or an ordinary adapter failure into cancellation", async () => {
+  const adapter = arrangeAdapterReturning({ action: "skip" });
+  await expect(adapter.onToolExecuteBefore(taskInput, taskOutput)).resolves.toEqual({ action: "skip" });
+  const wrapper = arrangePluginWithAdapter(adapter);
+  await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
+
+  const failingAdapter = arrangeAdapterThrowing(new Error("ordinary adapter failure"));
+  const failOpenWrapper = arrangePluginWithAdapter(failingAdapter);
+  await expect(failOpenWrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
+});
+
+it.each([
+  "review_artifact_write_committed",
+  "review_artifact_write_rejected",
+] as const)("throws only the dedicated cancellation for %s", async (reason) => {
+  const adapter = arrangeAdapterReturning({ action: "skip", reason });
+  const wrapper = arrangePluginWithAdapter(adapter);
+  await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).rejects.toMatchObject({
+    name: "ReviewArtifactWriteCancelled",
+    reason,
+  });
+});
+```
+
+`arrangeAdapterReturning`, `arrangeAdapterThrowing`, and `arrangePluginWithAdapter` must use the real
+`OpenCodePlugin` factory with only the adapter injection seam already used by existing integration tests;
+they must not call `JusticePlugin.handleEvent()` directly. The final two cases also assert that the host
+fixture's built-in writer spy has zero calls after the rejection.
 
 Create the two artifact adapters in this composition block, before creating the completion domain. Both take
 the durable `ReviewTaskCallBinding` or its usable reservation; neither receives an `artifactPath` from
@@ -14453,7 +15636,7 @@ Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `run
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
 Expected: PASS, including both task-review and final-review composition and supported-host flows, exact-once

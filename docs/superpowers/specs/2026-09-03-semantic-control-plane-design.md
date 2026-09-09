@@ -1155,6 +1155,9 @@ export type ReviewArtifactWriteSkipReason =
 - `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをrandomなprivate quarantineへ原子的に退避し、quarantine descriptorのidentityを検証する。一致した元inodeだけをquarantineから `unlinkat(2)` で削除する。差し替えinode、identity検証エラー、またはquarantineへの退避後に元leafが再作成された場合は、quarantine leafを元pathへ `RENAME_NOREPLACE` で戻す。restore先が占有されている場合はquarantine leafを保持し、どのreplacementも上書き・削除せず `replacement_retained` と advisoryを返す。private leaseも同じidentity-safe手順で扱い、check-then-unlink fallbackは持たない。artifactとleaseの両方をquarantineへ移し、両方のquarantine descriptorを再検証するまでは、いずれのquarantine leafも削除してはならない。片方のquarantine、再検証、またはrestoreが失敗した場合は、移動済みleafを全て `RENAME_NOREPLACE` で戻す。restore競合・replacement検出は `replacement_retained`、それ以外の不確実性は `cleanup_incomplete` として返し、未検証leafとquarantine leafを保持する。
 - runtime は review-artifact capability を、上記providerが予約作成・identity取得・private lease・`writeExisting`・`readOnce`・`cleanup` の全てを提供できる場合にだけ公開する。provider probeが失敗した場合、`createExclusiveMarker` と `ReservedReviewArtifactIo` は公開せず、reservation portは `artifact_storage_unavailable` の `unusable` reservationを返す。workerにはartifact pathを渡さず、通常のplugin処理はfail-openで継続する。このunsupported runtimeはP0 completion criterionの免除ではなく、supported production deploymentでproviderが利用可能であることをv4.0.0の必須完了条件とする。
 - `cleanup` は artifact path を削除する直前まで identity を確認する。runtime が確認済み directory entry と削除を原子的に結び付けられない場合は、artifact path と private lease のいずれも削除せず `replacement_retained` を返して advisory を記録する。この fail-closed retention は replacement を誤削除する check-then-unlink より優先する。runtime が原子的な identity-verified deletion を提供する場合に限り、private lease は元の inode を保持したまま best-effort で削除してよい。`cleanup` の結果は、artifactとleaseの両方をidentity検証済みで削除できた場合だけ `cleaned`、replacementまたはrestore競合でreplacement/quarantineを保持した場合は `replacement_retained`、一方だけ削除済み・削除失敗・検証不能などpaired cleanupの完了を証明できない場合は `cleanup_incomplete` とする。`cleanup_incomplete` からの再試行は残存するreservation/quarantineだけを対象にし、既に削除したleafの存在を仮定せず、replacementを上書き・削除しない。cleanup failure または retention は terminal、Gate、Acceptance authority を rollback しない。
+- `cleanup` の native state machine は次の4段階に固定する。(1) artifact と lease それぞれについて、既存の matching quarantine leaf を identity 検証付きで一件だけ探索する。(2) 残存していない対象だけを、対象 leaf の identity を検証してから `RENAME_NOREPLACE` で quarantine へ移す。(3) artifact/lease の両方の quarantine descriptor を開き、期待 identity と一致すること、対応する元 leaf が absent であること、candidate が重複していないことを確認する。(4) 段階 (3) が完全に成功した後に限り、検証済みの quarantine leaf を unlink する。段階 (3) の完了前に片側を削除してはならず、片側の unlink が成功してもう片側が失敗した場合は `cleanup_incomplete` とし、既に削除した leaf を復元しようとせず、残存する検証可能な quarantine/reservation leaf だけを次回に再試行する。
+- 一方の移動・再検証・restore が失敗した場合、まだ unlink は行わず、移動済み leaf を `RENAME_NOREPLACE` で戻す。restore 先が占有されている場合は `replacement_retained`、restore のその他の失敗または検証不能は `cleanup_incomplete` とし、quarantine leaf を保持する。quarantine の同一 identity 候補が複数、期待 identity 以外の候補、または列挙結果が不確実な場合は、候補を削除せず同じ fail-closed outcome を返す。再試行は名前の推測や全件削除ではなく、descriptor-relative に再列挙して identity が一意に一致する残存 leaf だけを対象にする。
+- native test-only fault injection は `#[cfg(test)]` の `CleanupFaults { fail_next_unlink_label: Option<CleanupLabel> }` に限定し、公開 N-API、環境変数、汎用 syscall registry には露出させない。lease quarantine の unlink を一度だけ失敗させるテストは、最初の結果が `cleanup_incomplete`、artifact が削除済み、lease quarantine が残存すること、二回目が lease 残存だけを削除して `cleaned` になること、および replacement を再作成・上書き・削除しないことを確認する。
 - dispatch 前にこの exclusive marker 作成を行う。`occupied` の場合、その artifact は権威付けしてはならない。Justice は新しい `artifactId` / `artifactPath` を生成し、未使用の安全な path が得られるまで最大 3 回試行する。衝突を観測した時点で `review_unexpected_existing_artifact` advisory を記録する。marker 作成の path validation は create 操作と同じ safe-relative-path boundary で行い、symlink 経由の destination を許可しない。
 - 安全な `artifactPath` を確立できない場合、`ReviewArtifactReservation` を `unusable` 扱いとして claimed durable record に保持する。Runtime 実行は fail-open とする（`task()` 呼び出しを継続させる）が、mandatory review completion は成立させず、`TaskAcceptanceDecision` / `PlanAcceptanceDecision` の precondition を未成立にする。ここでの「Acceptance blocked」は `AcceptanceDecision { verdict: "blocked" }` の発行を意味しない。`unusable` reservation は worker input に `artifactPath` を提示せず、PostToolUse でも filesystem read、ReviewArtifact 組み立て、terminal clean completion、Gate PASS、Acceptance、`AcceptanceDecision` の発行を行わない。
 - `createExclusiveMarker` は全 `FileWriter` に要求する共通操作ではなく、runtime-boundary の optional capability とする。runtime が exclusive create、inode identity、private lease、および `ReservedReviewArtifactIo` の全操作を完全に提供できない場合、reservation port は `fileExists` → `writeFile` 等の fallback を試みず、`artifact_storage_unavailable` の `unusable` reservation を返す。
@@ -1182,11 +1185,30 @@ export type ReviewArtifactWriteSkipReason =
    を行わず、advisory を best-effort で記録して `{
    action: "skip", reason: "review_artifact_write_rejected" }` を返す。後者は trusted completion
    evidence を作らず、通常の pathname writerへ fall-through してはならない。
- - `ReviewArtifactWriteSkipReason` は `SkipResponse` の optional な内部 discriminant として扱う。
-   `mergePreToolUseResponses` を含む全ての response merger はこの二つの reason を保持するが、
-   reason のない一般的な `skip` を cancellation へ変換しない。review write 以外の `skip` は従来の
-   fail-open / host behavior を維持する。
- - runtime adapter は `onToolExecuteBefore()` からこの内部 `HookResponse` を返す。plugin wrapper は
+- `ReviewArtifactWriteSkipReason` は `SkipResponse` の optional な内部 discriminant として扱う。
+  `mergePreToolUseResponses` を含む全ての response merger はこの二つの reason を保持するが、
+  reason のない一般的な `skip` を cancellation へ変換しない。review write 以外の `skip` は従来の
+  fail-open / host behavior を維持する。
+- `SkipResponse` は既存の discriminated union を拡張するだけで、response variant を増やさない。
+  型の正規形は次のとおりである。
+
+  ```ts
+  export interface SkipResponse {
+    readonly action: "skip";
+    readonly reason?: ReviewArtifactWriteSkipReason;
+  }
+
+  export type HookResponse = ProceedResponse | SkipResponse | InjectResponse;
+  ```
+
+  `mergePreToolUseResponses` と `mergePostToolUseResponses` は skip を次の規則で合成する。
+  reason が一件だけならその reason を保持し、同じ reason が複数なら同じ値を返し、reasonless
+  skip と reason付き skip の組み合わせでは reason付き skip を保持する。異なる二つの
+  `ReviewArtifactWriteSkipReason` が競合した場合は conflict logger を呼び、
+  `review_artifact_write_rejected` を返す。reasonless skip は従来どおり reasonless のままとし、
+  inject/proceed と skip の優先順位も既存どおり skip を優先する。これにより merger が
+  cancellation reason を落とさず、競合時は built-in writer を fail-closed で止められる。
+- runtime adapter は `onToolExecuteBefore()` からこの内部 `HookResponse` を返す。plugin wrapper は
    上記二つの reason だけを `ReviewArtifactWriteCancelled` に変換し、OpenCode の
    `tool.execute.before` 境界へ escape させる。これにより built-in writer を実行させない。通常の
    adapter / I/O error は従来どおり `PROCEED` へ縮退するが、dedicated cancellation を広い outer
@@ -2040,3 +2062,65 @@ host acceptance や JUS-P0-04 completion evidence には算入しない。
 `ec23694` のように設計・計画書だけを変更したコミットでは、テストコードが追加されたとは
 みなさない。計画上の fixture と実際に実行可能な production integration test を区別し、
 実テストの RED/GREEN と全体品質ゲートを別途確認する。
+
+Host acceptance report の最小 schema は固定する。fixture は prompt、worker text、credential、
+環境変数の値を保存せず、runtime が実際に提供した値と field path だけを redacted report に残す。
+
+```ts
+export type OpenCodeHostReviewContractReport = {
+  readonly status: "PASS" | "BLOCKED";
+  readonly failureClass?: "setup" | "contract";
+  readonly failureCode?:
+    | "host_missing"
+    | "host_version_mismatch"
+    | "model_unconfigured"
+    | "host_run_failed"
+    | "plugin_load_failed"
+    | "host_contract_paths_unconfigured"
+    | "task_mutation_dropped"
+    | "child_correlation_missing"
+    | "write_cancellation_failed"
+    | "unrelated_write_regressed"
+    | "unknown_failure";
+  readonly hostVersion: string;
+  readonly sdkVersion: string;
+  readonly taskReview: HostReviewTrace;
+  readonly finalReview: HostReviewTrace;
+  readonly writeCancellation: HostWriteCancellationTrace;
+  readonly unrelatedWrite: HostUnrelatedWriteTrace;
+};
+
+export type HostReviewTrace = {
+  readonly hookArgs: {
+    readonly parentCallId: string;
+    readonly runInBackground: false;
+    readonly artifactPath: string;
+  };
+  readonly taskExecutionArgs: {
+    readonly runInBackground: false;
+    readonly artifactPath: string;
+  };
+  readonly childBinding: {
+    readonly parentCallId: string;
+    readonly childSessionId: string;
+    readonly parentCallFieldPath: string;
+    readonly childSessionFieldPath: string;
+  };
+};
+
+export type HostWriteCancellationTrace = {
+  readonly reason: ReviewArtifactWriteSkipReason;
+  readonly builtInWriterInvocations: false;
+  readonly outsideTargetUnchanged: true;
+};
+
+export type HostUnrelatedWriteTrace = {
+  readonly builtInWriterInvocations: true;
+};
+```
+
+`taskReview` と `finalReview` は実際の `task` / child-session trace から作られなければならず、
+hook-local object、prompt、category、artifact path の再推測、worker self-report では埋められない。
+`failureClass: "setup"` は host/model/plugin の起動不能、`failureClass: "contract"` は起動後の
+mutation、correlation、cancellation、unrelated-write の不成立に限定する。どちらも `BLOCKED`
+であり、成功扱い・skip扱い・互換hostへの自動fallbackは禁止する。
