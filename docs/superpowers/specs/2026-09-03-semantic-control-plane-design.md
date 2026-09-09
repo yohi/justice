@@ -1078,7 +1078,17 @@ Every quarantined object belongs to exactly one validated reservation and MUST r
 all other reservations.
 
 The production provider MUST derive a descriptor-relative quarantine subtree from the already-validated
-safe target leaf and the durable reservation identifier. The canonical logical layout is:
+safe target leaf and the durable reservation identifier.
+
+The reservation identifier SSOT is the durable `ReviewArtifactReservation.artifactId`. The native provider
+MUST NOT introduce a second durable reservation ID. On create and after restart, it deterministically
+reconstructs that same identifier from the already-validated artifact leaf
+`.justice/reviews/<artifactId>.json`: the leaf must have the exact `.json` suffix, the extracted artifact ID
+must be non-empty and match the generated single-component artifact-ID format, and neither component may
+contain a path separator. Artifact and lease cleanup use the same validated artifact leaf as the stable
+target scope and the same reconstructed `artifactId` as the reservation identifier.
+
+The canonical logical layout is:
 
 ```text
 .justice/reviews/.quarantine/<safe-target-leaf>/<reservation-id>/artifact

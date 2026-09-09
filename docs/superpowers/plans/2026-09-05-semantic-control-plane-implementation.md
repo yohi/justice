@@ -5236,6 +5236,13 @@ GIT_MASTER=1 git commit -m "test: gate review artifact provider on Linux primiti
 
 The implementation must be the concrete provider named by the design: `LinuxOpenat2ReviewArtifactProvider`. The native crate package name is `justice_review_artifact_linux`, and the release build must produce `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`. The TypeScript owner must load only that bundled addon on the supported deployment; it must not silently substitute a generic filesystem backend, `bun:ffi`, or a pathname-based implementation.
 
+**Reservation namespace SSOT:** the existing durable `ReviewArtifactReservation.artifactId` is the reservation
+identifier. The native ABI does not add a second reservation-id field: create, reopen, and cleanup derive the
+same identifier from the validated artifact leaf `<artifactId>.json`. `cleanup()` computes it once from
+`reservation.artifact_path` and passes the same validated artifact leaf scope and the same derived identifier
+to both artifact and lease quarantine operations. This makes restart reconstruction deterministic from the
+existing durable descriptor (`artifactPath`, `leasePath`, `artifactIdentity`) without adding a new durable ID.
+
 **Pinned toolchain and package contract:**
 
 ```toml
@@ -5631,84 +5638,25 @@ describe("LinuxOpenat2ReviewArtifactProvider security boundaries", () => {
 });
 ```
 
-Add this native unit test to the same `lib.rs` under `#[cfg(test)]`. It is the required deterministic native
-fault-injection test; the TypeScript `failLeaseDelete` mock below is supplementary and cannot replace it:
+The deterministic native cleanup tests are part of the complete
+`#[cfg(test)] mod cleanup_fault_tests` in the `lib.rs` listing below and MUST be materialized unchanged in the
+RED scaffold before `cargo test` runs. That module fully defines `arrange_native_cleanup_fixture`,
+`arrange_two_reservation_cleanup_fixture`, reservation-namespace inspection, test-only one-sided unlink fault
+injection, residual quarantine inspection, and namespace-open tracing; there are no illustrative or undefined
+fixture helpers.
 
-```rust
-#[cfg(test)]
-mod cleanup_fault_tests {
-    use super::*;
+The module contains these required behavioral tests:
 
-    #[test]
-    fn one_sided_quarantine_unlink_failure_keeps_residual_for_retry() -> Result<()> {
-        let fixture = arrange_native_cleanup_fixture()?;
-        {
-            let mut state = fixture
-                .root
-                .state
-                .lock()
-                .map_err(|_| error(Status::GenericFailure, "root_lock_poisoned", libc::EIO))?;
-            state
-                .as_mut()
-                .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?
-                .faults
-                .fail_next_unlink_label = Some(CleanupLabel::Lease);
-        }
+- `one_sided_quarantine_unlink_failure_keeps_residual_for_retry`: artifact unlink succeeds, lease unlink fails
+  once, `cleanup_incomplete` is returned, and retry removes only the same reservation's verified residual.
+- `cleanup_isolation_does_not_cross_reservations`: reservation A retains a one-sided residual while reservation
+  B cleans successfully; B opens only B's namespace, then A retries successfully.
+- `concurrent_residual_retries_remain_isolated`: A and B both retain residuals concurrently and each retry
+  opens and consumes only its own namespace.
 
-        let first = fixture.root.cleanup(&fixture.reservation)?;
-        assert_eq!(first.status, "cleanup_incomplete");
-        assert!(!fixture.artifact_target_exists());
-        assert!(!fixture.lease_target_exists());
-        assert!(!fixture.artifact_quarantine_exists());
-        assert!(fixture.lease_quarantine_exists());
-
-        let second = fixture.root.cleanup(&fixture.reservation)?;
-        assert_eq!(second.status, "cleaned");
-        assert!(!fixture.artifact_target_exists());
-        assert!(!fixture.lease_target_exists());
-        assert!(!fixture.artifact_quarantine_exists());
-        assert!(!fixture.lease_quarantine_exists());
-        fixture.assert_no_replacement_was_created_or_removed();
-        Ok(())
-    }
-}
-```
-
-`arrange_native_cleanup_fixture` must create a real supported Linux x86_64 root, artifact marker, private
-lease, and identity-safe path probes; it must not use a mock filesystem or expose `CleanupFaults` through N-API.
-The first cleanup call must verify both quarantine leaves before the injected lease unlink failure is reached.
-The second call must discover the artifact as already absent and delete only the identity-verified residual
-lease quarantine. Add the test name to the native `cargo test` hard gate and assert that no replacement leaf
-was created, overwritten, or deleted during either call.
-
-Add a deterministic cross-reservation test to the native security suite and the Linux integration suite:
-
-```rust
-#[test]
-fn cleanup_isolation_does_not_cross_reservations() -> Result<()> {
-    let fixture = arrange_two_reservation_cleanup_fixture()?;
-    force_replacement_and_quarantine(&fixture.first)?;
-    force_replacement_and_quarantine(&fixture.second)?;
-    assert_ne!(
-        quarantine_namespace(&fixture.first),
-        quarantine_namespace(&fixture.second),
-    );
-
-    cleanup(&fixture.first)?;
-    assert!(!quarantined_replacement_exists(&fixture.first)?);
-    assert!(quarantined_replacement_exists(&fixture.second)?);
-    assert_matching_and_replacement_state_unchanged(&fixture.second)?;
-    Ok(())
-}
-```
-
-The equivalent TypeScript/native-provider test must use two durable reservation IDs and two validated
-safe target leaves. It must prove that A's residual quarantine does not alter B's Matching or Replacement
-classification, and that B cleanup never opens, restores, or unlinks A's subtree. The cleanup sequence is
-fixed: move artifact, move lease, verify artifact identity, verify lease identity, verify both original
-slots are absent, then begin deletion; unlink artifact before unlinking lease. Any verification failure
-has delete count zero. A one-sided unlink failure returns `cleanup_incomplete`, and retry looks only in
-the same reservation's subtree.
+The equivalent TypeScript/native-provider coverage must use two durable `artifactId` identities reconstructed
+from two validated artifact leaves. Any verification failure has delete count zero, and no test-only state is
+exposed through N-API.
 
 The two files above are the RED source. Before running RED, Step 1 must materialize a complete buildable
 scaffold, not a prose placeholder. Use the complete `lib.rs` implementation listing in Step 3 as the source
@@ -5913,7 +5861,7 @@ enum RetentionReason {
 }
 
 enum QuarantineOutcome {
-    Moved { target_dir: RawFd, target_leaf: String, quarantine_leaf: String },
+    Moved(MovedQuarantineLeaf),
     AlreadyAbsent,
     Retained { reason: RetentionReason },
 }
@@ -5930,16 +5878,15 @@ enum DeleteOutcome {
     Incomplete,
 }
 
-#[derive(Clone)]
 struct MovedQuarantineLeaf {
     target_dir: RawFd,
     target_leaf: String,
-    quarantine_dir: RawFd,
+    quarantine_dir: OwnedFd,
     quarantine_leaf: String,
 }
 
-struct VerifiedQuarantineLeaf {
-    moved: MovedQuarantineLeaf,
+struct VerifiedQuarantineLeaf<'a> {
+    moved: &'a MovedQuarantineLeaf,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -5952,6 +5899,7 @@ enum CleanupLabel {
 #[derive(Default)]
 struct CleanupFaults {
     fail_next_unlink_label: Option<CleanupLabel>,
+    opened_quarantine_namespaces: Vec<(String, String)>,
 }
 
 #[napi]
@@ -6112,14 +6060,20 @@ impl NativeReviewArtifactRoot {
         self.verify_handle(reservation)?;
         let artifact_leaf = artifact_leaf(&reservation.artifact_path)?;
         let lease_leaf = lease_leaf(&reservation.lease_path)?;
+        let reservation_id = reservation_id_from_artifact_leaf(&artifact_leaf)?;
         let reviews_fd = state.reviews.as_raw_fd();
         let leases_fd = state.leases.as_raw_fd();
+
+        // Both artifact and lease use the artifact leaf as the stable target scope and
+        // the artifactId reconstructed from that leaf as the durable reservation id.
         let artifact = quarantine_one(
             state,
             reviews_fd,
             &artifact_leaf,
             &reservation.identity,
             "artifact",
+            &artifact_leaf,
+            &reservation_id,
         );
         let lease = quarantine_one(
             state,
@@ -6127,60 +6081,19 @@ impl NativeReviewArtifactRoot {
             &lease_leaf,
             &reservation.identity,
             "lease",
+            &artifact_leaf,
+            &reservation_id,
         );
+
         let status = match (artifact, lease) {
-            (
-                QuarantineOutcome::Moved {
-                    target_dir: artifact_dir,
-                    target_leaf: artifact_target,
-                    quarantine_leaf: artifact_quarantine,
-                },
-                QuarantineOutcome::Moved {
-                    target_dir: lease_dir,
-                    target_leaf: lease_target,
-                    quarantine_leaf: lease_quarantine,
-                },
-            ) => {
-                cleanup_moved_pair(
-                    state,
-                    MovedQuarantineLeaf {
-                        target_dir: artifact_dir,
-                        target_leaf: artifact_target,
-                        quarantine_leaf: artifact_quarantine,
-                    },
-                    MovedQuarantineLeaf {
-                        target_dir: lease_dir,
-                        target_leaf: lease_target,
-                        quarantine_leaf: lease_quarantine,
-                    },
-                    &reservation.identity,
-                )
+            (QuarantineOutcome::Moved(artifact), QuarantineOutcome::Moved(lease)) => {
+                cleanup_moved_pair(state, artifact, lease, &reservation.identity)
             }
-            (
-                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
-                QuarantineOutcome::Retained { reason },
-            ) => {
-                let restore = restore_quarantine(state, target_dir, &target_leaf, &quarantine_leaf);
-                match (reason, restore) {
-                    (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
-                        "replacement_retained"
-                    }
-                    (_, RestoreOutcome::Failed) => "cleanup_incomplete",
-                    (RetentionReason::Incomplete, RestoreOutcome::Restored) => "cleanup_incomplete",
-                }
+            (QuarantineOutcome::Moved(moved), QuarantineOutcome::Retained { reason }) => {
+                restore_moved_after_peer_failure(moved, reason)
             }
-            (
-                QuarantineOutcome::Retained { reason },
-                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
-            ) => {
-                let restore = restore_quarantine(state, target_dir, &target_leaf, &quarantine_leaf);
-                match (reason, restore) {
-                    (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
-                        "replacement_retained"
-                    }
-                    (_, RestoreOutcome::Failed) => "cleanup_incomplete",
-                    (RetentionReason::Incomplete, RestoreOutcome::Restored) => "cleanup_incomplete",
-                }
+            (QuarantineOutcome::Retained { reason }, QuarantineOutcome::Moved(moved)) => {
+                restore_moved_after_peer_failure(moved, reason)
             }
             (
                 QuarantineOutcome::Retained { reason: artifact_reason },
@@ -6192,32 +6105,22 @@ impl NativeReviewArtifactRoot {
                 _ => "cleanup_incomplete",
             },
             (QuarantineOutcome::AlreadyAbsent, QuarantineOutcome::AlreadyAbsent) => "cleaned",
-            (
-                QuarantineOutcome::AlreadyAbsent,
-                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
-            ) => cleanup_residual_leaf(
-                state,
-                MovedQuarantineLeaf {
-                    target_dir,
-                    target_leaf,
-                    quarantine_leaf,
-                },
-                &reservation.identity,
-                CleanupLabel::Lease,
-            ),
-            (
-                QuarantineOutcome::Moved { target_dir, target_leaf, quarantine_leaf },
-                QuarantineOutcome::AlreadyAbsent,
-            ) => cleanup_residual_leaf(
-                state,
-                MovedQuarantineLeaf {
-                    target_dir,
-                    target_leaf,
-                    quarantine_leaf,
-                },
-                &reservation.identity,
-                CleanupLabel::Artifact,
-            ),
+            (QuarantineOutcome::AlreadyAbsent, QuarantineOutcome::Moved(moved)) => {
+                cleanup_residual_leaf(
+                    state,
+                    moved,
+                    &reservation.identity,
+                    CleanupLabel::Lease,
+                )
+            }
+            (QuarantineOutcome::Moved(moved), QuarantineOutcome::AlreadyAbsent) => {
+                cleanup_residual_leaf(
+                    state,
+                    moved,
+                    &reservation.identity,
+                    CleanupLabel::Artifact,
+                )
+            }
             (
                 QuarantineOutcome::AlreadyAbsent,
                 QuarantineOutcome::Retained { reason },
@@ -6427,6 +6330,58 @@ fn identity_matches(fd: RawFd, expected: &NativeIdentity) -> Result<bool> {
     Ok(same_identity(&fstat_identity(fd)?, expected))
 }
 
+fn validate_quarantine_component(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+        || CString::new(value).is_err()
+    {
+        return Err(error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL));
+    }
+    Ok(())
+}
+
+fn validate_reservation_id(value: &str) -> Result<()> {
+    validate_quarantine_component(value)?;
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL));
+    }
+    Ok(())
+}
+
+fn reservation_id_from_artifact_leaf(artifact_leaf: &str) -> Result<String> {
+    validate_quarantine_component(artifact_leaf)?;
+    let artifact_id = artifact_leaf
+        .strip_suffix(".json")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    validate_reservation_id(artifact_id)?;
+    Ok(artifact_id.to_string())
+}
+
+fn open_reservation_quarantine(
+    state: &mut RootState,
+    safe_target_leaf: &str,
+    reservation_id: &str,
+) -> Result<OwnedFd> {
+    validate_quarantine_component(safe_target_leaf)?;
+    validate_reservation_id(reservation_id)?;
+
+    #[cfg(test)]
+    state
+        .faults
+        .opened_quarantine_namespaces
+        .push((safe_target_leaf.to_string(), reservation_id.to_string()));
+
+    let target_scope = open_or_create_dir(&state.quarantine_root, safe_target_leaf)?;
+    open_or_create_dir(&target_scope, reservation_id)
+}
+
 fn quarantine_one(
     state: &mut RootState,
     target_dir: RawFd,
@@ -6436,6 +6391,32 @@ fn quarantine_one(
     safe_target_leaf: &str,
     reservation_id: &str,
 ) -> QuarantineOutcome {
+    // Check the current target first. A pre-existing replacement must not create or
+    // inspect a quarantine namespace.
+    let current = match openat2(
+        target_dir,
+        target_leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+        OPEN_RESOLVE,
+    ) {
+        Ok(fd) => Some(fd),
+        Err(_) if current_errno() == libc::ENOENT => None,
+        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
+    };
+
+    if let Some(current) = current.as_ref() {
+        match identity_matches(current.as_raw_fd(), expected) {
+            Ok(true) => {}
+            Ok(false) => {
+                return QuarantineOutcome::Retained { reason: RetentionReason::Replacement };
+            }
+            Err(_) => {
+                return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
+            }
+        }
+    }
+
     let reservation_quarantine = match open_reservation_quarantine(
         state,
         safe_target_leaf,
@@ -6452,40 +6433,23 @@ fn quarantine_one(
         }
         Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
     };
-    let current = match openat2(
-        target_dir,
-        target_leaf,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        0,
-        OPEN_RESOLVE,
-    ) {
-        Ok(fd) => {
-            if existing_quarantine.is_some() {
-                return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
-            }
-            fd
-        }
-        Err(_) if current_errno() == libc::ENOENT => {
-            return match existing_quarantine {
-                Some(quarantine_leaf) => QuarantineOutcome::Moved {
-                    target_dir,
-                    target_leaf: target_leaf.to_string(),
-                    quarantine_leaf,
-                },
-                None => QuarantineOutcome::AlreadyAbsent,
-            };
-        }
-        Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
-    };
-    match identity_matches(current.as_raw_fd(), expected) {
-        Ok(true) => {}
-        Ok(false) => {
-            return QuarantineOutcome::Retained { reason: RetentionReason::Replacement };
-        }
-        Err(_) => {
-            return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
-        }
+
+    if current.is_none() {
+        return match existing_quarantine {
+            Some(quarantine_leaf) => QuarantineOutcome::Moved(MovedQuarantineLeaf {
+                target_dir,
+                target_leaf: target_leaf.to_string(),
+                quarantine_dir: reservation_quarantine,
+                quarantine_leaf,
+            }),
+            None => QuarantineOutcome::AlreadyAbsent,
+        };
     }
+
+    if existing_quarantine.is_some() {
+        return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
+    }
+
     let token = match random_token() {
         Ok(token) => token,
         Err(_) => return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete },
@@ -6502,6 +6466,7 @@ fn quarantine_one(
     {
         return QuarantineOutcome::Retained { reason: RetentionReason::Incomplete };
     }
+
     let quarantined = match openat2(
         reservation_quarantine.as_raw_fd(),
         &quarantine_leaf,
@@ -6511,7 +6476,12 @@ fn quarantine_one(
     ) {
         Ok(fd) => fd,
         Err(_) => {
-            let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
+            let reason = match restore_quarantine(
+                &reservation_quarantine,
+                target_dir,
+                target_leaf,
+                &quarantine_leaf,
+            ) {
                 RestoreOutcome::Collision => RetentionReason::Replacement,
                 RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
             };
@@ -6521,7 +6491,12 @@ fn quarantine_one(
     let quarantine_matches = match identity_matches(quarantined.as_raw_fd(), expected) {
         Ok(matches) => matches,
         Err(_) => {
-            let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
+            let reason = match restore_quarantine(
+                &reservation_quarantine,
+                target_dir,
+                target_leaf,
+                &quarantine_leaf,
+            ) {
                 RestoreOutcome::Collision => RetentionReason::Replacement,
                 RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
             };
@@ -6529,19 +6504,26 @@ fn quarantine_one(
         }
     };
     if !quarantine_matches {
-        let reason = match restore_quarantine(&reservation_quarantine, target_dir, target_leaf, &quarantine_leaf) {
+        let reason = match restore_quarantine(
+            &reservation_quarantine,
+            target_dir,
+            target_leaf,
+            &quarantine_leaf,
+        ) {
             RestoreOutcome::Collision => RetentionReason::Replacement,
             RestoreOutcome::Restored | RestoreOutcome::Failed => RetentionReason::Incomplete,
         };
         return QuarantineOutcome::Retained { reason };
     }
-    QuarantineOutcome::Moved {
+
+    QuarantineOutcome::Moved(MovedQuarantineLeaf {
         target_dir,
         target_leaf: target_leaf.to_string(),
-        quarantine_dir: reservation_quarantine.as_raw_fd(),
+        quarantine_dir: reservation_quarantine,
         quarantine_leaf,
-    }
+    })
 }
+
 
 fn find_matching_quarantine(
     reservation_quarantine: &OwnedFd,
@@ -6668,13 +6650,12 @@ fn restore_quarantine(quarantine_dir: &OwnedFd, target_dir: RawFd, target_leaf: 
     }
 }
 
-fn verify_quarantine_leaf(
-    state: &RootState,
-    moved: MovedQuarantineLeaf,
+fn verify_quarantine_leaf<'a>(
+    moved: &'a MovedQuarantineLeaf,
     expected: &NativeIdentity,
-) -> std::result::Result<VerifiedQuarantineLeaf, DeleteOutcome> {
+) -> std::result::Result<VerifiedQuarantineLeaf<'a>, DeleteOutcome> {
     let fd = match openat2(
-        moved.quarantine_dir,
+        moved.quarantine_dir.as_raw_fd(),
         &moved.quarantine_leaf,
         libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0,
@@ -6697,7 +6678,7 @@ fn verify_quarantine_leaf(
 
 fn delete_verified_quarantine(
     state: &mut RootState,
-    verified: VerifiedQuarantineLeaf,
+    verified: VerifiedQuarantineLeaf<'_>,
     label: CleanupLabel,
 ) -> DeleteOutcome {
     #[cfg(test)]
@@ -6707,9 +6688,33 @@ fn delete_verified_quarantine(
     }
     #[cfg(not(test))]
     let _ = label;
-    match unlinkat(verified.moved.quarantine_dir, &verified.moved.quarantine_leaf, 0) {
+    match unlinkat(
+        verified.moved.quarantine_dir.as_raw_fd(),
+        &verified.moved.quarantine_leaf,
+        0,
+    ) {
         Ok(()) => DeleteOutcome::Deleted,
         Err(_) => DeleteOutcome::Incomplete,
+    }
+}
+
+fn restore_moved_after_peer_failure(
+    moved: MovedQuarantineLeaf,
+    peer_reason: RetentionReason,
+) -> &'static str {
+    let restore = restore_quarantine(
+        &moved.quarantine_dir,
+        moved.target_dir,
+        &moved.target_leaf,
+        &moved.quarantine_leaf,
+    );
+    match (peer_reason, restore) {
+        (RetentionReason::Replacement, _) | (_, RestoreOutcome::Collision) => {
+            "replacement_retained"
+        }
+        (_, RestoreOutcome::Failed) | (RetentionReason::Incomplete, RestoreOutcome::Restored) => {
+            "cleanup_incomplete"
+        }
     }
 }
 
@@ -6720,13 +6725,14 @@ fn cleanup_moved_pair(
     expected: &NativeIdentity,
 ) -> &'static str {
     // Verify both quarantine leaves and both absent target leaves before either unlink.
-    let artifact_verified = verify_quarantine_leaf(state, artifact.clone(), expected);
-    let lease_verified = verify_quarantine_leaf(state, lease.clone(), expected);
+    let artifact_verified = verify_quarantine_leaf(&artifact, expected);
+    let lease_verified = verify_quarantine_leaf(&lease, expected);
     match (artifact_verified, lease_verified) {
-        (Ok(artifact), Ok(lease)) => {
-            let artifact_delete = delete_verified_quarantine(state, artifact, CleanupLabel::Artifact);
+        (Ok(artifact_verified), Ok(lease_verified)) => {
+            let artifact_delete =
+                delete_verified_quarantine(state, artifact_verified, CleanupLabel::Artifact);
             let lease_delete = if matches!(artifact_delete, DeleteOutcome::Deleted) {
-                delete_verified_quarantine(state, lease, CleanupLabel::Lease)
+                delete_verified_quarantine(state, lease_verified, CleanupLabel::Lease)
             } else {
                 DeleteOutcome::Incomplete
             };
@@ -6739,22 +6745,24 @@ fn cleanup_moved_pair(
             }
         }
         (artifact_result, lease_result) => {
+            let replacement_detected =
+                matches!(&artifact_result, Err(DeleteOutcome::ReplacementRetained))
+                    || matches!(&lease_result, Err(DeleteOutcome::ReplacementRetained));
             let artifact_restore = restore_quarantine(
-                state,
+                &artifact.quarantine_dir,
                 artifact.target_dir,
                 &artifact.target_leaf,
                 &artifact.quarantine_leaf,
             );
             let lease_restore = restore_quarantine(
-                state,
+                &lease.quarantine_dir,
                 lease.target_dir,
                 &lease.target_leaf,
                 &lease.quarantine_leaf,
             );
-            if matches!(artifact_restore, RestoreOutcome::Collision)
+            if replacement_detected
+                || matches!(artifact_restore, RestoreOutcome::Collision)
                 || matches!(lease_restore, RestoreOutcome::Collision)
-                || matches!(artifact_result, Err(DeleteOutcome::ReplacementRetained))
-                || matches!(lease_result, Err(DeleteOutcome::ReplacementRetained))
             {
                 "replacement_retained"
             } else {
@@ -6770,7 +6778,7 @@ fn cleanup_residual_leaf(
     expected: &NativeIdentity,
     label: CleanupLabel,
 ) -> &'static str {
-    match verify_quarantine_leaf(state, moved, expected) {
+    match verify_quarantine_leaf(&moved, expected) {
         Ok(verified) => match delete_verified_quarantine(state, verified, label) {
             DeleteOutcome::Deleted => "cleaned",
             DeleteOutcome::ReplacementRetained => "replacement_retained",
@@ -6780,6 +6788,7 @@ fn cleanup_residual_leaf(
         Err(DeleteOutcome::Incomplete) | Err(DeleteOutcome::Deleted) => "cleanup_incomplete",
     }
 }
+
 
 fn target_is_absent(target_dir: RawFd, target_leaf: &str) -> Result<bool> {
     match openat2(
@@ -6969,12 +6978,292 @@ fn error_for_errno(operation: &str, errno: c_int) -> Error {
 fn error(status: Status, code: &str, errno: c_int) -> Error {
     Error::new(status, format!("{code}:{errno}"))
 }
+
+#[cfg(test)]
+mod cleanup_fault_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    struct NativeCleanupFixture {
+        root_path: PathBuf,
+        root: NativeReviewArtifactRoot,
+        reservation: NativeReservationHandle,
+    }
+
+    struct TwoReservationCleanupFixture {
+        root_path: PathBuf,
+        root: NativeReviewArtifactRoot,
+        first: NativeReservationHandle,
+        second: NativeReservationHandle,
+    }
+
+    impl Drop for NativeCleanupFixture {
+        fn drop(&mut self) {
+            let _ = self.root.close();
+            let _ = std::fs::remove_dir_all(&self.root_path);
+        }
+    }
+
+    impl Drop for TwoReservationCleanupFixture {
+        fn drop(&mut self) {
+            let _ = self.root.close();
+            let _ = std::fs::remove_dir_all(&self.root_path);
+        }
+    }
+
+    fn create_test_root(label: &str) -> Result<(PathBuf, NativeReviewArtifactRoot)> {
+        let path = std::env::temp_dir().join(format!(
+            "justice-review-artifact-{label}-{:x}",
+            random_token()?,
+        ));
+        std::fs::create_dir(&path)
+            .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
+        let root = open_review_artifact_root(path.to_string_lossy().into_owned())?;
+        Ok((path, root))
+    }
+
+    fn create_test_reservation(
+        root: &NativeReviewArtifactRoot,
+        artifact_id: &str,
+    ) -> Result<NativeReservationHandle> {
+        validate_reservation_id(artifact_id)?;
+        root.create_exclusive_marker(format!(".justice/reviews/{artifact_id}.json"))
+    }
+
+    fn arrange_native_cleanup_fixture() -> Result<NativeCleanupFixture> {
+        let (root_path, root) = create_test_root("single")?;
+        let reservation = create_test_reservation(&root, "native-cleanup-a")?;
+        Ok(NativeCleanupFixture {
+            root_path,
+            root,
+            reservation,
+        })
+    }
+
+    fn arrange_two_reservation_cleanup_fixture() -> Result<TwoReservationCleanupFixture> {
+        let (root_path, root) = create_test_root("pair")?;
+        let first = create_test_reservation(&root, "native-cleanup-a")?;
+        let second = create_test_reservation(&root, "native-cleanup-b")?;
+        Ok(TwoReservationCleanupFixture {
+            root_path,
+            root,
+            first,
+            second,
+        })
+    }
+
+    fn reservation_namespace(
+        reservation: &NativeReservationHandle,
+    ) -> Result<(String, String)> {
+        let safe_target_leaf = artifact_leaf(&reservation.artifact_path)?;
+        let reservation_id = reservation_id_from_artifact_leaf(&safe_target_leaf)?;
+        Ok((safe_target_leaf, reservation_id))
+    }
+
+    fn fail_next_unlink(
+        root: &NativeReviewArtifactRoot,
+        label: CleanupLabel,
+    ) -> Result<()> {
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        state.faults.fail_next_unlink_label = Some(label);
+        Ok(())
+    }
+
+    fn take_opened_quarantine_namespaces(
+        root: &NativeReviewArtifactRoot,
+    ) -> Result<Vec<(String, String)>> {
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        Ok(std::mem::take(
+            &mut state.faults.opened_quarantine_namespaces,
+        ))
+    }
+
+    fn quarantine_entry_count(
+        root: &NativeReviewArtifactRoot,
+        reservation: &NativeReservationHandle,
+        label: CleanupLabel,
+    ) -> Result<usize> {
+        let (safe_target_leaf, reservation_id) = reservation_namespace(reservation)?;
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        let directory =
+            open_reservation_quarantine(state, &safe_target_leaf, &reservation_id)?;
+        let prefix = match label {
+            CleanupLabel::Artifact => "artifact-",
+            CleanupLabel::Lease => "lease-",
+        };
+        Ok(read_directory_entries(directory.as_raw_fd())?
+            .into_iter()
+            .filter(|leaf| leaf.starts_with(prefix))
+            .count())
+    }
+
+    fn target_exists(
+        root: &NativeReviewArtifactRoot,
+        reservation: &NativeReservationHandle,
+    ) -> Result<(bool, bool)> {
+        let artifact = artifact_leaf(&reservation.artifact_path)?;
+        let lease = lease_leaf(&reservation.lease_path)?;
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        Ok((
+            !target_is_absent(state.reviews.as_raw_fd(), &artifact)?,
+            !target_is_absent(state.leases.as_raw_fd(), &lease)?,
+        ))
+    }
+
+    fn assert_only_namespace_opened(
+        opened: &[(String, String)],
+        expected: &(String, String),
+    ) {
+        assert!(!opened.is_empty());
+        assert!(opened.iter().all(|namespace| namespace == expected));
+    }
+
+    #[test]
+    fn one_sided_quarantine_unlink_failure_keeps_residual_for_retry() -> Result<()> {
+        let fixture = arrange_native_cleanup_fixture()?;
+        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
+
+        let first = fixture.root.cleanup(&fixture.reservation)?;
+        assert_eq!(first.status, "cleanup_incomplete");
+        assert_eq!(target_exists(&fixture.root, &fixture.reservation)?, (false, false));
+        assert_eq!(
+            quarantine_entry_count(
+                &fixture.root,
+                &fixture.reservation,
+                CleanupLabel::Artifact,
+            )?,
+            0,
+        );
+        assert_eq!(
+            quarantine_entry_count(
+                &fixture.root,
+                &fixture.reservation,
+                CleanupLabel::Lease,
+            )?,
+            1,
+        );
+
+        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
+        let second = fixture.root.cleanup(&fixture.reservation)?;
+        assert_eq!(second.status, "cleaned");
+        let expected_namespace = reservation_namespace(&fixture.reservation)?;
+        let opened = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_only_namespace_opened(&opened, &expected_namespace);
+        assert_eq!(target_exists(&fixture.root, &fixture.reservation)?, (false, false));
+        assert_eq!(
+            quarantine_entry_count(
+                &fixture.root,
+                &fixture.reservation,
+                CleanupLabel::Artifact,
+            )?,
+            0,
+        );
+        assert_eq!(
+            quarantine_entry_count(
+                &fixture.root,
+                &fixture.reservation,
+                CleanupLabel::Lease,
+            )?,
+            0,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_isolation_does_not_cross_reservations() -> Result<()> {
+        let fixture = arrange_two_reservation_cleanup_fixture()?;
+        let first_namespace = reservation_namespace(&fixture.first)?;
+        let second_namespace = reservation_namespace(&fixture.second)?;
+        assert_ne!(first_namespace, second_namespace);
+
+        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
+        let first = fixture.root.cleanup(&fixture.first)?;
+        assert_eq!(first.status, "cleanup_incomplete");
+        assert_eq!(
+            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
+            1,
+        );
+
+        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
+        let second = fixture.root.cleanup(&fixture.second)?;
+        assert_eq!(second.status, "cleaned");
+        let opened_for_second = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_only_namespace_opened(&opened_for_second, &second_namespace);
+        assert_eq!(
+            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
+            1,
+        );
+
+        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
+        let first_retry = fixture.root.cleanup(&fixture.first)?;
+        assert_eq!(first_retry.status, "cleaned");
+        let opened_for_first = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_only_namespace_opened(&opened_for_first, &first_namespace);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_residual_retries_remain_isolated() -> Result<()> {
+        let fixture = arrange_two_reservation_cleanup_fixture()?;
+        let first_namespace = reservation_namespace(&fixture.first)?;
+        let second_namespace = reservation_namespace(&fixture.second)?;
+
+        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
+        assert_eq!(
+            fixture.root.cleanup(&fixture.first)?.status,
+            "cleanup_incomplete",
+        );
+        fail_next_unlink(&fixture.root, CleanupLabel::Lease)?;
+        assert_eq!(
+            fixture.root.cleanup(&fixture.second)?.status,
+            "cleanup_incomplete",
+        );
+        assert_eq!(
+            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
+            1,
+        );
+        assert_eq!(
+            quarantine_entry_count(&fixture.root, &fixture.second, CleanupLabel::Lease)?,
+            1,
+        );
+
+        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_eq!(fixture.root.cleanup(&fixture.second)?.status, "cleaned");
+        let opened_for_second = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_only_namespace_opened(&opened_for_second, &second_namespace);
+        assert_eq!(
+            quarantine_entry_count(&fixture.root, &fixture.first, CleanupLabel::Lease)?,
+            1,
+        );
+
+        let _ = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_eq!(fixture.root.cleanup(&fixture.first)?.status, "cleaned");
+        let opened_for_first = take_opened_quarantine_namespaces(&fixture.root)?;
+        assert_only_namespace_opened(&opened_for_first, &first_namespace);
+        Ok(())
+    }
+}
 ```
 
 The code above is the complete native implementation contract, not a placeholder: every helper body names
 the syscall, validation, ownership, and error behavior that must be copied into the implementation commit.
 `RootState._root`, every `OwnedFd`, and every reservation handle must be closed by Rust ownership or
-`close()`; no raw descriptor may cross into TypeScript. `openat2` must
+`close()`; no raw descriptor may cross into TypeScript. In particular, a reservation-local quarantine
+directory opened inside `quarantine_one()` is owned by `MovedQuarantineLeaf.quarantine_dir: OwnedFd` and is
+never returned as a borrowed/dangling `RawFd`. `VerifiedQuarantineLeaf` borrows that moved object only for
+the synchronous verify/delete phase. `openat2` must
 use `O_CLOEXEC`, `O_NOFOLLOW`, `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, and
 descriptor-relative directory fds. `quarantine_one` must use `renameat2(..., RENAME_NOREPLACE)`, verify
 the quarantine fd identity before `unlinkat`, scan the private quarantine directory by descriptor and
@@ -7227,7 +7516,7 @@ function safeNativeError(fallbackCode: string, cause: unknown): Error {
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && cargo test --manifest-path native/review-artifact-linux/Cargo.toml one_sided_quarantine_unlink_failure_keeps_residual_for_retry && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && cargo test --manifest-path native/review-artifact-linux/Cargo.toml cleanup_fault_tests && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
 ```
 
 The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity,
@@ -13820,7 +14109,13 @@ converts an arbitrary `skip` or ordinary failure into a throw. The composition E
 each cover one committed write and one rejected replacement, with the rejected flow producing no
 `tool.execute.after` evidence for the built-in writer.
 
-The required unit and boundary cases are concrete:
+The required unit and boundary cases are concrete. Extend the existing
+`tests/integration/opencode-plugin.test.ts` imports with
+`import type { HookResponse } from "../../src/core/types";`. The existing imports already provide
+`OpenCodePlugin`, `OpenCodeAdapter`, `OpenCodePluginInit`, `fakeInit`, and `vi`. Derive the actual
+`tool.execute.before` host input/output types from the returned OpenCode hook map; do not pass core
+`PreToolUseEvent` / `PostToolUseEvent` objects to the host hook.
+
 
 ```ts
 it.each([
@@ -13859,68 +14154,161 @@ it("fails closed when two reasoned skips conflict", () => {
   expect(warnings).toHaveLength(1);
 });
 
-function taskInput(overrides: Partial<PreToolUseEvent> = {}): PreToolUseEvent {
+type OpenCodeHooks = Awaited<ReturnType<typeof OpenCodePlugin>>;
+type ToolExecuteBeforeHook = NonNullable<OpenCodeHooks["tool.execute.before"]>;
+type HostToolInput = Parameters<ToolExecuteBeforeHook>[0];
+type HostToolOutput = Parameters<ToolExecuteBeforeHook>[1];
+
+function hostWriteInput(overrides: Partial<HostToolInput> = {}): HostToolInput {
   return {
-    type: "PreToolUse",
-    toolName: "task",
-    sessionId: "parent-1",
-    callId: "call-1",
-    input: { category: "sp-review", run_in_background: true },
+    tool: "write",
+    sessionID: "child-review-session",
+    callID: "write-call-1",
     ...overrides,
-  };
+  } as HostToolInput;
 }
 
-function taskOutput(overrides: Partial<PostToolUseEvent> = {}): PostToolUseEvent {
+function hostWriteOutput(overrides: Partial<HostToolOutput> = {}): HostToolOutput {
   return {
-    type: "PostToolUse",
-    toolName: "task",
-    sessionId: "parent-1",
-    callId: "call-1",
-    output: {},
+    args: {
+      filePath: ".justice/reviews/review-1.json",
+      content: "{}",
+    },
     ...overrides,
+  } as HostToolOutput;
+}
+
+function arrangeAdapterReturning(response: HookResponse): OpenCodeAdapter {
+  return {
+    ...createMockAdapter(),
+    onToolExecuteBefore: vi.fn(async () => response),
+  } as unknown as OpenCodeAdapter;
+}
+
+function arrangeAdapterThrowing(
+  cause: unknown = new Error("adapter failure"),
+): OpenCodeAdapter {
+  return {
+    ...createMockAdapter(),
+    onToolExecuteBefore: vi.fn(async () => {
+      throw cause;
+    }),
+  } as unknown as OpenCodeAdapter;
+}
+
+async function arrangePluginWithAdapter(
+  adapter: OpenCodeAdapter,
+): Promise<OpenCodeHooks> {
+  const init = fakeInit() as OpenCodePluginInit & {
+    __justiceTestAdapter?: OpenCodeAdapter;
   };
+  init.__justiceTestAdapter = adapter;
+  return await OpenCodePlugin(init as never);
 }
 
-async function arrangeAdapterReturning(response: HookResponse) {
-  const adapter = createMockAdapter();
-  adapter.handlePreToolUse = vi.fn(async () => response);
-  return adapter;
+function requireToolExecuteBefore(hooks: OpenCodeHooks): ToolExecuteBeforeHook {
+  const before = hooks["tool.execute.before"];
+  if (before === undefined) {
+    throw new Error("fixture: tool.execute.before hook missing");
+  }
+  return before;
 }
 
-async function arrangeAdapterThrowing(cause: unknown = new Error("adapter failure")) {
-  const adapter = createMockAdapter();
-  adapter.handlePreToolUse = vi.fn(async () => {
+async function invokeHostWriteBoundary(
+  hooks: OpenCodeHooks,
+  input: HostToolInput,
+  output: HostToolOutput,
+  builtInWriter: () => Promise<void>,
+): Promise<void> {
+  try {
+    await requireToolExecuteBefore(hooks)(input, output);
+  } catch (cause: unknown) {
+    if (cause instanceof Error && cause.name === "ReviewArtifactWriteCancelled") {
+      return;
+    }
     throw cause;
+  }
+  await builtInWriter();
+}
+
+it("does not convert a reasonless skip into dedicated cancellation", async () => {
+  const input = hostWriteInput();
+  const output = hostWriteOutput();
+  const adapter = arrangeAdapterReturning({ action: "skip" });
+  const direct = adapter.onToolExecuteBefore(input, output) as unknown as Promise<HookResponse>;
+  await expect(direct).resolves.toEqual({ action: "skip" });
+
+  const hooks = await arrangePluginWithAdapter(adapter);
+  await expect(requireToolExecuteBefore(hooks)(input, output)).resolves.toBeUndefined();
+});
+
+it("does not relabel an ordinary adapter error as review cancellation", async () => {
+  const hooks = await arrangePluginWithAdapter(
+    arrangeAdapterThrowing(new Error("ordinary adapter failure")),
+  );
+
+  await expect(
+    requireToolExecuteBefore(hooks)(hostWriteInput(), hostWriteOutput()),
+  ).rejects.toMatchObject({
+    name: "Error",
+    message: "ordinary adapter failure",
   });
-  return adapter;
-}
-
-async function arrangePluginWithAdapter(adapter: ReturnType<typeof createMockAdapter>) {
-  const fixture = await fakeInit({ adapter });
-  return { ...fixture, plugin: OpenCodePlugin(fixture.init), adapter };
-}
-
-it("does not convert a reasonless skip or an ordinary adapter failure into cancellation", async () => {
-  const adapter = await arrangeAdapterReturning({ action: "skip" });
-  await expect(adapter.onToolExecuteBefore(taskInput, taskOutput)).resolves.toEqual({ action: "skip" });
-  const wrapper = await arrangePluginWithAdapter(adapter);
-  await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
-
-  const failingAdapter = await arrangeAdapterThrowing(new Error("ordinary adapter failure"));
-  const failOpenWrapper = await arrangePluginWithAdapter(failingAdapter);
-  await expect(failOpenWrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
 });
 
 it.each([
   "review_artifact_write_committed",
   "review_artifact_write_rejected",
 ] as const)("throws only the dedicated cancellation for %s", async (reason) => {
-  const adapter = await arrangeAdapterReturning({ action: "skip", reason });
-  const wrapper = await arrangePluginWithAdapter(adapter);
-  await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).rejects.toMatchObject({
+  const adapter = arrangeAdapterReturning({ action: "skip", reason });
+  const hooks = await arrangePluginWithAdapter(adapter);
+  await expect(
+    requireToolExecuteBefore(hooks)(hostWriteInput(), hostWriteOutput()),
+  ).rejects.toMatchObject({
     name: "ReviewArtifactWriteCancelled",
     reason,
   });
+});
+
+it("keeps an unrelated normal write on the existing host path", async () => {
+  const builtInWriter = vi.fn(async () => undefined);
+  const hooks = await arrangePluginWithAdapter(
+    arrangeAdapterReturning({ action: "proceed" }),
+  );
+
+  await invokeHostWriteBoundary(
+    hooks,
+    hostWriteInput({
+      callID: "unrelated-write-call",
+    }),
+    hostWriteOutput({
+      args: {
+        filePath: ".justice/unrelated.txt",
+        content: "ok",
+      },
+    }),
+    builtInWriter,
+  );
+
+  expect(builtInWriter).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the built-in writer at zero after a rejected replacement", async () => {
+  const builtInWriter = vi.fn(async () => undefined);
+  const hooks = await arrangePluginWithAdapter(
+    arrangeAdapterReturning({
+      action: "skip",
+      reason: "review_artifact_write_rejected",
+    }),
+  );
+
+  await invokeHostWriteBoundary(
+    hooks,
+    hostWriteInput(),
+    hostWriteOutput(),
+    builtInWriter,
+  );
+
+  expect(builtInWriter).toHaveBeenCalledTimes(0);
 });
 ```
 
@@ -13929,11 +14317,13 @@ it.each([
 they must not call `JusticePlugin.handleEvent()` directly. The final two cases also assert that the host
 fixture's built-in writer spy has zero calls after the rejection.
 
-The definitions above are executable RED-fixture code, not illustrative pseudocode. Adapt only the local
-`PreToolUseEvent`, `PostToolUseEvent`, `HookResponse`, `createMockAdapter`, `fakeInit`, and
-`OpenCodePlugin` signatures already used by the integration seam. The fixture must typecheck before RED
-and fail only on behavioral assertions. Every call to the async `arrangePluginWithAdapter` helper must
-use `await`.
+The definitions above are executable RED-fixture code, not illustrative pseudocode. The fixture derives
+the host hook shapes from `OpenCodePlugin` itself, overrides only the existing
+`OpenCodeAdapter.onToolExecuteBefore` method on the local test double, injects it exclusively through
+`__justiceTestAdapter`, and returns the actual plugin hook map. It MUST NOT reference
+`adapter.handlePreToolUse`, pass core `PreToolUseEvent` / `PostToolUseEvent` values to the host hook, call
+`fakeInit({ adapter })`, or invent another test injection API. The fixture must typecheck before RED and
+fail only on behavioral assertions. Every call to the async `arrangePluginWithAdapter` helper uses `await`.
 
 Create the two artifact adapters in this composition block, before creating the completion domain. Both take
 the durable `ReviewTaskCallBinding` or its usable reservation; neither receives an `artifactPath` from
