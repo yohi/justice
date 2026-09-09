@@ -5061,7 +5061,8 @@ git commit -m "test: child session correlation runtime境界を検証"
 
 - Create `spikes/review-artifact-linux/probe.c`.
 - Create `spikes/review-artifact-linux/verify.ts`.
-- Modify `.devcontainer/Dockerfile` only to provide `build-essential`, `ca-certificates`, and `rustup`; do not install an unpinned apt `rustc` or `cargo`.
+- Replace `.devcontainer/Dockerfile` with the complete pinned-user structure below; do not install an unpinned apt `rustc` or `cargo`.
+- Modify `.devcontainer/devcontainer.json` so `remoteUser` does not override the Dockerfile's `bun` user during the hard gate.
 - Create `docs/agents/review-artifact-linux-provider.md` with the exact probe output and the supported deployment statement.
 - Test `tests/runtime/review-artifact-linux-probe.test.ts`.
 
@@ -5071,28 +5072,91 @@ The probe is a hard gate, not a best-effort experiment. It must prove the exact 
 
 **Implementation steps:**
 
-Before compiling the probe, make the devcontainer provisioning match the pinned toolchain. The Dockerfile must use the following package and rustup setup; it must not install `rustc` or `cargo` from apt:
+Before compiling the probe, make the devcontainer provisioning match the pinned toolchain. The final
+Dockerfile is not a partial insertion: it must use this complete structure, and it must not install
+`rustc` or `cargo` from apt:
 
 ```dockerfile
+FROM oven/bun:1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    curl \
-    git \
-    sudo \
+    build-essential ca-certificates curl git sudo \
     && rm -rf /var/lib/apt/lists/*
+
+ARG USERNAME=bun
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+
+RUN set -eux; \
+    if ! getent group "$USERNAME" >/dev/null; then groupadd --gid "$USER_GID" "$USERNAME"; fi; \
+    if ! id -u "$USERNAME" >/dev/null 2>&1; then useradd --uid "$USER_UID" --gid "$USERNAME" -m "$USERNAME"; fi; \
+    echo "$USERNAME ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME"; \
+    chmod 0440 "/etc/sudoers.d/$USERNAME"
+
+WORKDIR /workspace
+RUN chown -R "$USERNAME:$USERNAME" /workspace
+
+USER $USERNAME
+ENV RUSTUP_HOME=/home/bun/.rustup
+ENV CARGO_HOME=/home/bun/.cargo
+ENV PATH=/home/bun/.cargo/bin:${PATH}
 
 RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
     | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
-ENV PATH="/home/bun/.cargo/bin:${PATH}"
 RUN rustup toolchain install 1.85.1 \
     --profile minimal \
     --component rustfmt \
     --component clippy \
-    --target x86_64-unknown-linux-gnu
+    --target x86_64-unknown-linux-gnu \
+    && rustup default 1.85.1
 ```
 
-The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values, and the probe command must first assert `rustup show active-toolchain` is `1.85.1-x86_64-unknown-linux-gnu`.
+The existing `devcontainer.json` currently overrides `USER bun` with `remoteUser: "root"`. Replace that
+override with the following complete user selection; otherwise `devcontainer exec` would validate and run
+the gate as root even though the Dockerfile installs Rust under `/home/bun`:
+
+```jsonc
+{
+  "name": "Justice Plugin Dev",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": { "ghcr.io/devcontainers/features/common-utils:2": {} },
+  "mounts": [
+    "source=justice-node-modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+  ],
+  "postCreateCommand": "bun install --frozen-lockfile",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "vitest.explorer"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  },
+  "remoteUser": "bun"
+}
+```
+
+The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values. Every Rust command must
+run as `bun` and must verify the toolchain token (rustup may append a source suffix for a directory
+override):
+
+```bash
+test "$(whoami)" = "bun"
+command -v rustup
+command -v cargo
+command -v rustc
+test "$(rustup show active-toolchain | cut -d' ' -f1)" = "1.85.1-x86_64-unknown-linux-gnu"
+rustc --version
+cargo --version
+```
+
+Do not mix a root-installed rustup with `/home/bun` paths, and do not treat a successful root command as
+evidence for the `bun` execution environment.
 
 1. Implement `probe.c` as a standalone Linux x86_64 program using `syscall(SYS_openat2, ...)`, `openat(2)`, `linkat(2)`, `renameat2(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)`. It must open a supplied temporary workspace root as a directory descriptor, create `.justice/reviews`, `.justice/reviews/.leases`, and `.justice/reviews/.quarantine` beneath that descriptor, and never derive a trusted descriptor from a path resolved outside the root descriptor.
 2. Configure every descendant open with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`, plus `O_DIRECTORY`, `O_CLOEXEC`, and `O_NOFOLLOW` where applicable. Create the artifact leaf with `O_CREAT | O_EXCL | O_NOFOLLOW`, record its `st_dev`/`st_ino`, and create the private lease with `linkat(2)` before returning the reservation.
@@ -5103,8 +5167,9 @@ The exact `rust-toolchain.toml` created by Task 3.3b must repeat these values, a
 **Verification:**
 
 ```bash
-bun spikes/review-artifact-linux/verify.ts
-bun run test -- tests/runtime/review-artifact-linux-probe.test.ts
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && test "$(rustup show active-toolchain | cut -d" " -f1)" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version'
+devcontainer exec --workspace-folder . bun spikes/review-artifact-linux/verify.ts
+devcontainer exec --workspace-folder . bun run test -- tests/runtime/review-artifact-linux-probe.test.ts
 ```
 
 The first command must pass on the supported Linux x86_64 deployment. The second command must assert that a failed probe blocks provider publication and that no artifact path is handed to a worker. If the first command is `BLOCKED`, stop the implementation plan at this task and do not claim Phase 3 or JUS-P0-04 completion.
@@ -5197,6 +5262,13 @@ probeReviewArtifactCapabilities() -> {
 }
 ```
 
+The JavaScript descriptor is exactly `{ artifactPath, leasePath, artifactIdentity }`. Rust may keep
+`artifact_path`, `lease_path`, and `artifact_identity` internally, but the N-API generated JavaScript
+surface and declaration output must expose the camelCase names above. Verify the generated declaration and
+the runtime call against the pinned `napi` version; if that version does not perform the required conversion,
+use its explicit field-name mapping rather than changing the TypeScript adapter to snake_case. The direct
+addon test below is the authoritative ABI check.
+
 `openReviewArtifactRoot` is the only operation that accepts a host path. It must open and retain the canonical workspace root descriptor. All subsequent paths are validated relative paths under `.justice/reviews`; all opens are descriptor-relative `openat2(2)` operations with `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. `createExclusiveMarker` uses `O_CREAT | O_EXCL | O_NOFOLLOW`, records `st_dev`/`st_ino`, and creates the private lease with `linkat(2)`. `openExistingReservation` is the only restart path: it validates the durable descriptor, opens artifact and lease with no-follow, compares both `st_dev`/`st_ino` values to the durable identity, and returns a new handle only when all three identities match. `writeExisting`, `readOnce`, and `cleanup` compare the stored identity against the live descriptor before acting. `cleanup` uses `renameat2(2)` with `RENAME_NOREPLACE` to a random quarantine leaf, verifies the quarantined inode, deletes only the verified inode, and restores an unverified replacement with `RENAME_NOREPLACE` when the original leaf is absent. A restore collision leaves the quarantine entry and returns `replacement_retained`; it never overwrites or deletes the replacement.
 
 The provider object owns the root descriptor for the lifetime of the initialized
@@ -5219,9 +5291,11 @@ provider's marker result; it never fabricates inode identity or calls generic fi
 artifact.
 
 ```ts
+import { createRequire } from "node:module";
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createLinuxOpenat2ReviewArtifactProvider,
@@ -5236,7 +5310,24 @@ type UsableReservation = {
   readonly leasePath: string;
   readonly artifactIdentity: { readonly device: string; readonly inode: string };
 };
+type NativeAddonForTest = {
+  readonly openReviewArtifactRoot: (rootDir: string) => {
+    readonly openExistingReservation: (descriptor: {
+      readonly artifactPath: string;
+      readonly leasePath: string;
+      readonly artifactIdentity: { readonly device: string; readonly inode: string };
+    }) => { readonly artifactIdentity: () => { readonly device: string; readonly inode: string }; readonly close: () => void };
+    readonly close: () => void;
+  };
+};
 const roots: string[] = [];
+
+function loadBuiltReviewArtifactAddonForTest(): NativeAddonForTest {
+  const addonPath = fileURLToPath(
+    new URL("../../dist/native/justice_review_artifact_linux.linux-x64-gnu.node", import.meta.url),
+  );
+  return createRequire(import.meta.url)(addonPath) as NativeAddonForTest;
+}
 
 const unsupportedRuntimes = [
   { platform: "darwin", arch: "x64", glibc: true, openat2: true, renameat2: true },
@@ -5327,6 +5418,21 @@ describe("LinuxOpenat2ReviewArtifactProvider operations", () => {
     reopened.close();
   });
 
+  it("passes the camelCase durable descriptor through the built N-API addon", async () => {
+    const fixture = await arrangeProvider();
+    fixture.provider.close();
+    const addon = loadBuiltReviewArtifactAddonForTest();
+    const root = addon.openReviewArtifactRoot(fixture.root);
+    const handle = root.openExistingReservation({
+      artifactPath: fixture.reservation.artifactPath,
+      leasePath: fixture.reservation.leasePath,
+      artifactIdentity: fixture.reservation.artifactIdentity,
+    });
+    expect(handle.artifactIdentity()).toEqual(fixture.reservation.artifactIdentity);
+    handle.close();
+    root.close();
+  });
+
   it("fails closed after close without mutating the artifact", async () => {
     const fixture = await arrangeProvider();
     fixture.provider.close();
@@ -5337,6 +5443,11 @@ describe("LinuxOpenat2ReviewArtifactProvider operations", () => {
   });
 });
 ```
+
+`loadBuiltReviewArtifactAddonForTest()` must load the exact bundled `.node` file with `createRequire()`;
+it must not call the TypeScript provider, a mock addon, or a generic filesystem helper. This direct ABI
+assertion complements the provider-level restart test and fails if NAPI-RS exposes `artifactPath` while the
+adapter sends `artifact_path` (or the equivalent mismatch for `leasePath` / `artifactIdentity`).
 
 Create `tests/runtime/linux-review-artifact-provider-security.test.ts` with the real filesystem race
 and replacement cases below. These tests must run against the built addon, not a mock capability.
@@ -5476,30 +5587,114 @@ describe("LinuxOpenat2ReviewArtifactProvider security boundaries", () => {
 });
 ```
 
-The two files above are the RED source. Before running RED, Step 1 also creates the smallest typed
-compile scaffold for `src/runtime/linux-review-artifact-provider.ts`, the optional `NodeFileSystem`
-capability members, and the native-addon module shape used by the tests. The scaffold must implement the
-real root open plus exclusive marker/lease identity path needed to arrange a reservation, without fabricating
-an identity or using generic pathname I/O; its unimplemented read/write/cleanup operations may return a
-deterministic `artifact_storage_unavailable` error. It must not contain a pathname fallback or a fake
-successful operation. Step 3 replaces the scaffold's operation bodies with the production implementation in
-place. Every fixture must compile using only the planned public signatures and must fail on behavior assertions,
-not on a missing symbol, malformed fixture, unsupported matcher, or unavailable import. The test runner must
-load the native addon for the supported Linux cases; unsupported publication is covered by the pure
-environment guard matrix and must not be silently skipped.
+The two files above are the RED source. Before running RED, Step 1 must materialize a complete buildable
+scaffold, not a prose placeholder. Use the complete `lib.rs` implementation listing in Step 3 as the source
+for the scaffold, materialize it before RED, and replace only `writeExisting`, `readOnce`, and `cleanup`
+with the deterministic unsupported-operation errors described below. This preserves the real N-API exports,
+root descriptor ownership, exclusive marker, inode/lease identity, and restart ABI during RED while making
+the RED assertions behavioral. The scaffold consists of these exact files and contracts:
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "1.85.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-gnu"]
+```
+
+```toml
+# native/review-artifact-linux/Cargo.toml
+[package]
+name = "justice_review_artifact_linux"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "=0.2.177"
+napi = { version = "=3.12.2", default-features = false, features = ["napi8"] }
+napi-derive = "=3.6.3"
+
+[build-dependencies]
+napi-build = "=2.4.1"
+```
+
+```rust
+// native/review-artifact-linux/build.rs
+fn main() {
+    napi_build::setup();
+}
+```
+
+`native/review-artifact-linux/src/lib.rs` must export every ABI member listed in the Native API block:
+`NativeIdentity`, `NativeReservationDescriptor`, `NativeCleanupResult`, `NativeCapabilities`,
+`NativeReviewArtifactRoot`, `NativeReservationHandle`, `openReviewArtifactRoot`, and
+`probeReviewArtifactCapabilities`. The scaffold's root-open, directory-anchor, exclusive-marker,
+`fstat` identity, hard-link lease, and `openExistingReservation` bodies must be the real descriptor-relative
+Linux implementation used by the production provider. They must not fabricate an identity, use pathname
+fallbacks, or return a fake successful handle. Only `writeExisting`, `readOnce`, and `cleanup` may return
+the deterministic `artifact_storage_unavailable` error until Step 3 replaces those bodies. The capability
+probe must report the actual `openat2(2)` / `renameat2(2)` availability; it must not return unconditional
+success. The scaffold therefore can arrange the reservation fixture and exercise the ABI, while the RED
+assertions fail on the intentionally unsupported operations rather than on module loading or setup.
+
+The TypeScript scaffold must load only the bundled addon and expose the same camelCase JS surface as the
+Native API. Its operation stubs are deterministic failures, never a generic filesystem fallback:
+
+```ts
+const addonPath = fileURLToPath(new URL(
+  "../../dist/native/justice_review_artifact_linux.linux-x64-gnu.node",
+  import.meta.url,
+));
+
+function loadNativeAddon(): NativeAddon | undefined {
+  try {
+    return createRequire(import.meta.url)(addonPath) as NativeAddon;
+  } catch {
+    return undefined;
+  }
+}
+
+const unsupported = (operation: string): Error =>
+  new Error(`artifact_storage_unavailable:${operation}`);
+
+// createLinuxOpenat2ReviewArtifactProvider() must return undefined when the
+// addon, capability probe, or root open is unavailable. When published, its
+// marker callback delegates to createExclusiveMarker() and its reservation
+// methods delegate to writeExisting/readOnce/cleanup without pathname I/O.
+```
+
+The package script must exist before RED:
+
+```json
+"build:native:review-artifact": "bunx --no-install napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js"
+```
+
+Step 3 replaces only the deterministic unsupported operation bodies and completes the production
+implementation in place. Every fixture must compile using only the planned public signatures and must fail
+on behavior assertions, not on a missing symbol, malformed fixture, unsupported matcher, unavailable import,
+or absent `.node` file. The test runner must load the built native addon for supported Linux cases;
+unsupported publication is covered by the pure environment guard matrix and must not be silently skipped.
 
 - [ ] **Step 2: Confirm RED**
 
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu"'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu"'
+devcontainer exec --workspace-folder . bun run build:native:review-artifact
 devcontainer exec --workspace-folder . bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
 ```
 
-Expected RED is behavioral: the test files compile, then fail because the native addon/provider body is
-not implemented. A missing import, undefined symbol, invalid N-API binding, malformed fixture, unsupported
-matcher, or a skipped supported-platform suite is an invalid RED and must be fixed before implementation.
+Expected RED is behavioral: the addon builds and loads, the tests compile, the root/reservation fixture
+succeeds, and assertions for write/read/cleanup fail because the scaffold returns the deterministic
+unsupported error. A missing build, missing import, undefined symbol, invalid N-API binding, malformed
+fixture, unsupported matcher, addon setup failure, or skipped supported-platform suite is an invalid RED and
+must be fixed before implementation.
 
 - [ ] **Step 3: Implement the production provider**
 
@@ -6291,9 +6486,9 @@ type NativeHandle = Readonly<{
 type NativeRoot = Readonly<{
   createExclusiveMarker(path: string): NativeHandle;
   openExistingReservation(descriptor: {
-    artifact_path: string;
-    lease_path: string;
-    artifact_identity: NativeIdentity;
+    artifactPath: string;
+    leasePath: string;
+    artifactIdentity: NativeIdentity;
   }): NativeHandle;
   writeExisting(handle: NativeHandle, bytes: Buffer): void;
   readOnce(handle: NativeHandle): Buffer;
@@ -6394,9 +6589,9 @@ export function createLinuxOpenat2ReviewArtifactProvider(
     >,
   ): NativeHandle =>
     root.openExistingReservation({
-      artifact_path: reservation.artifactPath,
-      lease_path: reservation.leasePath,
-      artifact_identity: reservation.artifactIdentity,
+      artifactPath: reservation.artifactPath,
+      leasePath: reservation.leasePath,
+      artifactIdentity: reservation.artifactIdentity,
     });
 
   const reservedReviewArtifactIo: ReservedReviewArtifactIo = {
@@ -6487,10 +6682,14 @@ function safeNativeError(fallbackCode: string, cause: unknown): Error {
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
 ```
 
-The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity, descriptor-relative writes/reads, symlink rejection, ancestor replacement, restart, replacement-retaining cleanup, and `close()` descriptor release. The unsupported-platform test must verify `undefined` capability rather than a fallback provider. Mock filesystem tests remain unchanged and continue to cover ordinary plugin behavior.
+The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity,
+descriptor-relative writes/reads, symlink rejection, ancestor replacement, restart, direct camelCase
+`openExistingReservation` ABI binding, replacement-retaining cleanup, and `close()` descriptor release.
+The unsupported-platform test must verify `undefined` capability rather than a fallback provider. Mock filesystem
+tests remain unchanged and continue to cover ordinary plugin behavior.
 
 **Commit:**
 
@@ -6498,6 +6697,77 @@ The runtime tests must run against the built addon on Linux x86_64 and cover exc
 GIT_MASTER=1 git add native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs rust-toolchain.toml package.json bun.lock src/runtime/linux-review-artifact-provider.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
 GIT_MASTER=1 git commit -m "feat: add Linux openat2 review artifact provider"
 ```
+
+### Task 3.3c: Prove the supported OpenCode host mutation and cancellation boundary
+
+**Requirement:** JUS-P0-04, INV-20, INV-22, INV-23, Design §4.10, §12.5, §12.6, §12.7, F-047.
+
+**Files:**
+
+- Create `spikes/opencode-host-review-contract/verify.ts`.
+- Create `spikes/opencode-host-review-contract/README.md` with redacted host traces and exact field paths.
+- Test `tests/integration/opencode-host-review-contract.test.ts`.
+
+**Consumes:** the installed OpenCode CLI, the host plugin loader, the real `tool.execute.before` and
+`tool.execute.after` dispatch, the built-in `task` and `write` tools, and the runtime child-session events.
+
+**Produces:** a committed host acceptance report with the exact OpenCode CLI version, SDK version, hook
+dispatch shape, mutable-args field path, actual TaskTool execution observation, throw-cancellation behavior,
+and the supported/blocked result. This is a capability spike, not a generic OpenCode compatibility layer.
+
+**Supported host contract:**
+
+- `opencode --version` must equal exactly `1.18.29`.
+- The project SDK remains `@opencode-ai/plugin` / `@opencode-ai/sdk` `1.14.21`; this does not establish
+  host compatibility by itself.
+- A different host version, a missing version, or an unredacted/ambiguous event shape is `BLOCKED`, not a
+  supported range or a best-effort fallback.
+
+**Step 1: Implement the host-boundary probe**
+
+Create a temporary isolated workspace and a spike-only plugin fixture that is loaded by the real OpenCode
+host. Do not call `OpenCodeAdapter.onToolExecuteBefore()` directly. The fixture must:
+
+- receive an original `task` invocation with `run_in_background: true`;
+- mutate the actual `tool.execute.before` output args to `run_in_background: false` and add one approved
+  sentinel field containing the exact committed artifact path;
+- observe the host's actual TaskTool execution and child-session trace, proving that both mutated values were
+  consumed by the execution path rather than merely present in the hook-local object;
+- record the runtime-provided parent call ID and child session ID without deriving either from prompt,
+  category, artifact path, or worker self-report;
+- invoke the real built-in `write` tool against a temporary symlink/replacement target through the same host;
+  the rejection fixture throws the dedicated cancellation error, records no `tool.execute.after` for the
+  built-in writer, and verifies that both the outside target and symlink remain unchanged;
+- run one allowed non-review write to prove that generic writes retain their existing behavior.
+
+The report must contain separate `hookArgs`, `taskExecutionArgs`, `childBinding`, `writeCancellation`, and
+`unrelatedWrite` records. A hook-local `output.args` assertion is insufficient. The probe must exit non-zero
+when the host drops a mutation, rewrites `run_in_background`, loses the exact artifact path, swallows the
+cancellation throw, invokes the built-in writer after rejection, or changes an outside target.
+
+**Step 2: Run the runtime hard gate**
+
+```bash
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && test "$(opencode --version)" = "1.18.29"'
+devcontainer exec --workspace-folder . bun spikes/opencode-host-review-contract/verify.ts
+devcontainer exec --workspace-folder . bun run vitest run tests/integration/opencode-host-review-contract.test.ts
+```
+
+Expected: the report status is `PASS`, both review categories have actual TaskTool execution traces with
+`run_in_background=false` and the exact sentinel artifact path, and rejected review writes have zero
+built-in writer invocations. A missing host, unsupported version, direct-adapter-only trace, setup/import
+failure, skipped case, or absent child correlation is `BLOCKED` and stops Phase 3 before Task 3.4.
+
+**Step 3: Commit after approval**
+
+```bash
+GIT_MASTER=1 git add spikes/opencode-host-review-contract/verify.ts spikes/opencode-host-review-contract/README.md tests/integration/opencode-host-review-contract.test.ts
+GIT_MASTER=1 git commit -m "test: OpenCode host境界のreview契約を検証"
+```
+
+Task 3.3c owns only the evidence and hard gate. It must not add a host abstraction, compatibility registry,
+multi-host framework, OpenCode fork, or adapter rewrite. Task 3.6 consumes the recorded field paths and uses
+the real host acceptance path for the final task-review and final-review E2E.
 
 ### Task 3.4: Persist review dispatch and the PreToolUse claim protocol
 
@@ -9913,9 +10183,14 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
+- Modify: `src/core/hook-response-merger.ts`
+- Test: `tests/core/hook-response-merger.test.ts`
 - Test: `tests/runtime/opencode-adapter-v2.test.ts`
+- Modify: `src/opencode-plugin.ts`
+- Test: `tests/integration/opencode-plugin.test.ts`
 - Create: `tests/helpers/review-artifact-e2e-fixture.ts`
-- Test: `tests/integration/review-artifact-linux-e2e.test.ts`
+- Test: `tests/integration/review-artifact-linux-e2e.test.ts` (adapter/composition integration)
+- Test: `tests/integration/review-artifact-linux-host-e2e.test.ts` (supported OpenCode host acceptance)
 
 `tests/core/justice-plugin-routing.test.ts` is the shared production routing file: Task 3.4
 owns its live PreToolUse claim cases and Task 3.6 adds its matching review PostToolUse cases.
@@ -9926,27 +10201,40 @@ projection and restart recovery; its dispatch-slot and child-binding cases remai
 3.4 and 3.5 respectively. `tests/core/justice-plugin.test.ts` is owned here for single-boundary
 composition and startup ordering.
 
-`tests/integration/review-artifact-linux-e2e.test.ts` is the required production-path test. It runs
-only on the supported Linux x86_64 deployment after `bun run build:native:review-artifact`; on every
+`tests/integration/review-artifact-linux-e2e.test.ts` is the required adapter/composition integration test.
+It runs only on the supported Linux x86_64 deployment after `bun run build:native:review-artifact`; on every
 other platform or when the provider probe is unavailable it must fail as unsupported setup rather than
-silently skip the P0 path. It constructs the real `OpenCodeAdapter` and `JusticePlugin`, seeds one
-active Authorization and review-pending lifecycle, drives a `sp-review` PreToolUse claim, and then
-drives the child-session write and matching PostToolUse events. The test must assert all of the
-following through the real composition: the committed artifact path is the only path exposed to the
-worker; `run_in_background` is `false`; the write is mediated by `writeExisting` and does not call the
-generic `FileWriter.writeFile`; the one `readOnce` consumes the matching artifact; replacement and
-symlink cases are rejected before JSON parsing; the terminal record is durable before Gate/Acceptance;
-and cleanup retains a replacement with `replacement_retained` and an advisory. Run the same flow for
-`sp-final-review`, including its finalization identity and stale-round rejection.
+silently skip the P0 path. It constructs the real `OpenCodeAdapter` and `JusticePlugin`, seeds one active
+Authorization and review-pending lifecycle, drives a `sp-review` PreToolUse claim, and then drives the
+child-session write and matching PostToolUse events. It proves composition behavior only: the committed
+artifact path is the only path exposed to the adapter; `run_in_background` is `false`; the write is mediated
+by `writeExisting` and does not call the generic `FileWriter.writeFile`; the one `readOnce` consumes the
+matching artifact; replacement and symlink cases are rejected before JSON parsing; the terminal record is
+durable before Gate/Acceptance; and cleanup retains a replacement with `replacement_retained` and an
+advisory. Run the same flow for `sp-final-review`, including its finalization identity and stale-round
+rejection. This direct adapter test is not host acceptance evidence.
+
+`tests/integration/review-artifact-linux-host-e2e.test.ts` is the separate production host acceptance. It
+must invoke the exact supported OpenCode CLI `1.18.29`, load the built Justice plugin through the real host
+plugin loader, and execute both task-review and final-review flows through actual `task` and `write` tool
+dispatch. It must observe the actual child worker receiving `run_in_background = false` and the exact committed
+artifact path, then observe secure artifact write, matching PostToolUse, Gate, and Acceptance. The rejected
+symlink and inode replacement cases must throw the dedicated cancellation through the host boundary, invoke
+the built-in writer zero times, leave the outside target and replacement unchanged, and never reach JSON
+parsing, Gate, or Acceptance. Direct calls to `OpenCodeAdapter`, `JusticePlugin.handleEvent`, or
+`consumeReviewCompletion` cannot substitute for this test.
 
 The current OpenCode adapter method is `onToolExecuteBefore(...): Promise<void>` and its host-facing output
 contract currently exposes only mutable `output.args`; it silently returns after an internal `{ action: "skip" }`.
 The implementation must change that method to return the internal `HookResponse`, then have the plugin wrapper
-throw a dedicated cancellation error only for the committed review-artifact skip. OpenCode's documented
-`tool.execute.before` hook permits that throw to prevent the built-in tool from executing. Ordinary adapter and
-I/O failures remain fail-open. `tests/runtime/opencode-adapter-v2.test.ts` and the Linux E2E must prove both
-the returned skip and that the normal filesystem writer is not entered; neither test may bypass the adapter
-with a direct child `JusticePlugin.handleEvent()` call.
+throw a dedicated `ReviewArtifactWriteCancelled` only for the two review-artifact write reasons. A secure
+commit maps to `review_artifact_write_committed`; every rejected review-owned write maps to
+`review_artifact_write_rejected`. OpenCode's documented `tool.execute.before` hook is not treated as proven
+until Task 3.3c and the host E2E observe that the throw prevents the built-in tool from executing. Ordinary
+adapter and I/O failures remain fail-open. `tests/runtime/opencode-adapter-v2.test.ts`,
+`tests/core/hook-response-merger.test.ts`, the adapter composition E2E, and the supported-host E2E must prove
+the returned reason, reason preservation, narrow throw, and zero normal filesystem-writer invocations;
+none may bypass the adapter with a direct child `JusticePlugin.handleEvent()` call.
 
 Before the existing PostToolUse routing, add the review-artifact write branch to the same
 `JusticePlugin.handleEvent(PreToolUse)` route. It must resolve the child session through the durable
@@ -9955,11 +10243,13 @@ For `toolName === "write"`, accept only a string `toolInput.filePath` that equal
 `artifactPath` after the existing safe-relative-path validation, and a string `toolInput.content`.
 Call the injected `ReservedReviewArtifactIo.writeExisting(reservation, content)` and return
 `{ action: "skip", reason: "review_artifact_write_committed" }` only after that write commits; the normal
-OpenCode write tool must not run. A
-missing/stale child binding, path mismatch, invalid content, identity mismatch, or provider error
-returns `{ action: "skip" }` after recording a fail-closed advisory and leaves the review slot without
-trusted completion evidence. Non-review writes and writes from unrelated child sessions retain the
-existing routing. This is the only worker artifact-write path and is covered by the Linux E2E test.
+OpenCode write tool must not run. A missing/stale child binding, path mismatch, invalid content, identity
+mismatch, symlink/replacement, or provider error returns
+`{ action: "skip", reason: "review_artifact_write_rejected" }` after recording a fail-closed advisory and
+leaves the review slot without trusted completion evidence. The plugin wrapper must cancel the host built-in
+writer for both reasons. Non-review writes and writes from unrelated child sessions retain the existing
+routing. This is the only worker artifact-write path and is covered by both the adapter composition test and
+the supported-host E2E.
 
 **Consumes:** `ProjectedLifecycle` and `project(records, rebuiltAt).lifecycle` from Task 3.1; `findCurrentGateDecision` and
 `findCurrentAcceptanceDecision` from Task 3.2; projected claimed dispatch slot; durable `TaskCallBinding`; durable
@@ -11900,25 +12190,20 @@ describe("Linux review-artifact production composition", () => {
     await expect(
       fixture.writeReviewArtifact(childSessionId, writeCallId, artifactPath, "forged"),
     ).resolves.toEqual(
-      expect.objectContaining({ action: "skip", reason: "review_artifact_write_committed" }),
+      expect.objectContaining({ action: "skip", reason: "review_artifact_write_rejected" }),
     );
     expect(fixture.genericWrite.mock.calls.filter(([path]) => path === artifactPath)).toHaveLength(0);
 
-    await fixture.adapter.onToolExecuteAfter(
-      { tool: "write", sessionID: childSessionId, callID: writeCallId, args: { filePath: artifactPath } },
-      { output: "write failed", metadata: { error: true } },
-    );
     await expect(readFile(outsideTarget, "utf8")).resolves.toBe("outside");
-    await expect(readFile(join(root, artifactPath), "utf8")).resolves.toContain("outside");
     await expect(lstat(join(root, artifactPath)).then((entry) => entry.isSymbolicLink())).resolves.toBe(true);
     const records = await seed.readDurableRecords();
-    expect(countRecords(records, (record) => record.kind === "review_artifact_read_attempt")).toBe(1);
+    expect(countRecords(records, (record) => record.kind === "review_artifact_read_attempt")).toBe(0);
     expect(
       countRecords(
         records,
         (record) => record.kind === "review_dispatch_transition" && record.to === "terminal",
       ),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       records.filter(
         (record) =>
@@ -11953,13 +12238,14 @@ are not reached, the outside target remains unchanged, the symlink remains retai
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
 Expected: FAIL behaviorally because matching review completion has no composite terminal physical record or
-ordered Gate request. The Linux x86_64 E2E must load the built addon and fail on completion assertions; a
-provider-unavailable setup failure, skipped supported-platform case, missing helper, or missing-symbol/type
-error is an invalid RED.
+ordered Gate request, the response merger does not yet preserve the cancellation reason, and the plugin wrapper
+does not yet throw the dedicated cancellation. The Linux x86_64 composition E2E and supported-host E2E must
+load the built addon and fail on behavioral assertions; a provider-unavailable setup failure, skipped
+supported-platform case, missing helper, missing-symbol/type error, or host-version mismatch is an invalid RED.
 
 - [ ] **Step 3: Implement the fixed protocol**
 
@@ -11972,32 +12258,56 @@ cleanup adapters; no completion port may create a second store or boundary.
 Before wiring the child-write branch, preserve the host cancellation contract. OpenCode's documented
 `tool.execute.before` behavior allows the hook to throw to prevent the built-in tool from executing. Change
 `OpenCodeAdapter.onToolExecuteBefore()` to return the internal `HookResponse` while preserving its existing
-fail-open handling for ordinary errors. The production plugin wrapper must translate only the review-artifact
-`{ action: "skip" }` response, after `writeExisting` commits, into a dedicated cancellation error that is
-allowed to escape the hook; all unrelated adapter/I/O errors still degrade to `PROCEED` and never throw.
-The E2E helper must call this real adapter path and assert `{ action: "skip" }`; it must not bypass the
-adapter with a direct child `JusticePlugin.handleEvent()` call. Add an adapter/plugin test proving the normal
-OpenCode write tool is not entered after the cancellation error.
+fail-open handling for ordinary errors. The production plugin wrapper must translate only the two review-artifact
+skip reasons into a dedicated cancellation error that is allowed to escape the hook; all unrelated adapter/I/O
+errors still degrade to `PROCEED` and never throw. The E2E helper must call this real adapter path and assert
+the returned reason; it must not bypass the adapter with a direct child `JusticePlugin.handleEvent()` call.
+Add adapter, merger, and plugin-boundary tests proving that the normal OpenCode write tool is not entered after
+either cancellation error.
 
 The adapter/plugin boundary is explicit:
 
 ```ts
 const response = await adapter.onToolExecuteBefore(input, output);
-if (response.action === "skip" && response.reason === "review_artifact_write_committed") {
-  throw new ReviewArtifactWriteCancelled();
+if (
+  response.action === "skip" &&
+  (response.reason === "review_artifact_write_committed" ||
+    response.reason === "review_artifact_write_rejected")
+) {
+  throw new ReviewArtifactWriteCancelled(response.reason);
 }
 ```
 
 The cancellation response must carry a non-user-facing reason discriminant so unrelated `skip` responses are
-not converted into host cancellation. Add the optional internal `SkipResponse.reason` literal
-`"review_artifact_write_committed"`; all other skip responses omit it. The wrapper must not catch
-`ReviewArtifactWriteCancelled`; the adapter's
-ordinary outer catch must continue to catch and log all other failures.
+not converted into host cancellation. Add the optional internal `SkipResponse.reason` union
+`ReviewArtifactWriteSkipReason`; all other skip responses omit it. `ReviewArtifactWriteCancelled` stores the
+same reason for diagnostics without exposing it to users. The wrapper must not catch
+`ReviewArtifactWriteCancelled`; the adapter's ordinary outer catch must continue to catch and log all other
+failures.
 `OpenCodeAdapter.onToolExecuteBefore()` must therefore return `PROCEED` for every existing early-return and
 ordinary-error path, return the actual `HookResponse` from `JusticePlugin.handleEvent()` after any in-place
 payload merge, and preserve the existing `justice_*` early return as `PROCEED`. The OpenCode plugin wrapper
 must throw only the dedicated cancellation error through the SDK hook boundary without changing fail-open
 behavior for unrelated tools.
+
+The required failure matrix is:
+
+| Input case | Adapter response | Plugin wrapper | Built-in writer | Durable completion authority |
+| --- | --- | --- | --- | --- |
+| Matching usable reservation and `writeExisting` commit | `skip` + `review_artifact_write_committed` | throws `ReviewArtifactWriteCancelled` with the same reason | 0 calls | eligible for matching PostToolUse only |
+| Missing or stale child binding | `skip` + `review_artifact_write_rejected` | throws the rejected cancellation | 0 calls | no read, terminal, Gate, or Acceptance |
+| Wrong artifact path or invalid/non-string content | `skip` + `review_artifact_write_rejected` | throws the rejected cancellation | 0 calls | no read, terminal, Gate, or Acceptance |
+| Identity mismatch, symlink, inode replacement, or provider I/O failure | `skip` + `review_artifact_write_rejected` | throws the rejected cancellation | 0 calls | no JSON parse, read, terminal, Gate, or Acceptance |
+| Unrelated child write or ordinary non-review write | existing `PROCEED` behavior | does not throw | host decides normally | existing routing only |
+| Any unrelated `skip` without the reason union | existing `skip` | does not throw | existing host behavior | no reason-based completion |
+
+`tests/core/hook-response-merger.test.ts` must prove both reasons survive every response merge and that a
+reasonless `skip` remains reasonless. `tests/runtime/opencode-adapter-v2.test.ts` must prove the adapter returns
+each reason after in-place argument merge and returns `PROCEED` for ordinary errors. The existing
+`tests/integration/opencode-plugin.test.ts` must prove the wrapper throws only those two reasons and never
+converts an arbitrary `skip` or ordinary failure into a throw. The composition E2E and supported-host E2E must
+each cover one committed write and one rejected replacement, with the rejected flow producing no
+`tool.execute.after` evidence for the built-in writer.
 
 Create the two artifact adapters in this composition block, before creating the completion domain. Both take
 the durable `ReviewTaskCallBinding` or its usable reservation; neither receives an `artifactPath` from
@@ -13754,18 +14064,19 @@ Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `run
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(rustup show active-toolchain)" = "1.85.1-x86_64-unknown-linux-gnu" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "bun" && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
-Expected: PASS, including both task-review and final-review production flows, exact-once read/terminal
-assertions, no generic artifact write, stale final-round rejection, symlink replacement retention, and the
-`review_artifact_identity_mismatch` advisory.
+Expected: PASS, including both task-review and final-review composition and supported-host flows, exact-once
+read/terminal assertions, camelCase N-API reopen binding, both cancellation reasons, reason-preserving merge,
+zero built-in writer calls after secure rejection, no generic artifact write, stale final-round rejection,
+symlink/inode replacement retention, and the `review_artifact_identity_mismatch` advisory.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/review-artifact-linux-e2e.test.ts
-git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
+GIT_MASTER=1 git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/hook-response-merger.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/core/hook-response-merger.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts
+GIT_MASTER=1 git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
 ```
 
 ### Task 3.7: Update plan progress only after accepted task decisions
@@ -14261,15 +14572,18 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | uncertain claimed recovery                                     | 3.4, 3.6                | no automatic redispatch, artifact read, or Acceptance after restart                                                                                                                                                              |
 | JUS-P0-04 Gate after `gate_pending`                            | 3.1, 3.2, 3.6           | no early evaluation, terminal review before gate_pending, active-Authorization guard before Gate and Acceptance append, unavailable/error blocked                                                                                |
 | JUS-P0-04 finalization lifecycle                               | 3.1, 3.2, 3.4, 3.5, 3.6 | review-only retry preserves finalizationAttemptId and increments round; actual rework rotates identity; final review terminalization; stale Final Gate rejection; Final Gate PASS/rework/blocked                                 |
-| JUS-P0-04 durable review dispatch and child correlation        | 3.3, 3.4, 3.5           | runtime spike, pending/claimed recovery, parent-session critical section, concurrent claim, durable child binding                                                                                                                |
+| JUS-P0-04 durable review dispatch and child correlation        | 3.3, 3.3c, 3.4, 3.5     | child-session runtime spike, supported-host TaskTool mutation/correlation probe, pending/claimed recovery, parent-session critical section, concurrent claim, durable child binding                                                                                                  |
 | JUS-P0-04 accepted task progress                               | 3.7                     | all unchecked steps checked, reparse completed, other tasks unchanged, zero-step no-op, durable acceptance ordering, old terminal-Authorization decision rejection                                                               |
 | JSON review transport fixed for P0                             | 3.4, 3.6                | reservation anti-replay, unusable fail-open/blocked path, one usable-path read, composite terminal record; no typed transport dependency                                                                                         |
 | INV-01 through INV-05                                          | 1.1, 2.1, 2.2, 4.1      | category/routing/fingerprint/authorization focused tests named in those tasks                                                                                                                                                    |
 | INV-06 through INV-10                                          | 3.1, 3.2, 3.6, 3.7      | lifecycle, Gate, terminalization, progress, Final Gate tests named in those tasks                                                                                                                                                |
 | INV-11 through INV-18                                          | 3.3, 3.4, 3.5, 3.6      | purpose separation, claim, restart, correlation, stale-event and consumption tests named in those tasks                                                                                                                          |
 | INV-19 terminal Authorization boundary                         | 2.3, 3.2, 3.4, 3.6, 3.7 | terminality guards for dispatch, claim, staged completion, Gate, Acceptance, progress, recovery, cancellation-tombstone failure, and fresh reapproval isolation                                                                  |
-| INV-20 synchronous mandatory review                             | 3.4                     | package, hook, and final adapter wire guards force false for both review categories while preserving non-review caller values                                                                                                    |
+| INV-20 synchronous mandatory review                             | 3.3c, 3.4, 3.6          | host-boundary TaskTool execution proves the mutation is consumed; package, hook, and final adapter wire guards force false for both review categories while preserving non-review caller values                                                                                     |
 | INV-21 artifact inode identity                                  | 3.4, 3.6                | private lease, durable identity, no-follow existing-inode write/read, replacement rejection, and safe cleanup tests                                                                                                             |
+| INV-22 review-owned write cancellation                          | 3.3c, 3.6               | supported-host success/rejection cancellation, reason-preserving merger, narrow plugin throw, zero built-in writer calls, and outside-target retention                                                                                 |
+| INV-23 authoritative host mutation                              | 3.3c, 3.6               | exact OpenCode CLI hard gate, actual TaskTool execution trace, child-session correlation, committed artifact path delivery, and production host E2E                                                                                   |
+| N-API descriptor and addon build contract                       | 3.3b                   | direct camelCase `openExistingReservation` ABI call, root reopen identity, pinned Rust toolchain, exact N-API addon output, and built-addon runtime tests                                                                                   |
 
 ### Task-to-Requirement Traceability
 
@@ -14284,10 +14598,11 @@ git commit -m "feat: controller routing observationとdoctor診断を追加"
 | 3.2       | JUS-P0-02, JUS-P0-04, Design §4.6, §4.8.2, and §4.11, INV-07, INV-08, INV-10, INV-14, INV-19     | gate-pending-only; authorization guard; public parent-boundary entry and within-boundary Gate entry; same-identity Gate / Acceptance serialization and sequential idempotency; barrier-coordinated two- and three-way overlap; legacy schemaVersion 1 validation, shard replay, compatibility projection, and non-authority; strict new-decision validation / lookup; decision ordering; Gate-phase blocked-Acceptance and pre-Gate no-Acceptance tests |
 | 3.3       | JUS-P0-04, Design §4.9, INV-15                                                                   | child-session runtime spike                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.3a      | JUS-P0-04, Design §4.10, F-043                                                                   | Linux `openat2(2)` / `renameat2(2)` hard-gate probe; exclusive marker, inode/lease identity, descriptor-relative write/read, symlink and ancestor-swap rejection, replacement-retaining cleanup, unsupported-runtime result, and recorded PASS/BLOCKED output |
-| 3.3b      | JUS-P0-04, Design §4.10, INV-21, F-043                                                          | bundled Rust Node-API `LinuxOpenat2ReviewArtifactProvider`; exact addon build, `NodeFileSystem` capability composition, native security tests, unsupported-platform tests, and fail-open capability publication |
+| 3.3b      | JUS-P0-04, Design §4.10, INV-21, F-043                                                          | bundled Rust Node-API `LinuxOpenat2ReviewArtifactProvider`; exact addon build, camelCase descriptor ABI, root reopen identity, `NodeFileSystem` capability composition, native security tests, unsupported-platform tests, and fail-open capability publication |
+| 3.3c      | JUS-P0-04, Design §12.5, §12.6, §12.7, INV-20, INV-22, INV-23, F-047                         | exact OpenCode CLI hard gate; actual host plugin dispatch; mutable task-args propagation into TaskTool and child execution; runtime call/child correlation; secure-write and rejection cancellation; zero built-in writer calls; unrelated-write control; redacted evidence report |
 | 3.4       | JUS-P0-02, JUS-P0-04, Design §4.8, §4.8.1, §4.8.2, §4.10, §12.1, §12.2, §12.3, §12.5, PreToolUse §12.6, INV-11, INV-16, INV-17, INV-18, INV-19, INV-20, INV-21, F-036, F-040, F-041, F-042, F-043 | deterministic selector and parent-session candidate projector; single production composition root and shared boundary/log wiring; drain-time queued-delivery validator with deliver/discard/retain outcomes; startup fixture with normal-hook delivery, review-first claim/no-old-directive, terminal discard, and unreadable-authority retention; `ClaimInput` without correlation, exact unavailable/integrity blocked outcomes, and production routing spoof regression; authorization-specific snapshot membership; exact parent-session queue primitive; public cancellation wrapper versus within-parent helper; one outer release/fingerprint/missing-plan invalidation plus cancellation critical section; review-first PreToolUse claim and existing HookResponse mapping; startup missing-plan and fingerprint-mismatch terminalization inject no directive, offer, claim, Gate, or Acceptance; strict initial/reread Authorization rejection resolves blocked without leaking, records `review_authorization_unreadable`, attempts same-parent cancellation, and creates no positive state; category-aware synchronous wire normalization; optional exclusive-marker plus separate reserved-artifact I/O capability, unusable missing-capability result, inode lease, matching-inode write, and replacement rejection; review-only Final Review retry/current-round projection; no-reentrant queue, terminal-to-pending crash recovery, durable-before-directive ordering, repeated recovery idempotency, and stale-round rejection tests |
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, PostToolUse §12.6, INV-13 through INV-21, F-040, F-043 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, replacement-safe cleanup advisory, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, and shared-singleton integration tests |
+| 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-046, F-047 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware review PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, replacement-safe cleanup advisory, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -14324,6 +14639,19 @@ provider; Task 3.4 wires the provider through the actual `OpenCodeAdapter` compo
 drives a real Linux E2E from review claim through mediated worker write, one read, terminalization,
 Gate/Acceptance ordering, and replacement-safe cleanup. A mock-only GREEN result or a provider probe
 failure cannot satisfy F-043.
+F-046 reverse traceability is explicit: Design §12.5 defines the two-value
+`ReviewArtifactWriteSkipReason` contract; Task 3.6 changes the response merger to retain that reason,
+returns `review_artifact_write_committed` only after `writeExisting` commits, returns
+`review_artifact_write_rejected` for every review-owned rejection/provider failure, and makes the plugin
+wrapper throw only `ReviewArtifactWriteCancelled` for those two values. The failure matrix covers missing
+or stale bindings, wrong paths, invalid content, identity mismatch, symlink/inode replacement, provider
+failure, unrelated writes, and reasonless skips. Both composition and host tests assert zero built-in writer
+calls and no rejected completion evidence.
+F-047 reverse traceability is explicit: Design §12.7 pins the supported OpenCode CLI to `1.18.29` while
+keeping the lockfile SDK at `1.14.21`; Task 3.3c is the hard-gate runtime probe that records actual host
+hook dispatch, TaskTool execution, child-session correlation, mutable `run_in_background` and artifact-path
+propagation, and host cancellation; Task 3.6 consumes those recorded field paths in a separate supported-host
+production E2E. Direct adapter tests remain composition coverage only and cannot satisfy F-047.
 
 Phase 3 is incomplete if Task 3.3 cannot demonstrate both mandatory review correlations, if Task 3.3a
 cannot produce a supported-provider `PASS`, or if Task 3.3b cannot build and test the concrete addon.

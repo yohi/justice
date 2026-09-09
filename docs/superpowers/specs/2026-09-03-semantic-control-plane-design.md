@@ -1116,6 +1116,12 @@ export type ReservedReviewArtifactIo = {
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
   ) => Promise<"cleaned" | "replacement_retained">;
 };
+
+// This reason is an internal host-boundary discriminant. It is not user-facing
+// output and it must never be generalized into a cancellation framework.
+export type ReviewArtifactWriteSkipReason =
+  | "review_artifact_write_committed"
+  | "review_artifact_write_rejected";
 ```
 
 - `ReviewArtifactReservation` は **review worker の `task()` PreToolUse 時に生成される**。`callId` は Controller が `task()` を呼び出して PreToolUse に入った後に確定するため、ReviewPending 段階では `callId` を知らない。したがって、ReviewPending 時点では correlation だけを持つ `ReviewRequiredDirective` を Controller へ発行し、PreToolUse で `callId` を確定させたうえで `TaskCallBinding` と `ReviewArtifactReservation` を生成・bind する。
@@ -1151,15 +1157,31 @@ export type ReservedReviewArtifactIo = {
   review worker はその path へ `ReviewWorkerResultV1` を JSON として書き出す。`unusable` の
   場合は `artifactPath` を提示せず、review worker の完了を mandatory review completion
   として扱わない。
-- review worker の artifact write は通常の OpenCode `write` tool の PreToolUse として観測する。
-  durable child binding が `childSessionId`、`parentCallId`、および usable reservation を同じ
-  `TaskCallBinding` に解決でき、`toolInput.filePath` が committed `artifactPath` と一致し、
-  `toolInput.content` が文字列の場合だけ、Justice は `ReservedReviewArtifactIo.writeExisting`
-  を呼び出してから `{ action: "skip" }` を返す。これにより通常の pathname filesystem write は
-  実行されず、worker が見た path は trusted write boundary を迂回できない。child binding、path、
-  content、reservation のいずれかが不一致または不確実な場合は write を実行せず advisory を記録し、
-  matching PostToolUse は artifact completion authority にならない。一般の `write` tool と
-  review worker 以外の child write は既存 routing を通り、review capabilityを使用しない。
+ - review worker の artifact write は通常の OpenCode `write` tool の PreToolUse として観測する。
+   durable child binding が `childSessionId`、`parentCallId`、および usable reservation を同じ
+   `TaskCallBinding` に解決でき、`toolInput.filePath` が committed `artifactPath` と一致し、
+   `toolInput.content` が文字列の場合だけ、Justice は `ReservedReviewArtifactIo.writeExisting`
+   を呼び出してから `{ action: "skip" }` を返す。これにより通常の pathname filesystem write は
+   実行されず、worker が見た path は trusted write boundary を迂回できない。child binding、path、
+   content、reservation のいずれかが不一致または不確実な場合は write を実行せず advisory を記録し、
+   matching PostToolUse は artifact completion authority にならない。一般の `write` tool と
+   review worker 以外の child write は既存 routing を通り、review capabilityを使用しない。
+ - review-owned `write` の PreToolUse response は host cancellation 用の内部 reason を必ず持つ。
+   `writeExisting` が commit した場合だけ `{
+   action: "skip", reason: "review_artifact_write_committed" }` を返す。binding、path、content、
+   identity、symlink、replacement、または provider I/O のいずれかが拒否された場合は secure write
+   を行わず、advisory を best-effort で記録して `{
+   action: "skip", reason: "review_artifact_write_rejected" }` を返す。後者は trusted completion
+   evidence を作らず、通常の pathname writerへ fall-through してはならない。
+ - `ReviewArtifactWriteSkipReason` は `SkipResponse` の optional な内部 discriminant として扱う。
+   `mergePreToolUseResponses` を含む全ての response merger はこの二つの reason を保持するが、
+   reason のない一般的な `skip` を cancellation へ変換しない。review write 以外の `skip` は従来の
+   fail-open / host behavior を維持する。
+ - runtime adapter は `onToolExecuteBefore()` からこの内部 `HookResponse` を返す。plugin wrapper は
+   上記二つの reason だけを `ReviewArtifactWriteCancelled` に変換し、OpenCode の
+   `tool.execute.before` 境界へ escape させる。これにより built-in writer を実行させない。通常の
+   adapter / I/O error は従来どおり `PROCEED` へ縮退するが、dedicated cancellation を広い outer
+   fail-open catch で飲み込んではならない。
 - Justice は matching PostToolUse 到達後、`usable` な `TaskCallBinding.artifactReservation` に基づき、まず `ReviewArtifactReadAttemptRecord` を artifact I/O 前に一件だけ durable に記録し、その read lease に対して `artifactPath` を **一度だけ** 読み取る。既存の read-attempt record がある場合は path を再読しない。プロセス停止後に read-attempt はあるが completion / failure staging がない場合は、読み取り済みかどうかを推測せず `artifact_read_failed` として failure staging を作成し、artifact を再読しない。これにより crash 後の file mutation による別 digest の生成を許可しない。読み取り結果は strict schema validation を通し、reservation 単位の atomic consume operation として扱う。`unusable` の場合は artifact を読み取らず、mandatory review completion を成立させない。
   - 成功した読み取りは、まず `ReviewCompletionStagingRecord` に digest、`artifactId`、組み立て済み `ReviewArtifactV1`、および observed execution を durable に記録し、その後 `claimed → terminal` transition、consume marker、同じ artifact payload を一件の terminal physical record に記録する。read-attempt から completion staging または failure staging までの間に crash しても、recovery は再読せず、未確定 read を `artifact_read_failed` として failure staging-first protocol へ収束させる。commit 前に `ReviewArtifactV1` を Acceptance の入力へ渡さず、commit 失敗時は slot と staging を保持する。
   - 読み取り失敗は `ReviewArtifactFailureStagingRecord` を先に durable に記録してから、artifact payload を持たない `claimed → terminal` transition を一件だけ append する。failure staging または terminal append が失敗した場合は同じ durable marker を recovery で再試行し、read-attempt がある限り artifact を再読しない。terminal 成功後、元ファイルを archive / move または delete する。cleanup は matching durable terminal
@@ -1572,6 +1594,10 @@ review finds issue
 - persisted evidence が attempt-scoped（`TaskExecutionRef` / `FinalizationAttemptId`）であること。
 - OmO child session correlation（`DelegatedExecutionBinding`）が正しく機能すること。
 - review artifact anti-replay（`ReviewArtifactReservation`）が機能すること。
+- review-owned write の secure success / rejection がそれぞれ異なる cancellation reasonを返し、
+  plugin wrapper が両方を host cancellationへ変換して built-in writerを0回にすること。
+- supported OpenCode hostの実際のplugin dispatchとTaskTool executionで、mutable task argsの
+  `run_in_background = false` および committed artifact pathがworker executionへ到達すること。
 - 同一 parent session の review dispatch が 1 件ずつ発行され、matching pending slot の atomic claim により `callId` と trusted correlation が一対一に bind されること。
 - pending slot が 0 件・複数件、または review kind / category が不一致の場合に review binding を作らず、Runtime は継続し、pre-Gate の lifecycle / advisory を保持して AcceptanceDecision を発行しないこと。
 - Controller が prompt / args に再提示した correlation や category だけでは trusted identity を成立させないこと。
@@ -1661,6 +1687,8 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-19 | A terminal, missing, or uncertain Authorization cannot create authoritative Review, Gate, Acceptance, or Progress, including during restart recovery. |
 | INV-20 | Mandatory `sp-review` / `sp-final-review` uses `run_in_background = false` at the canonical and final wire boundaries. |
 | INV-21 | A review artifact is consumed only when its reserved path, private lease, and durable inode identity match. |
+| INV-22 | A review-owned artifact write is either securely committed and cancelled at the host boundary, or rejected and cancelled at the host boundary; it never falls through to the built-in pathname writer. |
+| INV-23 | Mandatory review wire mutations are authoritative only when the supported OpenCode host is observed to consume them during actual TaskTool execution. |
 
 ---
 
@@ -1712,6 +1740,9 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 31. `claimed + completion staging` は artifact / worker output を再読せずに terminalization を idempotent に再試行し、terminal Authorization より優先しない。
 32. mandatory review の `run_in_background = true` が caller payload に含まれても、canonical package と final wire payload の両方で false に正規化される。
 33. artifact reservation は private inode lease と durable identity を保持し、worker write と Justice read が同じ no-follow inode でない場合は completion authority を作らない。
+34. review-owned write の secure success は `review_artifact_write_committed`、secure rejection / provider failure は `review_artifact_write_rejected` となり、両方とも built-in writer を実行しない。
+35. supported OpenCode CLI `1.18.29` の実host boundaryで、`run_in_background = false` と committed artifact path が実際の TaskTool executionへ届くことを観測できる。
+36. N-API descriptorのJavaScript field naming、root reopen、reservation identity、Rust toolchain、native addon buildが同一の実行可能契約として検証される。
 
 ---
 
@@ -1912,6 +1943,14 @@ variant を追加しない。
   継続する。
 - blocked / stale / unreadable Authorization は binding、reservation、path を返さず、
   `proceed` または既存の advisory `inject` に縮退する。`skip` は使用しない。
+- 上記の `skip` 禁止は review-owned artifact write の host cancellation 例外には適用しない。
+  その経路だけが `SkipResponse.reason?: ReviewArtifactWriteSkipReason` を返し、
+  `review_artifact_write_committed` または `review_artifact_write_rejected` の二値を持つ。
+  reason のない一般的な `skip` は host cancellation へ変換しない。
+- `review_artifact_write_committed` は secure `writeExisting()` の commit 後だけ許可する。
+  `review_artifact_write_rejected` は secure write を実行しなかった場合、および provider が失敗した
+  場合を含む全ての review-owned write failure に使用する。rejected response を返した場合も
+  built-in `write` invocation は 0 でなければならない。
 - observation、normal context、gate advisory の既存 merge semantics を保持する。
 - claim、reservation、projection、delivery、completion の例外は hook boundary 内で捕捉し、
   advisory を best-effort に記録したうえで非ブロッキング response に縮退する。
@@ -1948,6 +1987,37 @@ Task 3.4 の acceptance は、unit factory testsに加えて、実際の `Justic
   後続 hook に
   古い `REVIEW REQUIRED` directive が含まれない。terminal / cancelled slot は inject せず、
   unreadable / uncertain authority は delivery を保持したまま positive directive を inject しない。
+
+### 12.7 Supported OpenCode host contract
+
+Review artifact の安全境界と mandatory synchronous review は、SDK の型検査だけでは成立しない。
+Phase 3 の supported host は、今回の実行環境で確認した **OpenCode CLI `1.18.29`** に
+固定する。`@opencode-ai/plugin` / `@opencode-ai/sdk` は lockfile の `1.14.21` と一致させるが、
+SDK version を host version の代用にはしない。別の host version、未確認の semver range、または
+version を取得できない環境は supported deployment ではない。
+
+Task 3.3c の hard-gate runtime spike は、`opencode --version` が `1.18.29` と完全一致することを
+最初に確認し、実際に
+plugin factory を host へロードして `tool.execute.before`、built-in `task` execution、child
+session observation、`tool.execute.after` を同一の実runtimeで通す。次の二つを direct adapter
+call ではなく host boundary で観測できなければ Phase 3 と JUS-P0-04 を BLOCKED とする。
+
+- original task input の `run_in_background = true` が hook 後の実際の `TaskTool` execution に
+  `false` として到達すること。
+- committed `artifactPath` が hook の一時 object だけでなく、実際の review worker execution に
+  同一値で到達すること。prompt text、category、artifact path の再推測、worker self-report は
+  delivery proof として使用しない。
+
+同じ host-boundary acceptance は、review-owned `write` の secure success / rejection 両方で
+`tool.execute.before` の dedicated cancellation が built-in writer を止めることも確認する。
+成功時は `review_artifact_write_committed`、拒否時は `review_artifact_write_rejected` を観測し、
+いずれも built-in writer invocation は 0、rejected case では symlink target と replacement inode
+が不変であることを確認する。一般の unrelated write は既存動作を維持する。
+
+Task 3.3c の報告が未作成、version mismatch、mutation propagation failure、または throw が
+host cancellation として作用しない場合、未確認の host を理由に実装を続行してはならない。
+現在の adapter mutation test は composition integration coverage として残せるが、production
+host acceptance や JUS-P0-04 completion evidence には算入しない。
 
 `ec23694` のように設計・計画書だけを変更したコミットでは、テストコードが追加されたとは
 みなさない。計画上の fixture と実際に実行可能な production integration test を区別し、
