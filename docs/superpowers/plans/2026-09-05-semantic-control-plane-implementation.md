@@ -14544,7 +14544,7 @@ are not reached, the outside target remains unchanged, the symlink remains retai
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/runtime/validation.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
 Expected: FAIL behaviorally because matching review completion has no composite terminal physical record or
@@ -14552,6 +14552,11 @@ ordered Gate request, the response merger does not yet preserve the cancellation
 does not yet throw the dedicated cancellation. The Linux x86_64 composition E2E and supported-host E2E must
 load the built addon and fail on behavioral assertions; a provider-unavailable setup failure, skipped
 supported-platform case, missing helper, missing-symbol/type error, or host-version mismatch is an invalid RED.
+
+`tests/runtime/validation.test.ts` is part of this same RED command. Its cleanup-record cases must
+compile and fail for the intended unimplemented or incorrect `review_artifact_cleanup` validation/replay
+behavior. A missing helper/type, shell syntax error, validator-test setup error, or other setup/compile failure
+is not acceptable RED evidence.
 
 - [ ] **Step 3: Implement the fixed protocol**
 
@@ -16756,7 +16761,7 @@ Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `run
 Run:
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && test "$(opencode --version)" = "1.18.29" && bun run build:native:review-artifact && bun run vitest run tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/runtime/validation.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/core/hook-response-merger.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts tests/integration/opencode-host-review-contract.test.ts'
 ```
 
 Expected: PASS, including both task-review and final-review composition and supported-host flows, exact-once
@@ -16764,10 +16769,17 @@ read/terminal assertions, camelCase N-API reopen binding, both cancellation reas
 zero built-in writer calls after secure rejection, no generic artifact write, stale final-round rejection,
 symlink/inode replacement retention, and the `review_artifact_identity_mismatch` advisory.
 
+The same GREEN run must pass `tests/runtime/validation.test.ts`: valid
+`review_artifact_cleanup` `started` and `finished(status)` records are accepted and replayed; malformed
+phase/status/required identity combinations are rejected; and restart/replay reconstructs the latest durable
+cleanup state. Only `finished(cleanup_incomplete)` is re-evaluable. `cleaned`, `quarantine_retained`, and
+`replacement_retained` are terminal, while started-without-finished projects `outcome_uncertain`; none of those
+terminal/uncertain states may automatically re-enter the provider.
+
 - [ ] **Step 5: Commit after approval**
 
 ```bash
-GIT_MASTER=1 git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/hook-response-merger.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/core/hook-response-merger.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts
+GIT_MASTER=1 git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/hook-response-merger.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/validation.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/runtime/validation.test.ts tests/core/hook-response-merger.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts
 GIT_MASTER=1 git commit -m "feat: review artifact消費とacceptanceをtransactionalに処理"
 ```
 
