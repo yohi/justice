@@ -7458,7 +7458,7 @@ function allowedEnvironment(
   const environment: Record<string, string> = { JUSTICE_HOST_TEST_MODEL: model, ...extra };
   for (const name of names) {
     const value = process.env[name];
-    if (value !== undefined) environment[name] = value;
+    if (value !== undefined && environment[name] === undefined) environment[name] = value;
   }
   return environment;
 }
@@ -7492,6 +7492,7 @@ async function verifyCase(
   model: string,
   reviewCase: ReviewCase,
   outsideTarget: string,
+  hostEnvironment: Readonly<Record<string, string>>,
 ): Promise<HostCaseResult> {
   const stateDir = join(workspace, ".justice-host-contract");
   const tracePath = join(stateDir, `${reviewCase}.trace.jsonl`);
@@ -7507,13 +7508,13 @@ async function verifyCase(
   const result = await runProcess(
     ["opencode", "run", "--format", "json", "--model", model, prompt],
     workspace,
-    allowedEnvironment(model, {
+    { ...hostEnvironment,
       JUSTICE_HOST_TRACE_PATH: tracePath,
       JUSTICE_HOST_ARTIFACT_PATH: artifactPath,
       JUSTICE_HOST_CATEGORY: reviewCase === "task-review" ? "sp-review" : "sp-final-review",
       JUSTICE_HOST_CHILD_SESSION_FIELD_PATH: childSessionFieldPath,
       JUSTICE_HOST_PARENT_CALL_FIELD_PATH: runtimeParentCallFieldPath,
-    }),
+    },
   );
   if (result.timedOut || result.exitCode !== 0) {
     const failureCode = /plugin|load/iu.test(result.stderr) ? "plugin_load_failed" : "host_run_failed";
@@ -7641,6 +7642,17 @@ async function main(): Promise<void> {
     }
     model = requiredModel();
     workspace = await mkdtemp(join(tmpdir(), "justice-opencode-host-contract-"));
+    const hostHome = join(workspace, ".host-home");
+    const hostConfigHome = join(workspace, ".host-config");
+    const hostCacheHome = join(workspace, ".host-cache");
+    await mkdir(hostHome, { recursive: true });
+    await mkdir(hostConfigHome, { recursive: true });
+    await mkdir(hostCacheHome, { recursive: true });
+    const hostEnvironment = allowedEnvironment("probe/probe", {
+      HOME: hostHome,
+      XDG_CONFIG_HOME: hostConfigHome,
+      XDG_CACHE_HOME: hostCacheHome,
+    });
     const stateDir = join(workspace, ".justice-host-contract");
     const pluginDir = join(workspace, ".opencode", "plugins");
     await mkdir(pluginDir, { recursive: true });
@@ -7648,7 +7660,7 @@ async function main(): Promise<void> {
     await copyFile(new URL("./justice-host-contract.ts", import.meta.url), join(pluginDir, "justice-host-contract.ts"));
     await writeFile(
       join(workspace, "opencode.json"),
-      JSON.stringify({ $schema: "https://opencode.ai/config.json", model, plugin: [join(pluginDir, "justice-host-contract.ts")] }),
+      JSON.stringify({ $schema: "https://opencode.ai/config.json", model }),
       "utf8",
     );
     report.failureClass = "contract";
@@ -13803,11 +13815,11 @@ it("fails closed when two reasoned skips conflict", () => {
 it("does not convert a reasonless skip or an ordinary adapter failure into cancellation", async () => {
   const adapter = arrangeAdapterReturning({ action: "skip" });
   await expect(adapter.onToolExecuteBefore(taskInput, taskOutput)).resolves.toEqual({ action: "skip" });
-  const wrapper = arrangePluginWithAdapter(adapter);
+  const wrapper = await arrangePluginWithAdapter(adapter);
   await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
 
   const failingAdapter = arrangeAdapterThrowing(new Error("ordinary adapter failure"));
-  const failOpenWrapper = arrangePluginWithAdapter(failingAdapter);
+  const failOpenWrapper = await arrangePluginWithAdapter(failingAdapter);
   await expect(failOpenWrapper["tool.execute.before"](taskInput, taskOutput)).resolves.toBeUndefined();
 });
 
@@ -13816,7 +13828,7 @@ it.each([
   "review_artifact_write_rejected",
 ] as const)("throws only the dedicated cancellation for %s", async (reason) => {
   const adapter = arrangeAdapterReturning({ action: "skip", reason });
-  const wrapper = arrangePluginWithAdapter(adapter);
+  const wrapper = await arrangePluginWithAdapter(adapter);
   await expect(wrapper["tool.execute.before"](taskInput, taskOutput)).rejects.toMatchObject({
     name: "ReviewArtifactWriteCancelled",
     reason,

@@ -1071,6 +1071,32 @@ export type DelegatedExecutionBinding = {
 
 ### 4.10 Review Artifact Reservation
 
+#### Reservation-local quarantine namespace
+
+Quarantine is not a global pool keyed only by generic `.artifact-*` or `.lease-*` names.
+Every quarantined object belongs to exactly one validated reservation and MUST remain isolated from
+all other reservations.
+
+The production provider MUST derive a descriptor-relative quarantine subtree from the already-validated
+safe target leaf and the durable reservation identifier. The canonical logical layout is:
+
+```text
+.justice/reviews/.quarantine/<safe-target-leaf>/<reservation-id>/artifact
+.justice/reviews/.quarantine/<safe-target-leaf>/<reservation-id>/lease
+```
+
+An implementation may use different internal leaf names, but it MUST preserve the same identity and
+isolation properties. A reservation can only discover, restore, retain, or delete its own quarantine
+entries; recovery MUST NOT enumerate a global namespace and infer ownership from file names. Restore
+is descriptor-relative and no-clobber, and recorded `st_dev` / `st_ino` identity is validated before
+deletion or restore. If the original path is occupied by a different inode, the quarantined object is
+retained and the operation returns a non-positive cleanup outcome/advisory; the replacement is never
+deleted. Artifact and lease cleanup remain independently retryable without crossing reservation
+boundaries.
+
+The Linux provider probe and production tests MUST verify that cleanup of one independently
+replaced/quarantined reservation leaves another reservation's quarantine state untouched.
+
 ```ts
 export type ReviewArtifactReservationFailureReason =
   | "artifact_path_collision_exhausted"
