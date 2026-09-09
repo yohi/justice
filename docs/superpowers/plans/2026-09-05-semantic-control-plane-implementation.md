@@ -5209,7 +5209,7 @@ not deleted or overwritten and the outcome is fail-closed retention.
 JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case.
 The only passing status is `status: "PASS"`. Missing `openat2(2)` / `renameat2(2)` still blocks the provider,
 but absence of an identity-bound unlink-by-handle primitive is **not** a reason to use name-only unlink:
-the supported behavior is `quarantine_retained`. The cleanup and reservation-creation race results must prove replacement deletion count zero, replacement overwrite count zero, retained replacement bytes, and no usable reservation from either reservation-creation race.
+the supported behavior is `quarantine_retained`. The cleanup and reservation-creation race results must prove replacement deletion count zero, replacement overwrite count zero, retained replacement bytes, and no usable reservation from either reservation-creation race. For the reservation races, the probe records the replacement inode identity immediately after the test seam and compares the same named leaf identity and bytes after the production-equivalent failure path; unchanged inode identity proves no delete/recreate, unchanged bytes prove no overwrite. Do not add syscall interception or a generic fault registry.
 5. Record the successful supported-environment output in `docs/agents/review-artifact-linux-provider.md`. Record the exact unsupported result and the user-visible `artifact_storage_unavailable` behavior as well; do not describe an unsupported runtime as a P0 exemption.
 
 **Verification:**
@@ -5833,13 +5833,15 @@ Run:
 
 ```bash
 devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu"'
+devcontainer exec --workspace-folder . bash -lc 'cargo test --manifest-path native/review-artifact-linux/Cargo.toml cleanup_fault_tests; cleanup_status=$?; cargo test --manifest-path native/review-artifact-linux/Cargo.toml reservation_creation_race_tests; reservation_status=$?; test "$cleanup_status" -ne 0 && test "$reservation_status" -ne 0'
 devcontainer exec --workspace-folder . bun run build:native:review-artifact
 devcontainer exec --workspace-folder . bun run vitest run tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
 ```
 
-Expected RED is behavioral: the addon builds and loads, the tests compile, the root/reservation fixture
-succeeds, and assertions for write/read/cleanup fail because the scaffold returns the deterministic
-unsupported error. A missing build, missing import, undefined symbol, invalid N-API binding, malformed
+Expected RED is behavioral: the native test modules compile, the addon builds and loads, the
+root/reservation fixtures succeed, and assertions for intentionally unsupported write/read/cleanup behavior fail.
+The reservation-creation race module must compile and execute its production failure path; a sibling-private
+helper error, malformed Markdown materialization, or skipped module is an invalid RED. A missing build, missing import, undefined symbol, invalid N-API binding, malformed
 fixture, unsupported matcher, addon setup failure, or skipped supported-platform suite is an invalid RED and
 must be fixed before implementation.
 
@@ -5975,6 +5977,7 @@ struct CleanupFaults {
 struct ReservationCreationFaults {
     replace_artifact_before_lease_link: bool,
     replace_lease_after_link: bool,
+    replacement_identity: Option<NativeIdentity>,
 }
 
 #[napi]
@@ -6020,11 +6023,13 @@ impl NativeReviewArtifactRoot {
         #[cfg(test)]
         if state.reservation_faults.replace_artifact_before_lease_link {
             state.reservation_faults.replace_artifact_before_lease_link = false;
-            replace_named_leaf_for_reservation_test(
-                state.reviews.as_raw_fd(),
-                &artifact_leaf,
-                b"artifact-replacement",
-            )?;
+            state.reservation_faults.replacement_identity = Some(
+                replace_named_leaf_for_reservation_test(
+                    state.reviews.as_raw_fd(),
+                    &artifact_leaf,
+                    b"artifact-replacement",
+                )?,
+            );
         }
 
         let lease_leaf = format!("{artifact_leaf}.lease");
@@ -6033,11 +6038,13 @@ impl NativeReviewArtifactRoot {
         #[cfg(test)]
         if state.reservation_faults.replace_lease_after_link {
             state.reservation_faults.replace_lease_after_link = false;
-            replace_named_leaf_for_reservation_test(
-                state.leases.as_raw_fd(),
-                &lease_leaf,
-                b"lease-replacement",
-            )?;
+            state.reservation_faults.replacement_identity = Some(
+                replace_named_leaf_for_reservation_test(
+                    state.leases.as_raw_fd(),
+                    &lease_leaf,
+                    b"lease-replacement",
+                )?,
+            );
         }
 
         let current_artifact = openat2(
@@ -6421,7 +6428,7 @@ fn replace_named_leaf_for_reservation_test(
     dir: RawFd,
     leaf: &str,
     replacement_bytes: &[u8],
-) -> Result<()> {
+) -> Result<NativeIdentity> {
     let token = random_token()?;
     let saved = format!("reservation-race-saved-{token:x}");
     renameat2(dir, leaf, dir, &saved, RENAME_NOREPLACE)?;
@@ -6433,7 +6440,7 @@ fn replace_named_leaf_for_reservation_test(
         OPEN_RESOLVE,
     )?;
     write_all(replacement.as_raw_fd(), replacement_bytes)?;
-    Ok(())
+    fstat_identity(replacement.as_raw_fd())
 }
 
 fn unlinkat(dir: RawFd, path: &str, flags: c_int) -> Result<()> {
@@ -7323,15 +7330,70 @@ mod cleanup_fault_tests {
         Ok(())
     }
 }
-```
 
 #[cfg(test)]
 mod reservation_creation_race_tests {
     use super::*;
+    use std::path::PathBuf;
+
+    struct ReservationRaceFixture {
+        root_path: PathBuf,
+        root: NativeReviewArtifactRoot,
+    }
+
+    impl Drop for ReservationRaceFixture {
+        fn drop(&mut self) {
+            let _ = self.root.close();
+            let _ = std::fs::remove_dir_all(&self.root_path);
+        }
+    }
+
+    fn arrange_reservation_race_fixture(label: &str) -> Result<ReservationRaceFixture> {
+        let root_path = std::env::temp_dir().join(format!(
+            "justice-review-artifact-reservation-race-{label}-{:x}",
+            random_token()?,
+        ));
+        std::fs::create_dir(&root_path)
+            .map_err(|_| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))?;
+        let root = open_review_artifact_root(root_path.to_string_lossy().into_owned())?;
+        Ok(ReservationRaceFixture { root_path, root })
+    }
+
+    fn take_expected_replacement_identity(root: &NativeReviewArtifactRoot) -> Result<NativeIdentity> {
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        state
+            .reservation_faults
+            .replacement_identity
+            .take()
+            .ok_or_else(|| error(Status::GenericFailure, "artifact_storage_unavailable", libc::EIO))
+    }
+
+    fn named_leaf_identity_for_reservation_test(
+        root: &NativeReviewArtifactRoot,
+        lease: bool,
+        leaf: &str,
+    ) -> Result<NativeIdentity> {
+        let mut guard = root.lock_open()?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| error(Status::GenericFailure, "root_closed", libc::EBADF))?;
+        let dir = if lease { state.leases.as_raw_fd() } else { state.reviews.as_raw_fd() };
+        let fd = openat2(
+            dir,
+            leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        )?;
+        fstat_identity(fd.as_raw_fd())
+    }
 
     #[test]
     fn artifact_name_replacement_before_lease_link_is_retained_and_never_usable() -> Result<()> {
-        let fixture = arrange_native_cleanup_fixture()?;
+        let fixture = arrange_reservation_race_fixture("artifact-replacement")?;
         {
             let mut guard = fixture.root.lock_open()?;
             let state = guard.as_mut().ok_or_else(|| {
@@ -7343,6 +7405,13 @@ mod reservation_creation_race_tests {
             ".justice/reviews/reservation-artifact-race.json".to_string(),
         );
         assert!(result.is_err());
+        let expected_replacement = take_expected_replacement_identity(&fixture.root)?;
+        let current_replacement = named_leaf_identity_for_reservation_test(
+            &fixture.root,
+            false,
+            "reservation-artifact-race.json",
+        )?;
+        assert!(same_identity(&expected_replacement, &current_replacement));
         assert_eq!(
             read_named_leaf_for_reservation_test(
                 &fixture.root,
@@ -7356,7 +7425,7 @@ mod reservation_creation_race_tests {
 
     #[test]
     fn lease_name_replacement_after_fd_link_is_retained_and_never_usable() -> Result<()> {
-        let fixture = arrange_native_cleanup_fixture()?;
+        let fixture = arrange_reservation_race_fixture("lease-replacement")?;
         {
             let mut guard = fixture.root.lock_open()?;
             let state = guard.as_mut().ok_or_else(|| {
@@ -7368,6 +7437,13 @@ mod reservation_creation_race_tests {
             ".justice/reviews/reservation-lease-race.json".to_string(),
         );
         assert!(result.is_err());
+        let expected_replacement = take_expected_replacement_identity(&fixture.root)?;
+        let current_replacement = named_leaf_identity_for_reservation_test(
+            &fixture.root,
+            true,
+            "reservation-lease-race.json.lease",
+        )?;
+        assert!(same_identity(&expected_replacement, &current_replacement));
         assert_eq!(
             read_named_leaf_for_reservation_test(
                 &fixture.root,
@@ -7402,6 +7478,7 @@ mod reservation_creation_race_tests {
         Ok(bytes)
     }
 }
+```
 
 The code above is the complete native implementation contract, not a placeholder. Every directory
 descriptor and reservation-local quarantine descriptor remains owned by `OwnedFd`. `openat2` uses
@@ -7414,7 +7491,11 @@ leaf is created, no fstat/link/open/identity failure path may call `unlinkat` on
 The lease source is always the open artifact fd via `link_open_fd_to_name`; a path source such as
 `linkat(reviews_fd, artifact_leaf, ...)` is forbidden. Both names are reopened and verified against the
 original fd identity before a `NativeReservationHandle` is returned. Partial/orphan names are retained on
-failure, the candidate reservation is unusable, and replacement deletion/overwrite counts remain zero.
+failure, the candidate reservation is unusable, and replacement deletion/overwrite counts remain zero. The
+reservation race tests capture the replacement inode identity at the narrow `#[cfg(test)]` seam and assert that
+the same named inode and bytes remain after the production failure path. Same identity proves no successful
+delete/recreate; unchanged bytes prove no overwrite. This is the zero-delete/zero-overwrite observation and
+requires no syscall interception framework.
 
 Most importantly, the supported v4.0.0 cleanup path contains **no physical unlink of a quarantine leaf**.
 An opened/fstat-verified fd is not evidence that a later `unlinkat(dirfd, name)` removes that same inode.
@@ -7705,7 +7786,7 @@ not reintroduce physical deletion.
 **Verification:**
 
 ```bash
-devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && cargo test --manifest-path native/review-artifact-linux/Cargo.toml cleanup_fault_tests && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
+devcontainer exec --workspace-folder . bash -lc 'test "$(whoami)" = "root" && test -w /workspace && command -v rustup && command -v cargo && command -v rustc && active_toolchain="$(rustup show active-toolchain)" && test "${active_toolchain%% *}" = "1.85.1-x86_64-unknown-linux-gnu" && rustc --version && cargo --version && cargo test --manifest-path native/review-artifact-linux/Cargo.toml cleanup_fault_tests && cargo test --manifest-path native/review-artifact-linux/Cargo.toml reservation_creation_race_tests && bun run build:native:review-artifact && bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts && bun run typecheck && bun run lint && bun run build'
 ```
 
 The runtime tests must run against the built addon on Linux x86_64 and cover exclusive creation, lease identity,
@@ -11842,6 +11923,7 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Modify: `src/core/types.ts`
 - Modify: `src/core/v2/observation-model.ts`
 - Modify: `src/core/v2/state-projection.ts`
+- Modify: `src/runtime/validation.ts`
 - Modify: `src/hooks/observation-handler.ts`
 - Modify: `src/core/justice-plugin.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
@@ -11849,6 +11931,7 @@ not reconstruct a second boundary or move PreToolUse claim logic into the comple
 - Test: `tests/core/review-artifact-reservation.test.ts`
 - Test: `tests/core/session-state-provider.test.ts`
 - Test: `tests/core/v2/state-projection.test.ts`
+- Test: `tests/runtime/validation.test.ts`
 - Test: `tests/hooks/observation-handler-transactional.test.ts`
 - Test: `tests/core/justice-plugin-routing.test.ts`
 - Test: `tests/core/justice-plugin.test.ts`
@@ -12247,8 +12330,10 @@ ReviewDispatchTransitionRecord): Promise<void>`;
 `projectReviewArtifactCleanupState(records: readonly PersistedLogRecord[], identity:
 { readonly parentSessionId: string; readonly callId: string; readonly correlation: ReviewCorrelation; readonly artifactId: string }):
 ProjectedReviewArtifactCleanupState`;
-`appendReviewArtifactCleanupRecord(record: Omit<ReviewArtifactCleanupRecord, keyof PersistedEnvelope>):
-Promise<{ readonly kind: "committed" } | { readonly kind: "rejected" }>`;
+`appendReviewArtifactCleanupRecord(record: PendingReviewArtifactCleanupRecord): Promise<
+  | { readonly kind: "committed"; readonly record: PersistedReviewArtifactCleanupRecord }
+  | { readonly kind: "failed" }
+>`;
 `findMatchingTerminalForStaging(records: readonly PersistedLogRecord[], staged:
 ReviewCompletionStagingRecord): ReviewDispatchTransitionRecord | undefined`;
 `routeTaskPostToolUse(event): Promise<HookResponse>` and the production `JusticePlugin.handleEvent(PostToolUse)`
@@ -12282,9 +12367,12 @@ replayable `PersistedLogRecord` variants and never become in-memory-only complet
 `observation-model.ts`, define the pending staging variant as `PendingEnvelope & { readonly recordType:
 "observation"; readonly kind: "review_completion_staged"; readonly parentSessionId: string; readonly
 staging: ReviewCompletionStaging }`, the artifact-failure staging variant as `PendingEnvelope &
-ReviewArtifactFailureStagingRecord`, and the pending PostToolUse variant as `PendingEnvelope &
-ReviewPostToolUsePendingRecord`; define the read-attempt variant as `PendingEnvelope &
-ReviewArtifactReadAttemptRecord`; include all corresponding persisted shapes in `PersistedLogRecord`.
+ReviewArtifactFailureStagingRecord`, the pending PostToolUse variant as `PendingEnvelope &
+ReviewPostToolUsePendingRecord`, the read-attempt variant as `PendingEnvelope &
+ReviewArtifactReadAttemptRecord`, and the cleanup variant as `PendingEnvelope & ReviewArtifactCleanupRecord`.
+Include each pending shape in `PendingObservationRecord` and each `PersistedEnvelope & ...` shape, including
+`PersistedReviewArtifactCleanupRecord`, in `PersistedLogRecord`; replay and projection must consume the same
+strictly validated cleanup shape.
 `appendReviewCompletionStaging` accepts the pending staging shape, `appendReviewArtifactFailureStaging`
 accepts the failure staging shape, and `appendReviewPostToolUsePending` accepts the pending PostToolUse shape, while
 `appendCompositeTerminalRecord` accepts a pending terminal transition and delegates to the existing
@@ -12332,6 +12420,16 @@ type ProjectedReviewArtifactCleanupState =
       readonly kind: "finished";
       readonly status: ReviewArtifactCleanupStatus;
     };
+
+type PendingReviewArtifactCleanupRecord = PendingEnvelope & ReviewArtifactCleanupRecord;
+type PersistedReviewArtifactCleanupRecord = PersistedEnvelope & ReviewArtifactCleanupRecord;
+
+type ReviewArtifactCleanupIdentity = {
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactId: string;
+};
 ```
 
 `projectReviewArtifactCleanupState(records, identity)` selects only records matching the durable
@@ -12349,12 +12447,131 @@ Automatic invocation policy is exact:
 - latest finished `cleaned`, `quarantine_retained`, or `replacement_retained` -> terminal, do not call provider;
 - `outcome_uncertain` -> fail-closed retention, advisory only, do not call provider.
 
+**Strict persisted cleanup validation / replay:** `ReviewArtifactCleanupRecord` is a closed durable
+Observation Log variant, not an in-memory marker. `PendingObservationRecord` includes
+`PendingReviewArtifactCleanupRecord`; `PersistedLogRecord` includes `PersistedReviewArtifactCleanupRecord`.
+`src/runtime/validation.ts` must recognize the new kind before its unknown-observation fallback. Use the
+following concrete validation delta; the correlation check mirrors the canonical `ReviewCorrelation` shape
+and does not trust worker/path data:
+
+```ts
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isValidPlanFingerprintValue(value: unknown): boolean {
+  return isObject(value) && value.algorithm === "sha256" && isNonEmptyString(value.value);
+}
+
+function isValidReviewCorrelationValue(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (value.reviewKind === "task-review") {
+    const ref = value.taskExecutionRef;
+    return (
+      isObject(ref) &&
+      isNonEmptyString(ref.authorizationId) &&
+      isNonEmptyString(ref.taskId) &&
+      isNonEmptyString(ref.attemptId) &&
+      isPositiveInteger(value.reviewRound)
+    );
+  }
+  if (value.reviewKind === "final-review") {
+    return (
+      isNonEmptyString(value.planPath) &&
+      isValidBootstrapPath(value.planPath) &&
+      isNonEmptyString(value.authorizationId) &&
+      isValidPlanFingerprintValue(value.planFingerprint) &&
+      isNonEmptyString(value.finalizationAttemptId) &&
+      isPositiveInteger(value.finalReviewRound)
+    );
+  }
+  return false;
+}
+
+function isValidReviewArtifactCleanupStatus(value: unknown): value is ReviewArtifactCleanupStatus {
+  return isOneOf(value, [
+    "cleaned",
+    "quarantine_retained",
+    "replacement_retained",
+    "cleanup_incomplete",
+  ]);
+}
+
+function validateReviewArtifactCleanupRecord(r: Record<string, unknown>): void {
+  const common =
+    r.recordType === "observation" &&
+    r.kind === "review_artifact_cleanup" &&
+    isNonEmptyString(r.parentSessionId) &&
+    isNonEmptyString(r.callId) &&
+    isValidReviewCorrelationValue(r.correlation) &&
+    isNonEmptyString(r.artifactId);
+  const phase =
+    (r.phase === "started" && r.status === undefined) ||
+    (r.phase === "finished" && isValidReviewArtifactCleanupStatus(r.status));
+  if (!common || !phase) throw new Error("Invalid review_artifact_cleanup record");
+}
+
+// Inside validateObservationRecord(r), before the unknown-kind fallback:
+} else if (kind === "review_artifact_cleanup") {
+  validateReviewArtifactCleanupRecord(r);
+}
+```
+
+The same shape is used by pending append, persisted replay, and projection. A malformed cleanup record,
+unknown status, `started` record carrying `status`, `finished` record missing `status`, empty identity field,
+or malformed correlation is rejected and never becomes restart authority. Do not add a permissive unknown-kind
+fallback.
+
+
+Add the strict cleanup-record RED/GREEN cases to `tests/runtime/validation.test.ts` and the replay case to the
+existing observation-log/projection fixture. These tests are part of Task 3.6, not a later hardening task:
+
+```ts
+it.each([
+  { phase: "started" as const },
+  { phase: "finished" as const, status: "cleaned" as const },
+  { phase: "finished" as const, status: "quarantine_retained" as const },
+  { phase: "finished" as const, status: "replacement_retained" as const },
+  { phase: "finished" as const, status: "cleanup_incomplete" as const },
+])("validates and replays review_artifact_cleanup %#", async (phase) => {
+  const pending = validCleanupRecord(phase);
+  const persisted = await appendAndReplay(pending);
+  expect(() => validateRecordSchema(persisted)).not.toThrow();
+  expect(projectReviewArtifactCleanupState([persisted], cleanupIdentity)).not.toEqual({
+    kind: "not_started",
+  });
+});
+
+it.each([
+  validCleanupRecord({ phase: "started", status: "cleaned" }),
+  validCleanupRecord({ phase: "finished" }),
+  validCleanupRecord({ phase: "finished", status: "unknown_status" }),
+  validCleanupRecord({ phase: "started", artifactId: "" }),
+  validCleanupRecord({ phase: "started", callId: "" }),
+  validCleanupRecord({ phase: "started", correlation: malformedCorrelation }),
+])("rejects malformed review_artifact_cleanup replay authority", (record) => {
+  expect(() => validateRecordSchema(record)).toThrow(/review_artifact_cleanup/u);
+});
+```
+
+RED is valid only when these tests compile and fail because the cleanup kind/state-machine behavior has not yet
+been implemented. Unknown-kind rejection by itself is not a valid behavioral RED after the Task 3.6 test source
+has been added. GREEN must include `tests/runtime/validation.test.ts` together with the Task 3.6 completion and
+projection tests.
+
+
  The core module must not import `ObservationLogStore`,
 `AuthorizationStore`, OpenCode adapter types, or notifier implementations directly. The injected
 `cleanupArtifact(reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>)`
 port returns `Promise<ReviewArtifactCleanupStatus>` and receives the trusted reservation pair, not an
 artifact path or ID from PostToolUse or worker output. The completion domain, not the provider adapter,
-owns durable cleanup-attempt bookkeeping so provider status is never erased to `Promise<void>`. `readAndAssembleMatchingArtifact` must call the reservation port's descriptor-relative,
+owns durable cleanup-attempt bookkeeping so provider status is never erased to `Promise<void>`. Both
+`ensureConsumedReviewArtifactCleaned()` and `ensureFailedReviewArtifactCleaned()` call the same
+`ensureReviewArtifactCleanupStateMachine()` helper; neither invokes `cleanupArtifact` directly. `readAndAssembleMatchingArtifact` must call the reservation port's descriptor-relative,
 no-follow read using the trusted `artifactPath`, `leasePath`, and `artifactIdentity`; it must not call
 generic pathname `readFile` for a reserved artifact. A missing, replaced, symlinked, or identity-mismatched
 leaf is an `artifact_read_failed` result before JSON parsing.
@@ -13076,6 +13293,10 @@ async function arrangeReviewArtifactCompletionFixture(
       await appendPendingRecord(input);
       return { kind: "committed" as const };
     },
+    appendReviewArtifactCleanupRecord: async (input) => ({
+      kind: "committed" as const,
+      record: await appendPendingRecord(input),
+    }),
     appendReviewDispatchTransition,
     readAndAssembleMatchingArtifact,
     cleanupArtifact,
@@ -13249,22 +13470,14 @@ it("retains a replacement path during terminal cleanup and records an advisory",
   expect(fixture.recordAdvisory).toHaveBeenCalledWith("review_artifact_identity_mismatch");
 });
 
-it("reports incomplete paired cleanup and retries only the residual lease", async () => {
+it("propagates cleanup_incomplete without using mock unlink counts as native security evidence", async () => {
   const fixture = await arrangeTerminalizedReviewWithUsableReservation();
   fixture.failNextLeaseDelete();
 
   await fixture.ensureCleanup();
 
-  expect(fixture.unlinkArtifactPath).toHaveBeenCalledTimes(2);
-  await expect(fixture.artifactExists()).resolves.toBe(false);
-  await expect(fixture.leaseExists()).resolves.toBe(true);
   expect(fixture.recordAdvisory).toHaveBeenCalledWith("review_artifact_cleanup_incomplete");
-
-  await fixture.ensureCleanup();
-
-  expect(fixture.unlinkArtifactPath).toHaveBeenCalledTimes(3);
-  await expect(fixture.artifactExists()).resolves.toBe(false);
-  await expect(fixture.leaseExists()).resolves.toBe(false);
+  await expect(fixture.leaseExists()).resolves.toBe(true);
 });
 ```
 
@@ -14662,23 +14875,24 @@ const readAndAssembleMatchingArtifact: ReviewCompletionDependencies["readAndAsse
   }
 };
 const cleanupArtifact: ReviewCompletionDependencies["cleanupArtifact"] = async (reservation) => {
-  if (reservedReviewArtifactIo === undefined) return;
+  if (reservedReviewArtifactIo === undefined) {
+    await this.recordReviewAdvisory("review_artifact_cleanup_incomplete");
+    return "cleanup_incomplete";
+  }
   try {
-    const outcome = await reservedReviewArtifactIo.cleanup(reservation);
-    if (outcome === "quarantine_retained") {
-      await this.recordReviewAdvisory("review_artifact_cleanup_retained");
-    } else if (outcome === "replacement_retained") {
-      await this.recordReviewAdvisory("review_artifact_identity_mismatch");
-    } else if (outcome === "cleanup_incomplete") {
-      await this.recordReviewAdvisory("review_artifact_cleanup_incomplete");
-    }
+    return await reservedReviewArtifactIo.cleanup(reservation);
   } catch (cause: unknown) {
     await this.recordReviewAdvisory("review_artifact_cleanup_failed", cause);
+    throw cause;
   }
 };
 
 this.reviewCompletionDomain = createReviewCompletionDomain({
   ...reviewCompletionDependencies,
+  // This appender is wired to the same ObservationLogStore append boundary used by
+  // the other Task 3.6 pending observation records. There is no second cleanup store.
+  appendReviewArtifactCleanupRecord:
+    reviewCompletionDependencies.appendReviewArtifactCleanupRecord,
   readAndAssembleMatchingArtifact,
   cleanupArtifact,
   dispatch: {
@@ -14888,8 +15102,11 @@ failure terminals are also cleanup-eligible through their trusted claimed reserv
 content or worker output. Normal matching requires
 `parentSessionId`, `staging.callId`, exact `staging.correlation`, and matching artifact ID / digest. Cancelled
 matching requires `terminalReason: "cancelled"`, `parentSessionId`, `staging.callId`, exact `staging.correlation`,
-and the durable claimed binding's artifact ID. Cleanup failure is reported as an advisory
-but never rolls back terminal, lifecycle, Gate, or Acceptance authority. `ensureTerminalReviewOutcomeApplied`
+and the durable claimed binding's artifact ID. Cleanup status is projected from `ReviewArtifactCleanupRecord`, not from an advisory. Only
+`not_started` and latest finished `cleanup_incomplete` may enter the provider; `cleaned`,
+`quarantine_retained`, `replacement_retained`, and outcome-uncertain latest `started` do not. Cleanup
+failure/retention is reported as an advisory but never rolls back terminal, lifecycle, Gate, or Acceptance
+authority. `ensureTerminalReviewOutcomeApplied`
 re-reads the latest durable Authorization and
 lifecycle projection, classifies the immutable terminal reason, and never appends the terminal record itself. It
 first checks only current identity. For `completed`, `review_pending` / `final_review_pending` appends the matching
@@ -14919,14 +15136,15 @@ that correlation. Append one `ReviewArtifactReadAttemptRecord` before the read a
 `ReviewArtifactFailureStagingRecord` before the failure terminal. If either staging or terminal append fails,
 retain the claimed slot and durable marker and retry the same staging / terminalization on recovery. A
 read-attempt marker without a staging record is treated as an interrupted `artifact_read_failed` attempt;
-recovery never rereads the artifact. After a durable failure terminal, never reread or reappend it. Cleanup
-then uses the trusted claimed reservation only, is best-effort / idempotent, and retries cleanup alone after
-a cleanup failure. The runtime provider implements that retry through descriptor-based
-`cleanupExistingReservation({ artifactPath, leasePath, artifactIdentity })`; Task 3.6 continues to call only
-`ReservedReviewArtifactIo.cleanup(reservation)` and MUST NOT call or know `openExistingReservation`.
-`artifact_missing` from strict read/write reopen is therefore not a cleanup prerequisite or recovery signal:
-cleanup classifies absent original leaves inside its own reservation-local state machine and still removes a
-matching residual lease/quarantine when its identity is valid. A different eligible candidate may still be offered.
+recovery never rereads the artifact. After a durable failure terminal, never reread or reappend it. Cleanup then uses the trusted claimed
+reservation plus the latest durable `ReviewArtifactCleanupRecord`. Record absence permits one started
+attempt; latest finished `cleanup_incomplete` permits one re-evaluation; latest finished `cleaned`,
+`quarantine_retained`, or `replacement_retained`, and latest `started`, do not invoke the provider. The runtime
+provider is reached only through descriptor-based `cleanupExistingReservation({ artifactPath, leasePath,
+artifactIdentity })`; Task 3.6 continues to call only `ReservedReviewArtifactIo.cleanup(reservation)` and MUST
+NOT call or know `openExistingReservation`. `artifact_missing` from strict read/write reopen is therefore not a
+cleanup prerequisite or recovery signal. Descriptor cleanup may inspect reservation-local residual state, but
+supported v4.0.0 never uses an identity check to authorize a later name-only unlink of a quarantine leaf. A different eligible candidate may still be offered.
 
 Review failure entry points must call Task 3.4's `terminalizeReviewFailure`; they must not construct a retry
 correlation, read either round field, append a retry pending transition, or inject a retry directive themselves.
@@ -15203,7 +15421,13 @@ type ReviewCompletionDependencies = {
   ) => Promise<ReviewCompletionStaging | ReviewArtifactReadFailure>;
   readonly cleanupArtifact: (
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ) => Promise<void>;
+  ) => Promise<ReviewArtifactCleanupStatus>;
+  readonly appendReviewArtifactCleanupRecord: (
+    input: PendingReviewArtifactCleanupRecord,
+  ) => Promise<
+    | { readonly kind: "committed"; readonly record: PersistedReviewArtifactCleanupRecord }
+    | { readonly kind: "failed" }
+  >;
   readonly evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: ReturnType<
     typeof createGatePendingAttemptEvaluator
   >["evaluateGatePendingAttemptWithinAuthorizationReviewBoundary"];
@@ -15227,6 +15451,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     appendReviewArtifactFailureStaging,
     appendReviewPostToolUsePending,
     appendReviewDispatchTransition,
+    appendReviewArtifactCleanupRecord,
     readAndAssembleMatchingArtifact,
     cleanupArtifact,
     evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
@@ -15849,14 +16074,122 @@ function findMatchingUsableArtifactReservation(
     : undefined;
 }
 
+
+function cleanupIdentityFor(
+  terminal: ReviewDispatchTransitionRecord,
+  reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+): ReviewArtifactCleanupIdentity | undefined {
+  if (!("callId" in terminal) || terminal.callId === undefined) return undefined;
+  return {
+    parentSessionId: terminal.parentSessionId,
+    callId: terminal.callId,
+    correlation: terminal.correlation,
+    artifactId: reservation.artifactId,
+  };
+}
+
+function projectReviewArtifactCleanupState(
+  records: readonly PersistedLogRecord[],
+  identity: ReviewArtifactCleanupIdentity,
+): ProjectedReviewArtifactCleanupState {
+  const matching = orderEventsForProjection(records).filter(
+    (record): record is PersistedReviewArtifactCleanupRecord =>
+      record.kind === "review_artifact_cleanup" &&
+      record.parentSessionId === identity.parentSessionId &&
+      record.callId === identity.callId &&
+      record.artifactId === identity.artifactId &&
+      sameReviewCorrelation(record.correlation, identity.correlation),
+  );
+  const latest = matching.at(-1);
+  if (latest === undefined) return { kind: "not_started" };
+  if (latest.phase === "started") return { kind: "outcome_uncertain" };
+  return { kind: "finished", status: latest.status };
+}
+
+async function appendCleanupPhase(
+  terminal: ReviewDispatchTransitionRecord,
+  identity: ReviewArtifactCleanupIdentity,
+  phase:
+    | { readonly phase: "started" }
+    | { readonly phase: "finished"; readonly status: ReviewArtifactCleanupStatus },
+): Promise<
+  | { readonly kind: "committed"; readonly record: PersistedReviewArtifactCleanupRecord }
+  | { readonly kind: "failed" }
+> {
+  return appendReviewArtifactCleanupRecord({
+    schemaVersion: 1,
+    timestamp: new Date().toISOString(),
+    agentId: terminal.agentId,
+    sessionId: terminal.sessionId,
+    writerId: terminal.writerId,
+    recordType: "observation",
+    kind: "review_artifact_cleanup",
+    ...identity,
+    ...phase,
+  });
+}
+
+async function recordCleanupStatusAdvisory(status: ReviewArtifactCleanupStatus): Promise<void> {
+  if (status === "quarantine_retained") {
+    await recordAdvisory("review_artifact_cleanup_retained");
+  } else if (status === "replacement_retained") {
+    await recordAdvisory("review_artifact_identity_mismatch");
+  } else if (status === "cleanup_incomplete") {
+    await recordAdvisory("review_artifact_cleanup_incomplete");
+  }
+}
+
+async function ensureReviewArtifactCleanupStateMachine(
+  terminal: ReviewDispatchTransitionRecord,
+  reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+): Promise<void> {
+  const identity = cleanupIdentityFor(terminal, reservation);
+  if (identity === undefined) return;
+  const current = projectReviewArtifactCleanupState(await readDurableRecords(), identity);
+  if (current.kind === "outcome_uncertain") {
+    await recordAdvisory("review_artifact_cleanup_outcome_uncertain");
+    return;
+  }
+  if (current.kind === "finished" && current.status !== "cleanup_incomplete") return;
+
+  const started = await appendCleanupPhase(terminal, identity, { phase: "started" });
+  if (started.kind !== "committed") {
+    await recordAdvisory("review_artifact_cleanup_start_append_failed");
+    return;
+  }
+
+  let status: ReviewArtifactCleanupStatus;
+  try {
+    status = await cleanupArtifact(reservation);
+  } catch (error: unknown) {
+    const finished = await appendCleanupPhase(terminal, identity, {
+      phase: "finished",
+      status: "cleanup_incomplete",
+    });
+    if (finished.kind !== "committed") {
+      await recordAdvisory("review_artifact_cleanup_outcome_uncertain", error);
+      return;
+    }
+    await recordAdvisory("review_artifact_cleanup_failed", error);
+    await recordCleanupStatusAdvisory("cleanup_incomplete");
+    return;
+  }
+
+  const finished = await appendCleanupPhase(terminal, identity, { phase: "finished", status });
+  if (finished.kind !== "committed") {
+    await recordAdvisory("review_artifact_cleanup_outcome_uncertain");
+    return;
+  }
+  await recordCleanupStatusAdvisory(status);
+}
+
 async function ensureConsumedReviewArtifactCleaned(
   staged: ReviewCompletionStagingRecord,
   terminal: ReviewDispatchTransitionRecord,
 ): Promise<void> {
   const records = await readDurableRecords();
   const matchingTerminal = findMatchingTerminalForStaging(records, staged);
-  if (matchingTerminal === undefined || matchingTerminal.transitionId !== terminal.transitionId)
-    return;
+  if (matchingTerminal === undefined || matchingTerminal.transitionId !== terminal.transitionId) return;
   if (
     matchingTerminal.terminalReason !== "completed" &&
     matchingTerminal.terminalReason !== "completed_with_findings" &&
@@ -15870,11 +16203,7 @@ async function ensureConsumedReviewArtifactCleaned(
     await recordAdvisory("review_artifact_cleanup_reservation_missing");
     return;
   }
-  try {
-    await cleanupArtifact(reservation);
-  } catch (error) {
-    await recordAdvisory("review_artifact_cleanup_failed", error);
-  }
+  await ensureReviewArtifactCleanupStateMachine(matchingTerminal, reservation);
 }
 
 function findClaimedUsableReservationForTerminal(
@@ -15908,11 +16237,7 @@ async function ensureFailedReviewArtifactCleaned(
     await recordAdvisory("review_artifact_cleanup_reservation_missing");
     return;
   }
-  try {
-    await cleanupArtifact(reservation);
-  } catch (error) {
-    await recordAdvisory("review_artifact_cleanup_failed", error);
-  }
+  await ensureReviewArtifactCleanupStateMachine(terminal, reservation);
 }
 
 async function recoverStagedArtifactFailure(
