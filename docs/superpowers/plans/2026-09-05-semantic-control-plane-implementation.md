@@ -5201,7 +5201,7 @@ download or install OpenCode/Rust from the runtime spike or a test.
 descriptor-relative write and read; final-component symlink; symlinked ancestor; ancestor replacement after
 reservation; artifact replacement before cleanup; lease replacement before cleanup; root descriptor
 close/reopen followed by `openExistingReservation`; reservation-local `renameat2(2)` quarantine; and a
-post-verification quarantine-name replacement race. The production-equivalent cleanup case MUST NOT call
+post-verification quarantine-name replacement race; artifact-name replacement after artifact `fstat` but before lease construction; and lease-name replacement immediately after the identity-bound fd hard-link. The production-equivalent cleanup case MUST NOT call
 `unlinkat(dirfd, verified_name)` after verification. The race case passes only when the replacement inode is
 not deleted or overwritten and the outcome is fail-closed retention.
 4. Implement `verify.ts` to compile the probe with
@@ -5209,7 +5209,7 @@ not deleted or overwritten and the outcome is fail-closed retention.
 JSON result with `provider`, `nativeApi`, `platform`, `kernel`, `status`, and one result for each case.
 The only passing status is `status: "PASS"`. Missing `openat2(2)` / `renameat2(2)` still blocks the provider,
 but absence of an identity-bound unlink-by-handle primitive is **not** a reason to use name-only unlink:
-the supported behavior is `quarantine_retained`. The race result must prove replacement deletion count zero.
+the supported behavior is `quarantine_retained`. The cleanup and reservation-creation race results must prove replacement deletion count zero, replacement overwrite count zero, retained replacement bytes, and no usable reservation from either reservation-creation race.
 5. Record the successful supported-environment output in `docs/agents/review-artifact-linux-provider.md`. Record the exact unsupported result and the user-visible `artifact_storage_unavailable` behavior as well; do not describe an unsupported runtime as a P0 exemption.
 
 **Verification:**
@@ -5921,6 +5921,8 @@ struct RootState {
     quarantine_root: OwnedFd,
     #[cfg(test)]
     faults: CleanupFaults,
+    #[cfg(test)]
+    reservation_faults: ReservationCreationFaults,
 }
 
 #[napi]
@@ -5968,6 +5970,13 @@ struct CleanupFaults {
     opened_quarantine_namespaces: Vec<(String, String)>,
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct ReservationCreationFaults {
+    replace_artifact_before_lease_link: bool,
+    replace_lease_after_link: bool,
+}
+
 #[napi]
 impl NativeReservationHandle {
     #[napi]
@@ -6006,42 +6015,49 @@ impl NativeReviewArtifactRoot {
             0o600,
             OPEN_RESOLVE,
         )?;
-        let identity = match fstat_identity(artifact_fd.as_raw_fd()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
-                return Err(error);
-            }
-        };
+        let identity = fstat_identity(artifact_fd.as_raw_fd())?;
+
+        #[cfg(test)]
+        if state.reservation_faults.replace_artifact_before_lease_link {
+            state.reservation_faults.replace_artifact_before_lease_link = false;
+            replace_named_leaf_for_reservation_test(
+                state.reviews.as_raw_fd(),
+                &artifact_leaf,
+                b"artifact-replacement",
+            )?;
+        }
+
         let lease_leaf = format!("{artifact_leaf}.lease");
-        if let Err(error) = linkat(
+        link_open_fd_to_name(&artifact_fd, state.leases.as_raw_fd(), &lease_leaf)?;
+
+        #[cfg(test)]
+        if state.reservation_faults.replace_lease_after_link {
+            state.reservation_faults.replace_lease_after_link = false;
+            replace_named_leaf_for_reservation_test(
+                state.leases.as_raw_fd(),
+                &lease_leaf,
+                b"lease-replacement",
+            )?;
+        }
+
+        let current_artifact = openat2(
             state.reviews.as_raw_fd(),
             &artifact_leaf,
-            state.leases.as_raw_fd(),
-            &lease_leaf,
-        ) {
-            let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
-            return Err(error);
-        }
-        let lease_fd = match openat2(
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        )?;
+        verify_identity(current_artifact.as_raw_fd(), &identity)?;
+
+        let lease_fd = openat2(
             state.leases.as_raw_fd(),
             &lease_leaf,
             libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0,
             OPEN_RESOLVE,
-        ) {
-            Ok(fd) => fd,
-            Err(error) => {
-                let _ = unlinkat(state.leases.as_raw_fd(), &lease_leaf, 0);
-                let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
-                return Err(error);
-            }
-        };
-        if let Err(error) = verify_identity(lease_fd.as_raw_fd(), &identity) {
-            let _ = unlinkat(state.leases.as_raw_fd(), &lease_leaf, 0);
-            let _ = unlinkat(state.reviews.as_raw_fd(), &artifact_leaf, 0);
-            return Err(error);
-        }
+        )?;
+        verify_identity(lease_fd.as_raw_fd(), &identity)?;
+
         Ok(NativeReservationHandle {
             root_token: self.root_token,
             artifact_path,
@@ -6249,6 +6265,8 @@ pub fn open_review_artifact_root(root_dir: String) -> Result<NativeReviewArtifac
             quarantine_root: quarantine,
             #[cfg(test)]
             faults: CleanupFaults::default(),
+            #[cfg(test)]
+            reservation_faults: ReservationCreationFaults::default(),
         })),
     })
 }
@@ -6361,13 +6379,61 @@ fn renameat2(from_dir: RawFd, from: &str, to_dir: RawFd, to: &str, flags: c_uint
     check_errno(result as c_int, "renameat2")
 }
 
-fn linkat(from_dir: RawFd, from: &str, to_dir: RawFd, to: &str) -> Result<()> {
-    let from = CString::new(from)
+fn link_open_fd_to_name(source: &OwnedFd, to_dir: RawFd, to: &str) -> Result<()> {
+    let empty = CString::new("")
         .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
     let to = CString::new(to)
         .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
-    let result = unsafe { libc::linkat(from_dir, from.as_ptr(), to_dir, to.as_ptr(), 0) };
-    check_errno(result, "linkat")
+    let direct = unsafe {
+        libc::linkat(
+            source.as_raw_fd(),
+            empty.as_ptr(),
+            to_dir,
+            to.as_ptr(),
+            libc::AT_EMPTY_PATH,
+        )
+    };
+    if direct == 0 {
+        return Ok(());
+    }
+
+    let direct_errno = current_errno();
+    if direct_errno != libc::ENOENT {
+        return Err(error_for_errno("linkat", direct_errno));
+    }
+
+    let proc_source = CString::new(format!("/proc/self/fd/{}", source.as_raw_fd()))
+        .map_err(|_| error(Status::InvalidArg, "artifact_path_invalid", libc::EINVAL))?;
+    let fallback = unsafe {
+        libc::linkat(
+            libc::AT_FDCWD,
+            proc_source.as_ptr(),
+            to_dir,
+            to.as_ptr(),
+            libc::AT_SYMLINK_FOLLOW,
+        )
+    };
+    check_errno(fallback, "linkat")
+}
+
+#[cfg(test)]
+fn replace_named_leaf_for_reservation_test(
+    dir: RawFd,
+    leaf: &str,
+    replacement_bytes: &[u8],
+) -> Result<()> {
+    let token = random_token()?;
+    let saved = format!("reservation-race-saved-{token:x}");
+    renameat2(dir, leaf, dir, &saved, RENAME_NOREPLACE)?;
+    let replacement = openat2(
+        dir,
+        leaf,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0o600,
+        OPEN_RESOLVE,
+    )?;
+    write_all(replacement.as_raw_fd(), replacement_bytes)?;
+    Ok(())
 }
 
 fn unlinkat(dir: RawFd, path: &str, flags: c_int) -> Result<()> {
@@ -7259,11 +7325,96 @@ mod cleanup_fault_tests {
 }
 ```
 
+#[cfg(test)]
+mod reservation_creation_race_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_name_replacement_before_lease_link_is_retained_and_never_usable() -> Result<()> {
+        let fixture = arrange_native_cleanup_fixture()?;
+        {
+            let mut guard = fixture.root.lock_open()?;
+            let state = guard.as_mut().ok_or_else(|| {
+                error(Status::GenericFailure, "root_closed", libc::EBADF)
+            })?;
+            state.reservation_faults.replace_artifact_before_lease_link = true;
+        }
+        let result = fixture.root.create_exclusive_marker(
+            ".justice/reviews/reservation-artifact-race.json".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            read_named_leaf_for_reservation_test(
+                &fixture.root,
+                false,
+                "reservation-artifact-race.json",
+            )?,
+            b"artifact-replacement",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lease_name_replacement_after_fd_link_is_retained_and_never_usable() -> Result<()> {
+        let fixture = arrange_native_cleanup_fixture()?;
+        {
+            let mut guard = fixture.root.lock_open()?;
+            let state = guard.as_mut().ok_or_else(|| {
+                error(Status::GenericFailure, "root_closed", libc::EBADF)
+            })?;
+            state.reservation_faults.replace_lease_after_link = true;
+        }
+        let result = fixture.root.create_exclusive_marker(
+            ".justice/reviews/reservation-lease-race.json".to_string(),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            read_named_leaf_for_reservation_test(
+                &fixture.root,
+                true,
+                "reservation-lease-race.json.lease",
+            )?,
+            b"lease-replacement",
+        );
+        Ok(())
+    }
+
+    fn read_named_leaf_for_reservation_test(
+        root: &NativeReviewArtifactRoot,
+        lease: bool,
+        leaf: &str,
+    ) -> Result<Vec<u8>> {
+        let mut guard = root.lock_open()?;
+        let state = guard.as_mut().ok_or_else(|| {
+            error(Status::GenericFailure, "root_closed", libc::EBADF)
+        })?;
+        let dir = if lease { state.leases.as_raw_fd() } else { state.reviews.as_raw_fd() };
+        let fd = openat2(
+            dir,
+            leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+            OPEN_RESOLVE,
+        )?;
+        let size = fstat_size(fd.as_raw_fd())?;
+        let mut bytes = vec![0_u8; size];
+        read_exact(fd.as_raw_fd(), &mut bytes)?;
+        Ok(bytes)
+    }
+}
+
 The code above is the complete native implementation contract, not a placeholder. Every directory
 descriptor and reservation-local quarantine descriptor remains owned by `OwnedFd`. `openat2` uses
 `O_CLOEXEC`, `O_NOFOLLOW`, and the documented resolve flags. `quarantine_one` uses
 `renameat2(..., RENAME_NOREPLACE)`, reopens and checks the quarantine inode identity, and never scans outside
 the reservation namespace.
+
+Reservation creation follows the same no-replacement-deletion principle. After the exclusive artifact
+leaf is created, no fstat/link/open/identity failure path may call `unlinkat` on artifact or lease names.
+The lease source is always the open artifact fd via `link_open_fd_to_name`; a path source such as
+`linkat(reviews_fd, artifact_leaf, ...)` is forbidden. Both names are reopened and verified against the
+original fd identity before a `NativeReservationHandle` is returned. Partial/orphan names are retained on
+failure, the candidate reservation is unusable, and replacement deletion/overwrite counts remain zero.
 
 Most importantly, the supported v4.0.0 cleanup path contains **no physical unlink of a quarantine leaf**.
 An opened/fstat-verified fd is not evidence that a later `unlinkat(dirfd, name)` removes that same inode.
@@ -7547,6 +7698,9 @@ not reintroduce physical deletion.
 | built-addon cleanup ABI | Task 3.3b | real `.node` exposes camelCase `cleanupExistingReservation` and returns `quarantine_retained` |
 | provider cleanup composition | Task 3.3b | reopened provider calls `ReservedReviewArtifactIo.cleanup` through descriptor API |
 | Task 3.6 cleanup retention | Task 3.6 | `quarantine_retained` records `review_artifact_cleanup_retained` without Gate/Acceptance rollback |
+| Task 3.6 durable cleanup idempotency | Task 3.6 | `started` before provider; only finished `cleanup_incomplete` retries; terminal/uncertain state does not call provider |
+| reservation fd-bound lease creation | Task 3.3a / 3.3b | opened artifact fd is hard-link source; pathname source link is forbidden |
+| reservation creation replacement race | Task 3.3b | artifact/lease replacement bytes remain; delete=0; overwrite=0; no usable reservation |
 
 **Verification:**
 
@@ -12090,6 +12244,11 @@ slot and binding.
 `ensureConsumedReviewArtifactCleaned(staged: ReviewCompletionStagingRecord, terminal:
 ReviewDispatchTransitionRecord): Promise<void>`;
 `ensureFailedReviewArtifactCleaned(terminal: ReviewDispatchTransitionRecord): Promise<void>`;
+`projectReviewArtifactCleanupState(records: readonly PersistedLogRecord[], identity:
+{ readonly parentSessionId: string; readonly callId: string; readonly correlation: ReviewCorrelation; readonly artifactId: string }):
+ProjectedReviewArtifactCleanupState`;
+`appendReviewArtifactCleanupRecord(record: Omit<ReviewArtifactCleanupRecord, keyof PersistedEnvelope>):
+Promise<{ readonly kind: "committed" } | { readonly kind: "rejected" }>`;
 `findMatchingTerminalForStaging(records: readonly PersistedLogRecord[], staged:
 ReviewCompletionStagingRecord): ReviewDispatchTransitionRecord | undefined`;
 `routeTaskPostToolUse(event): Promise<HookResponse>` and the production `JusticePlugin.handleEvent(PostToolUse)`
@@ -12146,11 +12305,56 @@ the parent event. Do not pass the child write call ID to `consumeReviewCompletio
 artifact path, category, prompt, or output as a binding selector. The E2E test must exercise the child write
 followed by the parent task PostToolUse in this order.
 All artifact reads, durable appends, Authorization lookups, cleanup, lifecycle transitions, and Gate
-requests in this task are injected ports. The core module must not import `ObservationLogStore`,
+requests in this task are injected ports.
+
+Task 3.6 adds exactly one review-artifact-specific durable record to the existing Observation Log:
+
+```ts
+type ReviewArtifactCleanupRecord = {
+  readonly recordType: "observation";
+  readonly kind: "review_artifact_cleanup";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactId: string;
+} & (
+  | { readonly phase: "started" }
+  | {
+      readonly phase: "finished";
+      readonly status: ReviewArtifactCleanupStatus;
+    }
+);
+
+type ProjectedReviewArtifactCleanupState =
+  | { readonly kind: "not_started" }
+  | { readonly kind: "outcome_uncertain" }
+  | {
+      readonly kind: "finished";
+      readonly status: ReviewArtifactCleanupStatus;
+    };
+```
+
+`projectReviewArtifactCleanupState(records, identity)` selects only records matching the durable
+parent/call/correlation/artifact identity and takes the latest one in `orderEventsForProjection()` order.
+No new cleanup queue, cleanup database, background worker, transaction abstraction, or mutable cleanup row is
+introduced. Before each permitted provider invocation, Task 3.6 must append `phase: "started"` durably.
+Only after that commit may it call `cleanupArtifact`. It then appends `phase: "finished"` with the exact
+provider outcome. If the started append fails, do not call the provider. If the provider throws, record
+`cleanup_incomplete` when possible. If the finished append fails, latest durable state remains
+`outcome_uncertain`; automatic recovery does not call the provider again.
+
+Automatic invocation policy is exact:
+- `not_started` -> one provider cleanup attempt may start;
+- latest finished `cleanup_incomplete` -> one re-evaluation attempt may start;
+- latest finished `cleaned`, `quarantine_retained`, or `replacement_retained` -> terminal, do not call provider;
+- `outcome_uncertain` -> fail-closed retention, advisory only, do not call provider.
+
+ The core module must not import `ObservationLogStore`,
 `AuthorizationStore`, OpenCode adapter types, or notifier implementations directly. The injected
 `cleanupArtifact(reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>)`
-port receives the trusted reservation pair, not an artifact path or ID from PostToolUse or worker
-output. `readAndAssembleMatchingArtifact` must call the reservation port's descriptor-relative,
+port returns `Promise<ReviewArtifactCleanupStatus>` and receives the trusted reservation pair, not an
+artifact path or ID from PostToolUse or worker output. The completion domain, not the provider adapter,
+owns durable cleanup-attempt bookkeeping so provider status is never erased to `Promise<void>`. `readAndAssembleMatchingArtifact` must call the reservation port's descriptor-relative,
 no-follow read using the trusted `artifactPath`, `leasePath`, and `artifactIdentity`; it must not call
 generic pathname `readFile` for a reserved artifact. A missing, replaced, symlinked, or identity-mismatched
 leaf is an `artifact_read_failed` result before JSON parsing.
@@ -12851,6 +13055,7 @@ async function arrangeReviewArtifactCompletionFixture(
     } else if (outcome === "cleanup_incomplete") {
       await recordAdvisory("review_artifact_cleanup_incomplete");
     }
+    return outcome;
   };
   const completion = createReviewCompletionDomain({
     readDurableRecords: () => logStore.readAll(),
@@ -13356,22 +13561,45 @@ it("does not duplicate terminalization, Gate, or Acceptance during repeated stag
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
 });
 
-it("retries cleanup after a crash following durable normal terminalization", async () => {
-  await arrangeClaimedStagingWithMatchingCleanTerminalWithoutCleanup(stagedRecord);
-  restartReviewCompletionRepository();
+it("does not automatically retry a durable terminal cleanup outcome", async () => {
+  await arrangeClaimedStagedCompletion(stagedRecord);
+  cleanupArtifact.mockResolvedValueOnce("quarantine_retained");
 
   await recoverStagedReviewCompletionsAfterRestart();
   await recoverStagedReviewCompletionsAfterRestart();
 
   expect(readArtifact).not.toHaveBeenCalled();
   expect(appendCompositeTerminalRecord).not.toHaveBeenCalled();
-  expect(cleanupArtifact).toHaveBeenCalledTimes(2);
+  expect(cleanupArtifact).toHaveBeenCalledTimes(1);
+  expect(projectedCleanupState()).toEqual({
+    kind: "finished",
+    status: "quarantine_retained",
+  });
   expect(durableTerminalRecords()).toHaveLength(1);
 });
 
-it("retains terminal, Gate, and Acceptance authority when cleanup fails then retries on restart", async () => {
-  failNextArtifactCleanup();
+it("retries only cleanup_incomplete and preserves terminal, Gate, and Acceptance authority", async () => {
+  cleanupArtifact
+    .mockResolvedValueOnce("cleanup_incomplete")
+    .mockResolvedValueOnce("quarantine_retained");
+
   await consumeReviewCompletion(matchingInput);
+  expect(durableTerminalRecords()).toHaveLength(1);
+  expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
+  expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
+  expect(projectedCleanupState()).toEqual({
+    kind: "finished",
+    status: "cleanup_incomplete",
+  });
+
+  restartReviewCompletionRepository();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(cleanupArtifact).toHaveBeenCalledTimes(2);
+  expect(projectedCleanupState()).toEqual({
+    kind: "finished",
+    status: "quarantine_retained",
+  });
   expect(durableTerminalRecords()).toHaveLength(1);
   expect(evaluateGatePendingAttempt).toHaveBeenCalledTimes(1);
   expect(recordAcceptanceDecision).toHaveBeenCalledTimes(1);
@@ -13379,6 +13607,33 @@ it("retains terminal, Gate, and Acceptance authority when cleanup fails then ret
   restartReviewCompletionRepository();
   await recoverStagedReviewCompletionsAfterRestart();
   expect(cleanupArtifact).toHaveBeenCalledTimes(2);
+});
+
+it("does not automatically retry replacement_retained", async () => {
+  cleanupArtifact.mockResolvedValueOnce("replacement_retained");
+  await consumeReviewCompletion(matchingInput);
+
+  restartReviewCompletionRepository();
+  await recoverStagedReviewCompletionsAfterRestart();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(cleanupArtifact).toHaveBeenCalledTimes(1);
+  expect(projectedCleanupState()).toEqual({
+    kind: "finished",
+    status: "replacement_retained",
+  });
+  expect(durableTerminalRecords()).toHaveLength(1);
+});
+
+it("does not call provider after a durable started marker with no finished outcome", async () => {
+  await arrangeDurableCleanupStartedWithoutOutcome(stagedRecord);
+
+  await recoverStagedReviewCompletionsAfterRestart();
+  await recoverStagedReviewCompletionsAfterRestart();
+
+  expect(cleanupArtifact).not.toHaveBeenCalled();
+  expect(projectedCleanupState()).toEqual({ kind: "outcome_uncertain" });
+  expect(recordAdvisory).toHaveBeenCalledWith("review_artifact_cleanup_outcome_uncertain");
   expect(durableTerminalRecords()).toHaveLength(1);
 });
 

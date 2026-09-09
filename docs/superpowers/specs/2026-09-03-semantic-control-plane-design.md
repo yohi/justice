@@ -770,6 +770,21 @@ export type ReviewArtifactFailureStagingRecord = {
   readonly terminalReason: ReviewArtifactFailureReason;
 };
 
+export type ReviewArtifactCleanupRecord = {
+  readonly recordType: "observation";
+  readonly kind: "review_artifact_cleanup";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactId: string;
+} & (
+  | { readonly phase: "started" }
+  | {
+      readonly phase: "finished";
+      readonly status: ReviewArtifactCleanupStatus;
+    }
+);
+
 type ReviewDispatchTransitionBase = {
   readonly recordType: "observation";
   readonly kind: "review_dispatch_transition";
@@ -848,7 +863,7 @@ export type ReviewDispatchSlot = {
   `reviewArtifact`、`observedExecution` を要求しない。
 
 - P0 では `ReviewDispatchId` を導入しない。slot の identity は `parentSessionId` と canonical な `ReviewCorrelation` の組み合わせであり、`transitionId` は個々の durable record の event identity に限る。
-- `ReviewDispatchTransitionRecord`、`ReviewCompletionStagingRecord`、`ReviewArtifactFailureStagingRecord`、`ReviewArtifactReadAttemptRecord`、および `ReviewPostToolUsePendingRecord` は review dispatch state の durable SSOT である。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこれらの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`ReviewPostToolUsePendingRecord` は matching parent task event の parent session、call、purpose、trusted correlation を必ず保持し、child-session binding が既に durable な場合だけ child-session と `ObservedReviewExecutionV1` を追加で保持する。binding より先に到着した場合は child fields を省略し、binding append 後または restart 時に current slot / call identity と durable binding / observed execution を再検証して同じ completion path を一度だけ再開する。一つでも不一致なら artifact read や terminalization を再開せず advisory に収束させる。artifact path と worker output は保持しない。`ReviewArtifactReadAttemptRecord` は trusted artifact identity と一回限りの read lease だけを保持し、artifact content は保持しない。`ReviewArtifactFailureStagingRecord` は artifact read / validation failure の terminalReason と trusted identity だけを保持し、artifact content は保持しない。`terminalReason: "completed"` は `artifactConsumption` と組み立て済み `CleanReviewArtifactV1` を必須とする。findings を持つ完了 review は `completed_with_findings`、未完了 result は `review_incomplete` とし、いずれも artifact を durable に保持して restart 後の rework / blocked 判定を再構築できるようにする。
+- `ReviewDispatchTransitionRecord`、`ReviewCompletionStagingRecord`、`ReviewArtifactFailureStagingRecord`、`ReviewArtifactReadAttemptRecord`、`ReviewPostToolUsePendingRecord`、および review-artifact cleanup 専用の `ReviewArtifactCleanupRecord` は既存 Observation Log 上の durable SSOT である。`ReviewArtifactCleanupRecord` は cleanup のためだけの narrow record であり、generic cleanup job / queue / transaction framework ではない。`ReviewDispatchSlot`、`TaskCallBinding`、`ReviewArtifactReservation` は replay でこれらの record から再構築する projection であり、`SessionStateProvider` の in-memory cache を authoritative state として扱わない。`ReviewPostToolUsePendingRecord` は matching parent task event の parent session、call、purpose、trusted correlation を必ず保持し、child-session binding が既に durable な場合だけ child-session と `ObservedReviewExecutionV1` を追加で保持する。binding より先に到着した場合は child fields を省略し、binding append 後または restart 時に current slot / call identity と durable binding / observed execution を再検証して同じ completion path を一度だけ再開する。一つでも不一致なら artifact read や terminalization を再開せず advisory に収束させる。artifact path と worker output は保持しない。`ReviewArtifactReadAttemptRecord` は trusted artifact identity と一回限りの read lease だけを保持し、artifact content は保持しない。`ReviewArtifactFailureStagingRecord` は artifact read / validation failure の terminalReason と trusted identity だけを保持し、artifact content は保持しない。`terminalReason: "completed"` は `artifactConsumption` と組み立て済み `CleanReviewArtifactV1` を必須とする。findings を持つ完了 review は `completed_with_findings`、未完了 result は `review_incomplete` とし、いずれも artifact を durable に保持して restart 後の rework / blocked 判定を再構築できるようにする。
 - **terminal physical record** は `ReviewDispatchTransitionRecord { from: "claimed"; to: "terminal" }` 一件とする。既存 `ObservationLogStore.append()` の一回の physical append が atomicity boundary であり、generic transaction / appendBatch は導入しない。terminal reason に応じて、worker outcome (`completed` / `completed_with_findings` / `review_incomplete`) の variant は `parentSessionId`、`transitionId`、trusted `correlation`、`expectedCategory`、`callId`、`terminalReason`、`artifactConsumption { artifactId, digest }`、assembled `ReviewArtifactV1` を一体として保持し、`reviewArtifact.observedExecution` が observed execution provenance を保持する。一方、claimed からの operational failure / unusable / cancellation / artifact read-validation failure (`review_execution_failed` / `lost_conclusive` / `artifact_reservation_unusable` / `cancelled` / `ReviewArtifactFailureReason`) は artifactなしを許可し、pending からの `cancelled` tombstone も `callId`、`artifactConsumption`、`reviewArtifact` を持たない。
 - `review_observed` は別 physical record ではない。terminal physical record の `reviewArtifact` から state projection が導出する review-observed semantic である。したがって replay は terminal record 一件から dispatch terminal state、artifact consumption、authoritative review、review summary を同じ順序で再構築し、`consumed=true / artifact missing` の partial state を表現しない。
 - `null → pending` は directive 発行前、`pending → claimed` は PreToolUse の atomic claim、`claimed → terminal` は matching PostToolUse、conclusive な失敗、unusable reservation、または artifact の read / JSON parse / schema validation failure を staging-first で durable に収束させた後にだけ許可する。Authorization cancellation では `claimed → terminal` と `pending → terminal` の両方を `cancelled` tombstone として許可する。`terminal` record は変更・削除・再利用しない。
@@ -1014,7 +1029,7 @@ artifact reservation の SSOT にはしない。
 | `terminal`                           | terminal physical record は不変の authority として保持する。retryable failure (`review_execution_failed` / `lost_conclusive`) は durable Authorization が current `active` の場合だけ、新しい correlation の `pending` slot を作る。`completed` / `completed_with_findings` / `review_incomplete` は terminal record を再appendせず、下記の post-terminal outcome application を idempotent に収束させる。 | terminal slot の変更・削除・再利用、同じ `callId` の再発行、terminal record の再append           |
 
 - `claimed` with `artifactReservation.status === "unusable"` は不確実状態ではない。worker execution を fail-open で継続した後、`artifact_reservation_unusable` tombstone を一度だけ収束させ、同じ correlation を retry candidate にしない。terminal append が失敗した場合だけ `claimed` のまま保持して次回 recovery で再試行する。
-- `claimed` の artifact read / validation failure は `artifact_missing`、`artifact_read_failed`、`artifact_json_invalid`、`artifact_schema_invalid` のいずれかへ分類し、failure staging を先に durable に記録してから非権威的な failure terminal として収束させる。failure terminal は `review_pending` / `final_review_pending` を blocked のまま保持し、Gate、Acceptance、retry、round変更を許可しない。read-attempt marker がある限り artifact は再読せず、staging または terminal append 失敗中だけ同じ claimed slot の durable transition を再試行し、durable terminal 後は cleanup のみを再試行する。
+- `claimed` の artifact read / validation failure は `artifact_missing`、`artifact_read_failed`、`artifact_json_invalid`、`artifact_schema_invalid` のいずれかへ分類し、failure staging を先に durable に記録してから非権威的な failure terminal として収束させる。failure terminal は `review_pending` / `final_review_pending` を blocked のまま保持し、Gate、Acceptance、review retry、round変更を許可しない。read-attempt marker がある限り artifact は再読せず、staging または terminal append 失敗中だけ同じ claimed slot の durable transition を再試行する。durable terminal 後の physical cleanup は `ReviewArtifactCleanupRecord` の最新状態だけで判断し、未実施または latest finished=`cleanup_incomplete` の場合に限り再評価できる。latest finished=`cleaned` / `quarantine_retained` / `replacement_retained`、または `started` のまま outcome 未確定の状態では automatic provider cleanup を再実行しない。
 - `claimed` は restart や経過時間だけでは失われたと判定しない。runtime が終端失敗を確定的に観測した場合だけ `lost_conclusive` として terminalize し、その後に同一 Task attempt では増分した `reviewRound` の新しい pending slot を発行する。終端が不明な場合は `claimed` のまま保持し、mandatory review completion と Acceptance の precondition を未成立にする。`AcceptanceDecision` は発行しない。
 - child-session binding より先に到着した matching `PostToolUse` は `ReviewPostToolUsePendingRecord` として durable に保持する。binding append 後または restart 時に current slot / call identity を再検証し、同じ completion を一度だけ再開する。binding が最後まで確立しない場合は artifact を読まず、pre-Gate blocked のままにする。
 - restart / replay は retryable terminal と既存 `pending` slot だけを走査して完了としてはならない。outstanding
@@ -1207,8 +1222,30 @@ export type ReviewArtifactWriteSkipReason =
 - **Anti-replay / integrity 契約**: review artifact の生成・消費は以下の strict プロトコルに従う。
 - Justice が PreToolUse 時点で `artifactId` と `artifactPath` を生成し、`ReviewArtifactReservation` を組み立てる。
 - `artifactPath` は Justice が `ReviewArtifactReservation` ごとに一意な安全な相対 path として生成する。binding identity は `TaskCallBinding` が保持し、path 自体に `callId` / `correlation` を埋め込むことは必須としない。例：`.justice/reviews/<artifactId>.json`。
-- reservation port の `createExclusiveMarker(artifactPath)` は、同じ review directory 内の一意な temporary marker を作成し、既存の `FileWriter.link`（宛先が存在する場合は `EEXIST` で atomic failure）で `artifactPath` に排他的に install する。成功結果は `created`、既存ファイル・symlink を含む占有結果は `occupied` とし、`fileExists` → `writeFile` の check-then-use や非排他的な上書きへの fallback は実装しない。temporary marker は成功・衝突のいずれでも best-effort で削除する。
-- `createExclusiveMarker` の成功時は、作成した artifact inode の `device` / `inode` を fstat で取得し、worker に提示しない private `leasePath`（例：`.justice/reviews/.leases/<artifactId>.lease`）を同じ inode への hard link として保持する。identity取得、lease作成、no-follow検証のいずれかができない場合は `usable` を返さない。lease は terminal cleanup まで保持し、restart 後も reservation の identity と lease path を SSOT とする。
+- reservation port の `createExclusiveMarker(artifactPath)` の externally visible semantics は
+  `created | occupied` の exclusive reservation のまま維持する。supported
+  `LinuxOpenat2ReviewArtifactProvider` は artifact leaf を descriptor-relative
+  `openat2(O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC)` で直接作成し、その **open済み artifact fd** を
+  reservation identity のauthorityとする。`fileExists` → `writeFile`、pathname source hard-link、
+  non-exclusive overwriteへのfallbackは実装しない。
+- `createExclusiveMarker` は artifact fd の `fstat` で `device` / `inode` を得た後、private lease を
+  pathname `reviews_fd + artifact_leaf` から作ってはならない。lease hard-link source はopen済み
+  artifact fdにidentity-boundでなければならない。supported Linux implementationは
+  `linkat(artifact_fd, "", leases_fd, lease_leaf, AT_EMPTY_PATH)` を使用できる場合はそれを使い、
+  `AT_EMPTY_PATH` が権限制約で利用できない場合だけ、Linux `linkat(2)` が明示する
+  `/proc/self/fd/<artifact-fd>` + `AT_SYMLINK_FOLLOW` を専用fallbackとして使用してよい。このprocfs
+  magic linkは **既に保持しているfdをhard-link sourceにする目的だけ** に限定し、workspace path
+  resolutionやread/write/cleanupのfallbackとして使用してはならない。
+- lease link作成後、artifact leafとlease leafをそれぞれdescriptor-relative no-followで再openし、
+  両方が元のartifact fd identityと一致する場合だけ `usable` reservationを返す。artifact nameまたは
+  lease nameがsame-UID concurrent processにより交換されていた場合、あるいはfstat/link/open/verifyの
+  いずれかが失敗した場合は `usable` を返さない。
+- artifact作成成功後のfailure rollbackでは、`artifact_leaf` / `lease_leaf` を「自分が作った名前」
+  という理由だけでname-only `unlinkat`してはならない。検証済みinodeとactual deletion targetを
+  atomicにbindingできないため、partial artifact/lease、orphan、またはreplacementをfail-closedに
+  保持し、そのcandidate artifactIdをabandonする。replacement deletion=0 / overwrite=0を
+  reservation creationの必須invariantとし、後続の新しいreservation candidateはfresh artifactIdを
+  使用する。P0ではこのorphan retentionのためのgeneric GC/cleanup daemon/databaseを導入しない。
 - runtime は予約作成と同時に review-artifact 専用の `ReservedReviewArtifactIo` を提供する。これは一般の `FileReader` / `FileWriter` を拡張しない narrow capability であり、`writeExisting`、`readOnce`、`cleanup` はいずれも path 単体ではなく trusted reservation 全体（`artifactPath`、`leasePath`、`artifactIdentity`）を受け取る。予約作成だけを提供し、この三操作のいずれかを安全に提供できない runtime は reservation を `unusable` とする。
 - worker の書込みを runtime が媒介する場合、`writeExisting` は既存の予約済み leaf を `O_NOFOLLOW` / descriptor-relative open 相当で開き、artifact descriptor と private lease descriptor の identity が durable reservation と一致する場合だけ truncate/write する。rename、unlink 後の再作成、symlink 経由の書込みは許可しない。worker が通常の filesystem tool で path を書き換えた内容は、それ自体では trusted authority ではない。Justice は必ず後述の `readOnce` 検証を通った bytes だけを artifact として受理する。
 - Justice の読み取りは pathname の再解決後に通常の `readFile` を呼ばない。`readOnce` は review directory を no-follow で開き、artifactPath と private leasePath を開いた file descriptor の `device` / `inode` と durable reservation の identity が三者一致することを検証してから、検証済み artifact descriptor から一度だけ読む。missing、symlink、差し替え、identity不一致は `artifact_read_failed` として扱い、artifactを権威付けしない。
@@ -1223,7 +1260,7 @@ export type ReviewArtifactWriteSkipReason =
   original pair を事前openせず reservation-local cleanup state machineへ入る。write/read の strict
   preconditionをcleanupのために緩和してはならず、generic reopen-mode enumも追加しない。
 
-- provider は Linux `openat2(2)` の `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` と directory descriptor を使い、workspace root、`.justice`、`reviews`、`.leases`、`.quarantine` を各操作で descriptor-relative にanchorする。exclusive leaf は `O_CREAT | O_EXCL | O_NOFOLLOW` で作成し、`fstat` の `st_dev` / `st_ino` を取得した後、`linkat(2)` で private leaseを同じinodeへ作成する。`writeExisting` / `readOnce` は各操作で現在の artifact leaf と lease leaf を no-follow で開き、両 descriptor のidentityを durable reservation と比較してから descriptorへ書込み・読込みを行い、pathname `readFile` / `writeFile` を使用しない。
+- provider は Linux `openat2(2)` の `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` と directory descriptor を使い、workspace root、`.justice`、`reviews`、`.leases`、`.quarantine` を各操作で descriptor-relative にanchorする。exclusive artifact leaf は `O_CREAT | O_EXCL | O_NOFOLLOW` で作成し、`fstat` の `st_dev` / `st_ino` を取得する。private leaseはpathname sourceではなくopen済みartifact fdから上記identity-bound `linkat`で作成し、artifact/lease両leafを再openしてidentity一致を確認する。`writeExisting` / `readOnce` は各操作で現在の artifact leaf と lease leaf を no-follow で開き、両 descriptor のidentityを durable reservation と比較してから descriptorへ書込み・読込みを行い、pathname `readFile` / `writeFile` を使用しない。
 - `cleanup` は worker-visible artifact path を identity確認後に直接unlinkしない。native providerは
   `renameat2(2)` の `RENAME_NOREPLACE` で現在のleafをreservation-local quarantineへ原子的に退避し、
   quarantine descriptorから `openat2(2)` / `fstat(2)` で期待 `st_dev` / `st_ino` を検証する。
@@ -1249,6 +1286,20 @@ export type ReviewArtifactWriteSkipReason =
   `cleanup_incomplete` は残存するreservation-local stateだけをdescriptorから再評価してよいが、
   name-only unlinkへfallbackしてはならない。cleanup failureまたはretentionはGate/Acceptanceを
   rollbackせず、replacementを上書き・削除しない。
+
+- cleanup invocation 自体も restart-safe / idempotent に扱うため、Task 3.6 は provider を呼ぶ前に
+  `ReviewArtifactCleanupRecord { phase: "started" }` を既存 Observation Log へ append し、provider が
+  outcome を返した後に同じ trusted `parentSessionId` / `callId` / `correlation` / `artifactId` で
+  `{ phase: "finished", status }` を append する。`started` append に失敗した場合は provider を呼ばない。
+  `finished` append に失敗して latest durable state が `started` のままなら、restart 後は outcome が
+  不確実なので automatic cleanup を再実行せず retention advisory に収束する。これにより crash が
+  terminal provider outcome の直後に起きても duplicate destructive cleanup を発行しない。
+- cleanup projection は同じ artifact identity の最新 `ReviewArtifactCleanupRecord` だけを
+  `orderEventsForProjection()` 順で採用する。record なしは cleanup 未実施、latest finished
+  `cleanup_incomplete` だけが automatic re-evaluation 可、latest finished `cleaned` /
+  `quarantine_retained` / `replacement_retained` は terminal、latest `started` は outcome-uncertain
+  terminal retention とする。`replacement_retained` は replacement を変更・削除する retry signal
+  ではない。これら cleanup outcome は review terminal / Gate / Acceptance authority を変更しない。
 - `cleanup_incomplete` recovery は same-process / process-restart の両方で durable
   `ReviewArtifactReservationDescriptor` だけから再開可能でなければならない。old
   `NativeReservationHandle` の再利用を前提にせず、`cleanupExistingReservation(descriptor)` が
