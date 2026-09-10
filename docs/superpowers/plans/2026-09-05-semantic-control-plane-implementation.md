@@ -17020,14 +17020,18 @@ or persistent probe implementation is modified by this spike. Temporary files li
 `@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21`; pinned OpenCode `1.18.29` source snapshot; existing
 `tests/types/command-execute-before.contract-fixture.ts`; `JUSTICE_HOST_TEST_MODEL`.
 
-**Hard gate:** Task 4.1/4.2 MUST NOT start unless the report ends with:
+**Hard gate:** Task 4.1/4.2 MUST NOT start unless Step 6 has completed and the report contains exactly one
+`## Result` section whose exact result line is:
 
 ```text
 JUS-P0-01 runtime observation = PASS
 ```
 
-PASS means all three capability groups succeed: (1) the four nominal probes, (2) the deterministic
-same-server/same-session invocation overlap probe, and (3) the deterministic post-arm failure/abandonment probe.
+The final post-Step-6 `## Result` exact line is the sole overall Task 4.0 status authority. It is authoritative only
+after Step 6 has combined both (1) correlation-validator PASS for the four nominal probes plus deterministic
+same-server/same-session overlap probe and (2) `JUS-P0-01 abandonment observation = PASS` for the deterministic
+post-arm failure/abandonment probe. A provisional PASS written by the correlation validator before Step 6 combines
+the abandonment result MUST NOT unlock Task 4.1/4.2.
 Task 4.0 records capability evidence only; it does **not** pre-authorize a production abandonment API. A PASS report
 must identify the exact target-session binding, cleanup scope/hook/value/order, and concurrent-B/suppression
 safety. After either PASS or BLOCKED, stop before Task 4.1/4.2. A separate document-only change must copy the
@@ -18669,10 +18673,28 @@ if [ "$correlation_code" -ne 0 ] ||    [ "$abandonment_line" != "JUS-P0-01 aband
   sed -i     's/^JUS-P0-01 runtime observation = PASS$/JUS-P0-01 runtime observation = BLOCKED/'     "$REPORT"
 fi
 
+test "$(grep -Fxc "## Result" "$REPORT")" = "1"
+test "$(grep -Ec "^JUS-P0-01 runtime observation = (PASS|BLOCKED)$" "$REPORT")" = "1"
+
+RESULT_LINE_NUMBER="$(
+  grep -nFx "## Result" "$REPORT" |
+    cut -d: -f1
+)"
+test -n "$RESULT_LINE_NUMBER"
+
+FINAL_RESULT="$(
+  sed -n "$((RESULT_LINE_NUMBER + 1))p" "$REPORT"
+)"
+
+case "$FINAL_RESULT" in
+  "JUS-P0-01 runtime observation = PASS"|"JUS-P0-01 runtime observation = BLOCKED") ;;
+  *) echo "ERROR: invalid final ## Result line: $FINAL_RESULT" >&2; exit 1 ;;
+esac
+
 if [ "$validation_code" -ne 0 ]; then
-  grep -Fx "JUS-P0-01 runtime observation = BLOCKED" "$REPORT"
+  test "$FINAL_RESULT" = "JUS-P0-01 runtime observation = BLOCKED"
 else
-  grep -Fx "JUS-P0-01 runtime observation = PASS" "$REPORT"
+  test "$FINAL_RESULT" = "JUS-P0-01 runtime observation = PASS"
 fi
 
 grep -Fx "## Verified candidate contract" "$REPORT"
@@ -18690,7 +18712,10 @@ exit "$validation_code"
 '
 ```
 
-The validator is the redaction/identity proof. `git diff --check` is formatting verification only.
+The validator is the redaction/identity proof. `git diff --check` is formatting verification only. The exact line
+immediately following the unique `## Result` heading after Step 6 finishes is the sole overall Task 4.0 status
+authority. `## Failure / abandonment capability` is supporting evidence and MUST NOT be treated as a second overall
+status authority.
 
 PASS requires all of the following:
 
@@ -18726,7 +18751,13 @@ heuristics. The report is capability evidence only and is not itself permission 
 
 Task 4.0 never directly unlocks Task 4.1/4.2.
 
-If the report is `PASS`:
+If the final post-Step-6 `## Result` exact line is:
+
+```text
+JUS-P0-01 runtime observation = PASS
+```
+
+then:
 
 1. stop before Task 4.1;
 2. commit only the sanitized spike report after its normal review;
@@ -18736,7 +18767,13 @@ If the report is `PASS`:
 6. commit that Design/Plan change separately and run document review again;
 7. only the reviewed exact contract may unlock Task 4.1/4.2.
 
-If the report is `BLOCKED`:
+If the final post-Step-6 `## Result` exact line is:
+
+```text
+JUS-P0-01 runtime observation = BLOCKED
+```
+
+then:
 
 1. stop before Task 4.1;
 2. retain fixed resource bounds and `removeSession()` cleanup only;
@@ -18757,8 +18794,9 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
-**Precondition:** Task 4.0 report is PASS **and** a subsequent document-only amendment has copied the exact
-sanitized lifecycle contract into Design §4.1 / Task 4.2 and passed document review. The current pre-spike Design
+**Precondition:** the final post-Step-6 `## Result` exact line is
+`JUS-P0-01 runtime observation = PASS` **and** a subsequent document-only amendment has copied the exact sanitized
+lifecycle contract into Design §4.1 / Task 4.2 and passed document review. The current pre-spike Design
 does not authorize a production abandonment API. Do not edit source until that reviewed amendment exists.
 
 **Files:**
