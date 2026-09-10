@@ -17016,9 +17016,17 @@ No production source, test source, production OpenCode configuration, workflow, 
 or persistent probe implementation is modified by this spike. Temporary files live only under
 `/tmp/justice-controller-routing-spike` in the existing devcontainer and are removed on every exit path.
 
-**Consumes:** installed supported OpenCode CLI `1.18.29`; resolved
-`@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21`; pinned OpenCode `1.18.29` source snapshot; existing
+**Consumes:** Bun in the existing devcontainer; temporary exact `opencode-ai@1.18.29` provisioned under
+`/tmp/justice-controller-routing-spike/opencode-cli`; resolved `@opencode-ai/plugin@1.14.21` /
+`@opencode-ai/sdk@1.14.21`; pinned OpenCode `1.18.29` source snapshot; existing
 `tests/types/command-execute-before.contract-fixture.ts`; `JUSTICE_HOST_TEST_MODEL`.
+
+The repository devcontainer is **not** assumed to have `opencode` on `PATH`. Every OpenCode invocation in this task
+MUST use the exact temporary binary
+`/tmp/justice-controller-routing-spike/opencode-cli/node_modules/.bin/opencode`. Failure to provision that exact
+package/binary, verify its package version, or execute `--version` is an **execution-prerequisite BLOCKED** result:
+do not create the runtime-signal report, do not synthesize `JUS-P0-01 runtime observation = BLOCKED`, and do not
+start Steps 2-6. A runtime observation exists only after Step 1 completes successfully.
 
 **Hard gate:** Task 4.1/4.2 MUST NOT start unless Step 6 has completed and the report contains exactly one
 `## Result` section whose exact result line is:
@@ -17071,7 +17079,7 @@ probe.dispose_flushed
 Never record `arguments`, prompt/message content, parts, raw event objects, command templates, model/provider IDs,
 credentials, environment values, arbitrary config, tool payloads, or stdout/stderr from the host.
 
-- [ ] **Step 1: Re-confirm installed declarations and pinned host source**
+- [ ] **Step 1: Provision the exact supported CLI, then re-confirm declarations and pinned host source**
 
 Run:
 
@@ -17079,7 +17087,25 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 
-test "$(opencode --version)" = "1.18.29"
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+CLI_ROOT="$SPIKE_ROOT/opencode-cli"
+OPENCODE_BIN="$CLI_ROOT/node_modules/.bin/opencode"
+
+rm -rf "$SPIKE_ROOT"
+mkdir -p "$CLI_ROOT"
+printf "%s\n" "{\"private\":true}" > "$CLI_ROOT/package.json"
+
+(
+  cd "$CLI_ROOT"
+  BUN_INSTALL_CACHE_DIR="$CLI_ROOT/cache" bun add --exact opencode-ai@1.18.29
+)
+
+test -x "$OPENCODE_BIN"
+CLI_PACKAGE_VERSION="$(
+  bun -e "const p=await Bun.file(process.argv.at(-1)).json(); process.stdout.write(p.version)"     "$CLI_ROOT/node_modules/opencode-ai/package.json"
+)"
+test "$CLI_PACKAGE_VERSION" = "1.18.29"
+test "$("$OPENCODE_BIN" --version)" = "1.18.29"
 test -n "${JUSTICE_HOST_TEST_MODEL:-}"
 
 bun run vitest run tests/types/command-execute-before.contract.test.ts
@@ -17143,15 +17169,14 @@ console.log("@opencode-ai/sdk=1.14.21");
 console.log("candidate identity fields typed; AssistantMessage.agent requires host trace");
 BUN
 
-opencode run --help | grep -F -- "--command"
-opencode run --help | grep -F -- "--session"
-opencode run --help | grep -F -- "--attach"
-opencode serve --help | grep -F -- "--port"
-opencode serve --help | grep -F -- "--hostname"
+"$OPENCODE_BIN" run --help | grep -F -- "--command"
+"$OPENCODE_BIN" run --help | grep -F -- "--session"
+"$OPENCODE_BIN" run --help | grep -F -- "--attach"
+"$OPENCODE_BIN" serve --help | grep -F -- "--port"
+"$OPENCODE_BIN" serve --help | grep -F -- "--hostname"
 
-SPIKE_ROOT=/tmp/justice-controller-routing-spike
 SRC="$SPIKE_ROOT/pinned-source"
-rm -rf "$SPIKE_ROOT"
+rm -rf "$SRC"
 mkdir -p "$SRC"
 
 PINNED=16747470f976aca3d362ad730bcd3fe82ecc2c9a
@@ -17202,21 +17227,29 @@ grep -F "export type EventSessionIdle = {" "$SRC/types.gen.ts"
 grep -F "export type EventSessionError = {" "$SRC/types.gen.ts"
 grep -F "\"chat.params\"?:" "$SRC/plugin-index.ts"
 
+echo "TEMP_OPENCODE_PACKAGE=opencode-ai"
+echo "TEMP_OPENCODE_PACKAGE_VERSION=$CLI_PACKAGE_VERSION"
+echo "TEMP_OPENCODE_BIN=$OPENCODE_BIN"
 echo "PINNED_HOST_SOURCE_COMMIT=$PINNED"
 echo "PINNED_HOST_SOURCE_VERSION=$SOURCE_VERSION"
 echo "PINNED_HOST_SOURCE_OK"
 '
 ```
 
-Expected: PASS. `opencode --version`, fetched `packages/opencode/package.json`, and the immutable source commit
-must resolve to OpenCode `1.18.29`; the source commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. The source checks must also prove:
+Expected: PASS. The temporary `opencode-ai` package version, the exact temporary binary's `--version`, fetched
+`packages/opencode/package.json`, and the immutable source commit must all resolve to OpenCode `1.18.29`; the source
+commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. The repository/global `PATH` is not an OpenCode authority.
+Package provisioning is isolated under `SPIKE_ROOT`, including Bun's install cache. The source checks must also prove:
 generic `event` callbacks are dispatched without awaiting their Promise, named hooks are awaited by
 `Plugin.trigger()`, `chat.params` runs inside the LLM/processor failure boundary, and `command.execute.before`
 precedes `prompt()` and `command.executed` in `SessionPrompt.command()`. They must additionally prove that local
 `opencode run` disposes its instance, the SDK exposes `POST /instance/dispose`, and the HTTP response can be produced
 before `InstanceStore.dispose()` finishes. Therefore attached probes must wait for a plugin-disposal sentinel;
 neither the HTTP response nor `kill` is a trace-flush guarantee. Network failure while retrieving that exact
-snapshot is `BLOCKED`; do not substitute another tag/branch.
+snapshot is execution-prerequisite `BLOCKED`; exact `opencode-ai@1.18.29` provisioning failure is the same.
+In either prerequisite failure case, stop before Step 2 without generating the runtime report or an overall
+`JUS-P0-01 runtime observation` line. Do not substitute another package version, tag, branch, global binary, or
+`PATH` binary.
 
 - [ ] **Step 2: Create the temporary workspace, probe, and validator**
 
@@ -17834,6 +17867,10 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
+OPENCODE_BIN="$SPIKE_ROOT/opencode-cli/node_modules/.bin/opencode"
+test -x "$OPENCODE_BIN"
+test "$("$OPENCODE_BIN" --version)" = "1.18.29"
+
 WORKSPACE="$SPIKE_ROOT/workspace"
 TRACE="$SPIKE_ROOT/nominal.trace.jsonl"
 STATUS="$SPIKE_ROOT/nominal-status.tsv"
@@ -17848,7 +17885,7 @@ run_probe() {
     cd "$WORKSPACE"
     JUSTICE_ROUTING_TRACE="$TRACE" \
     JUSTICE_ROUTING_BARRIER=0 \
-      opencode run \
+      "$OPENCODE_BIN" run \
         --format json \
         --model "$JUSTICE_HOST_TEST_MODEL" \
         --command "$command_name" \
@@ -17873,7 +17910,7 @@ These four probes remain separate because workflow identity must stay correct ev
 
 - [ ] **Step 4: Run one deterministic same-host/same-session overlap probe**
 
-This probe MUST use one `opencode serve` process. Two independent local `opencode run` processes without `--attach`
+This probe MUST use one exact temporary `$OPENCODE_BIN serve` process. Two independent local `$OPENCODE_BIN run` processes without `--attach`
 do not satisfy the concurrency requirement because they do not share the same process-local session runner.
 
 Run:
@@ -17882,6 +17919,10 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
+OPENCODE_BIN="$SPIKE_ROOT/opencode-cli/node_modules/.bin/opencode"
+test -x "$OPENCODE_BIN"
+test "$("$OPENCODE_BIN" --version)" = "1.18.29"
+
 WORKSPACE="$SPIKE_ROOT/workspace"
 TRACE="$SPIKE_ROOT/overlap.trace.jsonl"
 STATUS="$SPIKE_ROOT/overlap-status.tsv"
@@ -17915,7 +17956,7 @@ trap cleanup_processes EXIT
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
-    opencode serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
+    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
 ) &
 SERVER_PID=$!
 
@@ -17939,7 +17980,7 @@ set +e
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
-    opencode run \
+    "$OPENCODE_BIN" run \
       --attach "$BASE_URL" \
       --dir "$WORKSPACE" \
       --session "$SESSION_ID" \
@@ -17968,7 +18009,7 @@ set +e
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
-    opencode run \
+    "$OPENCODE_BIN" run \
       --attach "$BASE_URL" \
       --dir "$WORKSPACE" \
       --session "$SESSION_ID" \
@@ -18052,6 +18093,10 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
+OPENCODE_BIN="$SPIKE_ROOT/opencode-cli/node_modules/.bin/opencode"
+test -x "$OPENCODE_BIN"
+test "$("$OPENCODE_BIN" --version)" = "1.18.29"
+
 FAIL_WORKSPACE="$SPIKE_ROOT/failure-workspace"
 FAIL_TRACE="$SPIKE_ROOT/failure.trace.jsonl"
 FAIL_STATUS="$SPIKE_ROOT/failure-status.tsv"
@@ -18494,7 +18539,7 @@ trap cleanup EXIT
   cd "$FAIL_WORKSPACE"
   JUSTICE_ROUTING_FAILURE_TRACE="$FAIL_TRACE" \
   JUSTICE_ROUTING_FAILURE_BARRIER_DIR="$FAIL_BARRIER" \
-    opencode serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
+    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
 ) &
 SERVER_PID=$!
 
@@ -18512,7 +18557,7 @@ test -n "$SESSION_ID"
 set +e
 (
   cd "$FAIL_WORKSPACE"
-  opencode run \
+  "$OPENCODE_BIN" run \
     --attach "$BASE_URL" \
     --dir "$FAIL_WORKSPACE" \
     --session "$SESSION_ID" \
@@ -18534,7 +18579,7 @@ test -f "$FAIL_BARRIER/a-command-blocked"
 set +e
 (
   cd "$FAIL_WORKSPACE"
-  opencode run \
+  "$OPENCODE_BIN" run \
     --attach "$BASE_URL" \
     --dir "$FAIL_WORKSPACE" \
     --session "$SESSION_ID" \
