@@ -25,6 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
+- A Phase 4 runtime spike that cannot prove a non-content invocation-level join across exact pinned command, user message, finalized assistant message, and command completion — including one deterministic same-host/same-session overlap — blocks Phase 4 and JUS-P0-01 completion. `sessionId` alone is never an invocation identity.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17003,7 +17004,7 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 ## Phase 4: Controller Routing — JUS-P0-01
 
-### Task 4.0: Verify supported-host controller-routing correlation signals
+### Task 4.0: Verify supported-host invocation-level controller-routing correlation
 
 **Requirement:** JUS-P0-01, Design §3.3, §4.1, §5.1.
 
@@ -17011,36 +17012,52 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 - Create: `docs/spikes/2026-09-controller-routing-runtime-signals.md`
 
-No production source, test source, production OpenCode configuration, workflow, package, or native file is modified by
-this spike. The executable probe, temporary `opencode.json`, JSONL trace, and validator live under
-`/tmp/justice-controller-routing-spike` inside the existing devcontainer and are deleted in the cleanup step.
+No production source, test source, production OpenCode configuration, workflow, package, lockfile, Rust/native file,
+or persistent probe implementation is modified by this spike. Temporary files live only under
+`/tmp/justice-controller-routing-spike` in the existing devcontainer and are removed on every exit path.
 
-**Consumes:** the already-installed supported OpenCode CLI from the preceding Phase 3 host-capability work; pinned
-OpenCode host `1.18.29`; resolved `@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21`; existing
-`tests/types/command-execute-before.contract-fixture.ts`; `JUSTICE_HOST_TEST_MODEL` already configured by the local
-host-test environment.
+**Consumes:** installed supported OpenCode CLI `1.18.29`; resolved
+`@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21`; pinned OpenCode `1.18.29` source snapshot; existing
+`tests/types/command-execute-before.contract-fixture.ts`; `JUSTICE_HOST_TEST_MODEL`.
 
-This task MUST NOT install or update OpenCode, npm/Bun packages, providers, agents, or credentials. A missing
-supported host/model/provider setup is `BLOCKED`; it is not permission to use a different version or network
-installer.
+**Hard gate:** Task 4.1/4.2 MUST NOT start unless the report ends with:
 
-**Produces:** one bounded report at `docs/spikes/2026-09-controller-routing-runtime-signals.md` and no persistent
-probe implementation. The runtime trace uses this exact allowlist and no other JSON keys:
+```text
+JUS-P0-01 runtime observation = PASS
+```
+
+PASS means both the four nominal probes and the deterministic same-server/same-session overlap probe prove the
+exact invocation/message identity chain specified by Design §4.1. If the observed safe identity differs from the
+candidate contract, write `BLOCKED`, update Design/Plan in a separate document-only change, obtain review again, and
+only then reconsider implementation.
+
+The trace allowlist is exact:
 
 ```text
 hook
 command
 sessionID
-role
 agent
-messageID
+role
+userMessageID
+assistantMessageID
+parentMessageID
 completedPresent
 ```
 
-Never record `arguments`, prompt/message content, parts, raw event objects, model/provider identifiers, credentials,
-environment values, command templates, or arbitrary configuration.
+Allowed hook values are exactly:
 
-- [ ] **Step 1: Re-confirm exact installed contracts and the supported host**
+```text
+command.execute.before
+chat.params
+message.updated
+command.executed
+```
+
+Never record `arguments`, prompt/message content, parts, raw event objects, command templates, model/provider IDs,
+credentials, environment values, arbitrary config, tool payloads, or stdout/stderr from the host.
+
+- [ ] **Step 1: Re-confirm installed declarations and pinned host source**
 
 Run:
 
@@ -17053,20 +17070,16 @@ test -n "${JUSTICE_HOST_TEST_MODEL:-}"
 
 bun run vitest run tests/types/command-execute-before.contract.test.ts
 
-bun - <<'"'"'BUN'"'"'
+bun - <<'BUN'
 const pluginPackage = await Bun.file("node_modules/@opencode-ai/plugin/package.json").json();
 const sdkPackage = await Bun.file("node_modules/@opencode-ai/sdk/package.json").json();
-if (pluginPackage.version !== "1.14.21") {
-  throw new Error(`unexpected @opencode-ai/plugin version: ${pluginPackage.version}`);
-}
-if (sdkPackage.version !== "1.14.21") {
-  throw new Error(`unexpected @opencode-ai/sdk version: ${sdkPackage.version}`);
-}
+if (pluginPackage.version !== "1.14.21") throw new Error(`plugin=${pluginPackage.version}`);
+if (sdkPackage.version !== "1.14.21") throw new Error(`sdk=${sdkPackage.version}`);
 
-const pluginPath = "node_modules/@opencode-ai/plugin/dist/index.d.ts";
-const sdkPath = "node_modules/@opencode-ai/sdk/dist/gen/types.gen.d.ts";
-const plugin = (await Bun.file(pluginPath).text()).replace(/\s+/g, " ");
-const sdk = (await Bun.file(sdkPath).text()).replace(/\s+/g, " ");
+const plugin = (await Bun.file("node_modules/@opencode-ai/plugin/dist/index.d.ts").text())
+  .replace(/\s+/g, " ");
+const sdk = (await Bun.file("node_modules/@opencode-ai/sdk/dist/gen/types.gen.d.ts").text())
+  .replace(/\s+/g, " ");
 
 function requireText(haystack, needle, label) {
   if (!haystack.includes(needle)) throw new Error(`missing ${label}: ${needle}`);
@@ -17075,82 +17088,110 @@ function requireText(haystack, needle, label) {
 requireText(
   plugin,
   "\"command.execute.before\"?: ( input: { command: string; sessionID: string; arguments: string",
-  "command.execute.before input",
+  "command.execute.before",
 );
 requireText(
   plugin,
-  "\"chat.params\"?: ( input: { sessionID: string; agent: string",
-  "chat.params input",
+  "\"chat.params\"?: ( input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage",
+  "chat.params.message",
 );
+
+const userStart = sdk.indexOf("export type UserMessage = {");
+const userEnd = sdk.indexOf("export type ProviderAuthError", userStart);
+if (userStart < 0 || userEnd < 0) throw new Error("UserMessage declaration not found");
+const user = sdk.slice(userStart, userEnd);
+requireText(user, "id: string", "UserMessage.id");
+requireText(user, "sessionID: string", "UserMessage.sessionID");
 
 const assistantStart = sdk.indexOf("export type AssistantMessage = {");
 const assistantEnd = sdk.indexOf("export type Message =", assistantStart);
 if (assistantStart < 0 || assistantEnd < 0) throw new Error("AssistantMessage declaration not found");
 const assistant = sdk.slice(assistantStart, assistantEnd);
+requireText(assistant, "id: string", "AssistantMessage.id");
 requireText(assistant, "sessionID: string", "AssistantMessage.sessionID");
+requireText(assistant, "parentID: string", "AssistantMessage.parentID");
 requireText(assistant, "role: \"assistant\"", "AssistantMessage.role");
 requireText(assistant, "completed?: number", "AssistantMessage.time.completed");
 if (assistant.includes(" agent: string")) {
-  throw new Error(
-    "root SDK AssistantMessage now declares agent; re-review Design provenance before continuing",
-  );
+  throw new Error("root SDK now types AssistantMessage.agent; re-review provenance");
 }
 
-const eventStart = sdk.indexOf("export type EventMessageUpdated = {");
-const eventEnd = sdk.indexOf("export type EventMessageRemoved", eventStart);
-if (eventStart < 0 || eventEnd < 0) throw new Error("EventMessageUpdated declaration not found");
-requireText(sdk.slice(eventStart, eventEnd), "info: Message", "EventMessageUpdated.properties.info");
+const commandStart = sdk.indexOf("export type EventCommandExecuted = {");
+const commandEnd = sdk.indexOf("export type Session =", commandStart);
+if (commandStart < 0 || commandEnd < 0) throw new Error("EventCommandExecuted not found");
+const commandEvent = sdk.slice(commandStart, commandEnd);
+for (const field of ["name: string", "sessionID: string", "messageID: string"]) {
+  requireText(commandEvent, field, `EventCommandExecuted.${field}`);
+}
 
 console.log("@opencode-ai/plugin=1.14.21");
 console.log("@opencode-ai/sdk=1.14.21");
-console.log("root SDK AssistantMessage.agent=not-typed; host runtime proof required");
+console.log("candidate identity fields typed; AssistantMessage.agent requires host trace");
 BUN
 
 opencode run --help | grep -F -- "--command"
-opencode run --help | grep -F -- "--format"
+opencode run --help | grep -F -- "--session"
+opencode run --help | grep -F -- "--attach"
+opencode serve --help | grep -F -- "--port"
+opencode serve --help | grep -F -- "--hostname"
+
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+SRC="$SPIKE_ROOT/pinned-source"
+rm -rf "$SPIKE_ROOT"
+mkdir -p "$SRC"
+
+PINNED=859106eb17d5b840475f5e4b78e64c9622f8750e
+BASE="https://raw.githubusercontent.com/anomalyco/opencode/$PINNED"
+
+curl -fsSL "$BASE/packages/opencode/src/session/prompt.ts" -o "$SRC/prompt.ts"
+curl -fsSL "$BASE/packages/opencode/src/effect/runner.ts" -o "$SRC/runner.ts"
+curl -fsSL "$BASE/packages/sdk/js/src/gen/types.gen.ts" -o "$SRC/types.gen.ts"
+curl -fsSL "$BASE/packages/plugin/src/index.ts" -o "$SRC/plugin-index.ts"
+
+grep -F "\"command.execute.before\"" "$SRC/prompt.ts"
+grep -F "const result = yield* prompt({" "$SRC/prompt.ts"
+grep -F "messageID: result.info.id" "$SRC/prompt.ts"
+grep -F "case \"Running\":" "$SRC/runner.ts"
+grep -F "case \"ShellThenRun\":" "$SRC/runner.ts"
+grep -F "return [awaitDone(st.run.done), st]" "$SRC/runner.ts"
+grep -F "export type EventCommandExecuted = {" "$SRC/types.gen.ts"
+grep -F "\"chat.params\"?:" "$SRC/plugin-index.ts"
+
+echo "PINNED_HOST_SOURCE_OK"
 '
 ```
 
-Expected: PASS. The installed root SDK proves the command hook, `chat.params.agent`, assistant session/role, and
-optional completion field. It intentionally does **not** prove assistant `agent`; that field is accepted only if the
-real `1.18.29` host trace in Step 3 supplies it. If the root SDK shape has changed (including newly typing
-`AssistantMessage.agent`), stop and re-review the Design/Plan provenance before running the probe rather than silently
-rewriting the spike.
+Expected: PASS. Network failure while retrieving the exact pinned source snapshot is `BLOCKED`; do not inspect a
+different tag/branch as a substitute. The source inspection establishes only candidate host semantics. Runtime
+identity must still pass Steps 3-5.
 
-- [ ] **Step 2: Create the complete temporary probe and validator outside the repository**
+- [ ] **Step 2: Create the temporary workspace, probe, and validator**
 
-Run the following from the repository root. It creates only `/tmp/justice-controller-routing-spike`:
+Run from repository root:
 
 ```bash
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
 WORKSPACE="$SPIKE_ROOT/workspace"
-TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
-STATUS="$SPIKE_ROOT/run-status.tsv"
+NOMINAL_TRACE="$SPIKE_ROOT/nominal.trace.jsonl"
+OVERLAP_TRACE="$SPIKE_ROOT/overlap.trace.jsonl"
+NOMINAL_STATUS="$SPIKE_ROOT/nominal-status.tsv"
+OVERLAP_STATUS="$SPIKE_ROOT/overlap-status.tsv"
+BARRIER_DIR="$SPIKE_ROOT/barrier"
 
-cleanup_on_error() {
-  code=$?
-  if [ "$code" -ne 0 ]; then rm -rf "$SPIKE_ROOT"; fi
-  exit "$code"
-}
-trap cleanup_on_error EXIT
+mkdir -p "$WORKSPACE/.opencode/plugins" "$BARRIER_DIR"
+: > "$NOMINAL_TRACE"
+: > "$OVERLAP_TRACE"
+: > "$NOMINAL_STATUS"
+: > "$OVERLAP_STATUS"
 
-rm -rf "$SPIKE_ROOT"
-mkdir -p "$WORKSPACE/.opencode/plugins"
-: > "$TRACE"
-: > "$STATUS"
-
-cat > "$WORKSPACE/opencode.json" <<'"'"'JSON'"'"'
+cat > "$WORKSPACE/opencode.json" <<'JSON'
 {
   "$schema": "https://opencode.ai/config.json",
   "agent": {
-    "sisyphus": {
-      "mode": "primary"
-    },
-    "atlas": {
-      "mode": "primary"
-    }
+    "sisyphus": { "mode": "primary" },
+    "atlas": { "mode": "primary" }
   },
   "command": {
     "justice-implement-brainstorming": {
@@ -17173,30 +17214,42 @@ cat > "$WORKSPACE/opencode.json" <<'"'"'JSON'"'"'
 }
 JSON
 
-cat > "$WORKSPACE/.opencode/plugins/controller-routing-probe.js" <<'"'"'PROBE'"'"'
-import { appendFile } from "node:fs/promises";
+cat > "$WORKSPACE/.opencode/plugins/controller-routing-probe.js" <<'PROBE'
+import { appendFile, writeFile } from "node:fs/promises";
 
 const tracePath = process.env.JUSTICE_ROUTING_TRACE;
 if (!tracePath) throw new Error("JUSTICE_ROUTING_TRACE is required");
+
+const barrierEnabled = process.env.JUSTICE_ROUTING_BARRIER === "1";
+const barrierDir = process.env.JUSTICE_ROUTING_BARRIER_DIR;
+
+const COMMAND_A = "justice-implement-writing-plans";
+const COMMAND_B = "justice-implement-subagent-driven-development";
 
 const ALLOWED_KEYS = new Set([
   "hook",
   "command",
   "sessionID",
-  "role",
   "agent",
-  "messageID",
+  "role",
+  "userMessageID",
+  "assistantMessageID",
+  "parentMessageID",
   "completedPresent",
 ]);
 
 let writeChain = Promise.resolve();
+let overlapSession;
+let releaseA;
+let releasePromise;
+let aChatBlocked = false;
 
 function append(record) {
   const clean = Object.fromEntries(
     Object.entries(record).filter(([, value]) => value !== undefined),
   );
   for (const key of Object.keys(clean)) {
-    if (!ALLOWED_KEYS.has(key)) throw new Error(`probe attempted forbidden key: ${key}`);
+    if (!ALLOWED_KEYS.has(key)) throw new Error(`forbidden trace key: ${key}`);
   }
   writeChain = writeChain.then(() =>
     appendFile(tracePath, `${JSON.stringify(clean)}\n`, "utf8"),
@@ -17204,46 +17257,153 @@ function append(record) {
   return writeChain;
 }
 
+function armBarrier(sessionID) {
+  if (!barrierEnabled) return;
+  overlapSession = sessionID;
+  releasePromise = new Promise((resolve) => {
+    releaseA = resolve;
+  });
+}
+
+async function awaitBCommand() {
+  if (!releasePromise) throw new Error("overlap release promise missing");
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("overlap barrier timeout")), 15000);
+  });
+  try {
+    await Promise.race([releasePromise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const ControllerRoutingProbe = async () => ({
-  "command.execute.before": async (input) =>
-    append({
+  "command.execute.before": async (input) => {
+    await append({
       hook: "command.execute.before",
       command: input.command,
       sessionID: input.sessionID,
-    }),
+    });
 
-  "chat.params": async (input) =>
-    append({
+    if (!barrierEnabled) return;
+    if (input.command === COMMAND_A && overlapSession === undefined) {
+      armBarrier(input.sessionID);
+      return;
+    }
+    if (
+      input.command === COMMAND_B &&
+      overlapSession !== undefined &&
+      input.sessionID === overlapSession
+    ) {
+      releaseA?.();
+    }
+  },
+
+  "chat.params": async (input) => {
+    await append({
       hook: "chat.params",
       sessionID: input.sessionID,
       agent: input.agent,
-    }),
+      userMessageID:
+        input.message && typeof input.message.id === "string"
+          ? input.message.id
+          : undefined,
+    });
+
+    if (
+      barrierEnabled &&
+      !aChatBlocked &&
+      overlapSession !== undefined &&
+      input.sessionID === overlapSession
+    ) {
+      if (!barrierDir) throw new Error("JUSTICE_ROUTING_BARRIER_DIR is required");
+      aChatBlocked = true;
+      await writeFile(`${barrierDir}/a-chat-blocked`, input.sessionID, "utf8");
+      await awaitBCommand();
+    }
+  },
 
   event: async ({ event }) => {
-    if (event?.type !== "message.updated") return;
-    const info = event?.properties?.info;
-    if (!info || info.role !== "assistant") return;
-    const time = info.time && typeof info.time === "object" ? info.time : {};
-    await append({
-      hook: "message.updated",
-      sessionID: typeof info.sessionID === "string" ? info.sessionID : undefined,
-      role: "assistant",
-      agent: typeof info.agent === "string" ? info.agent : undefined,
-      messageID: typeof info.id === "string" ? info.id : undefined,
-      completedPresent:
-        Object.prototype.hasOwnProperty.call(time, "completed") &&
-        time.completed !== undefined,
-    });
+    if (event?.type === "message.updated") {
+      const info = event?.properties?.info;
+      if (!info || info.role !== "assistant") return;
+      const time = info.time && typeof info.time === "object" ? info.time : {};
+      await append({
+        hook: "message.updated",
+        sessionID: typeof info.sessionID === "string" ? info.sessionID : undefined,
+        role: "assistant",
+        agent: typeof info.agent === "string" ? info.agent : undefined,
+        assistantMessageID: typeof info.id === "string" ? info.id : undefined,
+        parentMessageID:
+          typeof info.parentID === "string" ? info.parentID : undefined,
+        completedPresent:
+          Object.prototype.hasOwnProperty.call(time, "completed") &&
+          time.completed !== undefined,
+      });
+      return;
+    }
+
+    if (event?.type === "command.executed") {
+      const p = event?.properties;
+      await append({
+        hook: "command.executed",
+        command: typeof p?.name === "string" ? p.name : undefined,
+        sessionID: typeof p?.sessionID === "string" ? p.sessionID : undefined,
+        assistantMessageID:
+          typeof p?.messageID === "string" ? p.messageID : undefined,
+      });
+    }
   },
 });
 PROBE
 
-cat > "$SPIKE_ROOT/validate-and-report.mjs" <<'"'"'VALIDATOR'"'"'
+cat > "$SPIKE_ROOT/create-session.mjs" <<'CREATE_SESSION'
+import { writeFile } from "node:fs/promises";
+
+const [baseUrl, workspace, outputPath] = process.argv.slice(2);
+if (!baseUrl || !workspace || !outputPath) {
+  throw new Error("usage: create-session.mjs BASE_URL WORKSPACE OUTPUT");
+}
+
+const response = await fetch(`${baseUrl}/session`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-opencode-directory": workspace,
+  },
+  body: JSON.stringify({ title: "justice-controller-routing-overlap" }),
+});
+
+if (!response.ok) throw new Error(`session create failed: ${response.status}`);
+const body = await response.json();
+if (!body || typeof body.id !== "string" || body.id.length === 0) {
+  throw new Error("session create response missing id");
+}
+await writeFile(outputPath, body.id, "utf8");
+CREATE_SESSION
+
+cat > "$SPIKE_ROOT/validate-and-report.mjs" <<'VALIDATOR'
 import { readFile, writeFile } from "node:fs/promises";
 
-const [tracePath, statusPath, reportPath] = process.argv.slice(2);
-if (!tracePath || !statusPath || !reportPath) {
-  throw new Error("usage: validate-and-report.mjs TRACE STATUS REPORT");
+const [
+  nominalTracePath,
+  nominalStatusPath,
+  overlapTracePath,
+  overlapStatusPath,
+  reportPath,
+] = process.argv.slice(2);
+
+if (
+  !nominalTracePath ||
+  !nominalStatusPath ||
+  !overlapTracePath ||
+  !overlapStatusPath ||
+  !reportPath
+) {
+  throw new Error(
+    "usage: validate-and-report.mjs NOMINAL_TRACE NOMINAL_STATUS OVERLAP_TRACE OVERLAP_STATUS REPORT",
+  );
 }
 
 const EXPECTED = new Map([
@@ -17253,111 +17413,272 @@ const EXPECTED = new Map([
   ["justice-implement-executing-plans", "sisyphus"],
 ]);
 
+const OVERLAP = [
+  ["justice-implement-writing-plans", "sisyphus"],
+  ["justice-implement-subagent-driven-development", "atlas"],
+];
+
 const ALLOWED_KEYS = new Set([
   "hook",
   "command",
   "sessionID",
-  "role",
   "agent",
-  "messageID",
+  "role",
+  "userMessageID",
+  "assistantMessageID",
+  "parentMessageID",
   "completedPresent",
 ]);
+
 const ALLOWED_HOOKS = new Set([
   "command.execute.before",
   "chat.params",
   "message.updated",
+  "command.executed",
 ]);
 
 const failures = [];
-const lines = (await readFile(tracePath, "utf8"))
-  .split(/\r?\n/)
-  .filter((line) => line.length > 0);
 
-const records = [];
-for (let index = 0; index < lines.length; index += 1) {
-  let record;
-  try {
-    record = JSON.parse(lines[index]);
-  } catch {
-    failures.push(`trace_json_invalid:${index + 1}`);
-    continue;
+async function readTrace(path, label) {
+  const lines = (await readFile(path, "utf8"))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const records = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let record;
+    try {
+      record = JSON.parse(lines[index]);
+    } catch {
+      failures.push(`${label}:trace_json_invalid:${index + 1}`);
+      continue;
+    }
+    if (!record || Array.isArray(record) || typeof record !== "object") {
+      failures.push(`${label}:trace_record_not_object:${index + 1}`);
+      continue;
+    }
+    const forbidden = Object.keys(record).filter((k) => !ALLOWED_KEYS.has(k));
+    if (forbidden.length) {
+      failures.push(
+        `${label}:trace_forbidden_keys:${index + 1}:${forbidden.sort().join(",")}`,
+      );
+    }
+    if (!ALLOWED_HOOKS.has(record.hook)) {
+      failures.push(`${label}:trace_hook_invalid:${index + 1}`);
+    }
+    records.push({ ...record, __index: index });
   }
-  if (!record || Array.isArray(record) || typeof record !== "object") {
-    failures.push(`trace_record_not_object:${index + 1}`);
-    continue;
-  }
-  const keys = Object.keys(record);
-  const forbidden = keys.filter((key) => !ALLOWED_KEYS.has(key));
-  if (forbidden.length > 0) {
-    failures.push(`trace_forbidden_keys:${index + 1}:${forbidden.sort().join(",")}`);
-  }
-  if (!ALLOWED_HOOKS.has(record.hook)) {
-    failures.push(`trace_hook_invalid:${index + 1}`);
-  }
-  records.push(record);
+  return records;
 }
 
-const statuses = new Map();
-for (const line of (await readFile(statusPath, "utf8")).split(/\r?\n/)) {
-  if (!line) continue;
-  const [command, rawCode, extra] = line.split("\t");
-  if (extra !== undefined || !EXPECTED.has(command) || !/^\d+$/.test(rawCode ?? "")) {
-    failures.push("run_status_invalid");
-    continue;
+async function readStatuses(path, expectedCommands, label) {
+  const statuses = new Map();
+  for (const line of (await readFile(path, "utf8")).split(/\r?\n/)) {
+    if (!line) continue;
+    const [command, rawCode, extra] = line.split("\t");
+    if (
+      extra !== undefined ||
+      !expectedCommands.has(command) ||
+      !/^\d+$/.test(rawCode ?? "") ||
+      statuses.has(command)
+    ) {
+      failures.push(`${label}:run_status_invalid`);
+      continue;
+    }
+    statuses.set(command, Number(rawCode));
   }
-  if (statuses.has(command)) failures.push(`run_status_duplicate:${command}`);
-  statuses.set(command, Number(rawCode));
+  for (const command of expectedCommands) {
+    if (!statuses.has(command)) failures.push(`${label}:run_status_missing:${command}`);
+    else if (statuses.get(command) !== 0) {
+      failures.push(`${label}:host_command_failed:${command}:${statuses.get(command)}`);
+    }
+  }
+  return statuses;
 }
 
-const traceSummary = new Map();
-
-for (const [command, expectedAgent] of EXPECTED) {
-  const code = statuses.get(command);
-  if (code === undefined) failures.push(`run_status_missing:${command}`);
-  else if (code !== 0) failures.push(`host_command_failed:${command}:${code}`);
-
-  const commands = records.filter(
-    (record) => record.hook === "command.execute.before" && record.command === command,
+function completedMessages(records, sessionID, assistantMessageID, expectedAgent) {
+  return records.filter(
+    (r) =>
+      r.hook === "message.updated" &&
+      r.sessionID === sessionID &&
+      r.role === "assistant" &&
+      r.assistantMessageID === assistantMessageID &&
+      r.agent === expectedAgent &&
+      r.completedPresent === true,
   );
-  if (commands.length !== 1) {
-    failures.push(`command_signal_count:${command}:${commands.length}`);
-    continue;
+}
+
+function chatsFor(records, sessionID, userMessageID, expectedAgent) {
+  return records.filter(
+    (r) =>
+      r.hook === "chat.params" &&
+      r.sessionID === sessionID &&
+      r.userMessageID === userMessageID &&
+      r.agent === expectedAgent,
+  );
+}
+
+function validateCommandChain(records, command, expectedAgent, label) {
+  const starts = records.filter(
+    (r) => r.hook === "command.execute.before" && r.command === command,
+  );
+  const completions = records.filter(
+    (r) => r.hook === "command.executed" && r.command === command,
+  );
+
+  if (starts.length !== 1) {
+    failures.push(`${label}:command_start_count:${command}:${starts.length}`);
+    return undefined;
+  }
+  if (completions.length !== 1) {
+    failures.push(`${label}:command_completion_count:${command}:${completions.length}`);
+    return undefined;
   }
 
-  const sessionID = commands[0].sessionID;
-  if (typeof sessionID !== "string" || sessionID.length === 0) {
-    failures.push(`command_session_missing:${command}`);
-    continue;
+  const start = starts[0];
+  const completion = completions[0];
+  if (
+    typeof start.sessionID !== "string" ||
+    start.sessionID.length === 0 ||
+    completion.sessionID !== start.sessionID
+  ) {
+    failures.push(`${label}:command_session_mismatch:${command}`);
+    return undefined;
   }
 
-  const chats = records.filter(
-    (record) =>
-      record.hook === "chat.params" &&
-      record.sessionID === sessionID &&
-      record.agent === expectedAgent,
-  );
-  if (chats.length === 0) failures.push(`chat_params_agent_missing:${command}`);
+  const assistantMessageID = completion.assistantMessageID;
+  if (typeof assistantMessageID !== "string" || assistantMessageID.length === 0) {
+    failures.push(`${label}:command_assistant_id_missing:${command}`);
+    return undefined;
+  }
 
-  const completed = records.filter(
-    (record) =>
-      record.hook === "message.updated" &&
-      record.sessionID === sessionID &&
-      record.role === "assistant" &&
-      record.agent === expectedAgent &&
-      record.completedPresent === true,
+  const finals = completedMessages(
+    records,
+    start.sessionID,
+    assistantMessageID,
+    expectedAgent,
   );
-  if (completed.length === 0) failures.push(`completed_assistant_agent_missing:${command}`);
+  if (finals.length !== 1) {
+    failures.push(`${label}:final_message_count:${command}:${finals.length}`);
+    return undefined;
+  }
 
-  traceSummary.set(command, {
-    sessionID,
-    chatAgent: chats[0]?.agent,
-    messageAgent: completed[0]?.agent,
-    messageID: completed[0]?.messageID,
-    completedPresent: completed[0]?.completedPresent === true,
-  });
+  const final = finals[0];
+  const userMessageID = final.parentMessageID;
+  if (typeof userMessageID !== "string" || userMessageID.length === 0) {
+    failures.push(`${label}:parent_user_id_missing:${command}`);
+    return undefined;
+  }
+
+  const chats = chatsFor(records, start.sessionID, userMessageID, expectedAgent);
+  if (chats.length === 0) {
+    failures.push(`${label}:chat_identity_missing:${command}`);
+    return undefined;
+  }
+
+  if (!(start.__index < completion.__index)) {
+    failures.push(`${label}:completion_before_start:${command}`);
+  }
+
+  return {
+    command,
+    sessionID: start.sessionID,
+    userMessageID,
+    assistantMessageID,
+    chatAgent: chats[0].agent,
+    finalAgent: final.agent,
+    startIndex: start.__index,
+    chatIndex: chats[0].__index,
+    finalIndex: final.__index,
+    completionIndex: completion.__index,
+  };
+}
+
+const nominalRecords = await readTrace(nominalTracePath, "nominal");
+await readStatuses(nominalStatusPath, new Set(EXPECTED.keys()), "nominal");
+
+const nominalSummary = [];
+for (const [command, agent] of EXPECTED) {
+  const chain = validateCommandChain(nominalRecords, command, agent, "nominal");
+  if (chain) nominalSummary.push(chain);
+}
+
+const overlapRecords = await readTrace(overlapTracePath, "overlap");
+await readStatuses(
+  overlapStatusPath,
+  new Set(OVERLAP.map(([command]) => command)),
+  "overlap",
+);
+
+const overlapSummary = OVERLAP.map(([command, agent]) =>
+  validateCommandChain(overlapRecords, command, agent, "overlap"),
+).filter(Boolean);
+
+if (overlapSummary.length === 2) {
+  const [a, b] = overlapSummary;
+  if (a.sessionID !== b.sessionID) {
+    failures.push("overlap:not_same_session");
+  }
+  if (a.userMessageID === b.userMessageID) {
+    failures.push("overlap:user_identity_collapsed");
+  }
+  if (a.assistantMessageID === b.assistantMessageID) {
+    failures.push("overlap:assistant_identity_collapsed");
+  }
+
+  const aStart = overlapRecords.find(
+    (r) =>
+      r.hook === "command.execute.before" &&
+      r.command === "justice-implement-writing-plans",
+  );
+  const bStart = overlapRecords.find(
+    (r) =>
+      r.hook === "command.execute.before" &&
+      r.command === "justice-implement-subagent-driven-development",
+  );
+  const aChat = overlapRecords.find(
+    (r) =>
+      r.hook === "chat.params" &&
+      r.sessionID === a.sessionID &&
+      r.userMessageID === a.userMessageID,
+  );
+  const aFinal = overlapRecords.find(
+    (r) =>
+      r.hook === "message.updated" &&
+      r.assistantMessageID === a.assistantMessageID &&
+      r.completedPresent === true,
+  );
+
+  if (!aStart || !bStart || !aChat || !aFinal) {
+    failures.push("overlap:barrier_evidence_missing");
+  } else if (
+    !(
+      aStart.__index < aChat.__index &&
+      aChat.__index < bStart.__index &&
+      bStart.__index < aFinal.__index
+    )
+  ) {
+    failures.push("overlap:required_interleaving_not_observed");
+  }
+
+  const crossA = completedMessages(
+    overlapRecords,
+    a.sessionID,
+    b.assistantMessageID,
+    "sisyphus",
+  );
+  const crossB = completedMessages(
+    overlapRecords,
+    b.sessionID,
+    a.assistantMessageID,
+    "atlas",
+  );
+  if (crossA.length || crossB.length) failures.push("overlap:controller_cross_join");
+} else {
+  failures.push(`overlap:chain_count:${overlapSummary.length}`);
 }
 
 const result = failures.length === 0 ? "PASS" : "BLOCKED";
+
 const report = [
   "# Controller Routing Runtime Signal Spike",
   "",
@@ -17365,95 +17686,71 @@ const report = [
   "- OpenCode version: `1.18.29`",
   "- @opencode-ai/plugin: `1.14.21`",
   "- @opencode-ai/sdk: `1.14.21`",
+  "- pinned host source commit: `859106eb17d5b840475f5e4b78e64c9622f8750e`",
   "",
-  "## Resolved SDK declarations",
-  "- command.execute.before: `input.command` + `input.sessionID` typed by the pinned plugin declaration",
-  "- chat.params: `input.agent` + `input.sessionID` typed by the pinned plugin declaration",
-  "- message.updated: root SDK types `info.sessionID`, assistant `role`, and optional `info.time.completed`",
-  "- assistant agent typing: root SDK `AssistantMessage` does not type `agent`; `info.agent` below is accepted only from the supported-host runtime trace",
+  "## Verified candidate contract",
+  "- command.execute.before: exact command + session; capture-arm only",
+  "- chat.params: session + UserMessage.id + raw agent",
+  "- finalized message.updated: session + assistant id + parent user id + raw agent + completion",
+  "- command.executed: exact command + session + result assistant message id",
   "",
-  "## Redacted traces",
+  "## Nominal four-command chains",
 ];
 
-for (const [command] of EXPECTED) {
-  const summary = traceSummary.get(command);
-  report.push(`### ${command}`);
-  if (!summary) {
-    report.push("- trace: unavailable");
-  } else {
-    report.push(`- sessionID: \`${summary.sessionID}\``);
-    report.push(`- chat.params agent: \`${summary.chatAgent ?? "missing"}\``);
-    report.push(`- finalized assistant agent: \`${summary.messageAgent ?? "missing"}\``);
-    report.push(`- messageID: \`${summary.messageID ?? "missing"}\``);
-    report.push(`- completedPresent: \`${summary.completedPresent}\``);
-  }
+for (const item of nominalSummary) {
+  report.push(`### ${item.command}`);
+  report.push(`- sessionID: \`${item.sessionID}\``);
+  report.push(`- userMessageID: \`${item.userMessageID}\``);
+  report.push(`- assistantMessageID: \`${item.assistantMessageID}\``);
+  report.push(`- chat agent: \`${item.chatAgent}\``);
+  report.push(`- final agent: \`${item.finalAgent}\``);
+  report.push("");
+}
+
+report.push("## Same-session overlap");
+for (const item of overlapSummary) {
+  report.push(`### ${item.command}`);
+  report.push(`- sessionID: \`${item.sessionID}\``);
+  report.push(`- userMessageID: \`${item.userMessageID}\``);
+  report.push(`- assistantMessageID: \`${item.assistantMessageID}\``);
+  report.push(`- chat agent: \`${item.chatAgent}\``);
+  report.push(`- final agent: \`${item.finalAgent}\``);
   report.push("");
 }
 
 report.push("## Result");
 report.push(`JUS-P0-01 runtime observation = ${result}`);
 report.push("");
-report.push("## Evidence");
-report.push(
-  `- workflow identity: ${result === "PASS" ? "all four exact command.execute.before identities observed" : "not proven"}`,
-);
-report.push(
-  `- session correlation: ${result === "PASS" ? "command/chat/message signals correlated by the same sessionID for all four commands" : "not proven"}`,
-);
-report.push(
-  `- raw actual agent: ${result === "PASS" ? "chat.params and host message.updated expose the expected raw agent string" : "not proven"}`,
-);
-report.push(
-  `- finalized assistant signal: ${result === "PASS" ? "assistant message.updated with completedPresent=true observed for all four commands" : "not proven"}`,
-);
-if (failures.length > 0) {
-  report.push(`- sanitized failure codes: \`${failures.join(";")}\``);
-}
+report.push("## Sanitized failures");
+if (failures.length === 0) report.push("- none");
+else for (const failure of failures) report.push(`- ${failure}`);
 report.push("");
 
 await writeFile(reportPath, `${report.join("\n")}\n`, "utf8");
-
-if (result !== "PASS") {
-  console.error("JUS-P0-01 runtime observation = BLOCKED");
-  for (const failure of failures) console.error(failure);
-  process.exitCode = 1;
-} else {
-  console.log("JUS-P0-01 runtime observation = PASS");
-}
+console.log(`JUS-P0-01 runtime observation = ${result}`);
+process.exit(result === "PASS" ? 0 : 1);
 VALIDATOR
 
-test -f "$WORKSPACE/opencode.json"
-test -f "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
-test -f "$SPIKE_ROOT/validate-and-report.mjs"
+node --check "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
+node --check "$SPIKE_ROOT/create-session.mjs"
+node --check "$SPIKE_ROOT/validate-and-report.mjs"
 '
 ```
 
-Expected: PASS. These files are temporary probe inputs only; do not add them to Git and do not copy the temporary
-configuration into the spike report.
+Expected: all three temporary JavaScript files pass syntax validation.
 
-- [ ] **Step 3: Execute all four exact pinned commands through the real supported host**
+- [ ] **Step 3: Run the four fresh-session nominal probes**
 
-Run exactly four fresh non-interactive command invocations. Raw host stdout/stderr are discarded; only the probe's
-allowlisted JSONL and each command's numeric exit code are retained temporarily:
+Run:
 
 ```bash
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
 WORKSPACE="$SPIKE_ROOT/workspace"
-TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
-STATUS="$SPIKE_ROOT/run-status.tsv"
+TRACE="$SPIKE_ROOT/nominal.trace.jsonl"
+STATUS="$SPIKE_ROOT/nominal-status.tsv"
 
-cleanup_on_error() {
-  code=$?
-  if [ "$code" -ne 0 ]; then rm -rf "$SPIKE_ROOT"; fi
-  exit "$code"
-}
-trap cleanup_on_error EXIT
-
-test "$(opencode --version)" = "1.18.29"
-test -n "${JUSTICE_HOST_TEST_MODEL:-}"
-test -f "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
 : > "$TRACE"
 : > "$STATUS"
 
@@ -17463,6 +17760,7 @@ run_probe() {
   (
     cd "$WORKSPACE"
     JUSTICE_ROUTING_TRACE="$TRACE" \
+    JUSTICE_ROUTING_BARRIER=0 \
       opencode run \
         --format json \
         --model "$JUSTICE_HOST_TEST_MODEL" \
@@ -17483,10 +17781,13 @@ test "$(wc -l < "$STATUS" | tr -d " ")" = "4"
 '
 ```
 
-Do not replace these with a single representative command. The four command identities are distinct even where the
-desired controller is the same.
+These four probes remain separate because workflow identity must stay correct even where multiple workflows choose
+`sisyphus`.
 
-- [ ] **Step 4: Mechanically validate allowlisted traces and write PASS/BLOCKED report**
+- [ ] **Step 4: Run one deterministic same-host/same-session overlap probe**
+
+This probe MUST use one `opencode serve` process. Two independent local `opencode run` processes without `--attach`
+do not satisfy the concurrency requirement because they do not share the same process-local session runner.
 
 Run:
 
@@ -17494,19 +17795,154 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
-TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
-STATUS="$SPIKE_ROOT/run-status.tsv"
-REPORT=/workspace/docs/spikes/2026-09-controller-routing-runtime-signals.md
+WORKSPACE="$SPIKE_ROOT/workspace"
+TRACE="$SPIKE_ROOT/overlap.trace.jsonl"
+STATUS="$SPIKE_ROOT/overlap-status.tsv"
+BARRIER_DIR="$SPIKE_ROOT/barrier"
+SESSION_FILE="$SPIKE_ROOT/overlap-session.txt"
+PORT=40967
+BASE_URL="http://127.0.0.1:$PORT"
 
-cleanup() {
-  rm -rf "$SPIKE_ROOT"
+: > "$TRACE"
+: > "$STATUS"
+rm -f "$BARRIER_DIR/a-chat-blocked" "$SESSION_FILE"
+
+SERVER_PID=
+A_PID=
+B_PID=
+
+cleanup_processes() {
+  code=$?
+  for pid in "${A_PID:-}" "${B_PID:-}" "${SERVER_PID:-}"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  exit "$code"
 }
-trap cleanup EXIT
+trap cleanup_processes EXIT
+
+(
+  cd "$WORKSPACE"
+  JUSTICE_ROUTING_TRACE="$TRACE" \
+  JUSTICE_ROUTING_BARRIER=1 \
+  JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+    opencode serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
+) &
+SERVER_PID=$!
+
+for _ in $(seq 1 100); do
+  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then break; fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "OpenCode overlap server exited" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+curl -fsS "$BASE_URL/global/health" >/dev/null
+
+bun "$SPIKE_ROOT/create-session.mjs" "$BASE_URL" "$WORKSPACE" "$SESSION_FILE"
+SESSION_ID="$(cat "$SESSION_FILE")"
+test -n "$SESSION_ID"
+
+set +e
+(
+  cd "$WORKSPACE"
+  JUSTICE_ROUTING_TRACE="$TRACE" \
+  JUSTICE_ROUTING_BARRIER=1 \
+  JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+    opencode run \
+      --attach "$BASE_URL" \
+      --dir "$WORKSPACE" \
+      --session "$SESSION_ID" \
+      --format json \
+      --model "$JUSTICE_HOST_TEST_MODEL" \
+      --command justice-implement-writing-plans \
+      >/dev/null 2>/dev/null
+) &
+A_PID=$!
+set -e
+
+for _ in $(seq 1 150); do
+  if [ -f "$BARRIER_DIR/a-chat-blocked" ]; then break; fi
+  if ! kill -0 "$A_PID" 2>/dev/null; then
+    echo "A exited before barrier" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+test -f "$BARRIER_DIR/a-chat-blocked"
+test "$(cat "$BARRIER_DIR/a-chat-blocked")" = "$SESSION_ID"
+
+set +e
+(
+  cd "$WORKSPACE"
+  JUSTICE_ROUTING_TRACE="$TRACE" \
+  JUSTICE_ROUTING_BARRIER=1 \
+  JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+    opencode run \
+      --attach "$BASE_URL" \
+      --dir "$WORKSPACE" \
+      --session "$SESSION_ID" \
+      --format json \
+      --model "$JUSTICE_HOST_TEST_MODEL" \
+      --command justice-implement-subagent-driven-development \
+      >/dev/null 2>/dev/null
+) &
+B_PID=$!
+
+wait "$A_PID"; A_CODE=$?
+A_PID=
+wait "$B_PID"; B_CODE=$?
+B_PID=
+set -e
+
+printf "%s\t%s\n" justice-implement-writing-plans "$A_CODE" >> "$STATUS"
+printf "%s\t%s\n" justice-implement-subagent-driven-development "$B_CODE" >> "$STATUS"
+
+test "$(wc -l < "$STATUS" | tr -d " ")" = "2"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=
+trap - EXIT
+'
+```
+
+Required observed ordering for the barrier proof is:
+
+```text
+A command.execute.before
+A chat.params (probe records it, then blocks that hook)
+B command.execute.before (same server process + same session; releases A)
+A finalized assistant message.updated
+```
+
+The full A/B command completion/message chains may contain additional assistant updates, but PASS requires a unique
+completed chain for each command and distinct A/B user and assistant identities. If the host collapses the two
+commands onto one assistant identity, omits B's own chain, or cannot process B while A is blocked, the candidate
+correlation contract is not proven and the result is `BLOCKED`.
+
+- [ ] **Step 5: Validate both traces mechanically and write the bounded report**
+
+Run:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+REPORT=/workspace/docs/spikes/2026-09-controller-routing-runtime-signals.md
 
 mkdir -p "$(dirname "$REPORT")"
 
 set +e
-bun "$SPIKE_ROOT/validate-and-report.mjs" "$TRACE" "$STATUS" "$REPORT"
+bun "$SPIKE_ROOT/validate-and-report.mjs" \
+  "$SPIKE_ROOT/nominal.trace.jsonl" \
+  "$SPIKE_ROOT/nominal-status.tsv" \
+  "$SPIKE_ROOT/overlap.trace.jsonl" \
+  "$SPIKE_ROOT/overlap-status.tsv" \
+  "$REPORT"
 validation_code=$?
 set -e
 
@@ -17514,66 +17950,73 @@ test -f "$REPORT"
 
 if [ "$validation_code" -ne 0 ]; then
   grep -Fx "JUS-P0-01 runtime observation = BLOCKED" "$REPORT"
-  exit "$validation_code"
+else
+  grep -Fx "JUS-P0-01 runtime observation = PASS" "$REPORT"
 fi
 
-grep -Fx "JUS-P0-01 runtime observation = PASS" "$REPORT"
-grep -Fx "## Environment" "$REPORT"
-grep -Fx "## Resolved SDK declarations" "$REPORT"
-grep -Fx "## Redacted traces" "$REPORT"
-grep -Fx "## Result" "$REPORT"
-grep -Fx "## Evidence" "$REPORT"
-'
-```
+grep -Fx "## Verified candidate contract" "$REPORT"
+grep -Fx "## Nominal four-command chains" "$REPORT"
+grep -Fx "## Same-session overlap" "$REPORT"
+grep -Fx "## Sanitized failures" "$REPORT"
 
-Expected on a supported host: validator exits zero and the report says
-`JUS-P0-01 runtime observation = PASS`. The validator itself proves that every JSONL object contains only the
-seven allowlisted keys, that all four host commands exited zero, and that each exact command has same-session
-`chat.params` plus completed assistant `message.updated` with the expected raw agent.
-
-If any requirement fails, the validator writes `JUS-P0-01 runtime observation = BLOCKED`, exits non-zero, and Phase
-4 stops before Task 4.1/4.2. The sanitized failure codes may identify missing signal classes; do not copy raw
-stdout/stderr, event/config/message content, model/provider identifiers, or credentials into the report.
-
-`git diff --check` is formatting verification only; it is **not** the redaction proof. After the validator PASS,
-run:
-
-```bash
 git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
-grep -nE \
-  "^### justice-implement-(brainstorming|writing-plans|subagent-driven-development|executing-plans)$" \
-  docs/spikes/2026-09-controller-routing-runtime-signals.md
-```
 
-Expected: `git diff --check` passes and all four trace headings are present.
+rm -rf "$SPIKE_ROOT"
+test ! -e "$SPIKE_ROOT"
 
-- [ ] **Step 5: Clean the external probe, then commit only the report after approval**
-
-Step 4 installs an `EXIT` trap, so the external probe is removed on both PASS and BLOCKED results. Verify that
-cleanup happened; the `rm -rf` below is a fail-safe for an interrupted earlier shell:
-
-```bash
-devcontainer exec --workspace-folder . bash -lc '
-set -euo pipefail
-rm -rf /tmp/justice-controller-routing-spike
-test ! -e /tmp/justice-controller-routing-spike
+exit "$validation_code"
 '
 ```
 
-A BLOCKED report is still useful evidence, but its result prohibits Task 4.1/4.2. Do not introduce prompt parsing,
-controller→workflow reverse mapping, generic telemetry, a reusable trace subsystem, a production debug event bus, a
-new plugin abstraction, or a generic capability-test framework.
+The validator is the redaction/identity proof. `git diff --check` is formatting verification only.
 
-After the report has been reviewed and the user approves its commit:
+PASS requires all of the following:
+
+```text
+four exact nominal pinned commands each have:
+  command.execute.before
+  → exact same-session command.executed
+  → command.executed.assistantMessageID
+  → exact finalized assistant message with that ID
+  → assistant.parentMessageID
+  → exact chat.params.userMessageID
+  → expected raw agent
+
+overlap:
+  A and B use one host process and one session
+  A/B command starts are both observed
+  barrier ordering is observed
+  A/B userMessageID values are distinct
+  A/B assistantMessageID values are distinct
+  each command completion joins only its own finalized assistant
+  each finalized assistant joins only its own parent user chat
+  no controller cross-join is possible
+```
+
+Any failure is `BLOCKED`; do not weaken the validator, parse content, infer workflow from controller, or substitute
+latest/current event heuristics.
+
+- [ ] **Step 6: Record the gate outcome; do not auto-implement**
+
+If the report is `BLOCKED`, stop Phase 4. Task 4.1/4.2 are prohibited.
+
+If the report is `PASS`, compare the observed contract with Design §4.1 and this plan. If they are exact, Task 4.1
+may proceed after normal approval. If they differ in any identity field or semantics, stop and perform a
+document-only Design → Plan → review cycle first.
+
+After the spike report itself has been reviewed and approved for commit:
 
 ```bash
 GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
-GIT_MASTER=1 git commit -m "docs: verify controller routing runtime signals"
+GIT_MASTER=1 git commit -m "docs: verify controller routing invocation identity"
 ```
 
-### Task 4.1: Preserve workflow identity and evaluate controller observations
+### Task 4.1: Preserve workflow identity and define the verified invocation contract
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
+
+**Precondition:** Task 4.0 report is PASS and matches the exact Design §4.1 candidate contract. If the host proves a
+different contract, do not edit source; update Design/Plan and re-review first.
 
 **Files:**
 
@@ -17600,25 +18043,48 @@ export type ControllerPinnedCommand =
   | "justice-implement-subagent-driven-development"
   | "justice-implement-executing-plans";
 
-export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<ControllerPinnedCommand, ControllerWorkflow>>;
-export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
+export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<
+  ControllerPinnedCommand,
+  ControllerWorkflow
+>>;
+
+export function resolvePinnedCommandWorkflow(
+  command: string,
+): ControllerWorkflow | undefined;
 
 export type ControllerObservedAgentId = string;
 
-export type ControllerActualObservation = {
-  readonly source: "chat.params" | "message.updated";
-  readonly actualController: ControllerObservedAgentId;
-  readonly finalized: boolean;
+export type ControllerActualObservation =
+  | {
+      readonly source: "chat.params";
+      readonly sessionId: string;
+      readonly userMessageId: string;
+      readonly actualController: ControllerObservedAgentId;
+    }
+  | {
+      readonly source: "message.updated";
+      readonly sessionId: string;
+      readonly assistantMessageId: string;
+      readonly parentUserMessageId: string;
+      readonly actualController: ControllerObservedAgentId;
+      readonly finalized: boolean;
+    };
+
+export type ControllerCommandCompletion = {
+  readonly sessionId: string;
+  readonly command: ControllerPinnedCommand;
+  readonly assistantMessageId: string;
 };
 
-export type ControllerRoutingSessionContext = {
+export type ControllerRoutingInvocationContext = {
   readonly sessionId: string;
-  readonly routingGeneration: number;
+  readonly command: ControllerPinnedCommand;
   readonly workflow: ControllerWorkflow;
-  readonly applicationMethod: "pinned-command" | "none";
+  readonly applicationMethod: "pinned-command";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
   readonly chatParamsActualController?: ControllerObservedAgentId;
-  readonly finalizedMessageActualController?: ControllerObservedAgentId;
-  readonly phase: "collecting" | "finalized";
+  readonly finalizedMessageActualController: ControllerObservedAgentId;
 };
 
 export type ControllerRoutingEvaluationInput = {
@@ -17634,13 +18100,13 @@ export function evaluateControllerRoutingObservation(
 ): ControllerRoutingObservation;
 ```
 
-`ControllerObservedAgentId` belongs only to `src/core/controller-routing.ts`. Do not widen or redefine the
-existing `src/core/types.ts::ObservationAgentId`, which remains the physical-shard/envelope identity.
+There is no `routingGeneration` and no `ControllerRoutingSessionContext`. The invocation context exists only after
+host message identities have been joined. `ControllerObservedAgentId` remains separate from the closed
+`ObservationAgentId` physical-shard identity.
 
-- [ ] **Step 1: Write the complete failing routing/evaluator tests**
+- [ ] **Step 1: Write the complete failing mapping/evaluator/type-contract tests**
 
-Define the fixtures before the tests; do not use undeclared `appliedInput`-style globals. Also pin the exact
-pinned-command workflow resolver before evaluator fixtures:
+Keep the exact four mappings and leading-slash behavior:
 
 ```ts
 it.each([
@@ -17652,13 +18118,12 @@ it.each([
   expect(resolvePinnedCommandWorkflow(command)).toBe(workflow);
 });
 
-it("does not infer workflow from arbitrary command text", () => {
+it("does not infer workflow from arbitrary command/controller text", () => {
   expect(resolvePinnedCommandWorkflow("please-use-sisyphus")).toBeUndefined();
 });
-
 ```
 
-Then define the evaluator fixtures:
+Define the evaluator fixtures explicitly:
 
 ```ts
 const sisyphusDecision = createControllerRoutingDecision(
@@ -17675,15 +18140,15 @@ const appliedInput: ControllerRoutingEvaluationInput = {
   runtimeCapabilitySupported: false,
 };
 
-const knownMismatchInput: ControllerRoutingEvaluationInput = {
+const knownMismatchInput = {
   ...appliedInput,
   finalizedMessageActualController: "atlas",
-};
+} satisfies ControllerRoutingEvaluationInput;
 
-const customMismatchInput: ControllerRoutingEvaluationInput = {
+const customMismatchInput = {
   ...appliedInput,
   finalizedMessageActualController: "custom-controller-v2",
-};
+} satisfies ControllerRoutingEvaluationInput;
 
 const chatParamsOnlyInput: ControllerRoutingEvaluationInput = {
   decision: sisyphusDecision,
@@ -17697,66 +18162,19 @@ const unconfiguredInput: ControllerRoutingEvaluationInput = {
   applicationMethod: "none",
   runtimeCapabilitySupported: false,
 };
-
-it("retains workflow when two workflows select the same controller", () => {
-  expect(
-    createControllerRoutingDecision("brainstorming", "sisyphus", "workflow_rule").workflow,
-  ).toBe("brainstorming");
-  expect(sisyphusDecision.workflow).toBe("writing-plans");
-});
-
-it("reports applied only from a matching finalized message.updated observation", () => {
-  expect(evaluateControllerRoutingObservation(appliedInput)).toMatchObject({
-    routingStatus: "applied",
-    desiredController: "sisyphus",
-    actualController: "sisyphus",
-    applicationMethod: "pinned-command",
-    observationSource: "both",
-  });
-});
-
-it("reports mismatch for a different known controller", () => {
-  expect(evaluateControllerRoutingObservation(knownMismatchInput)).toMatchObject({
-    routingStatus: "mismatch",
-    actualController: "atlas",
-  });
-});
-
-it("reports mismatch for a custom or future controller identifier", () => {
-  expect(evaluateControllerRoutingObservation(customMismatchInput)).toMatchObject({
-    routingStatus: "mismatch",
-    actualController: "custom-controller-v2",
-  });
-});
-
-it("normalizes chat.params-only configured routing to actual_not_observed", () => {
-  expect(evaluateControllerRoutingObservation(chatParamsOnlyInput)).toEqual({
-    routingStatus: "unapplied",
-    desiredController: "sisyphus",
-    applicationMethod: "pinned-command",
-    observationSource: "none",
-    reason: "actual_not_observed",
-  });
-});
-
-it("reports application_not_configured when no application method is configured", () => {
-  expect(evaluateControllerRoutingObservation(unconfiguredInput)).toEqual({
-    routingStatus: "unapplied",
-    desiredController: "sisyphus",
-    applicationMethod: "none",
-    observationSource: "none",
-    reason: "application_not_configured",
-  });
-});
 ```
 
-Do not add a runtime-API adapter or runtime mutation mechanism. `unsupported` remains a reserved pure-domain
-result for `applicationMethod: "runtime-api"` with unavailable capability; current production wiring does not
-select that method.
+Required assertions:
+
+- finalized matching actual → `applied`, source `both`;
+- finalized known/custom mismatch → `mismatch` with raw actual preserved;
+- chat-only pure evaluator input → `unapplied/actual_not_observed`;
+- explicit `none` → `unapplied/application_not_configured`;
+- `brainstorming` and `writing-plans` both choose `sisyphus` but preserve different `workflow`;
+- `ControllerActualObservation` source members require their source-specific IDs;
+- no test or type treats `sessionId` or a local generation as invocation identity.
 
 - [ ] **Step 2: Confirm RED**
-
-Run:
 
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
@@ -17764,55 +18182,41 @@ devcontainer exec --workspace-folder . bun run vitest run \
   tests/core/controller-routing.test.ts
 ```
 
-Expected: FAIL behaviorally because workflow-preserving controller decisions and the evaluator/input contract are
-not implemented. Missing fixture declarations, missing imports caused by an incomplete test scaffold, or malformed
-test setup are not acceptable RED evidence.
+Expected: behavioral/type-contract FAIL because the workflow-preserving decision and verified identity types do not
+exist. Missing imports, undeclared fixtures, or malformed tests are not acceptable RED evidence.
 
-- [ ] **Step 3: Implement the exact evaluator contract**
+- [ ] **Step 3: Implement the exact pure-domain contract**
 
-1. Add `workflow` to only the controller member of the existing routing decision union and update
+1. Add `workflow` only to the controller routing decision member and update
    `createControllerRoutingDecision(workflow, controller, reason)` plus callers.
-2. In `src/core/controller-routing.ts`, define the four-literal `ControllerWorkflow`, four-literal
-   `ControllerPinnedCommand`, exact `PINNED_COMMAND_WORKFLOW_MAP`, and `resolvePinnedCommandWorkflow(command)`.
-   The resolver removes at most one leading `/` and then performs an exact map lookup; it must not inspect a
-   controller value, prompt, assistant text, or arbitrary skill text.
-3. Define `ControllerObservedAgentId`, `ControllerActualObservation`, `ControllerRoutingSessionContext`,
-   `ControllerRoutingEvaluationInput`, and the existing Design §4.1
-   discriminated `ControllerRoutingObservation` in `src/core/controller-routing.ts`.
-4. Implement this exact evaluation order:
-   - if `applicationMethod === "runtime-api" && runtimeCapabilitySupported === false`, return reserved
-     `unsupported/runtime_capability_unsupported`;
-   - derive a finalized-message source only from `finalizedMessageActualController`; if it exists, source is
-     `"both"` when `chatParamsActualController` also exists, otherwise `"message.updated"`;
-   - if `applicationMethod === "none"`, return `unapplied/application_not_configured`, retaining a finalized
-     actual only when one exists;
-   - for a configured method with no finalized actual, return `unapplied/actual_not_observed` with source `none`
-     and no `actualController`;
-   - for a configured method with finalized actual equal to desired, return `applied`;
-   - otherwise return `mismatch` and preserve the custom/known actual string.
-5. Do not change `src/core/types.ts::ObservationAgentId` except for unrelated existing caller updates needed by
-   the routing decision factory; specifically do not widen it to `string`.
+2. Define the four-literal workflow/command types, exact map, and exact resolver. Remove at most one leading `/`;
+   accept no aliases/fuzzy/prompt/skill/controller reverse matching.
+3. Define the source-discriminated `ControllerActualObservation`, `ControllerCommandCompletion`, and
+   `ControllerRoutingInvocationContext` exactly as above. Do not introduce a generic message identity abstraction.
+4. Keep `ControllerRoutingEvaluationInput` pure. Only a finalized message actual can produce
+   `applied`/`mismatch`; preserve custom raw strings.
+5. Do not widen `src/core/types.ts::ObservationAgentId`.
+6. Do not add session state, host hooks, tracing, or runtime mutation in Task 4.1.
 
 - [ ] **Step 4: Confirm GREEN**
 
-Run the same command as Step 2.
+Run the Step 2 command.
 
-Expected: PASS for exact pinned-command workflow identity, matching finalized observation, known mismatch, custom mismatch,
-chat.params-only normalization, and unconfigured application.
+Expected: PASS for exact command→workflow identity, same-controller workflow distinction, finalized actual
+evaluation, custom raw identity, and source-specific invocation identity types.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
-GIT_MASTER=1 git commit -m "feat: controller routingにworkflow identityを保持"
+GIT_MASTER=1 git commit -m "feat: controller routingにinvocation identityを定義"
 ```
 
-### Task 4.2: Correlate and persist controller routing observations and doctor diagnostics
+### Task 4.2: Correlate verified invocations and persist controller-routing audit
 
 **Requirement:** JUS-P0-01, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3.
 
-**Precondition:** Task 4.0 is PASS. If Task 4.0 records `JUS-P0-01 runtime observation = BLOCKED`, do not implement
-this task.
+**Precondition:** Task 4.0 is PASS and exact-match with Design §4.1. If not, do not implement this task.
 
 **Files:**
 
@@ -17841,41 +18245,47 @@ this task.
 - Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** Task 4.0 verified field paths; Task 4.1 `ControllerWorkflow`, `resolvePinnedCommandWorkflow()`,
-`ControllerRoutingDecision`, `ControllerActualObservation`, `evaluateControllerRoutingObservation()`; existing
-`SessionStateProvider`, `WorkflowRouter`, `PendingEnvelope`, `PendingObservationRecord`,
-`ObservationLogStore.append()`, `validateRecordSchema()`, `redactPendingLogRecord()`; Task 1.2
-`DoctorEffectiveConfigView.effectiveCommandDefinitions`.
+**Consumes:** Task 4.0 verified exact identity fields; Task 4.1 `ControllerWorkflow`,
+`ControllerPinnedCommand`, `resolvePinnedCommandWorkflow()`, `ControllerActualObservation`,
+`ControllerCommandCompletion`, `ControllerRoutingInvocationContext`, evaluator; existing `SessionStateProvider`,
+`WorkflowRouter`, `PendingEnvelope`, `PendingObservationRecord`, `ObservationLogStore.append()`,
+`validateRecordSchema()`, `redactPendingLogRecord()`; Task 1.2 effective doctor config.
 
 **Produces:**
 
 ```ts
 // src/core/session-state-provider.ts
-beginControllerRoutingContext(
+beginControllerRoutingCapture(
   sessionId: string,
-  workflow: ControllerWorkflow,
-  applicationMethod: "pinned-command" | "none",
-): ControllerRoutingSessionContext;
+  command: ControllerPinnedCommand,
+): void;
+
 recordControllerActualObservation(
-  sessionId: string,
   observation: ControllerActualObservation,
-): ControllerRoutingSessionContext | undefined;
-getControllerRoutingContext(sessionId: string): ControllerRoutingSessionContext | undefined;
-finishControllerRoutingContext(sessionId: string, routingGeneration: number): void;
+): ControllerRoutingInvocationContext | undefined;
+
+recordControllerCommandCompletion(
+  completion: ControllerCommandCompletion,
+): ControllerRoutingInvocationContext | undefined;
 
 // src/core/justice-plugin.ts
-bindControllerRoutingWorkflow(
+beginControllerRoutingCapture(
   sessionId: string,
-  workflow: ControllerWorkflow,
-  applicationMethod: "pinned-command" | "none",
+  command: ControllerPinnedCommand,
 ): void;
+
 observeControllerActual(
-  sessionId: string,
   observation: ControllerActualObservation,
 ): Promise<void>;
 
+observeControllerCommandCompletion(
+  completion: ControllerCommandCompletion,
+): Promise<void>;
+
 // src/hooks/observation-handler.ts
-emitControllerRoutingObservation(context: ControllerRoutingSessionContext): Promise<void>;
+emitControllerRoutingObservation(
+  context: ControllerRoutingInvocationContext,
+): Promise<void>;
 
 // src/core/v2/observation-model.ts
 export type ControllerRoutingObservedRecord = {
@@ -17885,109 +18295,142 @@ export type ControllerRoutingObservedRecord = {
 } & ControllerRoutingObservation;
 ```
 
-The session correlation state is ephemeral. Only `ControllerRoutingObservedRecord` is durable. Existing
-`setAgentMapping()` / `getAgentId()` remain unchanged and continue to own physical shard identity.
+Ephemeral state is bounded to sessions with active exact pinned-command captures and contains only:
 
-- [ ] **Step 1: Write complete failing session-correlation, runtime-transport, durable, replay, and doctor tests**
+```text
+capture count by (sessionId, command)
+chat actual by (sessionId, userMessageId)
+finalized assistant actual by (sessionId, assistantMessageId)
+command completion by (sessionId, assistantMessageId)
+```
 
-Add concrete fixtures before assertions. Runtime/correlation coverage must include all of the following.
+There is no session-current workflow slot and no routing generation.
+
+- [ ] **Step 1: Write complete failing correlation/runtime/durable/doctor tests**
+
+First pin exact identity correlation. The tests must not call the evaluator alone for production correlation.
+
+#### Different-controller deterministic interleaving
+
+Use `writing-plans` (`sisyphus`) as A and `subagent-driven-development` (`atlas`) as B. Encode the Task 4.0 verified
+ordering. Under the candidate contract, the minimum sequence is:
+
+```text
+A command.execute.before / capture arm, session=S
+A chat.params,             session=S user=U_A agent=sisyphus
+B command.execute.before / capture arm, session=S
+A finalized message,      session=S assistant=A_A parent=U_A agent=sisyphus
+B chat.params,             session=S user=U_B agent=atlas
+A command.executed,        session=S command=A assistant=A_A
+B finalized message,      session=S assistant=A_B parent=U_B agent=atlas
+B command.executed,        session=S command=B assistant=A_B
+```
+
+If Task 4.0 proves a different callback order while preserving the same exact identity join, use that proven order
+and update this document before implementation.
+
+Assertions are mandatory:
 
 ```ts
-it("starts a fresh routing generation and clears stale actuals on workflow switch", () => {
-  const first = state.beginControllerRoutingContext("s1", "brainstorming", "pinned-command");
-  state.recordControllerActualObservation("s1", {
-    source: "chat.params",
-    actualController: "sisyphus",
-    finalized: false,
-  });
-  state.recordControllerActualObservation("s1", {
-    source: "message.updated",
-    actualController: "sisyphus",
-    finalized: true,
-  });
-
-  const second = state.beginControllerRoutingContext("s1", "writing-plans", "pinned-command");
-  expect(second.routingGeneration).toBeGreaterThan(first.routingGeneration);
-  expect(second).toMatchObject({ workflow: "writing-plans", phase: "collecting" });
-  expect(second.chatParamsActualController).toBeUndefined();
-  expect(second.finalizedMessageActualController).toBeUndefined();
+expect(aRecord).toMatchObject({
+  workflow: "writing-plans",
+  desiredController: "sisyphus",
+  actualController: "sisyphus",
+  routingStatus: "applied",
 });
 
-it("keeps controller raw identity separate from shard identity", () => {
-  state.setAgentMapping("s-custom", "custom-controller-v2");
-  state.beginControllerRoutingContext("s-custom", "subagent-driven-development", "pinned-command");
-  const routing = state.recordControllerActualObservation("s-custom", {
-    source: "message.updated",
-    actualController: "custom-controller-v2",
-    finalized: true,
-  });
-  expect(state.getAgentId("s-custom")).toBe("unknown");
-  expect(routing?.finalizedMessageActualController).toBe("custom-controller-v2");
+expect(bRecord).toMatchObject({
+  workflow: "subagent-driven-development",
+  desiredController: "atlas",
+  actualController: "atlas",
+  routingStatus: "applied",
 });
 
-it("does not treat non-finalized message.updated as positive application evidence", () => {
-  state.beginControllerRoutingContext("s2", "writing-plans", "pinned-command");
-  const routing = state.recordControllerActualObservation("s2", {
-    source: "message.updated",
-    actualController: "sisyphus",
-    finalized: false,
-  });
-  expect(routing?.phase).toBe("collecting");
-  expect(routing?.finalizedMessageActualController).toBeUndefined();
-});
-
-it("removes routing correlation during session cleanup", () => {
-  state.beginControllerRoutingContext("s3", "brainstorming", "pinned-command");
-  state.removeSession("s3");
-  expect(state.getControllerRoutingContext("s3")).toBeUndefined();
-});
+expect(aRecord.workflow).not.toBe(bRecord.workflow);
+expect(aRecord.actualController).not.toBe("atlas");
+expect(bRecord.actualController).not.toBe("sisyphus");
 ```
 
-Adapter/JusticePlugin end-to-end tests must drive the actual Task 4.0 verified fields, not call the evaluator
-alone:
+Also assert:
 
-```text
-command.execute.before command=justice-implement-writing-plans session=S
-chat.params             agent=sisyphus session=S
-finalized message.updated info.agent=sisyphus info.sessionID=S info.time.completed=<present>
-→ latest durable routing record:
-   workflow=writing-plans
-   desiredController=sisyphus
-   actualController=sisyphus
-   routingStatus=applied
-   observationSource=both
+- A final actual cannot create/update B's durable record;
+- resolving A consumes only `(S, A_A)` and `U_A` state;
+- A completion does not remove B's capture/chat/final/completion state;
+- B final cannot create/update A's durable record;
+- no path compares only `sessionId` when selecting an invocation.
+
+#### Same-controller workflow distinction
+
+Use `brainstorming` and `writing-plans`, both `sisyphus`, with distinct user/assistant IDs. Interleave them and assert
+two records with exact workflow values:
+
+```ts
+expect(records.map((r) => r.workflow)).toEqual([
+  "brainstorming",
+  "writing-plans",
+]);
+expect(records.every((r) => r.actualController === "sisyphus")).toBe(true);
 ```
 
-```text
-command.execute.before command=justice-implement-subagent-driven-development session=S2
-finalized message.updated info.agent=custom-controller-v2 info.sessionID=S2 info.time.completed=<present>
-→ durable mismatch with actualController="custom-controller-v2"
-→ envelope/shard agentId may be "unknown" and MUST NOT replace routing actualController
-```
+This test exists to prove that `desiredController === actualController` cannot hide wrong workflow attribution.
 
-Include the explicit assertion:
+#### Source-specific state behavior
+
+Add focused tests proving:
+
+- `command.execute.before` exact pinned match only arms capture; it does not bind a current workflow context;
+- unrelated command text does not arm capture;
+- `chat.params` preserves exact raw `agent` under `(sessionId, userMessageId)`;
+- non-finalized assistant `message.updated` stores no positive finalized actual and produces no record;
+- finalized assistant observation is keyed by exact `(sessionId, assistantMessageId)` and retains
+  `parentUserMessageId`;
+- exact pinned `command.executed` is keyed by its `(sessionId, assistantMessageId)` and supplies workflow identity;
+- completion-before-final and final-before-completion both converge to the same joined invocation;
+- mismatched assistant IDs do not resolve;
+- mismatched parent user ID cannot borrow another invocation's chat actual;
+- when matching chat is absent but command completion + finalized assistant identity match, final routing may use
+  `observationSource = "message.updated"` without guessing chat identity;
+- production `chat.params` alone appends **no provisional durable routing record**;
+- session cleanup removes every routing-correlation entry/count for that session;
+- once a session's capture count reaches zero, unmatched routing leftovers are discarded;
+- a later event with no active pinned capture creates no routing record.
+
+#### Custom raw identity
+
+Keep the closed shard identity separate:
 
 ```ts
 expect(record.actualController).toBe("custom-controller-v2");
 expect(record.actualController).not.toBe("unknown");
 ```
 
-Also cover:
+Existing `setAgentMapping()` may normalize that same runtime agent to `"unknown"` for shard identity; the routing
+payload must retain the custom string.
 
-- recognized command accepts an optional single leading `/`, while unrelated command text creates no workflow
-  binding;
-- `chat.params` only with a configured pinned context produces durable `unapplied/actual_not_observed`;
-- non-finalized `message.updated` produces no routing durable record (and therefore no `applied`/`mismatch`);
-- finalized different known agent produces durable `mismatch`;
-- direct core integration with an explicitly bound `applicationMethod: "none"` produces
-  `unapplied/application_not_configured`; adapter tests must prove an absent/unrecognized pinned command does not
-  fabricate this workflow binding;
-- same session `brainstorming` → `writing-plans` switch does not reuse old actuals or workflow;
-- session cleanup removes routing context and a later observation with no new command creates no routing record;
-- routing append/redaction/validation failure remains fail-open and creates no Acceptance authority.
+#### Adapter field transport
 
-Define the durable fixtures in the current plan before the validator/store/redaction/projection assertions. These
-fixtures are specification examples, not a new fixture framework:
+Drive the exact Task 4.0 fields:
+
+```text
+command.execute.before:
+  command + sessionID
+
+chat.params:
+  sessionID + message.id + raw agent
+
+message.updated:
+  info.sessionID + info.id + info.parentID + raw info.agent
+  role=assistant + time.completed present
+
+command.executed:
+  properties.name + properties.sessionID + properties.messageID
+```
+
+Never transport prompt/message content, arguments, parts, model/provider payload, or raw events into routing state.
+
+#### Durable fixtures — self-contained current-plan contract
+
+Define these concrete fixtures before validator/store/redaction/projection assertions:
 
 ```ts
 const routingEnvelope = {
@@ -18069,8 +18512,7 @@ const legacySchemaVersion1Record = {
 };
 ```
 
-In `tests/runtime/validation.test.ts` or the existing owning validation suite, encode the status-specific durable
-rules as explicit assertions:
+Minimum validator matrix:
 
 ```ts
 expect(() => validateRecordSchema({ ...validCustomMismatch, sequence: 1 })).not.toThrow();
@@ -18091,12 +18533,7 @@ it.each([
   [{ ...validCustomMismatch, actualController: undefined }],
   [{ ...validUnappliedActualNotObserved, actualController: "atlas" }],
   [{ ...validUnappliedApplicationNotConfigured, applicationMethod: "pinned-command" }],
-  [
-    {
-      ...validUnappliedApplicationNotConfigured,
-      observationSource: "message.updated",
-    },
-  ],
+  [{ ...validUnappliedApplicationNotConfigured, observationSource: "message.updated" }],
   [{ ...validUnappliedApplicationNotConfigured, actualController: "atlas" }],
   [{ ...validCustomMismatch, actualController: "" }],
 ])("rejects an illegal controller-routing persisted shape", (record) => {
@@ -18104,11 +18541,11 @@ it.each([
 });
 ```
 
-The validator must also reject unknown routing status/reason literals and empty `workflow`. The table above is the
-minimum status/field matrix; do not collapse it to “malformed combinations are rejected.”
+Also reject unknown routing status/reason and empty workflow.
 
-In `tests/runtime/observation-log-store.test.ts`, use the existing `createMemFs()` and the real
-`ObservationLogStore` boundary. Append a pending routing record, then `readAll()`:
+#### Real append/read/replay boundary
+
+Use the existing `createMemFs()` and real `ObservationLogStore`:
 
 ```ts
 const { reader, writer } = createMemFs();
@@ -18135,14 +18572,12 @@ expect(replayed).toContainEqual(
 );
 ```
 
-Assert individually that replay preserves `workflow`, `routingStatus`, `desiredController`, `actualController`,
-`applicationMethod`, `observationSource`, and sequence. In the same suite, keep one existing valid
-`schemaVersion: 1` observation such as `skill_invoked` readable without migration. The exact
-`legacySchemaVersion1Record` above must remain accepted by `validateRecordSchema()`; if append/read coverage is used,
-strip only its `sequence` field before append and use an envelope/shard whose writer/session/agent match.
+Assert individually that replay preserves workflow/status/desired/actual/applicationMethod/source/sequence. Keep the
+legacy schemaVersion 1 fixture valid and readable without migration.
 
-In `tests/core/v2/persistence-redaction.test.ts`, drive the existing `redactPendingLogRecord()` primitive with
-routing free-form fields:
+#### Persistence redaction
+
+Use `redactPendingLogRecord()` directly:
 
 ```ts
 const sensitiveRouting = {
@@ -18154,47 +18589,37 @@ const redacted = redactPendingLogRecord(sensitiveRouting);
 
 expect(redacted).toMatchObject({
   kind: "controller_routing_observed",
-  routingStatus: "mismatch",
-  desiredController: "atlas",
-  applicationMethod: "pinned-command",
-  observationSource: "message.updated",
   workflow: "[REDACTED_PATH]",
   actualController: "[REDACTED_ENV]",
+  routingStatus: "mismatch",
+  applicationMethod: "pinned-command",
 });
-expect(redacted).not.toHaveProperty("prompt");
-expect(redacted).not.toHaveProperty("command");
-expect(redacted).not.toHaveProperty("config");
-expect(redacted).not.toHaveProperty("model");
-expect(redacted).not.toHaveProperty("provider");
 ```
 
-The typed record builder gets only `PendingEnvelope`, `workflow`, and `ControllerRoutingObservation`; its tests must
-also prove it has no input/property that copies a raw command definition, prompt, provider/model payload, credential,
-or arbitrary config. Do not add a generic unknown-field stripping framework.
+The persisted routing payload never contains command arguments/templates, prompt/message content, config objects,
+model/provider data, credentials, environment values, or host raw events.
 
-In `tests/core/v2/state-projection.test.ts`, use the existing main `project()` and
-`toSerializableProjectedState()` APIs:
+#### Audit-only projection
 
-```ts
-const before = project([], REBUILT_AT);
-const after = project(
-  [{ ...validCustomMismatch, sequence: 1 }],
-  REBUILT_AT,
-);
+Project the valid routing records alongside representative lifecycle/Evidence/Gate/Acceptance/Authorization state
+and assert adding/removing routing records changes none of:
 
-expect(toSerializableProjectedState(after)).toEqual(
-  toSerializableProjectedState(before),
-);
-expect(after.tasks.size).toBe(0);
+```text
+task count/status
+evidence refs
+Gate verdict/current decision
+Acceptance state
+Authorization state
+plan/finalization progress
 ```
 
-The unchanged serialized projection proves that the routing audit record creates no Lifecycle, Evidence, Gate,
-Acceptance, Authorization, or Progress authority. If the existing projector already no-ops on a no-task audit
-record, production projection code stays unchanged; add an explicit skip only if the closed-union exhaustiveness
-change requires it. Do not create a routing projection subsystem.
+Routing audit may feed existing L0 advisory visibility only; it is never authority.
 
-Keep the pinned-command doctor tests: correct agent, missing command, missing/empty/unrecognized agent, mismatched
-agent, both source-precedence directions, complete template output, and raw-config redaction.
+#### Doctor
+
+Retain the existing exact four command definitions and expected agents. Test correct/missing/malformed/mismatched
+agent values, source precedence, redacted diagnostics, and expected command template output. Doctor reads only the
+effective allowlisted `agent` field and does not expose raw config.
 
 - [ ] **Step 2: Confirm RED**
 
@@ -18202,7 +18627,6 @@ Run:
 
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
-  tests/core/controller-routing.test.ts \
   tests/core/session-state-provider.test.ts \
   tests/core/justice-plugin-routing.test.ts \
   tests/core/v2/observation-model.test.ts \
@@ -18216,115 +18640,106 @@ devcontainer exec --workspace-folder . bun run vitest run \
   tests/runtime/doctor-cli.test.ts
 ```
 
-Expected: FAIL behaviorally because the session routing context, exact command binding, raw/source/finalized
-transport, and end-to-end durable append are absent. Missing imports, undeclared fixtures, malformed SDK mock shape,
-or shell/setup errors are not acceptable RED evidence.
+Expected: RED because invocation-level state/transport and durable routing support are absent. The deterministic
+A/B interleaving and same-controller workflow tests must fail behaviorally against any session-current/latest
+implementation. Broken scaffolding is not acceptable RED evidence.
 
-- [ ] **Step 3: Implement the exact runtime correlation and durable observation path**
+- [ ] **Step 3: Implement in exact ownership order**
 
-1. **Session correlation ownership — `src/core/session-state-provider.ts`**
-   - Keep `sessionAgentIds`, `setAgentMapping()`, `getAgentId()`, and `resolveAgentId()` behavior unchanged.
-   - Add one session-keyed routing-context map using the Task 4.1 types.
-   - `beginControllerRoutingContext()` increments a fresh routing generation and replaces the previous workflow context with
-     no inherited actual observations.
-   - `recordControllerActualObservation()` stores raw controller strings without `resolveAgentId()`. `chat.params`
-     updates only `chatParamsActualController`; only finalized `message.updated` updates
-     `finalizedMessageActualController` and phase `finalized`.
-   - `finishControllerRoutingContext(sessionId, routingGeneration)` deletes only the same routing generation; a stale completion
-     must not delete a newer workflow context.
-   - Extend existing `removeSession()` to delete the routing context. Do not add another state service/framework.
+1. **`src/core/session-state-provider.ts` — narrow ephemeral correlation**
+   - add capture counts keyed by exact `(sessionId, command)`;
+   - add chat actuals keyed by `(sessionId, userMessageId)`;
+   - add finalized assistant actuals keyed by `(sessionId, assistantMessageId)`;
+   - add pinned command completions keyed by `(sessionId, assistantMessageId)`;
+   - `beginControllerRoutingCapture()` only increments exact pinned capture; it creates no current workflow slot;
+   - both record methods attempt the exact assistant-ID join and may return one
+     `ControllerRoutingInvocationContext`;
+   - workflow comes only from the joined `ControllerCommandCompletion.command`;
+   - finalized assistant `parentUserMessageId` selects only the matching chat entry;
+   - consume only the resolved invocation's IDs/count; when no captures remain for a session, drop unmatched routing
+     leftovers;
+   - `removeSession()` clears all routing correlation state for that session;
+   - add no generic session/event/correlation framework.
 
-2. **Workflow binding — `src/runtime/opencode-adapter.ts` + `src/core/justice-plugin.ts`**
-   - In `onCommandExecuteBefore(input, output)`, call `resolvePinnedCommandWorkflow(input.command)` before existing
-     `/justice-start` / `/justice-implement` handling. On exact match, ensure Justice is initialized and call
-     `justice.bindControllerRoutingWorkflow(input.sessionID, workflow, "pinned-command")`; do not change
-     `output.parts` for this routing observation.
-   - Never infer workflow from `WorkflowRouter.resolveController()` output. The three sisyphus workflows remain
-     distinct command bindings.
-   - Unrecognized commands create no controller routing context.
+2. **`src/runtime/opencode-adapter.ts` — lossless verified transport**
+   - exact pinned `command.execute.before` → `beginControllerRoutingCapture(sessionID, command)`;
+   - `chat.params` → raw agent + sessionID + `input.message.id`;
+   - assistant `message.updated` → raw agent + sessionID + `info.id` + `info.parentID` + finalized flag derived only
+     from `role === "assistant" && time.completed !== undefined`;
+   - `command.executed` → exact pinned `name` + sessionID + messageID;
+   - do not serialize/transport raw events or content;
+   - existing persona `AgentMapped` path stays separate.
 
-3. **Lossless actual transport — `src/runtime/opencode-adapter.ts`**
-   - Preserve the existing `AgentMapped` dispatch for persona/shard mapping.
-   - `onChatParams` additionally calls `justice.observeControllerActual(sessionID, { source: "chat.params",
-     actualController: input.agent, finalized: false })` using the raw string.
-   - For `message.updated`, use only Task 4.0 verified `properties.info` fields for routing: assistant role,
-     `info.sessionID`, raw `info.agent`, and `info.time.completed !== undefined`. Do not use the generic
-     `#resolveAgentName()` fallback chain as routing source identity and do not use `info.finish` as finalization
-     authority. Existing non-routing compatibility behavior may retain its fallback logic.
-   - Call `observeControllerActual()` for raw message actuals with `source: "message.updated"` and the exact
-     finalized boolean. Missing agent/session fields do not create routing evidence.
+3. **`src/core/justice-plugin.ts` — emit only a joined invocation**
+   - expose the three exact entry points listed in Produces;
+   - when a record call returns no joined context, return without routing append;
+   - when it returns a context, pass only that immutable snapshot to the observation handler;
+   - audit failures remain fail-open.
 
-4. **JusticePlugin correlation entry points — `src/core/justice-plugin.ts`**
-   - `bindControllerRoutingWorkflow()` delegates to `SessionStateProvider.beginControllerRoutingContext()`.
-   - `observeControllerActual()` delegates to `recordControllerActualObservation()`. If no active context exists,
-     return fail-open without routing append.
-   - For `chat.params`, pass the returned snapshot to `ObservationHandler.emitControllerRoutingObservation()` as
-     the provisional audit observation. For non-finalized `message.updated`, update session state but do not append
-     a routing record. For finalized `message.updated`, pass the finalized snapshot to the handler.
-   - After processing a finalized snapshot, call `finishControllerRoutingContext(sessionId, context.routingGeneration)` in a
-     `finally` path so an append failure cannot leave stale correlation reusable.
+4. **`src/hooks/observation-handler.ts` — no current-session lookup**
+   - accept `ControllerRoutingInvocationContext`;
+   - resolve desired controller from `context.workflow`;
+   - evaluate final raw actual; use matching chat actual only for source classification;
+   - build and append one final routing audit snapshot for the joined invocation;
+   - production `chat.params` arrival alone emits no provisional routing record;
+   - never query a "current/latest routing context".
 
-5. **Desired decision/evaluation/append — `src/hooks/observation-handler.ts`**
-   - `emitControllerRoutingObservation(context)` calls `WorkflowRouter.resolveController(context.workflow)`;
-     undefined is fail-open and emits no record.
-   - Build `createControllerRoutingDecision(context.workflow, desired, "workflow_rule")`.
-   - Build `ControllerRoutingEvaluationInput` only from the current context routing generation.
-   - Evaluate, call the typed `buildControllerRoutingObservedRecord()` from `record-builder.ts`, and append through
-     the existing `ObservationLogStore` using the closed `ObservationAgentId` envelope from
-     `sessionStateProvider.getAgentId(sessionId)`.
-   - On `chat.params`, append the provisional configured/unfinalized audit snapshot. On non-finalized
-     `message.updated`, append no routing record. On finalized message, append the final
-     applied/mismatch snapshot.
+5. **`src/core/v2/observation-model.ts` / `record-builder.ts`**
+   - add exactly one flattened `controller_routing_observed` observation union member/builder;
+   - preserve schemaVersion 1 envelope and custom raw actual string.
 
-6. **Durable observation boundary — current Task 4.2 contract**
-   - `src/core/v2/observation-model.ts`: define the flattened `ControllerRoutingObservedRecord` exactly as Design
-     §4.1 and add exactly one `PendingEnvelope & ControllerRoutingObservedRecord` member to the existing closed
-     `PendingObservationRecord` union. Keep `schemaVersion: 1`; no generic event record is introduced.
-   - `src/core/v2/record-builder.ts`: add one typed `buildControllerRoutingObservedRecord()` that accepts the
-     `PendingEnvelope`, `workflow`, and `ControllerRoutingObservation`, returns the flattened pending record, and has
-     no raw command/config/prompt/model/provider/credential/tool-payload input.
-   - `src/runtime/validation.ts`: add an explicit `controller_routing_observed` branch. Validate non-empty
-     `workflow`; each status-specific required/forbidden `actualController`, `applicationMethod`,
-     `observationSource`, and `reason` combination; and non-empty custom actual strings only in variants that permit
-     them. Preserve every previously valid `schemaVersion: 1` branch unchanged.
-   - `src/core/v2/persistence-redaction.ts`: add an explicit routing branch using the existing
-     `redactForPersistence()` primitive for free-form `workflow` and `actualController`. Preserve the literal
-     status/controller-method/source/reason fields. Do not create a second redaction framework.
-   - `ObservationLogStore` remains unchanged as the storage architecture: existing `append()` performs
-     `redactPendingLogRecord()` before sequencing/persistence, and existing `readAll()` re-enters
-     `validateRecordSchema()` during replay. Add tests through these real methods; do not add a routing store or a
-     second replay API.
-   - Main state projection remains audit-only for this kind. A routing record cannot create or mutate task
-     Lifecycle, Evidence, Gate, Acceptance, Authorization, or Progress state. Retain the natural no-op when possible;
-     add only an explicit skip in the existing projector if required for exhaustiveness. No routing projection
-     subsystem is introduced.
-   - Routing append/validation/redaction failures stay fail-open for execution and never create positive authority.
-     A mismatch is advisory/status visibility only.
-   - Do not add a generic event, persistence, projection, session-state, or DI framework.
+6. **`src/runtime/validation.ts`**
+   - implement the explicit status/reason/field matrix from Step 1;
+   - preserve every previously valid schemaVersion 1 record.
 
-7. **Doctor/docs**
-   - Keep the exact required four pinned commands and desired agents. The command names must match
-     `PINNED_COMMAND_WORKFLOW_MAP` exactly; tests assert no drift.
-   - Continue using only `DoctorEffectiveConfigView.effectiveCommandDefinitions` and expose no raw command/config
-     values.
-   - Document the same P0 commands and manual-install boundary in `README.md` and `SPEC.md`.
+7. **`src/core/v2/persistence-redaction.ts`**
+   - explicit routing branch;
+   - redact only free-form workflow/custom actual using the existing primitive;
+   - preserve literals/enums.
 
-- [ ] **Step 4: Confirm GREEN**
+8. **`src/runtime/observation-log-store.ts` existing boundary**
+   - no new store;
+   - append/read/replay through existing validation/redaction path.
 
-Run the same command as Step 2.
+9. **state projection**
+   - explicit no-authority handling for routing observation;
+   - no lifecycle/Evidence/Gate/Acceptance/Authorization/progress mutation.
 
-Expected: PASS for exact command→workflow binding, source/finalization preservation, custom raw identity retention,
-workflow-generation isolation, session cleanup, applied/mismatch/chat-only/unconfigured behavior, durable schema/
-validation/redaction/replay, audit-only projection, and doctor diagnostics.
+10. **doctor / README / SPEC**
+    - keep exact four pinned command definitions and expected agents;
+    - document that command execution correlation uses verified message identities and final audit is deferred until
+      exact command-completion/final-message join;
+    - expose no raw config/content.
 
-Then run the Phase 4 boundary gate required by Global Constraints. Task 4.0 must already be PASS; a unit-test-only
-substitute for the supported-host trace is not sufficient.
+- [ ] **Step 4: Confirm GREEN and Phase 4 boundary**
+
+Run the Step 2 command.
+
+Expected: PASS for:
+
+```text
+different-controller deterministic interleaving
+same-controller different-workflow interleaving
+exact message identity correlation
+A/B independent cleanup
+custom raw controller preservation
+non-finalized suppression
+no provisional chat.params durable append
+session cleanup
+durable schema/validator/redaction/append/read/replay
+legacy schemaVersion 1 compatibility
+audit-only projection
+doctor diagnostics
+```
+
+Then run the full Phase 4 boundary gate required by Global Constraints. Task 4.0 must already be PASS; unit tests
+cannot substitute for the supported-host overlap evidence.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/session-state-provider.ts src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/record-builder.ts src/runtime/validation.ts src/core/v2/persistence-redaction.ts src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/session-state-provider.test.ts tests/core/justice-plugin-routing.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/observation-log-store.test.ts tests/core/v2/state-projection.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
-GIT_MASTER=1 git commit -m "feat: correlate controller routing runtime observations"
+GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation identity"
 ```
 
 ## Traceability and Definition of Done
@@ -18335,8 +18750,8 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing runtime observati
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | executable supported-host 1.18.29 probe for all four commands, JSONL allowlist validation, exact command→workflow mapping, same-session routing correlation, raw chat.params + host-proven finalized message.updated agent, applied/known/custom mismatch/chat-only tests, concrete durable validation/redaction/append/replay fixtures, cleanup/isolation |
-| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK declaration inspection + root-SDK assistant-agent typing-gap check → real host command/chat/message trace for all four commands → exact workflow binding → session routing generation → raw/source/finalized actual capture → WorkflowRouter decision → evaluator → durable builder |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | supported-host 1.18.29 four-command nominal probe + deterministic same-server/same-session overlap probe, exact command.executed → assistant ID → parent user ID → chat.params ID join, exact command→workflow mapping, different-controller and same-controller interleavings, raw custom actual preservation, durable validation/redaction/append/replay, cleanup/isolation |
+| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK + host-source inspection → four nominal traces + deterministic overlap → session scope + stable user/assistant invocation identity → exact command completion/workflow binding → matching raw chat/final actual → WorkflowRouter decision → evaluator → durable builder; no session-current/latest heuristic |
 | Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
