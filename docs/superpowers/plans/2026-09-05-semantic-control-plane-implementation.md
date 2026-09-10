@@ -17031,6 +17031,13 @@ package/binary, verify its package version, or execute `--version` is an **execu
 do not create the runtime-signal report, do not synthesize `JUS-P0-01 runtime observation = BLOCKED`, and do not
 start Steps 2-6. A runtime observation exists only after Step 1 completes successfully.
 
+After Step 1 succeeds, capability `PASS` / `BLOCKED` values are **data outcomes**, not shell harness outcomes.
+A validator may internally use exit `0` for PASS and exit `1` for BLOCKED, but the enclosing Step 5/6 shell MUST
+treat either result as successful execution only after the corresponding result artifact is well-formed and the
+validator exit code matches that exact result. Shell non-zero is reserved for cases where a capability outcome
+cannot be trusted or completed, such as validator crash/unexpected exit, malformed or missing artifacts, I/O
+failure, or other harness failure. Step 7 is the only capability branch point after a runtime report exists.
+
 **Hard gate:** Task 4.1/4.2 MUST NOT start unless Step 6 has completed and the report contains exactly one
 `## Result` section whose exact result line is:
 
@@ -18632,14 +18639,65 @@ bun "$SPIKE_ROOT/validate-failure-lifecycle.mjs" \
 FAILURE_CODE=$?
 set -e
 
+test -s "$FAIL_RESULT"
+ABANDONMENT_RESULT="$(head -n 1 "$FAIL_RESULT")"
+
+for required in \
+  failure_injection_hook= \
+  a_command_executed= \
+  b_command_executed= \
+  b_finalized_identity= \
+  unsafe_early_lifecycle_observed= \
+  cleanup_scope= \
+  cleanup_session= \
+  cleanup_hook= \
+  cleanup_status= \
+  cleanup_order= \
+  preserves_concurrent_invocation= \
+  suppression_clear_authority= \
+  trace_flush=
+do
+  test "$(grep -Ec "^${required}" "$FAIL_RESULT")" = "1"
+done
+
+case "$ABANDONMENT_RESULT" in
+  "JUS-P0-01 abandonment observation = PASS")
+    test "$FAILURE_CODE" -eq 0
+    test "$(grep -Ec "^failure=" "$FAIL_RESULT")" = "0"
+    ;;
+  "JUS-P0-01 abandonment observation = BLOCKED")
+    test "$FAILURE_CODE" -eq 1
+    grep -Eq "^failure=" "$FAIL_RESULT"
+    ;;
+  *)
+    echo "ERROR: invalid abandonment result header" >&2
+    exit 1
+    ;;
+esac
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=
 
 trap - EXIT
-exit "$FAILURE_CODE"
+exit 0
 '
 ```
+
+Expected shell outcome:
+
+```text
+well-formed abandonment PASS + validator exit 0
+  → Step 5 shell exit 0
+well-formed abandonment BLOCKED + validator exit 1
+  → Step 5 shell exit 0
+missing/malformed result, PASS/exit mismatch, BLOCKED/exit mismatch, unexpected validator exit, or harness failure
+  → Step 5 shell non-zero
+```
+
+`failure-result.txt` is the Step 5 capability artifact; the Step 5 shell exit is only harness status. A valid
+BLOCKED result MUST continue to Step 6 unchanged. The wrapper does not erase the validator's original exit `1`;
+it requires exact `BLOCKED` ↔ exit `1` correspondence before normalizing the enclosing step to successful execution.
 
 The validator MUST distinguish **observed lifecycle evidence** from **safe cleanup authority**. It derives one
 non-empty `targetSessionID` from the unique A/B `command.execute.before` records and requires A failure injection,
@@ -18699,8 +18757,34 @@ bun "$SPIKE_ROOT/validate-and-report.mjs" \
 correlation_code=$?
 set -e
 
-test -f "$REPORT"
-test -f "$SPIKE_ROOT/failure-result.txt"
+test -s "$REPORT"
+test "$(grep -Fxc "## Result" "$REPORT")" = "1"
+test "$(grep -Ec "^JUS-P0-01 runtime observation = (PASS|BLOCKED)$" "$REPORT")" = "1"
+
+CORRELATION_RESULT_LINE_NUMBER="$(
+  grep -nFx "## Result" "$REPORT" |
+    cut -d: -f1
+)"
+test -n "$CORRELATION_RESULT_LINE_NUMBER"
+
+CORRELATION_RESULT="$(
+  sed -n "$((CORRELATION_RESULT_LINE_NUMBER + 1))p" "$REPORT"
+)"
+
+case "$CORRELATION_RESULT" in
+  "JUS-P0-01 runtime observation = PASS")
+    test "$correlation_code" -eq 0
+    ;;
+  "JUS-P0-01 runtime observation = BLOCKED")
+    test "$correlation_code" -eq 1
+    ;;
+  *)
+    echo "ERROR: invalid provisional correlation result" >&2
+    exit 1
+    ;;
+esac
+
+test -s "$SPIKE_ROOT/failure-result.txt"
 
 abandonment_line="$(head -n 1 "$SPIKE_ROOT/failure-result.txt")"
 
@@ -18718,9 +18802,12 @@ printf "\n## Failure / abandonment capability\n\n" >> "$REPORT"
 sed 's/^/- /' "$SPIKE_ROOT/failure-result.txt" >> "$REPORT"
 
 validation_code=0
-if [ "$correlation_code" -ne 0 ] ||    [ "$abandonment_line" != "JUS-P0-01 abandonment observation = PASS" ]; then
+if [ "$CORRELATION_RESULT" = "JUS-P0-01 runtime observation = BLOCKED" ] || \
+   [ "$abandonment_line" = "JUS-P0-01 abandonment observation = BLOCKED" ]; then
   validation_code=1
-  sed -i     's/^JUS-P0-01 runtime observation = PASS$/JUS-P0-01 runtime observation = BLOCKED/'     "$REPORT"
+  sed -i \
+    's/^JUS-P0-01 runtime observation = PASS$/JUS-P0-01 runtime observation = BLOCKED/' \
+    "$REPORT"
 fi
 
 test "$(grep -Fxc "## Result" "$REPORT")" = "1"
@@ -18758,9 +18845,14 @@ git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
 rm -rf "$SPIKE_ROOT"
 test ! -e "$SPIKE_ROOT"
 
-exit "$validation_code"
+exit 0
 '
 ```
+
+A well-formed final report is a successful execution of Step 6 whether its unique `## Result` is PASS or BLOCKED.
+`validation_code` is internal capability-combination state used to verify and, when required, rewrite the final
+result; it is not the shell harness status. Only report construction/validation/I/O or other harness failures make
+Step 6 exit non-zero. Therefore a valid BLOCKED report proceeds to Step 7 after scratch cleanup.
 
 The validator is the redaction/identity proof. `git diff --check` is formatting verification only. The exact line
 immediately following the unique `## Result` heading after Step 6 finishes is the sole overall Task 4.0 status
@@ -18799,7 +18891,9 @@ heuristics. The report is capability evidence only and is not itself permission 
 
 - [ ] **Step 7: Record capability outcome and stop before source implementation**
 
-Task 4.0 never directly unlocks Task 4.1/4.2.
+Task 4.0 never directly unlocks Task 4.1/4.2. After Step 1 has succeeded and Steps 2-6 have completed without a
+harness failure, Step 7 is the **only capability branch point**. It branches only on the final post-Step-6 unique
+`## Result` exact line; Step 5/6 shell exit status MUST NOT be used as a second PASS/BLOCKED authority.
 
 If the final post-Step-6 `## Result` exact line is:
 
