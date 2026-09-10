@@ -25,7 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- A Phase 4 runtime spike that cannot prove both (a) the non-content invocation-level join and (b) a safe no-command-completion abandonment boundary — including deterministic same-host/same-session overlap and failed-A/successful-B probes — blocks Phase 4 and JUS-P0-01 completion. `sessionId` alone is never an invocation identity; fixed per-session bounds do not waive the lifecycle gate.
+- A Phase 4 runtime spike that cannot prove both (a) the non-content invocation-level join and (b) an exact safe no-command-completion lifecycle contract blocks JUS-P0-01 implementation. Task 4.0 capability PASS alone never authorizes source changes: the exact cleanup scope/hook/value/order and suppression-clear authority must first be copied into Design/Plan in a document-only change and re-reviewed. `sessionId` alone is never an invocation identity; fixed per-session bounds do not waive the lifecycle gate.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17027,10 +17027,11 @@ JUS-P0-01 runtime observation = PASS
 ```
 
 PASS means all three capability groups succeed: (1) the four nominal probes, (2) the deterministic
-same-server/same-session invocation overlap probe, and (3) the deterministic post-arm failure/abandonment probe
-including failed-A/successful-B preservation. The identity chain and the abandonment boundary must both match Design
-§4.1. If either differs, is ambiguous, or cannot be proven, write `BLOCKED`, update Design/Plan in a separate
-document-only change, obtain review again, and only then reconsider implementation.
+same-server/same-session invocation overlap probe, and (3) the deterministic post-arm failure/abandonment probe.
+Task 4.0 records capability evidence only; it does **not** pre-authorize a production abandonment API. A PASS report
+must identify the exact cleanup scope/hook/value/order and concurrent-B/suppression safety. After either PASS or
+BLOCKED, stop before Task 4.1/4.2. A separate document-only change must copy the observed lifecycle contract into
+Design §4.1 and Task 4.2 and pass document review before implementation is reconsidered.
 
 The trace allowlist is exact:
 
@@ -17057,6 +17058,7 @@ command.executed
 session.status
 session.idle
 session.error
+probe.failure_injected
 ```
 
 Never record `arguments`, prompt/message content, parts, raw event objects, command templates, model/provider IDs,
@@ -17150,6 +17152,9 @@ BASE="https://raw.githubusercontent.com/anomalyco/opencode/$PINNED"
 
 curl -fsSL "$BASE/packages/opencode/src/session/prompt.ts" -o "$SRC/prompt.ts"
 curl -fsSL "$BASE/packages/opencode/src/effect/runner.ts" -o "$SRC/runner.ts"
+curl -fsSL "$BASE/packages/opencode/src/plugin/index.ts" -o "$SRC/opencode-plugin-index.ts"
+curl -fsSL "$BASE/packages/opencode/src/session/llm/request.ts" -o "$SRC/request.ts"
+curl -fsSL "$BASE/packages/opencode/src/session/processor.ts" -o "$SRC/processor.ts"
 curl -fsSL "$BASE/packages/sdk/js/src/gen/types.gen.ts" -o "$SRC/types.gen.ts"
 curl -fsSL "$BASE/packages/plugin/src/index.ts" -o "$SRC/plugin-index.ts"
 
@@ -17163,6 +17168,14 @@ test "$SOURCE_VERSION" = "1.18.29"
 grep -F "\"command.execute.before\"" "$SRC/prompt.ts"
 grep -F "const result = yield* prompt({" "$SRC/prompt.ts"
 grep -F "messageID: result.info.id" "$SRC/prompt.ts"
+
+grep -F "void hook[\"event\"]?." "$SRC/opencode-plugin-index.ts"
+grep -F "yield* Effect.promise(async () => fn(input, output))" "$SRC/opencode-plugin-index.ts"
+
+grep -F "const params = yield* input.plugin.trigger(" "$SRC/request.ts"
+grep -F "\"chat.params\"" "$SRC/request.ts"
+grep -F "Effect.catch(halt)" "$SRC/processor.ts"
+
 grep -F "case \"Running\":" "$SRC/runner.ts"
 grep -F "case \"ShellThenRun\":" "$SRC/runner.ts"
 grep -F "return [awaitDone(st.run.done), st]" "$SRC/runner.ts"
@@ -17179,9 +17192,12 @@ echo "PINNED_HOST_SOURCE_OK"
 ```
 
 Expected: PASS. `opencode --version`, fetched `packages/opencode/package.json`, and the immutable source commit
-must resolve to OpenCode `1.18.29`; the source commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. Network failure while retrieving
-that exact snapshot is `BLOCKED`; do not inspect a different tag/branch as a substitute. The source inspection
-establishes only candidate host semantics. Runtime identity and abandonment still require runtime proof.
+must resolve to OpenCode `1.18.29`; the source commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. The source checks must also prove:
+generic `event` callbacks are dispatched without awaiting their Promise, named hooks are awaited by
+`Plugin.trigger()`, `chat.params` runs inside the LLM/processor failure boundary, and `command.execute.before`
+precedes `prompt()` and `command.executed` in `SessionPrompt.command()`. Network failure while retrieving that exact
+snapshot is `BLOCKED`; do not inspect a different tag/branch as a substitute. Runtime identity/lifecycle behavior
+still requires the executable probes.
 
 - [ ] **Step 2: Create the temporary workspace, probe, and validator**
 
@@ -17943,13 +17959,16 @@ commands onto one assistant identity, omits B's own chain, or cannot process B w
 correlation contract is not proven and the result is `BLOCKED`.
 
 
-- [ ] **Step 5: Run one deterministic post-arm failure + successful-B probe**
+- [ ] **Step 5: Run deterministic awaited-hook failure + successful-B probe**
 
-This is a capability probe, not production failure injection. It creates a second temporary workspace plugin that
-fails **only** the A invocation after `command.execute.before` and after A's `chat.params` has been observed. A is
-held behind a barrier until B's `command.execute.before` is visible in the same server process and same session.
-The failure plugin records only the allowlisted lifecycle metadata; it never records an error object, stack, prompt,
-message content, provider/model payload, or environment values.
+This probe validates the no-`command.executed` path itself. Failure injection MUST occur in the awaited
+`command.execute.before` named hook, which `SessionPrompt.command()` invokes before `prompt()`. The detached generic
+`event` callback is observation-only. Do not inject from `event`, `message.updated`, or `chat.params`.
+
+A is `justice-implement-writing-plans`; B is `justice-implement-subagent-driven-development`. A writes its
+`command.execute.before` trace and a barrier file, waits until B's `command.execute.before` is observed in the same
+server process/session, writes `probe.failure_injected`, then throws. B releases A and returns normally from its
+named hook.
 
 Run:
 
@@ -17981,16 +18000,22 @@ const tracePath = process.env.JUSTICE_ROUTING_FAILURE_TRACE;
 const barrierDir = process.env.JUSTICE_ROUTING_FAILURE_BARRIER_DIR;
 if (!tracePath || !barrierDir) throw new Error("failure probe env missing");
 
-const COMMAND_A = "justice-implement-writing-plans";
-const COMMAND_B = "justice-implement-subagent-driven-development";
-const ALLOWED_KEYS = new Set(["hook", "command", "sessionID", "status"]);
+const A = "justice-implement-writing-plans";
+const B = "justice-implement-subagent-driven-development";
+const ALLOWED_KEYS = new Set([
+  "hook",
+  "command",
+  "sessionID",
+  "assistantMessageID",
+  "parentMessageID",
+  "completedPresent",
+  "status",
+]);
 
 let writeChain = Promise.resolve();
 let sessionID;
-let aUserMessageID;
 let releaseA;
 let releasePromise;
-let injected = false;
 
 function append(record) {
   const clean = Object.fromEntries(
@@ -18032,25 +18057,20 @@ export const ControllerRoutingFailureProbe = async () => ({
       sessionID: input.sessionID,
     });
 
-    if (input.command === COMMAND_A && sessionID === undefined) {
+    if (input.command === A && sessionID === undefined) {
       armBarrier(input.sessionID);
-      return;
-    }
-    if (input.command === COMMAND_B && input.sessionID === sessionID) {
-      releaseA?.();
-    }
-  },
-
-  "chat.params": async (input) => {
-    await append({ hook: "chat.params", sessionID: input.sessionID });
-    if (
-      aUserMessageID === undefined &&
-      input.sessionID === sessionID &&
-      typeof input.message?.id === "string"
-    ) {
-      aUserMessageID = input.message.id;
-      await writeFile(`${barrierDir}/a-chat-blocked`, input.sessionID, "utf8");
+      await writeFile(`${barrierDir}/a-command-blocked`, input.sessionID, "utf8");
       await waitForB();
+      await append({
+        hook: "probe.failure_injected",
+        command: A,
+        sessionID: input.sessionID,
+      });
+      throw new Error("ROUTING_PROBE_FORCED_POST_ARM_FAILURE");
+    }
+
+    if (input.command === B && input.sessionID === sessionID) {
+      releaseA?.();
     }
   },
 
@@ -18087,28 +18107,32 @@ export const ControllerRoutingFailureProbe = async () => ({
       return;
     }
 
+    if (event?.type === "message.updated") {
+      const info = event.properties?.info;
+      if (info?.role !== "assistant" || typeof info.sessionID !== "string") return;
+      await append({
+        hook: "message.updated",
+        sessionID: info.sessionID,
+        assistantMessageID: typeof info.id === "string" ? info.id : undefined,
+        parentMessageID: typeof info.parentID === "string" ? info.parentID : undefined,
+        completedPresent: info.time?.completed !== undefined,
+      });
+      return;
+    }
+
     if (event?.type === "command.executed") {
       const p = event.properties;
       await append({
         hook: "command.executed",
         command: typeof p?.name === "string" ? p.name : undefined,
         sessionID: typeof p?.sessionID === "string" ? p.sessionID : undefined,
+        assistantMessageID: typeof p?.messageID === "string" ? p.messageID : undefined,
       });
-      return;
     }
+  },
 
-    if (event?.type !== "message.updated" || injected) return;
-    const info = event.properties?.info;
-    if (
-      info?.role === "assistant" &&
-      info.sessionID === sessionID &&
-      typeof info.parentID === "string" &&
-      info.parentID === aUserMessageID
-    ) {
-      injected = true;
-      await append({ hook: "message.updated", sessionID: info.sessionID });
-      throw new Error("ROUTING_PROBE_FORCED_POST_ARM_FAILURE");
-    }
+  dispose: async () => {
+    await writeChain;
   },
 });
 FAIL_PROBE
@@ -18123,19 +18147,30 @@ if (!tracePath || !statusPath || !resultPath) {
 
 const A = "justice-implement-writing-plans";
 const B = "justice-implement-subagent-driven-development";
-const allowedKeys = new Set(["hook", "command", "sessionID", "status"]);
+
+const allowedKeys = new Set([
+  "hook",
+  "command",
+  "sessionID",
+  "assistantMessageID",
+  "parentMessageID",
+  "completedPresent",
+  "status",
+]);
+
 const allowedHooks = new Set([
   "command.execute.before",
-  "chat.params",
   "message.updated",
   "command.executed",
   "session.status",
   "session.idle",
   "session.error",
+  "probe.failure_injected",
 ]);
 
 const failures = [];
 const records = [];
+
 for (const [index, line] of (await readFile(tracePath, "utf8"))
   .split(/\r?\n/)
   .filter(Boolean)
@@ -18147,9 +18182,11 @@ for (const [index, line] of (await readFile(tracePath, "utf8"))
     failures.push(`trace_json_invalid:${index + 1}`);
     continue;
   }
+
   const forbidden = Object.keys(record).filter((key) => !allowedKeys.has(key));
   if (forbidden.length) failures.push(`forbidden_keys:${index + 1}`);
   if (!allowedHooks.has(record.hook)) failures.push(`invalid_hook:${index + 1}`);
+
   records.push({ ...record, __index: index });
 }
 
@@ -18168,18 +18205,32 @@ if (!status.has(B) || status.get(B) !== 0) failures.push("B_did_not_succeed");
 
 const aStart = records.find((r) => r.hook === "command.execute.before" && r.command === A);
 const bStart = records.find((r) => r.hook === "command.execute.before" && r.command === B);
-const aCommandExecuted = records.filter((r) => r.hook === "command.executed" && r.command === A);
-const bCommandExecuted = records.filter((r) => r.hook === "command.executed" && r.command === B);
+const injected = records.find((r) => r.hook === "probe.failure_injected" && r.command === A);
+const aExecuted = records.filter((r) => r.hook === "command.executed" && r.command === A);
+const bExecuted = records.filter((r) => r.hook === "command.executed" && r.command === B);
 
-if (!aStart || !bStart) failures.push("command_start_missing");
+if (!aStart || !bStart || !injected) failures.push("failure_barrier_evidence_missing");
 if (aStart && bStart && aStart.sessionID !== bStart.sessionID) failures.push("not_same_session");
-if (aCommandExecuted.length !== 0) failures.push("A_unexpected_command_executed");
-if (bCommandExecuted.length !== 1) failures.push(`B_command_executed_count:${bCommandExecuted.length}`);
-
-const injected = records.find((r) => r.hook === "message.updated");
-if (!injected) failures.push("failure_injection_point_missing");
 if (injected && bStart && !(bStart.__index < injected.__index)) {
-  failures.push("B_not_armed_before_A_failure");
+  failures.push("A_failed_before_B_was_armed");
+}
+if (aExecuted.length !== 0) failures.push("A_unexpected_command_executed");
+if (bExecuted.length !== 1) failures.push(`B_command_executed_count:${bExecuted.length}`);
+
+let bDone;
+let bFinal;
+
+if (bExecuted.length === 1) {
+  bDone = bExecuted[0];
+  bFinal = records.find(
+    (r) =>
+      r.hook === "message.updated" &&
+      r.sessionID === bDone.sessionID &&
+      r.assistantMessageID === bDone.assistantMessageID &&
+      r.completedPresent === true,
+  );
+  if (!bDone.assistantMessageID) failures.push("B_completion_messageID_missing");
+  if (!bFinal) failures.push("B_finalized_identity_missing");
 }
 
 const lifecycle = records.filter(
@@ -18188,29 +18239,56 @@ const lifecycle = records.filter(
     r.hook === "session.idle" ||
     (r.hook === "session.status" && r.status === "idle"),
 );
-if (lifecycle.length === 0) failures.push("no_terminal_or_quiescence_signal");
 
-if (bCommandExecuted.length === 1) {
-  const bDone = bCommandExecuted[0];
-  const betweenBStartAndBCompletion = lifecycle.filter(
-    (r) => bStart && r.__index > bStart.__index && r.__index < bDone.__index,
-  );
-  if (betweenBStartAndBCompletion.length === 0) {
-    failures.push("no_lifecycle_ordering_evidence_before_B_completion");
+let safeCandidate;
+let unsafeEarly = false;
+
+if (bDone && bFinal) {
+  const safeAfter = Math.max(bDone.__index, bFinal.__index);
+
+  for (const event of lifecycle) {
+    if (event.__index <= safeAfter) {
+      unsafeEarly = true;
+      continue;
+    }
+
+    // session.error is evidence only. It is not session-quiescence authority.
+    if (
+      event.hook === "session.idle" ||
+      (event.hook === "session.status" && event.status === "idle")
+    ) {
+      safeCandidate = event;
+      break;
+    }
   }
 }
 
+if (!safeCandidate) failures.push("no_safe_post_B_session_quiescence_boundary");
+
 const result = failures.length === 0 ? "PASS" : "BLOCKED";
-await writeFile(
-  resultPath,
-  [
-    `JUS-P0-01 abandonment observation = ${result}`,
-    ...failures.map((failure) => `failure=${failure}`),
-    "",
-  ].join("\n"),
-  "utf8",
-);
-console.log(`JUS-P0-01 abandonment observation = ${result}`);
+const cleanupHook = safeCandidate?.hook ?? "none";
+const cleanupStatus =
+  safeCandidate?.hook === "session.status" ? (safeCandidate.status ?? "none") : "none";
+
+const output = [
+  `JUS-P0-01 abandonment observation = ${result}`,
+  "failure_injection_hook=command.execute.before",
+  `a_command_executed=${aExecuted.length === 0 ? "no" : "yes"}`,
+  `b_command_executed=${bExecuted.length === 1 ? "yes" : "no"}`,
+  `b_finalized_identity=${bFinal ? "yes" : "no"}`,
+  `unsafe_early_lifecycle_observed=${unsafeEarly ? "true" : "false"}`,
+  `cleanup_scope=${safeCandidate ? "session" : "none"}`,
+  `cleanup_hook=${cleanupHook}`,
+  `cleanup_status=${cleanupStatus}`,
+  `cleanup_order=${safeCandidate ? "after_b_finalized_and_command_executed" : "none"}`,
+  `preserves_concurrent_invocation=${safeCandidate ? "true" : "false"}`,
+  `suppression_clear_authority=${safeCandidate ? "same_verified_boundary" : "removeSession_only"}`,
+  ...failures.map((failure) => `failure=${failure}`),
+  "",
+];
+
+await writeFile(resultPath, output.join("\n"), "utf8");
+console.log(output[0]);
 process.exit(result === "PASS" ? 0 : 1);
 FAIL_VALIDATE
 
@@ -18220,6 +18298,7 @@ node --check "$SPIKE_ROOT/validate-failure-lifecycle.mjs"
 SERVER_PID=
 A_PID=
 B_PID=
+
 cleanup() {
   code=$?
   for pid in "${A_PID:-}" "${B_PID:-}" "${SERVER_PID:-}"; do
@@ -18267,11 +18346,11 @@ A_PID=$!
 set -e
 
 for _ in $(seq 1 150); do
-  if [ -f "$FAIL_BARRIER/a-chat-blocked" ]; then break; fi
+  if [ -f "$FAIL_BARRIER/a-command-blocked" ]; then break; fi
   if ! kill -0 "$A_PID" 2>/dev/null; then exit 1; fi
   sleep 0.1
 done
-test -f "$FAIL_BARRIER/a-chat-blocked"
+test -f "$FAIL_BARRIER/a-command-blocked"
 
 set +e
 (
@@ -18296,37 +18375,47 @@ set -e
 printf "%s\t%s\n" justice-implement-writing-plans "$A_CODE" >> "$FAIL_STATUS"
 printf "%s\t%s\n" justice-implement-subagent-driven-development "$B_CODE" >> "$FAIL_STATUS"
 
+test "$A_CODE" -ne 0
+test "$B_CODE" -eq 0
+
+# Stop the same server before validation. Plugin.dispose() awaits writeChain,
+# so all detached lifecycle observations are flushed without a sleep heuristic.
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=
+
 set +e
 bun "$SPIKE_ROOT/validate-failure-lifecycle.mjs" \
   "$FAIL_TRACE" "$FAIL_STATUS" "$FAIL_RESULT"
 FAILURE_CODE=$?
 set -e
 
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
-SERVER_PID=
 trap - EXIT
-
 exit "$FAILURE_CODE"
 '
 ```
 
-Expected PASS requires all of the following:
+The validator MUST distinguish **observed lifecycle evidence** from **safe cleanup authority**. A
+`session.status idle`, `session.idle`, or `session.error` that occurs before B's matching finalized assistant and
+B's exact `command.executed` is retained as `unsafe_early_lifecycle_observed=true` but cannot make the probe PASS.
+`session.error` alone is never session-quiescence authority.
+
+PASS requires all of:
 
 ```text
-A command.execute.before observed
-B command.execute.before observed in the same server/session before A failure injection
 A exits non-zero
-A has no command.executed
+A command.execute.before and probe.failure_injected observed
+B command.execute.before observed before A injection in the same session
+A command.executed absent
 B exits zero
-B has exactly one command.executed
-at least one allowlisted terminal/quiescence signal is observed
-ordering evidence is sufficient to define a cleanup boundary that does not delete B
+B finalized assistant identity matches B command.executed.messageID
+one session.status(idle) or session.idle occurs only after both B finalized identity and B command.executed
+cleanup_scope/session + hook/value/order are written explicitly
+preserves_concurrent_invocation=true
 ```
 
-If the supported host cannot provide that evidence, this step is `BLOCKED`. Do not weaken the validator or invent a
-cleanup heuristic. The fixed per-session limits in Design §4.1 remain the memory-safety backstop, but they do not
-waive the requirement to re-enter Design → Plan → review before production implementation.
+If no post-B quiescence signal exists, the lifecycle capability result is `BLOCKED`. Do not weaken the validator,
+treat an early idle/error as cleanup authority, or invent a Justice-local invocation token.
 
 
 - [ ] **Step 6: Validate correlation traces, abandonment result, and write the bounded report**
@@ -18355,7 +18444,19 @@ test -f "$REPORT"
 test -f "$SPIKE_ROOT/failure-result.txt"
 
 abandonment_line="$(head -n 1 "$SPIKE_ROOT/failure-result.txt")"
-printf "\n## Failure / abandonment capability\n%s\n" "$abandonment_line" >> "$REPORT"
+
+case "$abandonment_line" in
+  "JUS-P0-01 abandonment observation = PASS"|"JUS-P0-01 abandonment observation = BLOCKED") ;;
+  *) echo "ERROR: invalid abandonment result header" >&2; exit 1 ;;
+esac
+
+for required in   failure_injection_hook=   a_command_executed=   b_command_executed=   b_finalized_identity=   unsafe_early_lifecycle_observed=   cleanup_scope=   cleanup_hook=   cleanup_status=   cleanup_order=   preserves_concurrent_invocation=   suppression_clear_authority=
+do
+  grep -E "^${required}" "$SPIKE_ROOT/failure-result.txt" >/dev/null
+done
+
+printf "\n## Failure / abandonment capability\n\n" >> "$REPORT"
+sed 's/^/- /' "$SPIKE_ROOT/failure-result.txt" >> "$REPORT"
 
 validation_code=0
 if [ "$correlation_code" -ne 0 ] ||    [ "$abandonment_line" != "JUS-P0-01 abandonment observation = PASS" ]; then
@@ -18409,33 +18510,50 @@ overlap:
   no controller cross-join is possible
 ```
 
-PASS additionally requires `JUS-P0-01 abandonment observation = PASS`. Any failure is `BLOCKED`; do not weaken
+PASS additionally requires `JUS-P0-01 abandonment observation = PASS` and the complete sanitized lifecycle
+contract above. The report must retain the exact `cleanup_scope`, `cleanup_hook`, `cleanup_status`, `cleanup_order`,
+`preserves_concurrent_invocation`, and `suppression_clear_authority` values. Any failure is `BLOCKED`; do not weaken
 either validator, parse content/error payloads, infer workflow from controller, or substitute latest/current event
-heuristics. A session-level idle/error signal is accepted as production cleanup authority only if this probe
-demonstrates a safe boundary that preserves B.
+heuristics. The report is capability evidence only and is not itself permission to implement cleanup.
 
-- [ ] **Step 7: Record the gate outcome; do not auto-implement**
+- [ ] **Step 7: Record capability outcome and stop before source implementation**
 
-If the report is `BLOCKED`, stop Phase 4. Task 4.1/4.2 are prohibited.
+Task 4.0 never directly unlocks Task 4.1/4.2.
 
-If the report is `PASS`, compare the observed contract with Design §4.1 and this plan. If they are exact, Task 4.1
-may proceed after normal approval. If they differ in any identity field or semantics, stop and perform a
-document-only Design → Plan → review cycle first.
+If the report is `PASS`:
+
+1. stop before Task 4.1;
+2. commit only the sanitized spike report after its normal review;
+3. copy the exact lifecycle contract from the report into Design §4.1;
+4. update Task 4.2 with exactly one matching cleanup scope/API/hook/value/order contract and concrete RED tests;
+5. define suppression-clear authority from the same verified boundary;
+6. commit that Design/Plan change separately and run document review again;
+7. only the reviewed exact contract may unlock Task 4.1/4.2.
+
+If the report is `BLOCKED`:
+
+1. stop before Task 4.1;
+2. retain fixed resource bounds and `removeSession()` cleanup only;
+3. update Design/Plan with the observed limitation or a newly justified capability strategy;
+4. run document review again;
+5. do not implement source/tests.
+
+No implementation agent may choose between session-wide and invocation-specific cleanup.
 
 After the spike report itself has been reviewed and approved for commit:
 
 ```bash
 GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
-GIT_MASTER=1 git commit -m "docs: verify controller routing invocation identity"
+GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 ```
 
 ### Task 4.1: Preserve workflow identity and define the verified invocation contract
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
-**Precondition:** Task 4.0 report is PASS and matches both the exact invocation identity contract and the safe
-abandonment/cleanup boundary in Design §4.1. If the host proves a different identity or lifecycle contract, do not
-edit source; update Design/Plan and re-review first.
+**Precondition:** Task 4.0 report is PASS **and** a subsequent document-only amendment has copied the exact
+sanitized lifecycle contract into Design §4.1 / Task 4.2 and passed document review. The current pre-spike Design
+does not authorize a production abandonment API. Do not edit source until that reviewed amendment exists.
 
 **Files:**
 
@@ -18635,8 +18753,9 @@ GIT_MASTER=1 git commit -m "feat: controller routingにinvocation identityを定
 
 **Requirement:** JUS-P0-01, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3.
 
-**Precondition:** Task 4.0 is PASS and exact-match with Design §4.1 for both invocation correlation and
-failure/abandonment lifecycle. If not, do not implement this task.
+**Precondition:** Task 4.0 is PASS and a subsequent reviewed document-only lifecycle amendment has replaced the
+pre-spike cleanup checkpoint with one exact host-verified cleanup scope/API/hook/value/order contract. Until then,
+this task is intentionally non-executable; do not infer or invent the missing production cleanup API.
 
 **Files:**
 
@@ -18687,10 +18806,6 @@ recordControllerActualObservation(
 recordControllerCommandCompletion(
   completion: ControllerCommandCompletion,
 ): ControllerRoutingInvocationContext | undefined;
-
-abandonControllerRoutingForSession(
-  sessionId: string,
-): void;
 
 export const CONTROLLER_ROUTING_MAX_PENDING_CAPTURES_PER_SESSION = 8;
 export const CONTROLLER_ROUTING_MAX_CHAT_ACTUALS_PER_SESSION = 8;
@@ -18821,58 +18936,28 @@ Add focused tests proving:
   `observationSource = "message.updated"` without guessing chat identity;
 - production `chat.params` alone appends **no provisional durable routing record**;
 - session cleanup removes every routing-correlation entry/count for that session;
-- verified abandonment cleanup removes unresolved failed-capture state without fabricating an audit;
-- failed-A cleanup preserves B state in the same session;
-- per-session pending/chat/final/completion limits are exactly 8 and overflow is fail-open suppression;
+- per-session pending/chat/final/completion limits are exactly 8 and overflow is fail-open suppression; pre-spike suppression clears only on `removeSession()`;
 - once a session's capture count reaches zero, unmatched routing leftovers are discarded;
 - a later event with no active pinned capture creates no routing record.
 
-#### Failed-capture abandonment and bounded-state tests
+#### Failure lifecycle contract checkpoint
 
-Use the exact Task 4.0-verified abandonment boundary; do not invent another signal in unit tests.
+Do not write production failed-capture cleanup tests from this pre-spike document. Task 4.0 must run first. The
+mandatory post-spike document-only amendment must replace this checkpoint with one concrete RED sequence copied from
+the sanitized report:
 
-Minimum failed-A sequence:
+- exact cleanup scope (`session` or a host-verified invocation identity);
+- exact hook/event and required value;
+- exact ordering relative to B finalized assistant + B `command.executed`;
+- one unsafe-early lifecycle case that must **not** clear B;
+- one failed-A/successful-B case proving A creates no durable audit and B remains correct;
+- exact suppression-clear authority.
 
-```text
-A command.execute.before
-→ A capture armed
-→ optional A chat/final partial state
-→ A fails
-→ no A command.executed
-→ verified abandonment boundary
-```
+The amendment must also add the exact narrow API signature matching that verified scope. No local generation,
+sequence, latest/current heuristic, content correlation, generic queue, TTL, cache, timer, or background worker may
+be introduced.
 
-Assert:
-
-```ts
-expect(state.pendingCaptureCount(sessionId)).toBe(0);
-expect(state.chatActualCount(sessionId)).toBe(0);
-expect(state.finalActualCount(sessionId)).toBe(0);
-expect(state.commandCompletionCount(sessionId)).toBe(0);
-expect(routingRecords).toHaveLength(0);
-```
-
-Then run a normal B invocation in the same session and assert only B produces one correct routing audit. A stale
-capture must not consume or block B.
-
-Also encode one failed-A/successful-B interleaving matching Task 4.0 evidence:
-
-```text
-A capture
-B capture
-A failure without command.executed
-verified safe abandonment boundary
-B exact completion/final identity
-```
-
-Required assertions:
-
-- A abandonment creates no durable routing record;
-- A cleanup does not remove B capture/chat/final/completion state;
-- B emits exactly one record with B workflow/desired/actual/status;
-- final unresolved routing state is empty.
-
-Resource-bound tests use the exact value `8`:
+Resource-bound tests remain required independently of lifecycle discovery. Use exact value `8`:
 
 - the ninth pending capture credit in one session triggers fail-open overflow handling;
 - the ninth unmatched chat entry triggers the same bounded suppression;
@@ -18880,10 +18965,9 @@ Resource-bound tests use the exact value `8`:
 - the ninth unmatched command-completion entry triggers the same bounded suppression;
 - overflow appends no routing record and never changes Gate/Acceptance/Authorization/lifecycle/progress state;
 - overflow clears unresolved routing entries and sets only the bounded routing-suppression marker;
-- a verified safe quiescence/abandonment boundary clears suppression; if Task 4.0 did not prove such a boundary,
-  Task 4.2 must not run.
-
-Do not implement an LRU, generic cache, generic TTL service, timer/background cleanup worker, or queue framework.
+- in the pre-spike contract, suppression remains until `removeSession(sessionId)`;
+- the post-spike reviewed amendment may replace that final rule only with the exact verified
+  `suppression_clear_authority` from Task 4.0.
 
 #### Custom raw identity
 
@@ -19151,8 +19235,9 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - `removeSession()` clears all routing correlation state for that session;
    - implement the exact four per-session limits (`8`) from Design §4.1; on overflow clear unresolved routing
      state, set the bounded routing-suppression marker, append no audit, and do not affect authoritative state;
-   - implement `abandonControllerRoutingForSession(sessionId)` only for the exact Task 4.0-verified safe boundary;
-     failure cleanup creates no durable routing record and must preserve any concurrently valid B state;
+   - under the current pre-spike contract, `routingSuppressed` clears only through `removeSession()`;
+   - do not implement any abandonment/quiescence API until the mandatory post-spike reviewed amendment has added
+     one exact signature and lifecycle contract to this task;
    - add no generic cache/TTL/timer/background-worker/session/event/correlation framework.
 
 2. **`src/runtime/opencode-adapter.ts` — lossless verified transport**
@@ -19161,9 +19246,10 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - assistant `message.updated` → raw agent + sessionID + `info.id` + `info.parentID` + finalized flag derived only
      from `role === "assistant" && time.completed !== undefined`;
    - `command.executed` → exact pinned `name` + sessionID + messageID;
-   - consume only the Task 4.0-verified lifecycle signal needed for abandonment; never forward error objects,
+   - before the mandatory post-spike lifecycle amendment, consume no session lifecycle event as routing cleanup
+     authority; `session.status`, `session.idle`, and `session.error` remain observation-only capability evidence;
+   - after that amendment, transport only its exact allowlisted lifecycle fields; never forward error objects,
      stack traces, status messages, prompt/message content, or raw lifecycle events;
-   - invoke routing abandonment only at the verified safe boundary; `session.idle` is not automatically authority;
    - do not serialize/transport raw events or content;
    - existing persona `AgentMapped` path stays separate.
 
@@ -19171,9 +19257,9 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - expose the three exact entry points listed in Produces;
    - when a record call returns no joined context, return without routing append;
    - when it returns a context, pass only that immutable snapshot to the observation handler;
-   - expose the narrow abandonment entry point and call `SessionStateProvider` only when Adapter supplies the
-     Task 4.0-verified safe lifecycle boundary;
-   - abandonment/overflow emit no routing audit and remain fail-open;
+   - expose no abandonment entry point in the pre-spike contract; the mandatory post-spike reviewed amendment
+     must add the exact cleanup entry point before this task may run;
+   - overflow emits no routing audit and remains fail-open;
    - audit failures remain fail-open.
 
 4. **`src/hooks/observation-handler.ts` — no current-session lookup**
@@ -19221,10 +19307,9 @@ Expected: PASS for:
 different-controller deterministic interleaving
 same-controller different-workflow interleaving
 exact message identity correlation
-A/B independent cleanup
-post-arm failure abandonment without fabricated audit
-failed-A cleanup preserves successful B
+A/B independent exact-join cleanup
 exact per-session bounds and overflow suppression
+post-spike reviewed lifecycle-contract tests added before Task 4.2 execution
 custom raw controller preservation
 non-finalized suppression
 no provisional chat.params durable append
@@ -19253,8 +19338,8 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | OpenCode 1.18.29 immutable-source provenance check, four nominal probes, deterministic same-server/same-session correlation overlap, deterministic post-arm failed-A/successful-B lifecycle probe, exact command/message identity join, verified abandonment boundary, fixed per-session bounds/overflow suppression, different- and same-controller interleavings, durable validation/redaction/append/replay, cleanup/isolation |
-| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK + exact v1.18.29 release-source inspection → nominal/overlap/failure traces → stable invocation identity → exact success consume OR verified no-completion abandonment → bounded per-session state (8) → matching raw actual → evaluator → durable audit; no session-current/latest or fabricated failure record |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | OpenCode 1.18.29 immutable-source provenance, four nominal probes, deterministic same-server/same-session correlation overlap, awaited command-hook failure probe, sanitized exact lifecycle contract report, mandatory post-spike Design/Plan review checkpoint, fixed per-session bounds/overflow suppression, durable validation/redaction/append/replay |
+| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK + exact v1.18.29 source → nominal/overlap traces → exact invocation join; awaited `command.execute.before` failure → ordered lifecycle evidence → exact cleanup contract report → mandatory document-only Design/Plan synchronization/review → only then production cleanup API/tests; no session-current/latest heuristic |
 | Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
