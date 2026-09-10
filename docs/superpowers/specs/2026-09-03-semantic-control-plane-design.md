@@ -323,10 +323,21 @@ The supported OpenCode runtime fields are:
 - a positive finalized message observation requires `info.role === "assistant"` and
   `info.time.completed !== undefined`. `info.finish` is not the JUS-P0-01 finalization authority.
 
-Before production wiring, Task 4.0 must verify these exact fields against the resolved SDK contract and one
-supported-host trace for a configured custom pinned command. If the host does not expose the command identity and
-finalized message fields above with a common `sessionID`, Task 4.2 is blocked. The fallback is not prompt parsing or
-a generic command-interception framework.
+Contract provenance is intentionally split between the pinned project SDK and the supported host runtime.
+`@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21` are sufficient to type-check
+`command.execute.before.input.command`, `command.execute.before.input.sessionID`, `chat.params.input.agent`,
+`chat.params.input.sessionID`, and assistant-message `sessionID` / `role` / optional `time.completed`. However, the
+root `@opencode-ai/sdk@1.14.21` `AssistantMessage` declaration does **not** declare `agent`; therefore
+`message.updated.properties.info.agent` is a required **supported-host runtime capability**, not a fact inferred
+from that older root SDK declaration.
+
+Before production wiring, Task 4.0 MUST verify the exact four pinned commands on the pinned supported OpenCode host
+`1.18.29`. For each command, the real host must expose `command.execute.before`, raw `chat.params.agent`, and a
+completed assistant `message.updated` carrying raw `info.agent`, all correlated by the same `sessionID`. The spike
+also records the root-SDK typing gap above rather than pretending it proves `AssistantMessage.agent`. If any required
+runtime signal is absent or cannot be correlated, record `JUS-P0-01 runtime observation = BLOCKED` and stop Phase 4
+before Task 4.1/4.2. Prompt parsing, desired-controller reverse lookup, raw message heuristics, and a generic
+command-interception/event framework are not fallback designs.
 
 `SessionStateProvider` keeps two intentionally separate identity domains:
 

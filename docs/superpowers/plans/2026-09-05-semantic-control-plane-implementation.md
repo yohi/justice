@@ -17011,85 +17011,560 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 - Create: `docs/spikes/2026-09-controller-routing-runtime-signals.md`
 
-No production source, test source, workflow, package, or native file is modified by this spike. Temporary probe files
-must live outside the repository and must be deleted after the trace is captured.
+No production source, test source, production OpenCode configuration, workflow, package, or native file is modified by
+this spike. The executable probe, temporary `opencode.json`, JSONL trace, and validator live under
+`/tmp/justice-controller-routing-spike` inside the existing devcontainer and are deleted in the cleanup step.
 
-**Consumes:** the resolved `@opencode-ai/plugin` / `@opencode-ai/sdk` contracts; existing
-`tests/types/command-execute-before.contract-fixture.ts`; supported OpenCode host.
+**Consumes:** the already-installed supported OpenCode CLI from the preceding Phase 3 host-capability work; pinned
+OpenCode host `1.18.29`; resolved `@opencode-ai/plugin@1.14.21` / `@opencode-ai/sdk@1.14.21`; existing
+`tests/types/command-execute-before.contract-fixture.ts`; `JUSTICE_HOST_TEST_MODEL` already configured by the local
+host-test environment.
 
-**Produces:** a bounded spike report containing the exact observed host paths for:
+This task MUST NOT install or update OpenCode, npm/Bun packages, providers, agents, or credentials. A missing
+supported host/model/provider setup is `BLOCKED`; it is not permission to use a different version or network
+installer.
 
-```text
-command.execute.before → input.command + input.sessionID
-chat.params            → input.agent + input.sessionID
-message.updated        → event.properties.info.sessionID
-                       → event.properties.info.agent
-                       → event.properties.info.role
-                       → event.properties.info.time.completed
-```
-
-The report contains only hook name, command name, session ID, role, agent ID, message ID, and a boolean/presence
-indicator for `time.completed`. Do not record prompts, arguments, message content, credentials, model/provider
-payloads, or arbitrary config.
-
-- [ ] **Step 1: Re-confirm the resolved SDK contracts without modifying source**
-
-Run the existing type contract suite first:
-
-```bash
-devcontainer exec --workspace-folder . bun run vitest run tests/types/command-execute-before.contract.test.ts
-```
-
-Then inspect the resolved SDK declaration used by the lockfile and record in the spike report that
-`message.updated.properties.info` is an assistant/user `Message`, with assistant `agent` and optional
-`time.completed`. Do not replace this with documentation from a different installed version.
-
-Expected: the command hook still exposes exactly `command`, `sessionID`, `arguments`; the resolved message type
-contains `info.sessionID`, `info.agent` for assistant messages, and optional `info.time.completed`.
-
-- [ ] **Step 2: Capture one real supported-host trace with a temporary external probe plugin**
-
-Create a throwaway OpenCode configuration and probe plugin under a temporary directory outside the repository. The
-probe plugin must subscribe only to `command.execute.before`, `chat.params`, and generic `event` for
-`message.updated`, and write one JSONL line per signal containing only the allowlisted fields above. Configure the
-four P0 commands with their expected pinned agents and invoke each command once.
-
-The required trace for every invocation is:
+**Produces:** one bounded report at `docs/spikes/2026-09-controller-routing-runtime-signals.md` and no persistent
+probe implementation. The runtime trace uses this exact allowlist and no other JSON keys:
 
 ```text
-command.execute.before(command=<exact pinned command>, sessionID=S)
-chat.params(sessionID=S, agent=<raw agent>)
-message.updated(info.sessionID=S, info.role=assistant, info.agent=<raw agent>, info.time.completed=<present>)
+hook
+command
+sessionID
+role
+agent
+messageID
+completedPresent
 ```
 
-At least one invocation must use `justice-implement-writing-plans`; at least one trace must demonstrate the exact
-raw agent string is observable before Justice's closed `ObservationAgentId` normalization. The probe may log an
-artificial/custom agent only if the supported host accepts it; custom-agent host acceptance is not itself a P0
-requirement.
+Never record `arguments`, prompt/message content, parts, raw event objects, model/provider identifiers, credentials,
+environment values, command templates, or arbitrary configuration.
 
-- [ ] **Step 3: Decide the capability result without fallback design**
-
-PASS only when the exact pinned command identity and finalized assistant message can be correlated by the same
-`sessionID`, and the raw agent field is observable. Record the exact successful paths in
-`docs/spikes/2026-09-controller-routing-runtime-signals.md`.
-
-If the pinned command does not reach `command.execute.before`, if the raw agent is unavailable, or if no stable
-completed-assistant signal exists, record `JUS-P0-01 runtime observation = BLOCKED` and stop Phase 4 before Task
-4.1/4.2 implementation. Do not substitute prompt parsing, controller→workflow reverse lookup, generic command
-interception, or a new event framework.
-
-- [ ] **Step 4: Verify the report is redacted and self-contained**
+- [ ] **Step 1: Re-confirm exact installed contracts and the supported host**
 
 Run:
 
 ```bash
-git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+
+test "$(opencode --version)" = "1.18.29"
+test -n "${JUSTICE_HOST_TEST_MODEL:-}"
+
+bun run vitest run tests/types/command-execute-before.contract.test.ts
+
+bun - <<'"'"'BUN'"'"'
+const pluginPackage = await Bun.file("node_modules/@opencode-ai/plugin/package.json").json();
+const sdkPackage = await Bun.file("node_modules/@opencode-ai/sdk/package.json").json();
+if (pluginPackage.version !== "1.14.21") {
+  throw new Error(`unexpected @opencode-ai/plugin version: ${pluginPackage.version}`);
+}
+if (sdkPackage.version !== "1.14.21") {
+  throw new Error(`unexpected @opencode-ai/sdk version: ${sdkPackage.version}`);
+}
+
+const pluginPath = "node_modules/@opencode-ai/plugin/dist/index.d.ts";
+const sdkPath = "node_modules/@opencode-ai/sdk/dist/gen/types.gen.d.ts";
+const plugin = (await Bun.file(pluginPath).text()).replace(/\s+/g, " ");
+const sdk = (await Bun.file(sdkPath).text()).replace(/\s+/g, " ");
+
+function requireText(haystack, needle, label) {
+  if (!haystack.includes(needle)) throw new Error(`missing ${label}: ${needle}`);
+}
+
+requireText(
+  plugin,
+  "\"command.execute.before\"?: ( input: { command: string; sessionID: string; arguments: string",
+  "command.execute.before input",
+);
+requireText(
+  plugin,
+  "\"chat.params\"?: ( input: { sessionID: string; agent: string",
+  "chat.params input",
+);
+
+const assistantStart = sdk.indexOf("export type AssistantMessage = {");
+const assistantEnd = sdk.indexOf("export type Message =", assistantStart);
+if (assistantStart < 0 || assistantEnd < 0) throw new Error("AssistantMessage declaration not found");
+const assistant = sdk.slice(assistantStart, assistantEnd);
+requireText(assistant, "sessionID: string", "AssistantMessage.sessionID");
+requireText(assistant, "role: \"assistant\"", "AssistantMessage.role");
+requireText(assistant, "completed?: number", "AssistantMessage.time.completed");
+if (assistant.includes(" agent: string")) {
+  throw new Error(
+    "root SDK AssistantMessage now declares agent; re-review Design provenance before continuing",
+  );
+}
+
+const eventStart = sdk.indexOf("export type EventMessageUpdated = {");
+const eventEnd = sdk.indexOf("export type EventMessageRemoved", eventStart);
+if (eventStart < 0 || eventEnd < 0) throw new Error("EventMessageUpdated declaration not found");
+requireText(sdk.slice(eventStart, eventEnd), "info: Message", "EventMessageUpdated.properties.info");
+
+console.log("@opencode-ai/plugin=1.14.21");
+console.log("@opencode-ai/sdk=1.14.21");
+console.log("root SDK AssistantMessage.agent=not-typed; host runtime proof required");
+BUN
+
+opencode run --help | grep -F -- "--command"
+opencode run --help | grep -F -- "--format"
+'
 ```
 
-Expected: PASS, and the report contains the SDK/package version, exact field paths, one redacted trace per P0
-command, and PASS/BLOCKED conclusion with no prompt/message/config contents.
+Expected: PASS. The installed root SDK proves the command hook, `chat.params.agent`, assistant session/role, and
+optional completion field. It intentionally does **not** prove assistant `agent`; that field is accepted only if the
+real `1.18.29` host trace in Step 3 supplies it. If the root SDK shape has changed (including newly typing
+`AssistantMessage.agent`), stop and re-review the Design/Plan provenance before running the probe rather than silently
+rewriting the spike.
 
-- [ ] **Step 5: Commit after approval**
+- [ ] **Step 2: Create the complete temporary probe and validator outside the repository**
+
+Run the following from the repository root. It creates only `/tmp/justice-controller-routing-spike`:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+WORKSPACE="$SPIKE_ROOT/workspace"
+TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
+STATUS="$SPIKE_ROOT/run-status.tsv"
+
+cleanup_on_error() {
+  code=$?
+  if [ "$code" -ne 0 ]; then rm -rf "$SPIKE_ROOT"; fi
+  exit "$code"
+}
+trap cleanup_on_error EXIT
+
+rm -rf "$SPIKE_ROOT"
+mkdir -p "$WORKSPACE/.opencode/plugins"
+: > "$TRACE"
+: > "$STATUS"
+
+cat > "$WORKSPACE/opencode.json" <<'"'"'JSON'"'"'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "sisyphus": {
+      "mode": "primary"
+    },
+    "atlas": {
+      "mode": "primary"
+    }
+  },
+  "command": {
+    "justice-implement-brainstorming": {
+      "template": "Reply with ROUTING_PROBE_OK only.",
+      "agent": "sisyphus"
+    },
+    "justice-implement-writing-plans": {
+      "template": "Reply with ROUTING_PROBE_OK only.",
+      "agent": "sisyphus"
+    },
+    "justice-implement-subagent-driven-development": {
+      "template": "Reply with ROUTING_PROBE_OK only.",
+      "agent": "atlas"
+    },
+    "justice-implement-executing-plans": {
+      "template": "Reply with ROUTING_PROBE_OK only.",
+      "agent": "sisyphus"
+    }
+  }
+}
+JSON
+
+cat > "$WORKSPACE/.opencode/plugins/controller-routing-probe.js" <<'"'"'PROBE'"'"'
+import { appendFile } from "node:fs/promises";
+
+const tracePath = process.env.JUSTICE_ROUTING_TRACE;
+if (!tracePath) throw new Error("JUSTICE_ROUTING_TRACE is required");
+
+const ALLOWED_KEYS = new Set([
+  "hook",
+  "command",
+  "sessionID",
+  "role",
+  "agent",
+  "messageID",
+  "completedPresent",
+]);
+
+let writeChain = Promise.resolve();
+
+function append(record) {
+  const clean = Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined),
+  );
+  for (const key of Object.keys(clean)) {
+    if (!ALLOWED_KEYS.has(key)) throw new Error(`probe attempted forbidden key: ${key}`);
+  }
+  writeChain = writeChain.then(() =>
+    appendFile(tracePath, `${JSON.stringify(clean)}\n`, "utf8"),
+  );
+  return writeChain;
+}
+
+export const ControllerRoutingProbe = async () => ({
+  "command.execute.before": async (input) =>
+    append({
+      hook: "command.execute.before",
+      command: input.command,
+      sessionID: input.sessionID,
+    }),
+
+  "chat.params": async (input) =>
+    append({
+      hook: "chat.params",
+      sessionID: input.sessionID,
+      agent: input.agent,
+    }),
+
+  event: async ({ event }) => {
+    if (event?.type !== "message.updated") return;
+    const info = event?.properties?.info;
+    if (!info || info.role !== "assistant") return;
+    const time = info.time && typeof info.time === "object" ? info.time : {};
+    await append({
+      hook: "message.updated",
+      sessionID: typeof info.sessionID === "string" ? info.sessionID : undefined,
+      role: "assistant",
+      agent: typeof info.agent === "string" ? info.agent : undefined,
+      messageID: typeof info.id === "string" ? info.id : undefined,
+      completedPresent:
+        Object.prototype.hasOwnProperty.call(time, "completed") &&
+        time.completed !== undefined,
+    });
+  },
+});
+PROBE
+
+cat > "$SPIKE_ROOT/validate-and-report.mjs" <<'"'"'VALIDATOR'"'"'
+import { readFile, writeFile } from "node:fs/promises";
+
+const [tracePath, statusPath, reportPath] = process.argv.slice(2);
+if (!tracePath || !statusPath || !reportPath) {
+  throw new Error("usage: validate-and-report.mjs TRACE STATUS REPORT");
+}
+
+const EXPECTED = new Map([
+  ["justice-implement-brainstorming", "sisyphus"],
+  ["justice-implement-writing-plans", "sisyphus"],
+  ["justice-implement-subagent-driven-development", "atlas"],
+  ["justice-implement-executing-plans", "sisyphus"],
+]);
+
+const ALLOWED_KEYS = new Set([
+  "hook",
+  "command",
+  "sessionID",
+  "role",
+  "agent",
+  "messageID",
+  "completedPresent",
+]);
+const ALLOWED_HOOKS = new Set([
+  "command.execute.before",
+  "chat.params",
+  "message.updated",
+]);
+
+const failures = [];
+const lines = (await readFile(tracePath, "utf8"))
+  .split(/\r?\n/)
+  .filter((line) => line.length > 0);
+
+const records = [];
+for (let index = 0; index < lines.length; index += 1) {
+  let record;
+  try {
+    record = JSON.parse(lines[index]);
+  } catch {
+    failures.push(`trace_json_invalid:${index + 1}`);
+    continue;
+  }
+  if (!record || Array.isArray(record) || typeof record !== "object") {
+    failures.push(`trace_record_not_object:${index + 1}`);
+    continue;
+  }
+  const keys = Object.keys(record);
+  const forbidden = keys.filter((key) => !ALLOWED_KEYS.has(key));
+  if (forbidden.length > 0) {
+    failures.push(`trace_forbidden_keys:${index + 1}:${forbidden.sort().join(",")}`);
+  }
+  if (!ALLOWED_HOOKS.has(record.hook)) {
+    failures.push(`trace_hook_invalid:${index + 1}`);
+  }
+  records.push(record);
+}
+
+const statuses = new Map();
+for (const line of (await readFile(statusPath, "utf8")).split(/\r?\n/)) {
+  if (!line) continue;
+  const [command, rawCode, extra] = line.split("\t");
+  if (extra !== undefined || !EXPECTED.has(command) || !/^\d+$/.test(rawCode ?? "")) {
+    failures.push("run_status_invalid");
+    continue;
+  }
+  if (statuses.has(command)) failures.push(`run_status_duplicate:${command}`);
+  statuses.set(command, Number(rawCode));
+}
+
+const traceSummary = new Map();
+
+for (const [command, expectedAgent] of EXPECTED) {
+  const code = statuses.get(command);
+  if (code === undefined) failures.push(`run_status_missing:${command}`);
+  else if (code !== 0) failures.push(`host_command_failed:${command}:${code}`);
+
+  const commands = records.filter(
+    (record) => record.hook === "command.execute.before" && record.command === command,
+  );
+  if (commands.length !== 1) {
+    failures.push(`command_signal_count:${command}:${commands.length}`);
+    continue;
+  }
+
+  const sessionID = commands[0].sessionID;
+  if (typeof sessionID !== "string" || sessionID.length === 0) {
+    failures.push(`command_session_missing:${command}`);
+    continue;
+  }
+
+  const chats = records.filter(
+    (record) =>
+      record.hook === "chat.params" &&
+      record.sessionID === sessionID &&
+      record.agent === expectedAgent,
+  );
+  if (chats.length === 0) failures.push(`chat_params_agent_missing:${command}`);
+
+  const completed = records.filter(
+    (record) =>
+      record.hook === "message.updated" &&
+      record.sessionID === sessionID &&
+      record.role === "assistant" &&
+      record.agent === expectedAgent &&
+      record.completedPresent === true,
+  );
+  if (completed.length === 0) failures.push(`completed_assistant_agent_missing:${command}`);
+
+  traceSummary.set(command, {
+    sessionID,
+    chatAgent: chats[0]?.agent,
+    messageAgent: completed[0]?.agent,
+    messageID: completed[0]?.messageID,
+    completedPresent: completed[0]?.completedPresent === true,
+  });
+}
+
+const result = failures.length === 0 ? "PASS" : "BLOCKED";
+const report = [
+  "# Controller Routing Runtime Signal Spike",
+  "",
+  "## Environment",
+  "- OpenCode version: `1.18.29`",
+  "- @opencode-ai/plugin: `1.14.21`",
+  "- @opencode-ai/sdk: `1.14.21`",
+  "",
+  "## Resolved SDK declarations",
+  "- command.execute.before: `input.command` + `input.sessionID` typed by the pinned plugin declaration",
+  "- chat.params: `input.agent` + `input.sessionID` typed by the pinned plugin declaration",
+  "- message.updated: root SDK types `info.sessionID`, assistant `role`, and optional `info.time.completed`",
+  "- assistant agent typing: root SDK `AssistantMessage` does not type `agent`; `info.agent` below is accepted only from the supported-host runtime trace",
+  "",
+  "## Redacted traces",
+];
+
+for (const [command] of EXPECTED) {
+  const summary = traceSummary.get(command);
+  report.push(`### ${command}`);
+  if (!summary) {
+    report.push("- trace: unavailable");
+  } else {
+    report.push(`- sessionID: \`${summary.sessionID}\``);
+    report.push(`- chat.params agent: \`${summary.chatAgent ?? "missing"}\``);
+    report.push(`- finalized assistant agent: \`${summary.messageAgent ?? "missing"}\``);
+    report.push(`- messageID: \`${summary.messageID ?? "missing"}\``);
+    report.push(`- completedPresent: \`${summary.completedPresent}\``);
+  }
+  report.push("");
+}
+
+report.push("## Result");
+report.push(`JUS-P0-01 runtime observation = ${result}`);
+report.push("");
+report.push("## Evidence");
+report.push(
+  `- workflow identity: ${result === "PASS" ? "all four exact command.execute.before identities observed" : "not proven"}`,
+);
+report.push(
+  `- session correlation: ${result === "PASS" ? "command/chat/message signals correlated by the same sessionID for all four commands" : "not proven"}`,
+);
+report.push(
+  `- raw actual agent: ${result === "PASS" ? "chat.params and host message.updated expose the expected raw agent string" : "not proven"}`,
+);
+report.push(
+  `- finalized assistant signal: ${result === "PASS" ? "assistant message.updated with completedPresent=true observed for all four commands" : "not proven"}`,
+);
+if (failures.length > 0) {
+  report.push(`- sanitized failure codes: \`${failures.join(";")}\``);
+}
+report.push("");
+
+await writeFile(reportPath, `${report.join("\n")}\n`, "utf8");
+
+if (result !== "PASS") {
+  console.error("JUS-P0-01 runtime observation = BLOCKED");
+  for (const failure of failures) console.error(failure);
+  process.exitCode = 1;
+} else {
+  console.log("JUS-P0-01 runtime observation = PASS");
+}
+VALIDATOR
+
+test -f "$WORKSPACE/opencode.json"
+test -f "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
+test -f "$SPIKE_ROOT/validate-and-report.mjs"
+'
+```
+
+Expected: PASS. These files are temporary probe inputs only; do not add them to Git and do not copy the temporary
+configuration into the spike report.
+
+- [ ] **Step 3: Execute all four exact pinned commands through the real supported host**
+
+Run exactly four fresh non-interactive command invocations. Raw host stdout/stderr are discarded; only the probe's
+allowlisted JSONL and each command's numeric exit code are retained temporarily:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+WORKSPACE="$SPIKE_ROOT/workspace"
+TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
+STATUS="$SPIKE_ROOT/run-status.tsv"
+
+cleanup_on_error() {
+  code=$?
+  if [ "$code" -ne 0 ]; then rm -rf "$SPIKE_ROOT"; fi
+  exit "$code"
+}
+trap cleanup_on_error EXIT
+
+test "$(opencode --version)" = "1.18.29"
+test -n "${JUSTICE_HOST_TEST_MODEL:-}"
+test -f "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
+: > "$TRACE"
+: > "$STATUS"
+
+run_probe() {
+  command_name="$1"
+  set +e
+  (
+    cd "$WORKSPACE"
+    JUSTICE_ROUTING_TRACE="$TRACE" \
+      opencode run \
+        --format json \
+        --model "$JUSTICE_HOST_TEST_MODEL" \
+        --command "$command_name" \
+        >/dev/null 2>/dev/null
+  )
+  code=$?
+  set -e
+  printf "%s\t%s\n" "$command_name" "$code" >> "$STATUS"
+}
+
+run_probe justice-implement-brainstorming
+run_probe justice-implement-writing-plans
+run_probe justice-implement-subagent-driven-development
+run_probe justice-implement-executing-plans
+
+test "$(wc -l < "$STATUS" | tr -d " ")" = "4"
+'
+```
+
+Do not replace these with a single representative command. The four command identities are distinct even where the
+desired controller is the same.
+
+- [ ] **Step 4: Mechanically validate allowlisted traces and write PASS/BLOCKED report**
+
+Run:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+SPIKE_ROOT=/tmp/justice-controller-routing-spike
+TRACE="$SPIKE_ROOT/controller-routing.trace.jsonl"
+STATUS="$SPIKE_ROOT/run-status.tsv"
+REPORT=/workspace/docs/spikes/2026-09-controller-routing-runtime-signals.md
+
+cleanup() {
+  rm -rf "$SPIKE_ROOT"
+}
+trap cleanup EXIT
+
+mkdir -p "$(dirname "$REPORT")"
+
+set +e
+bun "$SPIKE_ROOT/validate-and-report.mjs" "$TRACE" "$STATUS" "$REPORT"
+validation_code=$?
+set -e
+
+test -f "$REPORT"
+
+if [ "$validation_code" -ne 0 ]; then
+  grep -Fx "JUS-P0-01 runtime observation = BLOCKED" "$REPORT"
+  exit "$validation_code"
+fi
+
+grep -Fx "JUS-P0-01 runtime observation = PASS" "$REPORT"
+grep -Fx "## Environment" "$REPORT"
+grep -Fx "## Resolved SDK declarations" "$REPORT"
+grep -Fx "## Redacted traces" "$REPORT"
+grep -Fx "## Result" "$REPORT"
+grep -Fx "## Evidence" "$REPORT"
+'
+```
+
+Expected on a supported host: validator exits zero and the report says
+`JUS-P0-01 runtime observation = PASS`. The validator itself proves that every JSONL object contains only the
+seven allowlisted keys, that all four host commands exited zero, and that each exact command has same-session
+`chat.params` plus completed assistant `message.updated` with the expected raw agent.
+
+If any requirement fails, the validator writes `JUS-P0-01 runtime observation = BLOCKED`, exits non-zero, and Phase
+4 stops before Task 4.1/4.2. The sanitized failure codes may identify missing signal classes; do not copy raw
+stdout/stderr, event/config/message content, model/provider identifiers, or credentials into the report.
+
+`git diff --check` is formatting verification only; it is **not** the redaction proof. After the validator PASS,
+run:
+
+```bash
+git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
+grep -nE \
+  "^### justice-implement-(brainstorming|writing-plans|subagent-driven-development|executing-plans)$" \
+  docs/spikes/2026-09-controller-routing-runtime-signals.md
+```
+
+Expected: `git diff --check` passes and all four trace headings are present.
+
+- [ ] **Step 5: Clean the external probe, then commit only the report after approval**
+
+Step 4 installs an `EXIT` trap, so the external probe is removed on both PASS and BLOCKED results. Verify that
+cleanup happened; the `rm -rf` below is a fail-safe for an interrupted earlier shell:
+
+```bash
+devcontainer exec --workspace-folder . bash -lc '
+set -euo pipefail
+rm -rf /tmp/justice-controller-routing-spike
+test ! -e /tmp/justice-controller-routing-spike
+'
+```
+
+A BLOCKED report is still useful evidence, but its result prohibits Task 4.1/4.2. Do not introduce prompt parsing,
+controller→workflow reverse mapping, generic telemetry, a reusable trace subsystem, a production debug event bus, a
+new plugin abstraction, or a generic capability-test framework.
+
+After the report has been reviewed and the user approves its commit:
 
 ```bash
 GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
@@ -17511,15 +17986,212 @@ Also cover:
 - session cleanup removes routing context and a later observation with no new command creates no routing record;
 - routing append/redaction/validation failure remains fail-open and creates no Acceptance authority.
 
-Keep the durable-contract coverage from `7e990a8` unchanged:
+Define the durable fixtures in the current plan before the validator/store/redaction/projection assertions. These
+fixtures are specification examples, not a new fixture framework:
 
-- valid custom mismatch passes schema validation;
-- malformed status/reason/required-field combinations are rejected;
-- `ObservationLogStore.append()` → `readAll()` preserves routing payload/sequence;
-- an existing valid schemaVersion 1 fixture still replays unchanged;
-- persistence redaction copies no raw command/config/prompt/secret;
-- state projection gives the routing audit record no lifecycle/Evidence/Gate/Acceptance/Authorization/Progress
-  authority.
+```ts
+const routingEnvelope = {
+  schemaVersion: 1 as const,
+  timestamp: "2026-09-09T00:00:00.000Z",
+  agentId: "system" as const,
+  sessionId: "controller-routing",
+  writerId: "w-1",
+  recordType: "observation" as const,
+};
+
+const validCustomMismatch = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "subagent-driven-development",
+  routingStatus: "mismatch" as const,
+  desiredController: "atlas" as const,
+  actualController: "custom-controller-v2",
+  applicationMethod: "pinned-command" as const,
+  observationSource: "message.updated" as const,
+};
+
+const validApplied = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "writing-plans",
+  routingStatus: "applied" as const,
+  desiredController: "sisyphus" as const,
+  actualController: "sisyphus" as const,
+  applicationMethod: "pinned-command" as const,
+  observationSource: "both" as const,
+};
+
+const validUnappliedActualNotObserved = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "writing-plans",
+  routingStatus: "unapplied" as const,
+  desiredController: "sisyphus" as const,
+  applicationMethod: "pinned-command" as const,
+  observationSource: "none" as const,
+  reason: "actual_not_observed" as const,
+};
+
+const validUnappliedApplicationNotConfigured = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "brainstorming",
+  routingStatus: "unapplied" as const,
+  desiredController: "sisyphus" as const,
+  applicationMethod: "none" as const,
+  observationSource: "none" as const,
+  reason: "application_not_configured" as const,
+};
+
+const validUnconfiguredWithObservedActual = {
+  ...routingEnvelope,
+  kind: "controller_routing_observed" as const,
+  workflow: "brainstorming",
+  routingStatus: "unapplied" as const,
+  desiredController: "sisyphus" as const,
+  actualController: "custom-controller-v2",
+  applicationMethod: "none" as const,
+  observationSource: "message.updated" as const,
+  reason: "application_not_configured" as const,
+};
+
+const legacySchemaVersion1Record = {
+  schemaVersion: 1 as const,
+  sequence: 7,
+  timestamp: "2026-09-09T00:00:00.000Z",
+  agentId: "system" as const,
+  sessionId: "legacy",
+  writerId: "w-legacy",
+  recordType: "observation" as const,
+  kind: "skill_invoked" as const,
+  skillName: "git-master",
+  source: "skill_tool" as const,
+};
+```
+
+In `tests/runtime/validation.test.ts` or the existing owning validation suite, encode the status-specific durable
+rules as explicit assertions:
+
+```ts
+expect(() => validateRecordSchema({ ...validCustomMismatch, sequence: 1 })).not.toThrow();
+expect(() => validateRecordSchema({ ...validApplied, sequence: 2 })).not.toThrow();
+expect(() =>
+  validateRecordSchema({ ...validUnappliedActualNotObserved, sequence: 3 }),
+).not.toThrow();
+expect(() =>
+  validateRecordSchema({ ...validUnappliedApplicationNotConfigured, sequence: 4 }),
+).not.toThrow();
+expect(() =>
+  validateRecordSchema({ ...validUnconfiguredWithObservedActual, sequence: 5 }),
+).not.toThrow();
+expect(() => validateRecordSchema(legacySchemaVersion1Record)).not.toThrow();
+
+it.each([
+  [{ ...validApplied, reason: "actual_not_observed" }],
+  [{ ...validCustomMismatch, actualController: undefined }],
+  [{ ...validUnappliedActualNotObserved, actualController: "atlas" }],
+  [{ ...validUnappliedApplicationNotConfigured, applicationMethod: "pinned-command" }],
+  [
+    {
+      ...validUnappliedApplicationNotConfigured,
+      observationSource: "message.updated",
+    },
+  ],
+  [{ ...validUnappliedApplicationNotConfigured, actualController: "atlas" }],
+  [{ ...validCustomMismatch, actualController: "" }],
+])("rejects an illegal controller-routing persisted shape", (record) => {
+  expect(() => validateRecordSchema({ ...record, sequence: 99 })).toThrow();
+});
+```
+
+The validator must also reject unknown routing status/reason literals and empty `workflow`. The table above is the
+minimum status/field matrix; do not collapse it to “malformed combinations are rejected.”
+
+In `tests/runtime/observation-log-store.test.ts`, use the existing `createMemFs()` and the real
+`ObservationLogStore` boundary. Append a pending routing record, then `readAll()`:
+
+```ts
+const { reader, writer } = createMemFs();
+const store = new ObservationLogStore(writer, reader, "w-routing");
+const routingShard = {
+  agentId: "system" as const,
+  sessionId: "controller-routing",
+  writerId: "w-routing",
+};
+const pendingCustomMismatch = {
+  ...validCustomMismatch,
+  writerId: "w-routing",
+};
+
+const sequence = await store.append(routingShard, pendingCustomMismatch);
+const replayed = await store.readAll();
+
+expect(sequence).toBe(1);
+expect(replayed).toContainEqual(
+  expect.objectContaining({
+    ...pendingCustomMismatch,
+    sequence: 1,
+  }),
+);
+```
+
+Assert individually that replay preserves `workflow`, `routingStatus`, `desiredController`, `actualController`,
+`applicationMethod`, `observationSource`, and sequence. In the same suite, keep one existing valid
+`schemaVersion: 1` observation such as `skill_invoked` readable without migration. The exact
+`legacySchemaVersion1Record` above must remain accepted by `validateRecordSchema()`; if append/read coverage is used,
+strip only its `sequence` field before append and use an envelope/shard whose writer/session/agent match.
+
+In `tests/core/v2/persistence-redaction.test.ts`, drive the existing `redactPendingLogRecord()` primitive with
+routing free-form fields:
+
+```ts
+const sensitiveRouting = {
+  ...validCustomMismatch,
+  workflow: "/home/user/private/workflow",
+  actualController: "TOKEN=secret123",
+};
+const redacted = redactPendingLogRecord(sensitiveRouting);
+
+expect(redacted).toMatchObject({
+  kind: "controller_routing_observed",
+  routingStatus: "mismatch",
+  desiredController: "atlas",
+  applicationMethod: "pinned-command",
+  observationSource: "message.updated",
+  workflow: "[REDACTED_PATH]",
+  actualController: "[REDACTED_ENV]",
+});
+expect(redacted).not.toHaveProperty("prompt");
+expect(redacted).not.toHaveProperty("command");
+expect(redacted).not.toHaveProperty("config");
+expect(redacted).not.toHaveProperty("model");
+expect(redacted).not.toHaveProperty("provider");
+```
+
+The typed record builder gets only `PendingEnvelope`, `workflow`, and `ControllerRoutingObservation`; its tests must
+also prove it has no input/property that copies a raw command definition, prompt, provider/model payload, credential,
+or arbitrary config. Do not add a generic unknown-field stripping framework.
+
+In `tests/core/v2/state-projection.test.ts`, use the existing main `project()` and
+`toSerializableProjectedState()` APIs:
+
+```ts
+const before = project([], REBUILT_AT);
+const after = project(
+  [{ ...validCustomMismatch, sequence: 1 }],
+  REBUILT_AT,
+);
+
+expect(toSerializableProjectedState(after)).toEqual(
+  toSerializableProjectedState(before),
+);
+expect(after.tasks.size).toBe(0);
+```
+
+The unchanged serialized projection proves that the routing audit record creates no Lifecycle, Evidence, Gate,
+Acceptance, Authorization, or Progress authority. If the existing projector already no-ops on a no-task audit
+record, production projection code stays unchanged; add an explicit skip only if the closed-union exhaustiveness
+change requires it. Do not create a routing projection subsystem.
 
 Keep the pinned-command doctor tests: correct agent, missing command, missing/empty/unrecognized agent, mismatched
 agent, both source-precedence directions, complete template output, and raw-config redaction.
@@ -17604,11 +18276,31 @@ or shell/setup errors are not acceptable RED evidence.
      `message.updated`, append no routing record. On finalized message, append the final
      applied/mismatch snapshot.
 
-6. **Durable boundaries — existing Task 4.2 files from `7e990a8`**
-   - Preserve the exact flattened `ControllerRoutingObservedRecord`, closed observation union, schemaVersion 1
-     validator branch, explicit redaction branch, append/read/replay behavior, and audit-only projection semantics.
-   - Accept any non-empty custom actual-controller string only where the domain variant permits it.
-   - Do not add a generic event, persistence, projection, or DI framework.
+6. **Durable observation boundary — current Task 4.2 contract**
+   - `src/core/v2/observation-model.ts`: define the flattened `ControllerRoutingObservedRecord` exactly as Design
+     §4.1 and add exactly one `PendingEnvelope & ControllerRoutingObservedRecord` member to the existing closed
+     `PendingObservationRecord` union. Keep `schemaVersion: 1`; no generic event record is introduced.
+   - `src/core/v2/record-builder.ts`: add one typed `buildControllerRoutingObservedRecord()` that accepts the
+     `PendingEnvelope`, `workflow`, and `ControllerRoutingObservation`, returns the flattened pending record, and has
+     no raw command/config/prompt/model/provider/credential/tool-payload input.
+   - `src/runtime/validation.ts`: add an explicit `controller_routing_observed` branch. Validate non-empty
+     `workflow`; each status-specific required/forbidden `actualController`, `applicationMethod`,
+     `observationSource`, and `reason` combination; and non-empty custom actual strings only in variants that permit
+     them. Preserve every previously valid `schemaVersion: 1` branch unchanged.
+   - `src/core/v2/persistence-redaction.ts`: add an explicit routing branch using the existing
+     `redactForPersistence()` primitive for free-form `workflow` and `actualController`. Preserve the literal
+     status/controller-method/source/reason fields. Do not create a second redaction framework.
+   - `ObservationLogStore` remains unchanged as the storage architecture: existing `append()` performs
+     `redactPendingLogRecord()` before sequencing/persistence, and existing `readAll()` re-enters
+     `validateRecordSchema()` during replay. Add tests through these real methods; do not add a routing store or a
+     second replay API.
+   - Main state projection remains audit-only for this kind. A routing record cannot create or mutate task
+     Lifecycle, Evidence, Gate, Acceptance, Authorization, or Progress state. Retain the natural no-op when possible;
+     add only an explicit skip in the existing projector if required for exhaustiveness. No routing projection
+     subsystem is introduced.
+   - Routing append/validation/redaction failures stay fail-open for execution and never create positive authority.
+     A mismatch is advisory/status visibility only.
+   - Do not add a generic event, persistence, projection, session-state, or DI framework.
 
 7. **Doctor/docs**
    - Keep the exact required four pinned commands and desired agents. The command names must match
@@ -17643,8 +18335,8 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing runtime observati
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | supported-host command/message signal trace, exact pinned-command→workflow mapping, session routing-generation correlation, raw chat.params + finalized message.updated transport, applied/known/custom mismatch/chat-only tests, durable append/replay, cleanup/isolation |
-| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | `command.execute.before` field verification → exact workflow binding → session routing generation → raw/source/finalized actual capture → WorkflowRouter decision → evaluator → durable builder |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | executable supported-host 1.18.29 probe for all four commands, JSONL allowlist validation, exact command→workflow mapping, same-session routing correlation, raw chat.params + host-proven finalized message.updated agent, applied/known/custom mismatch/chat-only tests, concrete durable validation/redaction/append/replay fixtures, cleanup/isolation |
+| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK declaration inspection + root-SDK assistant-agent typing-gap check → real host command/chat/message trace for all four commands → exact workflow binding → session routing generation → raw/source/finalized actual capture → WorkflowRouter decision → evaluator → durable builder |
 | Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
 | pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
