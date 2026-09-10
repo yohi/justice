@@ -17014,7 +17014,10 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 No production source, test source, production OpenCode configuration, workflow, package, lockfile, Rust/native file,
 or persistent probe implementation is modified by this spike. Temporary files live only under
-`/tmp/justice-controller-routing-spike` in the existing devcontainer and are removed on every exit path.
+`/tmp/justice-controller-routing-spike` in the existing devcontainer. Step 1 starts by removing that entire root so
+a rerun never reuses stale scratch state, and Step 6 removes it after the final report is validated. If Steps 1-5
+exit early, the temporary root may remain under `/tmp` only; it is non-authoritative scratch state, MUST NOT be
+persisted or treated as capability evidence, and the next Step 1 removes it before provisioning a fresh CLI.
 
 **Consumes:** Bun in the existing devcontainer; temporary exact `opencode-ai@1.18.29` provisioned under
 `/tmp/justice-controller-routing-spike/opencode-cli`; resolved `@opencode-ai/plugin@1.14.21` /
@@ -17248,8 +17251,10 @@ before `InstanceStore.dispose()` finishes. Therefore attached probes must wait f
 neither the HTTP response nor `kill` is a trace-flush guarantee. Network failure while retrieving that exact
 snapshot is execution-prerequisite `BLOCKED`; exact `opencode-ai@1.18.29` provisioning failure is the same.
 In either prerequisite failure case, stop before Step 2 without generating the runtime report or an overall
-`JUS-P0-01 runtime observation` line. Do not substitute another package version, tag, branch, global binary, or
-`PATH` binary.
+`JUS-P0-01 runtime observation` line. The failed attempt may leave only temporary scratch state under `SPIKE_ROOT`;
+do not commit, copy, or interpret it as evidence. A rerun starts with Step 1's `rm -rf "$SPIKE_ROOT"` and therefore
+must create a fresh temporary CLI and source snapshot. Do not substitute another package version, tag, branch,
+global binary, or `PATH` binary.
 
 - [ ] **Step 2: Create the temporary workspace, probe, and validator**
 
