@@ -17892,13 +17892,32 @@ console.log(`JUS-P0-01 runtime observation = ${result}`);
 process.exit(result === "PASS" ? 0 : 1);
 VALIDATOR
 
-node --check "$WORKSPACE/.opencode/plugins/controller-routing-probe.js"
-node --check "$SPIKE_ROOT/create-session.mjs"
-node --check "$SPIKE_ROOT/validate-and-report.mjs"
+WORKSPACE="$WORKSPACE" SPIKE_ROOT="$SPIKE_ROOT" bun - <<'BUN'
+const workspace = process.env.WORKSPACE;
+const spikeRoot = process.env.SPIKE_ROOT;
+if (!workspace || !spikeRoot) throw new Error("syntax-check paths are required");
+
+const files = [
+  `${workspace}/.opencode/plugins/controller-routing-probe.js`,
+  `${spikeRoot}/create-session.mjs`,
+  `${spikeRoot}/validate-and-report.mjs`,
+];
+
+const transpiler = new Bun.Transpiler({ loader: "js", target: "bun" });
+for (const file of files) {
+  const source = await Bun.file(file).text();
+  transpiler.transformSync(source);
+  console.log(`syntax-ok:${file}`);
+}
+BUN
 '
 ```
 
-Expected: all three temporary JavaScript files pass syntax validation.
+Expected: all three temporary JavaScript files pass syntax validation. This check MUST use Bun's parser without
+executing the temporary modules: `Bun.Transpiler.transformSync()` parses/transpiles the source while module resolution
+and runtime execution remain outside this syntax-only gate. Do not substitute `node --check` unless Step 1 has
+explicitly proved that `node` is a real Node.js CLI with compatible `--check` semantics; a Bun fallback wrapper is not
+such proof. In particular, syntax validation MUST NOT evaluate the probe's top-level `JUSTICE_ROUTING_TRACE` guard.
 
 - [ ] **Step 3: Run the four fresh-session nominal probes**
 
