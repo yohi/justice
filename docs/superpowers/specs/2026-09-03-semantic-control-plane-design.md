@@ -411,11 +411,66 @@ the exact `(sessionId, assistantMessageId)`. The assistant's `parentUserMessageI
 `PINNED_COMMAND_WORKFLOW_MAP`.
 
 Resolution consumes only that invocation's exact command-completion/final-message entries and, when present, its
-exact parent user-message chat entry. It decrements only the matching `(sessionId, command)` capture count. A
-completion for A cannot mutate or delete B state. When the session has no remaining pinned-command captures,
-unmatched routing-correlation leftovers for that session are discarded. `removeSession(sessionId)` always removes
-all JUS-P0-01 ephemeral state for that session. No generic queue manager, event bus, tracing framework, workflow
-engine, or new DI/state framework is introduced.
+exact parent user-message chat entry. It decrements only the matching `(sessionId, command)` capture accounting. A
+completion for A cannot mutate or delete B state.
+
+`command.execute.before` does **not** imply that a matching `command.executed` will eventually arrive. A failure in
+`prompt(...)`, a plugin/provider failure, abort, or another terminal failure may leave an armed capture without
+command completion. Therefore successful join is not the only lifecycle exit and `removeSession(sessionId)` is not
+the only abandonment cleanup.
+
+JUS-P0-01 ephemeral state has fixed per-session bounds. These constants are part of the v4.0.0 contract:
+
+```ts
+export const CONTROLLER_ROUTING_MAX_PENDING_CAPTURES_PER_SESSION = 8;
+export const CONTROLLER_ROUTING_MAX_CHAT_ACTUALS_PER_SESSION = 8;
+export const CONTROLLER_ROUTING_MAX_FINAL_ACTUALS_PER_SESSION = 8;
+export const CONTROLLER_ROUTING_MAX_COMPLETIONS_PER_SESSION = 8;
+```
+
+The sum of pending capture credits for the four exact pinned commands MUST NOT exceed 8 for one session. Each of the
+three identity maps (`chat.params`, finalized assistant, command completion) MUST NOT exceed 8 entries for one
+session. The values are deliberately small because nominal operation requires one invocation and the supported
+overlap proof requires two.
+
+Overflow is fail-open for execution and fail-closed for audit attribution:
+
+1. do not invent or append a routing record;
+2. clear all unresolved JUS-P0-01 correlation entries for that session;
+3. set one bounded `routingSuppressed` marker for that session;
+4. ignore further routing capture/actual/completion input for that session until a Task 4.0-verified safe
+   quiescence/abandonment boundary or `removeSession(sessionId)` clears suppression.
+
+No LRU/cache abstraction, generic TTL service, background cleanup worker, queue manager, event bus, telemetry
+framework, or new DI/state framework is introduced.
+
+Task 4.0 must additionally prove the supported-host failure lifecycle after capture arm. Candidate host signals are
+`session.status` with `status.type === "idle"`, `session.idle`, and `session.error`; their mere presence in the SDK is
+not sufficient. The runtime probe must establish ordering in normal success, post-arm failure, and the
+failed-A/successful-B same-session case. In particular, pinned OpenCode `1.18.29` source can publish session idle as
+the runner becomes idle before the command call publishes `command.executed`, so an idle event MUST NOT be treated
+as unconditional immediate `clear all`.
+
+A production abandonment boundary is accepted only if Task 4.0 proves that it can retire unresolved A state without
+deleting or consuming a concurrently valid B invocation. The cleanup produces no durable routing observation. If
+the supported host exposes no safe boundary, or the boundary cannot preserve B, Task 4.0 is `BLOCKED`; Task 4.1/4.2
+must not start. The probe result must then drive a new Design → Plan → document-review cycle rather than an
+implementation-time heuristic.
+
+When Task 4.0 verifies the candidate boundary exactly, `SessionStateProvider` exposes this narrow routing-only API:
+
+```ts
+abandonControllerRoutingForSession(
+  sessionId: string,
+): void;
+```
+
+The adapter/JusticePlugin may call it only at the verified safe boundary documented by the PASS report. It clears
+unresolved routing correlation state and the suppression marker for that session but creates no routing audit.
+`removeSession(sessionId)` remains the broader session lifecycle cleanup and always removes every JUS-P0-01 entry.
+
+When the session has no remaining pinned-command captures after a successful join, unmatched routing-correlation
+leftovers for that session are discarded. No generic framework is introduced.
 
 The narrow API responsibilities are:
 
@@ -432,6 +487,10 @@ recordControllerActualObservation(
 recordControllerCommandCompletion(
   completion: ControllerCommandCompletion,
 ): ControllerRoutingInvocationContext | undefined;
+
+abandonControllerRoutingForSession(
+  sessionId: string,
+): void;
 ```
 
 Both record methods may complete the join because host callback delivery order must not be assumed beyond the
@@ -453,6 +512,10 @@ JusticePlugin.observeControllerActual(
 JusticePlugin.observeControllerCommandCompletion(
   completion: ControllerCommandCompletion,
 ): Promise<void>;
+
+JusticePlugin.abandonControllerRoutingForSession(
+  sessionId: string,
+): void;
 ```
 
 `OpenCodeAdapter.onCommandExecuteBefore()` removes at most one leading `/`, performs the exact pinned-command lookup,
@@ -1726,6 +1789,35 @@ assistant's `parentID`.
 Because `chat.params` does not yet have a safely joined command identity, production does not append a provisional
 routing record there. It waits for the exact final join. This avoids durable false `unapplied`, false `mismatch`, or
 false `applied` records when another pinned command is already present in the same session.
+
+
+Success and failure are both first-class JUS-P0-01 paths:
+
+```text
+command capture
+├─ success
+│  → exact command completion
+│  → assistant/user identity join
+│  → durable audit
+│  → exact-state consume
+│
+└─ no command completion / failure
+   → Task 4.0-verified safe abandonment boundary
+   → no fabricated durable audit
+   → unresolved ephemeral state cleanup
+```
+
+`command.executed` is never assumed to be guaranteed after `command.execute.before`. Task 4.0 therefore includes one
+deterministic post-arm failure probe in addition to the four nominal probes and the invocation-correlation overlap
+probe. It must also prove a failed-A/successful-B same-session sequence so abandonment cannot destroy B state.
+
+The fixed per-session limits from §4.1 (8 pending capture credits and 8 entries for each identity map) are an
+independent memory-safety backstop. Overflow clears unresolved routing state and suppresses routing audit for that
+session rather than guessing. Because routing is audit-only, missing an audit is acceptable; fabricating one is not.
+
+If no safe host abandonment boundary is proven, Phase 4 remains BLOCKED even though the fixed limits prevent
+unbounded resource growth. Source implementation does not choose a fallback; Design and Plan must be revised and
+reviewed first.
 
 Automated tests must include both different-controller and same-controller workflow interleavings. In particular,
 `brainstorming` and `writing-plans` both select `sisyphus`, so tests must assert the durable `workflow` field itself
