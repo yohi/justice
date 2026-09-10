@@ -17135,16 +17135,42 @@ function requireText(haystack, needle, label) {
   if (!haystack.includes(needle)) throw new Error(`missing ${label}: ${needle}`);
 }
 
-requireText(
-  plugin,
-  "\"command.execute.before\"?: ( input: { command: string; sessionID: string; arguments: string",
-  "command.execute.before",
-);
-requireText(
-  plugin,
-  "\"chat.params\"?: ( input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage",
-  "chat.params.message",
-);
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function requireHookInputFields(haystack, hookName, fields) {
+  const hook = escapeRegExp(hookName);
+  const match = haystack.match(
+    new RegExp(
+      `"${hook}"\\?\\s*:\\s*\\(\\s*input\\s*:\\s*\\{([^}]*)\\}`,
+    ),
+  );
+  if (!match) throw new Error(`missing ${hookName} input object`);
+
+  const input = match[1];
+  for (const [field, type] of fields) {
+    const fieldPattern = new RegExp(
+      `\\b${escapeRegExp(field)}\\s*:\\s*${escapeRegExp(type)}\\b`,
+    );
+    if (!fieldPattern.test(input)) {
+      throw new Error(`missing ${hookName}.${field}: ${type}`);
+    }
+  }
+}
+
+requireHookInputFields(plugin, "command.execute.before", [
+  ["command", "string"],
+  ["sessionID", "string"],
+  ["arguments", "string"],
+]);
+requireHookInputFields(plugin, "chat.params", [
+  ["sessionID", "string"],
+  ["agent", "string"],
+  ["model", "Model"],
+  ["provider", "ProviderContext"],
+  ["message", "UserMessage"],
+]);
 
 const userStart = sdk.indexOf("export type UserMessage = {");
 const userEnd = sdk.indexOf("export type ProviderAuthError", userStart);
@@ -17249,6 +17275,9 @@ echo "PINNED_HOST_SOURCE_OK"
 Expected: PASS. The temporary `opencode-ai` package version, the exact temporary binary's `--version`, fetched
 `packages/opencode/package.json`, and the immutable source commit must all resolve to OpenCode `1.18.29`; the source
 commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. The repository/global `PATH` is not an OpenCode authority.
+The installed declaration checks are semantic field checks: they MUST tolerate declaration-emitter whitespace and
+line-layout differences while still requiring the exact hook name and required input field/type pairs. Do not
+replace them with one formatting-sensitive flattened substring or weaken them to hook-name-only presence checks.
 Package provisioning is isolated under `SPIKE_ROOT`, including Bun's install cache. The source checks must also prove:
 generic `event` callbacks are dispatched without awaiting their Promise, named hooks are awaited by
 `Plugin.trigger()`, `chat.params` runs inside the LLM/processor failure boundary, and `command.execute.before`
