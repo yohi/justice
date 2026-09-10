@@ -17059,6 +17059,8 @@ session.status
 session.idle
 session.error
 probe.failure_injected
+probe.dispose_started
+probe.dispose_flushed
 ```
 
 Never record `arguments`, prompt/message content, parts, raw event objects, command templates, model/provider IDs,
@@ -17155,6 +17157,10 @@ curl -fsSL "$BASE/packages/opencode/src/effect/runner.ts" -o "$SRC/runner.ts"
 curl -fsSL "$BASE/packages/opencode/src/plugin/index.ts" -o "$SRC/opencode-plugin-index.ts"
 curl -fsSL "$BASE/packages/opencode/src/session/llm/request.ts" -o "$SRC/request.ts"
 curl -fsSL "$BASE/packages/opencode/src/session/processor.ts" -o "$SRC/processor.ts"
+curl -fsSL "$BASE/packages/opencode/src/cli/effect-cmd.ts" -o "$SRC/effect-cmd.ts"
+curl -fsSL "$BASE/packages/opencode/src/server/routes/instance/httpapi/handlers/instance.ts" -o "$SRC/instance-handler.ts"
+curl -fsSL "$BASE/packages/opencode/src/server/routes/instance/httpapi/lifecycle.ts" -o "$SRC/instance-lifecycle.ts"
+curl -fsSL "$BASE/packages/sdk/js/src/gen/sdk.gen.ts" -o "$SRC/sdk.gen.ts"
 curl -fsSL "$BASE/packages/sdk/js/src/gen/types.gen.ts" -o "$SRC/types.gen.ts"
 curl -fsSL "$BASE/packages/plugin/src/index.ts" -o "$SRC/plugin-index.ts"
 
@@ -17176,6 +17182,12 @@ grep -F "const params = yield* input.plugin.trigger(" "$SRC/request.ts"
 grep -F "\"chat.params\"" "$SRC/request.ts"
 grep -F "Effect.catch(halt)" "$SRC/processor.ts"
 
+grep -F "await AppRuntime.runPromise(store.dispose(ctx))" "$SRC/effect-cmd.ts"
+grep -F "url: \"/instance/dispose\"" "$SRC/sdk.gen.ts"
+grep -F "yield* markInstanceForDisposal" "$SRC/instance-handler.ts"
+grep -F "marked.store.dispose(marked.ctx)" "$SRC/instance-lifecycle.ts"
+grep -F "response is sent before disposeMiddleware performs the teardown" "$SRC/instance-lifecycle.ts"
+
 grep -F "case \"Running\":" "$SRC/runner.ts"
 grep -F "case \"ShellThenRun\":" "$SRC/runner.ts"
 grep -F "return [awaitDone(st.run.done), st]" "$SRC/runner.ts"
@@ -17195,9 +17207,11 @@ Expected: PASS. `opencode --version`, fetched `packages/opencode/package.json`, 
 must resolve to OpenCode `1.18.29`; the source commit is exactly `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. The source checks must also prove:
 generic `event` callbacks are dispatched without awaiting their Promise, named hooks are awaited by
 `Plugin.trigger()`, `chat.params` runs inside the LLM/processor failure boundary, and `command.execute.before`
-precedes `prompt()` and `command.executed` in `SessionPrompt.command()`. Network failure while retrieving that exact
-snapshot is `BLOCKED`; do not inspect a different tag/branch as a substitute. Runtime identity/lifecycle behavior
-still requires the executable probes.
+precedes `prompt()` and `command.executed` in `SessionPrompt.command()`. They must additionally prove that local
+`opencode run` disposes its instance, the SDK exposes `POST /instance/dispose`, and the HTTP response can be produced
+before `InstanceStore.dispose()` finishes. Therefore attached probes must wait for a plugin-disposal sentinel;
+neither the HTTP response nor `kill` is a trace-flush guarantee. Network failure while retrieving that exact
+snapshot is `BLOCKED`; do not substitute another tag/branch.
 
 - [ ] **Step 2: Create the temporary workspace, probe, and validator**
 
@@ -17277,6 +17291,7 @@ let overlapSession;
 let releaseA;
 let releasePromise;
 let aChatBlocked = false;
+let closing = false;
 
 function append(record) {
   const clean = Object.fromEntries(
@@ -17359,6 +17374,8 @@ export const ControllerRoutingProbe = async () => ({
   },
 
   event: async ({ event }) => {
+    if (closing) return;
+
     if (event?.type === "message.updated") {
       const info = event?.properties?.info;
       if (!info || info.role !== "assistant") return;
@@ -17388,6 +17405,13 @@ export const ControllerRoutingProbe = async () => ({
           typeof p?.messageID === "string" ? p.messageID : undefined,
       });
     }
+  },
+
+  dispose: async () => {
+    closing = true;
+    await writeChain;
+    await appendFile(tracePath, `${JSON.stringify({ hook: "probe.dispose_started" })}\n`, "utf8");
+    await appendFile(tracePath, `${JSON.stringify({ hook: "probe.dispose_flushed" })}\n`, "utf8");
   },
 });
 PROBE
@@ -17469,6 +17493,8 @@ const ALLOWED_HOOKS = new Set([
   "chat.params",
   "message.updated",
   "command.executed",
+  "probe.dispose_started",
+  "probe.dispose_flushed",
 ]);
 
 const failures = [];
@@ -17502,6 +17528,25 @@ async function readTrace(path, label) {
     records.push({ ...record, __index: index });
   }
   return records;
+}
+
+function validateDisposeFlush(records, expectedCount, label) {
+  const started = records.filter((r) => r.hook === "probe.dispose_started");
+  const flushed = records.filter((r) => r.hook === "probe.dispose_flushed");
+
+  if (started.length !== expectedCount) {
+    failures.push(`${label}:dispose_started_count:${started.length}`);
+  }
+  if (flushed.length !== expectedCount) {
+    failures.push(`${label}:dispose_flushed_count:${flushed.length}`);
+  }
+
+  const pairs = Math.min(started.length, flushed.length);
+  for (let index = 0; index < pairs; index += 1) {
+    if (!(started[index].__index < flushed[index].__index)) {
+      failures.push(`${label}:dispose_marker_order:${index}`);
+    }
+  }
 }
 
 async function readStatuses(path, expectedCommands, label) {
@@ -17628,6 +17673,7 @@ function validateCommandChain(records, command, expectedAgent, label) {
 }
 
 const nominalRecords = await readTrace(nominalTracePath, "nominal");
+validateDisposeFlush(nominalRecords, EXPECTED.size, "nominal");
 await readStatuses(nominalStatusPath, new Set(EXPECTED.keys()), "nominal");
 
 const nominalSummary = [];
@@ -17637,6 +17683,7 @@ for (const [command, agent] of EXPECTED) {
 }
 
 const overlapRecords = await readTrace(overlapTracePath, "overlap");
+validateDisposeFlush(overlapRecords, 1, "overlap");
 await readStatuses(
   overlapStatusPath,
   new Set(OVERLAP.map(([command]) => command)),
@@ -17727,6 +17774,7 @@ const report = [
   "- chat.params: session + UserMessage.id + raw agent",
   "- finalized message.updated: session + assistant id + parent user id + raw agent + completion",
   "- command.executed: exact command + session + result assistant message id",
+  "- detached event trace flush: instance disposal + probe.dispose_flushed sentinel",
   "",
   "## Nominal four-command chains",
 ];
@@ -17937,6 +17985,25 @@ printf "%s\t%s\n" justice-implement-subagent-driven-development "$B_CODE" >> "$S
 
 test "$(wc -l < "$STATUS" | tr -d " ")" = "2"
 
+curl -fsS -X POST \
+  -H "x-opencode-directory: $WORKSPACE" \
+  "$BASE_URL/instance/dispose" \
+  >/dev/null
+
+for _ in $(seq 1 200); do
+  if grep -F "\"hook\":\"probe.dispose_flushed\"" "$TRACE" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "OpenCode overlap server exited before dispose flush" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+
+grep -F "\"hook\":\"probe.dispose_started\"" "$TRACE" >/dev/null
+grep -F "\"hook\":\"probe.dispose_flushed\"" "$TRACE" >/dev/null
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=
@@ -17957,6 +18024,10 @@ The full A/B command completion/message chains may contain additional assistant 
 completed chain for each command and distinct A/B user and assistant identities. If the host collapses the two
 commands onto one assistant identity, omits B's own chain, or cannot process B while A is blocked, the candidate
 correlation contract is not proven and the result is `BLOCKED`.
+
+The overlap trace becomes authoritative only after `POST /instance/dispose` produces
+`probe.dispose_flushed`. `kill "$SERVER_PID"` is process cleanup only; it is never a plugin-finalizer or trace-flush
+authority.
 
 
 - [ ] **Step 5: Run deterministic awaited-hook failure + successful-B probe**
@@ -18016,6 +18087,7 @@ let writeChain = Promise.resolve();
 let sessionID;
 let releaseA;
 let releasePromise;
+let closing = false;
 
 function append(record) {
   const clean = Object.fromEntries(
@@ -18075,6 +18147,8 @@ export const ControllerRoutingFailureProbe = async () => ({
   },
 
   event: async ({ event }) => {
+    if (closing) return;
+
     if (event?.type === "session.status") {
       const p = event.properties;
       await append({
@@ -18132,7 +18206,10 @@ export const ControllerRoutingFailureProbe = async () => ({
   },
 
   dispose: async () => {
+    closing = true;
     await writeChain;
+    await appendFile(tracePath, `${JSON.stringify({ hook: "probe.dispose_started" })}\n`, "utf8");
+    await appendFile(tracePath, `${JSON.stringify({ hook: "probe.dispose_flushed" })}\n`, "utf8");
   },
 });
 FAIL_PROBE
@@ -18166,6 +18243,8 @@ const allowedHooks = new Set([
   "session.idle",
   "session.error",
   "probe.failure_injected",
+  "probe.dispose_started",
+  "probe.dispose_flushed",
 ]);
 
 const failures = [];
@@ -18233,11 +18312,30 @@ if (bExecuted.length === 1) {
   if (!bFinal) failures.push("B_finalized_identity_missing");
 }
 
+const disposeStarted = records.filter((r) => r.hook === "probe.dispose_started");
+const disposeFlushed = records.filter((r) => r.hook === "probe.dispose_flushed");
+
+if (disposeStarted.length !== 1) failures.push(`dispose_started_count:${disposeStarted.length}`);
+if (disposeFlushed.length !== 1) failures.push(`dispose_flushed_count:${disposeFlushed.length}`);
+if (
+  disposeStarted.length === 1 &&
+  disposeFlushed.length === 1 &&
+  !(disposeStarted[0].__index < disposeFlushed[0].__index)
+) {
+  failures.push("dispose_marker_order");
+}
+
+const evidenceCutoff =
+  disposeStarted.length === 1 ? disposeStarted[0].__index : Number.POSITIVE_INFINITY;
+
 const lifecycle = records.filter(
   (r) =>
-    r.hook === "session.error" ||
-    r.hook === "session.idle" ||
-    (r.hook === "session.status" && r.status === "idle"),
+    r.__index < evidenceCutoff &&
+    (
+      r.hook === "session.error" ||
+      r.hook === "session.idle" ||
+      (r.hook === "session.status" && r.status === "idle")
+    ),
 );
 
 let safeCandidate;
@@ -18283,6 +18381,7 @@ const output = [
   `cleanup_order=${safeCandidate ? "after_b_finalized_and_command_executed" : "none"}`,
   `preserves_concurrent_invocation=${safeCandidate ? "true" : "false"}`,
   `suppression_clear_authority=${safeCandidate ? "same_verified_boundary" : "removeSession_only"}`,
+  "trace_flush=explicit_instance_dispose_then_probe.dispose_flushed",
   ...failures.map((failure) => `failure=${failure}`),
   "",
 ];
@@ -18378,17 +18477,34 @@ printf "%s\t%s\n" justice-implement-subagent-driven-development "$B_CODE" >> "$F
 test "$A_CODE" -ne 0
 test "$B_CODE" -eq 0
 
-# Stop the same server before validation. Plugin.dispose() awaits writeChain,
-# so all detached lifecycle observations are flushed without a sleep heuristic.
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
-SERVER_PID=
+curl -fsS -X POST \
+  -H "x-opencode-directory: $FAIL_WORKSPACE" \
+  "$BASE_URL/instance/dispose" \
+  >/dev/null
+
+for _ in $(seq 1 200); do
+  if grep -F "\"hook\":\"probe.dispose_flushed\"" "$FAIL_TRACE" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "OpenCode failure server exited before dispose flush" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+
+grep -F "\"hook\":\"probe.dispose_started\"" "$FAIL_TRACE" >/dev/null
+grep -F "\"hook\":\"probe.dispose_flushed\"" "$FAIL_TRACE" >/dev/null
 
 set +e
 bun "$SPIKE_ROOT/validate-failure-lifecycle.mjs" \
   "$FAIL_TRACE" "$FAIL_STATUS" "$FAIL_RESULT"
 FAILURE_CODE=$?
 set -e
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=
 
 trap - EXIT
 exit "$FAILURE_CODE"
@@ -18399,6 +18515,10 @@ The validator MUST distinguish **observed lifecycle evidence** from **safe clean
 `session.status idle`, `session.idle`, or `session.error` that occurs before B's matching finalized assistant and
 B's exact `command.executed` is retained as `unsafe_early_lifecycle_observed=true` but cannot make the probe PASS.
 `session.error` alone is never session-quiescence authority.
+
+`probe.dispose_started` is the evidence cutoff, not a lifecycle candidate. `dispose()` sets `closing = true`, drains
+the already-chained detached-event writes, writes `probe.dispose_started`, then writes `probe.dispose_flushed`.
+Lifecycle events at or after that cutoff are excluded, so forced disposal cannot manufacture a false safe boundary.
 
 PASS requires all of:
 
@@ -18412,6 +18532,8 @@ B finalized assistant identity matches B command.executed.messageID
 one session.status(idle) or session.idle occurs only after both B finalized identity and B command.executed
 cleanup_scope/session + hook/value/order are written explicitly
 preserves_concurrent_invocation=true
+probe.dispose_started and probe.dispose_flushed each occur exactly once
+all lifecycle evidence used for cleanup classification occurs before probe.dispose_started
 ```
 
 If no post-B quiescence signal exists, the lifecycle capability result is `BLOCKED`. Do not weaken the validator,
@@ -18450,7 +18572,7 @@ case "$abandonment_line" in
   *) echo "ERROR: invalid abandonment result header" >&2; exit 1 ;;
 esac
 
-for required in   failure_injection_hook=   a_command_executed=   b_command_executed=   b_finalized_identity=   unsafe_early_lifecycle_observed=   cleanup_scope=   cleanup_hook=   cleanup_status=   cleanup_order=   preserves_concurrent_invocation=   suppression_clear_authority=
+for required in   failure_injection_hook=   a_command_executed=   b_command_executed=   b_finalized_identity=   unsafe_early_lifecycle_observed=   cleanup_scope=   cleanup_hook=   cleanup_status=   cleanup_order=   preserves_concurrent_invocation=   suppression_clear_authority=   trace_flush=
 do
   grep -E "^${required}" "$SPIKE_ROOT/failure-result.txt" >/dev/null
 done
@@ -18512,7 +18634,7 @@ overlap:
 
 PASS additionally requires `JUS-P0-01 abandonment observation = PASS` and the complete sanitized lifecycle
 contract above. The report must retain the exact `cleanup_scope`, `cleanup_hook`, `cleanup_status`, `cleanup_order`,
-`preserves_concurrent_invocation`, and `suppression_clear_authority` values. Any failure is `BLOCKED`; do not weaken
+`preserves_concurrent_invocation`, `suppression_clear_authority`, and `trace_flush` values. Any failure is `BLOCKED`; do not weaken
 either validator, parse content/error payloads, infer workflow from controller, or substitute latest/current event
 heuristics. The report is capability evidence only and is not itself permission to implement cleanup.
 
