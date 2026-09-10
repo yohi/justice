@@ -17029,8 +17029,9 @@ JUS-P0-01 runtime observation = PASS
 PASS means all three capability groups succeed: (1) the four nominal probes, (2) the deterministic
 same-server/same-session invocation overlap probe, and (3) the deterministic post-arm failure/abandonment probe.
 Task 4.0 records capability evidence only; it does **not** pre-authorize a production abandonment API. A PASS report
-must identify the exact cleanup scope/hook/value/order and concurrent-B/suppression safety. After either PASS or
-BLOCKED, stop before Task 4.1/4.2. A separate document-only change must copy the observed lifecycle contract into
+must identify the exact target-session binding, cleanup scope/hook/value/order, and concurrent-B/suppression
+safety. After either PASS or BLOCKED, stop before Task 4.1/4.2. A separate document-only change must copy the
+observed lifecycle contract into
 Design §4.1 and Task 4.2 and pass document review before implementation is reconsidered.
 
 The trace allowlist is exact:
@@ -18282,16 +18283,65 @@ for (const line of (await readFile(statusPath, "utf8")).split(/\r?\n/).filter(Bo
 if (!status.has(A) || status.get(A) === 0) failures.push("A_did_not_fail");
 if (!status.has(B) || status.get(B) !== 0) failures.push("B_did_not_succeed");
 
-const aStart = records.find((r) => r.hook === "command.execute.before" && r.command === A);
-const bStart = records.find((r) => r.hook === "command.execute.before" && r.command === B);
-const injected = records.find((r) => r.hook === "probe.failure_injected" && r.command === A);
-const aExecuted = records.filter((r) => r.hook === "command.executed" && r.command === A);
-const bExecuted = records.filter((r) => r.hook === "command.executed" && r.command === B);
+const aStarts = records.filter(
+  (r) => r.hook === "command.execute.before" && r.command === A,
+);
+const bStarts = records.filter(
+  (r) => r.hook === "command.execute.before" && r.command === B,
+);
 
-if (!aStart || !bStart || !injected) failures.push("failure_barrier_evidence_missing");
-if (aStart && bStart && aStart.sessionID !== bStart.sessionID) failures.push("not_same_session");
+if (aStarts.length !== 1) failures.push(`A_command_start_count:${aStarts.length}`);
+if (bStarts.length !== 1) failures.push(`B_command_start_count:${bStarts.length}`);
+
+const aStart = aStarts.length === 1 ? aStarts[0] : undefined;
+const bStart = bStarts.length === 1 ? bStarts[0] : undefined;
+
+const targetSessionID =
+  aStart &&
+  bStart &&
+  typeof aStart.sessionID === "string" &&
+  aStart.sessionID.length > 0 &&
+  aStart.sessionID === bStart.sessionID
+    ? aStart.sessionID
+    : undefined;
+
+if (!targetSessionID) failures.push("target_session_not_exact");
+
+const injectedCandidates = targetSessionID
+  ? records.filter(
+      (r) =>
+        r.hook === "probe.failure_injected" &&
+        r.command === A &&
+        r.sessionID === targetSessionID,
+    )
+  : [];
+if (injectedCandidates.length !== 1) {
+  failures.push(`A_failure_injection_count:${injectedCandidates.length}`);
+}
+const injected = injectedCandidates.length === 1 ? injectedCandidates[0] : undefined;
+
+const aExecuted = targetSessionID
+  ? records.filter(
+      (r) =>
+        r.hook === "command.executed" &&
+        r.command === A &&
+        r.sessionID === targetSessionID,
+    )
+  : [];
+const bExecuted = targetSessionID
+  ? records.filter(
+      (r) =>
+        r.hook === "command.executed" &&
+        r.command === B &&
+        r.sessionID === targetSessionID,
+    )
+  : [];
+
 if (injected && bStart && !(bStart.__index < injected.__index)) {
   failures.push("A_failed_before_B_was_armed");
+}
+if (injected && injected.sessionID !== targetSessionID) {
+  failures.push("A_failure_injection_session_mismatch");
 }
 if (aExecuted.length !== 0) failures.push("A_unexpected_command_executed");
 if (bExecuted.length !== 1) failures.push(`B_command_executed_count:${bExecuted.length}`);
@@ -18299,17 +18349,29 @@ if (bExecuted.length !== 1) failures.push(`B_command_executed_count:${bExecuted.
 let bDone;
 let bFinal;
 
-if (bExecuted.length === 1) {
+if (bExecuted.length === 1 && targetSessionID) {
   bDone = bExecuted[0];
-  bFinal = records.find(
+  if (bDone.sessionID !== targetSessionID) {
+    failures.push("B_completion_session_mismatch");
+  }
+
+  const bFinalCandidates = records.filter(
     (r) =>
       r.hook === "message.updated" &&
-      r.sessionID === bDone.sessionID &&
+      r.sessionID === targetSessionID &&
       r.assistantMessageID === bDone.assistantMessageID &&
       r.completedPresent === true,
   );
+
+  if (bFinalCandidates.length !== 1) {
+    failures.push(`B_finalized_identity_count:${bFinalCandidates.length}`);
+  }
+  bFinal = bFinalCandidates.length === 1 ? bFinalCandidates[0] : undefined;
+
   if (!bDone.assistantMessageID) failures.push("B_completion_messageID_missing");
-  if (!bFinal) failures.push("B_finalized_identity_missing");
+  if (bFinal && bFinal.sessionID !== targetSessionID) {
+    failures.push("B_finalized_session_mismatch");
+  }
 }
 
 const disposeStarted = records.filter((r) => r.hook === "probe.dispose_started");
@@ -18328,21 +18390,28 @@ if (
 const evidenceCutoff =
   disposeStarted.length === 1 ? disposeStarted[0].__index : Number.POSITIVE_INFINITY;
 
-const lifecycle = records.filter(
-  (r) =>
-    r.__index < evidenceCutoff &&
-    (
-      r.hook === "session.error" ||
-      r.hook === "session.idle" ||
-      (r.hook === "session.status" && r.status === "idle")
-    ),
-);
+const lifecycle = targetSessionID
+  ? records.filter(
+      (r) =>
+        r.__index < evidenceCutoff &&
+        r.sessionID === targetSessionID &&
+        (
+          r.hook === "session.error" ||
+          r.hook === "session.idle" ||
+          (r.hook === "session.status" && r.status === "idle")
+        ),
+    )
+  : [];
 
 let safeCandidate;
 let unsafeEarly = false;
 
-if (bDone && bFinal) {
-  const safeAfter = Math.max(bDone.__index, bFinal.__index);
+if (bDone && bFinal && injected && targetSessionID) {
+  const safeAfter = Math.max(
+    injected.__index,
+    bDone.__index,
+    bFinal.__index,
+  );
 
   for (const event of lifecycle) {
     if (event.__index <= safeAfter) {
@@ -18350,18 +18419,24 @@ if (bDone && bFinal) {
       continue;
     }
 
-    // session.error is evidence only. It is not session-quiescence authority.
+    // session.error is same-session evidence only. It never establishes quiescence.
     if (
       event.hook === "session.idle" ||
       (event.hook === "session.status" && event.status === "idle")
     ) {
+      if (event.sessionID !== targetSessionID) {
+        failures.push("safe_candidate_session_mismatch");
+        continue;
+      }
       safeCandidate = event;
       break;
     }
   }
 }
 
-if (!safeCandidate) failures.push("no_safe_post_B_session_quiescence_boundary");
+if (!safeCandidate) {
+  failures.push("no_safe_same_session_post_failure_and_B_quiescence_boundary");
+}
 
 const result = failures.length === 0 ? "PASS" : "BLOCKED";
 const cleanupHook = safeCandidate?.hook ?? "none";
@@ -18376,9 +18451,10 @@ const output = [
   `b_finalized_identity=${bFinal ? "yes" : "no"}`,
   `unsafe_early_lifecycle_observed=${unsafeEarly ? "true" : "false"}`,
   `cleanup_scope=${safeCandidate ? "session" : "none"}`,
+  `cleanup_session=${safeCandidate ? "target_probe_session" : "none"}`,
   `cleanup_hook=${cleanupHook}`,
   `cleanup_status=${cleanupStatus}`,
-  `cleanup_order=${safeCandidate ? "after_b_finalized_and_command_executed" : "none"}`,
+  `cleanup_order=${safeCandidate ? "after_a_failure_injected_and_b_finalized_and_command_executed" : "none"}`,
   `preserves_concurrent_invocation=${safeCandidate ? "true" : "false"}`,
   `suppression_clear_authority=${safeCandidate ? "same_verified_boundary" : "removeSession_only"}`,
   "trace_flush=explicit_instance_dispose_then_probe.dispose_flushed",
@@ -18511,10 +18587,13 @@ exit "$FAILURE_CODE"
 '
 ```
 
-The validator MUST distinguish **observed lifecycle evidence** from **safe cleanup authority**. A
-`session.status idle`, `session.idle`, or `session.error` that occurs before B's matching finalized assistant and
-B's exact `command.executed` is retained as `unsafe_early_lifecycle_observed=true` but cannot make the probe PASS.
-`session.error` alone is never session-quiescence authority.
+The validator MUST distinguish **observed lifecycle evidence** from **safe cleanup authority**. It derives one
+non-empty `targetSessionID` from the unique A/B `command.execute.before` records and requires A failure injection,
+B command completion, B finalized assistant identity, and every lifecycle candidate to belong to that same session.
+A same-session `session.status idle`, `session.idle`, or `session.error` that occurs before A
+`probe.failure_injected`, B's matching finalized assistant, or B's exact `command.executed` is retained as
+`unsafe_early_lifecycle_observed=true` but cannot make the probe PASS. Unrelated-session lifecycle events are not
+candidates. `session.error` alone is never session-quiescence authority.
 
 `probe.dispose_started` is the evidence cutoff, not a lifecycle candidate. `dispose()` sets `closing = true`, drains
 the already-chained detached-event writes, writes `probe.dispose_started`, then writes `probe.dispose_flushed`.
@@ -18528,16 +18607,20 @@ A command.execute.before and probe.failure_injected observed
 B command.execute.before observed before A injection in the same session
 A command.executed absent
 B exits zero
-B finalized assistant identity matches B command.executed.messageID
-one session.status(idle) or session.idle occurs only after both B finalized identity and B command.executed
-cleanup_scope/session + hook/value/order are written explicitly
+B finalized assistant identity matches B command.executed.messageID in the target session
+target sessionID is a non-empty exact A/B session identity
+A probe.failure_injected belongs to the target session
+B command.executed belongs to the target session
+one same-session session.status(idle) or session.idle occurs only after A failure injection, B finalized identity, and B command.executed
+cleanup_scope/session + cleanup_session/target_probe_session + hook/value/order are written explicitly
 preserves_concurrent_invocation=true
 probe.dispose_started and probe.dispose_flushed each occur exactly once
 all lifecycle evidence used for cleanup classification occurs before probe.dispose_started
 ```
 
-If no post-B quiescence signal exists, the lifecycle capability result is `BLOCKED`. Do not weaken the validator,
-treat an early idle/error as cleanup authority, or invent a Justice-local invocation token.
+If no same-session quiescence signal exists after A failure injection plus B finalized identity and B
+`command.executed`, the lifecycle capability result is `BLOCKED`. Do not weaken the validator, treat unrelated-
+session or early idle/error as cleanup authority, or invent a Justice-local invocation token.
 
 
 - [ ] **Step 6: Validate correlation traces, abandonment result, and write the bounded report**
@@ -18572,7 +18655,7 @@ case "$abandonment_line" in
   *) echo "ERROR: invalid abandonment result header" >&2; exit 1 ;;
 esac
 
-for required in   failure_injection_hook=   a_command_executed=   b_command_executed=   b_finalized_identity=   unsafe_early_lifecycle_observed=   cleanup_scope=   cleanup_hook=   cleanup_status=   cleanup_order=   preserves_concurrent_invocation=   suppression_clear_authority=   trace_flush=
+for required in   failure_injection_hook=   a_command_executed=   b_command_executed=   b_finalized_identity=   unsafe_early_lifecycle_observed=   cleanup_scope=   cleanup_session=   cleanup_hook=   cleanup_status=   cleanup_order=   preserves_concurrent_invocation=   suppression_clear_authority=   trace_flush=
 do
   grep -E "^${required}" "$SPIKE_ROOT/failure-result.txt" >/dev/null
 done
@@ -18633,8 +18716,9 @@ overlap:
 ```
 
 PASS additionally requires `JUS-P0-01 abandonment observation = PASS` and the complete sanitized lifecycle
-contract above. The report must retain the exact `cleanup_scope`, `cleanup_hook`, `cleanup_status`, `cleanup_order`,
-`preserves_concurrent_invocation`, `suppression_clear_authority`, and `trace_flush` values. Any failure is `BLOCKED`; do not weaken
+contract above. The report must retain the exact `cleanup_scope`, `cleanup_session`, `cleanup_hook`,
+`cleanup_status`, `cleanup_order`, `preserves_concurrent_invocation`, `suppression_clear_authority`, and
+`trace_flush` values. Any failure is `BLOCKED`; do not weaken
 either validator, parse content/error payloads, infer workflow from controller, or substitute latest/current event
 heuristics. The report is capability evidence only and is not itself permission to implement cleanup.
 
@@ -18646,8 +18730,8 @@ If the report is `PASS`:
 
 1. stop before Task 4.1;
 2. commit only the sanitized spike report after its normal review;
-3. copy the exact lifecycle contract from the report into Design §4.1;
-4. update Task 4.2 with exactly one matching cleanup scope/API/hook/value/order contract and concrete RED tests;
+3. copy the exact lifecycle contract, including target-session binding and cleanup order, from the report into Design §4.1;
+4. update Task 4.2 with exactly one matching cleanup scope/API/session/hook/value/order contract and concrete RED tests;
 5. define suppression-clear authority from the same verified boundary;
 6. commit that Design/Plan change separately and run document review again;
 7. only the reviewed exact contract may unlock Task 4.1/4.2.
