@@ -17990,9 +17990,15 @@ BARRIER_DIR="$SPIKE_ROOT/barrier"
 SESSION_FILE="$SPIKE_ROOT/overlap-session.txt"
 PORT=40967
 BASE_URL="http://127.0.0.1:$PORT"
+SERVER_STDERR="$SPIKE_ROOT/overlap-server.stderr"
+A_STDERR="$SPIKE_ROOT/overlap-a.stderr"
+B_STDERR="$SPIKE_ROOT/overlap-b.stderr"
 
 : > "$TRACE"
 : > "$STATUS"
+: > "$SERVER_STDERR"
+: > "$A_STDERR"
+: > "$B_STDERR"
 rm -f "$BARRIER_DIR/a-chat-blocked" "$SESSION_FILE"
 
 SERVER_PID=
@@ -18016,7 +18022,7 @@ trap cleanup_processes EXIT
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
-    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
+    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>"$SERVER_STDERR"
 ) &
 SERVER_PID=$!
 
@@ -18047,20 +18053,50 @@ set +e
       --format json \
       --model "$JUSTICE_HOST_TEST_MODEL" \
       --command justice-implement-writing-plans \
-      >/dev/null 2>/dev/null
+      >/dev/null 2>"$A_STDERR"
 ) &
 A_PID=$!
 set -e
 
+classify_a_pre_barrier_failure() {
+  set +e
+  wait "$A_PID"
+  A_EARLY_CODE=$?
+  set -e
+  A_PID=
+  A_START_COUNT="$(grep -Ec '"hook":"command.execute.before".*"command":"justice-implement-writing-plans"' "$TRACE" 2>/dev/null || true)"
+  A_CHAT_COUNT="$(grep -Ec '"hook":"chat.params"' "$TRACE" 2>/dev/null || true)"
+  A_STDERR_PRESENT=false
+  test ! -s "$A_STDERR" || A_STDERR_PRESENT=true
+  if [ "$A_START_COUNT" -eq 0 ]; then
+    FAILURE_STAGE="before_command_execute_before"
+  elif [ "$A_CHAT_COUNT" -eq 0 ]; then
+    FAILURE_STAGE="after_command_execute_before_before_chat_params"
+  else
+    FAILURE_STAGE="after_chat_params_before_barrier_file"
+  fi
+  printf '%s\n' \
+    "OVERLAP_A_PRE_BARRIER_FAILURE" \
+    "a_exit_code=$A_EARLY_CODE" \
+    "failure_stage=$FAILURE_STAGE" \
+    "a_command_start_count=$A_START_COUNT" \
+    "chat_params_count=$A_CHAT_COUNT" \
+    "a_stderr_present=$A_STDERR_PRESENT" >&2
+  echo "Raw A stderr remains scratch-only at $A_STDERR and MUST NOT be copied into the report or repository." >&2
+  exit 1
+}
+
 for _ in $(seq 1 150); do
   if [ -f "$BARRIER_DIR/a-chat-blocked" ]; then break; fi
   if ! kill -0 "$A_PID" 2>/dev/null; then
-    echo "A exited before barrier" >&2
-    exit 1
+    classify_a_pre_barrier_failure
   fi
   sleep 0.1
 done
-test -f "$BARRIER_DIR/a-chat-blocked"
+if [ ! -f "$BARRIER_DIR/a-chat-blocked" ]; then
+  echo "OVERLAP_A_BARRIER_TIMEOUT" >&2
+  exit 1
+fi
 test "$(cat "$BARRIER_DIR/a-chat-blocked")" = "$SESSION_ID"
 
 set +e
@@ -18076,7 +18112,7 @@ set +e
       --format json \
       --model "$JUSTICE_HOST_TEST_MODEL" \
       --command justice-implement-subagent-driven-development \
-      >/dev/null 2>/dev/null
+      >/dev/null 2>"$B_STDERR"
 ) &
 B_PID=$!
 
@@ -18127,7 +18163,9 @@ A finalized assistant message.updated
 ```
 
 The full A/B command completion/message chains may contain additional assistant updates, but PASS requires a unique
-completed chain for each command and distinct A/B user and assistant identities. If the host collapses the two
+completed chain for each command and distinct A/B user and assistant identities.
+
+If A exits before the deterministic barrier, Step 4 is a **harness failure**, not a runtime capability BLOCKED result. Raw server/A/B stderr MUST remain scratch-only under `SPIKE_ROOT` and MUST NOT be copied into the repository or report. Emit only sanitized fields `a_exit_code`, `failure_stage`, `a_command_start_count`, `chat_params_count`, and `a_stderr_present`. `failure_stage` is exactly one of `before_command_execute_before`, `after_command_execute_before_before_chat_params`, or `after_chat_params_before_barrier_file`. If A remains alive past the barrier deadline, emit `OVERLAP_A_BARRIER_TIMEOUT` and stop as a harness failure. These diagnostics are not capability evidence and MUST NOT unlock Step 5. If the host collapses the two
 commands onto one assistant identity, omits B's own chain, or cannot process B while A is blocked, the candidate
 correlation contract is not proven and the result is `BLOCKED`.
 
