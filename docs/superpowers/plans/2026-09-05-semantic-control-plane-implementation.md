@@ -17118,6 +17118,10 @@ test "$CLI_PACKAGE_VERSION" = "1.18.29"
 test "$("$OPENCODE_BIN" --version)" = "1.18.29"
 test -n "${JUSTICE_HOST_TEST_MODEL:-}"
 
+BUN_VERSION="$(bun --version)"
+test -n "$BUN_VERSION"
+printf "%s\n" "$BUN_VERSION" > "$SPIKE_ROOT/bun-version.txt"
+
 bun run vitest run tests/types/command-execute-before.contract.test.ts
 
 bun - <<'BUN'
@@ -17266,6 +17270,7 @@ grep -F "\"chat.params\"?:" "$SRC/plugin-index.ts"
 echo "TEMP_OPENCODE_PACKAGE=opencode-ai"
 echo "TEMP_OPENCODE_PACKAGE_VERSION=$CLI_PACKAGE_VERSION"
 echo "TEMP_OPENCODE_BIN=$OPENCODE_BIN"
+echo "TEMP_BUN_VERSION=$BUN_VERSION"
 echo "PINNED_HOST_SOURCE_COMMIT=$PINNED"
 echo "PINNED_HOST_SOURCE_VERSION=$SOURCE_VERSION"
 echo "PINNED_HOST_SOURCE_OK"
@@ -17949,28 +17954,65 @@ console.log(`JUS-P0-01 runtime observation = ${result}`);
 process.exit(result === "PASS" ? 0 : 1);
 VALIDATOR
 
+EXPECTED_BUN_VERSION="$(cat "$SPIKE_ROOT/bun-version.txt")"
+CURRENT_BUN_VERSION="$(bun --version)"
+test -n "$EXPECTED_BUN_VERSION"
+test -n "$CURRENT_BUN_VERSION"
+if [ "$CURRENT_BUN_VERSION" != "$EXPECTED_BUN_VERSION" ]; then
+  printf '%s\n' \
+    "STEP2_SYNTAX_HARNESS_FAILURE" \
+    "syntax_file=none" \
+    "syntax_stage=bun_version_changed" \
+    "syntax_bun_version=$CURRENT_BUN_VERSION" >&2
+  exit 1
+fi
+
 WORKSPACE="$WORKSPACE" SPIKE_ROOT="$SPIKE_ROOT" bun - <<'BUN'
 const workspace = process.env.WORKSPACE;
 const spikeRoot = process.env.SPIKE_ROOT;
 if (!workspace || !spikeRoot) throw new Error("syntax-check paths are required");
 
 const files = [
-  `${workspace}/.opencode/plugins/controller-routing-probe.js`,
-  `${spikeRoot}/create-session.mjs`,
-  `${spikeRoot}/validate-and-report.mjs`,
+  ["controller_routing_probe", `${workspace}/.opencode/plugins/controller-routing-probe.js`],
+  ["create_session", `${spikeRoot}/create-session.mjs`],
+  ["validate_and_report", `${spikeRoot}/validate-and-report.mjs`],
 ];
 
+const fail = (label, stage) => {
+  console.error("STEP2_SYNTAX_HARNESS_FAILURE");
+  console.error(`syntax_file=${label}`);
+  console.error(`syntax_stage=${stage}`);
+  console.error(`syntax_bun_version=${Bun.version}`);
+  process.exit(1);
+};
+
 const transpiler = new Bun.Transpiler({ loader: "js", target: "bun" });
-for (const file of files) {
-  const source = await Bun.file(file).text();
-  transpiler.transformSync(source);
-  console.log(`syntax-ok:${file}`);
+for (const [label, file] of files) {
+  let source;
+  try {
+    source = await Bun.file(file).text();
+  } catch {
+    fail(label, "read");
+  }
+
+  try {
+    transpiler.transformSync(source);
+  } catch {
+    fail(label, "parse");
+  }
+
+  console.log(`syntax-ok:${label}`);
 }
 BUN
 '
 ```
 
-Expected: all three temporary JavaScript files pass syntax validation. This check MUST use Bun's parser without
+Expected: all three temporary JavaScript files pass syntax validation. Step 1 records the non-empty `bun --version`
+under `SPIKE_ROOT`; Step 2 MUST require the same Bun version before syntax parsing. On a Step 2 failure, emit only the
+sanitized marker `STEP2_SYNTAX_HARNESS_FAILURE`, `syntax_file` in
+`none|controller_routing_probe|create_session|validate_and_report`, `syntax_stage` in
+`bun_version_changed|read|parse`, and the non-secret `syntax_bun_version`. Do not emit parser exception text, source
+content, raw paths, environment values, or stack traces as durable evidence. This check MUST use Bun's parser without
 executing the temporary modules: `Bun.Transpiler.transformSync()` parses/transpiles the source while module resolution
 and runtime execution remain outside this syntax-only gate. Do not substitute `node --check` unless Step 1 has
 explicitly proved that `node` is a real Node.js CLI with compatible `--check` semantics; a Bun fallback wrapper is not
