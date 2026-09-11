@@ -19075,7 +19075,9 @@ Run:
 devcontainer exec --workspace-folder . bash -lc '
 set -euo pipefail
 SPIKE_ROOT=/tmp/justice-controller-routing-spike
-REPORT=/workspace/docs/spikes/2026-09-controller-routing-runtime-signals.md
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+test -n "$REPO_ROOT"
+REPORT="$REPO_ROOT/docs/spikes/2026-09-controller-routing-runtime-signals.md"
 
 mkdir -p "$(dirname "$REPORT")"
 
@@ -19172,7 +19174,7 @@ grep -Fx "## Same-session overlap" "$REPORT"
 grep -Fx "## Sanitized failures" "$REPORT"
 grep -Fx "## Failure / abandonment capability" "$REPORT"
 
-git diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
+git -C "$REPO_ROOT" diff --check -- docs/spikes/2026-09-controller-routing-runtime-signals.md
 
 rm -rf "$SPIKE_ROOT"
 test ! -e "$SPIKE_ROOT"
@@ -19182,9 +19184,11 @@ exit 0
 ```
 
 A well-formed final report is a successful execution of Step 6 whether its unique `## Result` is PASS or BLOCKED.
-`validation_code` is internal capability-combination state used to verify and, when required, rewrite the final
-result; it is not the shell harness status. Only report construction/validation/I/O or other harness failures make
-Step 6 exit non-zero. Therefore a valid BLOCKED report proceeds to Step 7 after scratch cleanup.
+Step 6 MUST resolve the active repository root with `git rev-parse --show-toplevel` inside the same `devcontainer exec`
+and write the report under that exact worktree; `/workspace` is not a report-path authority. `validation_code` is
+internal capability-combination state used to verify and, when required, rewrite the final result; it is not the
+shell harness status. Only report construction/validation/I/O or other harness failures make Step 6 exit non-zero.
+Therefore a valid BLOCKED report proceeds to Step 7 after scratch cleanup.
 
 The validator is the redaction/identity proof. `git diff --check` is formatting verification only. The exact line
 immediately following the unique `## Result` heading after Step 6 finishes is the sole overall Task 4.0 status
