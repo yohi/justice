@@ -18107,9 +18107,15 @@ classify_a_pre_barrier_failure() {
     "chat_params_count=$A_CHAT_COUNT" \
     "a_stderr_present=$A_STDERR_PRESENT" >&2
 
-  TRACE="$TRACE" bun - <<'BARRIER_DIAGNOSTIC'
+  TRACE="$TRACE" F012_CHAT_COUNT="$A_CHAT_COUNT" bun - <<'BARRIER_DIAGNOSTIC'
 const path = process.env.TRACE;
 if (!path) throw new Error("TRACE is required");
+
+const f012CountRaw = process.env.F012_CHAT_COUNT;
+if (!f012CountRaw || !/^\d+$/.test(f012CountRaw)) {
+  throw new Error("F012_CHAT_COUNT must be a non-negative integer");
+}
+const f012Count = Number(f012CountRaw);
 
 const records = (await Bun.file(path).text())
   .split(/\r?\n/)
@@ -18117,24 +18123,43 @@ const records = (await Bun.file(path).text())
   .map((line) => JSON.parse(line))
   .filter((record) => record?.hook === "chat.params");
 
-if (records.length !== 1) {
+const fields = [
+  ["barrierEnabled", "barrier_enabled"],
+  ["barrierDirSet", "barrier_dir_set"],
+  ["commandASeen", "command_a_seen"],
+  ["overlapSessionSet", "overlap_session_set"],
+  ["sessionMatchesOverlap", "session_matches_overlap"],
+  ["aChatBlocked", "a_chat_blocked"],
+  ["releasePromiseSet", "release_promise_set"],
+];
+
+const schemaRecords = records.filter((record) =>
+  fields.every(([key]) => typeof record[key] === "boolean"),
+);
+
+console.error(`barrier_trace_record_count=${records.length}`);
+console.error(`barrier_trace_schema_record_count=${schemaRecords.length}`);
+console.error(
+  `barrier_trace_count_matches_f012=${records.length === f012Count}`,
+);
+
+let reason;
+if (records.length !== f012Count) {
+  reason = "count_changed_after_f012_snapshot";
+} else if (records.length !== 1) {
+  reason = "chat_params_record_count_not_one";
+} else if (schemaRecords.length !== 1) {
+  reason = "f014_boolean_schema_missing_or_non_boolean";
+} else {
+  reason = "valid";
+}
+console.error(`barrier_trace_diagnostic_reason=${reason}`);
+
+if (reason !== "valid") {
   console.error("barrier_trace_diagnostic_valid=false");
 } else {
-  const state = records[0];
-  const fields = [
-    ["barrierEnabled", "barrier_enabled"],
-    ["barrierDirSet", "barrier_dir_set"],
-    ["commandASeen", "command_a_seen"],
-    ["overlapSessionSet", "overlap_session_set"],
-    ["sessionMatchesOverlap", "session_matches_overlap"],
-    ["aChatBlocked", "a_chat_blocked"],
-    ["releasePromiseSet", "release_promise_set"],
-  ];
+  const state = schemaRecords[0];
   for (const [key, label] of fields) {
-    if (typeof state[key] !== "boolean") {
-      console.error("barrier_trace_diagnostic_valid=false");
-      process.exit(0);
-    }
     console.error(`${label}=${state[key]}`);
   }
   console.error("barrier_trace_diagnostic_valid=true");
@@ -18230,10 +18255,18 @@ that establishes `chat_params_count`; do not use a second sidecar write as diagn
 trace keys are exactly `barrierEnabled`, `barrierDirSet`, `commandASeen`, `overlapSessionSet`,
 `sessionMatchesOverlap`, `aChatBlocked`, and `releasePromiseSet`, all boolean. The harness may emit only
 `barrier_enabled`, `barrier_dir_set`, `command_a_seen`, `overlap_session_set`, `session_matches_overlap`,
-`a_chat_blocked`, `release_promise_set`, and `barrier_trace_diagnostic_valid`; it MUST NOT emit either session
-identifier, raw hook input, prompt/message content, or raw trace content. `barrier_trace_diagnostic_valid=true`
-requires exactly one pre-B `chat.params` record and all seven boolean keys. These booleans diagnose which in-memory
-barrier predicate failed and are not runtime capability evidence. If the host collapses the two
+`a_chat_blocked`, `release_promise_set`, `barrier_trace_record_count`, `barrier_trace_schema_record_count`,
+`barrier_trace_count_matches_f012`, `barrier_trace_diagnostic_reason`, and
+`barrier_trace_diagnostic_valid`; it MUST NOT emit either session identifier, raw hook input, prompt/message
+content, or raw trace content. `barrier_trace_diagnostic_reason` is exactly one of
+`count_changed_after_f012_snapshot`, `chat_params_record_count_not_one`,
+`f014_boolean_schema_missing_or_non_boolean`, or `valid`.
+`barrier_trace_diagnostic_valid=true` requires reason `valid`, exactly one pre-B `chat.params` record, and all seven
+boolean keys. `barrier_trace_record_count` is the count observed by the diagnostic reader;
+`barrier_trace_schema_record_count` is the subset whose seven F-014 diagnostic keys are all boolean;
+`barrier_trace_count_matches_f012` compares the diagnostic-time count with the earlier F-012 `chat_params_count`.
+These diagnostics distinguish a trace-count race from a missing/non-boolean F-014 schema without exposing raw
+trace content. They are not runtime capability evidence. If the host collapses the two
 commands onto one assistant identity, omits B's own chain, or cannot process B while A is blocked, the candidate
 correlation contract is not proven and the result is `BLOCKED`.
 
