@@ -18458,7 +18458,10 @@ This probe validates the no-`command.executed` path itself. Failure injection MU
 A is `justice-implement-writing-plans`; B is `justice-implement-subagent-driven-development`. A writes its
 `command.execute.before` trace and a barrier file, waits until B's `command.execute.before` is observed in the same
 server process/session, writes `probe.failure_injected`, then throws. B releases A and returns normally from its
-named hook.
+named hook. The attached A/B client processes MUST run from a dedicated empty local scratch directory outside
+`FAIL_WORKSPACE`; `--dir "$FAIL_WORKSPACE"` remains the remote server directory. This prevents client-side bootstrap
+from discovering the server-only failure probe through its local working directory. Do not solve this by exporting
+the failure trace/barrier env to attached clients, because the failure probe is a server-only trace writer.
 
 Run:
 
@@ -18479,9 +18482,10 @@ SESSION_FILE="$SPIKE_ROOT/failure-session.txt"
 FAIL_SERVER_STDOUT="$SPIKE_ROOT/failure-server.stdout"
 FAIL_PROBE_HOME="$SPIKE_ROOT/failure-probe-home"
 FAIL_PROBE_XDG_CONFIG="$SPIKE_ROOT/failure-probe-xdg-config"
+FAIL_CLIENT_ROOT="$SPIKE_ROOT/failure-client-root"
 
-rm -rf "$FAIL_WORKSPACE" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG"
-mkdir -p "$FAIL_WORKSPACE/.opencode/plugins" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG"
+rm -rf "$FAIL_WORKSPACE" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG" "$FAIL_CLIENT_ROOT"
+mkdir -p "$FAIL_WORKSPACE/.opencode/plugins" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG" "$FAIL_CLIENT_ROOT"
 : > "$FAIL_TRACE"
 : > "$FAIL_STATUS"
 : > "$FAIL_RESULT"
@@ -18945,7 +18949,7 @@ test -n "$SESSION_ID"
 
 set +e
 (
-  cd "$FAIL_WORKSPACE"
+  cd "$FAIL_CLIENT_ROOT"
   HOME="$FAIL_PROBE_HOME" \
   XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   "$OPENCODE_BIN" run \
@@ -18969,7 +18973,7 @@ test -f "$FAIL_BARRIER/a-command-blocked"
 
 set +e
 (
-  cd "$FAIL_WORKSPACE"
+  cd "$FAIL_CLIENT_ROOT"
   HOME="$FAIL_PROBE_HOME" \
   XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   "$OPENCODE_BIN" run \
