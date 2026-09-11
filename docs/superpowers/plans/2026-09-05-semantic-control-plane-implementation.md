@@ -17349,6 +17349,11 @@ if (!tracePath) throw new Error("JUSTICE_ROUTING_TRACE is required");
 
 const barrierEnabled = process.env.JUSTICE_ROUTING_BARRIER === "1";
 const barrierDir = process.env.JUSTICE_ROUTING_BARRIER_DIR;
+const PROBE_REVISION = "jus-p0-01-f016";
+const processRole = process.env.JUSTICE_ROUTING_PROBE_ROLE;
+if (!["local", "server", "client"].includes(processRole)) {
+  throw new Error("JUSTICE_ROUTING_PROBE_ROLE must be local, server, or client");
+}
 
 const COMMAND_A = "justice-implement-writing-plans";
 const COMMAND_B = "justice-implement-subagent-driven-development";
@@ -17370,6 +17375,8 @@ const ALLOWED_KEYS = new Set([
   "sessionMatchesOverlap",
   "aChatBlocked",
   "releasePromiseSet",
+  "probeRevision",
+  "processRole",
 ]);
 
 let writeChain = Promise.resolve();
@@ -17384,11 +17391,16 @@ function append(record) {
   const clean = Object.fromEntries(
     Object.entries(record).filter(([, value]) => value !== undefined),
   );
-  for (const key of Object.keys(clean)) {
+  const stamped = {
+    ...clean,
+    probeRevision: PROBE_REVISION,
+    processRole,
+  };
+  for (const key of Object.keys(stamped)) {
     if (!ALLOWED_KEYS.has(key)) throw new Error(`forbidden trace key: ${key}`);
   }
   writeChain = writeChain.then(() =>
-    appendFile(tracePath, `${JSON.stringify(clean)}\n`, "utf8"),
+    appendFile(tracePath, `${JSON.stringify(stamped)}\n`, "utf8"),
   );
   return writeChain;
 }
@@ -17589,6 +17601,8 @@ const ALLOWED_KEYS = new Set([
   "sessionMatchesOverlap",
   "aChatBlocked",
   "releasePromiseSet",
+  "probeRevision",
+  "processRole",
 ]);
 
 const ALLOWED_HOOKS = new Set([
@@ -17958,6 +17972,9 @@ test "$("$OPENCODE_BIN" --version)" = "1.18.29"
 WORKSPACE="$SPIKE_ROOT/workspace"
 TRACE="$SPIKE_ROOT/nominal.trace.jsonl"
 STATUS="$SPIKE_ROOT/nominal-status.tsv"
+PROBE_HOME="$SPIKE_ROOT/probe-home"
+PROBE_XDG_CONFIG="$SPIKE_ROOT/probe-xdg-config"
+mkdir -p "$PROBE_HOME" "$PROBE_XDG_CONFIG"
 
 : > "$TRACE"
 : > "$STATUS"
@@ -17967,8 +17984,11 @@ run_probe() {
   set +e
   (
     cd "$WORKSPACE"
+    HOME="$PROBE_HOME" \
+    XDG_CONFIG_HOME="$PROBE_XDG_CONFIG" \
     JUSTICE_ROUTING_TRACE="$TRACE" \
     JUSTICE_ROUTING_BARRIER=0 \
+    JUSTICE_ROUTING_PROBE_ROLE=local \
       "$OPENCODE_BIN" run \
         --format json \
         --model "$JUSTICE_HOST_TEST_MODEL" \
@@ -18017,6 +18037,9 @@ BASE_URL="http://127.0.0.1:$PORT"
 SERVER_STDERR="$SPIKE_ROOT/overlap-server.stderr"
 A_STDERR="$SPIKE_ROOT/overlap-a.stderr"
 B_STDERR="$SPIKE_ROOT/overlap-b.stderr"
+PROBE_HOME="$SPIKE_ROOT/probe-home"
+PROBE_XDG_CONFIG="$SPIKE_ROOT/probe-xdg-config"
+mkdir -p "$PROBE_HOME" "$PROBE_XDG_CONFIG"
 
 : > "$TRACE"
 : > "$STATUS"
@@ -18043,9 +18066,12 @@ trap cleanup_processes EXIT
 
 (
   cd "$WORKSPACE"
+  HOME="$PROBE_HOME" \
+  XDG_CONFIG_HOME="$PROBE_XDG_CONFIG" \
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+  JUSTICE_ROUTING_PROBE_ROLE=server \
     "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>"$SERVER_STDERR"
 ) &
 SERVER_PID=$!
@@ -18067,9 +18093,12 @@ test -n "$SESSION_ID"
 set +e
 (
   cd "$WORKSPACE"
+  HOME="$PROBE_HOME" \
+  XDG_CONFIG_HOME="$PROBE_XDG_CONFIG" \
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+  JUSTICE_ROUTING_PROBE_ROLE=client \
     "$OPENCODE_BIN" run \
       --attach "$BASE_URL" \
       --dir "$WORKSPACE" \
@@ -18133,11 +18162,27 @@ const fields = [
   ["releasePromiseSet", "release_promise_set"],
 ];
 
-const schemaRecords = records.filter((record) =>
+const EXPECTED_REVISION = "jus-p0-01-f016";
+const expectedWriterRecords = records.filter(
+  (record) =>
+    record?.probeRevision === EXPECTED_REVISION &&
+    record?.processRole === "server",
+);
+const clientWriterRecords = records.filter(
+  (record) =>
+    record?.probeRevision === EXPECTED_REVISION &&
+    record?.processRole === "client",
+);
+const schemaRecords = expectedWriterRecords.filter((record) =>
   fields.every(([key]) => typeof record[key] === "boolean"),
 );
 
 console.error(`barrier_trace_record_count=${records.length}`);
+console.error(`barrier_trace_expected_writer_count=${expectedWriterRecords.length}`);
+console.error(`barrier_trace_client_writer_count=${clientWriterRecords.length}`);
+console.error(
+  `barrier_trace_other_writer_count=${records.length - expectedWriterRecords.length - clientWriterRecords.length}`,
+);
 console.error(`barrier_trace_schema_record_count=${schemaRecords.length}`);
 console.error(
   `barrier_trace_count_matches_f012=${records.length === f012Count}`,
@@ -18148,6 +18193,8 @@ if (records.length !== f012Count) {
   reason = "count_changed_after_f012_snapshot";
 } else if (records.length !== 1) {
   reason = "chat_params_record_count_not_one";
+} else if (expectedWriterRecords.length !== 1) {
+  reason = "unexpected_probe_revision_or_process_role";
 } else if (schemaRecords.length !== 1) {
   reason = "f014_boolean_schema_missing_or_non_boolean";
 } else {
@@ -18186,9 +18233,12 @@ test "$(cat "$BARRIER_DIR/a-chat-blocked")" = "$SESSION_ID"
 set +e
 (
   cd "$WORKSPACE"
+  HOME="$PROBE_HOME" \
+  XDG_CONFIG_HOME="$PROBE_XDG_CONFIG" \
   JUSTICE_ROUTING_TRACE="$TRACE" \
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
+  JUSTICE_ROUTING_PROBE_ROLE=client \
     "$OPENCODE_BIN" run \
       --attach "$BASE_URL" \
       --dir "$WORKSPACE" \
@@ -18256,11 +18306,17 @@ trace keys are exactly `barrierEnabled`, `barrierDirSet`, `commandASeen`, `overl
 `sessionMatchesOverlap`, `aChatBlocked`, and `releasePromiseSet`, all boolean. The harness may emit only
 `barrier_enabled`, `barrier_dir_set`, `command_a_seen`, `overlap_session_set`, `session_matches_overlap`,
 `a_chat_blocked`, `release_promise_set`, `barrier_trace_record_count`, `barrier_trace_schema_record_count`,
-`barrier_trace_count_matches_f012`, `barrier_trace_diagnostic_reason`, and
-`barrier_trace_diagnostic_valid`; it MUST NOT emit either session identifier, raw hook input, prompt/message
-content, or raw trace content. `barrier_trace_diagnostic_reason` is exactly one of
+`barrier_trace_count_matches_f012`, `barrier_trace_expected_writer_count`,
+`barrier_trace_client_writer_count`, `barrier_trace_other_writer_count`,
+`barrier_trace_diagnostic_reason`, and `barrier_trace_diagnostic_valid`; it MUST NOT emit either session identifier,
+raw hook input, prompt/message content, raw trace content, filesystem paths, or process identifiers.
+Every probe-generated trace record is stamped with the fixed `probeRevision=jus-p0-01-f016` and a sanitized
+`processRole` in `local|server|client`. Step 3 runs with role `local`; the Step 4 serve process runs with role
+`server`; attached A/B clients run with role `client`. Step 3 and Step 4 MUST also set scratch-only `HOME` and
+`XDG_CONFIG_HOME` under `SPIKE_ROOT` so global OpenCode config/plugin directories cannot contribute external
+plugins to the probe. `barrier_trace_diagnostic_reason` is exactly one of
 `count_changed_after_f012_snapshot`, `chat_params_record_count_not_one`,
-`f014_boolean_schema_missing_or_non_boolean`, or `valid`.
+`unexpected_probe_revision_or_process_role`, `f014_boolean_schema_missing_or_non_boolean`, or `valid`.
 `barrier_trace_diagnostic_valid=true` requires reason `valid`, exactly one pre-B `chat.params` record, and all seven
 boolean keys. `barrier_trace_record_count` is the count observed by the diagnostic reader;
 `barrier_trace_schema_record_count` is the subset whose seven F-014 diagnostic keys are all boolean;
