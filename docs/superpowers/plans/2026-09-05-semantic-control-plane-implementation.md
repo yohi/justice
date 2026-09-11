@@ -17615,6 +17615,7 @@ const ALLOWED_HOOKS = new Set([
 ]);
 
 const failures = [];
+const EXPECTED_PROBE_REVISION = "jus-p0-01-f016";
 
 async function readTrace(path, label) {
   const lines = (await readFile(path, "utf8"))
@@ -17645,6 +17646,22 @@ async function readTrace(path, label) {
     records.push({ ...record, __index: index });
   }
   return records;
+}
+
+function validateProbeIdentity(records, expectedRole, label) {
+  const normal = records.filter(
+    (record) =>
+      record.hook !== "probe.dispose_started" &&
+      record.hook !== "probe.dispose_flushed",
+  );
+  for (const record of normal) {
+    if (record.probeRevision !== EXPECTED_PROBE_REVISION) {
+      failures.push(`${label}:probe_revision_mismatch:${record.__index + 1}`);
+    }
+    if (record.processRole !== expectedRole) {
+      failures.push(`${label}:probe_process_role_mismatch:${record.__index + 1}`);
+    }
+  }
 }
 
 function validateDisposeFlush(records, expectedCount, label) {
@@ -17790,6 +17807,7 @@ function validateCommandChain(records, command, expectedAgent, label) {
 }
 
 const nominalRecords = await readTrace(nominalTracePath, "nominal");
+validateProbeIdentity(nominalRecords, "local", "nominal");
 validateDisposeFlush(nominalRecords, EXPECTED.size, "nominal");
 await readStatuses(nominalStatusPath, new Set(EXPECTED.keys()), "nominal");
 
@@ -17800,6 +17818,7 @@ for (const [command, agent] of EXPECTED) {
 }
 
 const overlapRecords = await readTrace(overlapTracePath, "overlap");
+validateProbeIdentity(overlapRecords, "server", "overlap");
 validateDisposeFlush(overlapRecords, 1, "overlap");
 await readStatuses(
   overlapStatusPath,
@@ -18034,6 +18053,10 @@ BARRIER_DIR="$SPIKE_ROOT/barrier"
 SESSION_FILE="$SPIKE_ROOT/overlap-session.txt"
 PORT=40967
 BASE_URL="http://127.0.0.1:$PORT"
+if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+  echo "OVERLAP_PRELAUNCH_PORT_OCCUPIED" >&2
+  exit 1
+fi
 SERVER_STDERR="$SPIKE_ROOT/overlap-server.stderr"
 A_STDERR="$SPIKE_ROOT/overlap-a.stderr"
 B_STDERR="$SPIKE_ROOT/overlap-b.stderr"
@@ -18077,13 +18100,16 @@ trap cleanup_processes EXIT
 SERVER_PID=$!
 
 for _ in $(seq 1 100); do
-  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then break; fi
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "OpenCode overlap server exited" >&2
     exit 1
   fi
+  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+    break
+  fi
   sleep 0.1
 done
+kill -0 "$SERVER_PID" 2>/dev/null
 curl -fsS "$BASE_URL/global/health" >/dev/null
 
 bun "$SPIKE_ROOT/create-session.mjs" "$BASE_URL" "$WORKSPACE" "$SESSION_FILE"
@@ -18146,11 +18172,17 @@ if (!f012CountRaw || !/^\d+$/.test(f012CountRaw)) {
 }
 const f012Count = Number(f012CountRaw);
 
-const records = (await Bun.file(path).text())
+const traceRecords = (await Bun.file(path).text())
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((line) => JSON.parse(line))
-  .filter((record) => record?.hook === "chat.params");
+  .map((line) => JSON.parse(line));
+
+const records = traceRecords.filter((record) => record?.hook === "chat.params");
+const aStartRecords = traceRecords.filter(
+  (record) =>
+    record?.hook === "command.execute.before" &&
+    record?.command === "justice-implement-writing-plans",
+);
 
 const fields = [
   ["barrierEnabled", "barrier_enabled"],
@@ -18173,10 +18205,26 @@ const clientWriterRecords = records.filter(
     record?.probeRevision === EXPECTED_REVISION &&
     record?.processRole === "client",
 );
+const expectedCommandWriterRecords = aStartRecords.filter(
+  (record) =>
+    record?.probeRevision === EXPECTED_REVISION &&
+    record?.processRole === "server",
+);
+const clientCommandWriterRecords = aStartRecords.filter(
+  (record) =>
+    record?.probeRevision === EXPECTED_REVISION &&
+    record?.processRole === "client",
+);
 const schemaRecords = expectedWriterRecords.filter((record) =>
   fields.every(([key]) => typeof record[key] === "boolean"),
 );
 
+console.error(`barrier_command_record_count=${aStartRecords.length}`);
+console.error(`barrier_command_expected_writer_count=${expectedCommandWriterRecords.length}`);
+console.error(`barrier_command_client_writer_count=${clientCommandWriterRecords.length}`);
+console.error(
+  `barrier_command_other_writer_count=${aStartRecords.length - expectedCommandWriterRecords.length - clientCommandWriterRecords.length}`,
+);
 console.error(`barrier_trace_record_count=${records.length}`);
 console.error(`barrier_trace_expected_writer_count=${expectedWriterRecords.length}`);
 console.error(`barrier_trace_client_writer_count=${clientWriterRecords.length}`);
@@ -18189,7 +18237,11 @@ console.error(
 );
 
 let reason;
-if (records.length !== f012Count) {
+if (aStartRecords.length !== 1) {
+  reason = "command_record_count_not_one";
+} else if (expectedCommandWriterRecords.length !== 1) {
+  reason = "unexpected_command_probe_revision_or_process_role";
+} else if (records.length !== f012Count) {
   reason = "count_changed_after_f012_snapshot";
 } else if (records.length !== 1) {
   reason = "chat_params_record_count_not_one";
@@ -18308,6 +18360,8 @@ trace keys are exactly `barrierEnabled`, `barrierDirSet`, `commandASeen`, `overl
 `a_chat_blocked`, `release_promise_set`, `barrier_trace_record_count`, `barrier_trace_schema_record_count`,
 `barrier_trace_count_matches_f012`, `barrier_trace_expected_writer_count`,
 `barrier_trace_client_writer_count`, `barrier_trace_other_writer_count`,
+`barrier_command_record_count`, `barrier_command_expected_writer_count`,
+`barrier_command_client_writer_count`, `barrier_command_other_writer_count`,
 `barrier_trace_diagnostic_reason`, and `barrier_trace_diagnostic_valid`; it MUST NOT emit either session identifier,
 raw hook input, prompt/message content, raw trace content, filesystem paths, or process identifiers.
 Every probe-generated trace record is stamped with the fixed `probeRevision=jus-p0-01-f016` and a sanitized
@@ -18315,8 +18369,15 @@ Every probe-generated trace record is stamped with the fixed `probeRevision=jus-
 `server`; attached A/B clients run with role `client`. Step 3 and Step 4 MUST also set scratch-only `HOME` and
 `XDG_CONFIG_HOME` under `SPIKE_ROOT` so global OpenCode config/plugin directories cannot contribute external
 plugins to the probe. `barrier_trace_diagnostic_reason` is exactly one of
+`command_record_count_not_one`, `unexpected_command_probe_revision_or_process_role`,
 `count_changed_after_f012_snapshot`, `chat_params_record_count_not_one`,
 `unexpected_probe_revision_or_process_role`, `f014_boolean_schema_missing_or_non_boolean`, or `valid`.
+Before either Step 4 or Step 5 starts its fixed-port server, the health endpoint on that port MUST be unreachable;
+an already-listening endpoint is a harness failure and MUST NOT be reused. During readiness polling, the newly
+started `SERVER_PID` MUST be alive before a health response is accepted. Step 5 applies the same scratch-only
+`HOME`/`XDG_CONFIG_HOME` isolation to its server and attached clients. The correlation validator MUST require the
+fixed F-016 probe revision and `processRole=local` for nominal normal records and `processRole=server` for overlap
+normal records; merely allowing those keys is insufficient.
 `barrier_trace_diagnostic_valid=true` requires reason `valid`, exactly one pre-B `chat.params` record, and all seven
 boolean keys. `barrier_trace_record_count` is the count observed by the diagnostic reader;
 `barrier_trace_schema_record_count` is the subset whose seven F-014 diagnostic keys are all boolean;
@@ -18360,9 +18421,15 @@ FAIL_BARRIER="$SPIKE_ROOT/failure-barrier"
 SESSION_FILE="$SPIKE_ROOT/failure-session.txt"
 PORT=40968
 BASE_URL="http://127.0.0.1:$PORT"
+if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+  echo "FAILURE_PRELAUNCH_PORT_OCCUPIED" >&2
+  exit 1
+fi
+FAIL_PROBE_HOME="$SPIKE_ROOT/failure-probe-home"
+FAIL_PROBE_XDG_CONFIG="$SPIKE_ROOT/failure-probe-xdg-config"
 
-rm -rf "$FAIL_WORKSPACE" "$FAIL_BARRIER"
-mkdir -p "$FAIL_WORKSPACE/.opencode/plugins" "$FAIL_BARRIER"
+rm -rf "$FAIL_WORKSPACE" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG"
+mkdir -p "$FAIL_WORKSPACE/.opencode/plugins" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" "$FAIL_PROBE_XDG_CONFIG"
 : > "$FAIL_TRACE"
 : > "$FAIL_STATUS"
 : > "$FAIL_RESULT"
@@ -18792,6 +18859,8 @@ trap cleanup EXIT
 
 (
   cd "$FAIL_WORKSPACE"
+  HOME="$FAIL_PROBE_HOME" \
+  XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   JUSTICE_ROUTING_FAILURE_TRACE="$FAIL_TRACE" \
   JUSTICE_ROUTING_FAILURE_BARRIER_DIR="$FAIL_BARRIER" \
     "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
@@ -18799,10 +18868,13 @@ trap cleanup EXIT
 SERVER_PID=$!
 
 for _ in $(seq 1 100); do
-  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then break; fi
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then exit 1; fi
+  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+    break
+  fi
   sleep 0.1
 done
+kill -0 "$SERVER_PID" 2>/dev/null
 curl -fsS "$BASE_URL/global/health" >/dev/null
 
 bun "$SPIKE_ROOT/create-session.mjs" "$BASE_URL" "$FAIL_WORKSPACE" "$SESSION_FILE"
@@ -18812,6 +18884,8 @@ test -n "$SESSION_ID"
 set +e
 (
   cd "$FAIL_WORKSPACE"
+  HOME="$FAIL_PROBE_HOME" \
+  XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   "$OPENCODE_BIN" run \
     --attach "$BASE_URL" \
     --dir "$FAIL_WORKSPACE" \
@@ -18834,6 +18908,8 @@ test -f "$FAIL_BARRIER/a-command-blocked"
 set +e
 (
   cd "$FAIL_WORKSPACE"
+  HOME="$FAIL_PROBE_HOME" \
+  XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   "$OPENCODE_BIN" run \
     --attach "$BASE_URL" \
     --dir "$FAIL_WORKSPACE" \
