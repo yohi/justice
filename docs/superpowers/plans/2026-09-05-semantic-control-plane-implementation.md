@@ -18051,12 +18051,7 @@ TRACE="$SPIKE_ROOT/overlap.trace.jsonl"
 STATUS="$SPIKE_ROOT/overlap-status.tsv"
 BARRIER_DIR="$SPIKE_ROOT/barrier"
 SESSION_FILE="$SPIKE_ROOT/overlap-session.txt"
-PORT=40967
-BASE_URL="http://127.0.0.1:$PORT"
-if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
-  echo "OVERLAP_PRELAUNCH_PORT_OCCUPIED" >&2
-  exit 1
-fi
+SERVER_STDOUT="$SPIKE_ROOT/overlap-server.stdout"
 SERVER_STDERR="$SPIKE_ROOT/overlap-server.stderr"
 A_STDERR="$SPIKE_ROOT/overlap-a.stderr"
 B_STDERR="$SPIKE_ROOT/overlap-b.stderr"
@@ -18066,6 +18061,7 @@ mkdir -p "$PROBE_HOME" "$PROBE_XDG_CONFIG"
 
 : > "$TRACE"
 : > "$STATUS"
+: > "$SERVER_STDOUT"
 : > "$SERVER_STDERR"
 : > "$A_STDERR"
 : > "$B_STDERR"
@@ -18095,21 +18091,30 @@ trap cleanup_processes EXIT
   JUSTICE_ROUTING_BARRIER=1 \
   JUSTICE_ROUTING_BARRIER_DIR="$BARRIER_DIR" \
   JUSTICE_ROUTING_PROBE_ROLE=server \
-    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>"$SERVER_STDERR"
+    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port 0 >"$SERVER_STDOUT" 2>"$SERVER_STDERR"
 ) &
 SERVER_PID=$!
 
+BASE_URL=
 for _ in $(seq 1 100); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "OpenCode overlap server exited" >&2
     exit 1
   fi
-  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+  LISTEN_COUNT="$(grep -Ec '^opencode server listening on http://127\.0\.0\.1:[0-9]+$' "$SERVER_STDOUT" 2>/dev/null || true)"
+  if [ "$LISTEN_COUNT" -gt 1 ]; then
+    echo "OVERLAP_LISTEN_URL_AMBIGUOUS" >&2
+    exit 1
+  fi
+  if [ "$LISTEN_COUNT" -eq 1 ]; then
+    LISTEN_LINE="$(grep -E '^opencode server listening on http://127\.0\.0\.1:[0-9]+$' "$SERVER_STDOUT")"
+    BASE_URL="${LISTEN_LINE#opencode server listening on }"
     break
   fi
   sleep 0.1
 done
 kill -0 "$SERVER_PID" 2>/dev/null
+test -n "$BASE_URL"
 curl -fsS "$BASE_URL/global/health" >/dev/null
 
 bun "$SPIKE_ROOT/create-session.mjs" "$BASE_URL" "$WORKSPACE" "$SESSION_FILE"
@@ -18372,10 +18377,13 @@ plugins to the probe. `barrier_trace_diagnostic_reason` is exactly one of
 `command_record_count_not_one`, `unexpected_command_probe_revision_or_process_role`,
 `count_changed_after_f012_snapshot`, `chat_params_record_count_not_one`,
 `unexpected_probe_revision_or_process_role`, `f014_boolean_schema_missing_or_non_boolean`, or `valid`.
-Before either Step 4 or Step 5 starts its fixed-port server, the health endpoint on that port MUST be unreachable;
-an already-listening endpoint is a harness failure and MUST NOT be reused. During readiness polling, the newly
-started `SERVER_PID` MUST be alive before a health response is accepted. Step 5 applies the same scratch-only
-`HOME`/`XDG_CONFIG_HOME` isolation to its server and attached clients. The correlation validator MUST require the
+Step 4 and Step 5 MUST start OpenCode with explicit `--port 0` and derive `BASE_URL` only from the unique
+`opencode server listening on http://127.0.0.1:<port>` line written by that newly started child process to a
+scratch-only stdout file. A missing or ambiguous listen line is a harness failure. The raw server stdout remains
+scratch-only and MUST NOT be copied into the report or repository. During readiness polling, the newly started
+`SERVER_PID` MUST remain alive before its parsed URL is accepted. This removes fixed-port reuse as an authority
+boundary: a pre-existing listener is never selected merely because it responds to health. Step 5 applies the same
+scratch-only `HOME`/`XDG_CONFIG_HOME` isolation to its server and attached clients. The correlation validator MUST require the
 fixed F-016 probe revision and `processRole=local` for nominal normal records and `processRole=server` for overlap
 normal records; merely allowing those keys is insufficient.
 `barrier_trace_diagnostic_valid=true` requires reason `valid`, exactly one pre-B `chat.params` record, and all seven
@@ -18419,12 +18427,7 @@ FAIL_STATUS="$SPIKE_ROOT/failure-status.tsv"
 FAIL_RESULT="$SPIKE_ROOT/failure-result.txt"
 FAIL_BARRIER="$SPIKE_ROOT/failure-barrier"
 SESSION_FILE="$SPIKE_ROOT/failure-session.txt"
-PORT=40968
-BASE_URL="http://127.0.0.1:$PORT"
-if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
-  echo "FAILURE_PRELAUNCH_PORT_OCCUPIED" >&2
-  exit 1
-fi
+FAIL_SERVER_STDOUT="$SPIKE_ROOT/failure-server.stdout"
 FAIL_PROBE_HOME="$SPIKE_ROOT/failure-probe-home"
 FAIL_PROBE_XDG_CONFIG="$SPIKE_ROOT/failure-probe-xdg-config"
 
@@ -18433,6 +18436,7 @@ mkdir -p "$FAIL_WORKSPACE/.opencode/plugins" "$FAIL_BARRIER" "$FAIL_PROBE_HOME" 
 : > "$FAIL_TRACE"
 : > "$FAIL_STATUS"
 : > "$FAIL_RESULT"
+: > "$FAIL_SERVER_STDOUT"
 
 cp "$SPIKE_ROOT/workspace/opencode.json" "$FAIL_WORKSPACE/opencode.json"
 
@@ -18863,18 +18867,27 @@ trap cleanup EXIT
   XDG_CONFIG_HOME="$FAIL_PROBE_XDG_CONFIG" \
   JUSTICE_ROUTING_FAILURE_TRACE="$FAIL_TRACE" \
   JUSTICE_ROUTING_FAILURE_BARRIER_DIR="$FAIL_BARRIER" \
-    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port "$PORT" >/dev/null 2>/dev/null
+    "$OPENCODE_BIN" serve --hostname 127.0.0.1 --port 0 >"$FAIL_SERVER_STDOUT" 2>/dev/null
 ) &
 SERVER_PID=$!
 
+BASE_URL=
 for _ in $(seq 1 100); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then exit 1; fi
-  if curl -fsS "$BASE_URL/global/health" >/dev/null 2>/dev/null; then
+  LISTEN_COUNT="$(grep -Ec '^opencode server listening on http://127\.0\.0\.1:[0-9]+$' "$FAIL_SERVER_STDOUT" 2>/dev/null || true)"
+  if [ "$LISTEN_COUNT" -gt 1 ]; then
+    echo "FAILURE_LISTEN_URL_AMBIGUOUS" >&2
+    exit 1
+  fi
+  if [ "$LISTEN_COUNT" -eq 1 ]; then
+    LISTEN_LINE="$(grep -E '^opencode server listening on http://127\.0\.0\.1:[0-9]+$' "$FAIL_SERVER_STDOUT")"
+    BASE_URL="${LISTEN_LINE#opencode server listening on }"
     break
   fi
   sleep 0.1
 done
 kill -0 "$SERVER_PID" 2>/dev/null
+test -n "$BASE_URL"
 curl -fsS "$BASE_URL/global/health" >/dev/null
 
 bun "$SPIKE_ROOT/create-session.mjs" "$BASE_URL" "$FAIL_WORKSPACE" "$SESSION_FILE"
