@@ -17349,6 +17349,7 @@ if (!tracePath) throw new Error("JUSTICE_ROUTING_TRACE is required");
 
 const barrierEnabled = process.env.JUSTICE_ROUTING_BARRIER === "1";
 const barrierDir = process.env.JUSTICE_ROUTING_BARRIER_DIR;
+const barrierStatePath = `${tracePath}.barrier-state.json`;
 
 const COMMAND_A = "justice-implement-writing-plans";
 const COMMAND_B = "justice-implement-subagent-driven-development";
@@ -17370,6 +17371,7 @@ let overlapSession;
 let releaseA;
 let releasePromise;
 let aChatBlocked = false;
+let commandASeen = false;
 let closing = false;
 
 function append(record) {
@@ -17414,6 +17416,7 @@ export const ControllerRoutingProbe = async () => ({
       sessionID: input.sessionID,
     });
 
+    if (input.command === COMMAND_A) commandASeen = true;
     if (!barrierEnabled) return;
     if (input.command === COMMAND_A && overlapSession === undefined) {
       armBarrier(input.sessionID);
@@ -17438,6 +17441,21 @@ export const ControllerRoutingProbe = async () => ({
           ? input.message.id
           : undefined,
     });
+
+    await writeFile(
+      barrierStatePath,
+      JSON.stringify({
+        barrierEnabled,
+        barrierDirSet: typeof barrierDir === "string" && barrierDir.length > 0,
+        commandASeen,
+        overlapSessionSet: overlapSession !== undefined,
+        sessionMatchesOverlap:
+          overlapSession !== undefined && input.sessionID === overlapSession,
+        aChatBlocked,
+        releasePromiseSet: releasePromise !== undefined,
+      }),
+      "utf8",
+    );
 
     if (
       barrierEnabled &&
@@ -17993,13 +18011,14 @@ BASE_URL="http://127.0.0.1:$PORT"
 SERVER_STDERR="$SPIKE_ROOT/overlap-server.stderr"
 A_STDERR="$SPIKE_ROOT/overlap-a.stderr"
 B_STDERR="$SPIKE_ROOT/overlap-b.stderr"
+BARRIER_STATE="$TRACE.barrier-state.json"
 
 : > "$TRACE"
 : > "$STATUS"
 : > "$SERVER_STDERR"
 : > "$A_STDERR"
 : > "$B_STDERR"
-rm -f "$BARRIER_DIR/a-chat-blocked" "$SESSION_FILE"
+rm -f "$BARRIER_DIR/a-chat-blocked" "$SESSION_FILE" "$BARRIER_STATE"
 
 SERVER_PID=
 A_PID=
@@ -18082,7 +18101,31 @@ classify_a_pre_barrier_failure() {
     "a_command_start_count=$A_START_COUNT" \
     "chat_params_count=$A_CHAT_COUNT" \
     "a_stderr_present=$A_STDERR_PRESENT" >&2
-  echo "Raw A stderr remains scratch-only at $A_STDERR and MUST NOT be copied into the report or repository." >&2
+
+  if [ -s "$BARRIER_STATE" ]; then
+    BARRIER_STATE="$BARRIER_STATE" bun - <<'BARRIER_DIAGNOSTIC'
+const path = process.env.BARRIER_STATE;
+if (!path) throw new Error("BARRIER_STATE is required");
+const state = JSON.parse(await Bun.file(path).text());
+const fields = [
+  ["barrierEnabled", "barrier_enabled"],
+  ["barrierDirSet", "barrier_dir_set"],
+  ["commandASeen", "command_a_seen"],
+  ["overlapSessionSet", "overlap_session_set"],
+  ["sessionMatchesOverlap", "session_matches_overlap"],
+  ["aChatBlocked", "a_chat_blocked"],
+  ["releasePromiseSet", "release_promise_set"],
+];
+for (const [key, label] of fields) {
+  if (typeof state[key] !== "boolean") throw new Error(`invalid barrier diagnostic field: ${key}`);
+  console.error(`${label}=${state[key]}`);
+}
+BARRIER_DIAGNOSTIC
+  else
+    echo "barrier_state_present=false" >&2
+  fi
+
+  echo "Raw A stderr and barrier-state sidecar remain scratch-only and MUST NOT be copied into the report or repository." >&2
   exit 1
 }
 
@@ -18165,7 +18208,13 @@ A finalized assistant message.updated
 The full A/B command completion/message chains may contain additional assistant updates, but PASS requires a unique
 completed chain for each command and distinct A/B user and assistant identities.
 
-If A exits before the deterministic barrier, Step 4 is a **harness failure**, not a runtime capability BLOCKED result. Raw server/A/B stderr MUST remain scratch-only under `SPIKE_ROOT` and MUST NOT be copied into the repository or report. Emit only sanitized fields `a_exit_code`, `failure_stage`, `a_command_start_count`, `chat_params_count`, and `a_stderr_present`. `failure_stage` is exactly one of `before_command_execute_before`, `after_command_execute_before_before_chat_params`, or `after_chat_params_before_barrier_file`. If A remains alive past the barrier deadline, emit `OVERLAP_A_BARRIER_TIMEOUT` and stop as a harness failure. These diagnostics are not capability evidence and MUST NOT unlock Step 5. If the host collapses the two
+If A exits before the deterministic barrier, Step 4 is a **harness failure**, not a runtime capability BLOCKED result. Raw server/A/B stderr MUST remain scratch-only under `SPIKE_ROOT` and MUST NOT be copied into the repository or report. Emit only sanitized fields `a_exit_code`, `failure_stage`, `a_command_start_count`, `chat_params_count`, and `a_stderr_present`. `failure_stage` is exactly one of `before_command_execute_before`, `after_command_execute_before_before_chat_params`, or `after_chat_params_before_barrier_file`. If A remains alive past the barrier deadline, emit `OVERLAP_A_BARRIER_TIMEOUT` and stop as a harness failure. These diagnostics are not capability evidence and MUST NOT unlock Step 5. For an A pre-barrier exit,
+the probe also writes a scratch-only boolean barrier-state sidecar adjacent to the overlap trace. The harness may
+emit only `barrier_enabled`, `barrier_dir_set`, `command_a_seen`, `overlap_session_set`,
+`session_matches_overlap`, `a_chat_blocked`, and `release_promise_set`; it MUST NOT emit either session identifier,
+raw hook input, prompt/message content, or the sidecar itself. A missing sidecar may be reported only as
+`barrier_state_present=false`. These booleans diagnose which in-memory barrier predicate failed and are not runtime
+capability evidence. If the host collapses the two
 commands onto one assistant identity, omits B's own chain, or cannot process B while A is blocked, the candidate
 correlation contract is not proven and the result is `BLOCKED`.
 
