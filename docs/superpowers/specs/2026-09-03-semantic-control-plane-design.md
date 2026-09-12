@@ -1807,6 +1807,13 @@ but it is open and is not specification authority. In particular, this Design do
 session-scoped single-flight state model, `session.idle` cleanup/ownership-release authority, new ambiguous/suppressed
 routing statuses, or a new narrow-spike procedure.
 
+The separate successor experiment, `docs/spikes/2026-09-controller-routing-session-safety.md`, fixed an Option D
+session-safety hypothesis before execution but ended as an `execution/harness failure`: the required devcontainer
+runtime was unavailable and the isolated host fallback had no configured test model. It produced no capability
+`PASS` or `BLOCKED` result and no runtime sequence evidence. Option D is therefore **NOT ADOPTED**; this failure is
+not negative runtime capability evidence and cannot weaken or replace Task 4.0's authoritative `BLOCKED` result.
+The only confirmed suppression-clear authority remains `removeSession()`.
+
 `REQUIREMENTS_2026-09-03.md` remains authoritative and JUS-P0-01 is currently unmet/blocked. Any successor semantics
 that change the requirement must be approved separately, synchronized across Requirements / Design / Implementation
 Plan as applicable, and independently reviewed before source implementation is reconsidered. Prompt/message content,
