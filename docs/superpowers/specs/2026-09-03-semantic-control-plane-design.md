@@ -2,7 +2,7 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Approved（anti-replay 契約を復元、implementation plan 作成可）
+**Status:** Design Approved（JUS-P0-01 Phase 4 BLOCKED / post-spike design resolution pending; JUS-P0-02 / 03 / 04 unchanged）
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
 
@@ -73,8 +73,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
 - `src/core/session-state-provider.ts`
   - 既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持し、custom controller のために widening しない。
-  - Controller Routing は `sessionId` を scope として扱うが invocation identity には使わない。Task 4.0 で検証した user/assistant message identity と `command.executed` identity を JUS-P0-01 専用の bounded ephemeral state で相関する。
-  - `command.execute.before` は exact pinned-command capture を arm するだけで current workflow slot を作らない。完了した invocation は exact message identity 単位で解放し、`removeSession()` はその session の全 routing correlation state を削除する。新しい generic session-state framework は作らない。
+  - Controller Routing は `sessionId` を scope として扱うが invocation identity には使わない。Task 4.0 は nominal path の user/assistant/message field を観測した一方、same-session overlap を含む旧 per-invocation production contract を `BLOCKED` とした。旧 bounded ephemeral correlation candidate は current production authority ではない。
+  - `command.execute.before` の capture-arm、exact message join、per-invocation release を含む旧 state model は pre-spike candidate としてのみ保持する。successor design が承認・検証・再レビューされるまで JUS-P0-01 source implementation は行わず、現時点で確認済みの suppression-clear authority は `removeSession()` のみとする。新しい generic session-state framework は作らない。
 
 ### 3.3 Hook / Adapter 接続
 
@@ -83,8 +83,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `task()` PreToolUse 介入条件を「active binding の session/path/fingerprint が一致」に置き換える。
   - fingerprint 不一致検出時に binding を `invalidated` 化する。
 - `src/hooks/observation-handler.ts`
-  - `emitControllerRoutingObservation(context)` は Task 4.0 で検証済みの `ControllerRoutingInvocationContext` だけを入力に、`WorkflowRouter.resolveController(workflow)` → `createControllerRoutingDecision()` → `evaluateControllerRoutingObservation()` → typed record builder → `ObservationLogStore.append()` を実行する。session の current/latest context を引き直さない。
-  - `chat.params` 単独では workflow attribution が確定しないため production path の provisional durable append は行わない。exact `command.executed.messageID` と finalized assistant identity が join した後だけ final audit を出し、raw custom agent stringを shard `ObservationAgentId` へ変換せず routing payload に保持する。
+  - JUS-P0-01 の `emitControllerRoutingObservation(context)` / exact message join は pre-spike candidate wiring であり、Task 4.0 の nominal field observationだけでは production-safe `ControllerRoutingInvocationContext` を証明していない。same-session overlap / abandonment が `BLOCKED` のため、successor design の承認・検証・文書レビュー前にこの wiring を production 実装してはならない。
+  - `chat.params` / finalized `message.updated` / `command.executed` の各 field は runtime evidence として観測済みだが、それらを同一 invocation の production authority として結合できることは証明されていない。session current/latest、content、FIFO、TTL 等で不足 identity を補完してはならない。
   - Worker 完了・Evidence・Review・Gate 結果を typed lifecycle events として durable log に書き出す。
   - review dispatch の `pending` / `claimed` / `terminal` transition を durable observation として記録する。`pending` は `ReviewRequiredDirective` の inject より先に記録する。
   - `task()` 呼び出しに `TaskCallPurpose` を付与し、PostToolUse で implementation / task_review / final_review を区別する。
@@ -96,8 +96,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - task() payload の正規化 (禁止 field 除去 / `taskId`/`loadSkills`/`runInBackground` の canonicalize) を維持。
   - `sp-deep` / `sp-architecture` も category として通すだけで model/agent は補正しない。
   - `ReviewRequiredDirective` を Controller へ inject するための出力経路を追加。
-  - JUS-P0-01 の `command.execute.before.input.command` / `input.sessionID` は exact pinned-command capture の arm にだけ使い、session-current workflow binding には使わない。最終 workflow authority は Task 4.0 で検証した `command.executed.name` とその `messageID` の exact join とする。desired controller、prompt、assistant自由文から workflow を逆算しない。
-  - routing actual は `chat.params.input.message.id` + raw `input.agent`、finalized `message.updated` の `info.id` + `info.parentID` + raw `info.agent`、および `command.executed.name/sessionID/messageID` を lossless に別経路で渡す。positive finalization は assistant `info.time.completed !== undefined` のみを使い、既存 persona用 `AgentMapped` normalizationとは分離する。
+  - JUS-P0-01 の `command.execute.before.input.command` / `input.sessionID`、`command.executed.name/messageID`、`chat.params`、finalized `message.updated` は Task 4.0 で個別に観測された field である。ただし same-session overlap で旧 exact per-invocation join は成立しなかったため、これらを current production workflow authority として wire してはならない。desired controller、prompt、assistant自由文、session-current/latest context、FIFO/TTL から workflow を推測しない。
+  - raw agent / message identity の lossless transport も successor design が確定するまで JUS-P0-01 production wiring の authority ではない。既存 persona用 `AgentMapped` normalization と controller observation を分離する原則は維持する。
 - `src/core/justice-plugin.ts`
   - `PostToolUse` イベントを **transactional order** で処理する。`observationHandler` / `planBridge` / `taskFeedback` 等の side-effecting handlers を `Promise.all` して並列実行してはならない。
 - implementation task の PreToolUse で current task に fresh `TaskExecutionRef` / `attemptId` を発行し、`authorized → in_progress` を durable に記録してから implementation `TaskCallBinding` を作る。identity allocation と transition は deterministic な transition key で結び、append 結果が不明な場合は同じ key を read-before-retry して既存 identity を再利用する。記録不能な場合も task() は fail-open で継続するが、その call は authoritative worker completion にしない。
@@ -266,13 +266,32 @@ export function evaluateControllerRoutingObservation(
 
 ### Runtime correlation contract
 
-JUS-P0-01 production wiring uses one exact, bounded **invocation-level** correlation path. `sessionId` is a scope
+> [!CAUTION]
+> **Post-spike authoritative status — JUS-P0-01 / F-004**
+>
+> Task 4.0 is **COMPLETED**. The authoritative evidence is
+> `docs/spikes/2026-09-controller-routing-runtime-signals.md` at commit
+> `58bd1c1570c298f9f9974b564d575777d0df38ec`. Its final result is
+> `JUS-P0-01 runtime observation = BLOCKED`; abandonment is also `BLOCKED`.
+> This is formal negative capability evidence, not a harness failure. The report records
+> `cleanup_scope=none`, `cleanup_session=none`, `cleanup_hook=none`, `cleanup_status=none`,
+> `cleanup_order=none`, `preserves_concurrent_invocation=false`, and
+> `suppression_clear_authority=removeSession_only`.
+>
+> The old per-invocation contract retained below was the **pre-spike candidate**. Task 4.0 did not
+> authorize it for the supported host. It is retained only as historical rationale and MUST NOT be
+> used as implementation authority. Task 4.1, Task 4.2, and JUS-P0-01 source implementation remain
+> blocked. https://github.com/yohi/justice/issues/228 tracks candidate successor semantics, but it is open and non-authoritative;
+> no option from that issue is adopted by this Design yet. `REQUIREMENTS_2026-09-03.md` remains the
+> current requirement authority and is currently unmet/blocked for JUS-P0-01.
+
+The retained pre-spike JUS-P0-01 candidate attempted one exact, bounded **invocation-level** correlation path. `sessionId` is a scope
 key only; it is **not** a command invocation identity. Workflow identity is never inferred from the selected
 controller, assistant prose, prompt/message content, arbitrary skill text, "latest command", or the session's
 current/most-recent routing context.
 
-The v4.0.0 candidate contract is intentionally fixed before implementation and is allowed to become production
-contract only if Task 4.0 proves it on supported OpenCode `1.18.29`:
+The following v4.0.0 contract was fixed as the pre-spike candidate. Task 4.0 did **not** prove it for
+supported OpenCode `1.18.29`; the definition is retained only to explain the rejected current-host candidate:
 
 ```text
 command.execute.before
@@ -332,25 +351,26 @@ Contract provenance is split between the resolved project SDK/plugin and the pin
   state waits rather than rejecting a later run. These source facts motivate the overlap probe but do not replace
   runtime evidence.
 
-Task 4.0 MUST verify the exact field values and joins above, including a same-host-instance, same-session overlap
-case. The four fresh-session nominal probes remain required. In addition, one bounded overlap probe uses:
+Task 4.0 executed the four fresh-session nominal probes and the same-host-instance, same-session overlap probe.
+The nominal paths exposed the expected fields, but the overlap result did not satisfy the required per-invocation
+identity chain. The executed overlap used:
 
 ```text
 A: justice-implement-writing-plans                 desired=sisyphus
 B: justice-implement-subagent-driven-development   desired=atlas
 ```
 
-The overlap probe must deterministically reach A's `chat.params` while A's session run is active, observe B's
-`command.execute.before` in the **same OpenCode server process and same session**, and only then release A. PASS
-requires distinct, non-crossing A/B user-message and assistant-message identities. If the exact candidate join is
-absent, ambiguous, collapses A/B onto one assistant identity, or requires content/ordering heuristics, Task 4.0
-writes `JUS-P0-01 runtime observation = BLOCKED` and Phase 4 stops.
+The probe attempted to keep A/B distinct in one OpenCode server process and one session. The committed report
+records `overlap:final_message_count:justice-implement-writing-plans:0` and `overlap:chain_count:1`; therefore the
+required non-crossing A/B identity contract was not demonstrated and the authoritative result is
+`JUS-P0-01 runtime observation = BLOCKED`. Phase 4 source implementation stops at this boundary.
 
-If Task 4.0 discovers a different host-provided, non-content invocation identity that is at least as strong as the
-candidate chain, do **not** silently substitute it. Update this Design first, update the Implementation Plan second,
-re-run document review, and only then continue. A failed candidate is not permission to implement a fallback.
+Task 4.0 did not establish an alternative host-provided non-content invocation identity strong enough to replace
+the failed candidate. A successor strategy must be decided separately and may not be silently substituted here.
+Issue #228 is the open design tracker; until a successor contract is approved, synchronized into the relevant
+documents, and independently reviewed, a failed candidate is not permission to implement a fallback.
 
-The production correlation state is ephemeral and JUS-P0-01-specific. It is **not** a single
+The retained **pre-spike candidate** correlation state was ephemeral and JUS-P0-01-specific. The types and state rules below are not current implementation authority. It is **not** a single
 `Map<sessionId, ControllerRoutingSessionContext>` slot and it has no "current routing context" authority. It stores
 only bounded entries needed to complete the verified join:
 
@@ -419,7 +439,7 @@ completion for A cannot mutate or delete B state.
 command completion. Therefore successful join is not the only lifecycle exit and `removeSession(sessionId)` is not
 the only abandonment cleanup.
 
-JUS-P0-01 ephemeral state has fixed per-session bounds. These constants are part of the v4.0.0 contract:
+The pre-spike candidate used fixed per-session bounds. These constants are retained as candidate resource-safety rationale only and do not authorize implementation:
 
 ```ts
 export const CONTROLLER_ROUTING_MAX_PENDING_CAPTURES_PER_SESSION = 8;
@@ -440,19 +460,19 @@ Overflow is fail-open for execution and fail-closed for audit attribution:
 3. set one bounded `routingSuppressed` marker for that session;
 4. ignore further routing capture/actual/completion input for that session.
 
-At this pre-spike design point, only `removeSession(sessionId)` is authorized to clear `routingSuppressed`. No
-session-level lifecycle event is yet production cleanup authority. This intentionally sacrifices routing-audit
-coverage rather than guessing at a boundary. The fixed limits keep process-local memory bounded while Task 4.0
-proves whether a stronger cleanup contract exists.
+Task 4.0 did not prove a stronger safe cleanup/quiescence boundary. The authoritative report records
+`cleanup_scope=none` and `suppression_clear_authority=removeSession_only`. Therefore no session lifecycle event is
+production cleanup authority, and `removeSession(sessionId)` remains the only confirmed suppression-clear authority.
+The fixed value `8` remains historical candidate resource-bound rationale and MUST NOT be interpreted as permission
+to implement the blocked per-invocation state model.
 
 No LRU/cache abstraction, generic TTL service, background cleanup worker, queue manager, event bus, telemetry
 framework, or new DI/state framework is introduced.
 
-Task 4.0 must prove the supported-host failure lifecycle after capture arm. Candidate observable signals are
-`session.status` with `status.type === "idle"`, `session.idle`, and `session.error`, but their names or SDK presence
-are never sufficient to make them cleanup authority. Pinned OpenCode `1.18.29` source can publish session idle while
-the runner becomes idle **before** the command call publishes `command.executed`; every such early signal is
-therefore classified as observed-but-unsafe for session-wide cleanup.
+Task 4.0 executed the supported-host failure lifecycle probe after capture arm. It observed early lifecycle
+signals but found no same-session quiescence signal after A failure plus B finalized identity plus B
+`command.executed`. The report therefore classifies the abandonment capability as `BLOCKED`; `session.status idle`,
+`session.idle`, and `session.error` are evidence only and are not authorized cleanup authority.
 
 The failure probe injects A's failure from the awaited `command.execute.before` hook itself, after A has been armed
 and after B's `command.execute.before` is observed in the same server process and same session. It does not inject
@@ -478,18 +498,17 @@ invocation-specific cleanup candidate is allowed only if Task 4.0 observes a non
 names the failed invocation; a Justice-local generation, sequence, "latest command", controller inference, or prompt
 content is not acceptable.
 
-**No production abandonment API is authorized by this Design before Task 4.0 runs.** Task 4.0 writes the exact
-sanitized lifecycle result (`cleanup_scope`, `cleanup_hook`, required value, ordering, B-preservation, and
-suppression-clear authority). Whether the result is PASS or BLOCKED, Task 4.1/4.2 MUST NOT start until a subsequent
-document-only change copies that exact contract into this Design and the Implementation Plan and passes document
-review. If no safe boundary is proven, the lifecycle result is `BLOCKED`; the fixed limits remain only a bounded
-memory-safety backstop, not permission to implement an unverified cleanup heuristic.
+**No production abandonment API is authorized by the Task 4.0 result.** The committed sanitized lifecycle result
+is `BLOCKED` with no safe cleanup scope/hook/order and with `removeSession_only` as suppression-clear authority.
+Task 4.1/4.2 and JUS-P0-01 source implementation remain blocked while successor design resolution is pending. The
+fixed limits are historical bounded-memory backstop rationale only; they are not permission to implement an
+unverified cleanup heuristic or the rejected current-host candidate.
 
 When the session has no remaining pinned-command captures after a successful exact join, unmatched
 routing-correlation leftovers for that session are discarded. `removeSession(sessionId)` always removes every
 JUS-P0-01 correlation entry and `routingSuppressed` marker. No generic framework is introduced.
 
-The narrow API responsibilities are:
+The following narrow API responsibilities belonged to the pre-spike candidate and are not currently authorized for implementation:
 
 ```ts
 beginControllerRoutingCapture(
@@ -541,7 +560,7 @@ When either observation method returns a ready `ControllerRoutingInvocationConte
 `ControllerRoutingDecision`, evaluates the finalized raw actual, builds the typed durable record, and appends it
 through `ObservationLogStore`.
 
-Production timing is intentionally conservative:
+The pre-spike candidate timing rules were intentionally conservative; they are retained for rationale only and are not current implementation authority:
 
 - `chat.params` **does not immediately append** a provisional `controller_routing_observed` record. At that point
   the host has not yet supplied the exact command-completion identity that proves which pinned workflow owns the
@@ -1748,100 +1767,50 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 
 ### 5.1 JUS-P0-01 Controller Routing
 
-```text
-supported-host capability verification (Task 4.0)
-        ↓
-exact pinned command start observed
-(command.execute.before; capture-arm only)
-        ↓
-verified non-content invocation/message identity
-  chat.params.message.id = U
-  finalized assistant.id = A
-  finalized assistant.parentID = U
-  command.executed.messageID = A
-  command.executed.name = exact pinned command
-        ↓
-exact command → workflow
-        ↓
-WorkflowRouter.resolveController(workflow)
-        ↓
-desiredController
-        ↓
-matching finalized raw actualController
-        ↓
-evaluateControllerRoutingObservation()
-        ↓
-applied / mismatch / unapplied / unsupported
-        ↓
-durable controller_routing_observed
-        ↓
-validation / redaction / replay
-        ↓
-audit-only projection
-```
+**Current status: BLOCKED / design resolution pending.**
 
-`sessionId` is only the scope for the correlation state. It is not an invocation identity. The production path must
-not attach an actual event to whichever workflow is currently/latest for a session.
-
-Task 4.0 is a hard gate. PASS requires all four nominal pinned commands and one deterministic same-server,
-same-session overlap case to prove the exact non-content join defined in §4.1. The overlap case must keep
-`justice-implement-writing-plans` (`sisyphus`) and
-`justice-implement-subagent-driven-development` (`atlas`) disjoint. If the candidate fields are missing, ambiguous,
-or collapse both invocations onto one identity, Phase 4 is BLOCKED.
-
-After PASS, production state is keyed by verified user/assistant message identities, not a session-local generation.
-`command.execute.before` only arms bounded capture. Workflow authority is the exact pinned
-`command.executed.name` joined through its assistant `messageID`; the final raw agent is taken from that same
-assistant message. `chat.params` may contribute `"both"` source evidence only when its `message.id` equals the
-assistant's `parentID`.
-
-Because `chat.params` does not yet have a safely joined command identity, production does not append a provisional
-routing record there. It waits for the exact final join. This avoids durable false `unapplied`, false `mismatch`, or
-false `applied` records when another pinned command is already present in the same session.
-
-
-Success and failure are both first-class JUS-P0-01 paths, but failure cleanup is intentionally split into a
-capability-discovery checkpoint and a later reviewed production contract:
+Task 4.0 is completed and its authoritative report is
+`docs/spikes/2026-09-controller-routing-runtime-signals.md` at commit `58bd1c1570c298f9f9974b564d575777d0df38ec`.
+The final result is `JUS-P0-01 runtime observation = BLOCKED`; this is formal negative capability evidence,
+not a harness failure. Nominal single-command field observation succeeded, but same-session overlap did not prove
+the required per-invocation identity chain, and the failure/abandonment probe established no safe cleanup boundary.
 
 ```text
-command capture
-├─ success
-│  → exact command completion
-│  → assistant/user identity join
-│  → durable audit
-│  → exact-state consume
-│
-└─ no command completion / failure
-   → no fabricated durable audit
-   → bounded unresolved state only
-   → Task 4.0 proves exact cleanup/quiescence capability
-   → Design + Plan document-only contract update
-   → document review
-   → only then may production cleanup be implemented
+JUS-P0-01 current requirement
+        ↓
+Task 4.0 capability evidence
+        ↓
+runtime observation = BLOCKED
+        ↓
+old per-invocation production candidate = not authorized
+        ↓
+successor design decision pending (Issue #228; non-authoritative)
+        ↓
+Task 4.1 / Task 4.2 / JUS-P0-01 source implementation = suspended
 ```
 
-`command.executed` is never assumed to be guaranteed after `command.execute.before`. Task 4.0 includes one
-deterministic post-arm failure probe in addition to the four nominal probes and the invocation-correlation overlap
-probe. Failure is injected from the awaited `command.execute.before` path so the probe can require A non-zero and
-absence of A `command.executed`; the detached generic `event` callback is observation-only.
+The committed evidence fixes the current facts as:
 
-The fixed per-session limits from §4.1 (8 pending capture credits and 8 entries for each identity map) are an
-independent memory-safety backstop. Overflow clears unresolved routing state and suppresses routing audit rather than
-guessing. Until a reviewed post-spike contract says otherwise, only `removeSession()` clears suppression. Because
-routing is audit-only, missing an audit is acceptable; fabricating one is not.
+```text
+cleanup_scope = none
+cleanup_session = none
+cleanup_hook = none
+cleanup_status = none
+cleanup_order = none
+preserves_concurrent_invocation = false
+suppression_clear_authority = removeSession_only
+```
 
-A Task 4.0 PASS is not direct authorization for Task 4.1/4.2. The exact PASS lifecycle fields must first be copied
-into Design §4.1 and Task 4.2 in a document-only commit and reviewed. If the probe is BLOCKED, or if no lifecycle
-event is safe after B finalized identity and B `command.executed`, Phase 4 implementation remains BLOCKED.
+These facts do not select a successor design. Issue #228 (https://github.com/yohi/justice/issues/228) tracks candidate successor semantics,
+but it is open and is not specification authority. In particular, this Design does not adopt Option D, a
+session-scoped single-flight state model, `session.idle` cleanup/ownership-release authority, new ambiguous/suppressed
+routing statuses, or a new narrow-spike procedure.
 
-Automated tests must include both different-controller and same-controller workflow interleavings. In particular,
-`brainstorming` and `writing-plans` both select `sisyphus`, so tests must assert the durable `workflow` field itself
-is bound to the correct invocation rather than treating controller equality as proof.
-
-If Task 4.0 observes a different safe host-provided identity contract, implementation must not begin. Update this
-Design, synchronize the Implementation Plan, and pass document review first. Prompt/message content parsing,
-desired-controller reverse lookup, "latest/current context", and generic tracing/event frameworks are forbidden
-fallbacks.
+`REQUIREMENTS_2026-09-03.md` remains authoritative and JUS-P0-01 is currently unmet/blocked. Any successor semantics
+that change the requirement must be approved separately, synchronized across Requirements / Design / Implementation
+Plan as applicable, and independently reviewed before source implementation is reconsidered. Prompt/message content,
+FIFO/event ordering, TTL, local generation, and session current/latest heuristics remain forbidden as substitute
+identity authority.
 
 ### 5.2 JUS-P0-02 Plan-Scoped Authorization
 
@@ -2290,7 +2259,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | Phase 1 | JUS-P0-03 Category Routing          | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加                                                                                                                                                                                                                                                                            |
 | Phase 2 | JUS-P0-02 Plan Authorization        | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装                                                                                                                                                                                                                                                                          |
 | Phase 3 | JUS-P0-04 Transactional Acceptance  | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
-| Phase 4 | JUS-P0-01 Controller Runtime Wiring | ControllerRoutingObservation 評価、pinned-command 雛形・doctor 検査、upstream 拡張要求の分離                                                                                                                                                                                                                                                                     |
+| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **BLOCKED:** Task 4.0 negative capability evidence is authoritative; successor design is unresolved and source implementation is suspended |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
 

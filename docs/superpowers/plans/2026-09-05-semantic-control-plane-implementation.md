@@ -25,7 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- A Phase 4 runtime spike that cannot prove both (a) the non-content invocation-level join and (b) an exact safe no-command-completion lifecycle contract blocks JUS-P0-01 implementation. Task 4.0 capability PASS alone never authorizes source changes: the exact cleanup scope/hook/value/order and suppression-clear authority must first be copied into Design/Plan in a document-only change and re-reviewed. `sessionId` alone is never an invocation identity; fixed per-session bounds do not waive the lifecycle gate.
+- Phase 4 Task 4.0 is completed. Its authoritative report `docs/spikes/2026-09-controller-routing-runtime-signals.md` records `JUS-P0-01 runtime observation = BLOCKED`; this is formal negative capability evidence, not a harness failure. The old per-invocation candidate is not authorized, Task 4.1/4.2 are suspended, and JUS-P0-01 source implementation remains blocked while successor design resolution is pending. `sessionId` alone is never an invocation identity; fixed per-session bounds do not waive the lifecycle gate.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17004,7 +17004,27 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 ## Phase 4: Controller Routing — JUS-P0-01
 
+> [!CAUTION]
+> **CURRENT PHASE STATUS: BLOCKED / DESIGN RESOLUTION PENDING**
+>
+> Task 4.0 is completed. The authoritative committed evidence is
+> `docs/spikes/2026-09-controller-routing-runtime-signals.md` at `58bd1c1570c298f9f9974b564d575777d0df38ec`, with
+> `JUS-P0-01 runtime observation = BLOCKED` and abandonment `BLOCKED`. This is negative capability evidence,
+> not a harness failure. The old per-invocation production candidate is not authorized. Task 4.1 and Task 4.2 are
+> suspended / not executable, and JUS-P0-01 source implementation must not start.
+>
+> https://github.com/yohi/justice/issues/228 tracks candidate successor semantics. It is open and non-authoritative; no option from that issue is
+> adopted by this Plan. `REQUIREMENTS_2026-09-03.md` remains unchanged and authoritative while JUS-P0-01 is
+> currently unmet/blocked.
+
 ### Task 4.0: Verify supported-host invocation correlation and abandonment lifecycle
+
+> **STATUS: COMPLETED — AUTHORITATIVE RESULT = BLOCKED**
+>
+> The task body below is retained as the provenance/reproduction procedure for the committed evidence. It is not an
+> active unlock step. Do **not** rerun it to replace or override the committed result and do not overwrite the
+> existing report. Any future successor-design capability experiment must use a separately approved task and a new
+> evidence artifact.
 
 **Requirement:** JUS-P0-01, Design §3.3, §4.1, §5.1.
 
@@ -19392,12 +19412,17 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 ### Task 4.1: Preserve workflow identity and define the verified invocation contract
 
+> **STATUS: SUSPENDED / NOT EXECUTABLE**
+>
+> Completed Task 4.0 did not satisfy this task's production precondition. The material below is retained as
+> pre-spike candidate detail; some pure-domain pieces may remain reusable, but no source/test step in this task is
+> currently authorized. A reviewed successor design must explicitly replace or re-authorize this task before use.
+
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
-**Precondition:** the final post-Step-6 `## Result` exact line is
-`JUS-P0-01 runtime observation = PASS` **and** a subsequent document-only amendment has copied the exact sanitized
-lifecycle contract into Design §4.1 / Task 4.2 and passed document review. The current pre-spike Design
-does not authorize a production abandonment API. Do not edit source until that reviewed amendment exists.
+**Current precondition status:** **NOT SATISFIED.** The completed Task 4.0 authoritative result is
+`JUS-P0-01 runtime observation = BLOCKED`. Therefore this task is suspended and source/test edits listed below must
+not be executed. The retained content does not select the successor design tracked by Issue #228.
 
 **Files:**
 
@@ -19595,11 +19620,18 @@ GIT_MASTER=1 git commit -m "feat: controller routingにinvocation identityを定
 
 ### Task 4.2: Correlate verified invocations and persist controller-routing audit
 
+> **STATUS: SUSPENDED / NOT EXECUTABLE**
+>
+> Completed Task 4.0 blocked the per-invocation runtime correlation / abandonment contract assumed by this task.
+> All correlation maps, A/B interleavings, cleanup checkpoints, and related source/test snippets below are retained
+> only as pre-spike candidate implementation detail. They are not current implementation authority and must not be
+> mechanically converted to Issue #228 Option D or any other successor design.
+
 **Requirement:** JUS-P0-01, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3.
 
-**Precondition:** Task 4.0 is PASS and a subsequent reviewed document-only lifecycle amendment has replaced the
-pre-spike cleanup checkpoint with one exact host-verified cleanup scope/API/hook/value/order contract. Until then,
-this task is intentionally non-executable; do not infer or invent the missing production cleanup API.
+**Current precondition status:** **NOT SATISFIED.** Task 4.0 completed with `BLOCKED`; its report contains no
+authorized cleanup scope/API/hook/value/order contract. This task remains suspended. Do not infer or invent a
+cleanup API, and do not use Issue #228 proposals as implementation authority.
 
 **Files:**
 
@@ -19786,20 +19818,12 @@ Add focused tests proving:
 
 #### Failure lifecycle contract checkpoint
 
-Do not write production failed-capture cleanup tests from this pre-spike document. Task 4.0 must run first. The
-mandatory post-spike document-only amendment must replace this checkpoint with one concrete RED sequence copied from
-the sanitized report:
-
-- exact cleanup scope (`session` or a host-verified invocation identity);
-- exact hook/event and required value;
-- exact ordering relative to B finalized assistant + B `command.executed`;
-- one unsafe-early lifecycle case that must **not** clear B;
-- one failed-A/successful-B case proving A creates no durable audit and B remains correct;
-- exact suppression-clear authority.
-
-The amendment must also add the exact narrow API signature matching that verified scope. No local generation,
-sequence, latest/current heuristic, content correlation, generic queue, TTL, cache, timer, or background worker may
-be introduced.
+Task 4.0 has completed with `BLOCKED`. The committed report provides **no** safe production cleanup scope, hook,
+value/order, or concurrent-B preservation contract: `cleanup_scope=none`, `preserves_concurrent_invocation=false`,
+`suppression_clear_authority=removeSession_only`. Therefore no concrete cleanup RED sequence or narrow cleanup API is
+authorized from the current evidence. This entire Task 4.2 remains suspended pending a separately approved successor
+design. Local generation, sequence, latest/current heuristic, content correlation, FIFO/event-order inference, TTL,
+cache/timer cleanup, or background worker must not be substituted.
 
 Resource-bound tests remain required independently of lifecycle discovery. Use exact value `8`:
 
@@ -20164,8 +20188,9 @@ audit-only projection
 doctor diagnostics
 ```
 
-Then run the full Phase 4 boundary gate required by Global Constraints. Task 4.0 must already be PASS; unit tests
-cannot substitute for the supported-host overlap evidence.
+This pre-spike Phase 4 completion step is suspended because Task 4.0 is authoritatively `BLOCKED`. Do not run
+the Phase 4 source boundary gate as an unlock attempt; unit tests cannot replace the failed supported-host capability
+evidence or select a successor design.
 
 - [ ] **Step 5: Commit after approval**
 
@@ -20182,10 +20207,10 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0, 4.1, 4.2           | OpenCode 1.18.29 immutable-source provenance, four nominal probes, deterministic same-server/same-session correlation overlap, awaited command-hook failure probe, sanitized exact lifecycle contract report, mandatory post-spike Design/Plan review checkpoint, fixed per-session bounds/overflow suppression, durable validation/redaction/append/replay |
-| Design §4.1 controller routing runtime correlation              | 4.0, 4.1, 4.2           | pinned SDK + exact v1.18.29 source → nominal/overlap traces → exact invocation join; awaited `command.execute.before` failure → ordered lifecycle evidence → exact cleanup contract report → mandatory document-only Design/Plan synchronization/review → only then production cleanup API/tests; no session-current/latest heuristic |
-| Design §4.1 `controller_routing_observed` durable audit contract | 4.2 | PendingObservationRecord member, record builder, strict runtime validator, persistence redaction, ObservationLogStore append/read replay, schemaVersion:1 compatibility, no-authority state projection test |
-| pinned command name + agent validation                         | 4.2                     | correct agent, missing command, missing agent, mismatched agent, higher-priority replacement in both directions, expected-agent template, raw-config redaction                                                                   |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0 completed; 4.1 / 4.2 suspended | Task 4.0 committed negative capability evidence (`runtime observation = BLOCKED`); old per-invocation production candidate not authorized; successor design unresolved; Issue #228 is reference only |
+| Design §4.1 controller routing runtime correlation | 4.0 evidence; 4.1 / 4.2 suspended | nominal fields observed, same-session per-invocation join / abandonment contract BLOCKED; `cleanup_scope=none`, `preserves_concurrent_invocation=false`, `suppression_clear_authority=removeSession_only`; no heuristic fallback |
+| Design §4.1 `controller_routing_observed` durable audit contract | 4.2 (suspended) | pre-spike candidate only; no durable controller-routing production audit implementation is authorized until successor design resolution and document review |
+| pinned command name + agent validation | 4.2 (suspended) | retained candidate coverage only; not executable while JUS-P0-01 successor design is unresolved |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
 | JUS-P0-02-06 progress-only mutation preserves authorization    | 2.1, 2.2                | approved-task checkbox-only progress produces an equal fingerprint, retains the active binding, and restores cache                                                                                                                 |
 | JUS-P0-02-07 canonical fingerprint reuse                       | 2.1, 2.2                | startup validation uses the same `computePlanFingerprint` with durable approved snapshot task IDs                                                                                                                                |
@@ -20332,8 +20357,9 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | controller routing tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | effective pinned-command name-and-agent, precedence, redaction, template, and routing-observation tests                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 4.0       | JUS-P0-01 supported-host capability evidence                                                     | **COMPLETED / BLOCKED:** committed runtime report is authoritative negative capability evidence; successor design unresolved |
+| 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | **SUSPENDED / NOT EXECUTABLE:** completed Task 4.0 precondition is BLOCKED; retained task content is pre-spike candidate detail |
+| 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | **SUSPENDED / NOT EXECUTABLE:** old per-invocation correlation / cleanup candidate is not authorized; Issue #228 remains non-authoritative |
 
 F-035 reverse traceability is also explicit: `AtomicPersistence` strict-read opt-in implements the
 Design §4.2 authoritative-read failure semantics without changing other persistence domains;
