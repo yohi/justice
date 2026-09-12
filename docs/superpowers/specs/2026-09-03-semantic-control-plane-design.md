@@ -436,8 +436,9 @@ completion for A cannot mutate or delete B state.
 
 `command.execute.before` does **not** imply that a matching `command.executed` will eventually arrive. A failure in
 `prompt(...)`, a plugin/provider failure, abort, or another terminal failure may leave an armed capture without
-command completion. Therefore successful join is not the only lifecycle exit and `removeSession(sessionId)` is not
-the only abandonment cleanup.
+command completion. The pre-spike candidate therefore required an abandonment path beyond successful exact join or
+`removeSession(sessionId)`. Task 4.0 did not prove such a path, so this retained candidate requirement is not current
+production authority.
 
 The pre-spike candidate used fixed per-session bounds. These constants are retained as candidate resource-safety rationale only and do not authorize implementation:
 

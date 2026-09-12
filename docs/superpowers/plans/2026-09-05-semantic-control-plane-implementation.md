@@ -19746,8 +19746,9 @@ B finalized message,      session=S assistant=A_B parent=U_B agent=atlas
 B command.executed,        session=S command=B assistant=A_B
 ```
 
-If Task 4.0 proves a different callback order while preserving the same exact identity join, use that proven order
-and update this document before implementation.
+The pre-spike candidate allowed this sequence to be replaced only by a Task 4.0-proven alternative ordering that
+preserved the same exact identity join. Task 4.0 did not provide such an alternative, so this sequence remains
+historical rationale only.
 
 Assertions are mandatory:
 
@@ -19812,7 +19813,7 @@ Add focused tests proving:
   `observationSource = "message.updated"` without guessing chat identity;
 - production `chat.params` alone appends **no provisional durable routing record**;
 - session cleanup removes every routing-correlation entry/count for that session;
-- per-session pending/chat/final/completion limits are exactly 8 and overflow is fail-open suppression; pre-spike suppression clears only on `removeSession()`;
+- historical pre-spike candidate only: pending/chat/final/completion limits were exactly 8, overflow used fail-open suppression, and suppression cleared only on `removeSession()`; these values and behaviors are not successor requirements;
 - once a session's capture count reaches zero, unmatched routing leftovers are discarded;
 - a later event with no active pinned capture creates no routing record.
 
@@ -19825,17 +19826,18 @@ authorized from the current evidence. This entire Task 4.2 remains suspended pen
 design. Local generation, sequence, latest/current heuristic, content correlation, FIFO/event-order inference, TTL,
 cache/timer cleanup, or background worker must not be substituted.
 
-Resource-bound tests remain required independently of lifecycle discovery. Use exact value `8`:
+Historical pre-spike candidate resource-bound tests used exact value `8`; this retained block is not executable and
+does not constrain an unresolved successor design:
 
-- the ninth pending capture credit in one session triggers fail-open overflow handling;
-- the ninth unmatched chat entry triggers the same bounded suppression;
-- the ninth unmatched finalized-assistant entry triggers the same bounded suppression;
-- the ninth unmatched command-completion entry triggers the same bounded suppression;
-- overflow appends no routing record and never changes Gate/Acceptance/Authorization/lifecycle/progress state;
-- overflow clears unresolved routing entries and sets only the bounded routing-suppression marker;
-- in the pre-spike contract, suppression remains until `removeSession(sessionId)`;
-- the post-spike reviewed amendment may replace that final rule only with the exact verified
-  `suppression_clear_authority` from Task 4.0.
+- the candidate's ninth pending capture credit in one session triggered fail-open overflow handling;
+- the candidate's ninth unmatched chat entry triggered the same bounded suppression;
+- the candidate's ninth unmatched finalized-assistant entry triggered the same bounded suppression;
+- the candidate's ninth unmatched command-completion entry triggered the same bounded suppression;
+- candidate overflow appended no routing record and did not change Gate/Acceptance/Authorization/lifecycle/progress state;
+- candidate overflow cleared unresolved routing entries and set only the bounded routing-suppression marker;
+- under the pre-spike candidate, suppression remained until `removeSession(sessionId)`;
+- Task 4.0 did not authorize a successor suppression-clear rule. A future reviewed successor design must define and
+  validate its own bounded-state and suppression-release contract before any replacement Task 4.2 is executable.
 
 #### Custom raw identity
 
@@ -20086,7 +20088,10 @@ Expected: RED because invocation-level state/transport and durable routing suppo
 A/B interleaving and same-controller workflow tests must fail behaviorally against any session-current/latest
 implementation. Broken scaffolding is not acceptable RED evidence.
 
-- [ ] **Step 3: Implement in exact ownership order**
+- [ ] **Step 3: Historical pre-spike candidate ownership order (NOT EXECUTABLE)**
+
+The numbered instructions below describe the suspended pre-spike candidate only. They are retained as historical
+rationale and MUST NOT be executed or treated as successor-design authority.
 
 1. **`src/core/session-state-provider.ts` — narrow ephemeral correlation**
    - add capture counts keyed by exact `(sessionId, command)`;
@@ -20101,11 +20106,11 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - consume only the resolved invocation's IDs/count; when no captures remain for a session, drop unmatched routing
      leftovers;
    - `removeSession()` clears all routing correlation state for that session;
-   - implement the exact four per-session limits (`8`) from Design §4.1; on overflow clear unresolved routing
-     state, set the bounded routing-suppression marker, append no audit, and do not affect authoritative state;
-   - under the current pre-spike contract, `routingSuppressed` clears only through `removeSession()`;
-   - do not implement any abandonment/quiescence API until the mandatory post-spike reviewed amendment has added
-     one exact signature and lifecycle contract to this task;
+   - the pre-spike candidate would have implemented the exact four per-session limits (`8`) from Design §4.1;
+     those constants are historical candidate detail and do not constrain a successor design;
+   - under that pre-spike candidate, `routingSuppressed` cleared only through `removeSession()`;
+   - Task 4.0 produced no authorized abandonment/quiescence API. A future reviewed successor design must define and
+     validate its own lifecycle contract before a replacement Task 4.2 can be authorized;
    - add no generic cache/TTL/timer/background-worker/session/event/correlation framework.
 
 2. **`src/runtime/opencode-adapter.ts` — lossless verified transport**
@@ -20114,10 +20119,11 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - assistant `message.updated` → raw agent + sessionID + `info.id` + `info.parentID` + finalized flag derived only
      from `role === "assistant" && time.completed !== undefined`;
    - `command.executed` → exact pinned `name` + sessionID + messageID;
-   - before the mandatory post-spike lifecycle amendment, consume no session lifecycle event as routing cleanup
-     authority; `session.status`, `session.idle`, and `session.error` remain observation-only capability evidence;
-   - after that amendment, transport only its exact allowlisted lifecycle fields; never forward error objects,
-     stack traces, status messages, prompt/message content, or raw lifecycle events;
+   - the pre-spike candidate treated `session.status`, `session.idle`, and `session.error` as observation-only
+     capability evidence until a verified lifecycle contract existed; Task 4.0 did not produce one, so this task
+     authorizes no session lifecycle event as routing cleanup authority;
+   - a future reviewed successor design must define its own lifecycle transport contract. This retained candidate
+     does not pre-authorize any lifecycle fields; never infer such authority from this historical block;
    - do not serialize/transport raw events or content;
    - existing persona `AgentMapped` path stays separate.
 
@@ -20125,8 +20131,8 @@ implementation. Broken scaffolding is not acceptable RED evidence.
    - expose the three exact entry points listed in Produces;
    - when a record call returns no joined context, return without routing append;
    - when it returns a context, pass only that immutable snapshot to the observation handler;
-   - expose no abandonment entry point in the pre-spike contract; the mandatory post-spike reviewed amendment
-     must add the exact cleanup entry point before this task may run;
+   - the pre-spike candidate exposed no abandonment entry point, and Task 4.0 produced none. A future reviewed
+     successor design must define and validate any cleanup entry point before a replacement Task 4.2 can be authorized;
    - overflow emits no routing audit and remains fail-open;
    - audit failures remain fail-open.
 
@@ -20176,8 +20182,8 @@ different-controller deterministic interleaving
 same-controller different-workflow interleaving
 exact message identity correlation
 A/B independent exact-join cleanup
-exact per-session bounds and overflow suppression
-post-spike reviewed lifecycle-contract tests added before Task 4.2 execution
+historical candidate per-session bounds and overflow suppression (not successor authority)
+historical lifecycle-contract placeholder; no current successor test contract is authorized
 custom raw controller preservation
 non-finalized suppression
 no provisional chat.params durable append
