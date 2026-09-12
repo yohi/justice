@@ -18895,8 +18895,63 @@ console.log(output[0]);
 process.exit(result === "PASS" ? 0 : 1);
 FAIL_VALIDATE
 
-node --check "$FAIL_WORKSPACE/.opencode/plugins/controller-routing-failure-probe.js"
-node --check "$SPIKE_ROOT/validate-failure-lifecycle.mjs"
+STEP5_EXPECTED_BUN_VERSION="$(cat "$SPIKE_ROOT/bun-version.txt")"
+STEP5_CURRENT_BUN_VERSION="$(bun --version)"
+test -n "$STEP5_EXPECTED_BUN_VERSION"
+test -n "$STEP5_CURRENT_BUN_VERSION"
+
+if [ "$STEP5_CURRENT_BUN_VERSION" != "$STEP5_EXPECTED_BUN_VERSION" ]; then
+  printf '%s\n' \
+    "STEP5_SYNTAX_HARNESS_FAILURE" \
+    "syntax_file=none" \
+    "syntax_stage=bun_version_changed" \
+    "syntax_bun_version=$STEP5_CURRENT_BUN_VERSION" >&2
+  exit 1
+fi
+
+test -n "$FAIL_WORKSPACE"
+test -n "$SPIKE_ROOT"
+
+FAIL_WORKSPACE="$FAIL_WORKSPACE" SPIKE_ROOT="$SPIKE_ROOT" bun - <<'"'"'STEP5_SYNTAX'"'"'
+const failWorkspace = process.env.FAIL_WORKSPACE;
+const spikeRoot = process.env.SPIKE_ROOT;
+
+const fail = (label, stage) => {
+  console.error("STEP5_SYNTAX_HARNESS_FAILURE");
+  console.error(`syntax_file=${label}`);
+  console.error(`syntax_stage=${stage}`);
+  console.error(`syntax_bun_version=${Bun.version}`);
+  process.exit(1);
+};
+
+const files = [
+  [
+    "failure_probe",
+    `${failWorkspace}/.opencode/plugins/controller-routing-failure-probe.js`,
+  ],
+  [
+    "failure_validator",
+    `${spikeRoot}/validate-failure-lifecycle.mjs`,
+  ],
+];
+
+const transpiler = new Bun.Transpiler({ loader: "js", target: "bun" });
+
+for (const [label, file] of files) {
+  let source;
+  try {
+    source = await Bun.file(file).text();
+  } catch {
+    fail(label, "read");
+  }
+
+  try {
+    transpiler.transformSync(source);
+  } catch {
+    fail(label, "parse");
+  }
+}
+STEP5_SYNTAX
 
 SERVER_PID=
 A_PID=
@@ -19068,6 +19123,18 @@ trap - EXIT
 exit 0
 '
 ```
+
+Before the failure server starts, Step 5 MUST syntax-parse both generated JavaScript files with the same Bun
+version recorded by Step 1 and MUST NOT execute either generated module. In particular, do not use `node --check`
+unless Step 1 has independently proved a real Node.js CLI with compatible non-executing `--check` semantics.
+The failure probe has a top-level trace/barrier environment guard, so evaluating that module as a syntax check is a
+harness defect. The Step 5 syntax gate MUST use `Bun.Transpiler.transformSync()` with `loader: "js"` and
+`target: "bun"`, matching the Step 2 parser semantics.
+
+On a Step 5 syntax-gate failure, emit only `STEP5_SYNTAX_HARNESS_FAILURE`, `syntax_file` in
+`none|failure_probe|failure_validator`, `syntax_stage` in `bun_version_changed|read|parse`, and the non-secret
+`syntax_bun_version`. Do not emit source content, parser exception text, raw paths, environment values, or stack
+traces. Such a failure is a harness failure and is not runtime capability evidence.
 
 Expected shell outcome:
 
