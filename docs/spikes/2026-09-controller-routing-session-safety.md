@@ -129,3 +129,44 @@ This is a separate execution attempt. It preserves the fixed hypothesis, procedu
 `SESSION-SAFETY-1 = execution/harness failure`
 
 `SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The prerequisite for a future execution is an explicitly configured, already authorized `JUSTICE_HOST_TEST_MODEL` in `provider/model` form available to the selected isolated execution environment. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
+
+### Continuation attempt: 2026-09-13 (authorized model)
+
+This is a separate execution attempt. It preserves the fixed hypothesis, procedure, PASS criteria, BLOCKED criteria, and harness-failure boundary above.
+
+#### Execution environment
+
+- The existing repository devcontainer was started and used for the isolated temporary harness.
+- The temporary CLI package and binary both reported OpenCode `1.18.29`.
+- The separately fetched source was pinned at `16747470f976aca3d362ad730bcd3fe82ecc2c9a`.
+- `JUSTICE_HOST_TEST_MODEL` was exported only in the temporary devcontainer execution environment as the explicitly authorized `openai/gpt-5.6-luna`; it was not written to repository configuration, `.env`, or production configuration.
+
+#### Execution/harness failure
+
+The exact host rejected the authorized model identifier during model resolution before it dispatched the R `command.execute.before` hook. The sanitized host classification was `ProviderModelNotFoundError`; the host suggested unqualified catalog names, but no alternative provider/model was selected or used.
+
+- R did not reach hook-local acquisition or rollback.
+- A, B, and C were not started.
+- The disposal sentinel flushed the temporary trace, but it contained no routing runtime events and is not capability evidence.
+- No complete R/A/B/C execution or schema-valid runtime validator result exists.
+
+#### Criterion-by-criterion result
+
+| Fixed PASS criterion | Result |
+| --- | --- |
+| 1. Supported-host version/source/declarations verified | Partial preflight only; exact CLI and pinned source verified, but the host could not resolve the required model |
+| 2. R rollback leaves no state | Not evaluated |
+| 3. Same-session A/B lifecycle | Not evaluated |
+| 4. A rollback preserves B suppression | Not evaluated |
+| 5. B routing mutations precede release idle | Not evaluated |
+| 6. C window between B idle and old completion | Not evaluated |
+| 7. Old B completion has zero C-state effect | Not evaluated |
+| 8. C completes independently | Not evaluated |
+| 9. A/B suppression and one-slot bound | Not evaluated |
+| 10. Schema-valid flushed trace | Not evaluated; the flushed partial trace is not evidence |
+
+#### Final classification
+
+`SESSION-SAFETY-1 = execution/harness failure`
+
+`SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The next attempt requires the exact supported host to expose the explicitly authorized `openai/gpt-5.6-luna` identifier without selecting a substitute. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
