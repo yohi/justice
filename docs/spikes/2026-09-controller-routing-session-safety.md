@@ -217,3 +217,63 @@ The temporary validator parsed the flushed JSONL trace and wrote a schema-readab
 `SESSION-SAFETY-1 = execution/harness failure`
 
 `SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The mechanical validator's `BLOCKED` output is not a capability result because the required C command could not reach `command.execute.before`. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
+
+### Continuation attempt: 2026-09-13 (v1 client request-shape correction)
+
+This is a separate execution attempt. It preserves the fixed hypothesis, procedure, PASS criteria, BLOCKED criteria, and harness-failure boundary above. The preceding execution-harness result and its facts remain unchanged.
+
+#### Exact client contract
+
+- The pinned v1 generated SDK exposes `Session.command(options: Options<SessionCommandData, ...>)` for `POST /session/{id}/command`.
+- `SessionCommandData.path.id` is the required session-ID path parameter. The request body carries the command fields, including `command`, `arguments`, and optional `model`.
+- The generated client resolves `{id}` from `options.path`; a flat `sessionID` property is not a substitute for `path.id`.
+- The temporary C request was changed only from the flat request shape to `path: { id: sessionID }` plus the v1 `body` shape. No probe state transition, event handling, trigger, delay, retry, or scheduling behavior was changed.
+
+#### Execution environment
+
+- The exact temporary CLI package and binary both reported OpenCode `1.18.29`.
+- The source was pinned at `16747470f976aca3d362ad730bcd3fe82ecc2c9a` and reported OpenCode `1.18.29`.
+- The repository `@opencode-ai/plugin` and `@opencode-ai/sdk` declarations were both `1.14.21`.
+- `JUSTICE_HOST_TEST_MODEL` was set only in the temporary execution environment to the explicitly authorized `opencode/mimo-v2.5-free` model. No alternate model, provider, package, version, production source, or production test was used.
+
+#### Runtime sequence and sanitized observations
+
+- R reached `command.execute.before`; `r_acquired` was followed by `r_rolled_back` with `owned = false` and `suppressed = false`, and no R `command.executed` was observed.
+- A and B reached `command.execute.before` in the same session. B established suppression before A's injected failure; A recorded rollback preservation of B's suppression. B completed with its finalized assistant observation and old `command.executed` observation.
+- B's routing-mutating order was `b_chat_params`, `b_finalized`, `b_idle`, `b_old_command_executed`.
+- The fixed trigger requested C immediately from the first observed B `session.idle`. The complete sanitized ordering was `b_idle` -> `b_old_command_executed` -> `c_start_requested` -> `c_acquired`.
+- C reached `command.execute.before`, then produced its own `c_chat_params`, `c_finalized`, `c_idle`, and `c_command_executed` observations.
+- The old B completion observation recorded `cOwned = false`; C did not yet own the slot when that old event arrived. No C-owned state was available for that event to mutate, so the required criterion-7 observation while C owns the slot was not established.
+- The instance disposal completed and the temporary trace recorded exactly one `dispose_flushed` marker before validation. The trace contained only bounded sequence values, fixed labels, event kinds, and booleans.
+
+#### Validator result
+
+The temporary validator parsed the complete flushed trace and wrote a schema-valid result with exit code `1`:
+
+```text
+result = BLOCKED
+failures = c_window, old_b_effect
+```
+
+The C dispatch was successful, so this is a capability result rather than an execution/harness failure. The natural ordering did not satisfy the fixed C window, and the old-B-while-C-owns-slot isolation observation was not demonstrated.
+
+#### Criterion-by-criterion result
+
+| Fixed PASS criterion | Result |
+| --- | --- |
+| 1. Supported-host version/source/declarations verified | PASS |
+| 2. R rollback leaves no state | PASS |
+| 3. Same-session A/B lifecycle | PASS |
+| 4. A rollback preserves B suppression | PASS |
+| 5. B routing mutations precede release idle | PASS |
+| 6. C window between B idle and old completion | FAIL; `b_idle` -> `b_old_command_executed` -> `c_acquired` |
+| 7. Old B completion has zero C-state effect while C owns the slot | FAIL / not demonstrated; `cOwned = false` at the old-B observation |
+| 8. C completes independently | PASS |
+| 9. A/B suppression and one-slot bound | PASS |
+| 10. Schema-valid flushed trace | PASS |
+
+#### Final classification
+
+`SESSION-SAFETY-1 = BLOCKED`
+
+The complete supported-host execution demonstrates that the corrected v1 C request is dispatchable, but the fixed capability contract is not satisfied by the natural runtime ordering. Option D remains **NOT ADOPTED**. Task 4.1 and Task 4.2 remain **SUSPENDED / NOT EXECUTABLE**, and production implementation remains **BLOCKED**. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
