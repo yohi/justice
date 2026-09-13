@@ -91,3 +91,41 @@ The required runtime sequence did not complete, so this artifact has no capabili
 - The host fallback stopped before a complete A/B/C trace and before validator output. No partial trace is runtime evidence.
 
 `SESSION-SAFETY-1` is unproven. Option D is **NOT ADOPTED**. This execution/harness failure does not alter the Task 4.0 `BLOCKED` result, does not create a new cleanup/release authority, and does not authorize production source or test implementation.
+
+### Continuation attempt: 2026-09-13
+
+This is a separate execution attempt. It preserves the fixed hypothesis, procedure, PASS criteria, BLOCKED criteria, and harness-failure boundary above.
+
+#### Execution environment
+
+- The existing repository devcontainer was started through its configured Docker environment.
+- The exact scratch CLI package and binary both reported OpenCode `1.18.29`.
+- The source fetched at pinned commit `16747470f976aca3d362ad730bcd3fe82ecc2c9a` reported OpenCode `1.18.29`.
+- The repository `@opencode-ai/plugin` and `@opencode-ai/sdk` declarations were both `1.14.21`; the command-before contract test passed.
+- `JUSTICE_HOST_TEST_MODEL` was not configured in either the devcontainer or the isolated host fallback. No model/provider was substituted.
+
+#### Runtime sequence and sanitized observations
+
+- R/A/B/C were not started because the required model prerequisite was absent.
+- No runtime trace, disposal sentinel, or validator result was produced. No partial trace is capability evidence.
+
+#### Criterion-by-criterion result
+
+| Fixed PASS criterion | Result |
+| --- | --- |
+| 1. Supported-host version/source/declarations verified | Partial preflight only; exact CLI, pinned source, and declarations verified, but no runtime execution |
+| 2. R rollback leaves no state | Not evaluated |
+| 3. Same-session A/B lifecycle | Not evaluated |
+| 4. A rollback preserves B suppression | Not evaluated |
+| 5. B routing mutations precede release idle | Not evaluated |
+| 6. C window between B idle and old completion | Not evaluated |
+| 7. Old B completion has zero C-state effect | Not evaluated |
+| 8. C completes independently | Not evaluated |
+| 9. A/B suppression and one-slot bound | Not evaluated |
+| 10. Schema-valid flushed trace | Not evaluated |
+
+#### Final classification
+
+`SESSION-SAFETY-1 = execution/harness failure`
+
+`SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The prerequisite for a future execution is an explicitly configured, already authorized `JUSTICE_HOST_TEST_MODEL` in `provider/model` form available to the selected isolated execution environment. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
