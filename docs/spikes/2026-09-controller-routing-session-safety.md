@@ -170,3 +170,50 @@ The exact host rejected the authorized model identifier during model resolution 
 `SESSION-SAFETY-1 = execution/harness failure`
 
 `SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The next attempt requires the exact supported host to expose the explicitly authorized `openai/gpt-5.6-luna` identifier without selecting a substitute. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
+
+### Continuation attempt: 2026-09-13 (authorized runtime model)
+
+This is a separate execution attempt. It preserves the fixed hypothesis, procedure, PASS criteria, BLOCKED criteria, and harness-failure boundary above.
+
+#### Execution environment
+
+- The existing repository devcontainer was started and used for the isolated temporary harness.
+- The temporary CLI package and binary both reported OpenCode `1.18.29`.
+- The separately fetched source was pinned at `16747470f976aca3d362ad730bcd3fe82ecc2c9a` and reported OpenCode `1.18.29`.
+- The explicitly authorized temporary model variable was exported only in the devcontainer server and command processes. It was not written to repository configuration, `.env`, or production configuration.
+- No alternate model, provider, alias, package, lockfile, production source, or production test was used.
+
+#### Runtime sequence and sanitized observations
+
+- R resolved through the provider and reached `command.execute.before`; `r_acquired` was followed by `r_rolled_back` with `owned = false` and `suppressed = false`.
+- A and B reached `command.execute.before` in the same session. B established suppression before A's injected failure; A recorded rollback preservation of suppression. B completed with finalized assistant observation and an old `command.executed` observation.
+- B's routing-mutating order was `b_chat_params`, `b_chat_params`, `b_finalized`, `b_idle`, `b_old_command_executed`.
+- The probe requested C after `b_idle`, but the old B completion event was observed before the C request could dispatch: `b_idle` -> `b_old_command_executed` -> `c_start_requested`.
+- C did not reach `command.execute.before`. The temporary probe called the supported host's v1 plugin client with a flat v2-style request shape. The host therefore left the `{id}` path placeholder unresolved and rejected the request before C execution.
+- No C ownership, capture, suppression, audit, finalized observation, or `command.executed` state was observed. This absence is harness failure, not evidence that the C isolation criterion passed or failed.
+- The instance disposal endpoint returned successfully and the disposal sentinel appended `dispose_flushed` before validation. The trace contained only sanitized transition records.
+
+#### Validator result
+
+The temporary validator parsed the flushed JSONL trace and wrote a schema-readable result, but exited non-zero with the mechanical result `BLOCKED`. Criteria 1, 2, 3, 4, 5, 9, and 10 were mechanically satisfied. Criteria 6, 7, and 8 were mechanically unsatisfied because C never reached its hook; those results cannot be promoted to capability evidence under the fixed harness-failure boundary.
+
+#### Criterion-by-criterion result
+
+| Fixed PASS criterion | Result |
+| --- | --- |
+| 1. Supported-host version/source/declarations verified | PASS for the completed preflight |
+| 2. R rollback leaves no state | PASS |
+| 3. Same-session A/B lifecycle | PASS |
+| 4. A rollback preserves B suppression | PASS |
+| 5. B routing mutations precede release idle | PASS |
+| 6. C window between B idle and old completion | Not evaluated; C dispatch failed in the harness |
+| 7. Old B completion has zero C-state effect | Not evaluated; C never owned the slot |
+| 8. C completes independently | Not evaluated |
+| 9. A/B suppression and one-slot bound | PASS for the observed state machine |
+| 10. Schema-valid flushed trace | PASS; disposal sentinel and validator completed |
+
+#### Final classification
+
+`SESSION-SAFETY-1 = execution/harness failure`
+
+`SESSION-SAFETY-1` remains **UNPROVEN**. Option D remains **NOT ADOPTED** and production implementation remains **BLOCKED**. The mechanical validator's `BLOCKED` output is not a capability result because the required C command could not reach `command.execute.before`. Task 4.0 remains immutable `BLOCKED` evidence for the old per-invocation candidate.
