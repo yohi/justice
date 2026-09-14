@@ -62,6 +62,16 @@ export function assessControllerConfiguration(input: {
   readonly effectiveDefinition?: DoctorEffectiveCommandDefinition;
   readonly effectiveConfigAvailable: boolean;
 }): ControllerConfigurationAssessment {
+  const base = {
+    workflow: input.decision.workflow,
+    desiredController: input.decision.controller,
+    pinnedCommand: input.pinnedCommand,
+  } as const;
+
+  if (!input.effectiveConfigAvailable) {
+    return { ...base, status: "unsupported", reason: "effective_config_unsupported" };
+  }
+
   const expectedController = CONTROLLER_WORKFLOW_ROUTER.resolveController(input.decision.workflow);
   if (expectedController !== input.decision.controller) {
     throw new Error(
@@ -74,16 +84,6 @@ export function assessControllerConfiguration(input: {
     throw new Error(
       `Invalid pinned command: ${input.decision.workflow} requires ${expectedPinnedCommand}, got ${input.pinnedCommand}`,
     );
-  }
-
-  const base = {
-    workflow: input.decision.workflow,
-    desiredController: input.decision.controller,
-    pinnedCommand: input.pinnedCommand,
-  } as const;
-
-  if (!input.effectiveConfigAvailable) {
-    return { ...base, status: "unsupported", reason: "effective_config_unsupported" };
   }
 
   const definition = input.effectiveDefinition;

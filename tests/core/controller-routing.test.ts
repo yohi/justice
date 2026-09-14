@@ -172,6 +172,28 @@ describe("controller configuration assurance", () => {
     });
   });
 
+  it("gives unsupported precedence before canonical input validation", () => {
+    expect(
+      assessControllerConfiguration({
+        decision: {
+          kind: "controller",
+          workflow: "subagent-driven-development",
+          controller: "sisyphus",
+          reason: "workflow_rule",
+        },
+        pinnedCommand: "justice-implement-brainstorming",
+        effectiveDefinition: { kind: "valid", agent: "sisyphus" },
+        effectiveConfigAvailable: false,
+      }),
+    ).toEqual({
+      workflow: "subagent-driven-development",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-brainstorming",
+      status: "unsupported",
+      reason: "effective_config_unsupported",
+    });
+  });
+
   it("gives unsupported precedence over an otherwise valid definition", () => {
     expect(
       assess(
