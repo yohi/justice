@@ -21,6 +21,12 @@ describe("routing-decision factories", () => {
     });
   });
 
+  it("rejects a workflow/controller pair that violates the canonical mapping", () => {
+    expect(() =>
+      createControllerRoutingDecision("brainstorming", "atlas", "workflow_rule"),
+    ).toThrow("Invalid controller routing pair");
+  });
+
   it("creates a worker decision", () => {
     const decision = createWorkerRoutingDecision(
       "implementation",

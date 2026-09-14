@@ -73,6 +73,33 @@ describe("controller configuration assurance", () => {
     expect(resolvePinnedCommandWorkflow(command)).toBeUndefined();
   });
 
+  it("rejects a controller decision that violates the canonical workflow mapping", () => {
+    expect(() =>
+      assessControllerConfiguration({
+        decision: {
+          kind: "controller",
+          workflow: "subagent-driven-development",
+          controller: "sisyphus",
+          reason: "workflow_rule",
+        },
+        pinnedCommand: "justice-implement-subagent-driven-development",
+        effectiveDefinition: { kind: "valid", agent: "sisyphus" },
+        effectiveConfigAvailable: true,
+      }),
+    ).toThrow("Invalid controller decision");
+  });
+
+  it("rejects a pinned command that does not belong to the decision workflow", () => {
+    expect(() =>
+      assessControllerConfiguration({
+        decision: decision("brainstorming", "sisyphus"),
+        pinnedCommand: "justice-implement-executing-plans",
+        effectiveDefinition: { kind: "valid", agent: "sisyphus" },
+        effectiveConfigAvailable: true,
+      }),
+    ).toThrow("Invalid pinned command");
+  });
+
   it("reports configured only for exact desired-controller equality", () => {
     expect(
       assess("brainstorming", "sisyphus", "justice-implement-brainstorming", {

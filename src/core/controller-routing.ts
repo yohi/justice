@@ -1,3 +1,4 @@
+import { WorkflowRouter } from "./workflow-router";
 import type {
   ControllerAgent,
   ControllerConfigurationAssessment,
@@ -26,6 +27,8 @@ const WORKFLOW_PINNED_COMMAND_MAP: ReadonlyMap<
   ["subagent-driven-development", "justice-implement-subagent-driven-development"],
   ["executing-plans", "justice-implement-executing-plans"],
 ]);
+
+const CONTROLLER_WORKFLOW_ROUTER = new WorkflowRouter();
 
 const CONTROLLER_AGENTS = new Set<ControllerAgent>([
   "sisyphus",
@@ -59,6 +62,20 @@ export function assessControllerConfiguration(input: {
   readonly effectiveDefinition?: DoctorEffectiveCommandDefinition;
   readonly effectiveConfigAvailable: boolean;
 }): ControllerConfigurationAssessment {
+  const expectedController = CONTROLLER_WORKFLOW_ROUTER.resolveController(input.decision.workflow);
+  if (expectedController !== input.decision.controller) {
+    throw new Error(
+      `Invalid controller decision: ${input.decision.workflow} requires ${expectedController ?? "unknown"}, got ${input.decision.controller}`,
+    );
+  }
+
+  const expectedPinnedCommand = resolvePinnedCommandForWorkflow(input.decision.workflow);
+  if (expectedPinnedCommand !== input.pinnedCommand) {
+    throw new Error(
+      `Invalid pinned command: ${input.decision.workflow} requires ${expectedPinnedCommand}, got ${input.pinnedCommand}`,
+    );
+  }
+
   const base = {
     workflow: input.decision.workflow,
     desiredController: input.decision.controller,

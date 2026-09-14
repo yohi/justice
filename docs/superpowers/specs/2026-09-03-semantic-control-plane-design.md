@@ -232,10 +232,10 @@ export type ControllerPinnedCommand =
   | "justice-implement-subagent-driven-development"
   | "justice-implement-executing-plans";
 
-export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<
+export const PINNED_COMMAND_WORKFLOW_MAP: ReadonlyMap<
   ControllerPinnedCommand,
   ControllerWorkflow
->>;
+>;
 
 export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
 

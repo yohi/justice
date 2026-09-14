@@ -1,3 +1,4 @@
+import { WorkflowRouter } from "./workflow-router";
 import type {
   ControllerAgent,
   ControllerRoutingDecision,
@@ -9,6 +10,8 @@ import type {
   UnroutedRoutingDecision,
   WorkerRoutingDecision,
 } from "./types";
+
+const CONTROLLER_WORKFLOW_ROUTER = new WorkflowRouter();
 
 const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
   ExecutionRole,
@@ -28,6 +31,12 @@ export function createControllerRoutingDecision(
   controller: ControllerAgent,
   reason: RoutingReason,
 ): ControllerRoutingDecision {
+  const expectedController = CONTROLLER_WORKFLOW_ROUTER.resolveController(workflow);
+  if (expectedController !== controller) {
+    throw new Error(
+      `Invalid controller routing pair: ${workflow} requires ${expectedController ?? "unknown"}, got ${controller}`,
+    );
+  }
   return { kind: "controller", workflow, controller, reason };
 }
 
