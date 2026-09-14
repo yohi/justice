@@ -149,7 +149,7 @@ GIT_MASTER=1 git commit -m "feat: execution roleをsp categoryへ完全対応"
 
 **Consumes:** `SpCategory` from `src/core/types.ts`; one already-resolved OpenCode configuration snapshot supplied through an injected doctor dependency. The production CLI adapter obtains that snapshot with `opencode debug config` in the target cwd/environment. Existing local source scans remain separate plugin-install/remediation diagnostics and are not effective-config authority.
 
-**Produces:** `DoctorEffectiveConfigResult = { kind: "available"; view: DoctorEffectiveConfigView } | { kind: "unsupported"; reason: ... }`; `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition> }`; `DoctorEffectiveCommandDefinition = { readonly agent?: string }`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
+**Produces:** `DoctorEffectiveConfigResult = { kind: "available"; view: DoctorEffectiveConfigView } | { kind: "unsupported"; reason: ... }`; `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition> }`; `DoctorEffectiveCommandDefinition = { readonly kind: "valid"; readonly agent?: string } | { readonly kind: "invalid" }`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -192,7 +192,9 @@ it("does not promote local source scans to effective-config authority", () => {
 });
 ```
 
-Add adapter tests for resolved-config acquisition: success JSON, missing executable, non-zero exit, invalid JSON, and unexpected top-level shape. Failure cases must produce `kind = "unsupported"` and must not include raw stdout/stderr in diagnostics.
+Add adapter tests for resolved-config acquisition: exact `1.18.29` version + success JSON, missing executable, version command failure, version mismatch, non-zero config exit, version/config timeout, invalid JSON, unexpected top-level shape, and child termination after timeout. Failure cases must produce `kind = "unsupported"` and must not include raw stdout/stderr in diagnostics.
+
+Add pure projection tests for exact pinned command normalization: missing key -> no map entry; object with absent agent -> `{ kind: "valid" }`; object with string agent -> `{ kind: "valid", agent }`; null/scalar/array definition or non-string present agent -> `{ kind: "invalid" }`.
 
 - [ ] **Step 2: Confirm RED**
 
@@ -214,9 +216,9 @@ export const ALL_SP_CATEGORIES: readonly SpCategory[] = [
 ];
 ```
 
-Implement `projectDoctorEffectiveConfig(resolvedConfig: unknown)` as a pure allowlist projection. It reads only top-level `category` key names and the exact pinned-command definitions needed later by JUS-P0-01. It does not merge sources.
+Implement `projectDoctorEffectiveConfig(resolvedConfig: unknown)` as a pure allowlist projection. It reads only top-level `category` key names and the exact pinned-command definitions needed later by JUS-P0-01. It does not merge sources. Normalize each exact pinned command definition to `DoctorEffectiveCommandDefinition`: absent key -> no entry; non-null non-array object with absent/string `agent` -> `kind: "valid"`; null/scalar/array or present non-string `agent` -> `kind: "invalid"`. Discard every other field.
 
-Extend `DoctorDeps` with an injected resolved-config reader. The production `main()` adapter executes exactly `opencode debug config` in the target cwd/environment without shell interpolation, captures stdout only in memory, parses JSON, projects the allowlisted view, and discards the raw resolved object. Missing executable, non-zero exit, launch failure, invalid JSON, or unverified target context yields `unsupported`; do not fall back to `SOURCE_PRIORITY` to synthesize success.
+Extend `DoctorDeps` with an injected host-config reader/runner so unit tests never spawn a real host. The production `main()` adapter invokes `opencode --version` first and requires exact trimmed output `1.18.29`, then invokes `opencode debug config`. Use argument arrays with no shell interpolation, the same target cwd/environment, and a fixed `DOCTOR_HOST_COMMAND_TIMEOUT_MS = 30_000` for each probe. On timeout terminate the child and wait for termination before returning. Missing executable, version mismatch, non-zero exit, timeout, launch failure, invalid JSON, or unverified target context yields `unsupported`; do not fall back to `SOURCE_PRIORITY` to synthesize success.
 
 Keep the existing `configCandidates` / `scanConfigContent` path for Justice plugin installation and remediation diagnostics only. Do not delete it, but do not expose a conversion from `SourceScanResult` to authoritative `DoctorEffectiveConfigView`.
 
@@ -19431,8 +19433,12 @@ session/message/event identity.
   - Cover `configured`, missing command -> `missing`, wrong agent -> `misconfigured`, missing agent ->
     `misconfigured`, invalid command shape -> `misconfigured`, and unsupported effective-config mechanism ->
     `unsupported`.
-  - Cover a custom or unexpected configured agent as diagnostic-safe `misconfigured`, without widening
+  - Cover a normalized `{ kind: "invalid" }` effective definition as `misconfigured / invalid_command_definition`.
+  - Cover a normalized `{ kind: "valid" }` definition with absent agent as `misconfigured / agent_missing`.
+  - Cover a custom or unexpected configured agent as diagnostic-safe `misconfigured / agent_invalid`, without widening
     `ControllerAgent`.
+  - The pure assessment input is only `effectiveConfigAvailable` plus the normalized
+    `DoctorEffectiveCommandDefinition`; it does not consume the historical `DoctorCommandDefinitionDiagnostic`.
   - Assert exact command equality: aliases, leading-text variants, and fuzzy matches are rejected.
   - Assert `configured` has no runtime-applied field or semantic implication and that the assessment accepts no
     session, message, event, or execution state.
@@ -19498,7 +19504,7 @@ GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
   - Cover all four exact expected command/agent pairs from an injected host-resolved snapshot.
   - Cover snapshot available + missing command -> `missing`.
   - Cover snapshot available + wrong, absent, non-string/unrecognized, or custom agent -> `misconfigured`.
-  - Cover resolved-config command unavailable, non-zero exit, invalid JSON, invalid top-level shape, or unverifiable target context -> `unsupported`.
+  - Cover unsupported host version, resolved-config command unavailable, version/config timeout, non-zero exit, invalid JSON, invalid top-level shape, or unverifiable target context -> `unsupported`.
   - Prove a local config source containing the exact four expected command/agent pairs cannot convert an `unsupported` host result into `configured`.
   - Assert doctor output is redacted, names only the required commands and configured agent where allowed, and emits exact four-command remediation/template output.
   - Assert raw `opencode debug config` stdout/stderr, command body, provider options, credentials, and unrelated config values never appear in diagnostics or persistence.
@@ -19519,8 +19525,8 @@ Expected: behavioral failures because doctor does not yet consume host-resolved 
 
   1. Reuse Task 1.2's resolved-config reader/projection. Do not create a second source merge implementation.
   2. `opencode debug config` is the standalone authority for supported OpenCode `1.18.29`; `client.config.get()` is only an equivalent adapter when the exact same instance/workspace context is guaranteed.
-  3. Pass only the exact pinned command name and allowlisted `agent` from `DoctorEffectiveConfigView` to Task 4.1CA assessment. Never pass the raw resolved config.
-  4. If resolved-config acquisition is unavailable/failed/unparseable/context-unverified, return `unsupported`. Do not fall back to local source scans to synthesize `configured`, `missing`, or `misconfigured`.
+  3. Pass only `effectiveConfigAvailable` and the exact pinned command's normalized `DoctorEffectiveCommandDefinition` from `DoctorEffectiveConfigView` to Task 4.1CA assessment. Do not pass `DoctorCommandDefinitionDiagnostic`, local scan diagnostics, or the raw resolved config.
+  4. If host-version verification or resolved-config acquisition is unavailable/failed/timed-out/unparseable/context-unverified, return `unsupported`. Do not fall back to local source scans to synthesize `configured`, `missing`, or `misconfigured`.
   5. Emit configured/missing/misconfigured/unsupported diagnostics and exact remediation/template output. Local scan diagnostics may be shown separately as non-authoritative remediation hints.
   6. Update README and SPEC in the implementation change, explicitly stating `configured != applied` and `local source scan != configured authority`.
   7. Do not modify `src/runtime/opencode-adapter.ts`, `src/hooks/observation-handler.ts`, event schemas, session state, or routing-observation persistence for this task.

@@ -316,7 +316,9 @@ Justice は以下を MUST とする。
 
 - workflow ごとの exact pinned command 名と expected agent/controller を定義する。
 - `justice doctor` は Justice 独自の source-priority merge ではなく、supported OpenCode host が解決した effective configuration を authority として検査する。
-- supported OpenCode `1.18.29` の standalone doctor では `opencode debug config` の resolved configuration を authority とする。同一 instance/workspace context を保証できる場合に限り、public SDK / HTTP の `config.get` を同値の authority として利用できる。
+- supported OpenCode `1.18.29` の standalone doctor は、positive configuration authority を作る前に同じ `opencode` executable / environment で `opencode --version` を実行し、trim 済み version が exact `1.18.29` であることを確認しなければならない。version mismatch、version command failure、または version output を検証できない場合は `unsupported` とする。
+- version gate 通過後の standalone doctor では、同じ target cwd/environment の `opencode debug config` が返す resolved configuration を authority とする。host command は shell interpolation なしで実行し、各 probe は最大 30,000 ms に制限する。timeout 時は child process を終了させ `unsupported` とし、local source から success を推測してはならない。
+- public SDK / HTTP の `config.get` は、supported host version と同一 instance/workspace context が別の supported mechanism で検証済みの場合に限り同値の authority として利用できる。
 - local config source scan は plugin installation、読み取り可否、remediation hint の診断に利用してよいが、`configurationStatus = configured` の根拠にしてはならない。
 - host-resolved effective configuration を取得・parse・validation できない場合は `unsupported` とし、local source から success を推測してはならない。
 - exact four pinned commands の正しい configuration template/example を提供する。
@@ -354,7 +356,7 @@ unsupported
 - `configured`: host-resolved effective configuration が取得済みで、required pinned command が存在し、その configured agent が desired controller と exact に一致する。
 - `missing`: host-resolved effective configuration が取得済みで、required pinned command が存在しない。
 - `misconfigured`: host-resolved effective configuration が取得済みで、command は存在するが agent absent、agent invalid、agent と desired controller の不一致、または取得済み effective definition が deterministically invalid で requirement を満たさない。
-- `unsupported`: supported host から authoritative effective configuration を取得できない、target context を同一と保証できない、host command/API が失敗する、または resolved response を parse/validation できない。raw source の malformed configuration により host が resolved configuration を生成できない場合も `configured` / `missing` を推測せず `unsupported` とする。
+- `unsupported`: supported host version を確認できない、authoritative effective configuration を取得できない、target context を同一と保証できない、host command/API が失敗または timeout する、または resolved response を parse/validation できない。raw source の malformed configuration により host が resolved configuration を生成できない場合も `configured` / `missing` を推測せず `unsupported` とする。
 
 local source scan、`SOURCE_PRIORITY` の再実装、個別 config file の見かけ上の値は `configured` の authority ではない。
 `configured` は configuration assurance のみを表す。runtime routing applied、runtime routing succeeded、actual controller attribution、
@@ -409,6 +411,7 @@ executing-plans
 - host-resolved effective configuration 内の command agent が expected agent と異なる場合は `misconfigured`。
 - host-resolved effective configuration 内に command は存在するが agent がない場合は `misconfigured`。
 - host-resolved effective configuration を取得できない場合は `unsupported`。raw source scan が exact command/agent を含んでいても `configured` へ昇格しない。
+- standalone doctor で `opencode --version` が exact `1.18.29` ではない、version probe が失敗する、または version/config probe が 30,000 ms を超える場合は `unsupported`。timeout 後の child process は残存させない。
 - resolved snapshot 内で deterministically invalid な required command definition は `misconfigured`。invalid source のため host 自身が resolved snapshot を生成できない場合は `unsupported` とし、success を推測しない。
 - Justice は OpenCode の source precedence / deep-merge / command auto-discovery を独自再実装して authoritative effective configuration を作らない。
 - custom/unexpected agent は diagnostic-safe に扱い、configured としない。

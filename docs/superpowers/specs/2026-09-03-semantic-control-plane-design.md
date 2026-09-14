@@ -116,11 +116,14 @@ OpenCode `1.18.29` の authority は次の public surface で固定する。
 
 ```text
 standalone doctor:
+  opencode --version
+    -> exact "1.18.29"
   opencode debug config
     -> Config.Service.get()
     -> resolved configuration JSON
 
 in-process / connected equivalent:
+  independently verified supported host version + exact instance/workspace context
   client.config.get() / GET /config
     -> Config.Service.get()
 ```
@@ -128,9 +131,14 @@ in-process / connected equivalent:
 `opencode debug config` は provider/model/session execution を開始せず、resolved configuration の取得だけを行う。`client.config.get()` を使う場合は standalone CLI と同一の directory/workspace context であることを adapter が保証しなければならない。
 
 ```ts
-export type DoctorEffectiveCommandDefinition = {
-  readonly agent?: string;
-};
+export type DoctorEffectiveCommandDefinition =
+  | {
+      readonly kind: "valid";
+      readonly agent?: string;
+    }
+  | {
+      readonly kind: "invalid";
+    };
 
 export type DoctorEffectiveConfigView = {
   readonly effectiveCategoryNames: readonly string[];
@@ -147,6 +155,8 @@ export type DoctorEffectiveConfigResult =
       readonly reason:
         | "resolved_config_command_unavailable"
         | "resolved_config_command_failed"
+        | "resolved_config_host_version_unsupported"
+        | "resolved_config_timeout"
         | "resolved_config_invalid_json"
         | "resolved_config_context_unverified"
         | "resolved_config_shape_invalid";
@@ -164,16 +174,20 @@ export function isRecognizedControllerAgent(value: unknown): value is Controller
 export function isPinnedControllerCommand(
   definition: DoctorEffectiveCommandDefinition | undefined,
 ): definition is DoctorEffectiveCommandDefinition & { readonly agent: ControllerAgent } {
-  return definition !== undefined && isRecognizedControllerAgent(definition.agent);
+  return (
+    definition?.kind === "valid" &&
+    isRecognizedControllerAgent(definition.agent)
+  );
 }
 ```
 
 Authority and safety rules:
 
 - Positive `configured` authority MUST come from `DoctorEffectiveConfigResult.kind = "available"`. local config source scan、`SOURCE_PRIORITY`、individual file contents、command template files の直接走査だけから `configured` を生成してはならない。
-- The runtime adapter invokes `opencode debug config` without shell interpolation, with the target project cwd/environment. Non-zero exit、missing executable、timeout/launch failure、invalid JSON、unexpected top-level shape は `unsupported` とする。
+- The standalone runtime adapter first runs `opencode --version` and requires exact trimmed output `1.18.29`, then runs `opencode debug config`; both commands use argument arrays without shell interpolation and the same target project cwd/environment. Each probe has a fixed 30,000 ms timeout. Missing executable、version mismatch、non-zero exit、timeout/launch failure、invalid JSON、unexpected top-level shape は `unsupported` とし、timeout 後は child process を終了して orphan を残さない。
 - stdout の resolved configuration は secret-bearing data として扱う。memory 上で parse した直後に allowlisted projection を作り、raw stdout / full parsed object を persistence、telemetry、exception detail、doctor output に含めない。stderr も raw persistence せず generic/redacted diagnostic に変換する。
 - Projection が読むのは top-level `category` の key names と、top-level `command` における exact four pinned command の definition だけである。command body、template、description、model、provider、options、その他の command は出力しない。
+- exact pinned command key がない場合は map entry を作らない。key が存在し、definition が non-null non-array object で `agent` が absent または string の場合は `{ kind: "valid", agent? }` に正規化する。definition 自体が null/scalar/array、または `agent` が存在するが string ではない場合は `{ kind: "invalid" }` に正規化する。raw definition は projection 後に保持しない。
 - required command が resolved snapshot に存在しない場合は `missing`。存在するが `agent` が absent / non-string / unrecognized / desired controller と不一致なら `misconfigured`。exact equality の場合だけ `configured`。
 - OpenCode が malformed source 等により resolved snapshot 自体を生成できない場合、Justice は source files から擬似 effective config を組み立てず `unsupported` とする。local source scan は remediation hint を出してよいが authoritative status を上書きしない。
 - OpenCode `1.18.29` は config source 間を `mergeDeep` し、さらに `ConfigCommand.load(dir)` で `{command,commands}/**/*.md` を `result.command` に merge する。remote / managed contribution も host 側で処理される。これらを Justice 側で部分再実装しないことが CA-001 の correctness boundary である。
@@ -260,17 +274,20 @@ export function assessControllerConfiguration(input: {
   readonly decision: ControllerRoutingDecision;
   readonly pinnedCommand: ControllerPinnedCommand;
   readonly effectiveDefinition?: DoctorEffectiveCommandDefinition;
-  readonly effectiveDiagnostics: readonly DoctorCommandDefinitionDiagnostic[];
-  readonly effectiveConfigSupported: boolean;
+  readonly effectiveConfigAvailable: boolean;
 }): ControllerConfigurationAssessment;
 ```
 
-Assessment precedence is fixed: if the supported host cannot provide a verified resolved configuration snapshot,
-produce `unsupported` and stop. From an available host-resolved snapshot, a missing exact command produces `missing`;
-an absent/invalid agent, deterministically invalid effective definition, or agent inequality produces `misconfigured`;
-only exact configured-agent equality produces `configured`. Source precedence, deep merge, command-file discovery,
-remote config, and managed config are host responsibilities and are not reconstructed by this assessment. The
-assessment consumes no runtime session, message, event, terminal envelope, or execution outcome state.
+Assessment precedence is fixed: if `effectiveConfigAvailable = false`, produce `unsupported` and stop. From an
+available host-resolved snapshot, `effectiveDefinition === undefined` produces `missing`;
+`effectiveDefinition.kind === "invalid"` produces `misconfigured / invalid_command_definition`;
+`kind === "valid"` with no agent produces `misconfigured / agent_missing`; an unrecognized string agent produces
+`misconfigured / agent_invalid`; a recognized agent unequal to the desired controller produces
+`misconfigured / agent_mismatch`; only exact configured-agent equality produces `configured`.
+`DoctorCommandDefinitionDiagnostic` is not an input to this assessment and is not part of the current configuration
+assurance contract. Source precedence, deep merge, command-file discovery, remote config, and managed config are host
+responsibilities and are not reconstructed by this assessment. The assessment consumes no runtime session, message,
+event, terminal envelope, or execution outcome state.
 
 ### Historical Option G matched terminal envelope contract
 
