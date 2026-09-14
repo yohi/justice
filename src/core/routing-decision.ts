@@ -1,10 +1,13 @@
 import type {
   ControllerAgent,
+  ControllerRoutingDecision,
+  ControllerWorkflow,
   ExecutionRole,
-  RoutingDecision,
   RoutingReason,
   SpCategory,
   TaskCategory,
+  UnroutedRoutingDecision,
+  WorkerRoutingDecision,
 } from "./types";
 
 const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
@@ -21,17 +24,18 @@ const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
 ]);
 
 export function createControllerRoutingDecision(
+  workflow: ControllerWorkflow,
   controller: ControllerAgent,
   reason: RoutingReason,
-): RoutingDecision {
-  return { kind: "controller", controller, reason };
+): ControllerRoutingDecision {
+  return { kind: "controller", workflow, controller, reason };
 }
 
 export function createWorkerRoutingDecision(
   executionRole: ExecutionRole,
   category: SpCategory | TaskCategory,
   reason: RoutingReason,
-): Extract<RoutingDecision, { readonly kind: "worker" }> {
+): WorkerRoutingDecision {
   if (
     reason !== "explicit_request" &&
     reason !== "compatibility_fallback" &&
@@ -42,7 +46,9 @@ export function createWorkerRoutingDecision(
   return { kind: "worker", executionRole, category, reason };
 }
 
-export function createUnroutedRoutingDecision(reason: RoutingReason): RoutingDecision {
+export function createUnroutedRoutingDecision(
+  reason: RoutingReason,
+): UnroutedRoutingDecision {
   return { kind: "unrouted", reason };
 }
 

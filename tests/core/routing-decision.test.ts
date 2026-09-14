@@ -7,10 +7,15 @@ import {
 import type { ExecutionRole } from "../../src/core/types";
 
 describe("routing-decision factories", () => {
-  it("creates a controller decision", () => {
-    const decision = createControllerRoutingDecision("sisyphus", "workflow_rule");
+  it("creates a desired controller decision", () => {
+    const decision = createControllerRoutingDecision(
+      "brainstorming",
+      "sisyphus",
+      "workflow_rule",
+    );
     expect(decision).toEqual({
       kind: "controller",
+      workflow: "brainstorming",
       controller: "sisyphus",
       reason: "workflow_rule",
     });

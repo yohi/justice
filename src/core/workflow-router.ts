@@ -1,6 +1,6 @@
-import type { ControllerAgent } from "./types";
+import type { ControllerAgent, ControllerWorkflow } from "./types";
 
-const WORKFLOW_CONTROLLER_MAP: ReadonlyMap<string, ControllerAgent> = new Map([
+const WORKFLOW_CONTROLLER_MAP: ReadonlyMap<ControllerWorkflow, ControllerAgent> = new Map([
   ["brainstorming", "sisyphus"],
   ["writing-plans", "sisyphus"],
   ["subagent-driven-development", "atlas"],
@@ -9,10 +9,10 @@ const WORKFLOW_CONTROLLER_MAP: ReadonlyMap<string, ControllerAgent> = new Map([
 
 export class WorkflowRouter {
   resolveController(workflow: string): ControllerAgent | undefined {
-    return WORKFLOW_CONTROLLER_MAP.get(workflow);
+    return WORKFLOW_CONTROLLER_MAP.get(workflow as ControllerWorkflow);
   }
 
-  isKnownWorkflow(workflow: string): boolean {
-    return WORKFLOW_CONTROLLER_MAP.has(workflow);
+  isKnownWorkflow(workflow: string): workflow is ControllerWorkflow {
+    return WORKFLOW_CONTROLLER_MAP.has(workflow as ControllerWorkflow);
   }
 }

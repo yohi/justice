@@ -147,6 +147,27 @@ export type TaskCategory =
 
 export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
 
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+export type DoctorEffectiveCommandDefinition =
+  | {
+      readonly kind: "valid";
+      readonly agent?: string;
+    }
+  | {
+      readonly kind: "invalid";
+    };
+
 export type ExecutionRole =
   | "mechanical"
   | "implementation"
@@ -171,22 +192,52 @@ export type RoutingReason =
   | "explicit_request"
   | "compatibility_fallback";
 
+export type ControllerRoutingDecision = {
+  readonly kind: "controller";
+  readonly workflow: ControllerWorkflow;
+  readonly controller: ControllerAgent;
+  readonly reason: RoutingReason;
+};
+
+export type WorkerRoutingDecision = {
+  readonly kind: "worker";
+  readonly executionRole: ExecutionRole;
+  readonly category: SpCategory | TaskCategory;
+  readonly reason: RoutingReason;
+};
+
+export type UnroutedRoutingDecision = {
+  readonly kind: "unrouted";
+  readonly reason: RoutingReason;
+};
+
 export type RoutingDecision =
-  | {
-      readonly kind: "controller";
-      readonly controller: ControllerAgent;
-      readonly reason: RoutingReason;
-    }
-  | {
-      readonly kind: "worker";
-      readonly executionRole: ExecutionRole;
-      readonly category: SpCategory | TaskCategory;
-      readonly reason: RoutingReason;
-    }
-  | {
-      readonly kind: "unrouted";
-      readonly reason: RoutingReason;
-    };
+  | ControllerRoutingDecision
+  | WorkerRoutingDecision
+  | UnroutedRoutingDecision;
+
+export type ControllerConfigurationStatus =
+  | "configured"
+  | "missing"
+  | "misconfigured"
+  | "unsupported";
+
+export type ControllerConfigurationReason =
+  | "command_missing"
+  | "invalid_command_definition"
+  | "agent_missing"
+  | "agent_invalid"
+  | "agent_mismatch"
+  | "effective_config_unsupported";
+
+export type ControllerConfigurationAssessment = {
+  readonly workflow: ControllerWorkflow;
+  readonly desiredController: ControllerAgent;
+  readonly pinnedCommand: ControllerPinnedCommand;
+  readonly configuredController?: string;
+  readonly status: ControllerConfigurationStatus;
+  readonly reason?: ControllerConfigurationReason;
+};
 
 /** コンパクション時に保護すべき状態 */
 export interface ProtectedContext {
