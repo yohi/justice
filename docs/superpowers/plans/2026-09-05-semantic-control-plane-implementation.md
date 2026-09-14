@@ -25,7 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. The distinct Option G artifact records `COMMAND-ENVELOPE-1 = PASS`; replacement Task 4.1G/4.2G formalize that contract but remain non-executable until independent document review and separate production implementation authorization. `sessionId` alone is never invocation identity.
+- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17005,16 +17005,17 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 ## Phase 4: Controller Routing — JUS-P0-01
 
 > [!CAUTION]
-> **CURRENT PHASE STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / IMPLEMENTATION NOT AUTHORIZED**
+> **CURRENT PHASE STATUS: BLOCKED / IMPLEMENTATION NOT AUTHORIZED**
 >
 > Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence. Option D and Option F
 > remain not adopted. The distinct Option G evidence in
-> `docs/spikes/2026-09-controller-routing-command-envelope.md` is `COMMAND-ENVELOPE-1 = PASS`, and the resulting
-> Requirements and Design contract is represented below by replacement Task 4.1G and Task 4.2G.
+> `docs/spikes/2026-09-controller-routing-command-envelope.md` is `COMMAND-ENVELOPE-1 = PASS` within its original
+> scope. `docs/spikes/2026-09-controller-routing-command-envelope-2.md` is `COMMAND-ENVELOPE-2 = BLOCKED` and
+> confirms RG-010: a direct prompt has no stable public discriminator from the pinned command's own prompt lifecycle.
 >
-> Task 4.1G and Task 4.2G are **NOT EXECUTABLE** until the synchronized evidence, Requirements, Design, and Plan pass
-> independent document review and production implementation receives separate authorization. This formalization does
-> not start source/test implementation. Issue #228 remains non-authoritative historical tracking.
+> Task 4.1G and Task 4.2G are **BLOCKED / NOT EXECUTABLE**. Option G is not authorized as a production successor;
+> no independent document review result or separate implementation authorization may override this capability block.
+> Issue #228 remains non-authoritative historical tracking.
 >
 > The old Task 4.1 and Task 4.2 blocks remain below as historical pre-spike candidate detail. They are not unsuspended,
 > are not part of the replacement sequence, and must not be executed. `removeSession()` remains the only sticky
@@ -19416,10 +19417,10 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 ### Task 4.1G: Define the Option G domain and state-machine contract
 
-> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+> **STATUS: BLOCKED / NOT EXECUTABLE**
 >
-> Do not execute any step until the synchronized Option G evidence, Requirements, Design, and Plan have passed
-> independent document review and production implementation has been separately authorized.
+> `COMMAND-ENVELOPE-2` confirms RG-010. Do not execute any step unless a separately authorized future capability
+> establishes a supported-host solution; this task is not an authorization to create or select one.
 
 **Requirement:** JUS-P0-01-01 through JUS-P0-01-06, Design §3.2, §4.1, §5.1, INV-01, INV-24, INV-25.
 
@@ -19569,10 +19570,10 @@ GIT_MASTER=1 git commit -m "feat: controller routingにterminal envelopeを定�
 
 ### Task 4.2G: Wire Option G and persist the audit-only result
 
-> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+> **STATUS: BLOCKED / NOT EXECUTABLE**
 >
-> This task is blocked by Task 4.1G and by the same independent-review and separate-authorization gate. Unit tests do
-> not replace the supported-host Option G evidence or authorize production execution.
+> This task is blocked by Task 4.1G and confirmed RG-010. Unit tests do not replace the supported-host Option G
+> evidence or authorize production execution.
 
 **Requirement:** JUS-P0-01-03 through JUS-P0-01-06, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3, INV-24, INV-25.
 
@@ -20700,8 +20701,8 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.0       | JUS-P0-01 supported-host historical capability evidence                                          | **COMPLETED / BLOCKED:** immutable negative evidence; not reinterpreted by Option G |
-| 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** replacement pure domain and Option G state-machine RED/GREEN sequence |
-| 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** replacement runtime wiring and durable audit RED/GREEN sequence; blocked by 4.1G and separate implementation authorization |
+| 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not an authorized production successor |
+| 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **BLOCKED / NOT EXECUTABLE:** blocked by 4.1G and confirmed RG-010; no runtime wiring or durable audit sequence is authorized |
 | old 4.1   | Historical rejected per-invocation candidate                                                      | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.1G** |
 | old 4.2   | Historical rejected multi-map correlation candidate                                               | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.2G** |
 

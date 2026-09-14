@@ -5,7 +5,7 @@
 - Baseline HEAD: `66605cf0cead51063fac479d6c370a5407107ce0`
 - Branch: `feature/semantic-control-plane-plan`
 - Baseline remote: `origin/feature/semantic-control-plane-plan` at the same HEAD
-- Execution-agent model: `openai/gpt-5.6-sol`
+- Execution-agent model: `openai/gpt-5.6-terra`
 - Execution-agent reasoning level: `high`
 - Supported host: OpenCode `1.18.29`
 - Pinned host source: `16747470f976aca3d362ad730bcd3fe82ecc2c9a`

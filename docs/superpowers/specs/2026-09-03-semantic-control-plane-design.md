@@ -311,19 +311,20 @@ then missing finalized actual, then finalized actual/desired comparison. Only th
 produces `applied` / `mismatch`, and that input must carry `executionOutcome`. The production
 pinned-command path calls the evaluator only from a released Option G envelope.
 
-### Option G matched terminal envelope contract
+### Historical Option G matched terminal envelope contract
 
 > [!IMPORTANT]
-> **Evidence-backed successor status — JUS-P0-01 / Option G**
+> **Evidence-backed blocked status — JUS-P0-01 / Option G**
 >
 > `docs/spikes/2026-09-controller-routing-command-envelope.md` records
-> `COMMAND-ENVELOPE-1 = PASS` on OpenCode `1.18.29` at pinned source
-> `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. Option G is the formalized successor contract pending
-> independent document review, not an authorized production implementation.
+> `COMMAND-ENVELOPE-1 = PASS` only within its fixed original scope. The independent
+> `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records
+> `COMMAND-ENVELOPE-2 = BLOCKED` on OpenCode `1.18.29` at pinned source
+> `16747470f976aca3d362ad730bcd3fe82ecc2c9a`: same-session direct-prompt activity cannot be
+> distinguished from the pinned command's own prompt lifecycle using a stable public host discriminator.
 > Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence;
-> Option D and Option F remain not adopted. This formalization authorizes independent document
-> review only. Production source/test implementation remains prohibited until that review is
-> accepted and implementation is separately authorized.
+> Option D and Option F remain not adopted. RG-010 is confirmed. Option G is not authorized as a
+> production successor; Task 4.1G/4.2G and production source/test implementation are blocked.
 
 Option G uses one session-scoped candidate slot to correlate a clean command lifecycle. `sessionId`
 is only the state scope. The terminal identity is the conjunction of the exact captured pinned
@@ -2023,7 +2024,7 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 
 ### 5.1 JUS-P0-01 Controller Routing
 
-**Current status: OPTION G FORMALIZED / READY FOR INDEPENDENT DOCUMENT REVIEW.**
+**Current status: COMMAND-ENVELOPE-2 BLOCKED / OPTION G NOT AUTHORIZED AS PRODUCTION SUCCESSOR.**
 
 The evidence chain is additive and does not rewrite prior outcomes:
 
@@ -2031,19 +2032,21 @@ The evidence chain is additive and does not rewrite prior outcomes:
 Task 4.0 per-invocation candidate = BLOCKED
 SESSION-SAFETY-1 / Option D = BLOCKED / NOT ADOPTED
 COMMAND-TERMINAL-1 / Option F = BLOCKED / NOT ADOPTED
-COMMAND-ENVELOPE-1 / Option G = PASS
-Option G Requirements + Design + replacement Plan = formalized
-production implementation = not started
+COMMAND-ENVELOPE-1 / Option G = PASS within original fixed scope
+COMMAND-ENVELOPE-2 / same-session foreign activity = BLOCKED
+RG-010 = CONFIRMED
+Option G = NOT AUTHORIZED AS PRODUCTION SUCCESSOR
+Task 4.1G / 4.2G = BLOCKED / NOT EXECUTABLE
+production implementation = BLOCKED
 ```
 
-`docs/spikes/2026-09-controller-routing-command-envelope.md` proves on the exact supported host that a clean
-successful or failed assistant lifecycle can be closed by a finalized assistant message plus a matching
-`command.executed`, while keeping execution outcome separate from routing attribution. It also proves that overlap
-converges to sticky suppression, hook-local synchronous acquisition failure rolls back only its own candidate, and
-session removal clears suppression. Deterministic negative replay controls prove terminal mismatch and missing
-terminal + next command are fail-closed.
+`docs/spikes/2026-09-controller-routing-command-envelope.md` remains positive evidence only for its clean-command
+scope. `docs/spikes/2026-09-controller-routing-command-envelope-2.md` proves that direct prompts share the relevant
+same-session public lifecycle shape without a stable invocation/origin discriminator. It observed a foreign direct
+assistant finalized while a pinned candidate was active in both P1 and P2. Command-only U1/U2 overlap can fail-close,
+but that does not distinguish direct activity without a prohibited heuristic or suppressing the B0 positive path.
 
-The resulting production semantics are:
+The retained Option G semantics are non-executable historical/document-review material, not production semantics:
 
 ```text
 clean matched terminal envelope
@@ -2062,9 +2065,9 @@ FIFO/event-order inference, desired-controller reverse lookup, local generation 
 lookup remain forbidden. The source-ordering invariant only requires each adapter callback to mutate Option G state
 before its first `await`; it does not assign an invocation by event order.
 
-Issue #228 remains non-authoritative historical tracking. Independent document review is still required before the
-replacement Task 4.1G/4.2G production source/test sequence may be authorized. The maximum current state is
-`READY FOR INDEPENDENT DOCUMENT REVIEW`.
+Issue #228 remains non-authoritative historical tracking. Requirements remain unchanged because the desired semantic
+contract is still correct; the current host cannot satisfy it through Option G. Task 4.1G/4.2G are blocked and no
+production source/test sequence is authorized.
 
 ### 5.2 JUS-P0-02 Plan-Scoped Authorization
 
@@ -2516,7 +2519,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | Phase 1 | JUS-P0-03 Category Routing          | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加                                                                                                                                                                                                                                                                            |
 | Phase 2 | JUS-P0-02 Plan Authorization        | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装                                                                                                                                                                                                                                                                          |
 | Phase 3 | JUS-P0-04 Transactional Acceptance  | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
-| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **READY FOR INDEPENDENT DOCUMENT REVIEW:** Option G capability PASS is formalized; replacement Task 4.1G/4.2G remains non-executable until review and separate implementation authorization |
+| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not authorized as a production successor and Task 4.1G/4.2G remain blocked |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
 
@@ -2571,7 +2574,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 
 ## 11. 決定事項メモ
 
-- **Controller Runtime Wiring**: 現行 OpenCode plugin API で in-band agent 切替は不可。config 経由の `agent:` ピン留めを guaranteed application path とする。Option G の一候補 session state と matched terminal envelope だけが routing audit を確定し、overlap/mismatch/missing terminal は sticky suppression へ収束する。execution outcome は routingStatus と別 field とし、failed execution でも finalized actual と desired が一致すれば routing attribution は `applied` になり得る。完全な runtime 切替は upstream API 拡張要求として分離。
+- **Controller Runtime Wiring**: `COMMAND-ENVELOPE-1` は clean command scope で PASS のまま保持するが、`COMMAND-ENVELOPE-2` は same-session direct prompt と pinned prompt lifecycle を stable host field で区別できず BLOCKED である。Option G は production successor として未承認であり、Task 4.1G/4.2G は実行しない。完全な runtime 切替は upstream API 拡張要求として分離。
 - **Plan Fingerprint**: 正規化対象を Approved Canonical Snapshot 上で task 実行進捗として認識された checkbox state / EOL のみに限定。global/unscoped セクションの checkbox は正規化しない。legacy Error annotation は one-time migration で除去。一般空白・Task 本文は正規化しない (fail-closed)。fingerprint は `sha256:<lowercase hex>` と仕様化。
 - **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` を durable log へ書き、v2 state projection 拡張で復元。初回 plan finalization は `tasks_pending → all_tasks_accepted → final_review_pending` を同じ初回 identity で記録し、`all_tasks_accepted` の task 集合は Approved Canonical Snapshot を SSOT とする。
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
