@@ -61,7 +61,7 @@ Justice の責務は、
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| JUS-P0-01 | Controller Routing の Runtime Wiring | P0 |
+| JUS-P0-01 | Controller Routing の Configuration Assurance | P0 |
 | JUS-P0-02 | Plan-Scoped Authorization | P0 |
 | JUS-P0-03 | Semantic Category Routing の完全化 | P0 |
 | JUS-P0-04 | Evidence-Based Transactional Task Acceptance | P0 |
@@ -218,7 +218,7 @@ Complete
 
 ---
 
-# 4. JUS-P0-01: Controller Routing の Runtime Wiring
+# 4. JUS-P0-01: Controller Routing の Configuration Assurance
 
 ## 4.1 背景
 
@@ -230,23 +230,25 @@ workflow
 controller
 ```
 
-を判定できるだけでは十分ではない。
+を決定する。本来の JUS-P0-01 の end-state は、desired controller と actual runtime controller を
+invocation 単位で安全に相関し、authoritative な applied / mismatch を得ることである。
 
-Controller routing decision が Domain Object として存在していても、実際の OpenCode / OmO Runtime に反映されなければ、routing は成立していない。
-
-Justice は、
-
-```text
-Desired Controller
-```
-
-を決定するだけでなく、
+しかし、現行の supported OpenCode public surface は安全な invocation correlation と actual controller
+attribution を証明できない。v4.0.0 P0 は、次の deterministic configuration assurance に保証範囲を限定する。
 
 ```text
-Actual Controller
+desired controller
+    ↓
+required pinned-command configuration
+    ↓
+effective OpenCode configuration inspection
+    ↓
+configuration assurance
 ```
 
-との対応を Runtime 上で成立させる必要がある。
+これは本来の goal を不要と判断した変更ではない。runtime invocation-level controller attribution は将来目標として
+保持する。negative capability evidence の詳細は Design、immutable spike artifacts、および非 authoritative
+tracker である Issue #228 を参照する。
 
 ---
 
@@ -279,6 +281,9 @@ executing-plans
 
 ControllerRoutingDecision は WorkerRoutingDecision と別の型・別の処理経路として表現しなければならない。
 
+v4.0.0 における ControllerRoutingDecision は desired controller decision であり、runtime への適用または
+runtime applied proof ではない。
+
 例:
 
 ```text
@@ -304,73 +309,71 @@ WorkerRoutingDecision {
 
 ### JUS-P0-01-03
 
-ControllerRoutingDecision が OpenCode Adapter / OmO Runtime に実際に適用される経路を保証しなければならない。
+Justice は desired Controller を適用するために必要な pinned-command configuration を deterministic に定義し、
+effective OpenCode configuration 上でその設定を検査できなければならない。
 
-現行 OpenCode plugin API では、plugin hook から同一ターンの controller agent を in-band で書き換えられない。したがって JUS-P0-01 の "applied" 経路は、agent ピン留め済みの command 定義を利用者が OpenCode 設定に登録することで成立する。
+Justice は以下を MUST とする。
 
-Justice は以下を提供する。
+- workflow ごとの exact pinned command 名と expected agent/controller を定義する。
+- `justice doctor` が effective configuration を既存 effective-config semantics と source precedence に従って検査する。
+- missing、wrong agent、および invalid command definition を区別する。
+- exact four pinned commands の正しい configuration template/example を提供する。
+- higher-precedence の invalid definition が lower-precedence の valid agent を復活させない。
 
-- `justice doctor` による pinned-command 不足の検査と雛形出力。
-- README/ドキュメントにおける推奨 command 定義例。
-- 利用者が手動で配置した場合、`chat.params` / `message.updated` の actual agent と desired controller を突き合わせて `applied` / `mismatch` / `unapplied` / `unsupported` を判定する。
-
-単なる以下のいずれかのみをもって「Controller routed」と扱ってはならない。
-
-- prompt guidance
-- synthetic message
-- advisory text
-- log
-- domain-level decision
+runtime invocation の actual controller application は v4.0.0 P0 guarantee ではない。pinned command の存在、
+prompt guidance、synthetic message、advisory text、log、または domain-level decision のいずれも runtime routing
+が適用済みである根拠として扱ってはならない。
 
 ### JUS-P0-01-04
 
-Justice は Controller routing の適用結果を観測可能でなければならない。
+Justice は Controller configuration assurance の決定的な結果を観測可能でなければならない。
 
 最低限、
 
 ```text
 desiredController
-actualController
-routingStatus
-executionOutcome (terminal-correlated observation only)
+pinnedCommand
+configuredController?
+configurationStatus
 ```
 
 を区別できること。
 
-routingStatus は少なくとも、
+configurationStatus は少なくとも、
 
 ```text
-applied
-unapplied
+configured
+missing
+misconfigured
 unsupported
-mismatch
 ```
 
 相当の状態を表現できなければならない。
 
-finalized `message.updated` の actual controller が desired と一致し、かつその assistant message と pinned command の clean terminal correlation が成立した場合のみ `applied` とする。`chat.params` 一致だけ、finalized assistant 一件だけ、または `command.executed` 一件だけでは `applied` にしない。
+- `configured`: effective configuration に required pinned command が存在し、その configured agent が desired controller と exact に一致する。
+- `missing`: required pinned command が effective configuration に存在しない。
+- `misconfigured`: command は存在するが、agent absent、agent invalid、agent と desired controller の不一致、または invalid command shape により requirement を満たさない。
+- `unsupported`: Justice が supported deterministic mechanism で effective configuration を評価できない。malformed command definition は可能な限り `misconfigured` とし、`unsupported` へ逃がしてはならない。
+
+`configured` は configuration assurance のみを表す。runtime routing applied、runtime routing succeeded、actual controller attribution、
+execution outcome、または terminal lifecycle correlation を意味してはならない。
 
 ### JUS-P0-01-05
 
-Runtime の制約により Controller を適用できない場合、Justice は routing が成功したと報告してはならない。
+configuration assurance が成立しない場合、Justice は controller configuration が valid または configured であると
+報告してはならない。`configurationStatus = configured` であっても、Justice は runtime routing succeeded または
+runtime routing applied と報告してはならない。
 
 ### JUS-P0-01-06
 
-Justice は次の三つを独立した意味軸として扱わなければならない。
+authoritative runtime routing attribution は、v4.0.0 implementation requirement ではなく future host capability に依存する
+deferred contract とする。復活には最低限、host-owned stable execution identity、exact parent invocation ownership、
+authoritative selected agent/controller、typed terminal result、parent-to-child cancellation ownership、result bridge、
+および non-escalating permission/context contract に相当する public host capability が必要である。
 
-```text
-execution outcome
-routing attribution outcome
-lifecycle terminal correlation
-```
-
-finalized assistant が failed execution outcome を持つことは、Controller routing の `mismatch` を意味しない。completed lifecycle と clean terminal correlation が成立した後の `applied` / `mismatch` は、finalized actual controller と desired controller の一致だけで判定する。したがって failed execution であっても、clean terminal correlation と actual/desired 一致が成立すれば routing attribution は `applied` になり得るが、execution 自体を成功として記録してはならない。
-
-clean terminal correlation には最低限、同一 session、capture した pinned command 名と `command.executed.name` の一致、completed lifecycle を持つ finalized assistant message ID と `command.executed.messageID` の一致、および曖昧でない単一 candidate が必要である。
-
-overlap、terminal mismatch、missing terminal、またはその他の曖昧な相関では、Justice は workflow や routingStatus を推測せず、authoritative `controller_routing_observed` record を発行してはならない。実行自体は fail-open で継続する。
-
-sticky suppression、session removal fallback、ephemeral state の具体的な transition は Design-level semantics とし、この要件は特定の内部 state representation を要求しない。
+新しい host capability が得られても runtime attribution を自動的に復活させてはならない。必ず新たに承認された
+capability spike、Requirements/Design review、runtime attribution reactivation の順で評価する。過去の Option D、
+Option F、Option G は production successor として再利用または自動 unlock してはならない。
 
 ---
 
@@ -381,37 +384,33 @@ sticky suppression、session removal fallback、ephemeral state の具体的な 
 ```text
 brainstorming
 → desiredController = sisyphus
-→ runtime routing が実際に適用される
+→ expected pinned command が仕様上に存在する
+→ effective config agent = sisyphus
+→ configurationStatus = configured
 
 writing-plans
 → desiredController = sisyphus
+→ configurationStatus = configured
 
 subagent-driven-development
 → desiredController = atlas
+→ configurationStatus = configured
 
 executing-plans
 → desiredController = sisyphus
+→ configurationStatus = configured
 ```
 
-さらに、
+さらに、以下を自動テストで証明する。
 
-```text
-Core が atlas を返した
-BUT
-Runtime は sisyphus のまま
-```
-
-の場合、
-
-```text
-routingStatus = applied
-```
-
-となってはならない。
-
-さらに、成功 command と failed command の双方について、finalized assistant message と matching `command.executed` が clean terminal correlation を形成することを自動テストで証明する。failed command のテストでは `executionOutcome = failed` を保持したまま、actual controller が desired と一致すれば routing attribution が `applied`、一致しなければ `mismatch` になることを証明する。
-
-overlap、terminal mismatch、または matching terminal を欠いたまま次 command が開始する場合は、authoritative `controller_routing_observed` record が発行されず、別 invocation の actual controller や workflow が誤帰属されないことを自動テストで証明する。
+- required command がない場合は `missing`。
+- command の agent が expected agent と異なる場合は `misconfigured`。
+- command は存在するが agent がない場合は `misconfigured`。
+- invalid command definition は `misconfigured` または既存の deterministic invalid-config result。
+- higher-precedence の invalid configuration は lower-precedence の valid agent を復活させない。
+- custom/unexpected agent は diagnostic-safe に扱い、configured としない。
+- `configured` が runtime applied を意味しない。
+- doctor/template output が exact four pinned commands と expected agents を表現する。
 
 ---
 
@@ -1883,11 +1882,13 @@ Evidence
 
 を直列化する。
 
-### Phase 4 — Controller Runtime Wiring
+### Phase 4 — Controller Configuration Assurance
 
-ControllerRoutingDecision が実際の Runtime controller selection に反映されることを保証する。
+workflow からの desired Controller、exact pinned-command expectation、precedence-resolved effective
+configuration inspection、doctor diagnostics/template を保証する。`configured` は runtime application を意味しない。
 
-Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため、Core 上の routing model とは分離して実装・検証する。
+runtime invocation attribution は host capability blocked の deferred contract とし、Phase 4 v4.0.0 の実装・検証対象から
+外す。再導入には新 capability spike と Requirements/Design review が必要である。
 
 ---
 
@@ -1895,7 +1896,7 @@ Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため
 
 本要件は、以下すべてを満たした場合に完了とする。
 
-1. Controller routing が Domain 上だけでなく Runtime 上でも成立している。
+1. Four workflows の desired Controller と exact pinned command が決定され、precedence-resolved effective configuration が configured、missing、misconfigured、または unsupported として評価される。`configured` は runtime application を意味しない。
 2. Approved Plan authorization が複数 Task に継続する。
 3. Plan semantic mutation により authorization が失効する。
 4. Execution progress 更新では authorization が誤失効しない。
@@ -1908,7 +1909,7 @@ Phase 4 は OpenCode / OmO Runtime boundary への影響が最も大きいため
 11. Declared evidence のみでは required Gate が PASS しない。
 12. Final Review / Final Gate 前に Plan が Complete にならない。
 13. 上記すべてについて automated test が存在する。
-14. `justice doctor` が必要 category / configuration の不足を検出できる。
+14. `justice doctor` が必要 category と exact four pinned-command configuration の不足・誤設定・invalid definition を検出し、raw configuration を漏らさず exact remediation template を提示できる。
 15. Justice の内部障害時にも、未検証の Task を Accepted と誤認しない。
 16. `TaskCallPurpose` によって implementation / task_review / final_review が区別されている。
 17. `ReviewArtifactV1` により clean review を authoritative に観測できる。

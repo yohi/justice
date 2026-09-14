@@ -1,6 +1,6 @@
 # Semantic Control Plane Implementation Plan
 
-> **For agentic workers:** Execute only tasks whose status explicitly authorizes execution, inline in the current session. Do not dispatch subagents. Phase 4 Task 4.1G/4.2G and historical Task 4.1/4.2 are excluded until their stated review and authorization gates are satisfied. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute only tasks whose status explicitly authorizes execution, inline in the current session. Do not dispatch subagents. Phase 4 Task 4.1CA/4.2CA is READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE; Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -25,7 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity.
+- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity. v4.0.0 active scope is deterministic configuration assurance only; Task 4.1CA/4.2CA require independent document review and separate implementation authorization before any source or test edit.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17002,10 +17002,14 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 
 ---
 
-## Phase 4: Controller Routing — JUS-P0-01
+## Phase 4: Controller Routing Configuration Assurance — JUS-P0-01
 
 > [!CAUTION]
-> **CURRENT PHASE STATUS: BLOCKED / IMPLEMENTATION NOT AUTHORIZED**
+> **CURRENT PHASE STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+>
+> v4.0.0 P0 guarantees only deterministic configuration assurance:
+> desired controller -> exact pinned-command expectation -> effective configuration inspection -> doctor assessment.
+> `configured` never means runtime applied. No production implementation is authorized by this document change.
 >
 > Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence. Option D and Option F
 > remain not adopted. The distinct Option G evidence in
@@ -17013,8 +17017,9 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 > scope. `docs/spikes/2026-09-controller-routing-command-envelope-2.md` is `COMMAND-ENVELOPE-2 = BLOCKED` and
 > confirms RG-010: a direct prompt has no stable public discriminator from the pinned command's own prompt lifecycle.
 >
-> Task 4.1G and Task 4.2G are **BLOCKED / NOT EXECUTABLE**. Option G is not authorized as a production successor;
-> no independent document review result or separate implementation authorization may override this capability block.
+> Task 4.1G and Task 4.2G are **BLOCKED / NOT EXECUTABLE**. Option G is not authorized as a production successor.
+> Runtime attribution requires a separately approved future capability spike and Requirements/Design review; neither
+> independent document review nor an implementation authorization can override this capability block.
 > Issue #228 remains non-authoritative historical tracking.
 >
 > The old Task 4.1 and Task 4.2 blocks remain below as historical pre-spike candidate detail. They are not unsuspended,
@@ -19415,9 +19420,158 @@ GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
 GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 ```
 
+### Task 4.1CA: Define the pure controller configuration assurance contract
+
+> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+>
+> This replacement task is v4.0.0 configuration assurance only. It may not start until independent document review
+> passes and a separate implementation authorization is issued. It creates no runtime invocation, message, event,
+> terminal-envelope, or observation-persistence contract.
+
+**Requirement:** JUS-P0-01-01 through JUS-P0-01-05, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27.
+
+**Files:**
+
+- Modify: `src/core/types.ts`
+- Modify: `src/core/routing-decision.ts`
+- Modify: `src/core/workflow-router.ts`
+- Create: `src/core/controller-routing.ts`
+- Test: `tests/core/routing-decision.test.ts`
+- Test: `tests/core/controller-routing.test.ts`
+
+**Consumes:** existing `WorkflowRouter.resolveController(workflow)`, `ControllerAgent`, and no runtime or host state.
+
+**Produces:** an immutable desired-controller decision with an exact four-command expectation, plus a pure
+`ControllerConfigurationAssessment` whose only statuses are `configured`, `missing`, `misconfigured`, and
+`unsupported`. The result carries `workflow`, `desiredController`, `pinnedCommand`, optional configured controller,
+and a redacted reason; it contains no `routingStatus`, `executionOutcome`, actual controller, terminal envelope, or
+session/message/event identity.
+
+- [ ] **Step 1: Write failing pure-domain tests**
+
+  - Cover all four workflow-to-controller mappings and all four exact pinned-command mappings.
+  - Cover `configured`, missing command -> `missing`, wrong agent -> `misconfigured`, missing agent ->
+    `misconfigured`, invalid command shape -> `misconfigured`, and unsupported effective-config mechanism ->
+    `unsupported`.
+  - Cover a custom or unexpected configured agent as diagnostic-safe `misconfigured`, without widening
+    `ControllerAgent`.
+  - Assert exact command equality: aliases, leading-text variants, and fuzzy matches are rejected.
+  - Assert `configured` has no runtime-applied field or semantic implication and that the assessment accepts no
+    session, message, event, or execution state.
+
+- [ ] **Step 2: Run focused tests and confirm RED**
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/routing-decision.test.ts \
+  tests/core/controller-routing.test.ts
+```
+
+Expected: behavioral/type-contract failures because the exact command expectation and configuration-only assessment
+do not exist. Broken fixtures or runtime-host probing are not acceptable RED evidence.
+
+- [ ] **Step 3: Implement the minimal pure contract**
+
+  1. Preserve controller-versus-worker decision separation and make the controller decision explicitly a desired
+     controller decision.
+  2. Define the exact four-command map next to the controller configuration domain; allow no aliases or fuzzy match.
+  3. Implement exhaustive immutable assessment precedence without importing runtime or OpenCode packages.
+  4. Keep malformed definitions and custom agents diagnostic-safe; do not represent them as `unsupported` when they
+     can deterministically be classified as `misconfigured`.
+  5. Do not add session state, message state, event hooks, terminal envelopes, runtime observations, or persistence.
+
+- [ ] **Step 4: Run the Step 2 command and confirm GREEN**
+
+Expected: all mapping and configuration status tests pass, with `configured != runtime applied` represented in the
+type and behavior contract.
+
+- [ ] **Step 5: Commit only after implementation authorization**
+
+```bash
+GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/workflow-router.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
+GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
+```
+
+### Task 4.2CA: Wire effective configuration inspection and doctor diagnostics
+
+> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+>
+> This task depends on Task 4.1CA. Independent document review and separate implementation authorization are required
+> before any step. It does not add runtime message correlation, command hook state, routing observation persistence,
+> or terminal correlation.
+
+**Requirement:** JUS-P0-01-03 through JUS-P0-01-05, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27.
+
+**Files:**
+
+- Modify: `src/core/doctor-config.ts`
+- Modify: `src/core/doctor-categories.ts`
+- Modify: `src/runtime/doctor-cli.ts`
+- Modify: `README.md`
+- Modify: `SPEC.md`
+- Test: `tests/core/justice-doctor-config.test.ts`
+- Test: `tests/core/doctor-categories.test.ts`
+- Test: `tests/runtime/doctor-cli.test.ts`
+
+**Consumes:** Task 4.1CA assessment and the existing `SOURCE_PRIORITY` effective-config resolver.
+
+- [ ] **Step 1: Write failing effective-config and doctor tests**
+
+  - Cover the four exact expected command/agent pairs after effective configuration resolution.
+  - Cover missing, wrong agent, absent agent, invalid command definition, and custom agent diagnostics.
+  - Cover high-priority invalid values masking lower-priority valid values; never resurrect the lower agent.
+  - Cover unreadable or unsupported source handling and reserve `unsupported` for unavailable deterministic
+    evaluation, not malformed command definitions.
+  - Assert doctor output is redacted, names only the required commands and configured agent where allowed, and emits
+    exact four-command remediation/template output.
+  - Assert no test uses `command.execute.before`, `chat.params`, `message.updated`, `command.executed`, runtime
+    actual-controller attribution, terminal correlation, or `controller_routing_observed` persistence.
+
+- [ ] **Step 2: Run focused tests and confirm RED**
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/justice-doctor-config.test.ts \
+  tests/core/doctor-categories.test.ts \
+  tests/runtime/doctor-cli.test.ts
+```
+
+Expected: behavioral failures because doctor cannot yet assess the four controller configurations or produce their
+exact remediation template. Existing effective-config behavior must remain intact.
+
+- [ ] **Step 3: Wire only the effective-config and doctor path**
+
+  1. Reuse existing precedence resolution and shape validation; evaluate controller commands only after that view is
+     final.
+  2. Pass only allowlisted command names and agent values to the pure assessment; do not expose raw configuration,
+     command body, credentials, or unrelated values.
+  3. Emit configured/missing/misconfigured/unsupported diagnostics and exact remediation/template output.
+  4. Update README and SPEC in the implementation change, explicitly stating `configured != applied`.
+  5. Do not modify `src/runtime/opencode-adapter.ts`, `src/hooks/observation-handler.ts`, event schemas, session
+     state, or routing-observation persistence for this task.
+
+- [ ] **Step 4: Run focused tests and all repository gates**
+
+```bash
+devcontainer exec --workspace-folder . bun run test
+devcontainer exec --workspace-folder . bun run typecheck
+devcontainer exec --workspace-folder . bun run lint
+devcontainer exec --workspace-folder . bun run build
+```
+
+Expected: configured/missing/misconfigured/unsupported diagnostics and exact remediation pass without a runtime
+routing claim or new warnings.
+
+- [ ] **Step 5: Commit only after implementation authorization**
+
+```bash
+GIT_MASTER=1 git add src/core/doctor-config.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/justice-doctor-config.test.ts tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git commit -m "feat: controller configuration doctorを追加"
+```
+
 ### Task 4.1G: Define the Option G domain and state-machine contract
 
-> **STATUS: BLOCKED / NOT EXECUTABLE**
+> **STATUS: HISTORICAL / BLOCKED / NOT EXECUTABLE**
 >
 > `COMMAND-ENVELOPE-2` confirms RG-010. Do not execute any step unless a separately authorized future capability
 > establishes a supported-host solution; this task is not an authorization to create or select one.
@@ -19570,7 +19724,7 @@ GIT_MASTER=1 git commit -m "feat: controller routingにterminal envelopeを定�
 
 ### Task 4.2G: Wire Option G and persist the audit-only result
 
-> **STATUS: BLOCKED / NOT EXECUTABLE**
+> **STATUS: HISTORICAL / BLOCKED / NOT EXECUTABLE**
 >
 > This task is blocked by Task 4.1G and confirmed RG-010. Unit tests do not replace the supported-host Option G
 > evidence or authorize production execution.
@@ -19749,11 +19903,12 @@ GIT_MASTER=1 git commit -m "feat: controller routingのterminal envelopeを接�
 
 ### Historical Task 4.1: Preserve workflow identity and define the rejected invocation contract
 
-> **STATUS: HISTORICAL / NOT EXECUTABLE / REPLACED BY TASK 4.1G**
+> **STATUS: HISTORICAL / BLOCKED / NOT EXECUTABLE**
 >
 > Completed Task 4.0 did not satisfy this task's production precondition. The material below is retained as
 > pre-spike candidate detail; some pure-domain pieces may remain reusable, but no source/test step in this task is
-> currently authorized. Task 4.1G is the sole replacement sequence; it does not re-authorize this historical task.
+> currently authorized. Task 4.1CA is the current configuration-assurance replacement sequence; it does not
+> re-authorize this historical runtime-attribution task.
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
@@ -19957,7 +20112,7 @@ GIT_MASTER=1 git commit -m "feat: controller routingにinvocation identityを定
 
 ### Historical Task 4.2: Correlate the rejected invocation candidate and persist controller-routing audit
 
-> **STATUS: HISTORICAL / NOT EXECUTABLE / REPLACED BY TASK 4.2G**
+> **STATUS: HISTORICAL / BLOCKED / NOT EXECUTABLE**
 >
 > Completed Task 4.0 blocked the per-invocation runtime correlation / abandonment contract assumed by this task.
 > All correlation maps, A/B interleavings, cleanup checkpoints, and related source/test snippets below are retained
@@ -20159,7 +20314,8 @@ Add focused tests proving:
 At the time of this historical candidate, Task 4.0 had completed with `BLOCKED`. The committed report provided **no** safe production cleanup scope, hook,
 value/order, or concurrent-B preservation contract: `cleanup_scope=none`, `preserves_concurrent_invocation=false`,
 `suppression_clear_authority=removeSession_only`. Therefore this candidate had no concrete cleanup RED sequence or
-narrow cleanup API. Task 4.2G is the sole replacement sequence; this historical Task 4.2 remains non-executable.
+narrow cleanup API. Task 4.2CA is the current configuration-assurance replacement sequence; this historical
+runtime-attribution Task 4.2 remains non-executable.
 Local generation, sequence, latest/current heuristic, content correlation, FIFO/event-order inference, TTL,
 cache/timer cleanup, or background worker must not be substituted.
 
@@ -20546,14 +20702,26 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 
 <!-- markdownlint-disable MD013 MD060 -->
 
+### Phase 4 Definition of Done
+
+Phase 4 v4.0.0 is complete only when all four workflows resolve their expected desired controller, all four exact
+pinned commands are deterministically known, precedence-resolved effective configuration is assessed, and `justice
+doctor` detects missing, wrong, and invalid definitions while providing the exact remediation template. `configured`
+must never be represented as runtime applied. Runtime actual-controller correlation, terminal envelopes,
+`executionOutcome`, `routingStatus`, and `controller_routing_observed` are outside this v4.0.0 Definition of Done.
+
+The current replacement sequence remains **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**. Completion of
+this document change neither authorizes production implementation nor changes the historical BLOCKED status of Task
+4.0, Task 4.1G, Task 4.2G, or old Task 4.1/4.2.
+
 ### Requirement-to-Task Traceability
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0 historical evidence; Option G spike; 4.1G / 4.2G replacement | preserve prior BLOCKED results; exact command mapping; success/failed matched envelopes; execution/routing separation; independent review gate |
-| Design §4.1 Option G runtime correlation | 4.1G, 4.2G | one candidate; exact command + finalized assistant ID match; synchronous-prefix transition; sticky overlap/mismatch/missing-terminal suppression; removal-only cleanup; no heuristic fallback |
-| Design §4.1 `controller_routing_observed` durable audit contract | 4.2G | required execution outcome for applied/mismatch; explicit schema/validator/redaction/append/read/replay; legacy non-routing schemaVersion 1 compatibility; audit-only projection |
-| pinned command name + agent validation | 4.1G, 4.2G | exact four command mappings, finalized actual comparison, doctor effective-config validation, no content/controller reverse inference |
+| JUS-P0-01 configuration assurance | 4.1CA, 4.2CA | exact four workflow/controller and pinned-command mappings; configured/missing/misconfigured/unsupported; precedence-resolved effective configuration; redacted doctor diagnostics/template; configured never means runtime applied |
+| Design §4.1 configuration assessment | 4.1CA | pure desired-controller decision and exhaustive configuration assessment; no runtime session/message/event/terminal state |
+| Design §3.4 / §3.5 effective configuration and doctor | 4.2CA | source precedence; high-priority invalid value masks lower valid value; exact command/agent validation; redacted diagnostics and template |
+| Historical Option G runtime correlation | 4.0, 4.1G, 4.2G, old 4.1, old 4.2 | immutable BLOCKED evidence only; non-executable; no runtime successor is selected |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
 | JUS-P0-02-06 progress-only mutation preserves authorization    | 2.1, 2.2                | approved-task checkbox-only progress produces an equal fingerprint, retains the active binding, and restores cache                                                                                                                 |
 | JUS-P0-02-07 canonical fingerprint reuse                       | 2.1, 2.2                | startup validation uses the same `computePlanFingerprint` with durable approved snapshot task IDs                                                                                                                                |
@@ -20701,10 +20869,12 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.0       | JUS-P0-01 supported-host historical capability evidence                                          | **COMPLETED / BLOCKED:** immutable negative evidence; not reinterpreted by Option G |
-| 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not an authorized production successor |
-| 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **BLOCKED / NOT EXECUTABLE:** blocked by 4.1G and confirmed RG-010; no runtime wiring or durable audit sequence is authorized |
-| old 4.1   | Historical rejected per-invocation candidate                                                      | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.1G** |
-| old 4.2   | Historical rejected multi-map correlation candidate                                               | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.2G** |
+| 4.1CA     | JUS-P0-01, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27                                | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** pure configuration assurance only; no runtime correlation or persistence |
+| 4.2CA     | JUS-P0-01, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27                                        | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** depends on 4.1CA; effective-config/doctor wiring only |
+| 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not an authorized production successor |
+| 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** blocked by 4.1G and confirmed RG-010; no runtime wiring or durable audit sequence is authorized |
+| old 4.1   | Historical rejected per-invocation candidate                                                      | **HISTORICAL / BLOCKED / NOT EXECUTABLE** |
+| old 4.2   | Historical rejected multi-map correlation candidate                                               | **HISTORICAL / BLOCKED / NOT EXECUTABLE** |
 
 F-035 reverse traceability is also explicit: `AtomicPersistence` strict-read opt-in implements the
 Design §4.2 authoritative-read failure semantics without changing other persistence domains;

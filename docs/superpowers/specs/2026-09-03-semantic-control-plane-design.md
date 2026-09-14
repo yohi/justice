@@ -2,7 +2,7 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Approved（JUS-P0-01 Phase 4 BLOCKED / post-spike design resolution pending; JUS-P0-02 / 03 / 04 unchanged）
+**Status:** Design Approved（JUS-P0-01 v4.0.0 = Configuration Assurance; runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED; JUS-P0-02 / 03 / 04 unchanged）
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
 
@@ -14,7 +14,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 
 本設計書は `REQUIREMENTS_2026-09-03.md` の4要件を満たすための統合設計を定める。
 
-- **JUS-P0-01** Controller Routing の Runtime Wiring
+- **JUS-P0-01** Controller Routing の Configuration Assurance
 - **JUS-P0-02** Plan-Scoped Authorization
 - **JUS-P0-03** Semantic Category Routing の完全化
 - **JUS-P0-04** Evidence-Based Transactional Task Acceptance
@@ -52,7 +52,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 
 | モジュール                          | 責務                                                                                                |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `src/core/controller-routing.ts`    | `WorkflowRouter` による controller 判定と、actual controller 観測からの routingStatus 評価          |
+| `src/core/controller-routing.ts`    | `WorkflowRouter` による desired controller 判定、exact pinned-command expectation、configuration assessment |
 | `src/core/plan-authorization.ts`    | `ApprovedPlanBinding` のライフサイクル管理 (approve / invalidate / release)                         |
 | `src/core/plan-fingerprint.ts`      | 正規化 semantic hash、canonical plan snapshot の生成                                                |
 | `src/core/task-lifecycle.ts`        | Task Progress State (9状態) と Plan Finalization State (6状態) の純粋 state machine                 |
@@ -71,11 +71,10 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - durable observation/decision log から task lifecycle、plan finalization、review dispatch slot（binding / artifact reservation を含む）を再構築する projector を拡張。
 - `src/core/v2/gate-definition.ts` / `src/core/v2/rule-evaluation-engine.ts`
   - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
-- `src/core/session-state-provider.ts`
-  - 既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持し、custom controller のために widening しない。
-  - Controller Routing 専用に、session ごとに最大一つの Option G terminal-envelope candidate または一つの sticky suppression tag を保持する。`sessionId` は state scope であり、単独では invocation identity ではない。
-  - clean candidate は exact pinned command、finalized assistant message ID、finalized actual controller、execution outcome を保持し、matching `command.executed` でのみ immutable evaluation snapshot を返して解放する。overlap、terminal mismatch、missing terminal + next command、または曖昧な observation は sticky suppression とし、`removeSession()` だけが除去する。
-  - 旧 bounded multi-map/per-invocation join は historical rationale としてのみ保持する。Option G に queue、TTL、timer、latest/current lookup、local generation identity、または generic session-state framework を追加しない。
+- `src/core/doctor-config.ts` / `src/core/doctor-categories.ts`
+  - 既存 effective configuration resolution を再利用し、exact pinned command の effective definition を評価する。
+  - source precedence 後の command shape と `agent` だけを configuration assurance に入力し、raw command value や無関係な設定を診断へ出さない。
+  - `src/core/session-state-provider.ts` の既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持する。JUS-P0-01 v4.0.0 の configuration assurance は session state、message state、または invocation state を所有しない。
 
 ### 3.3 Hook / Adapter 接続
 
@@ -84,8 +83,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `task()` PreToolUse 介入条件を「active binding の session/path/fingerprint が一致」に置き換える。
   - fingerprint 不一致検出時に binding を `invalidated` 化する。
 - `src/hooks/observation-handler.ts`
-  - JUS-P0-01 の `emitControllerRoutingObservation(context)` は、Option G state machine が fully matching terminal envelope から返した immutable context だけを受け取る。個別の `chat.params`、finalized `message.updated`、`command.executed` から provisional record を発行しない。
-  - `executionOutcome` と `routingStatus` を別 field として durable audit record に保持する。failed execution でも clean envelope と finalized actual/desired 一致があれば routingStatus は `applied` になり得るが、execution outcome は `failed` のまま変えない。
+  - JUS-P0-01 v4.0.0 は controller runtime observation を発行しない。configuration assurance は `justice doctor` の deterministic diagnostic であり、`chat.params`、`message.updated`、`command.executed`、または terminal lifecycle correlation を入力にしない。
   - Worker 完了・Evidence・Review・Gate 結果を typed lifecycle events として durable log に書き出す。
   - review dispatch の `pending` / `claimed` / `terminal` transition を durable observation として記録する。`pending` は `ReviewRequiredDirective` の inject より先に記録する。
   - `task()` 呼び出しに `TaskCallPurpose` を付与し、PostToolUse で implementation / task_review / final_review を区別する。
@@ -97,9 +95,7 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - task() payload の正規化 (禁止 field 除去 / `taskId`/`loadSkills`/`runInBackground` の canonicalize) を維持。
   - `sp-deep` / `sp-architecture` も category として通すだけで model/agent は補正しない。
   - `ReviewRequiredDirective` を Controller へ inject するための出力経路を追加。
-  - JUS-P0-01 では exact pinned `command.execute.before.input.command` / `input.sessionID`、`chat.params` raw agent、completed assistant `message.updated` の raw agent / ID / lifecycle booleans、`command.executed.name/messageID` だけを lossless に transport する。desired controller、prompt、assistant自由文、session-current/latest context、FIFO/TTL から workflow を推測しない。
-  - generic `event` callback では、payload normalization と Option G state transition を最初の `await` より前に完了する。host event publish order を invocation identity として使わず、already-dispatched old callback の state mutation が terminal release 後へ遅延しないための execution-order invariant とする。
-  - `session.idle` / `session.status=idle` は observation-only であり state を変更しない。`session.deleted` は `removeSession()` へ転送する。既存 persona用 `AgentMapped` normalization と controller observation は分離する。
+  - JUS-P0-01 v4.0.0 は `command.execute.before` state、`chat.params`、`message.updated`、`command.executed`、または session lifecycle を controller configuration assessment へ接続しない。
 - `src/core/justice-plugin.ts`
   - `PostToolUse` イベントを **transactional order** で処理する。`observationHandler` / `planBridge` / `taskFeedback` 等の side-effecting handlers を `Promise.all` して並列実行してはならない。
 - implementation task の PreToolUse で current task に fresh `TaskExecutionRef` / `attemptId` を発行し、`authorized → in_progress` を durable に記録してから implementation `TaskCallBinding` を作る。identity allocation と transition は deterministic な transition key で結び、append 結果が不明な場合は同じ key を read-before-retry して既存 identity を再利用する。記録不能な場合も task() は fail-open で継続するが、その call は authoritative worker completion にしない。
@@ -159,17 +155,22 @@ export function isPinnedControllerCommand(
 - pinned-command は command key の存在だけでは成立しない。`agent` が存在し、空でなく、`ControllerAgent` として認識できる場合だけ pinned command として扱い、それ以外は `missing_agent` とする。
 - JSONC の `command` 各値は effective map へ格納する前に runtime validation する。`null`、scalar、array は `{}` として扱い、`invalid_command_definition` の redacted diagnostic（`source`、command name、shape reason のみ）を記録する。object の `agent` が string 以外の場合も `{}` と `agent_not_string` diagnostic に正規化する。高優先度 source の不正値も同名の低優先度値を完全に置換するため、低優先度の `agent` を誤って復活させない。raw value は effective view、診断、CLI 出力のいずれにも複写しない。
 
-### 3.5 Command 雛形 (Guaranteed Application Path)
+### 3.5 Command 雛形 (Configuration Assurance)
 
 OpenCode plugin API は plugin hook から同一ターンの controller agent / model を書き換えられない。調査により、`chat.params` output に `agent` / `model` フィールドが存在せず、`session.update` も title と archive state（`time.archived`）の更新に限定されることが判明した。
 
-したがって JUS-P0-01 の "applied" 経路は、**agent ピン留め済みの command 定義を利用者が OpenCode 設定に登録すること**で成立する。
+したがって JUS-P0-01 v4.0.0 は、**agent ピン留め済みの command 定義を利用者が OpenCode 設定に登録し、
+Justice が effective configuration を検査すること**を保証する。
 
 Justice は以下を提供する。
 
 - `justice doctor` による pinned-command 不足の検査と雛形出力。
 - README/ドキュメントにおける推奨 command 定義例。
-- 利用者が手動で配置した場合、`chat.params` / `message.updated` の actual agent と desired controller を突き合わせて `applied` / `mismatch` / `unapplied` を判定する。
+- exact pinned command と expected agent の configuration assessment。
+- configured、missing、misconfigured、unsupported の明示的な診断。
+
+`configured` は runtime applied の別名ではない。v4.0.0 は actual agent、runtime invocation、execution outcome、
+または terminal lifecycle を検査または報告しない。
 
 ---
 
@@ -209,111 +210,53 @@ export type ControllerRoutingDecision = {
 };
 
 // src/core/controller-routing.ts
-export type ControllerApplicationMethod = "pinned-command" | "runtime-api" | "none";
+export type ControllerConfigurationStatus =
+  | "configured"
+  | "missing"
+  | "misconfigured"
+  | "unsupported";
 
-export type ControllerObservationSource = "chat.params" | "message.updated" | "both" | "none";
+export type ControllerConfigurationReason =
+  | "command_missing"
+  | "invalid_command_definition"
+  | "agent_missing"
+  | "agent_invalid"
+  | "agent_mismatch"
+  | "effective_config_unsupported";
 
-// Controller-runtime observations may contain custom or future agent identifiers.
-// This type is intentionally distinct from src/core/types.ts::ObservationAgentId,
-// which remains the closed physical-shard / persisted-envelope identity type.
-export type ControllerObservedAgentId = string;
-
-export type ControllerRoutingStatus = "applied" | "unapplied" | "unsupported" | "mismatch";
-
-export type ControllerExecutionOutcome = "success" | "failed";
-
-export type ControllerRoutingUnappliedReason = "application_not_configured" | "actual_not_observed";
-
-export type ControllerRoutingUnsupportedReason = "runtime_capability_unsupported";
-
-type ControllerRoutingEvaluationBase = {
-  readonly decision: ControllerRoutingDecision;
-  readonly chatParamsActualController?: ControllerObservedAgentId;
-  readonly runtimeCapabilitySupported: boolean;
+export type ControllerConfigurationAssessment = {
+  readonly workflow: ControllerWorkflow;
+  readonly desiredController: ControllerAgent;
+  readonly pinnedCommand: ControllerPinnedCommand;
+  readonly configuredController?: string;
+  readonly status: ControllerConfigurationStatus;
+  readonly reason?: ControllerConfigurationReason;
 };
 
-export type ControllerRoutingEvaluationInput = ControllerRoutingEvaluationBase &
-  (
-    | {
-        readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
-        readonly finalizedMessageActualController: ControllerObservedAgentId;
-        readonly executionOutcome: ControllerExecutionOutcome;
-      }
-    | {
-        readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
-        readonly finalizedMessageActualController?: never;
-        readonly executionOutcome?: never;
-      }
-    | {
-        readonly applicationMethod: "none";
-        readonly finalizedMessageActualController?: ControllerObservedAgentId;
-        readonly executionOutcome?: never;
-      }
-  );
-
-export type ControllerRoutingObservation =
-  | {
-      readonly routingStatus: "applied";
-      readonly desiredController: ControllerAgent;
-      readonly actualController: ControllerAgent;
-      readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
-      readonly observationSource: "message.updated" | "both";
-      readonly executionOutcome: ControllerExecutionOutcome;
-    }
-  | {
-      readonly routingStatus: "mismatch";
-      readonly desiredController: ControllerAgent;
-      readonly actualController: ControllerObservedAgentId;
-      readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
-      readonly observationSource: "message.updated" | "both";
-      readonly executionOutcome: ControllerExecutionOutcome;
-    }
-  | {
-      readonly routingStatus: "unapplied";
-      readonly desiredController: ControllerAgent;
-      readonly applicationMethod: "none";
-      readonly observationSource: "none";
-      readonly actualController?: never;
-      readonly reason: "application_not_configured";
-    }
-  | {
-      readonly routingStatus: "unapplied";
-      readonly desiredController: ControllerAgent;
-      readonly applicationMethod: "none";
-      readonly observationSource: "message.updated" | "both";
-      readonly actualController: ControllerObservedAgentId;
-      readonly reason: "application_not_configured";
-    }
-  | {
-      readonly routingStatus: "unapplied";
-      readonly desiredController: ControllerAgent;
-      readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
-      readonly observationSource: "none";
-      readonly actualController?: never;
-      readonly reason: "actual_not_observed";
-    }
-  | {
-      readonly routingStatus: "unsupported";
-      readonly desiredController: ControllerAgent;
-      readonly applicationMethod: "runtime-api";
-      readonly observationSource: "none";
-      readonly actualController?: never;
-      readonly reason: "runtime_capability_unsupported";
-    };
-
-export function evaluateControllerRoutingObservation(
-  input: ControllerRoutingEvaluationInput,
-): ControllerRoutingObservation;
+export function assessControllerConfiguration(input: {
+  readonly decision: ControllerRoutingDecision;
+  readonly pinnedCommand: ControllerPinnedCommand;
+  readonly effectiveDefinition?: DoctorEffectiveCommandDefinition;
+  readonly effectiveDiagnostics: readonly DoctorCommandDefinitionDiagnostic[];
+  readonly effectiveConfigSupported: boolean;
+}): ControllerConfigurationAssessment;
 ```
 
-Evaluator precedence is fixed: unsupported `runtime-api` first, then `applicationMethod="none"`,
-then missing finalized actual, then finalized actual/desired comparison. Only the final comparison
-produces `applied` / `mismatch`, and that input must carry `executionOutcome`. The production
-pinned-command path calls the evaluator only from a released Option G envelope.
+Assessment precedence is fixed: an unsupported deterministic effective-config mechanism produces `unsupported`;
+otherwise a missing exact command produces `missing`; an invalid effective command shape, absent/invalid agent, or
+agent inequality produces `misconfigured`; only exact configured-agent equality produces `configured`. A high-priority
+invalid command masks a lower-priority valid definition before this assessment begins. The assessment consumes no
+runtime session, message, event, terminal envelope, or execution outcome state.
 
 ### Historical Option G matched terminal envelope contract
 
 > [!IMPORTANT]
+> **HISTORICAL / BLOCKED / NON-EXECUTABLE — DO NOT IMPLEMENT**
+>
+> The following Option G contract is retained only as negative-capability evidence and historical design material.
+> It is not v4.0.0 production semantics, does not define a current P0 output, and must not be selected as a successor
+> without a separately approved future capability spike and Requirements/Design review.
+>
 > **Evidence-backed blocked status — JUS-P0-01 / Option G**
 >
 > `docs/spikes/2026-09-controller-routing-command-envelope.md` records
@@ -2024,7 +1967,24 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 
 ### 5.1 JUS-P0-01 Controller Routing
 
-**Current status: COMMAND-ENVELOPE-2 BLOCKED / OPTION G NOT AUTHORIZED AS PRODUCTION SUCCESSOR.**
+**Current status: JUS-P0-01 v4.0.0 = CONFIGURATION ASSURANCE. Runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED. Option G = HISTORICAL / NOT AUTHORIZED.**
+
+The current production path is limited to:
+
+```text
+WorkflowRouter
+  -> ControllerRoutingDecision (desired controller)
+  -> exact pinned-command expectation
+  -> effective OpenCode configuration inspection
+  -> ControllerConfigurationAssessment
+  -> justice doctor diagnostic and exact remediation template
+```
+
+The effective configuration view is resolved before assessment. It respects source precedence, evaluates only the
+four exact pinned command names, requires exact agent equality, and redacts raw command values. A higher-priority
+invalid definition masks any lower-priority valid value. This path has no runtime message lifecycle correlation,
+no `command.execute.before` state, no `chat.params`, no `message.updated`, no `command.executed`, and no routing
+observation persistence.
 
 The evidence chain is additive and does not rewrite prior outcomes:
 
@@ -2046,7 +2006,8 @@ same-session public lifecycle shape without a stable invocation/origin discrimin
 assistant finalized while a pinned candidate was active in both P1 and P2. Command-only U1/U2 overlap can fail-close,
 but that does not distinguish direct activity without a prohibited heuristic or suppressing the B0 positive path.
 
-The retained Option G semantics are non-executable historical/document-review material, not production semantics:
+The retained Option G semantics are **HISTORICAL / BLOCKED / NON-EXECUTABLE / DO NOT IMPLEMENT** material, not
+production semantics:
 
 ```text
 clean matched terminal envelope
@@ -2065,9 +2026,28 @@ FIFO/event-order inference, desired-controller reverse lookup, local generation 
 lookup remain forbidden. The source-ordering invariant only requires each adapter callback to mutate Option G state
 before its first `await`; it does not assign an invocation by event order.
 
-Issue #228 remains non-authoritative historical tracking. Requirements remain unchanged because the desired semantic
-contract is still correct; the current host cannot satisfy it through Option G. Task 4.1G/4.2G are blocked and no
-production source/test sequence is authorized.
+Issue #228 remains non-authoritative historical tracking. The original runtime-attribution goal remains valid, but
+v4.0.0 Requirements deliberately guarantee configuration assurance only. Task 4.1G/4.2G are blocked and no runtime
+source/test sequence is authorized.
+
+### Future runtime-attribution restoration boundary
+
+Current production semantics remain configuration assurance until a host exposes an owned delegated-execution
+capability shape: host-generated stable execution ID, exact parent invocation ownership, isolated owned execution,
+authoritative selected agent, context and permission ownership, typed terminal result, result bridge, parent cancel
+propagation, and cleanup lifecycle. These are required capability characteristics, not assertions about a current
+OpenCode API.
+
+New host capability does not automatically reactivate runtime attribution. The required sequence is:
+
+```text
+new host capability
+  -> separately approved capability spike
+  -> evidence and Requirements/Design review
+  -> separately approved runtime-attribution design and implementation
+```
+
+Option D, Option F, and Option G remain historical evidence and may not be reused to unlock this sequence.
 
 ### 5.2 JUS-P0-02 Plan-Scoped Authorization
 
@@ -2383,21 +2363,20 @@ review finds issue
 
 | テストファイル                                  | 対象                                                                                                                                                                                                |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/core/controller-routing.test.ts`         | Option G reducer、success/failed outcome separation（failed + desired actual = `applied`、failed + mismatched actual = `mismatch`）、exact terminal match、terminal-before-finalized、overlap/mismatch/missing-terminal suppression、known/custom actual narrowing                  |
-| `tests/real-fs/controller-routing-option-g-host.test.ts` | opt-in exact OpenCode `1.18.29` production-plugin regression for S/F（一致・不一致 actual を含む）/C/C2/O/R/removal、first-`await` state mutation、zero cross-apply、redacted trace cleanup                               |
+| `tests/core/controller-routing.test.ts`         | four workflow/controller と exact pinned-command mapping、configured/missing/misconfigured/unsupported、custom agent の diagnostic-safe handling、configured が runtime applied を意味しないこと                  |
 | `tests/core/plan-authorization.test.ts`         | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否                                                                                             |
 | `tests/core/plan-fingerprint.test.ts`           | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化                       |
-| `tests/core/v2/observation-model.test.ts`      | `error_annotation` と `controller_routing_observed` の typed durable observation schema、closed union assignability、legacy schemaVersion:1 compatibility                                          |
-| `tests/runtime/validation.test.ts`             | `error_annotation` と `controller_routing_observed` の strict validation、routing status/payload discriminants、custom actual agent、legacy schemaVersion:1 replay compatibility                     |
+| `tests/core/v2/observation-model.test.ts`      | JUS-P0-01 v4.0.0 が `controller_routing_observed` runtime record を追加しないこと、および既存 observation schema の互換性                                          |
+| `tests/runtime/validation.test.ts`             | JUS-P0-01 v4.0.0 configuration assurance が runtime routing payload を入力または永続化しないこと、既存 schemaVersion:1 replay compatibility                     |
 | `tests/core/routing-decision.test.ts`           | 7→7 全射、deep→sp-deep、architecture→sp-architecture、低 category へのパス不存在                                                                                                                    |
 | `tests/core/task-lifecycle.test.ts`             | full lifecycle order、WorkerReported≠accepted、fresh rework attempt、restart current-attempt reconstruction、Final Review 未了で PlanComplete=false、attempt scoping で古い evidence の再利用を防ぐ |
 | `tests/core/review-dispatch-state.test.ts`      | durable pending / claimed / terminal、CAS claim、restart recovery、conclusive loss、stale PostToolUse、terminal tombstone の再利用禁止                                                              |
 | `tests/core/v2/state-projection.test.ts`        | one terminal physical record から consumption / authoritative review / review-observed semantic を同一に replay し、partial terminal state を投影しない                                             |
-| `tests/core/v2/persistence-redaction.test.ts`    | `controller_routing_observed` の free-form field redaction、raw config/command/prompt/secret 非永続化                                                                                               |
-| `tests/runtime/observation-log-store.test.ts`     | `controller_routing_observed` の append → persisted read/replay、既存 schemaVersion:1 record 互換                                                                                                   |
+| `tests/core/v2/persistence-redaction.test.ts`    | existing persistence redaction を維持し、JUS-P0-01 v4.0.0 の effective configuration が raw config/command/prompt/secret を永続化しないこと                                                                                               |
+| `tests/runtime/observation-log-store.test.ts`     | existing observation append/replay 互換を維持し、JUS-P0-01 v4.0.0 が controller configuration assessment を routing observation として永続化しないこと                                                                                                   |
 | `tests/core/acceptance-decision.test.ts`        | PASS/WARN/FAIL/unavailable それぞれの遷移、GateDecision の後だけ AcceptanceDecision を生成、evidence provenance 判定                                                                                |
 | `tests/core/doctor-categories.test.ts`          | `justice doctor` が 7 `sp-*` category の欠落を effective category view から検出                                                                                                                     |
-| `tests/core/justice-doctor-config.test.ts`      | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics                                                                                         |
+| `tests/core/justice-doctor-config.test.ts`      | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics、exact four pinned commands、high-priority invalid mask                                                                                         |
 | `tests/hooks/plan-bridge-authorization.test.ts` | `/justice-implement --approved` が binding を発行、不一致で invalidate                                                                                                                              |
 
 ### 6.2 特に追加すべきシナリオ
@@ -2430,7 +2409,7 @@ review finds issue
 - acceptance decision binding が `TaskExecutionRef` / `FinalizationAttemptId` に束縛されること。
 - 同一 `TaskExecutionRef` の review transport / reviewer execution retry では `reviewRound` が増分し、implementation rework で新しい `TaskExecutionRef` が発行された場合は `reviewRound=1` に戻ること。
 - Final Review 未完了では全 checkbox `[x]` でも `PlanComplete` にならないこと。
-- Controller Routing で Core が `atlas` を返し Runtime が `sisyphus` のままなら `routingStatus = mismatch` であること。
+- Controller Routing で Core が `atlas` を返す workflow の effective pinned command agent が `sisyphus` なら `misconfigured` であり、runtime applied を示さないこと。
 - fingerprint が fenced code block 内部を正規化しないこと。
 - provenance が確認できる Justice-generated legacy Error annotation では fingerprint が変化しないこと。
 - manual または provenance 不明の legacy Error annotation では fingerprint が変化すること。
@@ -2507,8 +2486,10 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-21 | A review artifact is consumed only when its reserved path, private lease, and durable inode identity match. |
 | INV-22 | A review-owned artifact write is either securely committed and cancelled at the host boundary, or rejected and cancelled at the host boundary; it never falls through to the built-in pathname writer. |
 | INV-23 | Mandatory review wire mutations are authoritative only when the supported OpenCode host is observed to consume them during actual TaskTool execution. |
-| INV-24 | Controller execution outcome, routing attribution outcome, and lifecycle terminal correlation remain separate; one never rewrites another. |
-| INV-25 | Controller routing is authoritative only from one non-ambiguous matched terminal envelope; unsafe or missing correlation creates no routing record. |
+| INV-24 | **Historical / deferred:** Controller execution outcome, routing attribution outcome, and lifecycle terminal correlation remain separate; one never rewrites another. |
+| INV-25 | **Historical / deferred:** Controller routing is authoritative only from one non-ambiguous matched terminal envelope; unsafe or missing correlation creates no routing record. |
+| INV-26 | Configuration assurance never implies runtime application, runtime success, or actual-controller attribution. |
+| INV-27 | Controller configuration is assessed only from a precedence-resolved effective command definition; an invalid higher-priority definition never resurrects a lower-priority value. |
 
 ---
 
@@ -2519,7 +2500,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | Phase 1 | JUS-P0-03 Category Routing          | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加                                                                                                                                                                                                                                                                            |
 | Phase 2 | JUS-P0-02 Plan Authorization        | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装                                                                                                                                                                                                                                                                          |
 | Phase 3 | JUS-P0-04 Transactional Acceptance  | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
-| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not authorized as a production successor and Task 4.1G/4.2G remain blocked |
+| Phase 4 | JUS-P0-01 Controller Configuration Assurance | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** Task 4.1CA/4.2CA define configuration assurance only; runtime attribution remains blocked and Task 4.1G/4.2G remain historical blocked |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
 
@@ -2527,7 +2508,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 
 ## 10. Definition of Done
 
-1. Controller routing が Domain 上だけでなく Runtime 上でも成立している (pinned-command + observation)。
+1. Four workflows resolve their expected desired controller, their exact pinned commands are deterministically known, and the precedence-resolved effective configuration is assessed as configured, missing, misconfigured, or unsupported without claiming runtime application.
 2. Approved Plan authorization が複数 Task に継続する。
 3. Plan semantic mutation により authorization が失効する。
 4. Execution progress 更新では authorization が誤失効しない。
@@ -2563,18 +2544,16 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 34. review-owned write の secure success は `review_artifact_write_committed`、secure rejection / provider failure は `review_artifact_write_rejected` となり、両方とも built-in writer を実行しない。
 35. supported OpenCode CLI `1.18.29` の実host boundaryで、`run_in_background = false` と committed artifact path が実際の TaskTool executionへ届くことを観測できる。
 36. N-API descriptorのJavaScript field naming、root reopen、reservation identity、Rust toolchain、native addon buildが同一の実行可能契約として検証される。
-37. `controller_routing_observed` が typed schema / validator / redaction / append-replay 境界を通る durable audit record として復元でき、custom actual controller を shard identity widening なしで保持する。
-38. Controller routing observation は audit-only であり、task lifecycle / Evidence / Gate / Acceptance / Authorization / Progress authority を獲得しない。
-39. clean successful/failed terminal envelope が exact command name と finalized assistant message ID で相関し、execution outcome を routingStatus と別 field のまま保持する。
-40. overlap、terminal mismatch、missing terminal + next command、曖昧な observation は sticky suppression となり、authoritative routing record を作らず、session removal だけが suppression を除去する。
-41. Option G state transition は callback の最初の `await` より前に完了し、古い callback の非同期 side effect が新 candidate state を参照・変更しない。
-42. production wiring 後、exact OpenCode `1.18.29` と approved runtime model の opt-in real-fs regression が S/F/C/C2/O/R/removal と zero cross-apply を再検証する。
+37. `justice doctor` は exact four pinned commands の configured/missing/misconfigured/unsupported を、raw configuration を漏らさず診断し、exact remediation template を提示できる。
+38. `configured` は runtime applied、runtime success、actual-controller attribution、execution outcome、または durable routing observation として表現されない。
+39. high-priority invalid command definition は lower-priority valid agent を復活させず、configuration assurance は precedence-resolved effective value だけを評価する。
+40. runtime actual-controller correlation は v4.0.0 DoD ではない。将来の再導入には新 capability spike と Requirements/Design review が必要である。
 
 ---
 
 ## 11. 決定事項メモ
 
-- **Controller Runtime Wiring**: `COMMAND-ENVELOPE-1` は clean command scope で PASS のまま保持するが、`COMMAND-ENVELOPE-2` は same-session direct prompt と pinned prompt lifecycle を stable host field で区別できず BLOCKED である。Option G は production successor として未承認であり、Task 4.1G/4.2G は実行しない。完全な runtime 切替は upstream API 拡張要求として分離。
+- **Controller Configuration Assurance**: v4.0.0 は desired controller、exact pinned-command expectation、precedence-resolved effective configuration、doctor diagnostics/template を保証する。`COMMAND-ENVELOPE-1` は clean command scope の historical evidence として保持し、`COMMAND-ENVELOPE-2` は same-session direct prompt と pinned prompt lifecycle を stable host field で区別できず BLOCKED のままである。Option G は production successor として未承認であり、Task 4.1G/4.2G は実行しない。runtime attribution は owned delegated-execution capability を要する別の将来契約である。
 - **Plan Fingerprint**: 正規化対象を Approved Canonical Snapshot 上で task 実行進捗として認識された checkbox state / EOL のみに限定。global/unscoped セクションの checkbox は正規化しない。legacy Error annotation は one-time migration で除去。一般空白・Task 本文は正規化しない (fail-closed)。fingerprint は `sha256:<lowercase hex>` と仕様化。
 - **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` を durable log へ書き、v2 state projection 拡張で復元。初回 plan finalization は `tasks_pending → all_tasks_accepted → final_review_pending` を同じ初回 identity で記録し、`all_tasks_accepted` の task 集合は Approved Canonical Snapshot を SSOT とする。
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。
@@ -2584,7 +2563,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 - **Review Dispatch**: P0 では `ReviewDispatchId` を追加せず、`parentSessionId + ReviewCorrelation` を slot identity とする。`pending` transition を directive 前に durable commit し、PreToolUse の `pending → claimed` CAS commit に `TaskCallBinding` と `ReviewArtifactReservation` を含める。restart 後の `pending` は同じ directive のみ再発行でき、`claimed` は call を再発行せず、terminal tombstone と stale event rejection を維持する。
 - **Authorization and Review Dispatch**: ReviewCorrelation が参照する durable Authorization は Review、Gate、Acceptance、Progress の authority boundary である。release / invalidation を先に durable commit し、その後 existing `cancelled` dispatch tombstone を best-effort で収束させる。別 store を transaction 化せず、すべての recovery / claim / completion / Gate entry point が terminality を再確認することで、pre-Gate では AcceptanceDecision を発行せず、Gate-phase でも fail-closed acceptance を維持する。
 - **Gate Verdict**: `UNKNOWN` は採用しない。Gate 評価の評価不能・内部エラー時は `gate_pending` / `final_gate_pending` のまま保持し、Gate-phase の評価失敗に限って blocked AcceptanceDecision を発行する。pre-Gate の評価不能・証拠不足・レビュー未完了では AcceptanceDecision を発行しない。task gate に加え plan gate（Final Gate）を追加。Gate 評価は lifecycle state = `gate_pending` / `final_gate_pending` 時に実行。task gate の `WARN` / `FAIL` は `rework_required`、plan gate の `WARN` / `FAIL` は `final_rework_required` へ進める。
-- **Traceability**: 本設計書の修正内容（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の pinned-command 適用の具体化、attempt-scoped acceptance、Review Artifact transport、child-session correlation など）は `REQUIREMENTS_2026-09-03.md` に反映済みである。
+- **Traceability**: 本設計書の修正内容（JUS-P0-04-06 の UNKNOWN 扱いの整理、JUS-P0-01 の configuration assurance、attempt-scoped acceptance、Review Artifact transport、child-session correlation など）は `REQUIREMENTS_2026-09-03.md` に反映済みである。
 
 ---
 
