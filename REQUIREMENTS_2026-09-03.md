@@ -315,10 +315,11 @@ effective OpenCode configuration 上でその設定を検査できなければ�
 Justice は以下を MUST とする。
 
 - workflow ごとの exact pinned command 名と expected agent/controller を定義する。
-- `justice doctor` が effective configuration を既存 effective-config semantics と source precedence に従って検査する。
-- missing、wrong agent、および invalid command definition を区別する。
+- `justice doctor` は Justice 独自の source-priority merge ではなく、supported OpenCode host が解決した effective configuration を authority として検査する。
+- supported OpenCode `1.18.29` の standalone doctor では `opencode debug config` の resolved configuration を authority とする。同一 instance/workspace context を保証できる場合に限り、public SDK / HTTP の `config.get` を同値の authority として利用できる。
+- local config source scan は plugin installation、読み取り可否、remediation hint の診断に利用してよいが、`configurationStatus = configured` の根拠にしてはならない。
+- host-resolved effective configuration を取得・parse・validation できない場合は `unsupported` とし、local source から success を推測してはならない。
 - exact four pinned commands の正しい configuration template/example を提供する。
-- higher-precedence の invalid definition が lower-precedence の valid agent を復活させない。
 
 runtime invocation の actual controller application は v4.0.0 P0 guarantee ではない。pinned command の存在、
 prompt guidance、synthetic message、advisory text、log、または domain-level decision のいずれも runtime routing
@@ -350,11 +351,12 @@ unsupported
 
 相当の状態を表現できなければならない。
 
-- `configured`: effective configuration に required pinned command が存在し、その configured agent が desired controller と exact に一致する。
-- `missing`: required pinned command が effective configuration に存在しない。
-- `misconfigured`: command は存在するが、agent absent、agent invalid、agent と desired controller の不一致、または invalid command shape により requirement を満たさない。
-- `unsupported`: Justice が supported deterministic mechanism で effective configuration を評価できない。malformed command definition は可能な限り `misconfigured` とし、`unsupported` へ逃がしてはならない。
+- `configured`: host-resolved effective configuration が取得済みで、required pinned command が存在し、その configured agent が desired controller と exact に一致する。
+- `missing`: host-resolved effective configuration が取得済みで、required pinned command が存在しない。
+- `misconfigured`: host-resolved effective configuration が取得済みで、command は存在するが agent absent、agent invalid、agent と desired controller の不一致、または取得済み effective definition が deterministically invalid で requirement を満たさない。
+- `unsupported`: supported host から authoritative effective configuration を取得できない、target context を同一と保証できない、host command/API が失敗する、または resolved response を parse/validation できない。raw source の malformed configuration により host が resolved configuration を生成できない場合も `configured` / `missing` を推測せず `unsupported` とする。
 
+local source scan、`SOURCE_PRIORITY` の再実装、個別 config file の見かけ上の値は `configured` の authority ではない。
 `configured` は configuration assurance のみを表す。runtime routing applied、runtime routing succeeded、actual controller attribution、
 execution outcome、または terminal lifecycle correlation を意味してはならない。
 
@@ -403,11 +405,12 @@ executing-plans
 
 さらに、以下を自動テストで証明する。
 
-- required command がない場合は `missing`。
-- command の agent が expected agent と異なる場合は `misconfigured`。
-- command は存在するが agent がない場合は `misconfigured`。
-- invalid command definition は `misconfigured` または既存の deterministic invalid-config result。
-- higher-precedence の invalid configuration は lower-precedence の valid agent を復活させない。
+- host-resolved effective configuration 内に required command がない場合は `missing`。
+- host-resolved effective configuration 内の command agent が expected agent と異なる場合は `misconfigured`。
+- host-resolved effective configuration 内に command は存在するが agent がない場合は `misconfigured`。
+- host-resolved effective configuration を取得できない場合は `unsupported`。raw source scan が exact command/agent を含んでいても `configured` へ昇格しない。
+- resolved snapshot 内で deterministically invalid な required command definition は `misconfigured`。invalid source のため host 自身が resolved snapshot を生成できない場合は `unsupported` とし、success を推測しない。
+- Justice は OpenCode の source precedence / deep-merge / command auto-discovery を独自再実装して authoritative effective configuration を作らない。
 - custom/unexpected agent は diagnostic-safe に扱い、configured としない。
 - `configured` が runtime applied を意味しない。
 - doctor/template output が exact four pinned commands と expected agents を表現する。

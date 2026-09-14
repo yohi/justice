@@ -136,7 +136,7 @@ GIT_MASTER=1 git commit -m "feat: execution roleをsp categoryへ完全対応"
 
 ### Task 1.2: Check required `sp-*` categories in doctor
 
-**Requirement:** JUS-P0-03, Design §5.3.
+**Requirement:** JUS-P0-03, Design §3.4, §5.3, INV-27.
 
 **Files:**
 
@@ -147,15 +147,21 @@ GIT_MASTER=1 git commit -m "feat: execution roleをsp categoryへ完全対応"
 - Test: `tests/core/justice-doctor-config.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** `SpCategory` from `src/core/types.ts`; `buildDoctorEffectiveConfigView(scans): DoctorEffectiveConfigView` from `src/core/doctor-config.ts`.
+**Consumes:** `SpCategory` from `src/core/types.ts`; one already-resolved OpenCode configuration snapshot supplied through an injected doctor dependency. The production CLI adapter obtains that snapshot with `opencode debug config` in the target cwd/environment. Existing local source scans remain separate plugin-install/remediation diagnostics and are not effective-config authority.
 
-**Produces:** `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition>; readonly diagnostics: readonly (DoctorCommandDefinitionDiagnostic | DoctorSourceDiagnostic)[] }`; `DoctorEffectiveCommandDefinition = { readonly agent?: string }`; `DoctorCommandDefinitionDiagnostic` records only `source`, command name, and one of `null | scalar | array | agent_not_string | missing_agent`; `DoctorSourceDiagnostic` records only `source` and one of `unreadable | unsupported | parse_failure`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
+**Produces:** `DoctorEffectiveConfigResult = { kind: "available"; view: DoctorEffectiveConfigView } | { kind: "unsupported"; reason: ... }`; `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition> }`; `DoctorEffectiveCommandDefinition = { readonly agent?: string }`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("reports exactly the missing required categories", () => {
-  expect(checkSpCategoryPresence(["sp-mechanical"])).toEqual({
+it("reports exactly the missing required categories from a resolved host snapshot", () => {
+  const projected = projectDoctorEffectiveConfig({
+    category: { "sp-mechanical": {} },
+    command: {},
+  });
+  expect(projected.kind).toBe("available");
+  if (projected.kind !== "available") throw new Error("expected available");
+  expect(checkSpCategoryPresence(projected.view.effectiveCategoryNames)).toEqual({
     ok: false,
     missing: [
       "sp-implementation",
@@ -168,57 +174,33 @@ it("reports exactly the missing required categories", () => {
   });
 });
 
-it("accepts all seven categories", () => {
-  expect(checkSpCategoryPresence(Array.from(ALL_SP_CATEGORIES))).toEqual({ ok: true, missing: [] });
+it("accepts all seven categories from a resolved host snapshot", () => {
+  const projected = projectDoctorEffectiveConfig({
+    category: Object.fromEntries(ALL_SP_CATEGORIES.map((name) => [name, {}])),
+    command: {},
+  });
+  expect(projected).toMatchObject({ kind: "available" });
 });
 
-it("uses the higher-priority JSONC category value instead of a source union", () => {
-  const effective = buildDoctorEffectiveConfigView([
-    scanConfigText("global", '{ category: { "sp-review": { agent: "old" }, "sp-deep": {} } }'),
-    scanConfigText("project", '{ category: { "sp-review": { agent: "new" } } }'),
-  ]);
-  expect(effective.effectiveCategoryNames).toEqual(["sp-review"]);
-});
-
-it.each(["category", "command"])("omits a missing %s key without exposing values", (key) => {
-  const effective = buildDoctorEffectiveConfigView([scanConfigText("project", "{}")]);
-  expect(
-    key === "category"
-      ? effective.effectiveCategoryNames
-      : Array.from(effective.effectiveCommandDefinitions),
-  ).toEqual([]);
-});
-
-it.each([
-  ["null", "null", "null"],
-  ["scalar", "false", "scalar"],
-  ["array", "[]", "array"],
-] as const)("normalizes an invalid command shape (%s) before map insertion", (_name, value, reason) => {
-  const effective = buildDoctorEffectiveConfigView([
-    scanConfigText(
-      "project",
-      `{ command: { "justice-implement-brainstorming": ${value} } }`,
-    ),
-  ]);
-
-  expect(effective.effectiveCommandDefinitions.get("justice-implement-brainstorming")).toEqual({});
-  expect(effective.diagnostics).toContainEqual(
-    expect.objectContaining({
-      kind: "invalid_command_definition",
-      commandName: "justice-implement-brainstorming",
-      reason,
-    }),
+it("does not promote local source scans to effective-config authority", () => {
+  const local = scanConfigContent(
+    "project",
+    '{ "category": { "sp-review": {} }, "command": { "justice-implement-brainstorming": { "agent": "sisyphus" } } }',
   );
+  expect(local).toBeDefined();
+  // There is intentionally no API from SourceScanResult -> DoctorEffectiveConfigView.
 });
 ```
+
+Add adapter tests for resolved-config acquisition: success JSON, missing executable, non-zero exit, invalid JSON, and unexpected top-level shape. Failure cases must produce `kind = "unsupported"` and must not include raw stdout/stderr in diagnostics.
 
 - [ ] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
-Expected: FAIL because the category checker is absent.
+Expected: FAIL because the host-resolved projection/provider contract is absent.
 
-- [ ] **Step 3: Implement the checker and CLI diagnostic**
+- [ ] **Step 3: Implement the checker and host-resolved config adapter**
 
 ```ts
 export const ALL_SP_CATEGORIES: readonly SpCategory[] = [
@@ -230,31 +212,27 @@ export const ALL_SP_CATEGORIES: readonly SpCategory[] = [
   "sp-deep",
   "sp-architecture",
 ];
-
-export function checkSpCategoryPresence(
-  categoryNames: readonly string[],
-): SpCategoryPresenceResult {
-  const names = new Set(categoryNames);
-  const missing = ALL_SP_CATEGORIES.filter((category) => !names.has(category));
-  return { ok: missing.length === 0, missing };
-}
 ```
 
-Parse each readable supported JSONC source in `doctor-config.ts` and reduce it in existing `SOURCE_PRIORITY` order. For allowlisted top-level `category` and `command` objects, a higher-priority same-name key replaces the lower-priority value; do not deep-merge or union names. Before a command value enters `effectiveCommandDefinitions`, validate that it is a non-null non-array object and retain only a string `agent`; normalize null, scalar, array, or non-string `agent` to `{}` and append a redacted `DoctorCommandDefinitionDiagnostic` with no raw value. This makes malformed higher-priority values produce `missing_agent` instead of resurrecting a lower-priority agent or throwing in `justice doctor`. Export category names and, for commands only, the validated allowlisted `agent` field keyed by command name. Unreadable, unsupported, and parse-error sources contribute no effective values and retain redacted diagnostics. `doctor-cli.ts` passes `effectiveCategoryNames` to the checker and appends one non-zero-exit diagnostic for every missing name.
+Implement `projectDoctorEffectiveConfig(resolvedConfig: unknown)` as a pure allowlist projection. It reads only top-level `category` key names and the exact pinned-command definitions needed later by JUS-P0-01. It does not merge sources.
 
-Add focused tests for command precedence, unreadable source, unsupported source, JSONC comments/trailing commas, category missing, command missing, and diagnostics that contain neither literal category/command values nor secret-like values.
+Extend `DoctorDeps` with an injected resolved-config reader. The production `main()` adapter executes exactly `opencode debug config` in the target cwd/environment without shell interpolation, captures stdout only in memory, parses JSON, projects the allowlisted view, and discards the raw resolved object. Missing executable, non-zero exit, launch failure, invalid JSON, or unverified target context yields `unsupported`; do not fall back to `SOURCE_PRIORITY` to synthesize success.
+
+Keep the existing `configCandidates` / `scanConfigContent` path for Justice plugin installation and remediation diagnostics only. Do not delete it, but do not expose a conversion from `SourceScanResult` to authoritative `DoctorEffectiveConfigView`.
+
+Security assertions: raw resolved config, raw stdout, raw stderr, command bodies, provider options, credentials, and unrelated values never enter doctor output, telemetry, persistence, or thrown error detail.
 
 - [ ] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
-Expected: PASS.
+Expected: PASS. Category verification is based only on a host-resolved snapshot; unavailable resolution is explicit and never converted to success by local source scanning.
 
 - [ ] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
-GIT_MASTER=1 git commit -m "feat: doctorでsp category設定を検査"
+GIT_MASTER=1 git commit -m "feat: doctorでhost resolved configを検査"
 ```
 
 ---
@@ -19492,13 +19470,13 @@ GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/wor
 GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
 ```
 
-### Task 4.2CA: Wire effective configuration inspection and doctor diagnostics
+### Task 4.2CA: Wire host-resolved configuration inspection and doctor diagnostics
 
 > **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
 >
-> This task depends on Task 4.1CA. Independent document review and separate implementation authorization are required
-> before any step. It does not add runtime message correlation, command hook state, routing observation persistence,
-> or terminal correlation.
+> This task depends on Task 4.1CA and the host-resolved config provider introduced by Task 1.2. Independent document
+> review and separate implementation authorization are required before any step. It does not add runtime message
+> correlation, command hook state, routing observation persistence, or terminal correlation.
 
 **Requirement:** JUS-P0-01-03 through JUS-P0-01-05, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27.
 
@@ -19513,19 +19491,18 @@ GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
 - Test: `tests/core/doctor-categories.test.ts`
 - Test: `tests/runtime/doctor-cli.test.ts`
 
-**Consumes:** Task 4.1CA assessment and the existing `SOURCE_PRIORITY` effective-config resolver.
+**Consumes:** Task 4.1CA assessment and Task 1.2 `DoctorEffectiveConfigResult` projected from the supported host's resolved configuration. Local `SOURCE_PRIORITY` scans are advisory only and are never controller-configuration authority.
 
-- [ ] **Step 1: Write failing effective-config and doctor tests**
+- [ ] **Step 1: Write failing host-resolved config and doctor tests**
 
-  - Cover the four exact expected command/agent pairs after effective configuration resolution.
-  - Cover missing, wrong agent, absent agent, invalid command definition, and custom agent diagnostics.
-  - Cover high-priority invalid values masking lower-priority valid values; never resurrect the lower agent.
-  - Cover unreadable or unsupported source handling and reserve `unsupported` for unavailable deterministic
-    evaluation, not malformed command definitions.
-  - Assert doctor output is redacted, names only the required commands and configured agent where allowed, and emits
-    exact four-command remediation/template output.
-  - Assert no test uses `command.execute.before`, `chat.params`, `message.updated`, `command.executed`, runtime
-    actual-controller attribution, terminal correlation, or `controller_routing_observed` persistence.
+  - Cover all four exact expected command/agent pairs from an injected host-resolved snapshot.
+  - Cover snapshot available + missing command -> `missing`.
+  - Cover snapshot available + wrong, absent, non-string/unrecognized, or custom agent -> `misconfigured`.
+  - Cover resolved-config command unavailable, non-zero exit, invalid JSON, invalid top-level shape, or unverifiable target context -> `unsupported`.
+  - Prove a local config source containing the exact four expected command/agent pairs cannot convert an `unsupported` host result into `configured`.
+  - Assert doctor output is redacted, names only the required commands and configured agent where allowed, and emits exact four-command remediation/template output.
+  - Assert raw `opencode debug config` stdout/stderr, command body, provider options, credentials, and unrelated config values never appear in diagnostics or persistence.
+  - Assert no test uses `command.execute.before`, `chat.params`, `message.updated`, `command.executed`, runtime actual-controller attribution, terminal correlation, or `controller_routing_observed` persistence.
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
@@ -19536,19 +19513,17 @@ devcontainer exec --workspace-folder . bun run vitest run \
   tests/runtime/doctor-cli.test.ts
 ```
 
-Expected: behavioral failures because doctor cannot yet assess the four controller configurations or produce their
-exact remediation template. Existing effective-config behavior must remain intact.
+Expected: behavioral failures because doctor does not yet consume host-resolved command definitions for controller configuration assessment or emit the exact remediation template.
 
-- [ ] **Step 3: Wire only the effective-config and doctor path**
+- [ ] **Step 3: Wire only the host-resolved config and doctor path**
 
-  1. Reuse existing precedence resolution and shape validation; evaluate controller commands only after that view is
-     final.
-  2. Pass only allowlisted command names and agent values to the pure assessment; do not expose raw configuration,
-     command body, credentials, or unrelated values.
-  3. Emit configured/missing/misconfigured/unsupported diagnostics and exact remediation/template output.
-  4. Update README and SPEC in the implementation change, explicitly stating `configured != applied`.
-  5. Do not modify `src/runtime/opencode-adapter.ts`, `src/hooks/observation-handler.ts`, event schemas, session
-     state, or routing-observation persistence for this task.
+  1. Reuse Task 1.2's resolved-config reader/projection. Do not create a second source merge implementation.
+  2. `opencode debug config` is the standalone authority for supported OpenCode `1.18.29`; `client.config.get()` is only an equivalent adapter when the exact same instance/workspace context is guaranteed.
+  3. Pass only the exact pinned command name and allowlisted `agent` from `DoctorEffectiveConfigView` to Task 4.1CA assessment. Never pass the raw resolved config.
+  4. If resolved-config acquisition is unavailable/failed/unparseable/context-unverified, return `unsupported`. Do not fall back to local source scans to synthesize `configured`, `missing`, or `misconfigured`.
+  5. Emit configured/missing/misconfigured/unsupported diagnostics and exact remediation/template output. Local scan diagnostics may be shown separately as non-authoritative remediation hints.
+  6. Update README and SPEC in the implementation change, explicitly stating `configured != applied` and `local source scan != configured authority`.
+  7. Do not modify `src/runtime/opencode-adapter.ts`, `src/hooks/observation-handler.ts`, event schemas, session state, or routing-observation persistence for this task.
 
 - [ ] **Step 4: Run focused tests and all repository gates**
 
@@ -19559,14 +19534,13 @@ devcontainer exec --workspace-folder . bun run lint
 devcontainer exec --workspace-folder . bun run build
 ```
 
-Expected: configured/missing/misconfigured/unsupported diagnostics and exact remediation pass without a runtime
-routing claim or new warnings.
+Expected: configured/missing/misconfigured/unsupported diagnostics and exact remediation pass without a runtime routing claim, local source merge authority, secret-bearing output, or new warnings.
 
 - [ ] **Step 5: Commit only after implementation authorization**
 
 ```bash
 GIT_MASTER=1 git add src/core/doctor-config.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/justice-doctor-config.test.ts tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts
-GIT_MASTER=1 git commit -m "feat: controller configuration doctorを追加"
+GIT_MASTER=1 git commit -m "feat: controller configuration doctorをhost resolved configへ接続"
 ```
 
 ### Task 4.1G: Define the Option G domain and state-machine contract

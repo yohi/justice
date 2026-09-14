@@ -2,7 +2,7 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Approved（JUS-P0-01 v4.0.0 = Configuration Assurance; runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED; JUS-P0-02 / 03 / 04 unchanged）
+**Status:** Design Review Pending（CA-001 host-resolved effective-config authority corrected; JUS-P0-01 v4.0.0 = Configuration Assurance; runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED; JUS-P0-02 / 03 / 04 unchanged）
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
 
@@ -72,8 +72,10 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 - `src/core/v2/gate-definition.ts` / `src/core/v2/rule-evaluation-engine.ts`
   - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
 - `src/core/doctor-config.ts` / `src/core/doctor-categories.ts`
-  - 既存 effective configuration resolution を再利用し、exact pinned command の effective definition を評価する。
-  - source precedence 後の command shape と `agent` だけを configuration assurance に入力し、raw command value や無関係な設定を診断へ出さない。
+  - category / command の authoritative view は local source の再マージではなく、supported OpenCode host が返す resolved configuration から projection する。
+  - supported OpenCode `1.18.29` の standalone `justice doctor` は `opencode debug config` を primary authority とする。この command は host の `Config.Service.get()` が返す resolved configuration を JSON として出力する。public SDK / HTTP `config.get` も同じ `Config.Service.get()` を返すため、同一 instance/workspace context を保証できる adapter では同値 authority として利用できる。
+  - raw resolved config は memory 上でのみ扱い、allowlisted category names と exact pinned command の `agent` だけを Core へ渡す。stdout、credentials、command body、provider options、無関係な設定を log / persistence / diagnostic に複写しない。
+  - 既存 local config source scan は Justice plugin installation / remediation diagnostics のために維持するが、source precedence、deep merge、`.opencode/command` auto-discovery、remote/managed contribution を再構成して `configured` を生成してはならない。
   - `src/core/session-state-provider.ts` の既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持する。JUS-P0-01 v4.0.0 の configuration assurance は session state、message state、または invocation state を所有しない。
 
 ### 3.3 Hook / Adapter 接続
@@ -108,31 +110,49 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
 
 ### 3.4 Doctor Effective Configuration View
 
-`justice doctor` は source ごとの plugin specifier scan を、category / command 診断の入力に再利用してはならない。診断に必要な最小 view は次だけとする。
+`justice doctor` の authoritative category / command view は、Justice が config source を再マージして作ってはならない。supported OpenCode host がすでに解決した configuration snapshot を入力とし、Justice は必要な allowlist projection だけを行う。
+
+OpenCode `1.18.29` の authority は次の public surface で固定する。
+
+```text
+standalone doctor:
+  opencode debug config
+    -> Config.Service.get()
+    -> resolved configuration JSON
+
+in-process / connected equivalent:
+  client.config.get() / GET /config
+    -> Config.Service.get()
+```
+
+`opencode debug config` は provider/model/session execution を開始せず、resolved configuration の取得だけを行う。`client.config.get()` を使う場合は standalone CLI と同一の directory/workspace context であることを adapter が保証しなければならない。
 
 ```ts
 export type DoctorEffectiveCommandDefinition = {
   readonly agent?: string;
 };
 
-export type DoctorCommandDefinitionDiagnostic = {
-  readonly kind: "invalid_command_definition";
-  readonly source: string;
-  readonly commandName: string;
-  readonly reason: "null" | "scalar" | "array" | "agent_not_string" | "missing_agent";
-};
-
-export type DoctorSourceDiagnostic = {
-  readonly kind: "source_error";
-  readonly source: string;
-  readonly errorCode: "unreadable" | "unsupported" | "parse_failure";
-};
-
 export type DoctorEffectiveConfigView = {
   readonly effectiveCategoryNames: readonly string[];
   readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition>;
-  readonly diagnostics: readonly (DoctorCommandDefinitionDiagnostic | DoctorSourceDiagnostic)[];
 };
+
+export type DoctorEffectiveConfigResult =
+  | {
+      readonly kind: "available";
+      readonly view: DoctorEffectiveConfigView;
+    }
+  | {
+      readonly kind: "unsupported";
+      readonly reason:
+        | "resolved_config_command_unavailable"
+        | "resolved_config_command_failed"
+        | "resolved_config_invalid_json"
+        | "resolved_config_context_unverified"
+        | "resolved_config_shape_invalid";
+    };
+
+export function projectDoctorEffectiveConfig(resolvedConfig: unknown): DoctorEffectiveConfigResult;
 
 export function isRecognizedControllerAgent(value: unknown): value is ControllerAgent {
   return (
@@ -148,12 +168,15 @@ export function isPinnedControllerCommand(
 }
 ```
 
-- source は既存 `SOURCE_PRIORITY` の低優先度から高優先度の順で処理する。readable かつ JSONC として parse できる source だけが effective view に寄与する。
-- allowlisted top-level `category` と `command` の object key を読み取る。各 key の effective value は、より高優先度 source に同名 key があればその値で完全に置換する。object の deep merge、全 source の union、未定義 key の値の転写は行わない。
-- unreadable source、unsupported source、parse failure は effective value を提供しない。診断には source と error code だけを残し、任意設定値や秘密値を含めない。
-- category presence と pinned-command presence はこの effective view だけを consume する。doctor result に raw configuration、command body、認証情報、または無関係な設定を複写しない。command から公開してよい値は pinned-controller 検査に必要な `agent` だけとする。
-- pinned-command は command key の存在だけでは成立しない。`agent` が存在し、空でなく、`ControllerAgent` として認識できる場合だけ pinned command として扱い、それ以外は `missing_agent` とする。
-- JSONC の `command` 各値は effective map へ格納する前に runtime validation する。`null`、scalar、array は `{}` として扱い、`invalid_command_definition` の redacted diagnostic（`source`、command name、shape reason のみ）を記録する。object の `agent` が string 以外の場合も `{}` と `agent_not_string` diagnostic に正規化する。高優先度 source の不正値も同名の低優先度値を完全に置換するため、低優先度の `agent` を誤って復活させない。raw value は effective view、診断、CLI 出力のいずれにも複写しない。
+Authority and safety rules:
+
+- Positive `configured` authority MUST come from `DoctorEffectiveConfigResult.kind = "available"`. local config source scan、`SOURCE_PRIORITY`、individual file contents、command template files の直接走査だけから `configured` を生成してはならない。
+- The runtime adapter invokes `opencode debug config` without shell interpolation, with the target project cwd/environment. Non-zero exit、missing executable、timeout/launch failure、invalid JSON、unexpected top-level shape は `unsupported` とする。
+- stdout の resolved configuration は secret-bearing data として扱う。memory 上で parse した直後に allowlisted projection を作り、raw stdout / full parsed object を persistence、telemetry、exception detail、doctor output に含めない。stderr も raw persistence せず generic/redacted diagnostic に変換する。
+- Projection が読むのは top-level `category` の key names と、top-level `command` における exact four pinned command の definition だけである。command body、template、description、model、provider、options、その他の command は出力しない。
+- required command が resolved snapshot に存在しない場合は `missing`。存在するが `agent` が absent / non-string / unrecognized / desired controller と不一致なら `misconfigured`。exact equality の場合だけ `configured`。
+- OpenCode が malformed source 等により resolved snapshot 自体を生成できない場合、Justice は source files から擬似 effective config を組み立てず `unsupported` とする。local source scan は remediation hint を出してよいが authoritative status を上書きしない。
+- OpenCode `1.18.29` は config source 間を `mergeDeep` し、さらに `ConfigCommand.load(dir)` で `{command,commands}/**/*.md` を `result.command` に merge する。remote / managed contribution も host 側で処理される。これらを Justice 側で部分再実装しないことが CA-001 の correctness boundary である。
 
 ### 3.5 Command 雛形 (Configuration Assurance)
 
@@ -242,11 +265,12 @@ export function assessControllerConfiguration(input: {
 }): ControllerConfigurationAssessment;
 ```
 
-Assessment precedence is fixed: an unsupported deterministic effective-config mechanism produces `unsupported`;
-otherwise a missing exact command produces `missing`; an invalid effective command shape, absent/invalid agent, or
-agent inequality produces `misconfigured`; only exact configured-agent equality produces `configured`. A high-priority
-invalid command masks a lower-priority valid definition before this assessment begins. The assessment consumes no
-runtime session, message, event, terminal envelope, or execution outcome state.
+Assessment precedence is fixed: if the supported host cannot provide a verified resolved configuration snapshot,
+produce `unsupported` and stop. From an available host-resolved snapshot, a missing exact command produces `missing`;
+an absent/invalid agent, deterministically invalid effective definition, or agent inequality produces `misconfigured`;
+only exact configured-agent equality produces `configured`. Source precedence, deep merge, command-file discovery,
+remote config, and managed config are host responsibilities and are not reconstructed by this assessment. The
+assessment consumes no runtime session, message, event, terminal envelope, or execution outcome state.
 
 ### Historical Option G matched terminal envelope contract
 
@@ -2489,7 +2513,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-24 | **Historical / deferred:** Controller execution outcome, routing attribution outcome, and lifecycle terminal correlation remain separate; one never rewrites another. |
 | INV-25 | **Historical / deferred:** Controller routing is authoritative only from one non-ambiguous matched terminal envelope; unsafe or missing correlation creates no routing record. |
 | INV-26 | Configuration assurance never implies runtime application, runtime success, or actual-controller attribution. |
-| INV-27 | Controller configuration is assessed only from a precedence-resolved effective command definition; an invalid higher-priority definition never resurrects a lower-priority value. |
+| INV-27 | Controller configuration is authoritative only from a supported host-resolved effective configuration (`opencode debug config` or context-equivalent public `config.get`); local source reconstruction never produces `configured`, and unavailable/unverified host resolution produces `unsupported`. |
 
 ---
 
@@ -2534,7 +2558,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 24. Review dispatch の `pending` / `claimed` / `terminal` transition、claim 時の binding / artifact reservation、consume marker が durable log から restart / replay 後に復元でき、復元した `claimed` call が再発行されない。
 25. old `callId` の stale `PostToolUse` が artifact、Review、Gate、Acceptance、current review round に影響せず、終端不明の claim は自動 retry されない。
 26. terminal review は一件の physical record で consumption、artifact、terminalization を保持し、projection が review-observed semantic を導出する。
-27. doctor は source precedence に従う allowlisted effective category / command view だけを診断し、raw configuration や秘密値を出力しない。
+27. doctor は supported OpenCode host の resolved configuration から allowlisted effective category / pinned-command view だけを projection し、local source merge から `configured` を推測せず、raw configuration や秘密値を出力しない。
 28. `/justice-implement --cancel` は session-scoped かつ pathless であり、reapproval は fresh authorizationId を発行する。
 29. accepted task の全 unchecked step が更新され、再 parse 後に completed となる。
 30. terminal Authorization の review directive / claim / completion / Gate / Acceptance / Progress は authoritative にならず、restart recovery もこれを復活させない。
