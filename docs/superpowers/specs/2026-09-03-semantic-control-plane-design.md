@@ -73,8 +73,9 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `GateScope` / `GateTrigger` を導入し、task gate に加えて plan gate（Final Gate）を評価できるように拡張。
 - `src/core/session-state-provider.ts`
   - 既存 `setAgentMapping()` / `getAgentId()` は `ObservationAgentId` の closed physical-shard identity 用として維持し、custom controller のために widening しない。
-  - Controller Routing は `sessionId` を scope として扱うが invocation identity には使わない。Task 4.0 は nominal path の user/assistant/message field を観測した一方、same-session overlap を含む旧 per-invocation production contract を `BLOCKED` とした。旧 bounded ephemeral correlation candidate は current production authority ではない。
-  - `command.execute.before` の capture-arm、exact message join、per-invocation release を含む旧 state model は pre-spike candidate としてのみ保持する。successor design が承認・検証・再レビューされるまで JUS-P0-01 source implementation は行わず、現時点で確認済みの suppression-clear authority は `removeSession()` のみとする。新しい generic session-state framework は作らない。
+  - Controller Routing 専用に、session ごとに最大一つの Option G terminal-envelope candidate または一つの sticky suppression tag を保持する。`sessionId` は state scope であり、単独では invocation identity ではない。
+  - clean candidate は exact pinned command、finalized assistant message ID、finalized actual controller、execution outcome を保持し、matching `command.executed` でのみ immutable evaluation snapshot を返して解放する。overlap、terminal mismatch、missing terminal + next command、または曖昧な observation は sticky suppression とし、`removeSession()` だけが除去する。
+  - 旧 bounded multi-map/per-invocation join は historical rationale としてのみ保持する。Option G に queue、TTL、timer、latest/current lookup、local generation identity、または generic session-state framework を追加しない。
 
 ### 3.3 Hook / Adapter 接続
 
@@ -83,8 +84,8 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - `task()` PreToolUse 介入条件を「active binding の session/path/fingerprint が一致」に置き換える。
   - fingerprint 不一致検出時に binding を `invalidated` 化する。
 - `src/hooks/observation-handler.ts`
-  - JUS-P0-01 の `emitControllerRoutingObservation(context)` / exact message join は pre-spike candidate wiring であり、Task 4.0 の nominal field observationだけでは production-safe `ControllerRoutingInvocationContext` を証明していない。same-session overlap / abandonment が `BLOCKED` のため、successor design の承認・検証・文書レビュー前にこの wiring を production 実装してはならない。
-  - `chat.params` / finalized `message.updated` / `command.executed` の各 field は runtime evidence として観測済みだが、それらを同一 invocation の production authority として結合できることは証明されていない。session current/latest、content、FIFO、TTL 等で不足 identity を補完してはならない。
+  - JUS-P0-01 の `emitControllerRoutingObservation(context)` は、Option G state machine が fully matching terminal envelope から返した immutable context だけを受け取る。個別の `chat.params`、finalized `message.updated`、`command.executed` から provisional record を発行しない。
+  - `executionOutcome` と `routingStatus` を別 field として durable audit record に保持する。failed execution でも clean envelope と finalized actual/desired 一致があれば routingStatus は `applied` になり得るが、execution outcome は `failed` のまま変えない。
   - Worker 完了・Evidence・Review・Gate 結果を typed lifecycle events として durable log に書き出す。
   - review dispatch の `pending` / `claimed` / `terminal` transition を durable observation として記録する。`pending` は `ReviewRequiredDirective` の inject より先に記録する。
   - `task()` 呼び出しに `TaskCallPurpose` を付与し、PostToolUse で implementation / task_review / final_review を区別する。
@@ -96,8 +97,9 @@ Justice は Superpowers が定義する開発プロセスの Desired State と�
   - task() payload の正規化 (禁止 field 除去 / `taskId`/`loadSkills`/`runInBackground` の canonicalize) を維持。
   - `sp-deep` / `sp-architecture` も category として通すだけで model/agent は補正しない。
   - `ReviewRequiredDirective` を Controller へ inject するための出力経路を追加。
-  - JUS-P0-01 の `command.execute.before.input.command` / `input.sessionID`、`command.executed.name/messageID`、`chat.params`、finalized `message.updated` は Task 4.0 で個別に観測された field である。ただし same-session overlap で旧 exact per-invocation join は成立しなかったため、これらを current production workflow authority として wire してはならない。desired controller、prompt、assistant自由文、session-current/latest context、FIFO/TTL から workflow を推測しない。
-  - raw agent / message identity の lossless transport も successor design が確定するまで JUS-P0-01 production wiring の authority ではない。既存 persona用 `AgentMapped` normalization と controller observation を分離する原則は維持する。
+  - JUS-P0-01 では exact pinned `command.execute.before.input.command` / `input.sessionID`、`chat.params` raw agent、completed assistant `message.updated` の raw agent / ID / lifecycle booleans、`command.executed.name/messageID` だけを lossless に transport する。desired controller、prompt、assistant自由文、session-current/latest context、FIFO/TTL から workflow を推測しない。
+  - generic `event` callback では、payload normalization と Option G state transition を最初の `await` より前に完了する。host event publish order を invocation identity として使わず、already-dispatched old callback の state mutation が terminal release 後へ遅延しないための execution-order invariant とする。
+  - `session.idle` / `session.status=idle` は observation-only であり state を変更しない。`session.deleted` は `removeSession()` へ転送する。既存 persona用 `AgentMapped` normalization と controller observation は分離する。
 - `src/core/justice-plugin.ts`
   - `PostToolUse` イベントを **transactional order** で処理する。`observationHandler` / `planBridge` / `taskFeedback` 等の side-effecting handlers を `Promise.all` して並列実行してはならない。
 - implementation task の PreToolUse で current task に fresh `TaskExecutionRef` / `attemptId` を発行し、`authorized → in_progress` を durable に記録してから implementation `TaskCallBinding` を作る。identity allocation と transition は deterministic な transition key で結び、append 結果が不明な場合は同じ key を read-before-retry して既存 identity を再利用する。記録不能な場合も task() は fail-open で継続するが、その call は authoritative worker completion にしない。
@@ -180,9 +182,28 @@ Justice は以下を提供する。
 // Factory functions are in src/core/routing-decision.ts.
 export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
 
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+export const PINNED_COMMAND_WORKFLOW_MAP: Readonly<Record<
+  ControllerPinnedCommand,
+  ControllerWorkflow
+>>;
+
+export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
+
 export type ControllerRoutingDecision = {
   readonly kind: "controller";
-  readonly workflow: string;
+  readonly workflow: ControllerWorkflow;
   readonly controller: ControllerAgent;
   readonly reason: RoutingReason;
 };
@@ -199,17 +220,36 @@ export type ControllerObservedAgentId = string;
 
 export type ControllerRoutingStatus = "applied" | "unapplied" | "unsupported" | "mismatch";
 
+export type ControllerExecutionOutcome = "success" | "failed";
+
 export type ControllerRoutingUnappliedReason = "application_not_configured" | "actual_not_observed";
 
 export type ControllerRoutingUnsupportedReason = "runtime_capability_unsupported";
 
-export type ControllerRoutingEvaluationInput = {
+type ControllerRoutingEvaluationBase = {
   readonly decision: ControllerRoutingDecision;
-  readonly applicationMethod: ControllerApplicationMethod;
   readonly chatParamsActualController?: ControllerObservedAgentId;
-  readonly finalizedMessageActualController?: ControllerObservedAgentId;
   readonly runtimeCapabilitySupported: boolean;
 };
+
+export type ControllerRoutingEvaluationInput = ControllerRoutingEvaluationBase &
+  (
+    | {
+        readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
+        readonly finalizedMessageActualController: ControllerObservedAgentId;
+        readonly executionOutcome: ControllerExecutionOutcome;
+      }
+    | {
+        readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
+        readonly finalizedMessageActualController?: never;
+        readonly executionOutcome?: never;
+      }
+    | {
+        readonly applicationMethod: "none";
+        readonly finalizedMessageActualController?: ControllerObservedAgentId;
+        readonly executionOutcome?: never;
+      }
+  );
 
 export type ControllerRoutingObservation =
   | {
@@ -218,6 +258,7 @@ export type ControllerRoutingObservation =
       readonly actualController: ControllerAgent;
       readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
       readonly observationSource: "message.updated" | "both";
+      readonly executionOutcome: ControllerExecutionOutcome;
     }
   | {
       readonly routingStatus: "mismatch";
@@ -225,6 +266,7 @@ export type ControllerRoutingObservation =
       readonly actualController: ControllerObservedAgentId;
       readonly applicationMethod: Exclude<ControllerApplicationMethod, "none">;
       readonly observationSource: "message.updated" | "both";
+      readonly executionOutcome: ControllerExecutionOutcome;
     }
   | {
       readonly routingStatus: "unapplied";
@@ -264,26 +306,235 @@ export function evaluateControllerRoutingObservation(
 ): ControllerRoutingObservation;
 ```
 
-### Runtime correlation contract
+Evaluator precedence is fixed: unsupported `runtime-api` first, then `applicationMethod="none"`,
+then missing finalized actual, then finalized actual/desired comparison. Only the final comparison
+produces `applied` / `mismatch`, and that input must carry `executionOutcome`. The production
+pinned-command path calls the evaluator only from a released Option G envelope.
 
-> [!CAUTION]
-> **Post-spike authoritative status — JUS-P0-01 / F-004**
+### Option G matched terminal envelope contract
+
+> [!IMPORTANT]
+> **Evidence-backed successor status — JUS-P0-01 / Option G**
 >
-> Task 4.0 is **COMPLETED**. The authoritative evidence is
-> `docs/spikes/2026-09-controller-routing-runtime-signals.md` at commit
-> `58bd1c1570c298f9f9974b564d575777d0df38ec`. Its final result is
-> `JUS-P0-01 runtime observation = BLOCKED`; abandonment is also `BLOCKED`.
-> This is formal negative capability evidence, not a harness failure. The report records
-> `cleanup_scope=none`, `cleanup_session=none`, `cleanup_hook=none`, `cleanup_status=none`,
-> `cleanup_order=none`, `preserves_concurrent_invocation=false`, and
-> `suppression_clear_authority=removeSession_only`.
->
-> The old per-invocation contract retained below was the **pre-spike candidate**. Task 4.0 did not
-> authorize it for the supported host. It is retained only as historical rationale and MUST NOT be
-> used as implementation authority. Task 4.1, Task 4.2, and JUS-P0-01 source implementation remain
-> blocked. https://github.com/yohi/justice/issues/228 tracks candidate successor semantics, but it is open and non-authoritative;
-> no option from that issue is adopted by this Design yet. `REQUIREMENTS_2026-09-03.md` remains the
-> current requirement authority and is currently unmet/blocked for JUS-P0-01.
+> `docs/spikes/2026-09-controller-routing-command-envelope.md` records
+> `COMMAND-ENVELOPE-1 = PASS` on OpenCode `1.18.29` at pinned source
+> `16747470f976aca3d362ad730bcd3fe82ecc2c9a`. Option G is the formalized successor contract pending
+> independent document review, not an authorized production implementation.
+> Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence;
+> Option D and Option F remain not adopted. This formalization authorizes independent document
+> review only. Production source/test implementation remains prohibited until that review is
+> accepted and implementation is separately authorized.
+
+Option G uses one session-scoped candidate slot to correlate a clean command lifecycle. `sessionId`
+is only the state scope. The terminal identity is the conjunction of the exact captured pinned
+command name and the finalized assistant message ID supplied by matching `command.executed`.
+
+```text
+idle
+  | exact pinned command.execute.before
+  v
+active(candidate)
+  | completed assistant message.updated
+  v
+finalized(candidate)
+  | command name match AND assistant message ID match
+  v
+release immutable context -> idle
+```
+
+Any unsafe transition is fail-closed for routing attribution:
+
+```text
+active / finalized
+  | overlap
+  | terminal mismatch
+  | ambiguous duplicate observation
+  | next command before matching terminal
+  v
+suppressed(sticky)
+  | session removal only
+  v
+removed
+```
+
+The state is a discriminated union and contains no queue:
+
+```ts
+export type ControllerExecutionOutcome = "success" | "failed";
+
+export type ControllerRoutingEnvelopeState =
+  | { readonly status: "idle" }
+  | {
+      readonly status: "active";
+      readonly command: ControllerPinnedCommand;
+      readonly workflow: ControllerWorkflow;
+      readonly applicationMethod: "pinned-command";
+      readonly chatParamsActualController?: ControllerObservedAgentId;
+    }
+  | {
+      readonly status: "finalized";
+      readonly command: ControllerPinnedCommand;
+      readonly workflow: ControllerWorkflow;
+      readonly applicationMethod: "pinned-command";
+      readonly chatParamsActualController?: ControllerObservedAgentId;
+      readonly assistantMessageId: string;
+      readonly finalizedMessageActualController: ControllerObservedAgentId;
+      readonly executionOutcome: ControllerExecutionOutcome;
+    }
+  | { readonly status: "suppressed" };
+
+export type ControllerRoutingEnvelopeContext = {
+  readonly sessionId: string;
+  readonly command: ControllerPinnedCommand;
+  readonly workflow: ControllerWorkflow;
+  readonly applicationMethod: "pinned-command";
+  readonly assistantMessageId: string;
+  readonly chatParamsActualController?: ControllerObservedAgentId;
+  readonly finalizedMessageActualController: ControllerObservedAgentId;
+  readonly executionOutcome: ControllerExecutionOutcome;
+};
+
+export type ControllerRoutingEnvelopeEvent =
+  | {
+      readonly kind: "begin";
+      readonly command: ControllerPinnedCommand;
+      readonly workflow: ControllerWorkflow;
+    }
+  | { readonly kind: "chat-params"; readonly actualController: ControllerObservedAgentId }
+  | {
+      readonly kind: "finalized";
+      readonly assistantMessageId: string;
+      readonly actualController: ControllerObservedAgentId;
+      readonly executionOutcome: ControllerExecutionOutcome;
+    }
+  | {
+      readonly kind: "terminal";
+      readonly sessionId: string;
+      readonly command: ControllerPinnedCommand;
+      readonly assistantMessageId: string;
+    }
+  | { readonly kind: "rollback"; readonly command: ControllerPinnedCommand }
+  | { readonly kind: "idle" };
+
+export type ControllerRoutingEnvelopeTransition =
+  | {
+      readonly state: Extract<ControllerRoutingEnvelopeState, { readonly status: "idle" }>;
+      readonly result: "released";
+      readonly context: ControllerRoutingEnvelopeContext;
+    }
+  | {
+      readonly state: ControllerRoutingEnvelopeState;
+      readonly result:
+        | "acquired"
+        | "recorded"
+        | "duplicate"
+        | "rolled-back"
+        | "suppressed"
+        | "ignored";
+      readonly context?: never;
+    };
+
+export function transitionControllerRoutingEnvelope(
+  state: ControllerRoutingEnvelopeState,
+  event: ControllerRoutingEnvelopeEvent,
+): ControllerRoutingEnvelopeTransition;
+```
+
+Each live session has at most one `active` or `finalized` candidate, or one zero-payload
+`suppressed` tag. The implementation must not add a capture queue, multi-entry correlation map,
+TTL, timer, background cleanup worker, or session-current/latest pointer. A session-removal path
+removes all candidate payload. Late callbacks already dispatched for that session are
+observation-only and cannot recreate candidate state; the implementation may use the existing
+session lifecycle generation solely as a stale-callback guard, never as invocation identity.
+`removed` in the state diagram is the trusted removal outcome, not a member retained in
+`ControllerRoutingEnvelopeState`; after cleanup there is no live routing candidate or suppression
+payload for that session.
+
+The required transitions are:
+
+1. An exact pinned `command.execute.before` resolves workflow through
+   `resolvePinnedCommandWorkflow()`. `idle` acquires one provisional `active` candidate.
+2. A second command before release changes `active` or `finalized` to `suppressed`. It does not
+   create a second owner or queue entry. A command arriving after a missing terminal is handled by
+   this same transition.
+3. Hook-local synchronous failure after provisional acquisition deletes that candidate only when
+   the exact provisional object is still current. It never clears `suppressed` state established by
+   another transition. No asynchronous failure rollback is permitted.
+4. `chat.params` may add its raw actual controller to `active` once. It emits no durable routing
+   record and supplies no invocation identity. A conflicting duplicate makes the state ambiguous
+   and therefore `suppressed`.
+5. A completed assistant `message.updated` may change `active` to `finalized` once. It stores the
+   assistant message ID, finalized raw actual controller, and separately classified execution
+   outcome. A different second finalized identity, missing required field, or contradictory replay
+   makes the state `suppressed`; an identical duplicate is idempotent.
+6. `command.executed` releases only a `finalized` candidate whose session, exact command name, and
+   assistant message ID all match. It first removes the mutable state and returns an immutable
+   `ControllerRoutingEnvelopeContext`; audit evaluation and append then consume only that snapshot.
+7. A terminal event before finalized state or with either identity mismatch changes the session to
+   `suppressed`. A terminal event with no candidate is ignored and cannot infer a workflow.
+8. In `suppressed`, routing, finalized, terminal, idle, and additional command observations are
+   non-authoritative no-ops. Only `removeSession(sessionId)` removes suppression.
+9. `session.idle` and `session.status=idle` are always observation-only. They never acquire,
+   finalize, release, overwrite, clear, or unsuppress routing state.
+
+The finalized lifecycle and outcome predicates are fixed to the supported host schema:
+
+```text
+assistantCompleted = assistant.time.completed is present and finite
+assistantHasError = assistant.error is present
+finishObserved = assistant.finish is a non-empty string
+finishIsError = assistant.finish == "error"
+
+completedLifecycle =
+  assistant role
+  AND assistantCompleted
+  AND (assistantHasError OR finishObserved)
+
+executionOutcome = failed when
+  completedLifecycle
+  AND (assistantHasError OR finishIsError)
+
+executionOutcome = success when
+  completedLifecycle
+  AND NOT assistantHasError
+  AND NOT finishIsError
+```
+
+`command.executed` is lifecycle correlation, not execution-success evidence. After clean terminal
+correlation, `evaluateControllerRoutingObservation()` compares only the finalized actual controller
+with the desired controller to choose `applied` or `mismatch`. It copies `executionOutcome` into the
+same audit record as a separate field. Therefore a failed command may produce
+`routingStatus="applied"` and `executionOutcome="failed"`; neither field rewrites the other.
+The exact raw-string equality check against the desired canonical ID performs the narrowing to
+`ControllerAgent` for the `applied` member. Any non-equal custom/future raw string remains lossless
+as `ControllerObservedAgentId` in `mismatch`; it is never normalized to `"unknown"` or cast into an
+`applied` result.
+
+The runtime adapter must execute payload normalization and every Option G state transition in the
+synchronous prefix of its hook callback, before its first `await`. This is not event-order identity.
+It preserves the pinned host's observed publish/dispatch property so an earlier finalized-message
+callback cannot defer its state mutation until after a matching terminal release and act on the next
+candidate. Asynchronous persistence and notification work receives only immutable transition output
+and may not read or mutate current envelope state.
+
+The only positive production path is:
+
+```text
+exact pinned command.execute.before
+-> optional chat.params observation
+-> completed finalized assistant message.updated
+-> exact matching command.executed
+-> remove state and return immutable context
+-> evaluate finalized actual vs desired
+-> append one audit-only controller_routing_observed record
+```
+
+Prompt text, message content, command arguments, desired-controller reverse lookup, FIFO, callback
+arrival order, elapsed time, and local generation are never correlation authority. Any audit
+evaluation, validation, redaction, persistence, or notification failure is fail-open for host
+execution and cannot restore consumed envelope state.
+
+### Historical pre-spike invocation candidate
 
 The retained pre-spike JUS-P0-01 candidate attempted one exact, bounded **invocation-level** correlation path. `sessionId` is a scope
 key only; it is **not** a command invocation identity. Workflow identity is never inferred from the selected
@@ -366,9 +617,9 @@ required non-crossing A/B identity contract was not demonstrated and the authori
 `JUS-P0-01 runtime observation = BLOCKED`. Phase 4 source implementation stops at this boundary.
 
 Task 4.0 did not establish an alternative host-provided non-content invocation identity strong enough to replace
-the failed candidate. A successor strategy must be decided separately and may not be silently substituted here.
-Issue #228 is the open design tracker; until a successor contract is approved, synchronized into the relevant
-documents, and independently reviewed, a failed candidate is not permission to implement a fallback.
+the failed candidate. That result did not authorize a silent fallback. The later Option G spike tested a distinct
+matched-terminal-envelope hypothesis; the authoritative contract now appears above. Issue #228 remains historical,
+non-authoritative design tracking and is not implementation authority.
 
 The retained **pre-spike candidate** correlation state was ephemeral and JUS-P0-01-specific. The types and state rules below are not current implementation authority. It is **not** a single
 `Map<sessionId, ControllerRoutingSessionContext>` slot and it has no "current routing context" authority. It stores
@@ -499,11 +750,11 @@ invocation-specific cleanup candidate is allowed only if Task 4.0 observes a non
 names the failed invocation; a Justice-local generation, sequence, "latest command", controller inference, or prompt
 content is not acceptable.
 
-**No production abandonment API is authorized by the Task 4.0 result.** The committed sanitized lifecycle result
+**No production abandonment API was authorized by the Task 4.0 result.** The committed sanitized lifecycle result
 is `BLOCKED` with no safe cleanup scope/hook/order and with `removeSession_only` as suppression-clear authority.
-Task 4.1/4.2 and JUS-P0-01 source implementation remain blocked while successor design resolution is pending. The
-fixed limits are historical bounded-memory backstop rationale only; they are not permission to implement an
-unverified cleanup heuristic or the rejected current-host candidate.
+Option G does not reinterpret that result: it replaces abandonment inference with matched terminal release and
+sticky suppression. The fixed limits below remain historical bounded-memory backstop rationale only; they are not
+permission to implement the rejected multi-map candidate.
 
 When the session has no remaining pinned-command captures after a successful exact join, unmatched
 routing-correlation leftovers for that session are discarded. `removeSession(sessionId)` always removes every
@@ -594,7 +845,9 @@ Persistence semantics remain normative and unchanged in authority:
   shard/envelope identity and MUST NOT be widened.
 - `controller_routing_observed` remains a flattened `schemaVersion: 1` audit-only observation.
 - `workflow`, `routingStatus`, `desiredController`, optional `actualController`, `applicationMethod`,
-  `observationSource`, and status-specific `reason` remain direct durable fields.
+  `observationSource`, terminal-correlated `executionOutcome`, and status-specific `reason` remain direct durable
+  fields. `executionOutcome` is required for `applied` / `mismatch` and absent for non-terminal
+  `unapplied` / `unsupported` variants.
 - `validateRecordSchema()` explicitly validates the routing discriminated union and must continue accepting
   previously valid schemaVersion 1 records.
 - `redactPendingLogRecord()` explicitly handles the routing record; free-form `workflow` and custom
@@ -830,6 +1083,8 @@ export type PlanFinalizationTransitionRecord = {
 };
 ```
 
+- 本書の `ReviewPending` / `FinalReviewPending` は説明用の表示名であり、永続化、wire payload、
+  transition、テストで使用する正規の状態値はそれぞれ `review_pending` / `final_review_pending` とする。
 - `TaskLifecycle Core` は永続化に依存しない。
 - `TaskAttemptId` は `authorizationId` + `taskId` 単位で発行する不透明な文字列である。同一 task における異なる attempt は異なる `attemptId` を持つ。
 - `FinalizationAttemptId` / `finalReviewRound` は plan finalization の各 iteration を区別する。初回は `tasks_pending → all_tasks_accepted` 遷移の前に **新しい `finalizationAttemptId`（新 UUID）と `finalReviewRound = 1` を発行**し、続く `all_tasks_accepted → final_review_pending` でも同じ identity を使う。`final_rework_required → final_review_pending` 遷移時には、**新しい `finalizationAttemptId`（新 UUID）および増分した `finalReviewRound` を両方発行・更新する**。
@@ -1768,58 +2023,48 @@ export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision
 
 ### 5.1 JUS-P0-01 Controller Routing
 
-**Current status: BLOCKED / design resolution pending.**
+**Current status: OPTION G FORMALIZED / READY FOR INDEPENDENT DOCUMENT REVIEW.**
 
-Task 4.0 is completed and its authoritative report is
-`docs/spikes/2026-09-controller-routing-runtime-signals.md` at commit `58bd1c1570c298f9f9974b564d575777d0df38ec`.
-The final result is `JUS-P0-01 runtime observation = BLOCKED`; this is formal negative capability evidence,
-not a harness failure. Nominal single-command field observation succeeded, but same-session overlap did not prove
-the required per-invocation identity chain, and the failure/abandonment probe established no safe cleanup boundary.
+The evidence chain is additive and does not rewrite prior outcomes:
 
 ```text
-JUS-P0-01 current requirement
-        ↓
-Task 4.0 capability evidence
-        ↓
-runtime observation = BLOCKED
-        ↓
-old per-invocation production candidate = not authorized
-        ↓
-successor design decision pending (Issue #228; non-authoritative)
-        ↓
-Task 4.1 / Task 4.2 / JUS-P0-01 source implementation = suspended
+Task 4.0 per-invocation candidate = BLOCKED
+SESSION-SAFETY-1 / Option D = BLOCKED / NOT ADOPTED
+COMMAND-TERMINAL-1 / Option F = BLOCKED / NOT ADOPTED
+COMMAND-ENVELOPE-1 / Option G = PASS
+Option G Requirements + Design + replacement Plan = formalized
+production implementation = not started
 ```
 
-The committed evidence fixes the current facts as:
+`docs/spikes/2026-09-controller-routing-command-envelope.md` proves on the exact supported host that a clean
+successful or failed assistant lifecycle can be closed by a finalized assistant message plus a matching
+`command.executed`, while keeping execution outcome separate from routing attribution. It also proves that overlap
+converges to sticky suppression, hook-local synchronous acquisition failure rolls back only its own candidate, and
+session removal clears suppression. Deterministic negative replay controls prove terminal mismatch and missing
+terminal + next command are fail-closed.
+
+The resulting production semantics are:
 
 ```text
-cleanup_scope = none
-cleanup_session = none
-cleanup_hook = none
-cleanup_status = none
-cleanup_order = none
-preserves_concurrent_invocation = false
-suppression_clear_authority = removeSession_only
+clean matched terminal envelope
+  -> release one immutable routing context
+  -> evaluate finalized actual controller vs desired controller
+  -> append routingStatus plus independent executionOutcome
+
+overlap / mismatch / missing terminal / ambiguity
+  -> sticky suppression
+  -> no authoritative routing record
+  -> session removal only clears suppression
 ```
 
-These facts do not select a successor design. Issue #228 (https://github.com/yohi/justice/issues/228) tracks candidate successor semantics,
-but it is open and is not specification authority. In particular, this Design does not adopt Option D, a
-session-scoped single-flight state model, `session.idle` cleanup/ownership-release authority, new ambiguous/suppressed
-routing statuses, or a new narrow-spike procedure.
+`session.idle`, `session.status=idle`, TTL, timer, elapsed time, prompt/message content, command arguments,
+FIFO/event-order inference, desired-controller reverse lookup, local generation identity, and session current/latest
+lookup remain forbidden. The source-ordering invariant only requires each adapter callback to mutate Option G state
+before its first `await`; it does not assign an invocation by event order.
 
-The separate successor experiment, `docs/spikes/2026-09-controller-routing-session-safety.md`, initially recorded an
-`execution/harness failure`, then completed a supported-host rerun after correcting the temporary v1 client request
-shape. The rerun reached C's `command.execute.before`, but its natural ordering was
-`b_idle` -> `b_old_command_executed` -> C acquisition, so the fixed session-safety capability result is
-`SESSION-SAFETY-1 = BLOCKED`. Option D is therefore **NOT ADOPTED**; this successor result does not weaken or replace
-Task 4.0's authoritative `BLOCKED` result.
-The only confirmed suppression-clear authority remains `removeSession()`.
-
-`REQUIREMENTS_2026-09-03.md` remains authoritative and JUS-P0-01 is currently unmet/blocked. Any successor semantics
-that change the requirement must be approved separately, synchronized across Requirements / Design / Implementation
-Plan as applicable, and independently reviewed before source implementation is reconsidered. Prompt/message content,
-FIFO/event ordering, TTL, local generation, and session current/latest heuristics remain forbidden as substitute
-identity authority.
+Issue #228 remains non-authoritative historical tracking. Independent document review is still required before the
+replacement Task 4.1G/4.2G production source/test sequence may be authorized. The maximum current state is
+`READY FOR INDEPENDENT DOCUMENT REVIEW`.
 
 ### 5.2 JUS-P0-02 Plan-Scoped Authorization
 
@@ -2135,7 +2380,8 @@ review finds issue
 
 | テストファイル                                  | 対象                                                                                                                                                                                                |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/core/controller-routing.test.ts`         | exact evaluator input/signature、finalized message matching、known/custom mismatch、chat.params-only normalization、application-not-configured                                                     |
+| `tests/core/controller-routing.test.ts`         | Option G reducer、success/failed outcome separation（failed + desired actual = `applied`、failed + mismatched actual = `mismatch`）、exact terminal match、terminal-before-finalized、overlap/mismatch/missing-terminal suppression、known/custom actual narrowing                  |
+| `tests/real-fs/controller-routing-option-g-host.test.ts` | opt-in exact OpenCode `1.18.29` production-plugin regression for S/F（一致・不一致 actual を含む）/C/C2/O/R/removal、first-`await` state mutation、zero cross-apply、redacted trace cleanup                               |
 | `tests/core/plan-authorization.test.ts`         | multi-task 継続、semantic 変更で invalidated、progress-only 更新で維持、別 session 拒否、release 後拒否                                                                                             |
 | `tests/core/plan-fingerprint.test.ts`           | checkbox 変更は hash 不変、task 本文変更で hash 変化、EOL 差は無視、Justice-generated Error annotation は hash 不変、manual / provenance 不明の Error annotation は hash 変化                       |
 | `tests/core/v2/observation-model.test.ts`      | `error_annotation` と `controller_routing_observed` の typed durable observation schema、closed union assignability、legacy schemaVersion:1 compatibility                                          |
@@ -2258,6 +2504,8 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | INV-21 | A review artifact is consumed only when its reserved path, private lease, and durable inode identity match. |
 | INV-22 | A review-owned artifact write is either securely committed and cancelled at the host boundary, or rejected and cancelled at the host boundary; it never falls through to the built-in pathname writer. |
 | INV-23 | Mandatory review wire mutations are authoritative only when the supported OpenCode host is observed to consume them during actual TaskTool execution. |
+| INV-24 | Controller execution outcome, routing attribution outcome, and lifecycle terminal correlation remain separate; one never rewrites another. |
+| INV-25 | Controller routing is authoritative only from one non-ambiguous matched terminal envelope; unsafe or missing correlation creates no routing record. |
 
 ---
 
@@ -2268,7 +2516,7 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4 の順に段階的にテストを移
 | Phase 1 | JUS-P0-03 Category Routing          | 7 role → 7 `sp-*` category の全射化、silent downgrade 除去、`justice doctor` 検査追加                                                                                                                                                                                                                                                                            |
 | Phase 2 | JUS-P0-02 Plan Authorization        | one-shot arm を Plan-Scoped Authorization に置換、fingerprint + canonical snapshot 実装                                                                                                                                                                                                                                                                          |
 | Phase 3 | JUS-P0-04 Transactional Acceptance  | WorkerReported / TaskAccepted 分離、Evidence→Review→Gate→Acceptance→Progress の直列化、durable review dispatch slot の CAS claim / restart recovery / stale-event rejection。`childSessionId` correlation runtime spike が失敗した場合、authoritative child evidence が確立せず、`TaskAccepted` / `PlanComplete` が blocked となるため、Phase 3 DoD は通らない。 |
-| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **BLOCKED:** Task 4.0 negative capability evidence is authoritative; successor design is unresolved and source implementation is suspended |
+| Phase 4 | JUS-P0-01 Controller Runtime Wiring | **READY FOR INDEPENDENT DOCUMENT REVIEW:** Option G capability PASS is formalized; replacement Task 4.1G/4.2G remains non-executable until review and separate implementation authorization |
 
 Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響が最も大きいためである。Phase 1-3 で Core model を固めてから接続する。
 
@@ -2314,12 +2562,16 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 36. N-API descriptorのJavaScript field naming、root reopen、reservation identity、Rust toolchain、native addon buildが同一の実行可能契約として検証される。
 37. `controller_routing_observed` が typed schema / validator / redaction / append-replay 境界を通る durable audit record として復元でき、custom actual controller を shard identity widening なしで保持する。
 38. Controller routing observation は audit-only であり、task lifecycle / Evidence / Gate / Acceptance / Authorization / Progress authority を獲得しない。
+39. clean successful/failed terminal envelope が exact command name と finalized assistant message ID で相関し、execution outcome を routingStatus と別 field のまま保持する。
+40. overlap、terminal mismatch、missing terminal + next command、曖昧な observation は sticky suppression となり、authoritative routing record を作らず、session removal だけが suppression を除去する。
+41. Option G state transition は callback の最初の `await` より前に完了し、古い callback の非同期 side effect が新 candidate state を参照・変更しない。
+42. production wiring 後、exact OpenCode `1.18.29` と approved runtime model の opt-in real-fs regression が S/F/C/C2/O/R/removal と zero cross-apply を再検証する。
 
 ---
 
 ## 11. 決定事項メモ
 
-- **Controller Runtime Wiring**: 現行 OpenCode plugin API で in-band agent 切替は不可。config 経由の `agent:` ピン留めを guaranteed application path とし、mismatch detection を主たる観測機能とする。完全な runtime 切替は upstream API 拡張要求として分離。
+- **Controller Runtime Wiring**: 現行 OpenCode plugin API で in-band agent 切替は不可。config 経由の `agent:` ピン留めを guaranteed application path とする。Option G の一候補 session state と matched terminal envelope だけが routing audit を確定し、overlap/mismatch/missing terminal は sticky suppression へ収束する。execution outcome は routingStatus と別 field とし、failed execution でも finalized actual と desired が一致すれば routing attribution は `applied` になり得る。完全な runtime 切替は upstream API 拡張要求として分離。
 - **Plan Fingerprint**: 正規化対象を Approved Canonical Snapshot 上で task 実行進捗として認識された checkbox state / EOL のみに限定。global/unscoped セクションの checkbox は正規化しない。legacy Error annotation は one-time migration で除去。一般空白・Task 本文は正規化しない (fail-closed)。fingerprint は `sha256:<lowercase hex>` と仕様化。
 - **Task Lifecycle**: 純粋 Core とし、永続化に依存しない。`TaskLifecycleTransitionRecord` / `PlanFinalizationTransitionRecord` を durable log へ書き、v2 state projection 拡張で復元。初回 plan finalization は `tasks_pending → all_tasks_accepted → final_review_pending` を同じ初回 identity で記録し、`all_tasks_accepted` の task 集合は Approved Canonical Snapshot を SSOT とする。
 - **Progress Update**: Worker success からの直接 plan.md 更新を廃止。`TaskAccepted` 後の専用 ProgressUpdater 経由でのみ checkbox を更新。

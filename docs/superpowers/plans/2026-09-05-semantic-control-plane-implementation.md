@@ -1,6 +1,6 @@
 # Semantic Control Plane Implementation Plan
 
-> **For agentic workers:** Execute this plan inline in the current session. Do not dispatch subagents. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute only tasks whose status explicitly authorizes execution, inline in the current session. Do not dispatch subagents. Phase 4 Task 4.1G/4.2G and historical Task 4.1/4.2 are excluded until their stated review and authorization gates are satisfied. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -25,7 +25,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- Phase 4 Task 4.0 is completed. Its authoritative report `docs/spikes/2026-09-controller-routing-runtime-signals.md` records `JUS-P0-01 runtime observation = BLOCKED`; this is formal negative capability evidence, not a harness failure. The old per-invocation candidate is not authorized, Task 4.1/4.2 are suspended, and JUS-P0-01 source implementation remains blocked while successor design resolution is pending. `sessionId` alone is never an invocation identity; fixed per-session bounds do not waive the lifecycle gate.
+- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. The distinct Option G artifact records `COMMAND-ENVELOPE-1 = PASS`; replacement Task 4.1G/4.2G formalize that contract but remain non-executable until independent document review and separate production implementation authorization. `sessionId` alone is never invocation identity.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -17005,24 +17005,21 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 ## Phase 4: Controller Routing — JUS-P0-01
 
 > [!CAUTION]
-> **CURRENT PHASE STATUS: BLOCKED / DESIGN RESOLUTION PENDING**
+> **CURRENT PHASE STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / IMPLEMENTATION NOT AUTHORIZED**
 >
-> Task 4.0 is completed. The authoritative committed evidence is
-> `docs/spikes/2026-09-controller-routing-runtime-signals.md` at `58bd1c1570c298f9f9974b564d575777d0df38ec`, with
-> `JUS-P0-01 runtime observation = BLOCKED` and abandonment `BLOCKED`. This is negative capability evidence,
-> not a harness failure. The old per-invocation production candidate is not authorized. Task 4.1 and Task 4.2 are
-> suspended / not executable, and JUS-P0-01 source implementation must not start.
+> Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence. Option D and Option F
+> remain not adopted. The distinct Option G evidence in
+> `docs/spikes/2026-09-controller-routing-command-envelope.md` is `COMMAND-ENVELOPE-1 = PASS`, and the resulting
+> Requirements and Design contract is represented below by replacement Task 4.1G and Task 4.2G.
 >
-> https://github.com/yohi/justice/issues/228 tracks candidate successor semantics. It is open and non-authoritative; no option from that issue is
-> adopted by this Plan. `REQUIREMENTS_2026-09-03.md` remains unchanged and authoritative while JUS-P0-01 is
-> currently unmet/blocked.
+> Task 4.1G and Task 4.2G are **NOT EXECUTABLE** until the synchronized evidence, Requirements, Design, and Plan pass
+> independent document review and production implementation receives separate authorization. This formalization does
+> not start source/test implementation. Issue #228 remains non-authoritative historical tracking.
 >
-> The separate successor capability artifact, `docs/spikes/2026-09-controller-routing-session-safety.md`, fixed and
-> attempted an Option D session-safety procedure. After the earlier harness failure, the exact supported-host rerun
-> corrected only the temporary v1 C request shape and completed R/A/B/C plus trace validation. C reached
-> `command.execute.before`, but the natural ordering was `b_idle` -> `b_old_command_executed` -> C acquisition, so
-> `SESSION-SAFETY-1 = BLOCKED`. This does not adopt Option D, release Task 4.1/4.2, or change `removeSession()` as
-> the only confirmed suppression-clear authority.
+> The old Task 4.1 and Task 4.2 blocks remain below as historical pre-spike candidate detail. They are not unsuspended,
+> are not part of the replacement sequence, and must not be executed. `removeSession()` remains the only sticky
+> suppression cleanup authority; `session.idle`, TTL, FIFO, timing, content, arguments, latest/current lookup, desired
+> controller reverse lookup, local generation identity, and event-order inference remain prohibited.
 
 ### Task 4.0: Verify supported-host invocation correlation and abandonment lifecycle
 
@@ -17031,7 +17028,7 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 > The task body below is retained as the provenance/reproduction procedure for the committed evidence. It is not an
 > active unlock step. Do **not** rerun it to replace or override the committed result and do not overwrite the
 > existing report. Any future successor-design capability experiment must use a separately approved task and a new
-> evidence artifact.
+> evidence artifact. No PASS wording inside this historical body can unlock Task 4.1G/4.2G or the old Task 4.1/4.2.
 
 **Requirement:** JUS-P0-01, Design §3.3, §4.1, §5.1.
 
@@ -19417,13 +19414,345 @@ GIT_MASTER=1 git add docs/spikes/2026-09-controller-routing-runtime-signals.md
 GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 ```
 
-### Task 4.1: Preserve workflow identity and define the verified invocation contract
+### Task 4.1G: Define the Option G domain and state-machine contract
 
-> **STATUS: SUSPENDED / NOT EXECUTABLE**
+> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+>
+> Do not execute any step until the synchronized Option G evidence, Requirements, Design, and Plan have passed
+> independent document review and production implementation has been separately authorized.
+
+**Requirement:** JUS-P0-01-01 through JUS-P0-01-06, Design §3.2, §4.1, §5.1, INV-01, INV-24, INV-25.
+
+**Files:**
+
+- Modify: `src/core/types.ts`
+- Modify: `src/core/routing-decision.ts`
+- Create: `src/core/controller-routing.ts`
+- Test: `tests/core/routing-decision.test.ts`
+- Test: `tests/core/controller-routing.test.ts`
+
+**Consumes:** `WorkflowRouter.resolveController(workflow)` and `ControllerAgent`.
+
+**Produces:**
+
+```ts
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+export type ControllerExecutionOutcome = "success" | "failed";
+
+export function resolvePinnedCommandWorkflow(command: string): ControllerWorkflow | undefined;
+
+export function classifyControllerExecutionOutcome(input: {
+  readonly assistantCompleted: boolean;
+  readonly assistantHasError: boolean;
+  readonly finishObserved: boolean;
+  readonly finishIsError: boolean;
+}): ControllerExecutionOutcome | undefined;
+
+export function transitionControllerRoutingEnvelope(
+  state: ControllerRoutingEnvelopeState,
+  event: ControllerRoutingEnvelopeEvent,
+): ControllerRoutingEnvelopeTransition;
+
+export function evaluateControllerRoutingObservation(
+  input: ControllerRoutingEvaluationInput,
+): ControllerRoutingObservation;
+```
+
+`ControllerRoutingEnvelopeState`, `ControllerRoutingEnvelopeEvent`,
+`ControllerRoutingEnvelopeTransition`, `ControllerRoutingEnvelopeContext`,
+`ControllerRoutingEvaluationInput`, and `ControllerRoutingObservation` use the exact discriminated-union definitions
+in Design §4.1; do not weaken required fields into an uncorrelated bag of optionals. The state/event/result unions must
+encode `idle`, one `active` candidate, one `finalized`
+candidate, and zero-payload `suppressed`; no queue or multi-entry collection. A matching terminal transition returns
+one immutable `ControllerRoutingEnvelopeContext` and next state `idle`. Unsafe transitions return no context and next
+state `suppressed`.
+
+- [ ] **Step 1: Write failing workflow, outcome, evaluator, and transition tests**
+
+Add exact mapping and no-inference assertions:
+
+```ts
+it.each([
+  ["justice-implement-brainstorming", "brainstorming"],
+  ["/justice-implement-writing-plans", "writing-plans"],
+  ["justice-implement-subagent-driven-development", "subagent-driven-development"],
+  ["justice-implement-executing-plans", "executing-plans"],
+] as const)("maps %s to %s", (command, workflow) => {
+  expect(resolvePinnedCommandWorkflow(command)).toBe(workflow);
+});
+
+expect(resolvePinnedCommandWorkflow("please-use-sisyphus")).toBeUndefined();
+```
+
+Add table tests proving completed/no-error is `success`, completed/error or `finishIsError` is `failed`, and an
+incomplete lifecycle is `undefined`. Add evaluator fixtures proving both of these records are legal and independent:
+
+```ts
+expect(evaluateControllerRoutingObservation(successInput)).toMatchObject({
+  routingStatus: "applied",
+  executionOutcome: "success",
+});
+expect(evaluateControllerRoutingObservation(failedInput)).toMatchObject({
+  routingStatus: "applied",
+  executionOutcome: "failed",
+});
+expect(evaluateControllerRoutingObservation(failedMismatchedActualInput)).toMatchObject({
+  routingStatus: "mismatch",
+  executionOutcome: "failed",
+});
+```
+
+Also assert both success and failed finalized custom actual produce `mismatch` while preserving the raw string;
+chat-only input cannot produce `applied`; exact raw-string equality with the desired canonical ID is the only
+narrowing to the `applied` `ControllerAgent`; `none` produces `unapplied/application_not_configured`; and
+`ObservationAgentId` is not widened.
+
+Drive the pure reducer through these exact sequences:
+
+```text
+idle -> begin -> active -> finalized(success) -> matching terminal -> idle + context
+idle -> begin -> active -> finalized(failed)  -> matching terminal -> idle + context
+active/finalized -> begin                    -> suppressed
+finalized -> mismatched terminal             -> suppressed
+active -> terminal before finalized          -> suppressed
+finalized -> next begin without terminal     -> suppressed
+suppressed -> any non-removal event           -> suppressed
+```
+
+Assert at most one candidate, no queue property, identical finalized duplicate idempotency, conflicting finalized or
+chat duplicate suppression, and no transition uses arguments/content/timing/order/generation as identity.
+
+- [ ] **Step 2: Run focused tests and confirm RED**
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/routing-decision.test.ts \
+  tests/core/controller-routing.test.ts
+```
+
+Expected: behavioral/type-contract failures because Option G types, classifier, reducer, and evaluator semantics do
+not exist. Syntax errors or broken fixtures are not acceptable RED evidence.
+
+- [ ] **Step 3: Implement the minimal pure Option G contract**
+
+1. Add `workflow` only to `ControllerRoutingDecision` and update its factory/callers.
+2. Implement the four-literal exact command map, removing at most one leading slash and accepting no alias or fuzzy
+   match.
+3. Implement lifecycle/outcome classification from redacted booleans only.
+4. Implement the exhaustive immutable state transition union with one candidate and no queue.
+5. Require a completed finalized assistant plus exact command and assistant-message-ID match for a released context.
+6. Keep execution outcome as data; choose `applied`/`mismatch` only from finalized actual versus desired.
+7. Add no host imports, I/O, timers, cache framework, session lookup, or local identity generation.
+
+- [ ] **Step 4: Run the Step 2 command and confirm GREEN**
+
+Expected: PASS for mapping, outcome separation, success/failure release, overlap/mismatch/missing-terminal
+suppression, custom actual preservation, and immutable O(1) transitions.
+
+- [ ] **Step 5: Commit only after the implementation authorization gate**
+
+```bash
+GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
+GIT_MASTER=1 git commit -m "feat: controller routingにterminal envelopeを定義"
+```
+
+### Task 4.2G: Wire Option G and persist the audit-only result
+
+> **STATUS: READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE**
+>
+> This task is blocked by Task 4.1G and by the same independent-review and separate-authorization gate. Unit tests do
+> not replace the supported-host Option G evidence or authorize production execution.
+
+**Requirement:** JUS-P0-01-03 through JUS-P0-01-06, Design §3.2, §3.3, §3.4, §4.1, §5.1, §7.3, INV-24, INV-25.
+
+**Files:**
+
+- Modify: `src/core/session-state-provider.ts`
+- Modify: `src/core/justice-plugin.ts`
+- Modify: `src/core/v2/observation-model.ts`
+- Modify: `src/core/v2/record-builder.ts`
+- Modify: `src/runtime/validation.ts`
+- Modify: `src/core/v2/persistence-redaction.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/hooks/observation-handler.ts`
+- Modify: `src/core/doctor-categories.ts`
+- Modify: `src/core/doctor-config.ts`
+- Modify: `src/runtime/doctor-cli.ts`
+- Modify: `README.md`
+- Modify: `SPEC.md`
+- Test: `tests/core/session-state-provider.test.ts`
+- Test: `tests/core/justice-plugin-routing.test.ts`
+- Test: `tests/core/v2/observation-model.test.ts`
+- Test: `tests/runtime/validation.test.ts`
+- Test: `tests/core/v2/persistence-redaction.test.ts`
+- Test: `tests/runtime/observation-log-store.test.ts`
+- Test: `tests/core/v2/state-projection.test.ts`
+- Test: `tests/runtime/opencode-adapter-v2.test.ts`
+- Test: `tests/real-fs/controller-routing-option-g-host.test.ts`
+- Test: `tests/hooks/observation-handler-gate.test.ts`
+- Test: `tests/core/justice-doctor-config.test.ts`
+- Test: `tests/runtime/doctor-cli.test.ts`
+
+**Consumes:** Task 4.1G types, reducer, outcome classifier, exact resolver, and evaluator; existing
+`SessionStateProvider`, `WorkflowRouter`, `ObservationLogStore`, validator, redaction, projection, and effective doctor
+configuration.
+
+**Produces:**
+
+```ts
+export type ControllerRoutingFinalizedInput = {
+  readonly sessionId: string;
+  readonly assistantMessageId: string;
+  readonly actualController: ControllerObservedAgentId;
+  readonly executionOutcome: ControllerExecutionOutcome;
+};
+
+export type ControllerRoutingTerminalInput = {
+  readonly sessionId: string;
+  readonly command: ControllerPinnedCommand;
+  readonly assistantMessageId: string;
+};
+
+beginControllerRoutingEnvelope(sessionId: string, command: ControllerPinnedCommand): "acquired" | "suppressed";
+rollbackControllerRoutingEnvelope(sessionId: string, command: ControllerPinnedCommand): void;
+recordControllerRoutingChatParams(sessionId: string, actualController: ControllerObservedAgentId): void;
+recordControllerRoutingFinalized(input: ControllerRoutingFinalizedInput): void;
+completeControllerRoutingEnvelope(input: ControllerRoutingTerminalInput): ControllerRoutingEnvelopeContext | undefined;
+
+emitControllerRoutingObservation(context: ControllerRoutingEnvelopeContext): Promise<void>;
+
+export type ControllerRoutingObservedRecord = {
+  readonly recordType: "observation";
+  readonly kind: "controller_routing_observed";
+  readonly workflow: string;
+} & ControllerRoutingObservation;
+```
+
+- [ ] **Step 1: Write failing session, adapter, and post-terminal safety tests**
+
+Test successful S and failed F through real production entry points. Both must match exact command/message identity,
+release before asynchronous append, and allow C/C2 fresh acquisition. Assert F persists
+`executionOutcome="failed"` independently from `routingStatus="applied"` when final actual matches desired and
+`routingStatus="mismatch"` when final actual differs from desired.
+
+Test O, R, M, X, removal, and stale-callback behavior:
+
+```text
+O: second begin -> sticky suppressed; no owner/queue/record; late finalized/terminal/idle are no-ops
+R: synchronous failure after acquired -> own active candidate removed; existing suppression preserved
+M: command or assistant ID mismatch -> sticky suppressed; no record
+Early terminal: command.executed before finalized -> sticky suppressed; no record
+X: next begin before terminal -> sticky suppressed; no record
+Removal: candidate/suppression cleared; already-dispatched late callbacks cannot recreate state
+Post-terminal: defer audit append, begin C/C2, then resolve old append; old async work cannot access new state
+```
+
+Assert `session.idle` and `session.status=idle` never mutate state. Assert adapter normalization and transition calls
+occur before the first `await`. Transport only session ID, exact command, raw agent, assistant message ID, and lifecycle
+booleans; reject prompt/content/arguments/raw errors/raw events as state inputs.
+
+- [ ] **Step 2: Write failing durable audit, projection, and doctor tests**
+
+Add `applied` and `mismatch` fixtures with required `executionOutcome`, plus existing `unapplied`/`unsupported`
+variants without it. Validate, redact, append, read, and replay them through the real boundaries. Reject illegal
+status/outcome/field combinations, empty workflow/actual, and unknown enum values. Keep every previously valid
+non-routing `schemaVersion: 1` record readable.
+
+Assert custom actual controller remains lossless, sensitive free-form workflow/actual values use existing redaction,
+and routing records change no task lifecycle, Evidence, Review, Gate, Acceptance, Authorization, or Progress state.
+Retain exact four pinned-command doctor checks and redacted effective-config diagnostics.
+
+- [ ] **Step 3: Run focused tests and confirm RED**
+
+```bash
+devcontainer exec --workspace-folder . bun run vitest run \
+  tests/core/session-state-provider.test.ts \
+  tests/core/justice-plugin-routing.test.ts \
+  tests/core/v2/observation-model.test.ts \
+  tests/runtime/validation.test.ts \
+  tests/core/v2/persistence-redaction.test.ts \
+  tests/runtime/observation-log-store.test.ts \
+  tests/core/v2/state-projection.test.ts \
+  tests/runtime/opencode-adapter-v2.test.ts \
+  tests/hooks/observation-handler-gate.test.ts \
+  tests/core/justice-doctor-config.test.ts \
+  tests/runtime/doctor-cli.test.ts
+```
+
+Expected: behavioral failures because production state ownership, synchronous transport, immutable release,
+execution-outcome persistence, and Option G suppression are absent. Broken scaffolding is not acceptable RED evidence.
+
+- [ ] **Step 4: Implement minimal production ownership and wiring**
+
+1. Let `SessionStateProvider` own one controller-envelope state per live session and delegate transitions to the Task
+   4.1G pure reducer. `removeSession()` clears all controller payload; use existing session lifecycle generation only
+   to reject stale callback continuation, never to correlate an invocation.
+2. In `OpenCodeAdapter`, normalize and apply every routing state transition in the callback's synchronous prefix,
+   before its first `await`. Keep generic event persistence/notification work outside mutable state.
+3. In `JusticePlugin`, release state before awaiting audit evaluation/append and pass only the immutable context to
+   `ObservationHandler`. Catch every adapter/hook/I/O failure and preserve host execution.
+4. In `ObservationHandler`, resolve desired controller from context workflow, evaluate finalized actual, and append
+   exactly one terminal-correlated audit record. Never query current/latest session routing state.
+5. Extend observation schema, builder, validator, redaction, append/replay, and projection with the explicit
+   `executionOutcome` matrix. Add no new store or schema version.
+6. Keep doctor/README/SPEC synchronized with exact pinned commands and the matched-terminal audit delay.
+7. Add the explicitly opt-in real-fs supported-host regression. It provisions exact `opencode-ai@1.18.29` in an
+   `os.tmpdir()` child, loads the production plugin build, requires
+   `JUSTICE_HOST_TEST_MODEL=opencode/mimo-v2.5-free`, permits no fallback, exercises S/F/C/C2/O/R/removal, validates
+   redacted predicates, and deletes scratch output. It never overwrites the capability artifact.
+
+- [ ] **Step 5: Run the exact-host production-wiring regression**
+
+```bash
+devcontainer exec --workspace-folder . env \
+  JUSTICE_HOST_TEST_MODEL=opencode/mimo-v2.5-free \
+  bun run vitest run tests/real-fs/controller-routing-option-g-host.test.ts
+```
+
+Expected: PASS on exact OpenCode `1.18.29` for S/F envelope closure, including failed F with matching actual =
+`applied` and mismatched actual = `mismatch`, C/C2 reuse, O sticky suppression, R rollback, removal cleanup,
+first-`await` callback safety, and zero cross-apply. A request/model/provisioning/trace failure is a harness failure
+and blocks Task 4.2G completion until corrected and rerun; it does not reclassify
+`COMMAND-ENVELOPE-1`. A complete semantic regression failure blocks production readiness.
+
+- [ ] **Step 6: Run focused tests and all repository gates**
+
+Run the Step 3 command, then:
+
+```bash
+devcontainer exec --workspace-folder . bun run test
+devcontainer exec --workspace-folder . bun run typecheck
+devcontainer exec --workspace-folder . bun run lint
+devcontainer exec --workspace-folder . bun run build
+```
+
+Expected: all focused tests and repository gates PASS with no new warning. Option G remains audit-only and fail-open.
+
+- [ ] **Step 7: Commit only after the implementation authorization gate**
+
+```bash
+GIT_MASTER=1 git add src/core/session-state-provider.ts src/core/justice-plugin.ts src/core/v2/observation-model.ts src/core/v2/record-builder.ts src/runtime/validation.ts src/core/v2/persistence-redaction.ts src/runtime/opencode-adapter.ts src/hooks/observation-handler.ts src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/session-state-provider.test.ts tests/core/justice-plugin-routing.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/observation-log-store.test.ts tests/core/v2/state-projection.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/real-fs/controller-routing-option-g-host.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
+GIT_MASTER=1 git commit -m "feat: controller routingのterminal envelopeを接続"
+```
+
+### Historical Task 4.1: Preserve workflow identity and define the rejected invocation contract
+
+> **STATUS: HISTORICAL / NOT EXECUTABLE / REPLACED BY TASK 4.1G**
 >
 > Completed Task 4.0 did not satisfy this task's production precondition. The material below is retained as
 > pre-spike candidate detail; some pure-domain pieces may remain reusable, but no source/test step in this task is
-> currently authorized. A reviewed successor design must explicitly replace or re-authorize this task before use.
+> currently authorized. Task 4.1G is the sole replacement sequence; it does not re-authorize this historical task.
 
 **Requirement:** JUS-P0-01, INV-01, Design §4.1.
 
@@ -19625,9 +19954,9 @@ GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/con
 GIT_MASTER=1 git commit -m "feat: controller routingにinvocation identityを定義"
 ```
 
-### Task 4.2: Correlate verified invocations and persist controller-routing audit
+### Historical Task 4.2: Correlate the rejected invocation candidate and persist controller-routing audit
 
-> **STATUS: SUSPENDED / NOT EXECUTABLE**
+> **STATUS: HISTORICAL / NOT EXECUTABLE / REPLACED BY TASK 4.2G**
 >
 > Completed Task 4.0 blocked the per-invocation runtime correlation / abandonment contract assumed by this task.
 > All correlation maps, A/B interleavings, cleanup checkpoints, and related source/test snippets below are retained
@@ -19826,11 +20155,11 @@ Add focused tests proving:
 
 #### Failure lifecycle contract checkpoint
 
-Task 4.0 has completed with `BLOCKED`. The committed report provides **no** safe production cleanup scope, hook,
+At the time of this historical candidate, Task 4.0 had completed with `BLOCKED`. The committed report provided **no** safe production cleanup scope, hook,
 value/order, or concurrent-B preservation contract: `cleanup_scope=none`, `preserves_concurrent_invocation=false`,
-`suppression_clear_authority=removeSession_only`. Therefore no concrete cleanup RED sequence or narrow cleanup API is
-authorized from the current evidence. This entire Task 4.2 remains suspended pending a separately approved successor
-design. Local generation, sequence, latest/current heuristic, content correlation, FIFO/event-order inference, TTL,
+`suppression_clear_authority=removeSession_only`. Therefore this candidate had no concrete cleanup RED sequence or
+narrow cleanup API. Task 4.2G is the sole replacement sequence; this historical Task 4.2 remains non-executable.
+Local generation, sequence, latest/current heuristic, content correlation, FIFO/event-order inference, TTL,
 cache/timer cleanup, or background worker must not be substituted.
 
 Historical pre-spike candidate resource-bound tests used exact value `8`; this retained block is not executable and
@@ -20220,10 +20549,10 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 
 | Requirement / Design Decision                                  | Plan Task               | Required tests                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JUS-P0-01 controller workflow identity and runtime observation | 4.0 completed; successor spike BLOCKED; 4.1 / 4.2 suspended | Task 4.0 committed negative capability evidence (`runtime observation = BLOCKED`); the separate Option D session-safety spike completed a valid rerun but failed its fixed C-window/isolation criteria; old per-invocation production candidate not authorized; successor design unresolved; Issue #228 is reference only |
-| Design §4.1 controller routing runtime correlation | 4.0 evidence; 4.1 / 4.2 suspended | nominal fields observed, same-session per-invocation join / abandonment contract BLOCKED; `cleanup_scope=none`, `preserves_concurrent_invocation=false`, `suppression_clear_authority=removeSession_only`; no heuristic fallback |
-| Design §4.1 `controller_routing_observed` durable audit contract | 4.2 (suspended) | pre-spike candidate only; no durable controller-routing production audit implementation is authorized until successor design resolution and document review |
-| pinned command name + agent validation | 4.2 (suspended) | retained candidate coverage only; not executable while JUS-P0-01 successor design is unresolved |
+| JUS-P0-01 controller workflow identity and runtime observation | 4.0 historical evidence; Option G spike; 4.1G / 4.2G replacement | preserve prior BLOCKED results; exact command mapping; success/failed matched envelopes; execution/routing separation; independent review gate |
+| Design §4.1 Option G runtime correlation | 4.1G, 4.2G | one candidate; exact command + finalized assistant ID match; synchronous-prefix transition; sticky overlap/mismatch/missing-terminal suppression; removal-only cleanup; no heuristic fallback |
+| Design §4.1 `controller_routing_observed` durable audit contract | 4.2G | required execution outcome for applied/mismatch; explicit schema/validator/redaction/append/read/replay; legacy non-routing schemaVersion 1 compatibility; audit-only projection |
+| pinned command name + agent validation | 4.1G, 4.2G | exact four command mappings, finalized actual comparison, doctor effective-config validation, no content/controller reverse inference |
 | JUS-P0-02-05 semantic mutation invalidates authorization       | 2.1, 2.2                | startup current fingerprint mismatch becomes durable `invalidated` before cache restore                                                                                                                                            |
 | JUS-P0-02-06 progress-only mutation preserves authorization    | 2.1, 2.2                | approved-task checkbox-only progress produces an equal fingerprint, retains the active binding, and restores cache                                                                                                                 |
 | JUS-P0-02-07 canonical fingerprint reuse                       | 2.1, 2.2                | startup validation uses the same `computePlanFingerprint` with durable approved snapshot task IDs                                                                                                                                |
@@ -20370,9 +20699,11 @@ GIT_MASTER=1 git commit -m "feat: correlate controller routing by invocation ide
 | 3.5       | JUS-P0-04, Design §4.9, INV-14, INV-15, INV-17, INV-18                                           | durable child-binding tests                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 4.0       | JUS-P0-01 supported-host capability evidence                                                     | **COMPLETED / BLOCKED:** committed runtime report is authoritative negative capability evidence; successor design unresolved. The separate Option D session-safety spike completed a valid rerun but is `SESSION-SAFETY-1 = BLOCKED` because the fixed C window/isolation criteria did not hold. |
-| 4.1       | JUS-P0-01, Design §4.1, INV-01                                                                   | **SUSPENDED / NOT EXECUTABLE:** completed Task 4.0 precondition is BLOCKED; retained task content is pre-spike candidate detail |
-| 4.2       | JUS-P0-01, Design §3.4, §3.5, and §5.1                                                           | **SUSPENDED / NOT EXECUTABLE:** old per-invocation correlation / cleanup candidate is not authorized; Issue #228 remains non-authoritative |
+| 4.0       | JUS-P0-01 supported-host historical capability evidence                                          | **COMPLETED / BLOCKED:** immutable negative evidence; not reinterpreted by Option G |
+| 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** replacement pure domain and Option G state-machine RED/GREEN sequence |
+| 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **READY FOR INDEPENDENT DOCUMENT REVIEW / NOT EXECUTABLE:** replacement runtime wiring and durable audit RED/GREEN sequence; blocked by 4.1G and separate implementation authorization |
+| old 4.1   | Historical rejected per-invocation candidate                                                      | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.1G** |
+| old 4.2   | Historical rejected multi-map correlation candidate                                               | **HISTORICAL / NOT EXECUTABLE / REPLACED BY 4.2G** |
 
 F-035 reverse traceability is also explicit: `AtomicPersistence` strict-read opt-in implements the
 Design §4.2 authoritative-read failure semantics without changing other persistence domains;

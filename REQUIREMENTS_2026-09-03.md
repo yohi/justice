@@ -332,6 +332,7 @@ Justice は Controller routing の適用結果を観測可能でなければな�
 desiredController
 actualController
 routingStatus
+executionOutcome (terminal-correlated observation only)
 ```
 
 を区別できること。
@@ -347,11 +348,29 @@ mismatch
 
 相当の状態を表現できなければならない。
 
-`message.updated` で actual controller が desired と一致した場合のみ `applied` とする。`chat.params` 一致だけでは `applied` にしない。
+finalized `message.updated` の actual controller が desired と一致し、かつその assistant message と pinned command の clean terminal correlation が成立した場合のみ `applied` とする。`chat.params` 一致だけ、finalized assistant 一件だけ、または `command.executed` 一件だけでは `applied` にしない。
 
 ### JUS-P0-01-05
 
 Runtime の制約により Controller を適用できない場合、Justice は routing が成功したと報告してはならない。
+
+### JUS-P0-01-06
+
+Justice は次の三つを独立した意味軸として扱わなければならない。
+
+```text
+execution outcome
+routing attribution outcome
+lifecycle terminal correlation
+```
+
+finalized assistant が failed execution outcome を持つことは、Controller routing の `mismatch` を意味しない。completed lifecycle と clean terminal correlation が成立した後の `applied` / `mismatch` は、finalized actual controller と desired controller の一致だけで判定する。したがって failed execution であっても、clean terminal correlation と actual/desired 一致が成立すれば routing attribution は `applied` になり得るが、execution 自体を成功として記録してはならない。
+
+clean terminal correlation には最低限、同一 session、capture した pinned command 名と `command.executed.name` の一致、completed lifecycle を持つ finalized assistant message ID と `command.executed.messageID` の一致、および曖昧でない単一 candidate が必要である。
+
+overlap、terminal mismatch、missing terminal、またはその他の曖昧な相関では、Justice は workflow や routingStatus を推測せず、authoritative `controller_routing_observed` record を発行してはならない。実行自体は fail-open で継続する。
+
+sticky suppression、session removal fallback、ephemeral state の具体的な transition は Design-level semantics とし、この要件は特定の内部 state representation を要求しない。
 
 ---
 
@@ -389,6 +408,10 @@ routingStatus = applied
 ```
 
 となってはならない。
+
+さらに、成功 command と failed command の双方について、finalized assistant message と matching `command.executed` が clean terminal correlation を形成することを自動テストで証明する。failed command のテストでは `executionOutcome = failed` を保持したまま、actual controller が desired と一致すれば routing attribution が `applied`、一致しなければ `mismatch` になることを証明する。
+
+overlap、terminal mismatch、または matching terminal を欠いたまま次 command が開始する場合は、authoritative `controller_routing_observed` record が発行されず、別 invocation の actual controller や workflow が誤帰属されないことを自動テストで証明する。
 
 ---
 
