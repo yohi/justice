@@ -15,38 +15,38 @@
 
 ## Nominal four-command chains
 ### justice-implement-brainstorming
-- sessionID: `ses_f6c4c76deffedtjS02ruXEC0dA`
-- userMessageID: `msg_093b38a1b001NgciTVkibkIlPa`
-- assistantMessageID: `msg_093b38a270013iNbflbI6rXeGI`
+- sessionID: `A`
+- userMessageID: `B`
+- assistantMessageID: `C`
 - chat agent: `sisyphus`
 - final agent: `sisyphus`
 
 ### justice-implement-writing-plans
-- sessionID: `ses_f6c4c5526ffeexg9QQ9OHyyGZI`
-- userMessageID: `msg_093b3abb9001ffwIW89mwRrcaX`
-- assistantMessageID: `msg_093b3abc6001ccPKixruKdasKN`
+- sessionID: `A`
+- userMessageID: `B`
+- assistantMessageID: `C`
 - chat agent: `sisyphus`
 - final agent: `sisyphus`
 
 ### justice-implement-subagent-driven-development
-- sessionID: `ses_f6c4c43d0ffeHIAwgIXND9hALH`
-- userMessageID: `msg_093b3bd17001pd7wzkMlyjY8kt`
-- assistantMessageID: `msg_093b3bd240017P0peIb29RnaKw`
+- sessionID: `A`
+- userMessageID: `B`
+- assistantMessageID: `C`
 - chat agent: `atlas`
 - final agent: `atlas`
 
 ### justice-implement-executing-plans
-- sessionID: `ses_f6c4c1955ffernC64XQhXZC9mv`
-- userMessageID: `msg_093b3e785001m9unBia72nPIQZ`
-- assistantMessageID: `msg_093b3e791001r8JKMhZTg6Vknv`
+- sessionID: `A`
+- userMessageID: `B`
+- assistantMessageID: `C`
 - chat agent: `sisyphus`
 - final agent: `sisyphus`
 
 ## Same-session overlap
 ### justice-implement-subagent-driven-development
-- sessionID: `ses_f6c4b9baeffe980uOy2T2mFz9K`
-- userMessageID: `msg_093b4699c001YDwozXLEtGegvO`
-- assistantMessageID: `msg_093b4936c001k64B5J51Gw0bTb`
+- sessionID: `A`
+- userMessageID: `B`
+- assistantMessageID: `C`
 - chat agent: `atlas`
 - final agent: `atlas`
 
