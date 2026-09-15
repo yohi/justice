@@ -1170,6 +1170,10 @@ export class PlanBridge {
       case "sp-review":
       case "sp-final-review":
         return "unspecified-low";
+      case "sp-deep":
+        return "deep";
+      case "sp-architecture":
+        return "unspecified-high";
       default:
         return category;
     }

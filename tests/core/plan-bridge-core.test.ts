@@ -135,13 +135,14 @@ describe("PlanBridgeCore", () => {
     expect(result?.request.category).toBe("unspecified-low");
   });
 
-  it("returns undefined when the classified role has no OMO category", () => {
-    expect(
-      core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
-        taskId: "t1",
-        prompt: "research the design",
-      }),
-    ).toBeUndefined();
+  it("builds a worker request for classified deep roles", () => {
+    const result = core.classifyAndBuildWorkerRequest(makeTask({ title: "deep reasoning research" }), {
+      taskId: "t1",
+      prompt: "research the design",
+    });
+
+    expect(result?.category).toBe("sp-deep");
+    expect(result?.request.category).toBe("sp-deep");
   });
 
   it("builds a worker request from an explicit execution role", () => {
@@ -154,12 +155,13 @@ describe("PlanBridgeCore", () => {
     expect(result?.request.category).toBe("sp-integration");
   });
 
-  it("returns no worker request for unmapped execution roles", () => {
+  it("builds a worker request for architecture roles", () => {
     const result = core.buildWorkerRequest("architecture", {
       taskId: "task-architecture",
       prompt: "design the architecture",
     });
 
-    expect(result).toBeUndefined();
+    expect(result?.category).toBe("sp-architecture");
+    expect(result?.request.category).toBe("sp-architecture");
   });
 });

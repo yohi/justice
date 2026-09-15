@@ -161,7 +161,9 @@ export type SpCategory =
   | "sp-implementation"
   | "sp-integration"
   | "sp-review"
-  | "sp-final-review";
+  | "sp-final-review"
+  | "sp-deep"
+  | "sp-architecture";
 
 export type RoutingReason =
   | "workflow_rule"

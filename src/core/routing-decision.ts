@@ -16,8 +16,8 @@ const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
   ["integration", new Set(["sp-integration"])],
   ["review", new Set(["sp-review"])],
   ["final-review", new Set(["sp-final-review"])],
-  ["deep", new Set(["deep"])],
-  ["architecture", new Set(["unspecified-high", "deep"])],
+  ["deep", new Set(["sp-deep"])],
+  ["architecture", new Set(["sp-architecture"])],
 ]);
 
 export function createControllerRoutingDecision(
