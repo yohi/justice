@@ -1,7 +1,7 @@
 # Semantic Control Plane Implementation Plan
 
 > **PLAN STATUS: FINALIZED / NOT SELF-AUTHORIZING**
-> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents. Task 4.1CA is implemented and independently accepted; Task 4.2CA remains NOT EXECUTABLE until the Task 1.2 host-resolved config provider is implemented and accepted. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes are procedural templates, not execution authority.
+> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents. Task 4.1CA is PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is separately authorized, implemented, and accepted and the Task 1.2 host-resolved config provider is implemented and accepted. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes are procedural templates, not execution authority.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -29,7 +29,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity. v4.0.0 active scope is deterministic configuration assurance only. Task 4.1CA is IMPLEMENTED / INDEPENDENT CODE REVIEW PASSED / ACCEPTED. Task 4.2CA remains PLANNED / NOT EXECUTABLE until Task 1.2 host-resolved config provider is implemented and accepted and a separate implementation authorization is issued.
+- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity. v4.0.0 active scope is deterministic configuration assurance only. Task 4.1CA is PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED. Task 4.2CA remains PLANNED / NOT EXECUTABLE until Task 4.1CA is separately authorized, implemented, and accepted and Task 1.2 host-resolved config provider is implemented and accepted; Task 4.2CA then still requires its own separate implementation authorization.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -16989,11 +16989,11 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 ## Phase 4: Controller Routing Configuration Assurance — JUS-P0-01
 
 > [!CAUTION]
-> **CURRENT PHASE STATUS: PLAN FINALIZED / Task 4.1CA ACCEPTED / Task 4.2CA NOT EXECUTABLE**
+> **CURRENT PHASE STATUS: PLAN FINALIZED / Task 4.1CA NOT AUTHORIZED / Task 4.2CA NOT EXECUTABLE**
 >
 > v4.0.0 P0 guarantees only deterministic configuration assurance:
 > desired controller -> exact pinned-command expectation -> effective configuration inspection -> doctor assessment.
-> `configured` never means runtime applied. Task 4.1CA is complete and accepted; no remaining Phase 4 implementation is authorized by this document finalization.
+> `configured` never means runtime applied. Task 4.1CA is specified by this finalized plan but is not implemented on this branch and has not received implementation authorization. No Phase 4 implementation is authorized by this document finalization.
 >
 > Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence. Option D and Option F
 > remain not adopted. The distinct Option G evidence in
@@ -19406,9 +19406,9 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 ### Task 4.1CA: Define the pure controller configuration assurance contract
 
-> **STATUS: IMPLEMENTED / INDEPENDENT CODE REVIEW PASSED / ACCEPTED**
+> **STATUS: PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED**
 >
-> This replacement task is the accepted v4.0.0 pure configuration-assurance domain contract. Its accepted implementation ends at `e7c5b056f1ef7ae5d2ee9a28509ae96d67f934c7`. It creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. The procedural checkboxes below remain the frozen implementation recipe and are not retroactive execution evidence.
+> This replacement task is the finalized v4.0.0 pure configuration-assurance implementation contract, but its source/test implementation is intentionally absent from this documentation-only branch. A separate explicit implementation authorization is required before any step below may modify source or tests. It creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. The procedural checkboxes below are an implementation recipe, not execution authority.
 
 **Requirement:** JUS-P0-01-01 through JUS-P0-01-05, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27.
 
@@ -20690,7 +20690,7 @@ doctor` detects missing, wrong, and invalid definitions while providing the exac
 must never be represented as runtime applied. Runtime actual-controller correlation, terminal envelopes,
 `executionOutcome`, `routingStatus`, and `controller_routing_observed` are outside this v4.0.0 Definition of Done.
 
-The v4.0.0 replacement sequence is finalized: **Task 4.1CA = IMPLEMENTED / ACCEPTED** and **Task 4.2CA = PLANNED / NOT EXECUTABLE** until Task 1.2 host-resolved config provider is implemented and accepted and separate implementation authorization is issued. Finalization of this plan neither authorizes remaining production implementation nor changes the historical BLOCKED status of Task 4.0, Task 4.1G, Task 4.2G, or old Task 4.1/4.2.
+The v4.0.0 replacement sequence is finalized as a plan: **Task 4.1CA = PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED** and **Task 4.2CA = PLANNED / NOT EXECUTABLE**. Task 4.2CA additionally requires Task 4.1CA to be separately authorized, implemented, and accepted plus an implemented and accepted Task 1.2 host-resolved config provider, followed by its own separate implementation authorization. Finalization of this plan authorizes no source/test implementation and does not change the historical BLOCKED status of Task 4.0, Task 4.1G, Task 4.2G, or old Task 4.1/4.2.
 
 ### Requirement-to-Task Traceability
 
@@ -20847,7 +20847,7 @@ The v4.0.0 replacement sequence is finalized: **Task 4.1CA = IMPLEMENTED / ACCEP
 | 3.6       | JUS-P0-02, JUS-P0-04, Design §4.5, §4.8.1, §4.8.2, §4.10, §4.11, §12.2, §12.4, §12.5, §12.6, §12.7, PostToolUse §12.6, INV-13 through INV-23, F-040, F-043, F-045, F-046, F-047, F-048 | uncertain authorization restoration from hydration, probe, fingerprint, or persistence keeps Wisdom/Telemetry/projection/notifier initialization but skips staged and dispatch positive recovery; startup-first matching Review PreToolUse claims once without old directive reinjection; terminal delivery discard and unreadable-authority retention; composition-root semantic-mismatch and progress-only startup ordering; purpose-aware parent-task PostToolUse routing before implementation handlers; trusted-reservation `readOnce` binding, no-follow artifact/lease/durable three-way identity validation before parse, replacement failure before Gate/Acceptance, paired cleanup status propagation including `cleanup_incomplete`, unusable no-read blocked path, authorization guard, within-boundary Gate capability for live and staged/post-terminal recovery, concrete staged-terminal recovery and post-terminal outcome helpers, exact staging/terminal cleanup matching, no reread, terminal reuse without reappend, lifecycle/Gate/Acceptance idempotency, failure blocking, mismatch rejection, terminal-auth precedence, composite terminal/replay, reason-preserving HookResponse merge, narrow host cancellation for both review-write outcomes, composition and supported-host E2E, and shared-singleton integration tests |
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.0       | JUS-P0-01 supported-host historical capability evidence                                          | **COMPLETED / BLOCKED:** immutable negative evidence; not reinterpreted by Option G |
-| 4.1CA     | JUS-P0-01, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27                                | **IMPLEMENTED / INDEPENDENT CODE REVIEW PASSED / ACCEPTED:** pure configuration assurance only; no runtime correlation or persistence |
+| 4.1CA     | JUS-P0-01, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27                                | **PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED:** pure configuration assurance only; source/test implementation intentionally absent from this documentation-only branch |
 | 4.2CA     | JUS-P0-01, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27                                        | **PLANNED / NOT EXECUTABLE:** depends on accepted 4.1CA and implemented + accepted Task 1.2 host-resolved config provider; separate implementation authorization required |
 | 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not an authorized production successor |
 | 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** blocked by 4.1G and confirmed RG-010; no runtime wiring or durable audit sequence is authorized |
