@@ -4,6 +4,7 @@ import {
   isJusticeSpecifier,
   mergeSourceScans,
   parseJsonc,
+  projectDoctorEffectiveConfig,
   scanConfigContent,
   scanUnreadableSource,
   stripComments,
@@ -151,6 +152,96 @@ describe("scanConfigContent()", () => {
     );
     expect(result.specifiers[0]?.optionKeys).toEqual(["a", "b", "c"]);
   });
+});
+
+describe("projectDoctorEffectiveConfig()", () => {
+  it("projects only the effective category names and exact pinned command definitions", () => {
+    const projected = projectDoctorEffectiveConfig({
+      category: {
+        "sp-review": { model: "provider/model", secret: "do-not-copy" },
+        quick: { description: "retain only the key name" },
+      },
+      command: {
+        "justice-implement-brainstorming": {
+          agent: "sisyphus",
+          template: "do-not-copy",
+        },
+        unrelated: { agent: "atlas" },
+      },
+      provider: { apiKey: "do-not-copy" },
+    });
+
+    expect(projected).toEqual({
+      kind: "available",
+      view: {
+        effectiveCategoryNames: ["sp-review", "quick"],
+        effectiveCommandDefinitions: new Map([
+          ["justice-implement-brainstorming", { kind: "valid", agent: "sisyphus" }],
+        ]),
+      },
+    });
+  });
+
+  it("does not create a map entry for a missing pinned command", () => {
+    const projected = projectDoctorEffectiveConfig({ category: {}, command: {} });
+
+    expect(projected.kind).toBe("available");
+    if (projected.kind !== "available") throw new Error("expected available");
+    expect(projected.view.effectiveCommandDefinitions.size).toBe(0);
+  });
+
+  it("normalizes a pinned command with no agent as valid", () => {
+    const projected = projectDoctorEffectiveConfig({
+      command: { "justice-implement-writing-plans": { template: "do-not-copy" } },
+    });
+
+    expect(projected.kind).toBe("available");
+    if (projected.kind !== "available") throw new Error("expected available");
+    expect(
+      projected.view.effectiveCommandDefinitions.get("justice-implement-writing-plans"),
+    ).toEqual({ kind: "valid" });
+  });
+
+  it("normalizes a pinned command with a string agent as valid", () => {
+    const projected = projectDoctorEffectiveConfig({
+      command: { "justice-implement-subagent-driven-development": { agent: "atlas" } },
+    });
+
+    expect(projected.kind).toBe("available");
+    if (projected.kind !== "available") throw new Error("expected available");
+    expect(
+      projected.view.effectiveCommandDefinitions.get(
+        "justice-implement-subagent-driven-development",
+      ),
+    ).toEqual({ kind: "valid", agent: "atlas" });
+  });
+
+  it.each([
+    ["null", null],
+    ["scalar", 42],
+    ["array", []],
+    ["non-string agent", { agent: { name: "atlas" } }],
+  ] as const)("normalizes a %s pinned command definition as invalid", (_label, definition) => {
+    const projected = projectDoctorEffectiveConfig({
+      command: { "justice-implement-executing-plans": definition },
+    });
+
+    expect(projected.kind).toBe("available");
+    if (projected.kind !== "available") throw new Error("expected available");
+    expect(
+      projected.view.effectiveCommandDefinitions.get("justice-implement-executing-plans"),
+    ).toEqual({ kind: "invalid" });
+  });
+
+  it.each([null, [], "invalid", 42])(
+    "rejects a non-object resolved configuration with an explicit shape reason (%s)",
+    (resolvedConfig) => {
+      expect(projectDoctorEffectiveConfig(resolvedConfig)).toEqual({
+        kind: "unsupported",
+        reason: "resolved_config_shape_invalid",
+      });
+    },
+  );
 });
 
 describe("isJusticeSpecifier()", () => {

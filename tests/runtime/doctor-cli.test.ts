@@ -1,9 +1,14 @@
 // tests/runtime/doctor-cli.test.ts
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createDoctorHostCommandRunner,
+  createDoctorHostConfigReader,
   resolveCacheRoot,
   runDoctor,
   runStatus,
+  type DoctorHostCommandResult,
+  type DoctorHostCommandRunner,
+  type DoctorHostProcess,
   type DoctorDeps,
 } from "../../src/runtime/doctor-cli";
 import { isJusticeSpecifier } from "../../src/core/doctor-config";
@@ -61,9 +66,38 @@ function baseDeps(overrides: Partial<DoctorDeps>): DoctorDeps {
     importer: async () => {
       throw new Error("importer not configured");
     },
+    hostConfigReader: async () => ({
+      kind: "available",
+      view: {
+        effectiveCategoryNames: [
+          "sp-mechanical",
+          "sp-implementation",
+          "sp-integration",
+          "sp-review",
+          "sp-final-review",
+          "sp-deep",
+          "sp-architecture",
+        ],
+        effectiveCommandDefinitions: new Map(),
+      },
+    }),
     ...overrides,
   };
 }
+
+function commandResult(overrides: Partial<DoctorHostCommandResult> = {}): DoctorHostCommandResult {
+  return {
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    ...overrides,
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const GLOBAL_CONFIG = "/home/user/.config/opencode/opencode.jsonc";
 const CACHE_300 =
@@ -383,6 +417,212 @@ describe("runDoctor()", () => {
     );
     expect(result.text).toContain(".justice/events:");
     expect(result.text).toContain("shard 1 件 / レコード 0 件");
+  });
+
+  it("reports missing required categories from the host-resolved snapshot", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "available",
+          view: {
+            effectiveCategoryNames: ["sp-mechanical"],
+            effectiveCommandDefinitions: new Map(),
+          },
+        }),
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("sp-implementation");
+    expect(result.text).toContain("sp-architecture");
+  });
+
+  it("does not treat local source scans as a successful category authority", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "unsupported",
+          reason: "resolved_config_command_unavailable",
+        }),
+        fileReader: mockReader({
+          [GLOBAL_CONFIG]:
+            '{ "plugin": ["@yohi/justice@3.0.0"], "category": { "sp-mechanical": {} } }',
+        }),
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("resolved_config_command_unavailable");
+  });
+
+  it("converts a synchronously throwing host reader into an unsupported result", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: () => {
+          throw new Error("host reader failed secret=do-not-copy");
+        },
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("resolved_config_command_failed");
+    expect(result.text).not.toContain("do-not-copy");
+  });
+});
+
+describe("createDoctorHostConfigReader()", () => {
+  it("requires the exact supported version before reading resolved JSON", async () => {
+    const calls: Array<{ readonly args: readonly string[]; readonly cwd: string }> = [];
+    const runner: DoctorHostCommandRunner = async (args, options) => {
+      calls.push({ args, cwd: options.cwd });
+      return args[1] === "--version"
+        ? commandResult({ stdout: "1.18.29\n" })
+        : commandResult({ stdout: '{"category":{"sp-mechanical":{}}}' });
+    };
+    const reader = createDoctorHostConfigReader(runner);
+
+    const result = await reader({ cwd: "/target", env: { PATH: "/bin" } });
+
+    expect(result.kind).toBe("available");
+    expect(calls).toEqual([
+      { args: ["opencode", "--version"], cwd: "/target" },
+      { args: ["opencode", "debug", "config"], cwd: "/target" },
+    ]);
+  });
+
+  it.each([
+    [
+      "missing executable",
+      async (): Promise<DoctorHostCommandResult> => {
+        throw new Error("missing executable secret=do-not-copy");
+      },
+      "resolved_config_command_unavailable",
+    ],
+    [
+      "version command failure",
+      async (): Promise<DoctorHostCommandResult> =>
+        commandResult({ exitCode: 1, stderr: "secret=do-not-copy" }),
+      "resolved_config_command_failed",
+    ],
+    [
+      "version mismatch",
+      async (): Promise<DoctorHostCommandResult> => commandResult({ stdout: "1.18.28\n" }),
+      "resolved_config_host_version_unsupported",
+    ],
+  ] as const)("returns unsupported for %s", async (_label, runnerResult, reason) => {
+    const reader = createDoctorHostConfigReader(async () => runnerResult());
+
+    const result = await reader({ cwd: "/target", env: {} });
+
+    expect(result).toEqual({ kind: "unsupported", reason });
+  });
+
+  it("returns unsupported when the resolved-config command exits non-zero without exposing stderr", async () => {
+    const reader = createDoctorHostConfigReader(async (args) =>
+      args[1] === "--version"
+        ? commandResult({ stdout: "1.18.29" })
+        : commandResult({ exitCode: 1, stderr: "provider secret=do-not-copy" }),
+    );
+
+    const result = await reader({ cwd: "/target", env: {} });
+
+    expect(result).toEqual({ kind: "unsupported", reason: "resolved_config_command_failed" });
+    expect(JSON.stringify(result)).not.toContain("do-not-copy");
+  });
+
+  it.each([
+    ["version", ["opencode", "--version"] as const],
+    ["config", ["opencode", "debug", "config"] as const],
+  ] as const)("returns unsupported on %s probe timeout", async (_label, timedOutArgs) => {
+    const reader = createDoctorHostConfigReader(async (args) => {
+      if (args.join(" ") === timedOutArgs.join(" ")) {
+        return commandResult({ timedOut: true });
+      }
+      return args[1] === "--version"
+        ? commandResult({ stdout: "1.18.29" })
+        : commandResult({ stdout: '{"category":{}}' });
+    });
+
+    const result = await reader({ cwd: "/target", env: {} });
+
+    expect(result).toEqual({ kind: "unsupported", reason: "resolved_config_timeout" });
+  });
+
+  it("returns unsupported for invalid JSON without exposing host output", async () => {
+    const reader = createDoctorHostConfigReader(async (args) =>
+      args[1] === "--version"
+        ? commandResult({ stdout: "1.18.29" })
+        : commandResult({ stdout: '{"secret":"do-not-copy"' }),
+    );
+
+    const result = await reader({ cwd: "/target", env: {} });
+
+    expect(result).toEqual({ kind: "unsupported", reason: "resolved_config_invalid_json" });
+    expect(JSON.stringify(result)).not.toContain("do-not-copy");
+  });
+
+  it("returns unsupported for an unexpected resolved-config top-level shape", async () => {
+    const reader = createDoctorHostConfigReader(async (args) =>
+      args[1] === "--version"
+        ? commandResult({ stdout: "1.18.29" })
+        : commandResult({ stdout: "[]" }),
+    );
+
+    await expect(reader({ cwd: "/target", env: {} })).resolves.toEqual({
+      kind: "unsupported",
+      reason: "resolved_config_shape_invalid",
+    });
+  });
+
+  it("rejects an unverified target context before spawning a host command", async () => {
+    let calls = 0;
+    const reader = createDoctorHostConfigReader(async () => {
+      calls += 1;
+      return commandResult({ stdout: "1.18.29" });
+    });
+
+    const result = await reader({ cwd: "", env: {} });
+
+    expect(result).toEqual({ kind: "unsupported", reason: "resolved_config_context_unverified" });
+    expect(calls).toBe(0);
+  });
+});
+
+describe("createDoctorHostCommandRunner()", () => {
+  it("kills a timed-out child and waits for its termination", async () => {
+    vi.useFakeTimers();
+    let killed = false;
+    let terminated = false;
+    let resolveExited: ((exitCode: number) => void) | undefined;
+    const exited = new Promise<number>((resolve) => {
+      resolveExited = resolve;
+    }).then((exitCode) => {
+      terminated = true;
+      return exitCode;
+    });
+    const process: DoctorHostProcess = {
+      stdout: null,
+      stderr: null,
+      exited,
+      kill: () => {
+        killed = true;
+        resolveExited?.(143);
+      },
+    };
+    const runner = createDoctorHostCommandRunner(() => process);
+    const resultPromise = runner(["opencode", "--version"], {
+      cwd: "/target",
+      env: {},
+      timeoutMs: 30_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await resultPromise;
+
+    expect(killed).toBe(true);
+    expect(terminated).toBe(true);
+    expect(result).toMatchObject({ exitCode: 143, timedOut: true });
   });
 });
 
