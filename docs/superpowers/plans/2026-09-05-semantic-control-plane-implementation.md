@@ -59,7 +59,7 @@
 
 **Produces:** `SpCategory` with `"sp-deep" | "sp-architecture"`; `OmoCategoryMapper.map(role: ExecutionRole): SpCategory`; worker routing that rejects every non-compatibility pair outside the seven-pair mapping.
 
-- [ ] **Step 1: Write the failing routing tests**
+- [x] **Step 1: Write the failing routing tests**
 
 ```ts
 it.each([
@@ -94,13 +94,13 @@ it.each(["sp-deep", "sp-architecture"] as const)(
 );
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts`
 
 Expected: FAIL because `sp-deep` and `sp-architecture` are not valid categories.
 
-- [ ] **Step 3: Implement the exact mapping**
+- [x] **Step 3: Implement the exact mapping**
 
 ```ts
 export type SpCategory =
@@ -125,13 +125,13 @@ const ROLE_TO_CATEGORY: Readonly<Record<ExecutionRole, SpCategory>> = {
 
 Remove `deep`, `unspecified-high`, and `unspecified-low` from the non-compatibility entries of `VALID_EXECUTION_ROLE_CATEGORIES`. Change `CategoryClassifier.classify()` to return `this.categoryMapper.map(role)` without a fallback. Do not modify `RetryPolicyCalculator`; its existing `SpCategory` modifier is zero.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/types.ts src/core/omo-category-mapper.ts src/core/routing-decision.ts src/core/category-classifier.ts tests/core/routing-decision.test.ts tests/unit/core/omo-category-mapper.test.ts tests/core/retry-policy-calculator.test.ts
@@ -155,7 +155,7 @@ GIT_MASTER=1 git commit -m "feat: execution roleをsp categoryへ完全対応"
 
 **Produces:** `DoctorEffectiveConfigResult = { kind: "available"; view: DoctorEffectiveConfigView } | { kind: "unsupported"; reason: ... }`; `DoctorEffectiveConfigView = { readonly effectiveCategoryNames: readonly string[]; readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition> }`; `DoctorEffectiveCommandDefinition = { readonly kind: "valid"; readonly agent?: string } | { readonly kind: "invalid" }`; `ALL_SP_CATEGORIES: readonly SpCategory[]`; `checkSpCategoryPresence(categoryNames: readonly string[]): SpCategoryPresenceResult` where `SpCategoryPresenceResult` is `{ readonly missing: readonly SpCategory[]; readonly ok: boolean }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it("reports exactly the missing required categories from a resolved host snapshot", () => {
@@ -200,13 +200,13 @@ Add adapter tests for resolved-config acquisition: exact `1.18.29` version + suc
 
 Add pure projection tests for exact pinned command normalization: missing key -> no map entry; object with absent agent -> `{ kind: "valid" }`; object with string agent -> `{ kind: "valid", agent }`; null/scalar/array definition or non-string present agent -> `{ kind: "invalid" }`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
 Expected: FAIL because the host-resolved projection/provider contract is absent.
 
-- [ ] **Step 3: Implement the checker and host-resolved config adapter**
+- [x] **Step 3: Implement the checker and host-resolved config adapter**
 
 ```ts
 export const ALL_SP_CATEGORIES: readonly SpCategory[] = [
@@ -228,13 +228,13 @@ Keep the existing `configCandidates` / `scanConfigContent` path for Justice plug
 
 Security assertions: raw resolved config, raw stdout, raw stderr, command bodies, provider options, credentials, and unrelated values never enter doctor output, telemetry, persistence, or thrown error detail.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts`
 
 Expected: PASS. Category verification is based only on a host-resolved snapshot; unavailable resolution is explicit and never converted to success by local source scanning.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/doctor-categories.ts src/core/doctor-config.ts src/runtime/doctor-cli.ts tests/core/doctor-categories.test.ts tests/core/justice-doctor-config.test.ts tests/runtime/doctor-cli.test.ts
