@@ -2024,11 +2024,13 @@ WorkflowRouter
   -> justice doctor diagnostic and exact remediation template
 ```
 
-The effective configuration view is resolved before assessment. It respects source precedence, evaluates only the
-four exact pinned command names, requires exact agent equality, and redacts raw command values. A higher-priority
-invalid definition masks any lower-priority valid value. This path has no runtime message lifecycle correlation,
-no `command.execute.before` state, no `chat.params`, no `message.updated`, no `command.executed`, and no routing
-observation persistence.
+The effective configuration view is resolved by the supported host before assessment. Source precedence, deep
+merge, command auto-discovery, and managed/remote contributions are already reflected in that host snapshot; Justice
+does not recompute them. Justice evaluates only the four exact pinned command names, requires exact agent equality,
+and redacts raw command values. If the host-resolved effective definition for a required command is invalid, it
+remains invalid; Justice never consults or resurrects lower-priority source values. This path has no runtime message
+lifecycle correlation, no `command.execute.before` state, no `chat.params`, no `message.updated`, no
+`command.executed`, and no routing observation persistence.
 
 The evidence chain is additive and does not rewrite prior outcomes:
 
@@ -2420,7 +2422,7 @@ review finds issue
 | `tests/runtime/observation-log-store.test.ts`     | existing observation append/replay 互換を維持し、JUS-P0-01 v4.0.0 が controller configuration assessment を routing observation として永続化しないこと                                                                                                   |
 | `tests/core/acceptance-decision.test.ts`        | PASS/WARN/FAIL/unavailable それぞれの遷移、GateDecision の後だけ AcceptanceDecision を生成、evidence provenance 判定                                                                                |
 | `tests/core/doctor-categories.test.ts`          | `justice doctor` が 7 `sp-*` category の欠落を effective category view から検出                                                                                                                     |
-| `tests/core/justice-doctor-config.test.ts`      | JSONC、source precedence、unreadable / unsupported source、allowlisted effective view、redacted diagnostics、exact four pinned commands、high-priority invalid mask                                                                                         |
+| `tests/core/justice-doctor-config.test.ts`      | local JSONC / unreadable-source advisory diagnostics と host-resolved allowlisted projection を分離し、exact four pinned commands、invalid effective definition、no local fallback、redaction を検証                                                                                         |
 | `tests/hooks/plan-bridge-authorization.test.ts` | `/justice-implement --approved` が binding を発行、不一致で invalidate                                                                                                                              |
 
 ### 6.2 特に追加すべきシナリオ
@@ -2590,7 +2592,7 @@ Phase 4 を最後にするのは、OpenCode / OmO Runtime boundary への影響�
 36. N-API descriptorのJavaScript field naming、root reopen、reservation identity、Rust toolchain、native addon buildが同一の実行可能契約として検証される。
 37. `justice doctor` は exact four pinned commands の configured/missing/misconfigured/unsupported を、raw configuration を漏らさず診断し、exact remediation template を提示できる。
 38. `configured` は runtime applied、runtime success、actual-controller attribution、execution outcome、または durable routing observation として表現されない。
-39. high-priority invalid command definition は lower-priority valid agent を復活させず、configuration assurance は precedence-resolved effective value だけを評価する。
+39. host-resolved snapshot の required command definition が invalid なら `misconfigured` とし、Justice は lower-priority source を再探索・復活させない。configuration assurance は host が解決済みの effective value だけを評価する。
 40. runtime actual-controller correlation は v4.0.0 DoD ではない。将来の再導入には新 capability spike と Requirements/Design review が必要である。
 
 ---
