@@ -2,9 +2,12 @@
 
 **Document:** Justice Semantic Control Plane Design  
 **Date:** 2026-09-04  
-**Status:** Design Review Pending（CA-001 host-resolved effective-config authority corrected; JUS-P0-01 v4.0.0 = Configuration Assurance; runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED; JUS-P0-02 / 03 / 04 unchanged）
+**Status:** FINAL / ACCEPTED（CA-001 / CA-002 resolved; JUS-P0-01 v4.0.0 = Configuration Assurance; runtime attribution = DEFERRED / HOST CAPABILITY BLOCKED; JUS-P0-02 / 03 / 04 design unchanged）
 **Scope:** JUS-P0-01 / JUS-P0-02 / JUS-P0-03 / JUS-P0-04  
 **Target Release:** v4.0.0
+**Finalized:** 2026-09-15
+**Authority Order:** Requirements → Design → Implementation Plan
+**Execution Boundary:** この設計書の確定は source / test 変更を認可しない。実装は Implementation Plan の task ごとに別途明示的な認可を要する。
 
 ---
 
