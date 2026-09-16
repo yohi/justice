@@ -887,8 +887,15 @@ export class PlanBridge {
           currentFingerprint,
           new Date().toISOString(),
         );
-      } catch {
-        // A failed invalidation remains fail-closed for this PreToolUse request.
+      } catch (error) {
+        this.safeNotify(
+          event.sessionId,
+          undefined,
+          "warning",
+          "escalation",
+          "Authorization invalidation failed",
+          `Failed to invalidate stale authorization during PreToolUse: ${String(error)}`,
+        );
       }
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
