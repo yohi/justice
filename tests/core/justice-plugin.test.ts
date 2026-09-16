@@ -38,6 +38,24 @@ describe("JusticePlugin", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
+  it("restores authorizations before loading wisdom and projections", async () => {
+    const order: string[] = [];
+    vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockImplementation(async () => {
+      order.push("authorization");
+      return "authoritative";
+    });
+    vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockImplementation(async () => {
+      order.push("wisdom");
+    });
+    vi.spyOn(plugin.getObservationHandler(), "initializeProjectionCache").mockImplementation(async () => {
+      order.push("projection");
+    });
+
+    await plugin.initialize();
+
+    expect(order.slice(0, 3)).toEqual(["authorization", "wisdom", "projection"]);
+  });
+
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };

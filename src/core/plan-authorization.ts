@@ -314,7 +314,7 @@ function samePlanFingerprint(left: PlanFingerprint, right: PlanFingerprint): boo
   return left.algorithm === right.algorithm && left.value === right.value;
 }
 
-export function deserializeAuthorizationBindings(raw: string): ReadonlyArray<ApprovedPlanBinding> {
+function deserializeAuthorizationBindings(raw: string): ReadonlyArray<ApprovedPlanBinding> {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed) || !parsed.every(isApprovedPlanBinding)) {
     throw new Error("Invalid authorization binding array");
@@ -433,7 +433,7 @@ function terminalTimestamp(binding: Exclude<ApprovedPlanBinding, { readonly stat
   return binding.status === "invalidated" ? binding.invalidatedAt : binding.releasedAt;
 }
 
-export function invalidateSuperseded(
+function invalidateSuperseded(
   binding: Extract<ApprovedPlanBinding, { readonly status: "active" }>,
   invalidatedAt = new Date().toISOString(),
 ): ApprovedPlanBinding {

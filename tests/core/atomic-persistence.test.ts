@@ -77,6 +77,21 @@ describe("AtomicPersistence", () => {
     });
   });
 
+  it("does not treat an ENOENT message without an errno code as absent", async () => {
+    const strict = new AtomicPersistence(
+      {
+        ...createMockFileReader({}),
+        readFile: async () => {
+          throw new Error("ENOENT: simulated read failure");
+        },
+      },
+      createMockFileWriter(),
+      { ...config(), strictReadValidation: true },
+    );
+
+    await expect(strict.loadWithLock()).rejects.toThrow("ENOENT: simulated read failure");
+  });
+
   it("rejects an existing blank file in strict mode", async () => {
     const strict = new AtomicPersistence(
       createMockFileReader({ "state.json": "" }),

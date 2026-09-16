@@ -33,6 +33,7 @@ import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-c
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
 import { buildCanonicalSnapshot, computePlanFingerprint } from "../core/plan-fingerprint";
+import * as planFingerprintModule from "../core/plan-fingerprint";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import {
@@ -205,6 +206,10 @@ export class PlanBridge {
     }
     for (const binding of bindings) {
       if (binding.status !== "active") continue;
+      if (normalizeSafeRelativePath(binding.planPath) === null) {
+        this.reconcileActivePlan(binding.sessionId, null);
+        return "uncertain";
+      }
       let planContent: string | null;
       try {
         planContent = await this.readPlanFile(binding.planPath);
@@ -220,8 +225,12 @@ export class PlanBridge {
               let currentFingerprint: PlanFingerprint;
               try {
                 const approvedTaskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
-                currentFingerprint = computePlanFingerprint(planContent, approvedTaskIds);
+                currentFingerprint = planFingerprintModule.computePlanFingerprint(
+                  planContent,
+                  approvedTaskIds,
+                );
               } catch {
+                this.reconcileActivePlan(binding.sessionId, null);
                 return "uncertain" as const;
               }
               const mutation = await dependencies.authorizationStore
@@ -554,13 +563,11 @@ export class PlanBridge {
 
     const dependencies = this.authorizationDependencies;
     if (dependencies === null) {
-      this.setActivePlan(sessionId, planPath);
-      this.implementationArmedSessions.set(sessionId, { planPath });
       return {
-        armed: true,
-        planPath,
-        directiveStage: "implementation_arm",
-        guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath }),
+        armed: false,
+        planPath: null,
+        directiveStage: "implementation_arm_required",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
       };
     }
 

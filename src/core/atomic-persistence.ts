@@ -280,9 +280,7 @@ export class AtomicPersistence<T> {
 
 function isErrno(value: unknown, code: string): boolean {
   return (
-    value instanceof Error &&
-    (("code" in value && (value as NodeJS.ErrnoException).code === code) ||
-      (code === "ENOENT" && value.message.includes("ENOENT")))
+    value instanceof Error && "code" in value && (value as NodeJS.ErrnoException).code === code
   );
 }
 

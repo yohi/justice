@@ -7,7 +7,6 @@ import {
 import {
   AuthorizationStore,
   createAuthorizationReviewBoundary,
-  deserializeAuthorizationBindings,
   mergeAuthorizationBindings,
   type ApprovePlanInput,
   type ApprovedPlanBinding,
@@ -132,10 +131,45 @@ describe("AuthorizationStore", () => {
     expect(mergeAuthorizationBindings([active], [released])).toEqual([released]);
   });
 
-  it("rejects invalid authorization schemas at the persistence boundary", () => {
-    expect(() => deserializeAuthorizationBindings(JSON.stringify([{}]))).toThrow(
-      "Invalid authorization binding array",
+  it("rejects invalid authorization schemas at the persistence boundary", async () => {
+    const files = createMockFileSystem({
+      ".justice/authorizations.json": JSON.stringify({ version: 1, data: [{}] }),
+    });
+
+    await expect(storeFor(files).hydrate()).rejects.toThrow("Invalid authorization binding array");
+  });
+
+  it("serializes same-session approvals through one boundary", async () => {
+    const files = createMockFileSystem();
+    const store = storeFor(files);
+
+    const [first, second] = await Promise.all([
+      store.approve(inputFor("same-session", "docs/first.md")),
+      store.approve(inputFor("same-session", "docs/second.md")),
+    ]);
+
+    const active = (await store.hydrate()).filter(
+      (binding) => binding.sessionId === "same-session" && binding.status === "active",
     );
+    expect([first, second].filter((binding) => binding !== null)).toHaveLength(2);
+    expect(active).toHaveLength(1);
+  });
+
+  it("merges approvals from independent boundaries into one active session binding", async () => {
+    const files = createMockFileSystem();
+    const storeA = new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
+    const storeB = new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
+
+    const [first, second] = await Promise.all([
+      storeA.approve(inputFor("cross-process", "docs/first.md")),
+      storeB.approve(inputFor("cross-process", "docs/second.md")),
+    ]);
+
+    const active = (await storeA.hydrate()).filter(
+      (binding) => binding.sessionId === "cross-process" && binding.status === "active",
+    );
+    expect(active).toHaveLength(1);
+    expect([first, second].filter((binding) => binding?.authorizationId === active[0]?.authorizationId)).toHaveLength(1);
   });
 
   it("does not invoke a reconciler when the authoritative save diverts", async () => {
