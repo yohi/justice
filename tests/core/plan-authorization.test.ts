@@ -23,14 +23,18 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   return { promise, resolve: (value) => resolve?.(value as T) };
 }
 
-function inputFor(sessionId: string, planPath: string, content = plan): ApprovePlanInput {
-  const taskIds = new PlanParser().parse(content).map((task) => task.id);
+function inputFor(
+  sessionId: string,
+  planPath: string,
+  approvedAt = "2026-09-05T00:00:00.000Z",
+): ApprovePlanInput {
+  const taskIds = new PlanParser().parse(plan).map((task) => task.id);
   return {
     sessionId,
     planPath,
-    canonicalSnapshot: buildCanonicalSnapshot(content, taskIds),
-    planFingerprint: computePlanFingerprint(content, taskIds),
-    approvedAt: "2026-09-05T00:00:00.000Z",
+    canonicalSnapshot: buildCanonicalSnapshot(plan, taskIds),
+    planFingerprint: computePlanFingerprint(plan, taskIds),
+    approvedAt,
   };
 }
 
