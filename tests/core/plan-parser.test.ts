@@ -77,6 +77,12 @@ describe("PlanParser", () => {
     });
   });
 
+  it("derives task-1 from both ordinary and leading-zero task headings", () => {
+    const tasks = parser.parse("## Task 1: First\n- [ ] step\n### Task 01: Second\n- [ ] step\n");
+
+    expect(tasks.map((task) => task.id)).toEqual(["task-1", "task-1"]);
+  });
+
   describe("updateCheckbox", () => {
     it("should check an unchecked step", () => {
       const content = "- [ ] Step 1\n- [ ] Step 2\n";

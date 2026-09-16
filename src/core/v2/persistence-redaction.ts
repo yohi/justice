@@ -166,6 +166,8 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
               })),
             }),
       };
+    case "error_annotation":
+      return { ...record, planPath: redactForPersistence(record.planPath) };
     // Each bootstrap kind is spread under its own literal `kind` so the result
     // stays assignable to a single PendingObservationRecord member.
     case "workflow_started":

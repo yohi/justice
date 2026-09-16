@@ -59,6 +59,22 @@ function validReviewObserved(): Record<string, unknown> {
   };
 }
 
+function validErrorAnnotation(): Record<string, unknown> {
+  return {
+    ...validBase("observation"),
+    kind: "error_annotation",
+    provenance: "observed",
+    planPath: "docs/plans/example.md",
+    planPathDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    planSnapshotDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    target: {
+      lineNumber: 3,
+      occurrence: 1,
+      normalizedLineDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    },
+  };
+}
+
 function validToolExecuted(): Record<string, unknown> {
   return {
     ...validBase("observation"),
@@ -97,6 +113,26 @@ describe("validateRecordSchema", () => {
 
   it("accepts a valid message record", () => {
     expect(() => validateRecordSchema(validMessage())).not.toThrow();
+  });
+
+  it("accepts a valid observed error_annotation record", () => {
+    expect(() => validateRecordSchema(validErrorAnnotation())).not.toThrow();
+  });
+
+  it.each([
+    { name: "missing path", override: { planPath: undefined } },
+    { name: "empty path", override: { planPath: "" } },
+    { name: "unsafe path", override: { planPath: "../plan.md" } },
+    { name: "invalid path digest", override: { planPathDigest: "bad" } },
+    { name: "non-positive line number", override: { target: { lineNumber: 0, occurrence: 1, normalizedLineDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } },
+    { name: "non-positive occurrence", override: { target: { lineNumber: 3, occurrence: 0, normalizedLineDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } },
+    { name: "invalid snapshot digest", override: { planSnapshotDigest: "bad" } },
+    { name: "invalid line digest", override: { target: { lineNumber: 3, occurrence: 1, normalizedLineDigest: "bad" } } },
+    { name: "malformed provenance", override: { provenance: "manual" } },
+  ])("rejects error_annotation with $name", ({ override }) => {
+    expect(() => validateRecordSchema({ ...validErrorAnnotation(), ...override })).toThrow(
+      "Invalid error_annotation record",
+    );
   });
 
   it("accepts a valid decision record", () => {

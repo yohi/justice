@@ -188,6 +188,20 @@ export type PlanActivatedRecord = {
   readonly workflow: WorkflowBootstrapAudit;
 };
 
+export type ErrorAnnotationObservation = {
+  readonly recordType: "observation";
+  readonly kind: "error_annotation";
+  readonly provenance: "observed" | "unknown";
+  readonly planPath: string;
+  readonly planPathDigest?: string;
+  readonly planSnapshotDigest: string;
+  readonly target: {
+    readonly lineNumber: number;
+    readonly occurrence: number;
+    readonly normalizedLineDigest: string;
+  };
+};
+
 export type WorkflowBootstrapRecord =
   | WorkflowStartedRecord
   | DesignRequestedRecord
@@ -203,6 +217,7 @@ export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & ReviewObservedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & SessionErrorRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & ReflectionRecord)
+  | (PendingEnvelope & ErrorAnnotationObservation)
   | (PendingEnvelope & { readonly recordType: "observation" } & WorkflowStartedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & DesignRequestedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanRequestedRecord)
