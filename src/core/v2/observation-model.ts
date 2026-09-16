@@ -193,6 +193,7 @@ export type ErrorAnnotationObservation = {
   readonly kind: "error_annotation";
   readonly provenance: "observed" | "unknown";
   readonly planPath: string;
+  readonly planPathDigest?: string;
   readonly planSnapshotDigest: string;
   readonly target: {
     readonly lineNumber: number;

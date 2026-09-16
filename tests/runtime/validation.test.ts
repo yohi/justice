@@ -65,6 +65,7 @@ function validErrorAnnotation(): Record<string, unknown> {
     kind: "error_annotation",
     provenance: "observed",
     planPath: "docs/plans/example.md",
+    planPathDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     planSnapshotDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     target: {
       lineNumber: 3,
@@ -122,6 +123,7 @@ describe("validateRecordSchema", () => {
     { name: "missing path", override: { planPath: undefined } },
     { name: "empty path", override: { planPath: "" } },
     { name: "unsafe path", override: { planPath: "../plan.md" } },
+    { name: "invalid path digest", override: { planPathDigest: "bad" } },
     { name: "non-positive line number", override: { target: { lineNumber: 0, occurrence: 1, normalizedLineDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } },
     { name: "non-positive occurrence", override: { target: { lineNumber: 3, occurrence: 0, normalizedLineDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } },
     { name: "invalid snapshot digest", override: { planSnapshotDigest: "bad" } },

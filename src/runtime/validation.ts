@@ -60,6 +60,7 @@ function isValidErrorAnnotationRecord(record: Readonly<Record<string, unknown>>)
   if (
     !isOneOf(record.provenance, ["observed", "unknown"]) ||
     !isValidMandatoryRelativePath(record.planPath) ||
+    (record.planPathDigest !== undefined && !isSha256Digest(record.planPathDigest)) ||
     !isSha256Digest(record.planSnapshotDigest) ||
     !isObject(record.target) ||
     Array.isArray(record.target)

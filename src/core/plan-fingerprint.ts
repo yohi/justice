@@ -7,9 +7,14 @@ import { hashString } from "./v2/hash";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/u;
 const CHECKBOX_REGEX = /^(\s*-\s+\[)[ xX](\]\s+.+)$/u;
-const FENCE_REGEX = /^\s*(```|~~~)/u;
+const FENCE_REGEX = /^\s*(`{3,}|~{3,})(.*)$/u;
 
-type FenceKind = "```" | "~~~";
+type FenceMarker = "`" | "~";
+
+type FenceState = {
+  readonly marker: FenceMarker;
+  readonly length: number;
+};
 
 type TaskSection = {
   readonly taskId: string;
@@ -27,21 +32,29 @@ function normalizeEol(raw: string): string {
   return raw.replace(/\r\n/g, "\n");
 }
 
-function advanceFence(fenceKind: FenceKind | null, line: string): FenceKind | null {
-  const marker = line.match(FENCE_REGEX)?.[1];
-  if (marker !== "```" && marker !== "~~~") return fenceKind;
-  if (fenceKind === null) return marker;
-  return fenceKind === marker ? null : fenceKind;
+function advanceFence(fence: FenceState | null, line: string): FenceState | null {
+  const match = line.match(FENCE_REGEX);
+  const markerRun = match?.[1];
+  const suffix = match?.[2];
+  if (markerRun === undefined || suffix === undefined) return fence;
+
+  const marker = markerRun[0];
+  if (marker !== "`" && marker !== "~") return fence;
+  if (fence === null) return { marker, length: markerRun.length };
+
+  const isClosingFence =
+    marker === fence.marker && markerRun.length >= fence.length && /^\s*$/u.test(suffix);
+  return isClosingFence ? null : fence;
 }
 
 function findTaskSections(lines: readonly string[]): ReadonlyArray<TaskSection> {
   const sections: TaskSection[] = [];
-  let fenceKind: FenceKind | null = null;
+  let fence: FenceState | null = null;
   let current: Omit<TaskSection, "end"> | null = null;
 
   for (const [index, line] of lines.entries()) {
-    fenceKind = advanceFence(fenceKind, line);
-    if (fenceKind !== null) continue;
+    fence = advanceFence(fence, line);
+    if (fence !== null) continue;
 
     const heading = line.match(TASK_HEADING_REGEX);
     if (heading?.[1] === undefined || heading[2] === undefined) continue;
@@ -78,12 +91,12 @@ function canonicalize(raw: string, approvedTaskIds: readonly string[]): Canonica
       .map((section) => section.start),
   );
   const canonicalLines = [...lines];
-  let fenceKind: FenceKind | null = null;
+  let fence: FenceState | null = null;
   let activeSectionStart: number | null = null;
 
   for (const [index, line] of lines.entries()) {
-    fenceKind = advanceFence(fenceKind, line);
-    if (fenceKind !== null) continue;
+    fence = advanceFence(fence, line);
+    if (fence !== null) continue;
 
     const heading = line.match(TASK_HEADING_REGEX);
     if (heading !== null) {

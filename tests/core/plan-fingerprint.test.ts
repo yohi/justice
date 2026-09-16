@@ -3,11 +3,13 @@ import {
   buildCanonicalSnapshot,
   computePlanFingerprint,
 } from "../../src/core/plan-fingerprint";
+import { hashString } from "../../src/core/v2/hash";
 import {
   createErrorAnnotationObservation,
   migrateJusticeGeneratedErrorAnnotations,
 } from "../../src/core/error-annotation";
 import type { ObservationRecord } from "../../src/core/v2/observation-model";
+import { redactPendingLogRecord } from "../../src/core/v2/persistence-redaction";
 import { validateRecordSchema } from "../../src/runtime/validation";
 
 const PLAN_PATH = "docs/plans/example.md";
@@ -30,7 +32,14 @@ type ErrorAnnotationRecord = Extract<ObservationRecord, { readonly kind: "error_
 function observedAnnotation(
   raw: string,
   lineNumber: number,
+  planPath = PLAN_PATH,
+  includePlanPathDigest = true,
 ): ErrorAnnotationRecord {
+  const { planPathDigest, ...observation } = createErrorAnnotationObservation(
+    planPath,
+    raw,
+    lineNumber,
+  );
   return {
     schemaVersion: 1,
     sequence: 1,
@@ -38,7 +47,8 @@ function observedAnnotation(
     agentId: "system",
     sessionId: "ses-1",
     writerId: "w-1",
-    ...createErrorAnnotationObservation(PLAN_PATH, raw, lineNumber),
+    ...observation,
+    ...(includePlanPathDigest ? { planPathDigest } : {}),
   };
 }
 
@@ -82,6 +92,25 @@ describe("plan fingerprint", () => {
     );
     expect(computePlanFingerprint(tildeUnchecked, ["task-1"])).not.toEqual(
       computePlanFingerprint(tildeChecked, ["task-1"]),
+    );
+  });
+
+  it("keeps checkboxes semantic for shorter or suffixed fence lines", () => {
+    const shorterCloseUnchecked =
+      "## Task 1: approved\n````text\n- [ ] example\n```\n- [ ] execute\n````\n";
+    const shorterCloseChecked = shorterCloseUnchecked.replace("- [ ] execute", "- [x] execute");
+    const suffixedCloseUnchecked =
+      "## Task 1: approved\n```text\n- [ ] example\n```not-a-close\n- [ ] execute\n```\n";
+    const suffixedCloseChecked = suffixedCloseUnchecked.replace(
+      "- [ ] execute",
+      "- [x] execute",
+    );
+
+    expect(computePlanFingerprint(shorterCloseUnchecked, ["task-1"])).not.toEqual(
+      computePlanFingerprint(shorterCloseChecked, ["task-1"]),
+    );
+    expect(computePlanFingerprint(suffixedCloseUnchecked, ["task-1"])).not.toEqual(
+      computePlanFingerprint(suffixedCloseChecked, ["task-1"]),
     );
   });
 
@@ -139,9 +168,27 @@ describe("plan fingerprint", () => {
 });
 
 describe("Justice-generated error annotation migration", () => {
+  it("migrates a new annotation after plan path redaction", () => {
+    const planPath = "docs/plans/access_token.md";
+    const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
+    const redacted = redactPendingLogRecord(observedAnnotation(raw, 3, planPath));
+    if (redacted.recordType !== "observation" || redacted.kind !== "error_annotation") {
+      throw new Error("Expected an error_annotation record");
+    }
+    const persisted = { ...redacted, sequence: 1 };
+
+    expect(persisted.planPath).toBe("docs/plans/[REDACTED_SECRET].md");
+    expect(JSON.stringify(persisted)).toContain("planPathDigest");
+
+    const result = migrateJusticeGeneratedErrorAnnotations(raw, planPath, [persisted]);
+
+    expect(result.content).not.toContain("> ⚠️ **Error**: failed");
+    expect(result.warnings).toEqual([]);
+  });
+
   it("removes one exactly identified observed legacy annotation after schema validation", () => {
     const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
-    const observation = observedAnnotation(raw, 3);
+    const observation = observedAnnotation(raw, 3, PLAN_PATH, false);
 
     validateRecordSchema(observation);
     const result = migrateJusticeGeneratedErrorAnnotations(raw, PLAN_PATH, [observation]);
@@ -167,6 +214,7 @@ describe("Justice-generated error annotation migration", () => {
       record: (raw: string): ErrorAnnotationRecord => ({
         ...observedAnnotation(raw, 3),
         planPath: "docs/plans/other.md",
+        planPathDigest: hashString("docs/plans/other.md"),
       }),
     },
     {

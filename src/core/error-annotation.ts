@@ -46,6 +46,7 @@ export function createErrorAnnotationObservation(
     kind: "error_annotation",
     provenance: "observed",
     planPath: normalizedPath,
+    planPathDigest: hashString(normalizedPath),
     planSnapshotDigest: hashString(lines.join("\n")),
     target: {
       lineNumber,
@@ -64,6 +65,8 @@ export function migrateJusticeGeneratedErrorAnnotations(
   const normalizedPath = normalizeSafeRelativePath(planPath);
   const lines = normalized.split("\n");
   const rawDigest = hashString(normalized);
+  const normalizedPathDigest =
+    normalizedPath === null ? undefined : hashString(normalizedPath);
   const removeIndexes = new Set<number>();
   const representedIndexes = new Set<number>();
   const warnings: MigrationWarning[] = [];
@@ -85,7 +88,9 @@ export function migrateJusticeGeneratedErrorAnnotations(
     const canRemove =
       record.provenance === "observed" &&
       normalizedPath !== null &&
-      record.planPath === normalizedPath &&
+      (record.planPathDigest === undefined
+        ? record.planPath === normalizedPath
+        : record.planPathDigest === normalizedPathDigest) &&
       record.planSnapshotDigest === rawDigest &&
       matchesLine &&
       line !== undefined &&
