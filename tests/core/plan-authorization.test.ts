@@ -15,6 +15,14 @@ import { createMockFileSystem, type MockFileSystem } from "../helpers/mock-file-
 
 const plan = "## Task 1: Approved\n- [ ] implement\n";
 
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value?: T) => void } {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve: (value) => resolve?.(value as T) };
+}
+
 function inputFor(sessionId: string, planPath: string, content = plan): ApprovePlanInput {
   const taskIds = new PlanParser().parse(content).map((task) => task.id);
   return {
@@ -139,37 +147,132 @@ describe("AuthorizationStore", () => {
     await expect(storeFor(files).hydrate()).rejects.toThrow("Invalid authorization binding array");
   });
 
-  it("serializes same-session approvals through one boundary", async () => {
+  it("serializes same-process same-session approvals without a filesystem conflict", async () => {
+    const boundary = createAuthorizationReviewBoundary();
     const files = createMockFileSystem();
-    const store = storeFor(files);
+    const store = new AuthorizationStore(files, files, boundary);
+    const firstMutationEntered = deferred<void>();
+    const releaseFirstMutation = deferred<void>();
+    const originalWriteFile = files.writeFile.bind(files);
+    let holdFirstAuthorizationWrite = false;
+    let activeMutationBodies = 0;
+    let maximumMutationBodies = 0;
+    files.writeFile = async (path, content) => {
+      if (holdFirstAuthorizationWrite && path.startsWith(".justice/authorizations.json.tmp.")) {
+        activeMutationBodies += 1;
+        maximumMutationBodies = Math.max(maximumMutationBodies, activeMutationBodies);
+        firstMutationEntered.resolve();
+        await releaseFirstMutation.promise;
+        activeMutationBodies -= 1;
+      }
+      await originalWriteFile(path, content);
+    };
 
-    const [first, second] = await Promise.all([
-      store.approve(inputFor("same-session", "docs/first.md")),
-      store.approve(inputFor("same-session", "docs/second.md")),
-    ]);
-
-    const active = (await store.hydrate()).filter(
-      (binding) => binding.sessionId === "same-session" && binding.status === "active",
+    const old = await store.approve(inputFor("s1", "docs/old.md"));
+    holdFirstAuthorizationWrite = true;
+    const approvalA = store.approve(inputFor("s1", "docs/a.md"));
+    await firstMutationEntered.promise;
+    const approvalB = store.approve(inputFor("s1", "docs/b.md"));
+    releaseFirstMutation.resolve();
+    const [a, b] = await Promise.all([approvalA, approvalB]);
+    const durable = await store.hydrate();
+    const active = durable.filter(
+      (binding) => binding.sessionId === "s1" && binding.status === "active",
     );
-    expect([first, second].filter((binding) => binding !== null)).toHaveLength(2);
+
+    expect(maximumMutationBodies).toBe(1);
+    expect([a, b].filter((binding) => binding !== null)).toHaveLength(2);
     expect(active).toHaveLength(1);
+    expect(durable.find((binding) => binding.authorizationId === old?.authorizationId)).toMatchObject({
+      status: "invalidated",
+      invalidationReason: "plan_superseded",
+    });
+    expect(
+      durable.filter(
+        (binding) =>
+          (binding.authorizationId === a?.authorizationId || binding.authorizationId === b?.authorizationId) &&
+          binding.status === "invalidated",
+      ),
+    ).toEqual([expect.objectContaining({ invalidationReason: "plan_superseded" })]);
+    expect(
+      [a, b].some(
+        (binding) => binding?.authorizationId === active[0]?.authorizationId,
+      ),
+    ).toBe(true);
   });
 
-  it("merges approvals from independent boundaries into one active session binding", async () => {
+  it("merges a cross-process version conflict through independent boundaries", async () => {
+    const firstTwoLinkAttempts = deferred<void>();
+    const firstClaimCompleted = deferred<void>();
     const files = createMockFileSystem();
-    const storeA = new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
-    const storeB = new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
+    const boundaryA = createAuthorizationReviewBoundary();
+    const boundaryB = createAuthorizationReviewBoundary();
+    const storeA = new AuthorizationStore(files, files, boundaryA);
+    const storeB = new AuthorizationStore(files, files, boundaryB);
+    const link = files.link;
+    if (link === undefined) throw new Error("authorization fixture requires link support");
+    const originalLink = link.bind(files);
+    let coordinateContenders = false;
+    let linkAttempts = 0;
+    files.link = async (target, claimPath) => {
+      if (!coordinateContenders) return originalLink(target, claimPath);
+      linkAttempts += 1;
+      if (linkAttempts <= 2) {
+        if (linkAttempts === 1) {
+          firstTwoLinkAttempts.resolve();
+          await firstTwoLinkAttempts.promise;
+          await originalLink(target, claimPath);
+          firstClaimCompleted.resolve();
+          return;
+        }
+        await firstTwoLinkAttempts.promise;
+        await firstClaimCompleted.promise;
+      }
+      await originalLink(target, claimPath);
+    };
 
-    const [first, second] = await Promise.all([
-      storeA.approve(inputFor("cross-process", "docs/first.md")),
-      storeB.approve(inputFor("cross-process", "docs/second.md")),
-    ]);
-
-    const active = (await storeA.hydrate()).filter(
-      (binding) => binding.sessionId === "cross-process" && binding.status === "active",
+    const old = await storeA.approve(inputFor("s1", "docs/old.md"));
+    const other = await storeA.approve(inputFor("s2", "docs/other.md"));
+    coordinateContenders = true;
+    const approvalA = storeA.approve(inputFor("s1", "docs/a.md", "2026-09-05T00:00:02.000Z"));
+    const approvalB = storeB.approve(inputFor("s1", "docs/b.md", "2026-09-05T00:00:01.000Z"));
+    await firstTwoLinkAttempts.promise;
+    const [a, b] = await Promise.all([approvalA, approvalB]);
+    const durable = await storeA.hydrate();
+    const active = durable.filter(
+      (binding) => binding.sessionId === "s1" && binding.status === "active",
     );
+    const freshDurable = durable.filter(
+      (binding) =>
+        binding.sessionId === "s1" &&
+        (binding.planPath === "docs/a.md" || binding.planPath === "docs/b.md"),
+    );
+    const freshWinner = freshDurable.find((binding) => binding.status === "active");
+    const freshLoser = freshDurable.find(
+      (binding) =>
+        binding.status === "invalidated" && binding.invalidationReason === "plan_superseded",
+    );
+
+    expect(linkAttempts).toBeGreaterThanOrEqual(4);
     expect(active).toHaveLength(1);
-    expect([first, second].filter((binding) => binding?.authorizationId === active[0]?.authorizationId)).toHaveLength(1);
+    expect(freshDurable.filter((binding) => binding.status === "active")).toHaveLength(1);
+    expect(freshLoser).toBeDefined();
+    expect(freshLoser).toMatchObject({
+      status: "invalidated",
+      invalidationReason: "plan_superseded",
+    });
+    expect(freshWinner).toEqual(active[0]);
+    const winnerResult = freshWinner?.planPath === "docs/a.md" ? a : b;
+    const loserResult = freshLoser?.planPath === "docs/a.md" ? a : b;
+    expect(winnerResult).toEqual(freshWinner);
+    expect(loserResult).toBeNull();
+    expect(durable.find((binding) => binding.authorizationId === old?.authorizationId)).toMatchObject({
+      status: "invalidated",
+      invalidationReason: "plan_superseded",
+    });
+    expect(durable.find((binding) => binding.authorizationId === other?.authorizationId)).toMatchObject({
+      status: "active",
+    });
   });
 
   it("does not invoke a reconciler when the authoritative save diverts", async () => {
