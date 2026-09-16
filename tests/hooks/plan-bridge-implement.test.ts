@@ -1,12 +1,31 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileWriter,
+  wirePlanBridgeAuthorization,
+} from "../helpers/mock-file-system";
 import { createMockNotifier } from "../helpers/mock-notifier";
 
 const planContent = ["## Task 1: Implement", "- [ ] Add implementation arm state"].join("\n");
+
+const originalHandleImplementationArm = PlanBridge.prototype.handleImplementationArm;
+
+beforeEach(() => {
+  vi.spyOn(PlanBridge.prototype, "handleImplementationArm").mockImplementation(
+    async function (this: PlanBridge, sessionId, request) {
+      wirePlanBridgeAuthorization(this);
+      return originalHandleImplementationArm.call(this, sessionId, request);
+    },
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createLoopHandler(reader: FileReader): LoopDetectionHandler {
   return new LoopDetectionHandler(reader, createMockFileWriter(), new TaskSplitter());

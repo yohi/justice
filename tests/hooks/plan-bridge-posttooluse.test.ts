@@ -7,7 +7,7 @@ import type {
   WisdomEntry,
   WisdomStoreInterface,
 } from "../../src/core/types";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
@@ -21,6 +21,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       "plan.md": ["## Task 1: Write docs", "- [ ] Document the new workflow"].join("\n"),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-1", {
       source: "command",
@@ -91,6 +92,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       "plan.md": "## Task 1: Write docs\n- [ ] Document it\n",
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-issue3", {
       source: "command",
@@ -146,6 +148,7 @@ describe("PlanBridge.handlePostToolUse", () => {
     };
     const reader = createMockFileReader(files);
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-completed", {
       source: "command",
@@ -190,6 +193,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       ),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-skills", {
       source: "command",
@@ -248,6 +252,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       undefined,
       mockWisdomStore satisfies WisdomStoreInterface,
     );
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-debug-wisdom", {
       source: "command",

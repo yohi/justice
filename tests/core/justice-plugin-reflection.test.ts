@@ -26,6 +26,7 @@ function rejectPlanWrites(writer: FileWriter): FileWriter {
     mkdir: writer.mkdir,
     rmdir: writer.rmdir,
     deleteFile: writer.deleteFile,
+    link: writer.link,
   };
 }
 
@@ -40,6 +41,9 @@ describe("JusticePlugin reflection event integration", () => {
       writerId: "w-reflection",
       workspaceRoot: "/workspace",
     });
+    await plugin.initialize();
+    plugin.getPlanBridge().setActivePlan("session-1", "plan.md");
+    plugin.getTaskFeedback().setActivePlan("session-1", "plan.md", "task-1");
     await plugin.getPlanBridge().handleImplementationArm("session-1", {
       source: "command",
       planPath: "plan.md",

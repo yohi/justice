@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { createMockNotifier } from "../helpers/mock-notifier";
 
 const plan = ["## Task 1: Review implementation", "- [ ] Address architecture feedback"].join("\n");
@@ -14,6 +14,7 @@ describe("Review rejection pivot integration flow", () => {
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const notifier = createMockNotifier();
     const bridge = new PlanBridge(reader, loopHandler, undefined, notifier);
+    wirePlanBridgeAuthorization(bridge);
     bridge.setActivePlan("s-pivot", "plan.md");
 
     const results = [];

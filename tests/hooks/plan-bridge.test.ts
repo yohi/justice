@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { normalizeTaskToolInputWithCategory, PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
@@ -8,7 +8,7 @@ import type {
   WorkflowStartRequest,
 } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
-import { createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
@@ -16,6 +16,21 @@ import { WisdomStore } from "../../src/core/wisdom-store";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 import type { ObservationHandler } from "../../src/hooks/observation-handler";
+
+const originalHandleImplementationArm = PlanBridge.prototype.handleImplementationArm;
+
+beforeEach(() => {
+  vi.spyOn(PlanBridge.prototype, "handleImplementationArm").mockImplementation(
+    async function (this: PlanBridge, sessionId, request) {
+      wirePlanBridgeAuthorization(this);
+      return originalHandleImplementationArm.call(this, sessionId, request);
+    },
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const samplePlanContent = [
   "## Task 1: Setup",

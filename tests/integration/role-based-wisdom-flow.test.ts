@@ -3,7 +3,7 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { WisdomStore } from "../../src/core/wisdom-store";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 const plan = ["## Task 1: Implement feature", "- [ ] Choose boundaries"].join("\n");
@@ -15,6 +15,7 @@ describe("Role-based wisdom integration flow", () => {
     const wisdomStore = new WisdomStore();
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+    wirePlanBridgeAuthorization(bridge);
 
     for (const content of ["hephaestus-1", "hephaestus-2", "hephaestus-3"]) {
       wisdomStore.add(makeWisdomDraft({ content, persona: "hephaestus" }), {
@@ -59,6 +60,7 @@ describe("Role-based wisdom integration flow", () => {
     const wisdomStore = new WisdomStore();
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+    wirePlanBridgeAuthorization(bridge);
 
     wisdomStore.add(makeWisdomDraft({ content: "atlas-only", persona: "atlas" }), {
       persona: "atlas",
@@ -103,6 +105,7 @@ describe("Role-based wisdom integration flow", () => {
     const wisdomStore = new WisdomStore();
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+    wirePlanBridgeAuthorization(bridge);
 
     wisdomStore.add(makeWisdomDraft({ content: "prometheus-wisdom", persona: "prometheus" }), {
       persona: "prometheus",
@@ -143,6 +146,7 @@ describe("Role-based wisdom integration flow", () => {
     const wisdomStore = new WisdomStore();
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore);
+    wirePlanBridgeAuthorization(bridge);
 
     wisdomStore.add(makeWisdomDraft({ content: "prometheus-wisdom", persona: "prometheus" }), {
       persona: "prometheus",
