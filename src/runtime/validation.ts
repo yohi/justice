@@ -19,11 +19,14 @@ function isOneOf(value: unknown, options: readonly string[]): boolean {
  * reflection `planRef.path` checks so a hand-forged record cannot smuggle an
  * absolute path (or a traversal) past the builder's redaction on replay.
  */
-function isValidBootstrapPath(value: unknown): boolean {
-  if (value === undefined) return true;
+function isValidMandatoryRelativePath(value: unknown): boolean {
   if (typeof value !== "string" || value.length === 0) return false;
   if (value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/u.test(value)) return false;
   return !value.split(/[\\/]/u).includes("..");
+}
+
+function isValidBootstrapPath(value: unknown): boolean {
+  return value === undefined || isValidMandatoryRelativePath(value);
 }
 
 function isValidWorkflowBootstrapAudit(value: unknown): boolean {
@@ -46,6 +49,32 @@ function isValidWorkflowBootstrapAudit(value: unknown): boolean {
     typeof value.goalSnippet === "string" &&
     isValidBootstrapPath(value.designPath) &&
     isValidBootstrapPath(value.planPath)
+  );
+}
+
+function isSha256Digest(value: unknown): boolean {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value);
+}
+
+function isValidErrorAnnotationRecord(record: Readonly<Record<string, unknown>>): boolean {
+  if (
+    !isOneOf(record.provenance, ["observed", "unknown"]) ||
+    !isValidMandatoryRelativePath(record.planPath) ||
+    !isSha256Digest(record.planSnapshotDigest) ||
+    !isObject(record.target) ||
+    Array.isArray(record.target)
+  ) {
+    return false;
+  }
+
+  return (
+    typeof record.target.lineNumber === "number" &&
+    Number.isSafeInteger(record.target.lineNumber) &&
+    record.target.lineNumber > 0 &&
+    typeof record.target.occurrence === "number" &&
+    Number.isSafeInteger(record.target.occurrence) &&
+    record.target.occurrence > 0 &&
+    isSha256Digest(record.target.normalizedLineDigest)
   );
 }
 
@@ -197,6 +226,10 @@ function validateObservationRecord(r: Record<string, unknown>): void {
           throw new Error("Invalid review_observed resolution marker");
         }
       }
+    }
+  } else if (kind === "error_annotation") {
+    if (!isValidErrorAnnotationRecord(r)) {
+      throw new Error("Invalid error_annotation record");
     }
   } else if (kind === "session_error") {
     if (typeof r.errorKind !== "string" || typeof r.message !== "string") {

@@ -11,6 +11,25 @@ export interface PlanTask {
 
 export type PlanTaskStatus = "pending" | "in_progress" | "completed" | "failed";
 
+export type CanonicalTaskSnapshot = {
+  readonly taskId: string;
+  readonly title: string;
+  readonly canonicalBody: string;
+  readonly digest: string;
+};
+
+export type CanonicalPlanSnapshot = {
+  readonly schema: "justice-plan-v1";
+  readonly documentDigest: string;
+  readonly globalBodyDigest: string;
+  readonly tasks: ReadonlyArray<CanonicalTaskSnapshot>;
+};
+
+export type PlanFingerprint = {
+  readonly algorithm: "sha256";
+  readonly value: string;
+};
+
 /** plan.md内の個別ステップ */
 export interface PlanStep {
   readonly id: string;

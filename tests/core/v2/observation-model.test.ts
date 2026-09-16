@@ -65,6 +65,28 @@ describe("ObservationRecord type", () => {
     expect(r.kind).toBe("review_observed");
   });
 
+  it("error_annotation record is assignable", () => {
+    const r: ObservationRecord = {
+      schemaVersion: 1,
+      sequence: 4,
+      timestamp: "2026-09-05T00:00:00.000Z",
+      agentId: "system",
+      sessionId: "ses_1",
+      writerId: "w-1",
+      recordType: "observation",
+      kind: "error_annotation",
+      provenance: "observed",
+      planPath: "docs/plans/example.md",
+      planSnapshotDigest: "sha256:abc",
+      target: {
+        lineNumber: 3,
+        occurrence: 1,
+        normalizedLineDigest: "sha256:def",
+      },
+    };
+    expect(r.target.lineNumber).toBe(3);
+  });
+
   it("tool_executed record with declared_claim evidence is assignable", () => {
     const r: ObservationRecord = {
       schemaVersion: 1,
