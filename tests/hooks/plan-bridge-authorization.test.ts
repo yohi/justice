@@ -3,11 +3,20 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import {
   AuthorizationStore,
   createAuthorizationReviewBoundary,
+  type AuthorizationReviewBoundary,
 } from "../../src/core/plan-authorization";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 import * as planFingerprintModule from "../../src/core/plan-fingerprint";
 
 const plan = "## Task 1: Approved\n- [ ] implement\n";
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value?: T) => void } {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve: (value) => resolve?.(value as T) };
+}
 
 function createFixture() {
   const files = createMockFileSystem({ "docs/plan.md": plan });
@@ -180,5 +189,150 @@ describe("PlanBridge authorization restoration", () => {
 
     await expect(bridge.restoreActivePlans()).resolves.toBe("uncertain");
     expect(read).not.toHaveBeenCalledWith("../secret.md");
+  });
+
+  it("returns unauthorized when the durable active binding is missing", async () => {
+    const { bridge, store } = createFixture();
+    const armed = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(armed.armed).toBe(true);
+    const binding = (await store.hydrate()).find((candidate) => candidate.status === "active");
+    expect(binding).toBeDefined();
+    await store.release(binding?.authorizationId ?? "missing", "2026-09-05T00:00:00.000Z");
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(bridge.getActivePlan("s1")).toBeNull();
+  });
+
+  it("returns unauthorized and durably invalidates a binding after a semantic plan change", async () => {
+    const { bridge, store, files } = createFixture();
+    const armed = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(armed.armed).toBe(true);
+    files.writtenFiles["docs/plan.md"] = "## Task 1: Changed\n- [ ] implement\n";
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(bridge.getActivePlan("s1")).toBeNull();
+    expect((await store.hydrate()).find((binding) => binding.sessionId === "s1")).toMatchObject({
+      status: "invalidated",
+    });
+  });
+
+  it("returns unauthorized when the active plan file is missing", async () => {
+    const { bridge, files } = createFixture();
+    const armed = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(armed.armed).toBe(true);
+    delete files.writtenFiles["docs/plan.md"];
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(bridge.getActivePlan("s1")).toBeNull();
+  });
+
+  it("enriches task input when the durable binding and plan fingerprint are unchanged", async () => {
+    const { bridge } = createFixture();
+    const armed = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(armed.armed).toBe(true);
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({
+      action: "inject",
+      modifiedPayload: { args: { task_id: "task-1" } },
+    });
+  });
+
+  it("serializes startup restoration with concurrent same-session approval", async () => {
+    const files = createMockFileSystem({ "docs/plan.md": plan });
+    const baseBoundary = createAuthorizationReviewBoundary();
+    const restorationEntered = deferred<void>();
+    const releaseRestoration = deferred<void>();
+    let activeOperations = 0;
+    let maximumActiveOperations = 0;
+    let holdNextOperation = false;
+    const boundary: AuthorizationReviewBoundary = {
+      withParentSession: async <T>(parentSessionId: string, operation: () => Promise<T>) => {
+        return baseBoundary.withParentSession(parentSessionId, async () => {
+          activeOperations += 1;
+          maximumActiveOperations = Math.max(maximumActiveOperations, activeOperations);
+          try {
+            if (holdNextOperation) {
+              holdNextOperation = false;
+              restorationEntered.resolve();
+              await releaseRestoration.promise;
+            }
+            return await operation();
+          } finally {
+            activeOperations -= 1;
+          }
+        });
+      },
+    };
+    const store = new AuthorizationStore(files, files, boundary);
+    const bridge = new PlanBridge(files);
+    bridge.setAuthorizationDependencies({
+      authorizationStore: store,
+      authorizationReviewBoundary: boundary,
+    });
+    const initialApproval = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(initialApproval.armed).toBe(true);
+
+    holdNextOperation = true;
+    const restoration = bridge.restoreActivePlans();
+    await restorationEntered.promise;
+    const concurrentApproval = bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    releaseRestoration.resolve();
+    await Promise.all([restoration, concurrentApproval]);
+
+    expect(maximumActiveOperations).toBe(1);
+    expect((await store.hydrate()).filter((binding) => binding.sessionId === "s1" && binding.status === "active"))
+      .toHaveLength(1);
   });
 });

@@ -797,6 +797,107 @@ export class PlanBridge {
     const activePlanPath = this.getActivePlan(event.sessionId);
     if (!activePlanPath) return PROCEED;
 
+    const dependencies = this.authorizationDependencies;
+    if (dependencies === null) {
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    const validatedPlanPath = normalizeSafeRelativePath(activePlanPath);
+    if (validatedPlanPath === null) {
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    let planContent: string;
+    try {
+      const content = await this.readPlanFile(validatedPlanPath);
+      if (content === null) {
+        this.setActivePlan(event.sessionId, null);
+        this.clearSessionCompletionInputs(event.sessionId);
+        return {
+          action: "inject",
+          injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+        };
+      }
+      planContent = content;
+    } catch {
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    let binding: ApprovedPlanBinding | undefined;
+    try {
+      binding = (await dependencies.authorizationStore.hydrate()).find(
+        (candidate) =>
+          candidate.status === "active" &&
+          candidate.sessionId === event.sessionId &&
+          candidate.planPath === validatedPlanPath,
+      );
+    } catch {
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    if (binding === undefined) {
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    let currentFingerprint: PlanFingerprint;
+    try {
+      currentFingerprint = computePlanFingerprint(
+        planContent,
+        binding.canonicalSnapshot.tasks.map((task) => task.taskId),
+      );
+    } catch {
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
+    if (
+      currentFingerprint.algorithm !== binding.planFingerprint.algorithm ||
+      currentFingerprint.value !== binding.planFingerprint.value
+    ) {
+      try {
+        await dependencies.authorizationStore.invalidateForFingerprint(
+          binding.authorizationId,
+          currentFingerprint,
+          new Date().toISOString(),
+        );
+      } catch {
+        // A failed invalidation remains fail-closed for this PreToolUse request.
+      }
+      this.setActivePlan(event.sessionId, null);
+      this.clearSessionCompletionInputs(event.sessionId);
+      return {
+        action: "inject",
+        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+      };
+    }
+
     const armed = this.consumeImplementationArm(event.sessionId);
     if (armed === null) {
       return {
@@ -813,24 +914,6 @@ export class PlanBridge {
     );
 
     // Fail-open ONLY on I/O error
-    let planContent: string;
-    try {
-      const content = await this.readPlanFile(activePlanPath);
-      if (content === null) {
-        // File missing: clear state and fail-open
-        this.setActivePlan(event.sessionId, null);
-        for (const k of this.lastCompletionInputs.keys()) {
-          if (k.startsWith(`${event.sessionId}:`)) this.lastCompletionInputs.delete(k);
-        }
-        return PROCEED;
-      }
-      planContent = content;
-    } catch {
-      this.setActivePlan(event.sessionId, null);
-      this.clearSessionCompletionInputs(event.sessionId);
-      return PROCEED;
-    }
-
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
     const implementationDirective = resolveWorkflowDirective({ stage: "implementation" });
