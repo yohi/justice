@@ -367,5 +367,33 @@ describe("JusticePlugin", () => {
       await plugin.initialize();
       expect(spy).toHaveBeenCalled();
     });
+
+    it("restores active plans before the existing initialization path", async () => {
+      const restore = vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockResolvedValue("authoritative");
+      const loadAll = vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockResolvedValue();
+      const projection = vi
+        .spyOn(plugin.getObservationHandler(), "initializeProjectionCache")
+        .mockResolvedValue();
+
+      await plugin.initialize();
+
+      expect(restore).toHaveBeenCalledOnce();
+      expect(loadAll).toHaveBeenCalledOnce();
+      expect(projection).toHaveBeenCalledOnce();
+    });
+
+    it("continues initialization when active-plan restoration rejects", async () => {
+      vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockRejectedValue(
+        new Error("restore failed"),
+      );
+      const loadAll = vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockResolvedValue();
+      const projection = vi
+        .spyOn(plugin.getObservationHandler(), "initializeProjectionCache")
+        .mockResolvedValue();
+
+      await expect(plugin.initialize()).resolves.toBeUndefined();
+      expect(loadAll).toHaveBeenCalledOnce();
+      expect(projection).toHaveBeenCalledOnce();
+    });
   });
 });

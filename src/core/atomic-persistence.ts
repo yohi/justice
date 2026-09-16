@@ -24,6 +24,7 @@ export interface AtomicPersistenceConfig<T> {
   readonly emptyValue: () => T;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly logger?: AtomicPersistenceLogger;
+  readonly strictReadValidation?: boolean;
 }
 
 interface VersionedEnvelope<T> {
@@ -78,6 +79,9 @@ export class AtomicPersistence<T> {
     }
 
     if (raw.trim().length === 0) {
+      if (this.config.strictReadValidation) {
+        throw new Error(`Persisted file is blank: ${this.config.filePath}`);
+      }
       return { data: this.config.emptyValue(), lockMeta: { version: 0 } };
     }
 
@@ -90,7 +94,8 @@ export class AtomicPersistence<T> {
         };
       }
       return { data: this.config.deserialize(raw), lockMeta: { version: 0 } };
-    } catch {
+    } catch (error: unknown) {
+      if (this.config.strictReadValidation) throw error;
       return { data: this.config.emptyValue(), lockMeta: { version: 0 } };
     }
   }
@@ -275,7 +280,9 @@ export class AtomicPersistence<T> {
 
 function isErrno(value: unknown, code: string): boolean {
   return (
-    value instanceof Error && "code" in value && (value as NodeJS.ErrnoException).code === code
+    value instanceof Error &&
+    (("code" in value && (value as NodeJS.ErrnoException).code === code) ||
+      (code === "ENOENT" && value.message.includes("ENOENT")))
   );
 }
 

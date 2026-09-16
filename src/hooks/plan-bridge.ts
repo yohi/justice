@@ -1,3 +1,8 @@
+import {
+  type ApprovedPlanBinding,
+  type AuthorizationReviewBoundary,
+  type AuthorizationStore,
+} from "../core/plan-authorization";
 import type {
   FileReader,
   HookEvent,
@@ -6,6 +11,7 @@ import type {
   DelegationRequest,
   PlanTask,
   AgentId,
+  PlanFingerprint,
   SpCategory,
   TaskCategory,
   ImplementationArmRequest,
@@ -26,6 +32,7 @@ import { DependencyAnalyzer } from "../core/dependency-analyzer";
 import { PlanCompletionDetector, type PlanCompletionInput } from "../core/plan-completion-detector";
 import { formatBanner } from "../core/justice-notifier";
 import type { JusticeNotifier } from "../core/justice-notifier";
+import { buildCanonicalSnapshot, computePlanFingerprint } from "../core/plan-fingerprint";
 import { CategoryClassifier } from "../core/category-classifier";
 import { LearningExtractor } from "../core/learning-extractor";
 import {
@@ -57,6 +64,13 @@ export function normalizeTaskToolInputWithCategory(
 
 /** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
 export type WorkflowNextSkill = "brainstorming" | "writing-plans";
+
+export type AuthorizationRestorationOutcome = "authoritative" | "uncertain";
+
+export type PlanBridgeAuthorizationDependencies = {
+  readonly authorizationStore: AuthorizationStore;
+  readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
+};
 
 /** セッション単位のワークフロー・ブートストラップ状態のスナップショット。 */
 export interface WorkflowBootstrapState {
@@ -114,6 +128,9 @@ export class PlanBridge {
   private readonly categoryClassifier: CategoryClassifier;
   private readonly learningExtractor: LearningExtractor;
   private readonly telemetry?: TelemetryStore;
+  private authorizationDependencies: PlanBridgeAuthorizationDependencies | null = null;
+  private cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim:
+    ((parentSessionId: string, authorizationId: string) => Promise<void>) | null = null;
   private observationHandler: ObservationHandler | null = null;
 
   constructor(
@@ -152,6 +169,146 @@ export class PlanBridge {
    */
   setObservationHandler(handler: ObservationHandler): void {
     this.observationHandler = handler;
+  }
+
+  setAuthorizationDependencies(dependencies: PlanBridgeAuthorizationDependencies): void {
+    if (this.authorizationDependencies !== null) {
+      throw new Error("PlanBridge authorization dependencies already configured");
+    }
+    this.authorizationDependencies = dependencies;
+  }
+
+  setReviewDispatchCancellation(
+    cancellation: (parentSessionId: string, authorizationId: string) => Promise<void>,
+  ): void {
+    if (this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim !== null) {
+      throw new Error("PlanBridge review-dispatch cancellation already configured");
+    }
+    this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim = cancellation;
+  }
+
+  private reconcileActivePlan(
+    parentSessionId: string,
+    activeBinding: Extract<ApprovedPlanBinding, { readonly status: "active" }> | null,
+  ): void {
+    this.setActivePlan(parentSessionId, activeBinding?.planPath ?? null);
+  }
+
+  async restoreActivePlans(): Promise<AuthorizationRestorationOutcome> {
+    const dependencies = this.authorizationDependencies;
+    if (dependencies === null) return "authoritative";
+    let bindings: readonly ApprovedPlanBinding[];
+    try {
+      bindings = await dependencies.authorizationStore.hydrate();
+    } catch {
+      return "uncertain";
+    }
+    for (const binding of bindings) {
+      if (binding.status !== "active") continue;
+      let planContent: string | null;
+      try {
+        planContent = await this.readPlanFile(binding.planPath);
+      } catch {
+        this.reconcileActivePlan(binding.sessionId, null);
+        return "uncertain";
+      }
+      if (planContent !== null) {
+        try {
+          const restoration = await dependencies.authorizationReviewBoundary.withParentSession(
+            binding.sessionId,
+            async () => {
+              let currentFingerprint: PlanFingerprint;
+              try {
+                const approvedTaskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
+                currentFingerprint = computePlanFingerprint(planContent, approvedTaskIds);
+              } catch {
+                return "uncertain" as const;
+              }
+              const mutation = await dependencies.authorizationStore
+                .invalidateForFingerprintWithinAuthorizationReviewBoundary(
+                  binding.sessionId,
+                  binding.authorizationId,
+                  currentFingerprint,
+                  new Date().toISOString(),
+                );
+              if (mutation.kind === "fingerprint_current") {
+                const current = await dependencies.authorizationStore.findByAuthorizationId(
+                  binding.authorizationId,
+                );
+                if (current?.status === "active" && current.sessionId === binding.sessionId) {
+                  this.reconcileActivePlan(binding.sessionId, current);
+                  return "current" as const;
+                }
+                this.reconcileActivePlan(binding.sessionId, null);
+                return "uncertain" as const;
+              }
+              if (
+                mutation.kind === "not_found" ||
+                mutation.kind === "wrong_parent" ||
+                mutation.kind === "already_terminal"
+              ) {
+                const latest = await dependencies.authorizationStore.findByAuthorizationId(
+                  binding.authorizationId,
+                );
+                this.reconcileActivePlan(binding.sessionId, null);
+                return latest === null || latest.status !== "active"
+                  ? ("terminalized" as const)
+                  : ("uncertain" as const);
+              }
+              if (mutation.kind !== "saved") {
+                this.reconcileActivePlan(binding.sessionId, null);
+                return "uncertain" as const;
+              }
+              const cancellation =
+                this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim;
+              if (cancellation === null) {
+                this.reconcileActivePlan(binding.sessionId, null);
+                return "uncertain" as const;
+              }
+              try {
+                await cancellation(binding.sessionId, binding.authorizationId);
+              } catch {
+                // The durable terminal remains authoritative; restart converges the cancelled tombstone.
+              }
+              this.reconcileActivePlan(binding.sessionId, null);
+              return "terminalized" as const;
+            },
+          );
+          if (restoration === "uncertain") return "uncertain";
+        } catch {
+          return "uncertain";
+        }
+        continue;
+      }
+
+      const mutation = await dependencies.authorizationReviewBoundary.withParentSession(
+        binding.sessionId,
+        async () => {
+          const result = await dependencies.authorizationStore
+            .invalidateMissingPlanWithinAuthorizationReviewBoundary(
+              binding.sessionId,
+              binding.authorizationId,
+              new Date().toISOString(),
+            );
+          if (result.kind !== "saved") return result;
+          const cancellation =
+            this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim;
+          if (cancellation === null) {
+            this.reconcileActivePlan(binding.sessionId, null);
+            return { kind: "uncertain" as const };
+          }
+          try {
+            await cancellation(binding.sessionId, binding.authorizationId);
+          } catch {
+            // The durable terminal remains authoritative; restart converges the cancelled tombstone.
+          }
+          this.reconcileActivePlan(binding.sessionId, null);
+          return result;
+        },
+      );
+      if (mutation.kind !== "saved") return "uncertain";
+    }
+    return "authoritative";
   }
 
   /**
@@ -395,14 +552,57 @@ export class PlanBridge {
       };
     }
 
-    this.setActivePlan(sessionId, planPath);
-    this.implementationArmedSessions.set(sessionId, { planPath });
+    const dependencies = this.authorizationDependencies;
+    if (dependencies === null) {
+      this.setActivePlan(sessionId, planPath);
+      this.implementationArmedSessions.set(sessionId, { planPath });
+      return {
+        armed: true,
+        planPath,
+        directiveStage: "implementation_arm",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath }),
+      };
+    }
+
+    const planContent = await this.readPlanFile(planPath);
+    if (planContent === null) {
+      return {
+        armed: false,
+        planPath: null,
+        directiveStage: "implementation_arm_required",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+      };
+    }
+    const approvedTaskIds = this.parser.parse(planContent).map((task) => task.id);
+    const approvalInput = {
+      sessionId,
+      planPath,
+      canonicalSnapshot: buildCanonicalSnapshot(planContent, approvedTaskIds),
+      planFingerprint: computePlanFingerprint(planContent, approvedTaskIds),
+      approvedAt: new Date().toISOString(),
+    };
+    const approved = await dependencies.authorizationReviewBoundary.withParentSession(sessionId, () =>
+      dependencies.authorizationStore.approveWithinAuthorizationReviewBoundary(
+        approvalInput,
+        (parentSessionId, activeBinding) => this.reconcileActivePlan(parentSessionId, activeBinding),
+      ),
+    );
+    if (approved === null) {
+      return {
+        armed: false,
+        planPath: null,
+        directiveStage: "implementation_arm_required",
+        guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
+      };
+    }
+
+    this.implementationArmedSessions.set(sessionId, { planPath: approved.planPath });
 
     return {
       armed: true,
-      planPath,
+      planPath: approved.planPath,
       directiveStage: "implementation_arm",
-      guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath }),
+      guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath: approved.planPath }),
     };
   }
 

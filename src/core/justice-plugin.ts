@@ -35,6 +35,11 @@ import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
 import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
+import {
+  AuthorizationStore,
+  createAuthorizationReviewBoundary,
+  type AuthorizationReviewBoundary,
+} from "./plan-authorization";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -273,6 +278,8 @@ export class JusticePlugin {
   private readonly wisdomStore: WisdomStore;
   private readonly tieredWisdomStore: TieredWisdomStore;
   private readonly telemetry: TelemetryStore;
+  private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
+  private readonly authorizationStore: AuthorizationStore;
   private readonly options: JusticePluginOptions;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
@@ -319,6 +326,12 @@ export class JusticePlugin {
 
     // Use tieredWisdomStore for handlers that need cross-project context
     this.loopHandler = new LoopDetectionHandler(fileReader, fileWriter, new TaskSplitter());
+    this.authorizationReviewBoundary = createAuthorizationReviewBoundary();
+    this.authorizationStore = new AuthorizationStore(
+      fileReader,
+      fileWriter,
+      this.authorizationReviewBoundary,
+    );
     this.planBridge = new PlanBridge(
       fileReader,
       this.loopHandler,
@@ -326,6 +339,10 @@ export class JusticePlugin {
       options.notifier,
       this.telemetry,
     );
+    this.planBridge.setAuthorizationDependencies({
+      authorizationStore: this.authorizationStore,
+      authorizationReviewBoundary: this.authorizationReviewBoundary,
+    });
 
     this.sessionStateProvider = new SessionStateProvider();
     this.taskFeedback = new TaskFeedbackHandler(
@@ -366,6 +383,16 @@ export class JusticePlugin {
    * This should be called before handling events.
    */
   async initialize(): Promise<void> {
+    try {
+      await this.planBridge.restoreActivePlans();
+    } catch (error) {
+      try {
+        this.options.logger?.warn(`Failed to restore authorization during initialization: ${error}`);
+      } catch {
+        /* Ignore logging errors to preserve fail-open behavior */
+      }
+    }
+
     try {
       await this.tieredWisdomStore.loadAll();
       await this.telemetry.load();
