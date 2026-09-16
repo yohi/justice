@@ -657,6 +657,70 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toMatchObject({ args: { category: "sp-review" } });
     });
 
+    it("preserves sp-deep category in the worker payload and completion input", async () => {
+      const planContent = ["### Task 1: Deep research", "- [ ] Investigate"].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await bridge.handleImplementationArm("s-deep", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { prompt: "delegate deep work" } },
+        sessionId: "s-deep",
+        callId: "c-deep",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("**Category**: sp-deep");
+      expect(response.modifiedPayload).toMatchObject({ args: { category: "sp-deep" } });
+
+      const stored = (
+        bridge as unknown as {
+          lastCompletionInputs: Map<string, { category: string }>;
+        }
+      ).lastCompletionInputs.get("s-deep:c-deep");
+      expect(stored?.category).toBe("sp-deep");
+    });
+
+    it("preserves sp-architecture category in the worker payload and completion input", async () => {
+      const planContent = ["### Task 1: Design architecture", "- [ ] Design system"].join("\n");
+      const reader = createMockFileReader({ "plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await bridge.handleImplementationArm("s-architecture", {
+        source: "command",
+        planPath: "plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { prompt: "delegate architecture work" } },
+        sessionId: "s-architecture",
+        callId: "c-architecture",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") {
+        throw new Error("expected inject response");
+      }
+      expect(response.injectedContext).toContain("**Category**: sp-architecture");
+      expect(response.modifiedPayload).toMatchObject({ args: { category: "sp-architecture" } });
+
+      const stored = (
+        bridge as unknown as {
+          lastCompletionInputs: Map<string, { category: string }>;
+        }
+      ).lastCompletionInputs.get("s-architecture:c-architecture");
+      expect(stored?.category).toBe("sp-architecture");
+    });
+
     it("should include progress summary in delegation context", async () => {
       const planContent = [
         "### Task 1: Setup",

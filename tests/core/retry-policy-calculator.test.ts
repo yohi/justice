@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RetryPolicyCalculator } from "../../src/core/retry-policy-calculator";
-import type { TaskCategory } from "../../src/core/types";
+import type { SpCategory, TaskCategory } from "../../src/core/types";
 
 describe("RetryPolicyCalculator", () => {
   it("computes category and step-count modifiers", () => {
@@ -31,4 +31,14 @@ describe("RetryPolicyCalculator", () => {
     expect(result.categoryModifier).toBe(0);
     expect(result.maxRetries).toBe(3);
   });
+
+  it.each(["sp-deep", "sp-architecture"] as const)(
+    "keeps %s at the existing zero retry modifier",
+    (category: SpCategory) => {
+      expect(new RetryPolicyCalculator().compute({ category, stepCount: 1 })).toMatchObject({
+        categoryModifier: 0,
+        maxRetries: RetryPolicyCalculator.BASE,
+      });
+    },
+  );
 });

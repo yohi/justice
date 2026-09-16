@@ -7,15 +7,27 @@ import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ALL_SP_CATEGORIES } from "../../src/core/doctor-categories";
 import { checkLoaderContract } from "../../src/core/loader-contract";
 import { normalizeSpecifier, resolveSpecifier } from "../../src/core/doctor-specifier";
-import { createCliFileReader, runDoctor } from "../../src/runtime/doctor-cli";
+import {
+  createCliFileReader,
+  runDoctor,
+  type DoctorHostConfigReader,
+} from "../../src/runtime/doctor-cli";
 
 let root: string;
 let cacheRoot: string;
 const VERSION = "3.0.0";
 const packageDir = (): string =>
   `${cacheRoot}/packages/@yohi/justice@${VERSION}/node_modules/@yohi/justice`;
+const healthyHostConfigReader: DoctorHostConfigReader = async () => ({
+  kind: "available",
+  view: {
+    effectiveCategoryNames: ALL_SP_CATEGORIES,
+    effectiveCommandDefinitions: new Map(),
+  },
+});
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "justice-doctor-integration-"));
@@ -67,6 +79,7 @@ describe("doctor resolver integration (real modules)", () => {
       cacheRoot,
       logPaths: [],
       importer: (entryFile) => import(entryFile) as Promise<Record<string, unknown>>,
+      hostConfigReader: healthyHostConfigReader,
     });
     expect(report.exitCode).toBe(0);
     expect(report.text).toContain("ローダ契約 OK");
@@ -84,6 +97,7 @@ describe("doctor resolver integration (real modules)", () => {
       cacheRoot,
       logPaths: [],
       importer: (entryFile) => import(entryFile) as Promise<Record<string, unknown>>,
+      hostConfigReader: healthyHostConfigReader,
     });
     expect(report.exitCode).toBe(0);
   });

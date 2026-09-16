@@ -12,12 +12,16 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   mergeSourceScans,
+  projectDoctorEffectiveConfig,
   scanConfigContent,
   scanUnreadableSource,
   isJusticeSpecifier,
   type ConfigSourceId,
+  type DoctorEffectiveConfigResult,
+  type DoctorEffectiveConfigUnsupportedReason,
   type SourceScanResult,
 } from "../core/doctor-config";
+import { ALL_SP_CATEGORIES, checkSpCategoryPresence } from "../core/doctor-categories";
 import {
   formatConfigDiagnostics,
   formatLogScanLines,
@@ -32,6 +36,46 @@ import { StatusCommand } from "../core/status-command";
 import { TelemetryStore } from "../core/telemetry-store";
 import { redactForPersistence } from "../core/v2/redaction";
 
+export const DOCTOR_HOST_COMMAND_TIMEOUT_MS = 30_000;
+
+export type DoctorHostCommandResult = {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+};
+
+export type DoctorHostCommandOptions = {
+  readonly cwd: string;
+  readonly env: { readonly [key: string]: string | undefined };
+  readonly timeoutMs: number;
+};
+
+export type DoctorHostCommandRunner = (
+  args: readonly string[],
+  options: DoctorHostCommandOptions,
+) => Promise<DoctorHostCommandResult>;
+
+export type DoctorHostProcess = {
+  readonly stdout: ReadableStream<Uint8Array> | null;
+  readonly stderr: ReadableStream<Uint8Array> | null;
+  readonly exited: Promise<number>;
+  readonly kill: () => void;
+};
+
+export type DoctorHostProcessSpawner = (
+  args: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: Readonly<Record<string, string>>;
+  },
+) => DoctorHostProcess;
+
+export type DoctorHostConfigReader = (context: {
+  readonly cwd: string;
+  readonly env: { readonly [key: string]: string | undefined };
+}) => Promise<DoctorEffectiveConfigResult>;
+
 export type DoctorDeps = {
   readonly fileReader: FileReader;
   readonly env: { readonly [key: string]: string | undefined };
@@ -40,12 +84,119 @@ export type DoctorDeps = {
   readonly cacheRoot: string;
   readonly logPaths: readonly string[];
   readonly importer: (entryFile: string) => Promise<Readonly<Record<string, unknown>>>;
+  readonly hostConfigReader?: DoctorHostConfigReader;
 };
 
 export type DoctorReport = {
   readonly exitCode: 0 | 1;
   readonly text: string;
 };
+
+function processEnvironment(env: {
+  readonly [key: string]: string | undefined;
+}): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+}
+
+function spawnDoctorHostProcess(
+  args: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: Readonly<Record<string, string>>;
+  },
+): DoctorHostProcess {
+  return Bun.spawn([...args], {
+    cwd: options.cwd,
+    env: options.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+async function readHostStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (stream === null) return "";
+  return new Response(stream).text();
+}
+
+export function createDoctorHostCommandRunner(
+  spawner: DoctorHostProcessSpawner = spawnDoctorHostProcess,
+): DoctorHostCommandRunner {
+  return async (args, options) => {
+    const child = spawner(args, {
+      cwd: options.cwd,
+      env: processEnvironment(options.env),
+    });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, options.timeoutMs);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        readHostStream(child.stdout),
+        readHostStream(child.stderr),
+      ]);
+      return { exitCode, stdout, stderr, timedOut };
+    } finally {
+      clearTimeout(timeout);
+      if (timedOut) await child.exited;
+    }
+  };
+}
+
+const SUPPORTED_OPENCODE_VERSION = "1.18.29";
+const OPENCODE_VERSION_ARGS = ["opencode", "--version"] as const;
+const OPENCODE_DEBUG_CONFIG_ARGS = ["opencode", "debug", "config"] as const;
+
+function unsupported(reason: DoctorEffectiveConfigUnsupportedReason): DoctorEffectiveConfigResult {
+  return { kind: "unsupported", reason };
+}
+
+export function createDoctorHostConfigReader(
+  runner: DoctorHostCommandRunner = createDoctorHostCommandRunner(),
+): DoctorHostConfigReader {
+  return async ({ cwd, env }) => {
+    if (cwd.trim().length === 0) {
+      return unsupported("resolved_config_context_unverified");
+    }
+
+    const options: DoctorHostCommandOptions = {
+      cwd,
+      env,
+      timeoutMs: DOCTOR_HOST_COMMAND_TIMEOUT_MS,
+    };
+    let version: DoctorHostCommandResult;
+    try {
+      version = await runner(OPENCODE_VERSION_ARGS, options);
+    } catch {
+      return unsupported("resolved_config_command_unavailable");
+    }
+    if (version.timedOut) return unsupported("resolved_config_timeout");
+    if (version.exitCode !== 0) return unsupported("resolved_config_command_failed");
+    if (version.stdout.trim() !== SUPPORTED_OPENCODE_VERSION) {
+      return unsupported("resolved_config_host_version_unsupported");
+    }
+
+    let config: DoctorHostCommandResult;
+    try {
+      config = await runner(OPENCODE_DEBUG_CONFIG_ARGS, options);
+    } catch {
+      return unsupported("resolved_config_command_unavailable");
+    }
+    if (config.timedOut) return unsupported("resolved_config_timeout");
+    if (config.exitCode !== 0) return unsupported("resolved_config_command_failed");
+    let resolvedConfig: unknown;
+    try {
+      resolvedConfig = JSON.parse(config.stdout);
+    } catch {
+      return unsupported("resolved_config_invalid_json");
+    }
+    return projectDoctorEffectiveConfig(resolvedConfig);
+  };
+}
 
 export async function runStatus(
   cwd: string,
@@ -187,23 +338,47 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   lines.push("■ 検査 1: OpenCode 設定の justice エントリ", ...diagnostics);
   failed ||= merged.diagnostics.some((d) => d.code === "justice_not_found_in_config");
 
-  // 検査 2: specifier 解決とローダ契約判定
+  let effectiveConfig: DoctorEffectiveConfigResult;
+  if (deps.hostConfigReader === undefined) {
+    effectiveConfig = unsupported("resolved_config_command_unavailable");
+  } else {
+    try {
+      effectiveConfig = await deps.hostConfigReader({ cwd: deps.cwd, env: deps.env });
+    } catch {
+      effectiveConfig = unsupported("resolved_config_command_failed");
+    }
+  }
+  lines.push("■ 検査 2: OpenCode 実効設定");
+  if (effectiveConfig.kind === "unsupported") {
+    failed = true;
+    lines.push(`  ✗ host-resolved config unsupported: ${effectiveConfig.reason}`);
+  } else {
+    const categoryPresence = checkSpCategoryPresence(effectiveConfig.view.effectiveCategoryNames);
+    if (categoryPresence.ok) {
+      lines.push(`  ✓ 必須 sp-* category: ${ALL_SP_CATEGORIES.length} 件`);
+    } else {
+      failed = true;
+      lines.push(`  ✗ 必須 sp-* category 不足: ${categoryPresence.missing.join(", ")}`);
+    }
+  }
+
+  // 検査 3: specifier 解決とローダ契約判定
   const justiceSpecifiers = merged.specifiers.filter((s) => isJusticeSpecifier(s.specifier));
   for (const entry of justiceSpecifiers) {
-    const section = await resolveAndCheckSpecifier("■ 検査 2", entry, deps);
+    const section = await resolveAndCheckSpecifier("■ 検査 3", entry, deps);
     if (section.failed) failed = true;
     lines.push(...section.lines);
   }
 
-  // 検査 3: OpenCode ログ走査
+  // 検査 4: OpenCode ログ走査
   const logLines = await formatLogScanLines(deps);
-  lines.push("■ 検査 3: OpenCode ログ", ...logLines);
+  lines.push("■ 検査 4: OpenCode ログ", ...logLines);
 
-  // 検査 4: .justice/ サマリ
-  lines.push("■ 検査 4: 観測データ", await summarizeObservationData(deps));
+  // 検査 5: .justice/ サマリ
+  lines.push("■ 検査 5: 観測データ", await summarizeObservationData(deps));
 
-  // 検査 5: gate.yaml 妥当性
-  lines.push("■ 検査 5: gate.yaml", await checkGateYaml(deps, lines));
+  // 検査 6: gate.yaml 妥当性
+  lines.push("■ 検査 6: gate.yaml", await checkGateYaml(deps, lines));
 
   return { exitCode: failed ? 1 : 0, text: redactForPersistence(lines.join("\n"), detector) };
 }
@@ -310,6 +485,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     cacheRoot,
     logPaths: await discoverLogPaths(env, home),
     importer: (entryFile) => import(entryFile) as Promise<Record<string, unknown>>,
+    hostConfigReader: createDoctorHostConfigReader(),
   });
   process.stdout.write(`${report.text}\n`);
   return report.exitCode;

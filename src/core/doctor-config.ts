@@ -54,6 +54,46 @@ export type SourceScanResult = {
   readonly diagnostics: readonly ConfigDiagnostic[];
 };
 
+export type DoctorEffectiveCommandDefinition =
+  | {
+      readonly kind: "valid";
+      readonly agent?: string;
+    }
+  | {
+      readonly kind: "invalid";
+    };
+
+export type DoctorEffectiveConfigView = {
+  readonly effectiveCategoryNames: readonly string[];
+  readonly effectiveCommandDefinitions: ReadonlyMap<string, DoctorEffectiveCommandDefinition>;
+};
+
+export type DoctorEffectiveConfigUnsupportedReason =
+  | "resolved_config_command_unavailable"
+  | "resolved_config_command_failed"
+  | "resolved_config_host_version_unsupported"
+  | "resolved_config_timeout"
+  | "resolved_config_invalid_json"
+  | "resolved_config_context_unverified"
+  | "resolved_config_shape_invalid";
+
+export type DoctorEffectiveConfigResult =
+  | {
+      readonly kind: "available";
+      readonly view: DoctorEffectiveConfigView;
+    }
+  | {
+      readonly kind: "unsupported";
+      readonly reason: DoctorEffectiveConfigUnsupportedReason;
+    };
+
+const PINNED_COMMAND_NAMES = [
+  "justice-implement-brainstorming",
+  "justice-implement-writing-plans",
+  "justice-implement-subagent-driven-development",
+  "justice-implement-executing-plans",
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -204,6 +244,54 @@ export function parseJsonc(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function normalizeEffectiveCommandDefinition(
+  definition: unknown,
+): DoctorEffectiveCommandDefinition {
+  if (!isRecord(definition)) {
+    return { kind: "invalid" };
+  }
+  if (!Object.prototype.hasOwnProperty.call(definition, "agent")) {
+    return { kind: "valid" };
+  }
+  return typeof definition.agent === "string"
+    ? { kind: "valid", agent: definition.agent }
+    : { kind: "invalid" };
+}
+
+export function projectDoctorEffectiveConfig(resolvedConfig: unknown): DoctorEffectiveConfigResult {
+  if (!isRecord(resolvedConfig)) {
+    return { kind: "unsupported", reason: "resolved_config_shape_invalid" };
+  }
+
+  const category = resolvedConfig.category;
+  const command = resolvedConfig.command;
+  if (
+    (category !== undefined && !isRecord(category)) ||
+    (command !== undefined && !isRecord(command))
+  ) {
+    return { kind: "unsupported", reason: "resolved_config_shape_invalid" };
+  }
+
+  const effectiveCategoryNames: readonly string[] =
+    category === undefined ? [] : Object.keys(category);
+  const effectiveCommandDefinitions = new Map<string, DoctorEffectiveCommandDefinition>();
+  if (command !== undefined) {
+    for (const commandName of PINNED_COMMAND_NAMES) {
+      if (Object.prototype.hasOwnProperty.call(command, commandName)) {
+        effectiveCommandDefinitions.set(
+          commandName,
+          normalizeEffectiveCommandDefinition(command[commandName]),
+        );
+      }
+    }
+  }
+
+  return {
+    kind: "available",
+    view: { effectiveCategoryNames, effectiveCommandDefinitions },
+  };
 }
 
 export function scanConfigContent(source: ConfigSourceId, content: string): SourceScanResult {

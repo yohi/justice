@@ -11,15 +11,12 @@ describe("OmoCategoryMapper", () => {
     ["integration", "sp-integration"],
     ["review", "sp-review"],
     ["final-review", "sp-final-review"],
+    ["deep", "sp-deep"],
+    ["architecture", "sp-architecture"],
   ];
 
   it.each(roleCategories)("maps %s to %s", (role, expected) => {
     expect(mapper.map(role)).toBe(expected);
-  });
-
-  it("returns undefined for deep and architecture", () => {
-    expect(mapper.map("deep")).toBeUndefined();
-    expect(mapper.map("architecture")).toBeUndefined();
   });
 
   it("guards SpCategory values", () => {

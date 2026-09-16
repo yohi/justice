@@ -1,13 +1,13 @@
 import type { ExecutionRole, SpCategory } from "./types";
 
-const ROLE_TO_CATEGORY: Readonly<Record<ExecutionRole, SpCategory | undefined>> = {
+const ROLE_TO_CATEGORY: Readonly<Record<ExecutionRole, SpCategory>> = {
   mechanical: "sp-mechanical",
   implementation: "sp-implementation",
   integration: "sp-integration",
   review: "sp-review",
   "final-review": "sp-final-review",
-  deep: undefined,
-  architecture: undefined,
+  deep: "sp-deep",
+  architecture: "sp-architecture",
 };
 
 const SP_CATEGORIES: ReadonlySet<SpCategory> = new Set([
@@ -16,10 +16,12 @@ const SP_CATEGORIES: ReadonlySet<SpCategory> = new Set([
   "sp-integration",
   "sp-review",
   "sp-final-review",
+  "sp-deep",
+  "sp-architecture",
 ]);
 
 export class OmoCategoryMapper {
-  map(role: ExecutionRole): SpCategory | undefined {
+  map(role: ExecutionRole): SpCategory {
     return ROLE_TO_CATEGORY[role];
   }
 

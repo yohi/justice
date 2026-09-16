@@ -1156,24 +1156,12 @@ export class PlanBridge {
     const skillName = this.pickCompletionSkill(delegation.loadSkills);
     this.lastCompletionInputs.set(`${sessionId}:${callId}`, {
       prompt: delegation.prompt,
-      category: this.toTaskCategory(delegation.category),
+      category: delegation.category,
       skillName,
       taskId: delegation.context.taskId,
     });
   }
 
-  private toTaskCategory(category: SpCategory | TaskCategory): TaskCategory {
-    switch (category) {
-      case "sp-mechanical":
-      case "sp-implementation":
-      case "sp-integration":
-      case "sp-review":
-      case "sp-final-review":
-        return "unspecified-low";
-      default:
-        return category;
-    }
-  }
 
   private pickCompletionSkill(loadSkills: readonly string[]): string | undefined {
     if (loadSkills.includes("systematic-debugging")) {

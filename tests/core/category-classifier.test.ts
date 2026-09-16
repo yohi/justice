@@ -35,11 +35,11 @@ describe("CategoryClassifier", () => {
     expect(classifier.classify(makeTask("final review before release"))).toBe("sp-final-review");
   });
 
-  it("falls back to unspecified-low for deep tasks", () => {
-    expect(classifier.classify(makeTask("deep reasoning task"))).toBe("unspecified-low");
+  it("classifies deep tasks as sp-deep", () => {
+    expect(classifier.classify(makeTask("deep reasoning task"))).toBe("sp-deep");
   });
 
-  it("falls back to unspecified-low for architecture tasks", () => {
-    expect(classifier.classify(makeTask("design system architecture"))).toBe("unspecified-low");
+  it("classifies architecture tasks as sp-architecture", () => {
+    expect(classifier.classify(makeTask("design system architecture"))).toBe("sp-architecture");
   });
 });

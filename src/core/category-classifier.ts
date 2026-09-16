@@ -8,7 +8,6 @@ export class CategoryClassifier {
 
   classify(task: PlanTask): SpCategory | TaskCategory {
     const role = this.roleClassifier.classify(task);
-    const category = this.categoryMapper.map(role);
-    return category ?? "unspecified-low";
+    return this.categoryMapper.map(role);
   }
 }

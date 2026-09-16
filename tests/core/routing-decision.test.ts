@@ -36,16 +36,21 @@ describe("routing-decision factories", () => {
     ["integration", "sp-integration"],
     ["review", "sp-review"],
     ["final-review", "sp-final-review"],
-    ["deep", "deep"],
-    ["architecture", "unspecified-high"],
-    ["architecture", "deep"],
-  ] as const)("accepts the valid %s/%s pair", (executionRole, category) => {
+    ["deep", "sp-deep"],
+    ["architecture", "sp-architecture"],
+  ] as const)("maps %s to %s", (executionRole, category) => {
     expect(createWorkerRoutingDecision(executionRole, category, "task_classification")).toEqual({
       kind: "worker",
       executionRole,
       category,
       reason: "task_classification",
     });
+  });
+
+  it("rejects the legacy architecture downgrade", () => {
+    expect(() =>
+      createWorkerRoutingDecision("architecture", "unspecified-high", "task_classification"),
+    ).toThrow();
   });
 
   it("rejects invalid role/category pairs", () => {
