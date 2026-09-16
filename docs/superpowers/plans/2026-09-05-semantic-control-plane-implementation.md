@@ -268,7 +268,7 @@ Export `CanonicalTaskSnapshot`, `CanonicalPlanSnapshot`, and `PlanFingerprint` f
 `src/core/types.ts`; `plan-fingerprint.ts` imports these shared types rather than defining a
 second fingerprint shape.
 
-- [ ] **Step 1: Write the failing semantic-boundary tests**
+- [x] **Step 1: Write the failing semantic-boundary tests**
 
 <!-- markdownlint-disable MD013 -->
 
@@ -332,13 +332,13 @@ it("treats duplicate approved task headings as semantic", () => {
 
 Add one replay test whose observed `error_annotation` identifies the exact legacy annotation line and expects migration to remove it. Add tests for a different `planPath`, a stale `planSnapshotDigest`, the second of two identical annotation lines, a manual annotation, and an unknown-provenance annotation; each must preserve the line and make the fingerprint change. Validate the typed observation through `observation-model.ts` and `runtime/validation.ts` before passing it to migration.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts`
 
 Expected: FAIL because canonical snapshot generation is absent.
 
-- [ ] **Step 3: Implement task-section-only canonicalization**
+- [x] **Step 3: Implement task-section-only canonicalization**
 
 Traverse normalized lines with the same task-heading rule as `PlanParser`. Derive a heading
 ID as `task-${taskNumber}` and compare it to `new Set(approvedTaskIds)`. Count each approved
@@ -388,13 +388,13 @@ export function computePlanFingerprint(
 
 `createErrorAnnotationObservation` records the EOL-normalized raw plan digest, safe `planPath`, 1-based line number, occurrence among equal normalized lines, and normalized line digest; it never persists the annotation text. `migrateJusticeGeneratedErrorAnnotations` accepts only `provenance: "observed"` records whose plan path and raw snapshot digest match the current input and whose line number, occurrence, and line digest identify one exact line in that snapshot. Process multiple targets against the original line identities, delete only those exact lines, and emit a migration warning for every unmatched, cross-plan, stale-digest, manual, or unknown-provenance annotation. `PendingObservationRecord` and `PersistedLogRecord` must include the `error_annotation` variant, and strict validation/replay must reject unsafe paths, non-positive line identities, invalid digests, or malformed provenance.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 The commit scope explicitly includes the shared `src/core/types.ts` exports for
 `CanonicalTaskSnapshot`, `CanonicalPlanSnapshot`, and `PlanFingerprint`; do not defer
