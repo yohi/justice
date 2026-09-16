@@ -87,7 +87,7 @@ function canonicalize(raw: string, approvedTaskIds: readonly string[]): Canonica
 
     const heading = line.match(TASK_HEADING_REGEX);
     if (heading !== null) {
-      activeSectionStart = sections.find((section) => section.start === index)?.start ?? null;
+      activeSectionStart = index;
       continue;
     }
     if (activeSectionStart === null || !normalizable.has(activeSectionStart)) continue;

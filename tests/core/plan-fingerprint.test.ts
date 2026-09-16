@@ -25,8 +25,12 @@ const unapprovedTaskChecked =
   "## Task 1: approved\n- [ ] execute\n\n## Task 2: added\n- [x] added step\n";
 const taskBodyA = "## Task 1: approved\n- [ ] execute\n";
 const taskBodyB = "## Task 1: renamed\n- [ ] execute\n";
+type ErrorAnnotationRecord = Extract<ObservationRecord, { readonly kind: "error_annotation" }>;
 
-function observedAnnotation(raw: string, lineNumber: number): ObservationRecord {
+function observedAnnotation(
+  raw: string,
+  lineNumber: number,
+): ErrorAnnotationRecord {
   return {
     schemaVersion: 1,
     sequence: 1,
@@ -119,6 +123,19 @@ describe("plan fingerprint", () => {
     expect(snapshot.globalBodyDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(snapshot.tasks[0]?.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
   });
+
+  it("omits unapproved task sections from the snapshot", () => {
+    const snapshot = buildCanonicalSnapshot(unapprovedTaskUnchecked, ["task-1"]);
+
+    expect(snapshot.tasks).toHaveLength(1);
+    expect(snapshot.tasks[0]?.taskId).toBe("task-1");
+  });
+
+  it("handles documents without task sections", () => {
+    const snapshot = buildCanonicalSnapshot("Notes only\n", []);
+
+    expect(snapshot.tasks).toEqual([]);
+  });
 });
 
 describe("Justice-generated error annotation migration", () => {
@@ -147,18 +164,24 @@ describe("Justice-generated error annotation migration", () => {
   it.each([
     {
       name: "a different plan path",
-      record: (raw: string) => ({ ...observedAnnotation(raw, 3), planPath: "docs/plans/other.md" }),
+      record: (raw: string): ErrorAnnotationRecord => ({
+        ...observedAnnotation(raw, 3),
+        planPath: "docs/plans/other.md",
+      }),
     },
     {
       name: "a stale snapshot digest",
-      record: (raw: string) => ({
+      record: (raw: string): ErrorAnnotationRecord => ({
         ...observedAnnotation(raw, 3),
         planSnapshotDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       }),
     },
     {
       name: "unknown provenance",
-      record: (raw: string) => ({ ...observedAnnotation(raw, 3), provenance: "unknown" }),
+      record: (raw: string): ErrorAnnotationRecord => ({
+        ...observedAnnotation(raw, 3),
+        provenance: "unknown",
+      }),
     },
   ])("preserves an annotation with $name", ({ record }) => {
     const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
@@ -177,5 +200,70 @@ describe("Justice-generated error annotation migration", () => {
 
     expect(result.content).toBe(raw);
     expect(result.warnings).toHaveLength(1);
+  });
+
+  it("rejects an unsafe plan path or an out-of-range annotation line", () => {
+    const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
+
+    expect(() => createErrorAnnotationObservation("../plan.md", raw, 3)).toThrow(
+      "Cannot identify an error annotation line",
+    );
+    expect(() => createErrorAnnotationObservation(PLAN_PATH, raw, 99)).toThrow(
+      "Cannot identify an error annotation line",
+    );
+  });
+
+  it("preserves an observation whose target is outside the current document", () => {
+    const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
+    const observation = observedAnnotation(raw, 3);
+    const staleTarget: typeof observation = {
+      ...observation,
+      target: { ...observation.target, lineNumber: 99 },
+    };
+    const staleBeforeDocument: typeof observation = {
+      ...observation,
+      target: { ...observation.target, lineNumber: 0 },
+    };
+
+    const result = migrateJusticeGeneratedErrorAnnotations(raw, PLAN_PATH, [
+      staleTarget,
+      staleBeforeDocument,
+    ]);
+
+    expect(result.content).toBe(raw);
+    expect(result.warnings).toEqual([
+      { kind: "unmatched_error_annotation", lineNumber: 99 },
+      { kind: "unmatched_error_annotation", lineNumber: 0 },
+      { kind: "unmatched_error_annotation", lineNumber: 3 },
+    ]);
+  });
+
+  it("does not remove a non-annotation line addressed by an observation", () => {
+    const raw = "## Task 1: approved\n\n> ⚠️ **Error**: failed\n\n- [ ] execute\n";
+    const observation = observedAnnotation(raw, 5);
+    const unrelated: ObservationRecord = {
+      schemaVersion: 1,
+      sequence: 2,
+      timestamp: "2026-09-05T00:00:00.000Z",
+      agentId: "system",
+      sessionId: "ses-1",
+      writerId: "w-1",
+      recordType: "observation",
+      kind: "message",
+      messageID: "msg-1",
+      role: "assistant",
+      textHash: "sha256:text",
+      finalized: true,
+      declaredClaims: [],
+      evidence: [],
+    };
+
+    const result = migrateJusticeGeneratedErrorAnnotations(raw, PLAN_PATH, [unrelated, observation]);
+
+    expect(result.content).toBe(raw);
+    expect(result.warnings).toEqual([
+      { kind: "unmatched_error_annotation", lineNumber: 5 },
+      { kind: "unmatched_error_annotation", lineNumber: 3 },
+    ]);
   });
 });

@@ -20,7 +20,6 @@ function normalizeEol(raw: string): string {
 
 function occurrenceAt(lines: readonly string[], lineNumber: number): number {
   const line = lines[lineNumber - 1];
-  if (line === undefined) return 0;
   return lines.slice(0, lineNumber).filter((candidate) => candidate === line).length;
 }
 
@@ -74,7 +73,9 @@ export function migrateJusticeGeneratedErrorAnnotations(
 
     const index = record.target.lineNumber - 1;
     const line = lines[index];
-    if (index >= 0 && index < lines.length) representedIndexes.add(index);
+    if (index >= 0) {
+      if (index < lines.length) representedIndexes.add(index);
+    }
     const matchesLine =
       line !== undefined &&
       occurrenceAt(lines, record.target.lineNumber) === record.target.occurrence &&

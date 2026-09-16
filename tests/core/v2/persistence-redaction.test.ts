@@ -364,6 +364,38 @@ describe("redactPendingLogRecord", () => {
     });
   });
 
+  describe("error_annotation records", () => {
+    it("redacts the plan path without changing annotation identity", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        agentId: "system",
+        recordType: "observation",
+        kind: "error_annotation",
+        provenance: "observed",
+        planPath: "/home/user/plan.md",
+        planSnapshotDigest: "sha256:snapshot",
+        target: {
+          lineNumber: 3,
+          occurrence: 1,
+          normalizedLineDigest: "sha256:line",
+        },
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toMatchObject({
+        kind: "error_annotation",
+        planPath: "[REDACTED_PATH]",
+        planSnapshotDigest: "sha256:snapshot",
+        target: {
+          lineNumber: 3,
+          occurrence: 1,
+          normalizedLineDigest: "sha256:line",
+        },
+      });
+    });
+  });
+
   describe("decision records", () => {
     it("redacts rule result reasons", () => {
       const record: PendingLogRecord = {
