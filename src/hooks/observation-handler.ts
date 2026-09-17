@@ -122,6 +122,7 @@ export class ObservationHandler {
       readonly getActiveAuthorization?: (parentSessionId: string) => Promise<ApprovedPlanBinding | null>;
       readonly getTaskLifecycleState?: (
         parentSessionId: string,
+        authorizationId: string,
         taskId: string,
       ) => Promise<TaskProgressState | undefined>;
     },
@@ -415,7 +416,11 @@ export class ObservationHandler {
           };
         }
         const lifecycleState =
-          (await this.options.getTaskLifecycleState?.(event.sessionId, taskId)) ?? "authorized";
+          (await this.options.getTaskLifecycleState?.(
+            event.sessionId,
+            authorization.authorizationId,
+            taskId,
+          )) ?? "authorized";
         const attempt = startImplementationAttempt({
           authorizationId: authorization.authorizationId,
           taskId,

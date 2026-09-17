@@ -35,7 +35,7 @@ import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
 import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
-import { project } from "./v2/state-projection";
+import { project, taskLifecycleKey } from "./v2/state-projection";
 import type { TaskProgressState } from "./v2/observation-model";
 import {
   AuthorizationStore,
@@ -381,10 +381,16 @@ export class JusticePlugin {
           return null;
         }
       },
-      getTaskLifecycleState: async (_parentSessionId: string, taskId: string): Promise<TaskProgressState | undefined> => {
+      getTaskLifecycleState: async (
+        parentSessionId: string,
+        authorizationId: string,
+        taskId: string,
+      ): Promise<TaskProgressState | undefined> => {
         try {
           const events = await this.observationLogStore.readAll();
-          return project(events, new Date().toISOString()).lifecycle.taskStates.get(taskId);
+          return project(events, new Date().toISOString()).lifecycle.taskStates.get(
+            taskLifecycleKey(parentSessionId, { authorizationId, taskId }),
+          );
         } catch {
           return undefined;
         }

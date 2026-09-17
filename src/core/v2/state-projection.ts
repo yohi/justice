@@ -105,7 +105,10 @@ function messageKey(sessionId: string, messageID: string, partID: string | undef
   return JSON.stringify([sessionId, messageID, partID ?? null]);
 }
 
-function taskLifecycleKey(parentSessionId: string, taskExecutionRef: TaskExecutionRef): string {
+export function taskLifecycleKey(
+  parentSessionId: string,
+  taskExecutionRef: Pick<TaskExecutionRef, "authorizationId" | "taskId">,
+): string {
   return JSON.stringify([
     parentSessionId,
     taskExecutionRef.authorizationId,
