@@ -65,6 +65,71 @@ describe("AtomicPersistence", () => {
     await expect(inaccessible.loadWithLock()).rejects.toThrow("permission denied");
   });
 
+  it("treats only ENOENT as an absent state in strict mode", async () => {
+    const strict = new AtomicPersistence(createMockFileReader({}), createMockFileWriter(), {
+      ...config(),
+      strictReadValidation: true,
+    });
+
+    await expect(strict.loadWithLock()).resolves.toEqual({
+      data: [],
+      lockMeta: { version: 0 },
+    });
+  });
+
+  it("does not treat an ENOENT message without an errno code as absent", async () => {
+    const strict = new AtomicPersistence(
+      {
+        ...createMockFileReader({}),
+        readFile: async () => {
+          throw new Error("ENOENT: simulated read failure");
+        },
+      },
+      createMockFileWriter(),
+      { ...config(), strictReadValidation: true },
+    );
+
+    await expect(strict.loadWithLock()).rejects.toThrow("ENOENT: simulated read failure");
+  });
+
+  it("rejects an existing blank file in strict mode", async () => {
+    const strict = new AtomicPersistence(
+      createMockFileReader({ "state.json": "" }),
+      createMockFileWriter(),
+      { ...config(), strictReadValidation: true },
+    );
+
+    await expect(strict.loadWithLock()).rejects.toThrow();
+  });
+
+  it("rejects malformed JSON in strict mode", async () => {
+    const strict = new AtomicPersistence(
+      createMockFileReader({ "state.json": "{" }),
+      createMockFileWriter(),
+      { ...config(), strictReadValidation: true },
+    );
+
+    await expect(strict.loadWithLock()).rejects.toThrow();
+  });
+
+  it("propagates domain deserialization failure in strict mode", async () => {
+    const strict = new AtomicPersistence(
+      createMockFileReader({
+        "state.json": JSON.stringify({ version: 4, data: { invalid: true } }),
+      }),
+      createMockFileWriter(),
+      {
+        ...config(),
+        strictReadValidation: true,
+        deserialize: () => {
+          throw new Error("invalid domain schema");
+        },
+      },
+    );
+
+    await expect(strict.loadWithLock()).rejects.toThrow("invalid domain schema");
+  });
+
   it("does not claim success when the writer cannot provide an exclusive claim primitive", async () => {
     const writer = createMockFileWriter();
     writer.link = undefined;

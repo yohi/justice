@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, HookEvent } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
-import { createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
 const samplePlanContent = [
@@ -32,6 +32,7 @@ describe("Plan Bridge Integration Flow", () => {
     const planPath = "docs/plans/sample-plan.md";
     const reader = createMockFileReader({ [planPath]: samplePlanContent });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     // Step 1: Agent sends message referencing the plan
     const messageEvent: HookEvent = {
@@ -84,6 +85,7 @@ describe("Plan Bridge Integration Flow", () => {
 
     const reader = createMockFileReader({ [planPath]: partialPlan });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     const event: HookEvent = {
       type: "Message",
@@ -111,6 +113,7 @@ describe("Plan Bridge Integration Flow", () => {
       }),
     };
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     const event: HookEvent = {
       type: "Message",

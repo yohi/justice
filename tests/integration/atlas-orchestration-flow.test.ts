@@ -3,7 +3,7 @@ import { PlanBridge } from "../../src/hooks/plan-bridge";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { WisdomStore } from "../../src/core/wisdom-store";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { createMockNotifier } from "../helpers/mock-notifier";
 
 const plan = ["## Task 1: Implement API", "- [ ] Build the implementation"].join("\n");
@@ -16,6 +16,7 @@ describe("Atlas orchestration integration flow", () => {
     const notifier = createMockNotifier();
     const loopHandler = new LoopDetectionHandler(reader, writer, new TaskSplitter());
     const bridge = new PlanBridge(reader, loopHandler, wisdomStore, notifier);
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-atlas", {
       source: "command",

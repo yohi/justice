@@ -2,6 +2,8 @@
 import { vi } from "vitest";
 import { dirname } from "node:path";
 import type { FileReader, FileWriter } from "../../src/core/types";
+import { AuthorizationStore, createAuthorizationReviewBoundary } from "../../src/core/plan-authorization";
+import type { PlanBridge } from "../../src/hooks/plan-bridge";
 
 export function createMockFileReader(files: Record<string, string>): FileReader {
   return {
@@ -224,4 +226,13 @@ export function createMemFs(): {
     },
   };
   return { files, reader, writer };
+}
+
+export function wirePlanBridgeAuthorization(bridge: PlanBridge): void {
+  const files = createMockFileSystem();
+  const boundary = createAuthorizationReviewBoundary();
+  bridge.setAuthorizationDependencies({
+    authorizationStore: new AuthorizationStore(files, files, boundary),
+    authorizationReviewBoundary: boundary,
+  });
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader, PreToolUseEvent } from "../../src/core/types";
-import { createMockFileReader } from "../helpers/mock-file-system";
+import { createMockFileReader, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 
 describe("Phase 6: Multi-Agent Coordination Flow", () => {
   let fileReader: FileReader;
@@ -34,6 +34,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
     fileReader = createMockFileReader({ "plan.md": planContent });
 
     planBridge = new PlanBridge(fileReader);
+    wirePlanBridgeAuthorization(planBridge);
   });
 
   it("should inject all multi-agent features into context correctly", async () => {
@@ -113,6 +114,7 @@ describe("Phase 6: Multi-Agent Coordination Flow", () => {
     const mockReader: FileReader = createMockFileReader({ "plan.md": complexPlan });
 
     const bridge = new PlanBridge(mockReader);
+    wirePlanBridgeAuthorization(bridge);
 
     // 1. Initial trigger
     await bridge.handleMessage({

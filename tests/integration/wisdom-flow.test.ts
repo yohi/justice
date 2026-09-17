@@ -5,7 +5,7 @@ import { CompactionProtector } from "../../src/hooks/compaction-protector";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { SmartRetryPolicy } from "../../src/core/smart-retry-policy";
 import type { PostToolUseEvent } from "../../src/core/types";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
@@ -56,6 +56,7 @@ describe("Wisdom Flow Integration", () => {
 
     // 3. PlanBridge uses sharedWisdomStore → previousLearnings injected into delegation
     const planBridge = new PlanBridge(reader, loopHandler, sharedWisdomStore);
+    wirePlanBridgeAuthorization(planBridge);
     await planBridge.handleImplementationArm("s-2", {
       source: "command",
       planPath: "plan.md",

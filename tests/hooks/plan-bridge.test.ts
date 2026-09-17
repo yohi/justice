@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { normalizeTaskToolInputWithCategory, PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
@@ -8,7 +8,7 @@ import type {
   WorkflowStartRequest,
 } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
-import { createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
@@ -16,6 +16,10 @@ import { WisdomStore } from "../../src/core/wisdom-store";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
 
 import type { ObservationHandler } from "../../src/hooks/observation-handler";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const samplePlanContent = [
   "## Task 1: Setup",
@@ -143,6 +147,7 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
 
       // Bootstrap the workflow into plan_ready first
       await bridge.handleWorkflowStart(
@@ -239,6 +244,7 @@ describe("PlanBridge", () => {
         { persona: "hephaestus" },
       );
       const bridge = new PlanBridge(reader, createLoopHandler(reader), wisdomStore);
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-learnings", {
         source: "command",
         planPath: "plan.md",
@@ -328,6 +334,7 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-skills", {
         source: "command",
         planPath: "docs/plans/sample-plan.md",
@@ -379,6 +386,7 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-tdd", {
         source: "command",
         planPath: "docs/plans/sample-plan.md",
@@ -410,6 +418,7 @@ describe("PlanBridge", () => {
       const planContent = ["## Task 1: Code review", "- [ ] Review code"].join("\n");
       const reader = createMockFileReader({ "docs/plans/review-plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-review", {
         source: "command",
         planPath: "docs/plans/review-plan.md",
@@ -450,6 +459,7 @@ describe("PlanBridge", () => {
         .mockReturnValueOnce(undefined)
         .mockImplementation(originalBuildWorkerDelegation);
 
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-rebuild-fallback", {
         source: "command",
         planPath: "docs/plans/sample-plan.md",
@@ -513,6 +523,7 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
 
       // Bootstrap the workflow into plan_ready first
       await bridge.handleWorkflowStart(
@@ -552,6 +563,7 @@ describe("PlanBridge", () => {
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
 
       await bridge.handleImplementationArm("s-code-review", {
         source: "command",
@@ -614,6 +626,7 @@ describe("PlanBridge", () => {
       );
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-1", {
         source: "command",
         planPath: "plan.md",
@@ -636,6 +649,7 @@ describe("PlanBridge", () => {
       const planContent = ["### Task 1: Review implementation", "- [ ] Review code"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-review-category", {
         source: "command",
         planPath: "plan.md",
@@ -661,6 +675,7 @@ describe("PlanBridge", () => {
       const planContent = ["### Task 1: Deep research", "- [ ] Investigate"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-deep", {
         source: "command",
         planPath: "plan.md",
@@ -693,6 +708,7 @@ describe("PlanBridge", () => {
       const planContent = ["### Task 1: Design architecture", "- [ ] Design system"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-architecture", {
         source: "command",
         planPath: "plan.md",
@@ -730,6 +746,7 @@ describe("PlanBridge", () => {
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-1", {
         source: "command",
         planPath: "plan.md",
@@ -760,6 +777,7 @@ describe("PlanBridge", () => {
       ].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-1", {
         source: "command",
         planPath: "plan.md",
@@ -784,6 +802,7 @@ describe("PlanBridge", () => {
       const planContent = ["### Task 1: Setup", "- [/] Init project"].join("\n");
       const reader = createMockFileReader({ "plan.md": planContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-1", {
         source: "command",
         planPath: "plan.md",

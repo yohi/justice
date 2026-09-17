@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   FileReader,
@@ -7,7 +7,7 @@ import type {
   WisdomEntry,
   WisdomStoreInterface,
 } from "../../src/core/types";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { createMockFileReader, createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 
@@ -21,6 +21,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       "plan.md": ["## Task 1: Write docs", "- [ ] Document the new workflow"].join("\n"),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-1", {
       source: "command",
@@ -86,11 +87,78 @@ describe("PlanBridge.handlePostToolUse", () => {
     expect(secondResponse.action).toBe("proceed");
   });
 
+  it("skips completion handling for an unauthorized task post-tool-use", async () => {
+    const reader = createMockFileReader({
+      "plan.md": "## Task 1: Fix bug\n- [ ] Debug the crash\n",
+    });
+    const loopHandler = createLoopHandler(reader);
+    const recordReviewOutput = vi.spyOn(loopHandler, "recordReviewOutput");
+    const bridge = new PlanBridge(reader, loopHandler);
+    wirePlanBridgeAuthorization(bridge);
+
+    await bridge.handleImplementationArm("s-unauthorized", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const authorizedResponse = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          agent: "prometheus",
+          skills: ["systematic-debugging"],
+        },
+      },
+      sessionId: "s-unauthorized",
+      callId: "c-authorized",
+    });
+    expect(authorizedResponse.action).toBe("inject");
+    if (authorizedResponse.action !== "inject") {
+      throw new Error("expected authorized task injection");
+    }
+    expect(authorizedResponse.modifiedPayload).toBeDefined();
+
+    const unauthorizedResponse = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          agent: "prometheus",
+          skills: ["systematic-debugging"],
+        },
+      },
+      sessionId: "s-unauthorized",
+      callId: "c-unauthorized",
+    });
+    expect(unauthorizedResponse.action).toBe("inject");
+    if (unauthorizedResponse.action !== "inject") {
+      throw new Error("expected unauthorized task advisory");
+    }
+    expect(unauthorizedResponse.modifiedPayload).toBeUndefined();
+
+    const postResponse = await bridge.handlePostToolUse({
+      type: "PostToolUse",
+      payload: {
+        toolName: "task",
+        toolResult: "Root cause: this task was not authorized",
+        error: false,
+      },
+      sessionId: "s-unauthorized",
+      callId: "c-unauthorized",
+    } as PostToolUseEvent);
+
+    expect(postResponse.action).toBe("proceed");
+    expect(recordReviewOutput).not.toHaveBeenCalled();
+  });
+
   it("clears lastCompletionInputs even if completion is not detected (Issue 3)", async () => {
     const reader = createMockFileReader({
       "plan.md": "## Task 1: Write docs\n- [ ] Document it\n",
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-issue3", {
       source: "command",
@@ -146,6 +214,7 @@ describe("PlanBridge.handlePostToolUse", () => {
     };
     const reader = createMockFileReader(files);
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-completed", {
       source: "command",
@@ -190,6 +259,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       ),
     });
     const bridge = new PlanBridge(reader, createLoopHandler(reader));
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-skills", {
       source: "command",
@@ -248,6 +318,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       undefined,
       mockWisdomStore satisfies WisdomStoreInterface,
     );
+    wirePlanBridgeAuthorization(bridge);
 
     await bridge.handleImplementationArm("s-debug-wisdom", {
       source: "command",

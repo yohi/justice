@@ -7,7 +7,11 @@ import { project } from "../../src/core/v2/state-projection";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
-import { createMemFs, createMockFileReader } from "../helpers/mock-file-system";
+import {
+  createMemFs,
+  createMockFileReader,
+  wirePlanBridgeAuthorization,
+} from "../helpers/mock-file-system";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -18,6 +22,9 @@ describe("ObservationHandler tool observation", () => {
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["### Task 1: Observe tools", "- [ ] Run tests"].join("\n"));
     const plugin = new JusticePlugin(reader, writer, { writerId: "w-handler" });
+    await plugin.initialize();
+    plugin.getPlanBridge().setActivePlan("session-plugin", "plan.md");
+    plugin.getTaskFeedback().setActivePlan("session-plugin", "plan.md", "task-1");
     await plugin.getPlanBridge().handleImplementationArm("session-plugin", {
       source: "command",
       planPath: "plan.md",
@@ -29,7 +36,7 @@ describe("ObservationHandler tool observation", () => {
       type: "PreToolUse",
       sessionId: "session-plugin",
       callId: "call-plugin",
-      payload: { toolName: "task", toolInput: { prompt: "run task" } },
+      payload: { toolName: "task", toolInput: { taskId: "task-1", prompt: "run task" } },
     });
     expect(preResponse.action).toBe("inject");
 
@@ -61,6 +68,7 @@ describe("ObservationHandler tool observation", () => {
   it("correlates the PlanBridge-injected taskId and evaluates task gates after projection", async () => {
     const plan = ["### Task 1: Observe tools", "- [ ] Run tests"].join("\n");
     const bridge = new PlanBridge(createMockFileReader({ "plan.md": plan }));
+    wirePlanBridgeAuthorization(bridge);
     await bridge.handleImplementationArm("session-1", {
       source: "command",
       planPath: "plan.md",

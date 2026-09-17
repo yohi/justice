@@ -38,6 +38,24 @@ describe("JusticePlugin", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
+  it("restores authorizations before loading wisdom and projections", async () => {
+    const order: string[] = [];
+    vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockImplementation(async () => {
+      order.push("authorization");
+      return "authoritative";
+    });
+    vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockImplementation(async () => {
+      order.push("wisdom");
+    });
+    vi.spyOn(plugin.getObservationHandler(), "initializeProjectionCache").mockImplementation(async () => {
+      order.push("projection");
+    });
+
+    await plugin.initialize();
+
+    expect(order.slice(0, 3)).toEqual(["authorization", "wisdom", "projection"]);
+  });
+
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };
@@ -366,6 +384,34 @@ describe("JusticePlugin", () => {
       const spy = vi.spyOn(tiered, "loadAll");
       await plugin.initialize();
       expect(spy).toHaveBeenCalled();
+    });
+
+    it("restores active plans before the existing initialization path", async () => {
+      const restore = vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockResolvedValue("authoritative");
+      const loadAll = vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockResolvedValue();
+      const projection = vi
+        .spyOn(plugin.getObservationHandler(), "initializeProjectionCache")
+        .mockResolvedValue();
+
+      await plugin.initialize();
+
+      expect(restore).toHaveBeenCalledOnce();
+      expect(loadAll).toHaveBeenCalledOnce();
+      expect(projection).toHaveBeenCalledOnce();
+    });
+
+    it("continues initialization when active-plan restoration rejects", async () => {
+      vi.spyOn(plugin.getPlanBridge(), "restoreActivePlans").mockRejectedValue(
+        new Error("restore failed"),
+      );
+      const loadAll = vi.spyOn(plugin.getTieredWisdomStore(), "loadAll").mockResolvedValue();
+      const projection = vi
+        .spyOn(plugin.getObservationHandler(), "initializeProjectionCache")
+        .mockResolvedValue();
+
+      await expect(plugin.initialize()).resolves.toBeUndefined();
+      expect(loadAll).toHaveBeenCalledOnce();
+      expect(projection).toHaveBeenCalledOnce();
     });
   });
 });
