@@ -106,6 +106,35 @@ function validMessage(): Record<string, unknown> {
   };
 }
 
+function validTaskLifecycleTransition(): Record<string, unknown> {
+  return {
+    ...validBase("observation"),
+    kind: "task_lifecycle_transition",
+    parentSessionId: "ses-1",
+    taskExecutionRef: {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    },
+    from: "authorized",
+    to: "in_progress",
+  };
+}
+
+function validPlanFinalizationTransition(): Record<string, unknown> {
+  return {
+    ...validBase("observation"),
+    kind: "plan_finalization_transition",
+    parentSessionId: "ses-1",
+    authorizationId: "auth-1",
+    planPath: "docs/plans/example.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    from: "all_tasks_accepted",
+    to: "final_review_pending",
+  };
+}
+
 describe("validateRecordSchema", () => {
   it("accepts a valid tool_executed record", () => {
     expect(() => validateRecordSchema(validToolExecuted())).not.toThrow();
@@ -113,6 +142,31 @@ describe("validateRecordSchema", () => {
 
   it("accepts a valid message record", () => {
     expect(() => validateRecordSchema(validMessage())).not.toThrow();
+  });
+
+  it("accepts lifecycle transition records", () => {
+    expect(() => validateRecordSchema(validTaskLifecycleTransition())).not.toThrow();
+    expect(() => validateRecordSchema(validPlanFinalizationTransition())).not.toThrow();
+  });
+
+  it.each([
+    { name: "missing execution ref", override: { taskExecutionRef: undefined } },
+    { name: "invalid from state", override: { from: "started" } },
+    { name: "invalid to state", override: { to: "finished" } },
+  ])("rejects malformed task lifecycle transitions: $name", ({ override }) => {
+    expect(() => validateRecordSchema({ ...validTaskLifecycleTransition(), ...override })).toThrow(
+      "Invalid task_lifecycle_transition record",
+    );
+  });
+
+  it.each([
+    { name: "missing finalization attempt", override: { finalizationAttemptId: undefined } },
+    { name: "invalid from state", override: { from: "started" } },
+    { name: "invalid to state", override: { to: "finished" } },
+  ])("rejects malformed plan finalization transitions: $name", ({ override }) => {
+    expect(() => validateRecordSchema({ ...validPlanFinalizationTransition(), ...override })).toThrow(
+      "Invalid plan_finalization_transition record",
+    );
   });
 
   it("accepts a valid observed error_annotation record", () => {

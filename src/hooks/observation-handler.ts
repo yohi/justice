@@ -25,7 +25,7 @@ import {
   type FinalizationAdvanceInput,
   type FinalizationAdvanceResult,
 } from "../core/task-lifecycle";
-import type { TaskProgressState } from "../core/v2/observation-model";
+import type { PendingObservationRecord, TaskProgressState } from "../core/v2/observation-model";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import {
   buildMessageRecord,
@@ -53,7 +53,6 @@ import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-
 import type { GateContext } from "../core/v2/gate-context";
 import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope";
 import type { PendingDecisionRecord } from "../core/v2/decision-model";
-import type { PendingObservationRecord } from "../core/v2/observation-model";
 import type { GateLoader } from "../runtime/gate-loader";
 import {
   assertNever,
