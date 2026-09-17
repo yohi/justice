@@ -143,6 +143,69 @@ function messageEvent(
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
+  it("projects lifecycle records without aborting later records", () => {
+    const invalidRecord = {
+      schemaVersion: 1 as const,
+      sequence: 1,
+      timestamp: "2026-07-06T00:00:01Z",
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      kind: "task_lifecycle_transition" as const,
+      taskId: "task-1",
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      taskExecutionRef: {
+        authorizationId: "auth-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+      },
+      from: "accepted" as const,
+      to: "pending" as const,
+    };
+    const validRecord = {
+      ...invalidRecord,
+      sequence: 2,
+      from: "pending" as const,
+      to: "in_progress" as const,
+    };
+
+    expect(project([invalidRecord, validRecord], REBUILT_AT).tasks.get("task-1")?.status).toBe(
+      "open",
+    );
+  });
+
+  it("replays all transitions for one task attempt and retains its identity", () => {
+    const ref = { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" } as const;
+    const states = [
+      ["pending", "authorized"],
+      ["authorized", "in_progress"],
+      ["in_progress", "worker_reported"],
+      ["worker_reported", "evidence_pending"],
+      ["evidence_pending", "review_pending"],
+    ] as const;
+    const events = states.map(([from, to], index) => ({
+      schemaVersion: 1 as const,
+      sequence: index + 1,
+      timestamp: `2026-07-06T00:00:0${index + 1}Z`,
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      taskId: "task-1",
+      kind: "task_lifecycle_transition" as const,
+      parentSessionId: "s1",
+      taskExecutionRef: ref,
+      from,
+      to,
+    }));
+
+    const state = project(events, REBUILT_AT);
+    expect(state.lifecycle.taskStates.get("task-1")).toBe("review_pending");
+    expect(state.lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(ref);
+  });
+
   it("collects tool evidence per task and applies decision verdict as status", () => {
     const events = [
       toolEvent(1, "2026-07-06T00:00:01Z", "task-1", "ev-1"),

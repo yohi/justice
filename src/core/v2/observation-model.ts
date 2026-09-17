@@ -4,6 +4,8 @@ import type {
   ObservationAgentId,
   WorkflowBootstrapPhase,
   WorkflowStartSource,
+  FinalizationAttemptId,
+  TaskExecutionRef,
 } from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
@@ -106,6 +108,44 @@ export type SessionErrorRecord = {
   readonly kind: "session_error";
   readonly errorKind: string;
   readonly message: string;
+};
+
+export type TaskProgressState =
+  | "pending"
+  | "authorized"
+  | "in_progress"
+  | "worker_reported"
+  | "evidence_pending"
+  | "review_pending"
+  | "gate_pending"
+  | "accepted"
+  | "rework_required";
+export type PlanFinalizationState =
+  | "tasks_pending"
+  | "all_tasks_accepted"
+  | "final_review_pending"
+  | "final_gate_pending"
+  | "complete"
+  | "final_rework_required";
+
+export type TaskLifecycleTransitionRecord = {
+  readonly kind: "task_lifecycle_transition";
+  readonly parentSessionId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly from: TaskProgressState;
+  readonly to: TaskProgressState;
+  readonly reason?: string;
+};
+export type PlanFinalizationTransitionRecord = {
+  readonly kind: "plan_finalization_transition";
+  readonly parentSessionId: string;
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalReviewRound: number;
+  readonly from: PlanFinalizationState;
+  readonly to: PlanFinalizationState;
+  readonly reason?: string;
 };
 export type ReflectionRecord = {
   readonly kind: "reflection";
@@ -221,8 +261,15 @@ export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & WorkflowStartedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & DesignRequestedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanRequestedRecord)
-  | (PendingEnvelope & { readonly recordType: "observation" } & PlanActivatedRecord);
+  | (PendingEnvelope & { readonly recordType: "observation" } & PlanActivatedRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord);
+export type LifecycleObservationRecord =
+  | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord);
 
-export type ObservationRecord = PendingObservationRecord & { readonly sequence: number };
+export type ObservationRecord = (PendingObservationRecord | LifecycleObservationRecord) & {
+  readonly sequence: number;
+};
 export type PendingLogRecord = PendingObservationRecord | PendingDecisionRecord;
 export type PersistedLogRecord = ObservationRecord | DecisionRecord;

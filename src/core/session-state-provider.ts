@@ -1,5 +1,5 @@
 import { AGENT_IDS } from "./types";
-import type { AgentId, ObservationAgentId } from "./types";
+import type { AgentId, ObservationAgentId, TaskCallBinding } from "./types";
 
 /**
  * SessionStateProvider:
@@ -24,6 +24,7 @@ export class SessionStateProvider {
     string,
     { readonly sessionId: string; readonly taskId: string; readonly generation: number }
   >();
+  private readonly taskCallBindings = new Map<string, TaskCallBinding>();
   private readonly sessionGenerations = new Map<string, number>();
   private nextSessionGeneration = 0;
 
@@ -55,6 +56,9 @@ export class SessionStateProvider {
     this.sessionGenerations.delete(sessionId);
     for (const [callId, window] of this.activeTaskWindows) {
       if (window.sessionId === sessionId) this.activeTaskWindows.delete(callId);
+    }
+    for (const [callId, binding] of this.taskCallBindings) {
+      if (binding.parentSessionId === sessionId) this.taskCallBindings.delete(callId);
     }
   }
 
@@ -110,6 +114,15 @@ export class SessionStateProvider {
    */
   closeActiveTaskWindow(callId: string): void {
     this.activeTaskWindows.delete(callId);
+    this.taskCallBindings.delete(callId);
+  }
+
+  setTaskCallBinding(callId: string, binding: TaskCallBinding): void {
+    this.taskCallBindings.set(callId, binding);
+  }
+
+  getTaskCallBinding(callId: string): TaskCallBinding | undefined {
+    return this.taskCallBindings.get(callId);
   }
 
   /**

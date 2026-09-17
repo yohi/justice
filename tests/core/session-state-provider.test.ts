@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
+import type { TaskCallBinding } from "../../src/core/types";
 
 describe("SessionStateProvider", () => {
   it("maps known agent names to AgentId", () => {
@@ -70,5 +71,18 @@ describe("SessionStateProvider", () => {
     provider.setAgentMapping("s1", "sisyphus");
     provider.removeSession("s1");
     expect(provider.getSessionGeneration("s1")).toBeUndefined();
+  });
+
+  it("persists and retrieves the implementation binding by call id", () => {
+    const provider = new SessionStateProvider();
+    const binding: TaskCallBinding = {
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    };
+    provider.setTaskCallBinding("call-1", binding);
+    expect(provider.getTaskCallBinding("call-1")).toEqual(binding);
+    provider.closeActiveTaskWindow("call-1");
+    expect(provider.getTaskCallBinding("call-1")).toBeUndefined();
   });
 });
