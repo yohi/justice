@@ -123,6 +123,7 @@ export class PlanBridge {
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
   > = new Map();
+  private readonly unauthorizedTaskCallIds: Set<string> = new Set();
   private readonly wisdomStore: WisdomStoreInterface | null;
   private readonly loopHandler: LoopDetectionHandler | null;
   private readonly notifier: JusticeNotifier | null;
@@ -381,6 +382,11 @@ export class PlanBridge {
     for (const key of this.lastCompletionInputs.keys()) {
       if (key.startsWith(`${sessionId}:`)) {
         this.lastCompletionInputs.delete(key);
+      }
+    }
+    for (const key of this.unauthorizedTaskCallIds) {
+      if (key.startsWith(`${sessionId}:`)) {
+        this.unauthorizedTaskCallIds.delete(key);
       }
     }
   }
@@ -799,20 +805,14 @@ export class PlanBridge {
 
     const dependencies = this.authorizationDependencies;
     if (dependencies === null) {
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     const validatedPlanPath = normalizeSafeRelativePath(activePlanPath);
     if (validatedPlanPath === null) {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     let planContent: string;
@@ -821,19 +821,13 @@ export class PlanBridge {
       if (content === null) {
         this.setActivePlan(event.sessionId, null);
         this.clearSessionCompletionInputs(event.sessionId);
-        return {
-          action: "inject",
-          injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-        };
+        return this.unauthorizedTaskResponse(event.sessionId, event.callId);
       }
       planContent = content;
     } catch {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     let binding: ApprovedPlanBinding | undefined;
@@ -847,19 +841,13 @@ export class PlanBridge {
     } catch {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     if (binding === undefined) {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     let currentFingerprint: PlanFingerprint;
@@ -871,10 +859,7 @@ export class PlanBridge {
     } catch {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     if (
@@ -899,18 +884,12 @@ export class PlanBridge {
       }
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     const armed = this.consumeImplementationArm(event.sessionId);
     if (armed === null) {
-      return {
-        action: "inject",
-        injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
-      };
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     this.completionDetector.recordPreToolUseInvocation(
@@ -1002,6 +981,10 @@ export class PlanBridge {
     let response: HookResponse = PROCEED;
 
     const key = event.callId ? `${sessionId}:${event.callId}` : undefined;
+    if (key !== undefined && this.unauthorizedTaskCallIds.delete(key)) {
+      this.lastCompletionInputs.delete(key);
+      return PROCEED;
+    }
     const completionInput = key ? this.lastCompletionInputs.get(key) : undefined;
 
     // A+B hybrid: evaluate skill completions
@@ -1442,6 +1425,16 @@ export class PlanBridge {
 
   private resolveDelegationPersona(sessionId: string): AgentId {
     return this.completionDetector.lastInvokedPersona(sessionId) ?? "hephaestus";
+  }
+
+  private unauthorizedTaskResponse(sessionId: string, callId: string | undefined): HookResponse {
+    if (callId !== undefined) {
+      this.unauthorizedTaskCallIds.add(`${sessionId}:${callId}`);
+    }
+    return {
+      action: "inject",
+      injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+    };
   }
 
   private rememberCompletionInput(

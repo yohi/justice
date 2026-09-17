@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type { FileReader } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
@@ -12,17 +12,6 @@ import { createMockNotifier } from "../helpers/mock-notifier";
 
 const planContent = ["## Task 1: Implement", "- [ ] Add implementation arm state"].join("\n");
 
-const originalHandleImplementationArm = PlanBridge.prototype.handleImplementationArm;
-
-beforeEach(() => {
-  vi.spyOn(PlanBridge.prototype, "handleImplementationArm").mockImplementation(
-    async function (this: PlanBridge, sessionId, request) {
-      wirePlanBridgeAuthorization(this);
-      return originalHandleImplementationArm.call(this, sessionId, request);
-    },
-  );
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -33,7 +22,9 @@ function createLoopHandler(reader: FileReader): LoopDetectionHandler {
 
 function createBridge(files: Record<string, string>): PlanBridge {
   const reader = createMockFileReader(files);
-  return new PlanBridge(reader, createLoopHandler(reader), undefined, createMockNotifier());
+  const bridge = new PlanBridge(reader, createLoopHandler(reader), undefined, createMockNotifier());
+  wirePlanBridgeAuthorization(bridge);
+  return bridge;
 }
 
 describe("PlanBridge.handleImplementationArm", () => {
@@ -59,6 +50,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     });
     const notifier = createMockNotifier();
     const bridge = new PlanBridge(reader, createLoopHandler(reader), undefined, notifier);
+    wirePlanBridgeAuthorization(bridge);
     bridge.setActivePlan("session-mismatch", "plan-a.md");
 
     const result = await bridge.handleImplementationArm("session-mismatch", {
