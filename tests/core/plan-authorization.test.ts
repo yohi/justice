@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { PlanParser } from "../../src/core/plan-parser";
+import type { AtomicPersistence } from "../../src/core/atomic-persistence";
 import {
   buildCanonicalSnapshot,
   computePlanFingerprint,
@@ -40,6 +41,32 @@ function inputFor(
 
 function storeFor(files: MockFileSystem): AuthorizationStore {
   return new AuthorizationStore(files, files, createAuthorizationReviewBoundary());
+}
+
+function persistenceFor(
+  store: AuthorizationStore,
+): AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>> {
+  return (store as unknown as {
+    readonly authorizationPersistence: AtomicPersistence<ReadonlyArray<ApprovedPlanBinding>>;
+  }).authorizationPersistence;
+}
+
+function activeBinding(authorizationId: string, sessionId = "s1"): ApprovedPlanBinding {
+  return {
+    authorizationId,
+    sessionId,
+    planPath: `docs/${authorizationId}.md`,
+    planFingerprint: { algorithm: "sha256", value: authorizationId },
+    canonicalSnapshot: {
+      schema: "justice-plan-v1",
+      documentDigest: authorizationId,
+      globalBodyDigest: authorizationId,
+      tasks: [],
+    },
+    fingerprintSchema: "justice-plan-v1",
+    approvedAt: "2026-09-05T00:00:00.000Z",
+    status: "active",
+  };
 }
 
 describe("AuthorizationStore", () => {
@@ -283,9 +310,7 @@ describe("AuthorizationStore", () => {
     const files = createMockFileSystem();
     const store = storeFor(files);
     const reconciler = vi.fn();
-    const persistence = (store as unknown as {
-      readonly authorizationPersistence: { saveAtomicWithLock: typeof store.approve };
-    }).authorizationPersistence;
+    const persistence = persistenceFor(store);
     vi.spyOn(persistence, "saveAtomicWithLock").mockResolvedValueOnce({
       status: "conflict_diverted",
       retries: 3,
@@ -296,5 +321,100 @@ describe("AuthorizationStore", () => {
       store.approveWithinAuthorizationReviewBoundary(inputFor("s1", "docs/plan.md"), reconciler),
     ).resolves.toBeNull();
     expect(reconciler).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the authorization save throws", async () => {
+    const files = createMockFileSystem();
+    const store = storeFor(files);
+    const persistence = persistenceFor(store);
+    vi.spyOn(persistence, "saveAtomicWithLock").mockRejectedValueOnce(new Error("save failed"));
+
+    await expect(
+      store.approveWithinAuthorizationReviewBoundary(inputFor("s1", "docs/plan.md"), vi.fn()),
+    ).resolves.toBeNull();
+  });
+
+  it("returns null when authoritative state contains multiple active bindings", async () => {
+    const files = createMockFileSystem();
+    const store = storeFor(files);
+    const persistence = persistenceFor(store);
+    const current = activeBinding("existing", "other");
+    const firstActive = activeBinding("first", "s1");
+    const secondActive = activeBinding("second", "s1");
+    vi.spyOn(persistence, "loadWithLock")
+      .mockResolvedValueOnce({ data: [current], lockMeta: { version: 1 } })
+      .mockResolvedValueOnce({
+        data: [current, firstActive, secondActive],
+        lockMeta: { version: 2 },
+      });
+    vi.spyOn(persistence, "saveAtomicWithLock").mockResolvedValueOnce({
+      status: "saved",
+      retries: 0,
+    });
+    const reconciler = vi.fn();
+
+    await expect(
+      store.approveWithinAuthorizationReviewBoundary(inputFor("s1", "docs/plan.md"), reconciler),
+    ).resolves.toBeNull();
+    expect(reconciler).toHaveBeenCalledWith("s1", null);
+  });
+
+  it("returns failed when mutation persistence lookups throw", async () => {
+    const files = createMockFileSystem();
+    const store = storeFor(files);
+    const persistence = persistenceFor(store);
+    vi.spyOn(persistence, "loadWithLock").mockRejectedValue(new Error("load failed"));
+
+    await expect(store.release("auth-1", "at")).resolves.toEqual({ kind: "failed" });
+    await expect(
+      store.releaseWithinAuthorizationReviewBoundary("s1", "auth-1", "at"),
+    ).resolves.toEqual({ kind: "failed" });
+    await expect(
+      store.invalidateForFingerprint("auth-1", { algorithm: "sha256", value: "changed" }, "at"),
+    ).resolves.toEqual({ kind: "failed" });
+    await expect(
+      store.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+        "s1",
+        "auth-1",
+        { algorithm: "sha256", value: "changed" },
+        "at",
+      ),
+    ).resolves.toEqual({ kind: "failed" });
+    await expect(
+      store.invalidateMissingPlanWithinAuthorizationReviewBoundary("s1", "auth-1", "at"),
+    ).resolves.toEqual({ kind: "failed" });
+  });
+
+  it("returns uncertain when releasing cannot save the terminal binding", async () => {
+    const files = createMockFileSystem();
+    const store = storeFor(files);
+    const approved = await store.approve(inputFor("s1", "docs/plan.md"));
+    const persistence = persistenceFor(store);
+    vi.spyOn(persistence, "saveAtomicWithLock").mockResolvedValueOnce({
+      status: "conflict_diverted",
+      retries: 3,
+      conflictPath: ".justice/authorizations.conflict.json",
+    });
+
+    await expect(
+      store.releaseWithinAuthorizationReviewBoundary(
+        "s1",
+        approved?.authorizationId ?? "missing",
+        "2026-09-05T00:00:01.000Z",
+      ),
+    ).resolves.toEqual({ kind: "uncertain" });
+  });
+
+  it("rejects a binding with an unknown terminal status", async () => {
+    const files = createMockFileSystem({
+      ".justice/authorizations.json": JSON.stringify([
+        {
+          ...activeBinding("auth-1"),
+          status: "unknown",
+        },
+      ]),
+    });
+
+    await expect(storeFor(files).hydrate()).rejects.toThrow("Invalid authorization binding array");
   });
 });
