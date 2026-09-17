@@ -426,6 +426,26 @@ describe("redactPendingLogRecord", () => {
         reason: "worker output at [REDACTED_PATH]",
       });
     });
+
+    it("preserves a task transition without an optional reason", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "task_lifecycle_transition",
+        parentSessionId: "parent-1",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
+        from: "in_progress",
+        to: "worker_reported",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toEqual(record);
+    });
   });
 
   describe("plan finalization transition records", () => {
@@ -456,6 +476,38 @@ describe("redactPendingLogRecord", () => {
         reason: "review output at [REDACTED_PATH]",
       });
     });
+
+    it("preserves a plan transition without an optional reason", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "plan_finalization_transition",
+        parentSessionId: "parent-1",
+        authorizationId: "auth-1",
+        planPath: "plan.md",
+        finalizationAttemptId: "final-1",
+        finalReviewRound: 1,
+        from: "tasks_pending",
+        to: "all_tasks_accepted",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toEqual(record);
+    });
+  });
+
+  it("rejects an unknown record kind at the runtime boundary", () => {
+    const record: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "session_error",
+      errorKind: "unknown",
+      message: "unexpected",
+    };
+    Reflect.set(record, "kind", "unsupported");
+
+    expect(() => Reflect.apply(redactPendingLogRecord, undefined, [record])).toThrow(TypeError);
   });
 
   describe("decision records", () => {

@@ -8,8 +8,11 @@ import {
 import type {
   ObservationRecord,
   DecisionRecord,
+  PlanFinalizationState,
   ReviewItem,
+  TaskProgressState,
 } from "../../../src/core/v2/observation-model";
+import type { TaskExecutionRef } from "../../../src/core/types";
 
 function toolEvent(
   seq: number,
@@ -140,6 +143,57 @@ function messageEvent(
   };
 }
 
+function taskLifecycleEvent(
+  sequence: number,
+  from: TaskProgressState,
+  to: TaskProgressState,
+  taskExecutionRef: TaskExecutionRef = {
+    authorizationId: "auth-1",
+    taskId: "task-1",
+    attemptId: "attempt-1",
+  },
+): ObservationRecord {
+  return {
+    schemaVersion: 1,
+    sequence,
+    timestamp: `2026-07-06T00:00:${String(sequence).padStart(2, "0")}Z`,
+    agentId: "atlas",
+    sessionId: "s1",
+    writerId: "w1",
+    recordType: "observation",
+    taskId: "task-1",
+    kind: "task_lifecycle_transition",
+    parentSessionId: "s1",
+    taskExecutionRef,
+    from,
+    to,
+  };
+}
+
+function planFinalizationEvent(
+  sequence: number,
+  from: PlanFinalizationState,
+  to: PlanFinalizationState,
+): ObservationRecord {
+  return {
+    schemaVersion: 1,
+    sequence,
+    timestamp: `2026-07-06T00:01:${String(sequence).padStart(2, "0")}Z`,
+    agentId: "atlas",
+    sessionId: "s1",
+    writerId: "w1",
+    recordType: "observation",
+    kind: "plan_finalization_transition",
+    parentSessionId: "s1",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    from,
+    to,
+  };
+}
+
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
@@ -204,6 +258,67 @@ describe("project() task fold", () => {
     const state = project(events, REBUILT_AT);
     expect(state.lifecycle.taskStates.get("task-1")).toBe("review_pending");
     expect(state.lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(ref);
+  });
+
+  it("ignores a new execution reference before the task enters rework", () => {
+    const firstRef = {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    } as const;
+    const first = taskLifecycleEvent(1, "pending", "authorized", firstRef);
+    const stale = taskLifecycleEvent(2, "authorized", "in_progress", {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-2",
+    });
+
+    const state = project([first, stale], REBUILT_AT);
+
+    expect(state.lifecycle.taskStates.get("task-1")).toBe("authorized");
+    expect(state.lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(firstRef);
+  });
+
+  it("accepts a new execution reference after rework", () => {
+    const ref1 = {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    } as const;
+    const ref2 = { ...ref1, attemptId: "attempt-2" } as const;
+    const events = [
+      taskLifecycleEvent(1, "pending", "authorized", ref1),
+      taskLifecycleEvent(2, "authorized", "in_progress", ref1),
+      taskLifecycleEvent(3, "in_progress", "worker_reported", ref1),
+      taskLifecycleEvent(4, "worker_reported", "evidence_pending", ref1),
+      taskLifecycleEvent(5, "evidence_pending", "review_pending", ref1),
+      taskLifecycleEvent(6, "review_pending", "rework_required", ref1),
+      taskLifecycleEvent(7, "rework_required", "in_progress", ref2),
+    ];
+
+    const state = project(events, REBUILT_AT);
+
+    expect(state.lifecycle.taskStates.get("task-1")).toBe("in_progress");
+    expect(state.lifecycle.currentTaskExecutionRefs.get("task-1")).toEqual(ref2);
+  });
+
+  it("projects valid and invalid plan finalization transitions", () => {
+    const state = project(
+      [
+        planFinalizationEvent(1, "tasks_pending", "all_tasks_accepted"),
+        planFinalizationEvent(2, "tasks_pending", "final_review_pending"),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.lifecycle.finalization).toEqual({
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      state: "all_tasks_accepted",
+    });
   });
 
   it("collects tool evidence per task and applies decision verdict as status", () => {

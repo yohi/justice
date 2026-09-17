@@ -85,4 +85,17 @@ describe("SessionStateProvider", () => {
     provider.closeActiveTaskWindow("call-1");
     expect(provider.getTaskCallBinding("call-1")).toBeUndefined();
   });
+
+  it("removes implementation bindings when their session is removed", () => {
+    const provider = new SessionStateProvider();
+    provider.setTaskCallBinding("call-1", {
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    });
+
+    provider.removeSession("s1");
+
+    expect(provider.getTaskCallBinding("call-1")).toBeUndefined();
+  });
 });
