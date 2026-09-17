@@ -30,18 +30,16 @@ export type PlanFingerprint = {
   readonly value: string;
 };
 
-export type TaskAttemptId = string;
 export type TaskExecutionRef = {
   readonly authorizationId: string;
   readonly taskId: string;
-  readonly attemptId: TaskAttemptId;
+  readonly attemptId: string;
 };
 export type TaskCallBinding = {
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly taskExecutionRef: TaskExecutionRef;
 };
-export type FinalizationAttemptId = string;
 export type ReviewKind = "task-review" | "final-review";
 export type TaskReviewCorrelation = {
   readonly reviewKind: "task-review";
@@ -53,7 +51,7 @@ export type FinalReviewCorrelation = {
   readonly planPath: string;
   readonly authorizationId: string;
   readonly planFingerprint: PlanFingerprint;
-  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalizationAttemptId: string;
   readonly finalReviewRound: number;
 };
 export type ReviewCorrelation = TaskReviewCorrelation | FinalReviewCorrelation;

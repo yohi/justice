@@ -168,6 +168,17 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
       };
     case "error_annotation":
       return { ...record, planPath: redactForPersistence(record.planPath) };
+    case "task_lifecycle_transition":
+      return {
+        ...record,
+        ...(record.reason === undefined ? {} : { reason: redactForPersistence(record.reason) }),
+      };
+    case "plan_finalization_transition":
+      return {
+        ...record,
+        planPath: redactForPersistence(record.planPath),
+        ...(record.reason === undefined ? {} : { reason: redactForPersistence(record.reason) }),
+      };
     // Each bootstrap kind is spread under its own literal `kind` so the result
     // stays assignable to a single PendingObservationRecord member.
     case "workflow_started":
@@ -178,9 +189,11 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
       return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
     case "plan_activated":
       return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
-    case "task_lifecycle_transition":
-      return record;
-    case "plan_finalization_transition":
-      return record;
+    default:
+      return assertNever(record);
   }
+}
+
+function assertNever(value: never): never {
+  throw new TypeError(`Unexpected record kind: ${String(value)}`);
 }
