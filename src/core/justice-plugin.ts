@@ -35,10 +35,13 @@ import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
 import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
+import { project, taskLifecycleKey } from "./v2/state-projection";
+import type { TaskProgressState } from "./v2/observation-model";
 import {
   AuthorizationStore,
   createAuthorizationReviewBoundary,
   type AuthorizationReviewBoundary,
+  type ApprovedPlanBinding,
 } from "./plan-authorization";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -280,6 +283,8 @@ export class JusticePlugin {
   private readonly telemetry: TelemetryStore;
   private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
   private readonly authorizationStore: AuthorizationStore;
+  private readonly writerId: string;
+  private readonly observationLogStore: ObservationLogStore;
   private readonly options: JusticePluginOptions;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
@@ -352,9 +357,10 @@ export class JusticePlugin {
       this.telemetry,
     );
     this.compactionProtector = new CompactionProtector(this.tieredWisdomStore);
-    const writerId = options.writerId ?? generateWriterId();
+    this.writerId = options.writerId ?? generateWriterId();
+    this.observationLogStore = new ObservationLogStore(fileWriter, fileReader, this.writerId);
     this.observationHandler = new ObservationHandler({
-      logStore: new ObservationLogStore(fileWriter, fileReader, writerId),
+      logStore: this.observationLogStore,
       sessionStateProvider: this.sessionStateProvider,
       projectionCache: new StateProjectionCache(
         fileWriter,
@@ -362,7 +368,39 @@ export class JusticePlugin {
         ".justice/state.json",
         options.logger ?? console,
       ),
-      writerId,
+      writerId: this.writerId,
+      getActiveAuthorization: async (
+        parentSessionId: string,
+        taskId: string,
+      ): Promise<ApprovedPlanBinding | null> => {
+        try {
+          const bindings = await this.authorizationStore.hydrate();
+          return (
+            bindings.find(
+              (binding) =>
+                binding.status === "active" &&
+                binding.sessionId === parentSessionId &&
+                binding.canonicalSnapshot.tasks.some((task) => task.taskId === taskId),
+            ) ?? null
+          );
+        } catch {
+          return null;
+        }
+      },
+      getTaskLifecycleState: async (
+        parentSessionId: string,
+        authorizationId: string,
+        taskId: string,
+      ): Promise<TaskProgressState | undefined> => {
+        try {
+          const events = await this.observationLogStore.readAll();
+          return project(events, new Date().toISOString()).lifecycle.taskStates.get(
+            taskLifecycleKey(parentSessionId, { authorizationId, taskId }),
+          );
+        } catch {
+          return undefined;
+        }
+      },
       workspaceRoot: options.workspaceRoot,
       logger: options.logger,
       gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),

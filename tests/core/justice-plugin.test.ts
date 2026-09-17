@@ -12,6 +12,12 @@ import type {
   EventEvent,
 } from "../../src/core/types";
 import { createMockFileSystem } from "../helpers/mock-file-system";
+import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import {
+  appendTaskLifecycleTransition,
+  type TaskLifecycleTransitionInput,
+} from "../../src/core/task-lifecycle";
+import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 
 describe("JusticePlugin", () => {
   let reader: FileReader;
@@ -215,6 +221,66 @@ describe("JusticePlugin", () => {
       };
       await plugin.handleEvent(event);
       expect(spy).toHaveBeenCalledWith(event);
+    });
+
+    it("uses the authorization-scoped lifecycle state when resuming rework", async () => {
+      const parentSessionId = "parent-1";
+      const taskId = "task-1";
+      const authorizationId = "auth-1";
+      const writerId = "w-lifecycle";
+      const binding = {
+        authorizationId,
+        sessionId: parentSessionId,
+        planPath: "plan.md",
+        planFingerprint: { algorithm: "sha256", value: "plan-fingerprint" },
+        canonicalSnapshot: {
+          schema: "justice-plan-v1",
+          documentDigest: "document-digest",
+          globalBodyDigest: "body-digest",
+          tasks: [{ taskId, title: "Rework", canonicalBody: "## Task 1: Rework", digest: "digest" }],
+        },
+        fingerprintSchema: "justice-plan-v1",
+        approvedAt: "2026-01-01T00:00:00.000Z",
+        status: "active",
+      } satisfies ApprovedPlanBinding;
+      const fs = createMockFileSystem({
+        "plan.md": "## Task 1: Rework\n- [ ] Fix\n",
+        ".justice/authorizations.json": JSON.stringify([binding]),
+      });
+      const testPlugin = new JusticePlugin(fs, fs, { writerId });
+      const logStore = new ObservationLogStore(fs, fs, writerId);
+      const taskExecutionRef = { authorizationId, taskId, attemptId: "attempt-1" };
+      const shardId = { agentId: "unknown" as const, sessionId: parentSessionId, writerId };
+      const transitions: readonly TaskLifecycleTransitionInput[] = [
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "pending", to: "authorized" },
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "authorized", to: "in_progress" },
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "in_progress", to: "worker_reported" },
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "worker_reported", to: "evidence_pending" },
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "evidence_pending", to: "review_pending" },
+        { agentId: "unknown", sessionId: parentSessionId, writerId, parentSessionId, taskExecutionRef, from: "review_pending", to: "rework_required" },
+      ];
+
+      for (const transition of transitions) {
+        await appendTaskLifecycleTransition(transition, (record) => logStore.append(shardId, record));
+      }
+
+      await testPlugin.handleEvent({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { task_id: taskId } },
+        sessionId: parentSessionId,
+        callId: "call-1",
+      });
+
+      const lifecycleRecords = (await logStore.readAll()).filter(
+        (record) => record.recordType === "observation" && record.kind === "task_lifecycle_transition",
+      );
+      expect(lifecycleRecords).toHaveLength(transitions.length + 1);
+      expect(lifecycleRecords[lifecycleRecords.length - 1]).toMatchObject({
+        parentSessionId,
+        from: "rework_required",
+        to: "in_progress",
+        taskExecutionRef: { authorizationId, taskId },
+      });
     });
 
     it("should route PostToolUse events to TaskFeedbackHandler", async () => {
