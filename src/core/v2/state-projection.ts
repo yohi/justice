@@ -1,11 +1,18 @@
 // src/core/v2/state-projection.ts
-import type { FullEvidenceRef } from "../types";
+import type { FullEvidenceRef, TaskExecutionRef } from "../types";
 import {
   computeMaxSequenceByShard,
   computeSourceHash,
   orderEventsForProjection,
 } from "./integrity";
-import type { Evidence, ObservationRecord, PersistedLogRecord } from "./observation-model";
+import type {
+  Evidence,
+  ObservationRecord,
+  PersistedLogRecord,
+  PlanFinalizationState,
+  TaskProgressState,
+} from "./observation-model";
+import { applyPlanTransition, applyTaskTransition } from "../task-lifecycle";
 import { toEvidenceArray } from "./evidence-list";
 import type { Verdict } from "./decision-model";
 import type { ReviewSummary, ScopeReviewSummary } from "./review-types";
@@ -37,6 +44,22 @@ export type ProjectedState = {
   };
   readonly tasks: ReadonlyMap<string, ProjectedTask>;
   readonly reviewSummary: ReviewSummary;
+  readonly lifecycle: ProjectedLifecycle;
+};
+
+export type FinalizationContext = {
+  readonly parentSessionId: string;
+  readonly authorizationId: string;
+  readonly planPath: string;
+  readonly finalizationAttemptId: string;
+  readonly finalReviewRound: number;
+  readonly state: PlanFinalizationState;
+};
+
+export type ProjectedLifecycle = {
+  readonly currentTaskExecutionRefs: ReadonlyMap<string, TaskExecutionRef>;
+  readonly taskStates: ReadonlyMap<string, TaskProgressState>;
+  readonly finalization: ReadonlyMap<string, FinalizationContext>;
 };
 
 type MutableTask = {
@@ -44,6 +67,14 @@ type MutableTask = {
   lastVerdict: TaskVerdict;
   evidence: ProjectedEvidence[];
   observedReviewScopes: string[];
+};
+
+type MutableLifecycle = {
+  currentTaskExecutionRefs: Map<string, TaskExecutionRef>;
+  taskStates: Map<string, TaskProgressState>;
+  finalization: Map<string, FinalizationContext>;
+  lastTransitionIdentities: Map<string, string>;
+  lastFinalizationTransitionIdentities: Map<string, string>;
 };
 
 type LatestMessageClaims = {
@@ -72,6 +103,22 @@ function messageKey(sessionId: string, messageID: string, partID: string | undef
   // Historical records without partID share a distinct legacy key; newly generated
   // message evidence is always keyed by the complete (session, message, part) tuple.
   return JSON.stringify([sessionId, messageID, partID ?? null]);
+}
+
+function taskLifecycleKey(parentSessionId: string, taskExecutionRef: TaskExecutionRef): string {
+  return JSON.stringify([
+    parentSessionId,
+    taskExecutionRef.authorizationId,
+    taskExecutionRef.taskId,
+  ]);
+}
+
+function taskExecutionRefIdentity(taskExecutionRef: TaskExecutionRef): string {
+  return JSON.stringify([
+    taskExecutionRef.authorizationId,
+    taskExecutionRef.taskId,
+    taskExecutionRef.attemptId,
+  ]);
 }
 
 function applyMessageObservation(
@@ -105,16 +152,106 @@ function applyMessageObservation(
   latestMessageClaims.set(key, { taskId, evidenceRefKeys });
 }
 
+type TaskLifecycleObservation = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "task_lifecycle_transition" }
+>;
+
+type PlanFinalizationObservation = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "plan_finalization_transition" }
+>;
+
+function planFinalizationKey(event: PlanFinalizationObservation): string {
+  return JSON.stringify([event.parentSessionId, event.authorizationId, event.planPath]);
+}
+
+function applyTaskLifecycleObservation(
+  tasks: Map<string, MutableTask>,
+  event: TaskLifecycleObservation,
+  lifecycle: MutableLifecycle,
+): void {
+  const taskId = event.taskExecutionRef.taskId;
+  const taskKey = taskLifecycleKey(event.parentSessionId, event.taskExecutionRef);
+  ensureTask(tasks, taskId);
+  const currentRef = lifecycle.currentTaskExecutionRefs.get(taskKey);
+  const identity = taskExecutionRefIdentity(event.taskExecutionRef);
+  if (currentRef !== undefined && taskExecutionRefIdentity(currentRef) !== identity) {
+    if (lifecycle.taskStates.get(taskKey) !== "rework_required") return;
+  }
+  const current = lifecycle.taskStates.get(taskKey) ?? "pending";
+  const outcome = applyTaskTransition(
+    {
+      value: current,
+      lastTransitionIdentity: lifecycle.lastTransitionIdentities.get(taskKey),
+    },
+    {
+      identity,
+      from: event.from,
+      to: event.to,
+    },
+  );
+  if (outcome.kind === "applied") {
+    lifecycle.taskStates.set(taskKey, outcome.state);
+    lifecycle.currentTaskExecutionRefs.set(taskKey, event.taskExecutionRef);
+    lifecycle.lastTransitionIdentities.set(taskKey, identity);
+  }
+}
+
+function applyPlanFinalizationObservation(
+  event: PlanFinalizationObservation,
+  lifecycle: MutableLifecycle,
+): void {
+  const planKey = planFinalizationKey(event);
+  const current = lifecycle.finalization.get(planKey)?.state ?? "tasks_pending";
+  const identity = JSON.stringify([
+    event.authorizationId,
+    event.planPath,
+    event.finalizationAttemptId,
+    event.finalReviewRound,
+  ]);
+  const outcome = applyPlanTransition(
+    {
+      value: current,
+      lastTransitionIdentity: lifecycle.lastFinalizationTransitionIdentities.get(planKey),
+    },
+    {
+      identity,
+      from: event.from,
+      to: event.to,
+    },
+  );
+  if (outcome.kind !== "applied") return;
+  lifecycle.finalization.set(planKey, {
+    parentSessionId: event.parentSessionId,
+    authorizationId: event.authorizationId,
+    planPath: event.planPath,
+    finalizationAttemptId: event.finalizationAttemptId,
+    finalReviewRound: event.finalReviewRound,
+    state: outcome.state,
+  });
+  lifecycle.lastFinalizationTransitionIdentities.set(planKey, identity);
+}
+
 function applyObservationEvent(
   tasks: Map<string, MutableTask>,
   latestMessageClaims: Map<string, LatestMessageClaims>,
   event: Extract<PersistedLogRecord, { recordType: "observation" }>,
   baseRef: Pick<PersistedLogRecord, "agentId" | "sessionId" | "writerId" | "sequence">,
+  lifecycle: MutableLifecycle,
 ): void {
   // Workflow bootstrap records are audit-only: skipped BEFORE ensureTask() so they
   // neither open a projected task window nor contribute evidence, even when they
   // carry a taskId. `projectWorkflowBootstrapAudit` exposes them separately.
   if (isWorkflowBootstrapRecordKind(event.kind)) return;
+  if (event.kind === "task_lifecycle_transition") {
+    applyTaskLifecycleObservation(tasks, event, lifecycle);
+    return;
+  }
+  if (event.kind === "plan_finalization_transition") {
+    applyPlanFinalizationObservation(event, lifecycle);
+    return;
+  }
   const taskId = event.taskId;
   if (!taskId) return;
   const taskState = ensureTask(tasks, taskId);
@@ -157,6 +294,13 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
   const maxSequenceByShard = computeMaxSequenceByShard(sorted);
   const tasks = new Map<string, MutableTask>();
   const latestMessageClaims = new Map<string, LatestMessageClaims>();
+  const lifecycle: MutableLifecycle = {
+    currentTaskExecutionRefs: new Map(),
+    taskStates: new Map(),
+    finalization: new Map(),
+    lastTransitionIdentities: new Map(),
+    lastFinalizationTransitionIdentities: new Map(),
+  };
 
   for (const event of sorted) {
     const baseRef = {
@@ -167,7 +311,7 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
     };
 
     if (event.recordType === "observation") {
-      applyObservationEvent(tasks, latestMessageClaims, event, baseRef);
+      applyObservationEvent(tasks, latestMessageClaims, event, baseRef, lifecycle);
     } else if (event.recordType === "decision") {
       applyDecisionEvent(tasks, event);
     }
@@ -181,6 +325,7 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
       maxSequenceByShard,
     },
     tasks,
+    lifecycle,
     reviewSummary: aggregateReviews(
       sorted.filter((event): event is ObservationRecord => event.recordType === "observation"),
     ),
@@ -198,6 +343,11 @@ type SerializedProjectedState = {
   readonly reviewSummary: ScopeReviewSummary & {
     readonly authority: "observed_review_output";
     readonly byScope: Record<string, ScopeReviewSummary>;
+  };
+  readonly lifecycle?: {
+    readonly currentTaskExecutionRefs: Record<string, TaskExecutionRef>;
+    readonly taskStates: Record<string, TaskProgressState>;
+    readonly finalization: Record<string, FinalizationContext>;
   };
 };
 
@@ -222,6 +372,11 @@ export function toSerializableProjectedState(state: ProjectedState): SerializedP
       resolved: state.reviewSummary.resolved,
       open: state.reviewSummary.open,
       byScope: Object.fromEntries(state.reviewSummary.byScope),
+    },
+    lifecycle: {
+      currentTaskExecutionRefs: Object.fromEntries(state.lifecycle.currentTaskExecutionRefs),
+      taskStates: Object.fromEntries(state.lifecycle.taskStates),
+      finalization: Object.fromEntries(state.lifecycle.finalization),
     },
   };
 }
@@ -248,6 +403,11 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
       resolved: raw.reviewSummary.resolved,
       open: raw.reviewSummary.open,
       byScope: new Map(Object.entries(raw.reviewSummary.byScope)),
+    },
+    lifecycle: {
+      currentTaskExecutionRefs: new Map(Object.entries(raw.lifecycle?.currentTaskExecutionRefs ?? {})),
+      taskStates: new Map(Object.entries(raw.lifecycle?.taskStates ?? {})) as Map<string, TaskProgressState>,
+      finalization: new Map(Object.entries(raw.lifecycle?.finalization ?? {})),
     },
   };
 }

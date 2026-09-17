@@ -30,6 +30,33 @@ export type PlanFingerprint = {
   readonly value: string;
 };
 
+export type TaskExecutionRef = {
+  readonly authorizationId: string;
+  readonly taskId: string;
+  readonly attemptId: string;
+};
+export type TaskCallBinding = {
+  readonly parentSessionId: string;
+  readonly authorizationId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+};
+export type ReviewKind = "task-review" | "final-review";
+export type TaskReviewCorrelation = {
+  readonly reviewKind: "task-review";
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly reviewRound: number;
+};
+export type FinalReviewCorrelation = {
+  readonly reviewKind: "final-review";
+  readonly planPath: string;
+  readonly authorizationId: string;
+  readonly planFingerprint: PlanFingerprint;
+  readonly finalizationAttemptId: string;
+  readonly finalReviewRound: number;
+};
+export type ReviewCorrelation = TaskReviewCorrelation | FinalReviewCorrelation;
+export type ReviewPendingCommittedHandler = (parentSessionId: string) => Promise<void>;
+
 /** plan.md内の個別ステップ */
 export interface PlanStep {
   readonly id: string;

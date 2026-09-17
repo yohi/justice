@@ -8,8 +8,11 @@ import {
 import type {
   ObservationRecord,
   DecisionRecord,
+  PlanFinalizationState,
   ReviewItem,
+  TaskProgressState,
 } from "../../../src/core/v2/observation-model";
+import type { TaskExecutionRef } from "../../../src/core/types";
 
 function toolEvent(
   seq: number,
@@ -140,9 +143,307 @@ function messageEvent(
   };
 }
 
+function taskLifecycleEvent(
+  sequence: number,
+  from: TaskProgressState,
+  to: TaskProgressState,
+  taskExecutionRef: TaskExecutionRef = {
+    authorizationId: "auth-1",
+    taskId: "task-1",
+    attemptId: "attempt-1",
+  },
+  parentSessionId = "s1",
+): ObservationRecord {
+  return {
+    schemaVersion: 1,
+    sequence,
+    timestamp: `2026-07-06T00:00:${String(sequence).padStart(2, "0")}Z`,
+    agentId: "atlas",
+    sessionId: parentSessionId,
+    writerId: "w1",
+    recordType: "observation",
+    taskId: "task-1",
+    kind: "task_lifecycle_transition",
+    parentSessionId,
+    taskExecutionRef,
+    from,
+    to,
+  };
+}
+
+type PlanFinalizationEventOptions = {
+  readonly parentSessionId?: string;
+  readonly authorizationId?: string;
+  readonly planPath?: string;
+  readonly finalizationAttemptId?: string;
+  readonly finalReviewRound?: number;
+};
+
+function planFinalizationEvent(
+  sequence: number,
+  from: PlanFinalizationState,
+  to: PlanFinalizationState,
+  options: PlanFinalizationEventOptions = {},
+): ObservationRecord {
+  const parentSessionId = options.parentSessionId ?? "s1";
+  const authorizationId = options.authorizationId ?? "auth-1";
+  const planPath = options.planPath ?? "plan.md";
+  const finalizationAttemptId = options.finalizationAttemptId ?? "final-1";
+  const finalReviewRound = options.finalReviewRound ?? 1;
+  return {
+    schemaVersion: 1,
+    sequence,
+    timestamp: `2026-07-06T00:01:${String(sequence).padStart(2, "0")}Z`,
+    agentId: "atlas",
+    sessionId: parentSessionId,
+    writerId: "w1",
+    recordType: "observation",
+    kind: "plan_finalization_transition",
+    parentSessionId,
+    authorizationId,
+    planPath,
+    finalizationAttemptId,
+    finalReviewRound,
+    from,
+    to,
+  };
+}
+
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
+  it("projects lifecycle records without aborting later records", () => {
+    const invalidRecord = {
+      schemaVersion: 1 as const,
+      sequence: 1,
+      timestamp: "2026-07-06T00:00:01Z",
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      kind: "task_lifecycle_transition" as const,
+      taskId: "task-1",
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      taskExecutionRef: {
+        authorizationId: "auth-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+      },
+      from: "accepted" as const,
+      to: "pending" as const,
+    };
+    const validRecord = {
+      ...invalidRecord,
+      sequence: 2,
+      from: "pending" as const,
+      to: "authorized" as const,
+    };
+    const finalRecord = {
+      ...invalidRecord,
+      sequence: 3,
+      from: "authorized" as const,
+      to: "in_progress" as const,
+    };
+
+    const state = project([invalidRecord, validRecord, finalRecord], REBUILT_AT);
+
+    expect(state.lifecycle.taskStates.get(JSON.stringify(["s1", "auth-1", "task-1"]))).toBe(
+      "in_progress",
+    );
+  });
+
+  it("replays all transitions for one task attempt and retains its identity", () => {
+    const ref = { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" } as const;
+    const states = [
+      ["pending", "authorized"],
+      ["authorized", "in_progress"],
+      ["in_progress", "worker_reported"],
+      ["worker_reported", "evidence_pending"],
+      ["evidence_pending", "review_pending"],
+    ] as const;
+    const events = states.map(([from, to], index) => ({
+      schemaVersion: 1 as const,
+      sequence: index + 1,
+      timestamp: `2026-07-06T00:00:0${index + 1}Z`,
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      taskId: "task-1",
+      kind: "task_lifecycle_transition" as const,
+      parentSessionId: "s1",
+      taskExecutionRef: ref,
+      from,
+      to,
+    }));
+
+    const state = project(events, REBUILT_AT);
+    const key = JSON.stringify(["s1", "auth-1", "task-1"]);
+    expect(state.lifecycle.taskStates.get(key)).toBe("review_pending");
+    expect(state.lifecycle.currentTaskExecutionRefs.get(key)).toEqual(ref);
+  });
+
+  it("ignores a new execution reference before the task enters rework", () => {
+    const firstRef = {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    } as const;
+    const first = taskLifecycleEvent(1, "pending", "authorized", firstRef);
+    const stale = taskLifecycleEvent(2, "authorized", "in_progress", {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-2",
+    });
+
+    const state = project([first, stale], REBUILT_AT);
+
+    const key = JSON.stringify(["s1", "auth-1", "task-1"]);
+    expect(state.lifecycle.taskStates.get(key)).toBe("authorized");
+    expect(state.lifecycle.currentTaskExecutionRefs.get(key)).toEqual(firstRef);
+  });
+
+  it("accepts a new execution reference after rework", () => {
+    const ref1 = {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    } as const;
+    const ref2 = { ...ref1, attemptId: "attempt-2" } as const;
+    const events = [
+      taskLifecycleEvent(1, "pending", "authorized", ref1),
+      taskLifecycleEvent(2, "authorized", "in_progress", ref1),
+      taskLifecycleEvent(3, "in_progress", "worker_reported", ref1),
+      taskLifecycleEvent(4, "worker_reported", "evidence_pending", ref1),
+      taskLifecycleEvent(5, "evidence_pending", "review_pending", ref1),
+      taskLifecycleEvent(6, "review_pending", "rework_required", ref1),
+      taskLifecycleEvent(7, "rework_required", "in_progress", ref2),
+    ];
+
+    const state = project(events, REBUILT_AT);
+
+    const key = JSON.stringify(["s1", "auth-1", "task-1"]);
+    expect(state.lifecycle.taskStates.get(key)).toBe("in_progress");
+    expect(state.lifecycle.currentTaskExecutionRefs.get(key)).toEqual(ref2);
+  });
+
+  it("keeps task lifecycle state independent across parent and authorization scopes", () => {
+    const state = project(
+      [
+        taskLifecycleEvent(
+          1,
+          "pending",
+          "authorized",
+          { authorizationId: "auth-a", taskId: "task-1", attemptId: "attempt-a" },
+          "parent-1",
+        ),
+        taskLifecycleEvent(
+          2,
+          "pending",
+          "authorized",
+          { authorizationId: "auth-b", taskId: "task-1", attemptId: "attempt-b" },
+          "parent-1",
+        ),
+        taskLifecycleEvent(
+          3,
+          "pending",
+          "authorized",
+          { authorizationId: "auth-a", taskId: "task-1", attemptId: "attempt-c" },
+          "parent-2",
+        ),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.lifecycle.taskStates.size).toBe(3);
+    expect(state.lifecycle.taskStates.get(JSON.stringify(["parent-1", "auth-a", "task-1"]))).toBe(
+      "authorized",
+    );
+    expect(state.lifecycle.taskStates.get(JSON.stringify(["parent-1", "auth-b", "task-1"]))).toBe(
+      "authorized",
+    );
+    expect(state.lifecycle.taskStates.get(JSON.stringify(["parent-2", "auth-a", "task-1"]))).toBe(
+      "authorized",
+    );
+  });
+
+  it("compares task execution references by fixed field order", () => {
+    const firstRef = {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    } as const;
+    const equivalentRef = {
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      authorizationId: "auth-1",
+    } as const;
+
+    const state = project(
+      [
+        taskLifecycleEvent(1, "pending", "authorized", firstRef),
+        taskLifecycleEvent(2, "authorized", "in_progress", equivalentRef),
+      ],
+      REBUILT_AT,
+    );
+
+    const key = JSON.stringify(["s1", "auth-1", "task-1"]);
+    expect(state.lifecycle.taskStates.get(key)).toBe("in_progress");
+    expect(state.lifecycle.currentTaskExecutionRefs.get(key)).toEqual(equivalentRef);
+  });
+
+  it("projects valid and invalid plan finalization transitions", () => {
+    const state = project(
+      [
+        planFinalizationEvent(1, "tasks_pending", "all_tasks_accepted"),
+        planFinalizationEvent(2, "tasks_pending", "final_review_pending"),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.lifecycle.finalization.get(JSON.stringify(["s1", "auth-1", "plan.md"]))).toEqual({
+      parentSessionId: "s1",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      state: "all_tasks_accepted",
+    });
+  });
+
+  it("keeps finalization progress independent for each composite plan scope", () => {
+    const planA = {
+      parentSessionId: "parent-1",
+      authorizationId: "auth-a",
+      planPath: "plans/a.md",
+      finalizationAttemptId: "final-a",
+    } as const;
+    const planB = {
+      parentSessionId: "parent-1",
+      authorizationId: "auth-b",
+      planPath: "plans/b.md",
+      finalizationAttemptId: "final-b",
+    } as const;
+    const state = project(
+      [
+        planFinalizationEvent(1, "tasks_pending", "all_tasks_accepted", planA),
+        planFinalizationEvent(2, "tasks_pending", "all_tasks_accepted", planB),
+        planFinalizationEvent(3, "all_tasks_accepted", "final_review_pending", planA),
+        planFinalizationEvent(4, "all_tasks_accepted", "final_review_pending", planB),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.lifecycle.finalization.size).toBe(2);
+    expect(
+      state.lifecycle.finalization.get(JSON.stringify(["parent-1", "auth-a", "plans/a.md"]))?.state,
+    ).toBe("final_review_pending");
+    expect(
+      state.lifecycle.finalization.get(JSON.stringify(["parent-1", "auth-b", "plans/b.md"]))?.state,
+    ).toBe("final_review_pending");
+  });
+
   it("collects tool evidence per task and applies decision verdict as status", () => {
     const events = [
       toolEvent(1, "2026-07-06T00:00:01Z", "task-1", "ev-1"),
@@ -409,6 +710,8 @@ describe("ProjectedState JSON round-trip", () => {
       reviewEvent(2, "2026-07-06T00:00:02Z", "task-1", "src/api", [
         reviewItem("a", "critical", "open"),
       ]),
+      taskLifecycleEvent(3, "pending", "authorized"),
+      planFinalizationEvent(4, "tasks_pending", "all_tasks_accepted"),
     ];
     const state = project(events, REBUILT_AT);
 
@@ -420,11 +723,17 @@ describe("ProjectedState JSON round-trip", () => {
     expect(serialized.reviewSummary).not.toHaveProperty("authorship");
 
     const restored = fromSerializableProjectedState(json);
-    expect(restored.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(2);
+    expect(restored.integrity.maxSequenceByShard.get('["atlas","s1","w1"]')).toBe(4);
     expect(restored.tasks.get("task-1")?.evidence).toHaveLength(1);
     expect(restored.reviewSummary.byScope.get("src/api")?.critical).toHaveLength(1);
     expect(restored.reviewSummary).not.toHaveProperty("authorship");
     expect(restored.integrity.sourceHash).toBe(state.integrity.sourceHash);
+    expect(restored.lifecycle.taskStates.get(JSON.stringify(["s1", "auth-1", "task-1"]))).toBe(
+      "authorized",
+    );
+    expect(
+      restored.lifecycle.finalization.get(JSON.stringify(["s1", "auth-1", "plan.md"]))?.state,
+    ).toBe("all_tasks_accepted");
   });
 
   it("reads a legacy schema-v2 cache that still carries authorship:null", () => {

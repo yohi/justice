@@ -396,6 +396,120 @@ describe("redactPendingLogRecord", () => {
     });
   });
 
+  describe("task lifecycle transition records", () => {
+    it("redacts the optional reason without changing transition identity", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "task_lifecycle_transition",
+        parentSessionId: "parent-1",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
+        from: "in_progress",
+        to: "worker_reported",
+        reason: "worker output at /home/user/output",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toMatchObject({
+        kind: "task_lifecycle_transition",
+        parentSessionId: "parent-1",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
+        reason: "worker output at [REDACTED_PATH]",
+      });
+    });
+
+    it("preserves a task transition without an optional reason", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "task_lifecycle_transition",
+        parentSessionId: "parent-1",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
+        from: "in_progress",
+        to: "worker_reported",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toEqual(record);
+    });
+  });
+
+  describe("plan finalization transition records", () => {
+    it("redacts the plan path and optional reason without changing transition identity", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "plan_finalization_transition",
+        parentSessionId: "parent-1",
+        authorizationId: "auth-1",
+        planPath: "/home/user/plan.md",
+        finalizationAttemptId: "final-1",
+        finalReviewRound: 2,
+        from: "final_review_pending",
+        to: "final_gate_pending",
+        reason: "review output at /home/user/report",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toMatchObject({
+        kind: "plan_finalization_transition",
+        parentSessionId: "parent-1",
+        authorizationId: "auth-1",
+        planPath: "[REDACTED_PATH]",
+        finalizationAttemptId: "final-1",
+        finalReviewRound: 2,
+        reason: "review output at [REDACTED_PATH]",
+      });
+    });
+
+    it("preserves a plan transition without an optional reason", () => {
+      const record: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "plan_finalization_transition",
+        parentSessionId: "parent-1",
+        authorizationId: "auth-1",
+        planPath: "plan.md",
+        finalizationAttemptId: "final-1",
+        finalReviewRound: 1,
+        from: "tasks_pending",
+        to: "all_tasks_accepted",
+      };
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toEqual(record);
+    });
+  });
+
+  it("rejects an unknown record kind at the runtime boundary", () => {
+    const record: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "session_error",
+      errorKind: "unknown",
+      message: "unexpected",
+    };
+    Reflect.set(record, "kind", "unsupported");
+
+    expect(() => Reflect.apply(redactPendingLogRecord, undefined, [record])).toThrow(TypeError);
+  });
+
   describe("decision records", () => {
     it("redacts rule result reasons", () => {
       const record: PendingLogRecord = {
