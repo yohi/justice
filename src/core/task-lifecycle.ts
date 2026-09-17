@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type {
-  FinalizationAttemptId,
   ObservationAgentId,
   TaskExecutionRef,
   ReviewPendingCommittedHandler,
@@ -53,10 +52,29 @@ const FINALIZATION_TRANSITIONS: ReadonlyMap<
   ["final_rework_required", new Set(["final_review_pending"])],
 ]);
 
-export function applyTaskTransition(
-  state: TaskProgressState | TransitionState<TaskProgressState>,
-  event: TaskLifecycleTransition,
-): TransitionOutcome<TaskProgressState> {
+type TransitionRules<S extends string> = {
+  readonly transitions: ReadonlyMap<S, ReadonlySet<S>>;
+  readonly replayFrom: S;
+  readonly replayTo: S;
+};
+
+const TASK_TRANSITION_RULES: TransitionRules<TaskProgressState> = {
+  transitions: TASK_TRANSITIONS,
+  replayFrom: "rework_required",
+  replayTo: "in_progress",
+};
+
+const FINALIZATION_TRANSITION_RULES: TransitionRules<PlanFinalizationState> = {
+  transitions: FINALIZATION_TRANSITIONS,
+  replayFrom: "final_rework_required",
+  replayTo: "final_review_pending",
+};
+
+function applyTransition<S extends string>(
+  state: S | TransitionState<S>,
+  event: { readonly identity: string; readonly from: S; readonly to: S },
+  rules: TransitionRules<S>,
+): TransitionOutcome<S> {
   const current = typeof state === "string" ? state : state.value;
   const previousIdentity = typeof state === "string" ? undefined : state.lastTransitionIdentity;
   if (previousIdentity === event.identity && event.to === current) {
@@ -65,7 +83,7 @@ export function applyTaskTransition(
   if (
     previousIdentity !== undefined &&
     previousIdentity !== event.identity &&
-    !(current === "rework_required" && event.to === "in_progress")
+    !(current === rules.replayFrom && event.to === rules.replayTo)
   ) {
     return { kind: "invalid", state: current, advisory: `stale identity ${event.identity}` };
   }
@@ -77,10 +95,17 @@ export function applyTaskTransition(
       advisory: `${event.from} -> ${event.to} does not start at ${current}`,
     };
   }
-  if (!TASK_TRANSITIONS.get(current)?.has(event.to)) {
+  if (!rules.transitions.get(current)?.has(event.to)) {
     return { kind: "invalid", state: current, advisory: `${current} -> ${event.to} is not allowed` };
   }
   return { kind: "applied", state: event.to };
+}
+
+export function applyTaskTransition(
+  state: TaskProgressState | TransitionState<TaskProgressState>,
+  event: TaskLifecycleTransition,
+): TransitionOutcome<TaskProgressState> {
+  return applyTransition(state, event, TASK_TRANSITION_RULES);
 }
 
 export type PlanFinalizationTransition = {
@@ -93,37 +118,14 @@ export function applyPlanTransition(
   state: PlanFinalizationState | TransitionState<PlanFinalizationState>,
   event: PlanFinalizationTransition,
 ): TransitionOutcome<PlanFinalizationState> {
-  const current = typeof state === "string" ? state : state.value;
-  const previousIdentity = typeof state === "string" ? undefined : state.lastTransitionIdentity;
-  if (previousIdentity === event.identity && event.to === current) {
-    return { kind: "duplicate", state: current };
-  }
-  if (
-    previousIdentity !== undefined &&
-    previousIdentity !== event.identity &&
-    !(current === "final_rework_required" && event.to === "final_review_pending")
-  ) {
-    return { kind: "invalid", state: current, advisory: `stale identity ${event.identity}` };
-  }
-  if (event.to === current) return { kind: "duplicate", state: current };
-  if (event.from !== current) {
-    return {
-      kind: "invalid",
-      state: current,
-      advisory: `${event.from} -> ${event.to} does not start at ${current}`,
-    };
-  }
-  if (!FINALIZATION_TRANSITIONS.get(current)?.has(event.to)) {
-    return { kind: "invalid", state: current, advisory: `${current} -> ${event.to} is not allowed` };
-  }
-  return { kind: "applied", state: event.to };
+  return applyTransition(state, event, FINALIZATION_TRANSITION_RULES);
 }
 
 export type FinalizationContext = {
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly planPath: string;
-  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalizationAttemptId: string;
   readonly finalReviewRound: number;
   readonly state: PlanFinalizationState;
 };
@@ -193,8 +195,8 @@ export async function notifyReviewPendingCommitted(
   } catch (cause: unknown) {
     try {
       await dependencies.recordAdvisory?.("review_pending_offer_failed", cause);
-    } catch (cause: unknown) {
-      void cause;
+    } catch {
+      return;
     }
   }
 }
@@ -208,6 +210,18 @@ export type LifecycleAppendResult =
 export type LifecycleRecordAppender = (
   record: PendingObservationRecord & LifecycleObservationRecord,
 ) => Promise<number>;
+
+async function appendLifecycleRecord(
+  record: PendingObservationRecord & LifecycleObservationRecord,
+  appendRecord: LifecycleRecordAppender,
+): Promise<{ readonly kind: "committed" | "failed" }> {
+  try {
+    await appendRecord(record);
+    return { kind: "committed" };
+  } catch {
+    return { kind: "failed" };
+  }
+}
 
 type TaskLifecycleTransitionInputBase = {
   readonly agentId?: ObservationAgentId;
@@ -232,8 +246,8 @@ export async function appendTaskLifecycleTransition(
   input: TaskLifecycleTransitionInput,
   appendRecord: LifecycleRecordAppender,
 ): Promise<{ readonly kind: "committed" | "failed" }> {
-  try {
-    await appendRecord({
+  return appendLifecycleRecord(
+    {
       schemaVersion: 1,
       timestamp: new Date().toISOString(),
       agentId: input.agentId ?? "system",
@@ -247,11 +261,9 @@ export async function appendTaskLifecycleTransition(
       from: input.from,
       to: input.to,
       ...(input.reason === undefined ? {} : { reason: input.reason }),
-    });
-    return { kind: "committed" };
-  } catch {
-    return { kind: "failed" };
-  }
+    },
+    appendRecord,
+  );
 }
 
 type PlanFinalizationTransitionInputBase = {
@@ -261,7 +273,7 @@ type PlanFinalizationTransitionInputBase = {
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly planPath: string;
-  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalizationAttemptId: string;
   readonly reason?: string;
 };
 
@@ -296,8 +308,8 @@ export async function appendPlanFinalizationTransition(
   input: PlanFinalizationTransitionInput,
   appendRecord: LifecycleRecordAppender,
 ): Promise<{ readonly kind: "committed" | "failed" }> {
-  try {
-    await appendRecord({
+  return appendLifecycleRecord(
+    {
       schemaVersion: 1,
       timestamp: new Date().toISOString(),
       agentId: input.agentId ?? "system",
@@ -313,24 +325,22 @@ export async function appendPlanFinalizationTransition(
       from: input.from,
       to: input.to,
       ...(input.reason === undefined ? {} : { reason: input.reason }),
-    });
-    return { kind: "committed" };
-  } catch {
-    return { kind: "failed" };
-  }
+    },
+    appendRecord,
+  );
 }
 
 export type FinalizationAdvanceInput = {
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly planPath: string;
-  readonly finalizationAttemptId?: FinalizationAttemptId;
+  readonly finalizationAttemptId?: string;
 };
 
 export type FinalizationAdvanceResult =
   | {
       readonly kind: "committed";
-      readonly finalizationAttemptId: FinalizationAttemptId;
+      readonly finalizationAttemptId: string;
       readonly finalReviewRound: 1;
     }
   | { readonly kind: "failed" };

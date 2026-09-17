@@ -4,7 +4,6 @@ import type {
   ObservationAgentId,
   WorkflowBootstrapPhase,
   WorkflowStartSource,
-  FinalizationAttemptId,
   TaskExecutionRef,
 } from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
@@ -141,7 +140,7 @@ export type PlanFinalizationTransitionRecord = {
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly planPath: string;
-  readonly finalizationAttemptId: FinalizationAttemptId;
+  readonly finalizationAttemptId: string;
   readonly finalReviewRound: number;
   readonly from: PlanFinalizationState;
   readonly to: PlanFinalizationState;

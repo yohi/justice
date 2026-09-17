@@ -136,6 +136,81 @@ function applyMessageObservation(
   latestMessageClaims.set(key, { taskId, evidenceRefKeys });
 }
 
+type TaskLifecycleObservation = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "task_lifecycle_transition" }
+>;
+
+type PlanFinalizationObservation = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "plan_finalization_transition" }
+>;
+
+function applyTaskLifecycleObservation(
+  tasks: Map<string, MutableTask>,
+  event: TaskLifecycleObservation,
+  lifecycle: MutableLifecycle,
+): void {
+  const taskId = event.taskExecutionRef.taskId;
+  ensureTask(tasks, taskId);
+  const currentRef = lifecycle.currentTaskExecutionRefs.get(taskId);
+  const identity = JSON.stringify(event.taskExecutionRef);
+  if (currentRef !== undefined && JSON.stringify(currentRef) !== identity) {
+    if (lifecycle.taskStates.get(taskId) !== "rework_required") return;
+  }
+  const current = lifecycle.taskStates.get(taskId) ?? "pending";
+  const outcome = applyTaskTransition(
+    {
+      value: current,
+      lastTransitionIdentity: lifecycle.lastTransitionIdentities.get(taskId),
+    },
+    {
+      identity,
+      from: event.from,
+      to: event.to,
+    },
+  );
+  if (outcome.kind === "applied") {
+    lifecycle.taskStates.set(taskId, outcome.state);
+    lifecycle.currentTaskExecutionRefs.set(taskId, event.taskExecutionRef);
+    lifecycle.lastTransitionIdentities.set(taskId, identity);
+  }
+}
+
+function applyPlanFinalizationObservation(
+  event: PlanFinalizationObservation,
+  lifecycle: MutableLifecycle,
+): void {
+  const current = lifecycle.finalization?.state ?? "tasks_pending";
+  const identity = JSON.stringify([
+    event.authorizationId,
+    event.planPath,
+    event.finalizationAttemptId,
+    event.finalReviewRound,
+  ]);
+  const outcome = applyPlanTransition(
+    {
+      value: current,
+      lastTransitionIdentity: lifecycle.lastFinalizationTransitionIdentity,
+    },
+    {
+      identity,
+      from: event.from,
+      to: event.to,
+    },
+  );
+  if (outcome.kind !== "applied") return;
+  lifecycle.finalization = {
+    parentSessionId: event.parentSessionId,
+    authorizationId: event.authorizationId,
+    planPath: event.planPath,
+    finalizationAttemptId: event.finalizationAttemptId,
+    finalReviewRound: event.finalReviewRound,
+    state: outcome.state,
+  };
+  lifecycle.lastFinalizationTransitionIdentity = identity;
+}
+
 function applyObservationEvent(
   tasks: Map<string, MutableTask>,
   latestMessageClaims: Map<string, LatestMessageClaims>,
@@ -148,58 +223,11 @@ function applyObservationEvent(
   // carry a taskId. `projectWorkflowBootstrapAudit` exposes them separately.
   if (isWorkflowBootstrapRecordKind(event.kind)) return;
   if (event.kind === "task_lifecycle_transition") {
-    const taskId = event.taskExecutionRef.taskId;
-    ensureTask(tasks, taskId);
-    const currentRef = lifecycle.currentTaskExecutionRefs.get(taskId);
-    const identity = JSON.stringify(event.taskExecutionRef);
-    if (currentRef !== undefined && JSON.stringify(currentRef) !== identity) {
-      if (lifecycle.taskStates.get(taskId) !== "rework_required") {
-        return;
-      }
-    }
-    const current = lifecycle.taskStates.get(taskId) ?? "pending";
-    const outcome = applyTaskTransition({
-      value: current,
-      lastTransitionIdentity: lifecycle.lastTransitionIdentities.get(taskId),
-    }, {
-      identity,
-      from: event.from,
-      to: event.to,
-    });
-    if (outcome.kind === "applied") {
-      lifecycle.taskStates.set(taskId, outcome.state);
-      lifecycle.currentTaskExecutionRefs.set(taskId, event.taskExecutionRef);
-      lifecycle.lastTransitionIdentities.set(taskId, identity);
-    }
+    applyTaskLifecycleObservation(tasks, event, lifecycle);
     return;
   }
   if (event.kind === "plan_finalization_transition") {
-    const current = lifecycle.finalization?.state ?? "tasks_pending";
-    const identity = JSON.stringify([
-        event.authorizationId,
-        event.planPath,
-        event.finalizationAttemptId,
-        event.finalReviewRound,
-      ]);
-    const outcome = applyPlanTransition({
-      value: current,
-      lastTransitionIdentity: lifecycle.lastFinalizationTransitionIdentity,
-    }, {
-      identity,
-      from: event.from,
-      to: event.to,
-    });
-    if (outcome.kind === "applied") {
-      lifecycle.finalization = {
-        parentSessionId: event.parentSessionId,
-        authorizationId: event.authorizationId,
-        planPath: event.planPath,
-        finalizationAttemptId: event.finalizationAttemptId,
-        finalReviewRound: event.finalReviewRound,
-        state: outcome.state,
-      };
-      lifecycle.lastFinalizationTransitionIdentity = identity;
-    }
+    applyPlanFinalizationObservation(event, lifecycle);
     return;
   }
   const taskId = event.taskId;
