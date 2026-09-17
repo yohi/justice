@@ -237,7 +237,7 @@ describe("JusticePlugin", () => {
           schema: "justice-plan-v1",
           documentDigest: "document-digest",
           globalBodyDigest: "body-digest",
-          tasks: [],
+          tasks: [{ taskId, title: "Rework", canonicalBody: "## Task 1: Rework", digest: "digest" }],
         },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-01-01T00:00:00.000Z",

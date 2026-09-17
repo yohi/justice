@@ -369,12 +369,18 @@ export class JusticePlugin {
         options.logger ?? console,
       ),
       writerId: this.writerId,
-      getActiveAuthorization: async (parentSessionId: string): Promise<ApprovedPlanBinding | null> => {
+      getActiveAuthorization: async (
+        parentSessionId: string,
+        taskId: string,
+      ): Promise<ApprovedPlanBinding | null> => {
         try {
           const bindings = await this.authorizationStore.hydrate();
           return (
             bindings.find(
-              (binding) => binding.status === "active" && binding.sessionId === parentSessionId,
+              (binding) =>
+                binding.status === "active" &&
+                binding.sessionId === parentSessionId &&
+                binding.canonicalSnapshot.tasks.some((task) => task.taskId === taskId),
             ) ?? null
           );
         } catch {

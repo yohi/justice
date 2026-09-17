@@ -161,6 +161,10 @@ describe("validateRecordSchema", () => {
 
   it.each([
     { name: "missing finalization attempt", override: { finalizationAttemptId: undefined } },
+    { name: "zero final review round", override: { finalReviewRound: 0 } },
+    { name: "negative final review round", override: { finalReviewRound: -1 } },
+    { name: "fractional final review round", override: { finalReviewRound: 1.5 } },
+    { name: "unsafe final review round", override: { finalReviewRound: Number.MAX_SAFE_INTEGER + 1 } },
     { name: "invalid from state", override: { from: "started" } },
     { name: "invalid to state", override: { to: "finished" } },
   ])("rejects malformed plan finalization transitions: $name", ({ override }) => {

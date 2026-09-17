@@ -119,7 +119,10 @@ export class ObservationHandler {
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
-      readonly getActiveAuthorization?: (parentSessionId: string) => Promise<ApprovedPlanBinding | null>;
+      readonly getActiveAuthorization?: (
+        parentSessionId: string,
+        taskId: string,
+      ) => Promise<ApprovedPlanBinding | null>;
       readonly getTaskLifecycleState?: (
         parentSessionId: string,
         authorizationId: string,
@@ -408,8 +411,11 @@ export class ObservationHandler {
       if (taskId === undefined) return PROCEED;
       this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
       if (this.options.getActiveAuthorization !== undefined) {
-        const authorization = await this.options.getActiveAuthorization(event.sessionId);
-        if (authorization === null) {
+        const authorization = await this.options.getActiveAuthorization(event.sessionId, taskId);
+        if (
+          authorization === null ||
+          !authorization.canonicalSnapshot.tasks.some((task) => task.taskId === taskId)
+        ) {
           return {
             action: "inject",
             injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),

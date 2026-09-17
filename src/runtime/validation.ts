@@ -298,6 +298,8 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       typeof r.planPath !== "string" ||
       typeof r.finalizationAttemptId !== "string" ||
       typeof r.finalReviewRound !== "number" ||
+      !Number.isSafeInteger(r.finalReviewRound) ||
+      r.finalReviewRound <= 0 ||
       !isOneOf(r.from, [
         "tasks_pending",
         "all_tasks_accepted",

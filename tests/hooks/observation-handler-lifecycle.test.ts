@@ -4,6 +4,13 @@ import { ObservationHandler } from "../../src/hooks/observation-handler";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMemFs } from "../helpers/mock-file-system";
 
+const canonicalTask = {
+  taskId: "task-1",
+  title: "Task 1",
+  canonicalBody: "## Task 1",
+  digest: "digest",
+} as const;
+
 describe("ObservationHandler lifecycle notifications", () => {
   it("creates a fresh authorized attempt from the active authorization", async () => {
     const { reader, writer } = createMemFs();
@@ -18,7 +25,7 @@ describe("ObservationHandler lifecycle notifications", () => {
         sessionId: "parent-1",
         planPath: "plan.md",
         planFingerprint: { algorithm: "sha256", value: "fingerprint" },
-        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [] },
+        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [canonicalTask] },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-09-17T00:00:00.000Z",
         status: "active",
@@ -38,6 +45,43 @@ describe("ObservationHandler lifecycle notifications", () => {
       authorizationId: "auth-1",
       taskId: "task-1",
     });
+  });
+
+  it("rejects a task absent from an empty canonical snapshot before lifecycle persistence", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const sessionStateProvider = new SessionStateProvider();
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider,
+      writerId: "w-1",
+      getActiveAuthorization: async () => ({
+        authorizationId: "auth-1",
+        sessionId: "parent-1",
+        planPath: "plan.md",
+        planFingerprint: { algorithm: "sha256", value: "fingerprint" },
+        canonicalSnapshot: {
+          schema: "justice-plan-v1",
+          documentDigest: "doc",
+          globalBodyDigest: "body",
+          tasks: [],
+        },
+        fingerprintSchema: "justice-plan-v1",
+        approvedAt: "2026-09-17T00:00:00.000Z",
+        status: "active",
+      }),
+    });
+
+    const response = await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "parent-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(sessionStateProvider.getTaskCallBinding("call-1")).toBeUndefined();
+    expect((await logStore.readAll()).filter((record) => record.recordType === "observation" && record.kind === "task_lifecycle_transition")).toHaveLength(0);
   });
 
   it("returns implementation unauthorized without an active authorization", async () => {
@@ -74,7 +118,7 @@ describe("ObservationHandler lifecycle notifications", () => {
         sessionId: "parent-1",
         planPath: "plan.md",
         planFingerprint: { algorithm: "sha256", value: "fingerprint" },
-        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [] },
+        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [canonicalTask] },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-09-17T00:00:00.000Z",
         status: "active",
@@ -108,7 +152,7 @@ describe("ObservationHandler lifecycle notifications", () => {
         sessionId: "parent-1",
         planPath: "plan.md",
         planFingerprint: { algorithm: "sha256", value: "fingerprint" },
-        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [] },
+        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [canonicalTask] },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-09-17T00:00:00.000Z",
         status: "active",
@@ -213,7 +257,7 @@ describe("ObservationHandler lifecycle notifications", () => {
         sessionId: "parent-1",
         planPath: "plan.md",
         planFingerprint: { algorithm: "sha256", value: "fingerprint" },
-        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [] },
+        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [canonicalTask] },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-09-17T00:00:00.000Z",
         status: "active",
@@ -259,7 +303,7 @@ describe("ObservationHandler lifecycle notifications", () => {
         sessionId: "parent-1",
         planPath: "plan.md",
         planFingerprint: { algorithm: "sha256", value: "fingerprint" },
-        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [] },
+        canonicalSnapshot: { schema: "justice-plan-v1", documentDigest: "doc", globalBodyDigest: "body", tasks: [canonicalTask] },
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-09-17T00:00:00.000Z",
         status: "active",
