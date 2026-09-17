@@ -77,7 +77,7 @@ function applyTransition<S extends string>(
 ): TransitionOutcome<S> {
   const current = typeof state === "string" ? state : state.value;
   const previousIdentity = typeof state === "string" ? undefined : state.lastTransitionIdentity;
-  if (previousIdentity === event.identity && event.to === current) {
+  if (previousIdentity === event.identity && (event.to === current || event.from !== current)) {
     return { kind: "duplicate", state: current };
   }
   if (

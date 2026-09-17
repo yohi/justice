@@ -78,6 +78,15 @@ describe("task lifecycle transitions", () => {
     ).toEqual({ kind: "duplicate", state: "worker_reported" });
   });
 
+  it("treats an earlier same-identity transition as duplicate after state advances", () => {
+    expect(
+      applyTaskTransition(
+        { value: "worker_reported", lastTransitionIdentity: "attempt-1" },
+        { identity: "attempt-1", from: "in_progress", to: "evidence_pending" },
+      ),
+    ).toEqual({ kind: "duplicate", state: "worker_reported" });
+  });
+
   it("applies an allowed plan finalization transition", () => {
     expect(
       applyPlanTransition("tasks_pending", {
