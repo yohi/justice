@@ -259,6 +259,64 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     if (!isValidWorkflowBootstrapAudit(r.workflow)) {
       throw new Error("Invalid workflow bootstrap record");
     }
+  } else if (kind === "task_lifecycle_transition") {
+    if (
+      typeof r.parentSessionId !== "string" ||
+      !isObject(r.taskExecutionRef) ||
+      typeof r.taskExecutionRef.authorizationId !== "string" ||
+      typeof r.taskExecutionRef.taskId !== "string" ||
+      typeof r.taskExecutionRef.attemptId !== "string" ||
+      !isOneOf(r.from, [
+        "pending",
+        "authorized",
+        "in_progress",
+        "worker_reported",
+        "evidence_pending",
+        "review_pending",
+        "gate_pending",
+        "accepted",
+        "rework_required",
+      ]) ||
+      !isOneOf(r.to, [
+        "pending",
+        "authorized",
+        "in_progress",
+        "worker_reported",
+        "evidence_pending",
+        "review_pending",
+        "gate_pending",
+        "accepted",
+        "rework_required",
+      ])
+    ) {
+      throw new Error("Invalid task_lifecycle_transition record");
+    }
+  } else if (kind === "plan_finalization_transition") {
+    if (
+      typeof r.parentSessionId !== "string" ||
+      typeof r.authorizationId !== "string" ||
+      typeof r.planPath !== "string" ||
+      typeof r.finalizationAttemptId !== "string" ||
+      typeof r.finalReviewRound !== "number" ||
+      !isOneOf(r.from, [
+        "tasks_pending",
+        "all_tasks_accepted",
+        "final_review_pending",
+        "final_gate_pending",
+        "complete",
+        "final_rework_required",
+      ]) ||
+      !isOneOf(r.to, [
+        "tasks_pending",
+        "all_tasks_accepted",
+        "final_review_pending",
+        "final_gate_pending",
+        "complete",
+        "final_rework_required",
+      ])
+    ) {
+      throw new Error("Invalid plan_finalization_transition record");
+    }
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);
   }

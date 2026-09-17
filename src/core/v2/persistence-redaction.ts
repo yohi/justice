@@ -178,5 +178,9 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
       return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
     case "plan_activated":
       return { ...record, workflow: redactWorkflowBootstrapAudit(record.workflow) };
+    case "task_lifecycle_transition":
+      return record;
+    case "plan_finalization_transition":
+      return record;
   }
 }

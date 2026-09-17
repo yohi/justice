@@ -10,7 +10,22 @@ import type {
   ShardId,
   WorkflowBootstrapPhase,
   WorkflowStartRequest,
+  ReviewPendingCommittedHandler,
+  TaskExecutionRef,
 } from "../core/types";
+import type { ApprovedPlanBinding } from "../core/plan-authorization";
+import {
+  advanceFinalizationAfterAllTasksAccepted as advanceFinalizationLifecycle,
+  appendTaskLifecycleTransition,
+  recordWorkerReportedAndEvidence,
+  requestCurrentTaskReview,
+  startImplementationAttempt,
+  type LifecycleRecordAppender,
+  type LifecycleNotificationDependencies,
+  type FinalizationAdvanceInput,
+  type FinalizationAdvanceResult,
+} from "../core/task-lifecycle";
+import type { TaskProgressState } from "../core/v2/observation-model";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
 import {
   buildMessageRecord,
@@ -94,6 +109,7 @@ export class ObservationHandler {
   private readonly persistedMessageHashes = new Map<string, Map<string, string>>();
   private readonly reviewDeliveriesBySession = new Map<string, Set<string>>();
   private projectionRefresh: Promise<void> = Promise.resolve();
+  private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
 
   constructor(
     private readonly options: {
@@ -104,6 +120,11 @@ export class ObservationHandler {
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
+      readonly getActiveAuthorization?: (parentSessionId: string) => Promise<ApprovedPlanBinding | null>;
+      readonly getTaskLifecycleState?: (
+        parentSessionId: string,
+        taskId: string,
+      ) => Promise<TaskProgressState | undefined>;
     },
   ) {}
 
@@ -117,6 +138,36 @@ export class ObservationHandler {
 
   getGateLoader(): GateLoader | undefined {
     return this.options.gateLoader;
+  }
+
+  setReviewPendingCommittedHandler(handler: ReviewPendingCommittedHandler): void {
+    this.reviewPendingCommittedHandler = handler;
+  }
+
+  async advanceFinalizationAfterAllTasksAccepted(
+    input: FinalizationAdvanceInput,
+  ): Promise<FinalizationAdvanceResult> {
+    const agentId = this.options.sessionStateProvider.getAgentId(input.parentSessionId);
+    const shardId: ShardId = {
+      agentId,
+      sessionId: input.parentSessionId,
+      writerId: this.options.writerId,
+    };
+    const appendRecord: LifecycleRecordAppender = async (record) => {
+      const sequence = await this.options.logStore.append(shardId, {
+        ...record,
+        agentId,
+        sessionId: input.parentSessionId,
+        writerId: this.options.writerId,
+      });
+      this.scheduleProjectionRefresh();
+      return sequence;
+    };
+    const dependencies: LifecycleNotificationDependencies = {
+      onReviewPendingCommitted: this.reviewPendingCommittedHandler,
+      recordAdvisory: (advisory, cause) => this.appendLifecycleAdvisory(advisory, cause),
+    };
+    return advanceFinalizationLifecycle(input, appendRecord, dependencies);
   }
 
   async handleSessionError(error: {
@@ -351,12 +402,52 @@ export class ObservationHandler {
   }
 
   async handlePreToolUse(event: PreToolUseEvent): Promise<HookResponse> {
-    if (event.payload.toolName !== "task" || event.callId === undefined) return PROCEED;
-    const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
-    if (taskId !== undefined) {
+    try {
+      if (event.payload.toolName !== "task" || event.callId === undefined) return PROCEED;
+      const taskId = resolveTaskIdFromToolInput(event.payload.toolInput);
+      if (taskId === undefined) return PROCEED;
       this.options.sessionStateProvider.setActiveTaskWindow(event.callId, taskId, event.sessionId);
+      if (this.options.getActiveAuthorization !== undefined) {
+        const authorization = await this.options.getActiveAuthorization(event.sessionId);
+        if (authorization === null) {
+          return {
+            action: "inject",
+            injectedContext: formatWorkflowDirective({ stage: "implementation_unauthorized" }),
+          };
+        }
+        const lifecycleState =
+          (await this.options.getTaskLifecycleState?.(event.sessionId, taskId)) ?? "authorized";
+        const attempt = startImplementationAttempt({
+          authorizationId: authorization.authorizationId,
+          taskId,
+          state: lifecycleState,
+        });
+        this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
+          parentSessionId: event.sessionId,
+          authorizationId: authorization.authorizationId,
+          taskExecutionRef: attempt.taskExecutionRef,
+        });
+        await this.appendInitialImplementationLifecycle(
+          event,
+          attempt.taskExecutionRef,
+          lifecycleState,
+        );
+        return PROCEED;
+      }
+      const taskExecutionRef = readTaskExecutionRef(event.payload.toolInput);
+      if (taskExecutionRef !== undefined) {
+        this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
+          parentSessionId: event.sessionId,
+          authorizationId: taskExecutionRef.authorizationId,
+          taskExecutionRef,
+        });
+        await this.appendInitialImplementationLifecycle(event, taskExecutionRef);
+      }
+      return PROCEED;
+    } catch (error) {
+      this.options.logger?.warn("observation-handler: PreToolUse lifecycle failed, degrading to PROCEED", error);
+      return PROCEED;
     }
-    return PROCEED;
   }
 
   async handlePostToolUse(event: PostToolUseEvent): Promise<HookResponse> {
@@ -416,6 +507,10 @@ export class ObservationHandler {
         }
       } else {
         await this.options.logStore.append(shardId, buildToolExecutedRecord(toolRecordInput));
+      }
+
+      if (event.payload.toolName === "task") {
+        await this.appendReviewPendingLifecycle(event, shardId, taskId);
       }
 
       const invokedSkills = detectSkillInvoked(
@@ -537,6 +632,129 @@ export class ObservationHandler {
         this.options.sessionStateProvider.closeActiveTaskWindow(callId);
       }
     }
+  }
+
+  private async appendReviewPendingLifecycle(
+    event: PostToolUseEvent,
+    shardId: ShardId,
+    taskId: string | undefined,
+  ): Promise<void> {
+    const binding = event.callId === undefined
+      ? undefined
+      : this.options.sessionStateProvider.getTaskCallBinding(event.callId);
+    const ref = binding?.taskExecutionRef;
+    if (ref === undefined || ref.taskId !== taskId) return;
+    const dependencies: LifecycleNotificationDependencies = {
+      onReviewPendingCommitted: this.reviewPendingCommittedHandler,
+      recordAdvisory: (advisory, cause) => this.appendLifecycleAdvisory(advisory, cause),
+    };
+    const appendRecord: LifecycleRecordAppender = async (record) => {
+      const sequence = await this.options.logStore.append(shardId, {
+        ...record,
+        agentId: shardId.agentId,
+        sessionId: shardId.sessionId,
+        writerId: shardId.writerId,
+        taskId,
+      });
+      this.scheduleProjectionRefresh();
+      return sequence;
+    };
+    const workerResult = await recordWorkerReportedAndEvidence({
+      parentSessionId: event.sessionId,
+      taskExecutionRef: ref,
+      appendRecord,
+    });
+    if (workerResult.kind !== "committed") return;
+    await requestCurrentTaskReview({
+      parentSessionId: event.sessionId,
+      taskExecutionRef: ref,
+      appendRecord,
+      dependencies,
+    });
+  }
+
+  private async appendInitialImplementationLifecycle(
+    event: PreToolUseEvent,
+    taskExecutionRef: TaskExecutionRef,
+    state: TaskProgressState = "authorized",
+  ): Promise<void> {
+    const agentId = this.options.sessionStateProvider.getAgentId(event.sessionId);
+    const shardId: ShardId = {
+      agentId,
+      sessionId: event.sessionId,
+      writerId: this.options.writerId,
+    };
+    const appendRecord: LifecycleRecordAppender = async (record) =>
+      this.options.logStore.append(shardId, {
+        ...record,
+        agentId,
+        sessionId: event.sessionId,
+        writerId: this.options.writerId,
+        taskId: taskExecutionRef.taskId,
+      });
+    if (state === "rework_required") {
+      await appendTaskLifecycleTransition(
+        {
+          agentId,
+          sessionId: event.sessionId,
+          writerId: this.options.writerId,
+          parentSessionId: event.sessionId,
+          taskExecutionRef,
+          from: "rework_required",
+          to: "in_progress",
+          reason: "implementation_rework_started",
+        },
+        appendRecord,
+      );
+      return;
+    }
+    const authorized = await appendTaskLifecycleTransition(
+      {
+        agentId,
+        sessionId: event.sessionId,
+        writerId: this.options.writerId,
+        parentSessionId: event.sessionId,
+        taskExecutionRef,
+        from: "pending",
+        to: "authorized",
+        reason: "implementation_started",
+      },
+      appendRecord,
+    );
+    if (authorized.kind === "failed") return;
+    await appendTaskLifecycleTransition(
+      {
+        agentId,
+        sessionId: event.sessionId,
+        writerId: this.options.writerId,
+        parentSessionId: event.sessionId,
+        taskExecutionRef,
+        from: "authorized",
+        to: "in_progress",
+        reason: "implementation_started",
+      },
+      appendRecord,
+    );
+  }
+
+  private async appendLifecycleAdvisory(advisory: string, _cause?: unknown): Promise<void> {
+    const agentId: ObservationAgentId = "system";
+    const sessionId = "lifecycle";
+    await this.options.logStore.append(
+      { agentId, sessionId, writerId: this.options.writerId },
+      buildSessionErrorRecord({
+        envelope: {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId,
+          sessionId,
+          writerId: this.options.writerId,
+          recordType: "observation",
+        },
+        errorKind: "lifecycle_advisory",
+        message: advisory,
+      }),
+    );
   }
 
   private async appendTaskSummaryDeclaredEvidence(
@@ -777,4 +995,20 @@ export class ObservationHandler {
 
 function isReviewObservationTool(toolName: string): boolean {
   return toolName === "task" || toolName === "code_review";
+}
+
+function readTaskExecutionRef(value: unknown): TaskExecutionRef | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  if (!("authorizationId" in value) || !("taskId" in value) || !("attemptId" in value)) return undefined;
+  const candidate = value as { authorizationId?: unknown; taskId?: unknown; attemptId?: unknown };
+  if (
+    typeof candidate.authorizationId !== "string" ||
+    typeof candidate.taskId !== "string" ||
+    typeof candidate.attemptId !== "string"
+  ) return undefined;
+  return {
+    authorizationId: candidate.authorizationId,
+    taskId: candidate.taskId,
+    attemptId: candidate.attemptId,
+  };
 }
