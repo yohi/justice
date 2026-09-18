@@ -14,6 +14,10 @@ function isOneOf(value: unknown, options: readonly string[]): boolean {
   return typeof value === "string" && options.includes(value);
 }
 
+function isPositiveReviewRound(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 /**
  * A bootstrap audit path is either absent or a safe relative path. Mirrors the
  * reflection `planRef.path` checks so a hand-forged record cannot smuggle an
@@ -325,41 +329,108 @@ function validateObservationRecord(r: Record<string, unknown>): void {
 }
 
 function validateDecisionRecord(r: Record<string, unknown>): void {
-  if (
-    r.gateType !== "task" ||
-    !isOneOf(r.verdict, ["PASS", "WARN", "FAIL"]) ||
-    r.reachableEnforcementLevel !== "L1" ||
-    r.appliedEnforcementLevel !== "L0" ||
-    !Array.isArray(r.ruleResults)
-  ) {
-    throw new Error("Invalid decision record");
-  }
-  for (const ruleResult of r.ruleResults) {
+  const hasGate = r.gateType !== undefined;
+  const hasAcceptance = r.kind !== undefined;
+  if (hasGate === hasAcceptance) throw new Error("Invalid decision record: ambiguous discriminant");
+  if (hasGate) {
     if (
-      !isObject(ruleResult) ||
-      typeof ruleResult.ruleId !== "string" ||
-      !isOneOf(ruleResult.verdict, ["PASS", "WARN", "FAIL"]) ||
-      typeof ruleResult.reason !== "string" ||
-      !Array.isArray(ruleResult.evidenceRefs)
-    ) {
-      throw new Error("Invalid decision ruleResult");
-    }
-    for (const ref of ruleResult.evidenceRefs) {
+      !isOneOf(r.gateType, ["task", "plan"]) ||
+      !isOneOf(r.verdict, ["PASS", "WARN", "FAIL"]) ||
+      r.reachableEnforcementLevel !== "L1" ||
+      r.appliedEnforcementLevel !== "L0" ||
+      !Array.isArray(r.ruleResults)
+    )
+      throw new Error("Invalid decision record");
+    for (const result of r.ruleResults) {
       if (
-        !isObject(ref) ||
-        ref.kind !== "full" ||
-        typeof ref.agentId !== "string" ||
-        typeof ref.sessionId !== "string" ||
-        typeof ref.writerId !== "string" ||
-        typeof ref.sequence !== "number" ||
-        !Number.isFinite(ref.sequence) ||
-        ref.sequence < 0 ||
-        typeof ref.evidenceId !== "string"
-      ) {
-        throw new Error("Invalid decision evidenceRef");
+        !isObject(result) ||
+        typeof result.ruleId !== "string" ||
+        !isOneOf(result.verdict, ["PASS", "WARN", "FAIL"]) ||
+        typeof result.reason !== "string" ||
+        !Array.isArray(result.evidenceRefs)
+      )
+        throw new Error("Invalid decision ruleResult");
+      for (const ref of result.evidenceRefs) {
+        if (
+          !isObject(ref) ||
+          ref.kind !== "full" ||
+          typeof ref.agentId !== "string" ||
+          typeof ref.sessionId !== "string" ||
+          typeof ref.writerId !== "string" ||
+          typeof ref.sequence !== "number" ||
+          !Number.isFinite(ref.sequence) ||
+          ref.sequence < 0 ||
+          typeof ref.evidenceId !== "string"
+        )
+          throw new Error("Invalid decision evidenceRef");
       }
     }
+    if (r.gateType === "task") {
+      if (
+        Object.hasOwn(r, "authorizationId") ||
+        Object.hasOwn(r, "planPath") ||
+        Object.hasOwn(r, "finalizationAttemptId") ||
+        Object.hasOwn(r, "finalReviewRound")
+      )
+        throw new Error("Invalid task GateDecision scope");
+      if (!Object.hasOwn(r, "taskExecutionRef")) {
+        if (Object.hasOwn(r, "taskId") && (typeof r.taskId !== "string" || r.taskId.length === 0))
+          throw new Error("Invalid legacy task GateDecision");
+        return;
+      }
+      if (
+        !isObject(r.taskExecutionRef) ||
+        typeof r.taskExecutionRef.authorizationId !== "string" ||
+        typeof r.taskExecutionRef.taskId !== "string" ||
+        typeof r.taskExecutionRef.attemptId !== "string" ||
+        typeof r.taskId !== "string" ||
+        r.taskId !== r.taskExecutionRef.taskId
+      )
+        throw new Error("Invalid task GateDecision identity");
+      return;
+    }
+    if (
+      Object.hasOwn(r, "taskId") ||
+      Object.hasOwn(r, "taskExecutionRef") ||
+      typeof r.authorizationId !== "string" ||
+      !isValidMandatoryRelativePath(r.planPath) ||
+      typeof r.finalizationAttemptId !== "string" ||
+      !isPositiveReviewRound(r.finalReviewRound)
+    )
+      throw new Error("Invalid plan GateDecision identity");
+    return;
   }
+  if (r.kind === "task-acceptance") {
+    if (
+      Object.hasOwn(r, "authorizationId") ||
+      Object.hasOwn(r, "planPath") ||
+      Object.hasOwn(r, "finalizationAttemptId") ||
+      Object.hasOwn(r, "finalReviewRound") ||
+      !isObject(r.taskExecutionRef) ||
+      typeof r.taskExecutionRef.authorizationId !== "string" ||
+      typeof r.taskExecutionRef.taskId !== "string" ||
+      typeof r.taskExecutionRef.attemptId !== "string" ||
+      typeof r.taskId !== "string" ||
+      r.taskId !== r.taskExecutionRef.taskId ||
+      !isOneOf(r.verdict, ["accepted", "rework-required", "blocked"])
+    )
+      throw new Error("Invalid task AcceptanceDecision");
+    return;
+  }
+  if (r.kind === "plan-acceptance") {
+    if (
+      Object.hasOwn(r, "taskId") ||
+      Object.hasOwn(r, "taskExecutionRef") ||
+      typeof r.authorizationId !== "string" ||
+      !isValidMandatoryRelativePath(r.planPath) ||
+      typeof r.finalizationAttemptId !== "string" ||
+      !isPositiveReviewRound(r.finalReviewRound) ||
+      !isOneOf(r.verdict, ["complete", "rework-required", "blocked"])
+    )
+      throw new Error("Invalid plan AcceptanceDecision");
+    return;
+  }
+  throw new Error("Invalid decision record: unknown acceptance kind");
 }
 
 /**

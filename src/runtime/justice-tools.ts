@@ -56,17 +56,7 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
 
         const scopedTaskId = taskId?.length ? taskId : undefined;
         if (scopedTaskId === undefined) {
-          return JSON.stringify(
-            evaluate([], [], {
-              trigger: "task_complete",
-              taskId: scopedTaskId,
-              agentId: SessionStateProvider.resolveAgentId(context.agent),
-              sessionId: context.sessionID,
-              reviewScope: [],
-            }),
-            null,
-            2,
-          );
+          return JSON.stringify({ verdict: "SKIP", reason: "no taskId provided" }, null, 2);
         }
 
         const observationHandler = justice.getObservationHandler();
@@ -76,17 +66,27 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         const events = await observationHandler.getLogStore().readAll();
         const state = project(events, new Date().toISOString());
         const gates = await gateLoader.load();
+        const currentRef = Array.from(state.lifecycle.currentTaskExecutionRefs.values()).find(
+          (ref) => ref.taskId === scopedTaskId,
+        );
+        if (currentRef === undefined) {
+          return JSON.stringify({ verdict: "SKIP", reason: "no current task attempt" }, null, 2);
+        }
         const gateContext: GateContext = {
+          scope: "task",
           trigger: "task_complete",
-          taskId: scopedTaskId,
+          taskExecutionRef: currentRef,
           agentId: SessionStateProvider.resolveAgentId(context.agent),
           sessionId: context.sessionID,
-          reviewScope: scopedTaskId === undefined ? [] : collectReviewScopes(state, scopedTaskId),
+          writerId: "unknown",
+          reviewScope: collectReviewScopes(state, scopedTaskId),
           reviewSummary: state.reviewSummary,
         };
-        const evidence =
-          scopedTaskId === undefined ? [] : (state.tasks.get(scopedTaskId)?.evidence ?? []);
-        return JSON.stringify(evaluate(gates, evidence, gateContext), null, 2);
+        return JSON.stringify(
+          evaluate(gates, state.tasks.get(scopedTaskId)?.evidence ?? [], gateContext),
+          null,
+          2,
+        );
       } catch (error: unknown) {
         return formatError(error instanceof Error ? error.message : String(error));
       }

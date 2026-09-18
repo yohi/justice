@@ -99,6 +99,7 @@ function redactWorkflowBootstrapAudit(audit: WorkflowBootstrapAudit): WorkflowBo
  */
 export function redactPendingLogRecord(record: PendingLogRecord): PendingLogRecord {
   if (record.recordType === "decision") {
+    if (!("ruleResults" in record)) return record;
     return {
       ...record,
       ruleResults: record.ruleResults.map((result) => ({

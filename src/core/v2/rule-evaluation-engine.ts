@@ -1,5 +1,5 @@
 import type { FullEvidenceRef } from "../types";
-import type { DecisionPayload, RuleResult, Verdict } from "./decision-model";
+import type { GateDecisionPayload, RuleResult, Verdict } from "./decision-model";
 import type { GateContext } from "./gate-context";
 import type { GateRule } from "./gate-definition";
 import type { Evidence } from "./observation-model";
@@ -14,12 +14,14 @@ export function evaluate(
   gates: readonly GateRule[],
   evidence: readonly ProjectedEvidence[],
   ctx: GateContext,
-): Omit<DecisionPayload, "recordType"> | SkipGateEvaluation {
-  if (ctx.taskId === undefined) {
-    return { verdict: "SKIP", reason: "no taskId provided" };
-  }
-
-  const activeGates = gates.filter((gate) => gate.enabled && gate.trigger.on === ctx.trigger);
+): GateDecisionPayload | SkipGateEvaluation {
+  const activeGates = gates.filter(
+    (gate) =>
+      gate.enabled &&
+      gate.gateType === ctx.scope &&
+      gate.trigger.scope === ctx.scope &&
+      gate.trigger.on === ctx.trigger,
+  );
   if (activeGates.length === 0) {
     return {
       verdict: "SKIP",
@@ -29,8 +31,21 @@ export function evaluate(
 
   const ruleResults = activeGates.map((gate) => evaluateRule(gate, evidence, ctx));
   return {
+    recordType: "decision",
     verdict: worstOf(ruleResults.map((result) => result.verdict)),
-    gateType: "task",
+    ...(ctx.scope === "task"
+      ? {
+          gateType: "task" as const,
+          taskId: ctx.taskExecutionRef.taskId,
+          taskExecutionRef: ctx.taskExecutionRef,
+        }
+      : {
+          gateType: "plan" as const,
+          authorizationId: ctx.authorizationId,
+          planPath: ctx.planPath,
+          finalizationAttemptId: ctx.finalizationAttemptId,
+          finalReviewRound: ctx.finalReviewRound,
+        }),
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
     ruleResults,
@@ -277,7 +292,7 @@ function assertNever(value: never): never {
  * (`formatBanner`/`iconFor`) per AGENTS.md, so they are never duplicated here.
  */
 export function formatGateAdvisoryMessage(
-  verdict: Pick<DecisionPayload, "verdict" | "ruleResults">,
+  verdict: Pick<GateDecisionPayload, "verdict" | "ruleResults">,
 ): string {
   const lines: string[] = [
     `${verdict.verdict}: ${verdict.ruleResults

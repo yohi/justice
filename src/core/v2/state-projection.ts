@@ -278,7 +278,8 @@ function applyDecisionEvent(
   tasks: Map<string, MutableTask>,
   event: Extract<PersistedLogRecord, { recordType: "decision" }>,
 ): void {
-  const taskId = event.taskId;
+  if (!("gateType" in event) || event.gateType !== "task") return;
+  const taskId = "taskId" in event ? event.taskId : undefined;
   if (!taskId) return;
   const taskState = ensureTask(tasks, taskId);
   taskState.lastVerdict = event.verdict;
@@ -408,8 +409,13 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
       byScope: new Map(Object.entries(raw.reviewSummary.byScope)),
     },
     lifecycle: {
-      currentTaskExecutionRefs: new Map(Object.entries(raw.lifecycle?.currentTaskExecutionRefs ?? {})),
-      taskStates: new Map(Object.entries(raw.lifecycle?.taskStates ?? {})) as Map<string, TaskProgressState>,
+      currentTaskExecutionRefs: new Map(
+        Object.entries(raw.lifecycle?.currentTaskExecutionRefs ?? {}),
+      ),
+      taskStates: new Map(Object.entries(raw.lifecycle?.taskStates ?? {})) as Map<
+        string,
+        TaskProgressState
+      >,
       finalization: new Map(Object.entries(raw.lifecycle?.finalization ?? {})),
     },
   };
