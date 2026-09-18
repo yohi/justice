@@ -296,6 +296,17 @@ describe("observation log projection rebuild integration", () => {
     return content.split("\n").filter((line) => line.trim().length > 0);
   }
 
+  it("keeps a physical shard readable around a legacy task Gate record", async () => {
+    const { files, reader, writer } = createMemFs();
+    const legacy = baseDecisionRecord(2);
+    const records = [baseRecord("tool_executed", 1), legacy, baseRecord("tool_executed", 3)];
+    files.set(toPhysicalPath(INTEGRATION_SHARD), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    const store = new ObservationLogStore(writer, reader, INTEGRATION_SHARD.writerId);
+
+    await expect(store.readAll()).resolves.toHaveLength(3);
+    expect(store.getLastReadIntegrity()).toEqual({ hasIntegrityViolation: false });
+  });
+
   function makeHandler(
     store: ObservationLogStore,
     cache: StateProjectionCache,

@@ -42,6 +42,43 @@ function validDecision(): Record<string, unknown> {
   };
 }
 
+function validDecisionVariants(): readonly Record<string, unknown>[] {
+  return [
+    {
+      ...validDecision(),
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    },
+    {
+      ...validBase("decision"),
+      gateType: "plan",
+      authorizationId: "auth-1",
+      planPath: "docs/plans/example.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      verdict: "PASS",
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults: [],
+    },
+    {
+      ...validBase("decision"),
+      kind: "task-acceptance",
+      taskId: "task-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      verdict: "accepted",
+    },
+    {
+      ...validBase("decision"),
+      kind: "plan-acceptance",
+      authorizationId: "auth-1",
+      planPath: "docs/plans/example.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      verdict: "complete",
+    },
+  ];
+}
+
 function validReviewObserved(): Record<string, unknown> {
   return {
     ...validBase("observation"),
@@ -198,9 +235,24 @@ describe("validateRecordSchema", () => {
     expect(() => validateRecordSchema(validDecision())).not.toThrow();
   });
 
+  it("accepts all four authoritative decision variants", () => {
+    for (const variant of validDecisionVariants())
+      expect(() => validateRecordSchema(variant)).not.toThrow();
+  });
+
+  it("accepts a schemaVersion 1 legacy task Gate record without taskExecutionRef", () => {
+    expect(() => validateRecordSchema(validDecision())).not.toThrow();
+  });
+
   it("rejects a legacy task GateDecision without a non-empty taskId", () => {
     expect(() => validateRecordSchema({ ...validDecision(), taskId: undefined })).toThrow(
       "Invalid legacy task GateDecision",
+    );
+  });
+
+  it("rejects a malformed present taskExecutionRef instead of reading it as legacy", () => {
+    expect(() => validateRecordSchema({ ...validDecision(), taskExecutionRef: { attemptId: "attempt-1" } })).toThrow(
+      "Invalid task GateDecision identity",
     );
   });
 
