@@ -11,6 +11,7 @@ gates:
   - id: require-tests
     gateType: task
     trigger:
+      scope: task
       on: task_complete
     check:
       type: evidence_outcome
@@ -24,7 +25,7 @@ gates:
       {
         id: "require-tests",
         gateType: "task",
-        trigger: { on: "task_complete" },
+        trigger: { scope: "task", on: "task_complete" },
         check: {
           type: "evidence_outcome",
           evidenceKind: "test",
@@ -60,6 +61,7 @@ gates:
   - id: require-build
     gateType: task
     trigger:
+      scope: task
       on: tool_observed
     check:
       type: evidence_present
@@ -69,6 +71,7 @@ gates:
   - id: review-items
     gateType: task
     trigger:
+      scope: task
       on: task_complete
     check:
       type: review_open_items

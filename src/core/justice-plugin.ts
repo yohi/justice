@@ -369,6 +369,14 @@ export class JusticePlugin {
         options.logger ?? console,
       ),
       writerId: this.writerId,
+      authorizationReviewBoundary: this.authorizationReviewBoundary,
+      findAuthorizationById: async (authorizationId: string): Promise<ApprovedPlanBinding | null> => {
+        try {
+          return await this.authorizationStore.findByAuthorizationId(authorizationId);
+        } catch {
+          return null;
+        }
+      },
       getActiveAuthorization: async (
         parentSessionId: string,
         taskId: string,

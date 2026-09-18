@@ -412,6 +412,31 @@ describe("project() task fold", () => {
     });
   });
 
+  it("keeps legacy task GateDecision records in compatibility projection", () => {
+    const state = project(
+      [decisionEvent(1, "2026-07-06T00:00:01Z", "task-1", "PASS")],
+      REBUILT_AT,
+    );
+
+    expect(state.tasks.get("task-1")?.lastVerdict).toBe("PASS");
+  });
+
+  it("replays final Gate transitions to the terminal plan state", () => {
+    const state = project(
+      [
+        planFinalizationEvent(1, "tasks_pending", "all_tasks_accepted"),
+        planFinalizationEvent(2, "all_tasks_accepted", "final_review_pending"),
+        planFinalizationEvent(3, "final_review_pending", "final_gate_pending"),
+        planFinalizationEvent(4, "final_gate_pending", "complete"),
+      ],
+      REBUILT_AT,
+    );
+
+    expect(state.lifecycle.finalization.get(JSON.stringify(["s1", "auth-1", "plan.md"]))?.state).toBe(
+      "complete",
+    );
+  });
+
   it("keeps finalization progress independent for each composite plan scope", () => {
     const planA = {
       parentSessionId: "parent-1",

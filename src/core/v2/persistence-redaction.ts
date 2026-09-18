@@ -6,6 +6,13 @@ import type {
   WorkflowBootstrapAudit,
 } from "./observation-model";
 import { redactForPersistence } from "./redaction";
+import { hashString } from "./hash";
+
+function isPlanDecisionRecord(
+  record: PendingLogRecord,
+): record is Extract<PendingLogRecord, { readonly recordType: "decision"; readonly planPath: string }> {
+  return "planPath" in record && typeof record.planPath === "string";
+}
 
 function redactToolEvidence(evidence: ToolOutputEvidence): ToolOutputEvidence {
   if (evidence.toolOutputClass === "command_exec") {
@@ -99,6 +106,24 @@ function redactWorkflowBootstrapAudit(audit: WorkflowBootstrapAudit): WorkflowBo
  */
 export function redactPendingLogRecord(record: PendingLogRecord): PendingLogRecord {
   if (record.recordType === "decision") {
+    if (isPlanDecisionRecord(record)) {
+      return {
+        ...record,
+        planPath: redactForPersistence(record.planPath),
+        planPathDigest: record.planPathDigest ?? hashString(record.planPath),
+        ...("ruleResults" in record
+          ? {
+              ruleResults: record.ruleResults.map((result) => ({
+                ...result,
+                ...(result.reason === undefined
+                  ? {}
+                  : { reason: redactForPersistence(result.reason) }),
+              })),
+            }
+          : {}),
+      };
+    }
+    if (!("ruleResults" in record)) return record;
     return {
       ...record,
       ruleResults: record.ruleResults.map((result) => ({

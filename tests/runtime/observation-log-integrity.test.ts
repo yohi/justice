@@ -103,6 +103,7 @@ function baseDecisionRecord(
     recordType: "decision",
     sequence,
     gateType: "task",
+    taskId: "task-1",
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
@@ -174,6 +175,13 @@ describe("observation log integrity", () => {
 describe("decision log integrity", () => {
   it("validates a complete decision record", () => {
     expect(() => validateRecordSchema(baseDecisionRecord(1))).not.toThrow();
+  });
+
+  it("replays legacy task GateDecision records only when taskId is present", () => {
+    expect(() => validateRecordSchema(baseDecisionRecord(1))).not.toThrow();
+    expect(() => validateRecordSchema(baseDecisionRecord(1, { taskId: undefined }))).toThrow(
+      "Invalid legacy task GateDecision",
+    );
   });
 
   it("throws for missing decision payload fields", () => {
@@ -287,6 +295,17 @@ describe("observation log projection rebuild integration", () => {
     if (content === undefined) throw new Error("expected a seeded shard file");
     return content.split("\n").filter((line) => line.trim().length > 0);
   }
+
+  it("keeps a physical shard readable around a legacy task Gate record", async () => {
+    const { files, reader, writer } = createMemFs();
+    const legacy = baseDecisionRecord(2);
+    const records = [baseRecord("tool_executed", 1), legacy, baseRecord("tool_executed", 3)];
+    files.set(toPhysicalPath(INTEGRATION_SHARD), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    const store = new ObservationLogStore(writer, reader, INTEGRATION_SHARD.writerId);
+
+    await expect(store.readAll()).resolves.toHaveLength(3);
+    expect(store.getLastReadIntegrity()).toEqual({ hasIntegrityViolation: false });
+  });
 
   function makeHandler(
     store: ObservationLogStore,

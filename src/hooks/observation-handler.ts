@@ -15,7 +15,12 @@ import type {
 } from "../core/types";
 import type { ApprovedPlanBinding } from "../core/plan-authorization";
 import {
+  createAuthorizationReviewBoundary,
+  type AuthorizationReviewBoundary,
+} from "../core/plan-authorization";
+import {
   advanceFinalizationAfterAllTasksAccepted as advanceFinalizationLifecycle,
+  appendPlanFinalizationTransition,
   appendTaskLifecycleTransition,
   recordWorkerReportedAndEvidence,
   requestCurrentTaskReview,
@@ -50,9 +55,8 @@ import { MessageRoleBuffer } from "../runtime/message-role-buffer";
 import type { ObservationLogStore, ReadOnlyObservationLog } from "../runtime/observation-log-store";
 import { validateProjectionCacheAgainstEvents } from "../runtime/state-projection-cache";
 import { evaluate, formatGateAdvisoryMessage } from "../core/v2/rule-evaluation-engine";
-import type { GateContext } from "../core/v2/gate-context";
-import { collectReviewScopes, deriveReviewScope } from "../core/v2/review-scope";
-import type { PendingDecisionRecord } from "../core/v2/decision-model";
+import { createGatePendingAttemptEvaluator } from "../core/acceptance-decision";
+import { deriveReviewScope } from "../core/v2/review-scope";
 import type { GateLoader } from "../runtime/gate-loader";
 import {
   assertNever,
@@ -109,6 +113,7 @@ export class ObservationHandler {
   private readonly reviewDeliveriesBySession = new Map<string, Set<string>>();
   private projectionRefresh: Promise<void> = Promise.resolve();
   private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
+  private readonly gateEvaluator;
 
   constructor(
     private readonly options: {
@@ -119,6 +124,10 @@ export class ObservationHandler {
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
+      readonly authorizationReviewBoundary?: AuthorizationReviewBoundary;
+      readonly findAuthorizationById?: (
+        authorizationId: string,
+      ) => Promise<ApprovedPlanBinding | null>;
       readonly getActiveAuthorization?: (
         parentSessionId: string,
         taskId: string,
@@ -129,7 +138,66 @@ export class ObservationHandler {
         taskId: string,
       ) => Promise<TaskProgressState | undefined>;
     },
-  ) {}
+  ) {
+    const authorizationReviewBoundary =
+      this.options.authorizationReviewBoundary ?? createAuthorizationReviewBoundary();
+    this.gateEvaluator = createGatePendingAttemptEvaluator({
+      readDurableRecords: () => this.options.logStore.readAll(),
+      appendDecision: async (record) => {
+        try {
+          await this.options.logStore.append(
+            { agentId: record.agentId, sessionId: record.sessionId, writerId: record.writerId },
+            record,
+          );
+          this.scheduleProjectionRefresh();
+          return { kind: "committed" };
+        } catch {
+          return { kind: "failed" };
+        }
+      },
+      findAuthorizationById: async (authorizationId) => {
+        if (this.options.findAuthorizationById !== undefined) {
+          return this.options.findAuthorizationById(authorizationId);
+        }
+        return null;
+      },
+      withAuthorizationReviewBoundary: authorizationReviewBoundary.withParentSession,
+      appendTaskLifecycleTransition: async (input) => {
+        const shardId: ShardId = {
+          agentId: input.agentId ?? "system",
+          sessionId: input.sessionId ?? input.parentSessionId,
+          writerId: input.writerId ?? this.options.writerId,
+        };
+        return appendTaskLifecycleTransition(input, async (record) => {
+          await this.options.logStore.append(shardId, record);
+          return 0;
+        });
+      },
+      appendPlanFinalizationTransition: async (input) => {
+        const shardId: ShardId = {
+          agentId: input.agentId ?? "system",
+          sessionId: input.sessionId ?? input.parentSessionId,
+          writerId: input.writerId ?? this.options.writerId,
+        };
+        return appendPlanFinalizationTransition(input, async (record) => {
+          await this.options.logStore.append(shardId, record);
+          return 0;
+        });
+      },
+      evaluateRules: async ({ context, projected }) => {
+        const loader = this.options.gateLoader;
+        if (loader === undefined) return { verdict: "SKIP", reason: "gate loader unavailable" };
+        return evaluate(
+          await loader.load(),
+          context.scope === "task"
+            ? (projected.tasks.get(context.taskExecutionRef.taskId)?.evidence ?? [])
+            : [],
+          context,
+        );
+      },
+      recordAdvisory: (advisory) => this.appendLifecycleAdvisory(advisory),
+    });
+  }
 
   getLogStore(): ReadOnlyObservationLog {
     return this.options.logStore;
@@ -455,7 +523,10 @@ export class ObservationHandler {
       }
       return PROCEED;
     } catch (error) {
-      this.options.logger?.warn("observation-handler: PreToolUse lifecycle failed, degrading to PROCEED", error);
+      this.options.logger?.warn(
+        "observation-handler: PreToolUse lifecycle failed, degrading to PROCEED",
+        error,
+      );
       return PROCEED;
     }
   }
@@ -649,9 +720,10 @@ export class ObservationHandler {
     shardId: ShardId,
     taskId: string | undefined,
   ): Promise<void> {
-    const binding = event.callId === undefined
-      ? undefined
-      : this.options.sessionStateProvider.getTaskCallBinding(event.callId);
+    const binding =
+      event.callId === undefined
+        ? undefined
+        : this.options.sessionStateProvider.getTaskCallBinding(event.callId);
     const ref = binding?.taskExecutionRef;
     if (ref === undefined || ref.taskId !== taskId) return;
     const dependencies: LifecycleNotificationDependencies = {
@@ -942,55 +1014,34 @@ export class ObservationHandler {
   private async evaluateGateIfTriggered(
     trigger: "task_complete" | "tool_observed",
     taskId: string | undefined,
-    _callId: string | undefined,
+    callId: string | undefined,
     agentId: ObservationAgentId,
     sessionId: string,
-    getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
+    _getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
   ): Promise<HookResponse> {
     try {
-      const gateLoader = this.options.gateLoader;
-      // Fail-open: gate evaluation is an optional dependency.
-      if (gateLoader === undefined) return PROCEED;
-      // No active task to gate on. Return before any I/O so tool calls that are
-      // not part of a task stay cheap (mirrors evaluate()'s own SKIP-on-no-taskId).
-      if (taskId === undefined) return PROCEED;
-
-      const state = await getState();
-      const gates = await gateLoader.load();
-      const ctx: GateContext = {
+      if (this.options.gateLoader === undefined || taskId === undefined) return PROCEED;
+      if (callId === undefined) return PROCEED;
+      const binding = this.options.sessionStateProvider.getTaskCallBinding(callId);
+      if (
+        binding === undefined ||
+        binding.parentSessionId !== sessionId ||
+        binding.taskExecutionRef.taskId !== taskId
+      )
+        return PROCEED;
+      const result = await this.gateEvaluator.evaluateGatePendingAttempt({
+        scope: "task",
         trigger,
-        taskId,
-        agentId,
-        sessionId,
-        reviewScope: collectReviewScopes(state, taskId),
-        reviewSummary: state.reviewSummary,
-      };
-      const evidence = state.tasks.get(taskId)?.evidence ?? [];
-      const verdict = evaluate(gates, evidence, ctx);
-      if (verdict.verdict === "SKIP") return PROCEED;
-
-      const shardId: ShardId = { agentId, sessionId, writerId: this.options.writerId };
-      const decision: PendingDecisionRecord = {
-        schemaVersion: 1 as const,
-        timestamp: new Date().toISOString(),
+        parentSessionId: sessionId,
+        taskExecutionRef: binding.taskExecutionRef,
         agentId,
         sessionId,
         writerId: this.options.writerId,
-        taskId,
-        recordType: "decision" as const,
-        ...verdict,
-      };
-      await this.options.logStore.append(shardId, decision);
-      // A DecisionRecord never feeds back into gate evidence, so an async cache
-      // refresh (same as handleSessionError/emitReflectionEvent) is sufficient;
-      // no synchronous re-projection is required for correctness here.
-      this.scheduleProjectionRefresh();
-
-      if (verdict.verdict === "PASS") return PROCEED;
-
+      });
+      if (result.kind !== "decided" || result.decision.verdict === "PASS") return PROCEED;
       return {
         action: "inject",
-        injectedContext: formatGateAdvisoryMessage(verdict),
+        injectedContext: formatGateAdvisoryMessage(result.decision),
         variant: "gate_advisory",
       };
     } catch (error) {
@@ -1009,13 +1060,15 @@ function isReviewObservationTool(toolName: string): boolean {
 
 function readTaskExecutionRef(value: unknown): TaskExecutionRef | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  if (!("authorizationId" in value) || !("taskId" in value) || !("attemptId" in value)) return undefined;
+  if (!("authorizationId" in value) || !("taskId" in value) || !("attemptId" in value))
+    return undefined;
   const candidate = value as { authorizationId?: unknown; taskId?: unknown; attemptId?: unknown };
   if (
     typeof candidate.authorizationId !== "string" ||
     typeof candidate.taskId !== "string" ||
     typeof candidate.attemptId !== "string"
-  ) return undefined;
+  )
+    return undefined;
   return {
     authorizationId: candidate.authorizationId,
     taskId: candidate.taskId,

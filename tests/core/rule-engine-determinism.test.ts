@@ -81,7 +81,7 @@ function createInputs(): {
       {
         id: "required-tests",
         gateType: "task",
-        trigger: { on: "task_complete" },
+        trigger: { scope: "task", on: "task_complete" },
         check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
         onViolation: "warn",
         onMissingEvidence: "warn",
@@ -116,10 +116,16 @@ function createInputs(): {
       },
     ],
     ctx: {
+      scope: "task",
       trigger: "task_complete",
-      taskId: "task-1",
+      taskExecutionRef: {
+        authorizationId: "auth-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+      },
       agentId: "hephaestus",
       sessionId: "s-1",
+      writerId: "w-1",
       reviewScope: [],
     },
   };

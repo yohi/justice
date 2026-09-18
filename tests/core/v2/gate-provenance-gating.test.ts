@@ -6,10 +6,12 @@ import { evaluate } from "../../../src/core/v2/rule-evaluation-engine";
 import type { ProjectedEvidence } from "../../../src/core/v2/state-projection";
 
 const CONTEXT = {
+  scope: "task",
   trigger: "task_complete",
-  taskId: "task-1",
+  taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
   agentId: "atlas",
   sessionId: "session-1",
+  writerId: "writer-1",
   reviewScope: [],
 } satisfies GateContext;
 
@@ -72,7 +74,7 @@ function gate(
   return {
     id,
     gateType: "task",
-    trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
     check,
     onViolation: policy.onViolation ?? "fail",
     onMissingEvidence: policy.onMissingEvidence ?? "warn",

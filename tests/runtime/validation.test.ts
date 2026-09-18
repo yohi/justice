@@ -18,6 +18,7 @@ function validDecision(): Record<string, unknown> {
   return {
     ...validBase("decision"),
     gateType: "task",
+    taskId: "task-1",
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
@@ -39,6 +40,43 @@ function validDecision(): Record<string, unknown> {
       },
     ],
   };
+}
+
+function validDecisionVariants(): readonly Record<string, unknown>[] {
+  return [
+    {
+      ...validDecision(),
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    },
+    {
+      ...validBase("decision"),
+      gateType: "plan",
+      authorizationId: "auth-1",
+      planPath: "docs/plans/example.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      verdict: "PASS",
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults: [],
+    },
+    {
+      ...validBase("decision"),
+      kind: "task-acceptance",
+      taskId: "task-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      verdict: "accepted",
+    },
+    {
+      ...validBase("decision"),
+      kind: "plan-acceptance",
+      authorizationId: "auth-1",
+      planPath: "docs/plans/example.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      verdict: "complete",
+    },
+  ];
 }
 
 function validReviewObserved(): Record<string, unknown> {
@@ -195,6 +233,69 @@ describe("validateRecordSchema", () => {
 
   it("accepts a valid decision record", () => {
     expect(() => validateRecordSchema(validDecision())).not.toThrow();
+  });
+
+  it("accepts all four authoritative decision variants", () => {
+    for (const variant of validDecisionVariants())
+      expect(() => validateRecordSchema(variant)).not.toThrow();
+  });
+
+  it("accepts a schemaVersion 1 legacy task Gate record without taskExecutionRef", () => {
+    expect(() => validateRecordSchema(validDecision())).not.toThrow();
+  });
+
+  it("rejects a legacy task GateDecision without a non-empty taskId", () => {
+    expect(() => validateRecordSchema({ ...validDecision(), taskId: undefined })).toThrow(
+      "Invalid legacy task GateDecision",
+    );
+  });
+
+  it("rejects a malformed present taskExecutionRef instead of reading it as legacy", () => {
+    expect(() => validateRecordSchema({ ...validDecision(), taskExecutionRef: { attemptId: "attempt-1" } })).toThrow(
+      "Invalid task GateDecision identity",
+    );
+  });
+
+  it("rejects a task GateDecision with plan-scoped fields", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecision(),
+        planPath: "plan.md",
+      }),
+    ).toThrow("Invalid task GateDecision scope");
+  });
+
+  it("rejects a malformed plan GateDecision", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[1],
+        finalReviewRound: 0,
+      }),
+    ).toThrow("Invalid plan GateDecision identity");
+  });
+
+  it("rejects malformed task and plan AcceptanceDecision records", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[2],
+        taskId: "different-task",
+      }),
+    ).toThrow("Invalid task AcceptanceDecision");
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[3],
+        verdict: "invalid",
+      }),
+    ).toThrow("Invalid plan AcceptanceDecision");
+  });
+
+  it("rejects an unknown AcceptanceDecision kind", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[2],
+        kind: "unknown-acceptance",
+      }),
+    ).toThrow("Invalid decision record: unknown acceptance kind");
   });
 
   it("rejects a non-object record", () => {

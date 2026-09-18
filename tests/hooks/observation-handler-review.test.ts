@@ -41,7 +41,7 @@ describe("ObservationHandler review observations", () => {
     const gate: GateRule = {
       id: "review-clean",
       gateType: "task",
-      trigger: { on: "tool_observed" },
+  trigger: { scope: "task", on: "tool_observed" },
       check: { type: "review_open_items", minimumSeverity: "major" },
       onViolation: "warn",
       onMissingEvidence: "warn",
@@ -69,9 +69,9 @@ describe("ObservationHandler review observations", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected review directive injection");
     expect(response.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
-    expect(response.injectedContext).toContain("review-clean=WARN");
+    expect(response.injectedContext).not.toContain("review-clean=WARN");
     expect(response.normalInjectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
-    expect(response.gateAdvisoryContext).toContain("review-clean=WARN");
+    expect(response.gateAdvisoryContext).toBeUndefined();
   });
 
   it("injects review clear only for a trusted complete snapshot without findings", async () => {

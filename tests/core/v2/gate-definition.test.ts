@@ -7,7 +7,7 @@ describe("GateRuleSchema", () => {
       id: "require-tests",
       description: "Require passing test evidence",
       gateType: "task",
-      trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
       check: {
         type: "evidence_outcome",
         evidenceKind: "test",
@@ -30,8 +30,21 @@ describe("GateRuleSchema", () => {
     const result = GateRuleSchema.safeParse({
       id: "unsupported-check",
       gateType: "task",
-      trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
       check: { type: "unknown_check" },
+      onViolation: "fail",
+      onMissingEvidence: "warn",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a gate whose trigger scope does not match its gate type", () => {
+    const result = GateRuleSchema.safeParse({
+      id: "mismatched-trigger",
+      gateType: "task",
+      trigger: { scope: "plan", on: "final_review_complete" },
+      check: { type: "evidence_present", evidenceKind: "test" },
       onViolation: "fail",
       onMissingEvidence: "warn",
     });
@@ -43,7 +56,7 @@ describe("GateRuleSchema", () => {
     const result = GateRuleSchema.safeParse({
       id: "missing-violation-action",
       gateType: "task",
-      trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
       check: { type: "evidence_present", evidenceKind: "build" },
       onMissingEvidence: "warn",
     });
@@ -55,7 +68,7 @@ describe("GateRuleSchema", () => {
     const result = GateRuleSchema.parse({
       id: "review-items",
       gateType: "task",
-      trigger: { on: "tool_observed" },
+    trigger: { scope: "task", on: "tool_observed" },
       check: { type: "review_open_items" },
       onViolation: "warn",
       onMissingEvidence: "pass",
