@@ -412,6 +412,15 @@ describe("project() task fold", () => {
     });
   });
 
+  it("keeps legacy task GateDecision records in compatibility projection", () => {
+    const state = project(
+      [decisionEvent(1, "2026-07-06T00:00:01Z", "task-1", "PASS")],
+      REBUILT_AT,
+    );
+
+    expect(state.tasks.get("task-1")?.lastVerdict).toBe("PASS");
+  });
+
   it("replays final Gate transitions to the terminal plan state", () => {
     const state = project(
       [
