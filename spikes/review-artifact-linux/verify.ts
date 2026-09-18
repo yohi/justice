@@ -8,6 +8,23 @@ import * as z from "zod";
 const PROVIDER_NAME = "LinuxOpenat2ReviewArtifactProvider" as const;
 const PASS_STATUS = "PASS" as const;
 const BLOCKED_STATUS = "BLOCKED" as const;
+const MINIMUM_KERNEL_MAJOR = 5;
+const MINIMUM_KERNEL_MINOR = 6;
+const REQUIRED_CASE_KEYS = [
+  "exclusive_reservation",
+  "reservation_collision",
+  "descriptor_relative_io",
+  "final_component_symlink",
+  "symlinked_ancestor",
+  "ancestor_replacement",
+  "artifact_replacement",
+  "lease_replacement",
+  "root_close_reopen",
+  "reservation_local_quarantine",
+  "post_verification_quarantine_race",
+  "artifact_name_replacement_after_fstat",
+  "lease_name_replacement_after_hard_link",
+] as const;
 
 const ProbeCaseSchema = z.object({
   status: z.enum(["PASS", "FAIL", "BLOCKED"]),
@@ -87,26 +104,62 @@ function failedReport(status: "FAIL" | "BLOCKED", detail: string): ProbeReport {
 }
 
 function allCasesPass(report: ProbeReport): boolean {
-  return Object.values(report.cases).every((result) => result.status === PASS_STATUS);
+  return REQUIRED_CASE_KEYS.every((caseKey) => report.cases[caseKey]?.status === PASS_STATUS);
+}
+
+function hasSupportedKernelVersion(kernel: string): boolean {
+  const match = /^(\d+)\.(\d+)(?:\.\d+)?/.exec(kernel);
+  const majorToken = match?.[1];
+  const minorToken = match?.[2];
+  if (majorToken === undefined || minorToken === undefined) {
+    return false;
+  }
+
+  const major = Number.parseInt(majorToken, 10);
+  const minor = Number.parseInt(minorToken, 10);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) {
+    return false;
+  }
+  return major > MINIMUM_KERNEL_MAJOR ||
+    (major === MINIMUM_KERNEL_MAJOR && minor >= MINIMUM_KERNEL_MINOR);
+}
+
+function hasSupportedPlatform(report: ProbeReport): boolean {
+  return (
+    report.platform.os === "linux" &&
+    report.platform.arch === "x86_64" &&
+    report.platform.libc === "glibc" &&
+    hasSupportedKernelVersion(report.kernel)
+  );
 }
 
 function normalizeProbeStatus(report: ProbeReport): ProbeReport {
   const nativePrimitivesAvailable =
     report.nativeApi.openat2 === true && report.nativeApi.renameat2 === true;
-  if (report.status === PASS_STATUS && nativePrimitivesAvailable && allCasesPass(report)) {
+  if (
+    report.status === PASS_STATUS &&
+    nativePrimitivesAvailable &&
+    hasSupportedPlatform(report) &&
+    allCasesPass(report)
+  ) {
     return report;
   }
-  if (!nativePrimitivesAvailable || report.status === BLOCKED_STATUS) {
+  if (!nativePrimitivesAvailable || !hasSupportedPlatform(report) || report.status === BLOCKED_STATUS) {
     return { ...report, status: BLOCKED_STATUS };
   }
   return { ...report, status: "FAIL" };
 }
 
-export function decideProviderPublication(report: ProbeReport): ProviderPublication {
+export function decideProviderPublication(
+  report: ProbeReport,
+  probeExitCode = 0,
+): ProviderPublication {
   if (
+    probeExitCode === 0 &&
     report.status === PASS_STATUS &&
     report.nativeApi.openat2 === true &&
     report.nativeApi.renameat2 === true &&
+    hasSupportedPlatform(report) &&
     allCasesPass(report)
   ) {
     return { status: "PUBLISHED", provider: PROVIDER_NAME };
@@ -144,6 +197,9 @@ async function verifyProbe(): Promise<ProbeReport> {
     }
 
     const execution = runCommand([binary, workspace]);
+    if (execution.exitCode !== 0) {
+      return failedReport("BLOCKED", "probe exited with a non-zero status");
+    }
     const parsed = ProbeReportSchema.safeParse(JSON.parse(execution.stdout));
     if (!parsed.success) {
       return failedReport("FAIL", "probe output was not a valid report");

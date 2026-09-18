@@ -53,6 +53,20 @@ typedef struct {
   identity_t identity;
 } reservation_t;
 
+typedef enum {
+  RESERVATION_RACE_NONE = 0,
+  RESERVATION_RACE_ARTIFACT_NAME_AFTER_FSTAT,
+  RESERVATION_RACE_LEASE_NAME_AFTER_HARD_LINK,
+} reservation_race_kind_t;
+
+typedef struct {
+  reservation_race_kind_t kind;
+  const char *saved_name;
+  const char *replacement_bytes;
+  identity_t replacement_identity;
+  bool replacement_recorded;
+} reservation_race_context_t;
+
 typedef struct {
   const char *name;
   bool passed;
@@ -174,6 +188,13 @@ static bool read_equals(int fd, const char *expected) {
   return memcmp(buffer, expected, length) == 0;
 }
 
+static bool replace_named_file(int dirfd, const char *name, const char *saved,
+                               const char *replacement, identity_t *replacement_identity);
+
+static cleanup_status_t cleanup_pair(const layout_t *layout, const reservation_t *reservation,
+                                     bool post_verification_race,
+                                     bool *replacement_bytes_retained);
+
 static bool make_directory(int dirfd, const char *name) {
   if (mkdirat(dirfd, name, 0700) == 0 || errno == EEXIST) {
     return true;
@@ -216,7 +237,8 @@ static bool open_layout(const char *root_path, layout_t *layout) {
 }
 
 static bool create_reservation(const layout_t *layout, const char *artifact, const char *initial,
-                               reservation_t *reservation) {
+                               reservation_t *reservation,
+                               reservation_race_context_t *race_context) {
   int artifact_fd = -1;
   int source_fd = -1;
   int lease_fd = -1;
@@ -233,11 +255,31 @@ static bool create_reservation(const layout_t *layout, const char *artifact, con
     close_fd(&artifact_fd);
     return false;
   }
+  if (race_context != NULL &&
+      race_context->kind == RESERVATION_RACE_ARTIFACT_NAME_AFTER_FSTAT) {
+    if (!replace_named_file(layout->reviews, artifact, race_context->saved_name,
+                            race_context->replacement_bytes,
+                            &race_context->replacement_identity)) {
+      close_fd(&artifact_fd);
+      return false;
+    }
+    race_context->replacement_recorded = true;
+  }
   source_fd = secure_open(layout->reviews, artifact, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0);
   if (source_fd < 0 || linkat(source_fd, "", layout->leases, lease, AT_EMPTY_PATH) < 0) {
     close_fd(&source_fd);
     close_fd(&artifact_fd);
     return false;
+  }
+  if (race_context != NULL && race_context->kind == RESERVATION_RACE_LEASE_NAME_AFTER_HARD_LINK) {
+    if (!replace_named_file(layout->leases, lease, race_context->saved_name,
+                            race_context->replacement_bytes,
+                            &race_context->replacement_identity)) {
+      close_fd(&source_fd);
+      close_fd(&artifact_fd);
+      return false;
+    }
+    race_context->replacement_recorded = true;
   }
   lease_fd = secure_open(layout->leases, lease, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0);
   if (lease_fd < 0 || !identity_from_fd(lease_fd, &lease_identity) ||
@@ -306,6 +348,18 @@ static bool named_file_equals(int dirfd, const char *name, const char *expected)
   return matches;
 }
 
+static bool named_file_identity_equals(int dirfd, const char *name,
+                                       const identity_t *expected) {
+  int fd = -1;
+  identity_t actual;
+  bool matches;
+
+  fd = secure_open(dirfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
+  matches = fd >= 0 && identity_from_fd(fd, &actual) && identities_equal(expected, &actual);
+  close_fd(&fd);
+  return matches;
+}
+
 static bool target_is_absent(int dirfd, const char *name) {
   int fd = secure_open(dirfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
   int target_errno = errno;
@@ -344,7 +398,7 @@ static case_report_t report_race(const char *name, bool passed, const char *deta
 
 static case_report_t case_exclusive_reservation(const layout_t *layout) {
   reservation_t reservation;
-  bool passed = create_reservation(layout, "exclusive.json", "", &reservation) &&
+  bool passed = create_reservation(layout, "exclusive.json", "", &reservation, NULL) &&
                 open_existing_reservation(layout, &reservation);
 
   return report(case_names[0], passed, passed ? "exclusive marker and identity-bound lease" :
@@ -355,7 +409,7 @@ static case_report_t case_collision(const layout_t *layout) {
   reservation_t reservation;
   int fd = -1;
   int collision_errno = 0;
-  bool passed = create_reservation(layout, "collision.json", "", &reservation);
+  bool passed = create_reservation(layout, "collision.json", "", &reservation, NULL);
 
   if (passed) {
     fd = secure_open(layout->reviews, "collision.json",
@@ -371,7 +425,7 @@ static case_report_t case_collision(const layout_t *layout) {
 static case_report_t case_descriptor_io(const layout_t *layout) {
   reservation_t reservation;
   int fd = -1;
-  bool passed = create_reservation(layout, "descriptor-io.json", "", &reservation);
+  bool passed = create_reservation(layout, "descriptor-io.json", "", &reservation, NULL);
 
   if (passed) {
     fd = secure_open(layout->reviews, reservation.artifact,
@@ -431,7 +485,7 @@ static case_report_t case_ancestor_replacement(layout_t *layout) {
   int outside_file = -1;
   int path_fd = -1;
   int anchored_fd = -1;
-  bool prepared = create_reservation(layout, "ancestor.json", "", &reservation);
+  bool prepared = create_reservation(layout, "ancestor.json", "", &reservation, NULL);
   bool swapped = false;
   bool anchored = false;
   bool path_rejected = false;
@@ -495,68 +549,80 @@ static case_report_t case_ancestor_replacement(layout_t *layout) {
 static case_report_t case_artifact_replacement(const layout_t *layout) {
   reservation_t reservation;
   identity_t replacement_identity;
-  int current = -1;
-  bool replaced = create_reservation(layout, "artifact-replacement.json", "", &reservation) &&
-                  replace_named_file(layout->reviews, reservation.artifact,
-                                     "artifact-replacement.saved", "replacement", &replacement_identity);
-  bool mismatch = false;
-  bool retained = false;
-
+  bool replacement_identity_retained = false;
+  bool replacement_bytes_retained = false;
+  bool usable_reservation = false;
+  cleanup_status_t cleanup_status = CLEANUP_FAILED;
+  bool replaced = create_reservation(layout, "artifact-replacement.json", "", &reservation, NULL);
   if (replaced) {
-    current = secure_open(layout->reviews, reservation.artifact,
-                          O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-    if (current >= 0) {
-      identity_t current_identity;
-      mismatch = identity_from_fd(current, &current_identity) &&
-                 !identities_equal(&reservation.identity, &current_identity);
-      retained = named_file_equals(layout->reviews, reservation.artifact, "replacement");
-    }
+    replaced = replace_named_file(layout->reviews, reservation.artifact,
+                                  "artifact-replacement.saved", "replacement",
+                                  &replacement_identity);
   }
-  close_fd(&current);
+  bool mismatch = replaced && !identities_equal(&reservation.identity, &replacement_identity);
+  if (replaced) {
+    cleanup_status = cleanup_pair(layout, &reservation, false, &replacement_bytes_retained);
+    replacement_identity_retained = named_file_identity_equals(
+        layout->reviews, reservation.artifact, &replacement_identity);
+    replacement_bytes_retained = replacement_identity_retained &&
+                                  named_file_equals(layout->reviews, reservation.artifact,
+                                                    "replacement");
+    usable_reservation = open_existing_reservation(layout, &reservation);
+  }
   case_report_t value = report_race(
-      case_names[6], replaced && mismatch && retained,
-      replaced && mismatch && retained ? "artifact replacement retained" :
-                                         "artifact replacement was touched",
-      "replacement_retained", retained, false);
-  value.replacement_delete_count = 0;
-  value.replacement_overwrite_count = 0;
+      case_names[6], replaced && mismatch && cleanup_status == CLEANUP_REPLACEMENT_RETAINED &&
+                         replacement_identity_retained && replacement_bytes_retained &&
+                         !usable_reservation,
+      replaced && mismatch && cleanup_status == CLEANUP_REPLACEMENT_RETAINED &&
+              replacement_identity_retained && replacement_bytes_retained && !usable_reservation
+          ? "artifact replacement retained by cleanup"
+          : "artifact replacement was touched or cleanup did not fail closed",
+      "replacement_retained", replacement_bytes_retained, usable_reservation);
+  value.replacement_delete_count = replacement_identity_retained ? 0 : 1;
+  value.replacement_overwrite_count = replacement_bytes_retained ? 0 : 1;
   return value;
 }
 
 static case_report_t case_lease_replacement(const layout_t *layout) {
   reservation_t reservation;
   identity_t replacement_identity;
-  int current = -1;
-  bool replaced = create_reservation(layout, "lease-replacement.json", "", &reservation) &&
-                  replace_named_file(layout->leases, reservation.lease,
-                                     "lease-replacement.saved", "lease-replacement", &replacement_identity);
-  bool mismatch = false;
-  bool retained = false;
-
+  bool replacement_identity_retained = false;
+  bool replacement_bytes_retained = false;
+  bool usable_reservation = false;
+  cleanup_status_t cleanup_status = CLEANUP_FAILED;
+  bool replaced = create_reservation(layout, "lease-replacement.json", "", &reservation, NULL);
   if (replaced) {
-    current = secure_open(layout->leases, reservation.lease,
-                          O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-    if (current >= 0) {
-      identity_t current_identity;
-      mismatch = identity_from_fd(current, &current_identity) &&
-                 !identities_equal(&reservation.identity, &current_identity);
-      retained = named_file_equals(layout->leases, reservation.lease, "lease-replacement");
-    }
+    replaced = replace_named_file(layout->leases, reservation.lease,
+                                  "lease-replacement.saved", "lease-replacement",
+                                  &replacement_identity);
   }
-  close_fd(&current);
+  bool mismatch = replaced && !identities_equal(&reservation.identity, &replacement_identity);
+  if (replaced) {
+    cleanup_status = cleanup_pair(layout, &reservation, false, &replacement_bytes_retained);
+    replacement_identity_retained = named_file_identity_equals(
+        layout->leases, reservation.lease, &replacement_identity);
+    replacement_bytes_retained = replacement_identity_retained &&
+                                  named_file_equals(layout->leases, reservation.lease,
+                                                    "lease-replacement");
+    usable_reservation = open_existing_reservation(layout, &reservation);
+  }
   case_report_t value = report_race(
-      case_names[7], replaced && mismatch && retained,
-      replaced && mismatch && retained ? "lease replacement retained" :
-                                         "lease replacement was touched",
-      "replacement_retained", retained, false);
-  value.replacement_delete_count = 0;
-  value.replacement_overwrite_count = 0;
+      case_names[7], replaced && mismatch && cleanup_status == CLEANUP_REPLACEMENT_RETAINED &&
+                         replacement_identity_retained && replacement_bytes_retained &&
+                         !usable_reservation,
+      replaced && mismatch && cleanup_status == CLEANUP_REPLACEMENT_RETAINED &&
+              replacement_identity_retained && replacement_bytes_retained && !usable_reservation
+          ? "lease replacement retained by cleanup"
+          : "lease replacement was touched or cleanup did not fail closed",
+      "replacement_retained", replacement_bytes_retained, usable_reservation);
+  value.replacement_delete_count = replacement_identity_retained ? 0 : 1;
+  value.replacement_overwrite_count = replacement_bytes_retained ? 0 : 1;
   return value;
 }
 
 static case_report_t case_root_close_reopen(const char *root_path, layout_t *layout) {
   reservation_t reservation;
-  bool created = create_reservation(layout, "reopen.json", "", &reservation);
+  bool created = create_reservation(layout, "reopen.json", "", &reservation, NULL);
 
   close_layout(layout);
   bool reopened = created && open_layout(root_path, layout);
@@ -671,7 +737,7 @@ static cleanup_status_t cleanup_pair(const layout_t *layout, const reservation_t
 static case_report_t case_reservation_local_quarantine(const layout_t *layout) {
   reservation_t reservation;
   bool replacement_retained = false;
-  bool created = create_reservation(layout, "quarantine.json", "quarantine-bytes", &reservation);
+  bool created = create_reservation(layout, "quarantine.json", "quarantine-bytes", &reservation, NULL);
   cleanup_status_t status = created ? cleanup_pair(layout, &reservation, false, &replacement_retained)
                                     : CLEANUP_FAILED;
   bool passed = status == CLEANUP_QUARANTINE_RETAINED && !replacement_retained;
@@ -689,7 +755,7 @@ static case_report_t case_reservation_local_quarantine(const layout_t *layout) {
 static case_report_t case_post_verification_race(const layout_t *layout) {
   reservation_t reservation;
   bool replacement_retained = false;
-  bool created = create_reservation(layout, "quarantine-race.json", "original", &reservation);
+  bool created = create_reservation(layout, "quarantine-race.json", "original", &reservation, NULL);
   cleanup_status_t status = created ? cleanup_pair(layout, &reservation, true, &replacement_retained)
                                     : CLEANUP_FAILED;
   bool passed = status == CLEANUP_QUARANTINE_RETAINED && replacement_retained;
@@ -705,96 +771,60 @@ static case_report_t case_post_verification_race(const layout_t *layout) {
 
 static case_report_t case_artifact_creation_race(const layout_t *layout) {
   const char *artifact = "reservation-artifact-race.json";
-  const char *saved = "reservation-artifact-race.saved";
-  const char *lease = "reservation-artifact-race.json.lease";
-  int artifact_fd = -1;
-  int source_fd = -1;
-  int current_fd = -1;
-  int lease_fd = -1;
-  identity_t original_identity;
-  identity_t replacement_identity;
-  identity_t current_identity;
-  bool created = false;
-  bool current_matches = false;
-  bool replacement_retained = false;
-  bool unusable = false;
-
-  artifact_fd = secure_open(layout->reviews, artifact,
-                            O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-  created = artifact_fd >= 0 && identity_from_fd(artifact_fd, &original_identity);
-  source_fd = created ? secure_open(layout->reviews, artifact, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0)
-                      : -1;
-  if (created && source_fd >= 0 && replace_named_file(layout->reviews, artifact, saved,
-                                                       "artifact-replacement", &replacement_identity)) {
-    bool linked = linkat(source_fd, "", layout->leases, lease, AT_EMPTY_PATH) == 0;
-    current_fd = secure_open(layout->reviews, artifact, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-    current_matches = current_fd >= 0 && identity_from_fd(current_fd, &current_identity);
-    replacement_retained = current_matches && identities_equal(&replacement_identity, &current_identity) &&
-                           read_equals(current_fd, "artifact-replacement");
-    lease_fd = secure_open(layout->leases, lease, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-    unusable = current_matches && !identities_equal(&original_identity, &current_identity) && linked &&
-               lease_fd >= 0;
-  }
-  close_fd(&lease_fd);
-  close_fd(&current_fd);
-  close_fd(&source_fd);
-  close_fd(&artifact_fd);
-  bool passed = created && replacement_retained && unusable;
+  reservation_t reservation;
+  reservation_race_context_t race = {
+      .kind = RESERVATION_RACE_ARTIFACT_NAME_AFTER_FSTAT,
+      .saved_name = "reservation-artifact-race.saved",
+      .replacement_bytes = "artifact-replacement",
+      .replacement_recorded = false,
+  };
+  bool created = create_reservation(layout, artifact, "", &reservation, &race);
+  bool usable_reservation = created && open_existing_reservation(layout, &reservation);
+  bool replacement_identity_retained =
+      race.replacement_recorded &&
+      named_file_identity_equals(layout->reviews, artifact, &race.replacement_identity);
+  bool replacement_bytes_retained =
+      replacement_identity_retained && named_file_equals(layout->reviews, artifact,
+                                                          race.replacement_bytes);
+  bool passed = race.replacement_recorded && !usable_reservation &&
+                replacement_identity_retained && replacement_bytes_retained && !created;
   case_report_t value = report_race(case_names[11], passed,
                                     passed ? "artifact replacement retained; reservation unusable" :
                                              "artifact creation race produced a usable reservation",
-                                    "artifact_storage_unavailable", replacement_retained, false);
-  value.replacement_delete_count = 0;
-  value.replacement_overwrite_count = 0;
+                                    "artifact_storage_unavailable", replacement_bytes_retained,
+                                    usable_reservation);
+  value.replacement_delete_count = replacement_identity_retained ? 0 : 1;
+  value.replacement_overwrite_count = replacement_bytes_retained ? 0 : 1;
   return value;
 }
 
 static case_report_t case_lease_creation_race(const layout_t *layout) {
   const char *artifact = "reservation-lease-race.json";
   const char *lease = "reservation-lease-race.json.lease";
-  const char *saved = "reservation-lease-race.json.lease.saved";
-  int artifact_fd = -1;
-  int source_fd = -1;
-  int lease_fd = -1;
-  int current_fd = -1;
-  identity_t original_identity;
-  identity_t replacement_identity;
-  identity_t current_identity;
-  bool created = false;
-  bool current_matches = false;
-  bool replacement_retained = false;
-  bool unusable = false;
-
-  artifact_fd = secure_open(layout->reviews, artifact,
-                            O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-  created = artifact_fd >= 0 && identity_from_fd(artifact_fd, &original_identity);
-  source_fd = created ? secure_open(layout->reviews, artifact, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0)
-                      : -1;
-  if (created && source_fd >= 0 && linkat(source_fd, "", layout->leases, lease, AT_EMPTY_PATH) == 0) {
-    lease_fd = secure_open(layout->leases, lease, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-    bool linked_identity_matches = lease_fd >= 0 && identity_from_fd(lease_fd, &current_identity) &&
-                                   identities_equal(&original_identity, &current_identity);
-    close_fd(&lease_fd);
-    if (linked_identity_matches &&
-        replace_named_file(layout->leases, lease, saved, "lease-replacement",
-                           &replacement_identity)) {
-      current_fd = secure_open(layout->leases, lease, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
-      current_matches = current_fd >= 0 && identity_from_fd(current_fd, &current_identity);
-      replacement_retained = current_matches && identities_equal(&replacement_identity, &current_identity) &&
-                             read_equals(current_fd, "lease-replacement");
-      unusable = current_matches && !identities_equal(&original_identity, &current_identity);
-    }
-  }
-  close_fd(&current_fd);
-  close_fd(&source_fd);
-  close_fd(&artifact_fd);
-  bool passed = created && replacement_retained && unusable;
+  reservation_t reservation;
+  reservation_race_context_t race = {
+      .kind = RESERVATION_RACE_LEASE_NAME_AFTER_HARD_LINK,
+      .saved_name = "reservation-lease-race.json.lease.saved",
+      .replacement_bytes = "lease-replacement",
+      .replacement_recorded = false,
+  };
+  bool created = create_reservation(layout, artifact, "", &reservation, &race);
+  bool usable_reservation = created && open_existing_reservation(layout, &reservation);
+  bool replacement_identity_retained =
+      race.replacement_recorded &&
+      named_file_identity_equals(layout->leases, lease, &race.replacement_identity);
+  bool replacement_bytes_retained =
+      replacement_identity_retained && named_file_equals(layout->leases, lease,
+                                                          race.replacement_bytes);
+  bool passed = race.replacement_recorded && !usable_reservation &&
+                replacement_identity_retained && replacement_bytes_retained && !created;
   case_report_t value = report_race(case_names[12], passed,
                                     passed ? "lease replacement retained; reservation unusable" :
                                              "lease creation race produced a usable reservation",
-                                    "artifact_storage_unavailable", replacement_retained, false);
-  value.replacement_delete_count = 0;
-  value.replacement_overwrite_count = 0;
+                                    "artifact_storage_unavailable", replacement_bytes_retained,
+                                    usable_reservation);
+  value.replacement_delete_count = replacement_identity_retained ? 0 : 1;
+  value.replacement_overwrite_count = replacement_bytes_retained ? 0 : 1;
   return value;
 }
 
