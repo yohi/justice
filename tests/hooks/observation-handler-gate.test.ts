@@ -181,7 +181,8 @@ describe("ObservationHandler gate evaluation", () => {
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
-      getActiveAuthorization: vi.fn(async () => activeAuthorization),
+      findAuthorizationById: vi.fn(async () => activeAuthorization),
+      getActiveAuthorization: vi.fn(async () => null),
     });
 
     const response = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
