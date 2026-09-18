@@ -238,6 +238,20 @@ function authoritativeGateRecord(): PersistedLogRecord {
   } as unknown as PersistedLogRecord;
 }
 
+function taskAcceptanceRecord(
+  verdict: "accepted" | "rework-required" | "blocked" = "accepted",
+): PersistedLogRecord {
+  return {
+    ...lifecycleRecords()[0],
+    sequence: 9,
+    recordType: "decision",
+    kind: "task-acceptance",
+    taskId: "task-1",
+    taskExecutionRef: ref,
+    verdict,
+  } as unknown as PersistedLogRecord;
+}
+
 function barrierDependencies(
   initialRecords: readonly PersistedLogRecord[],
   evaluateRules: GateEvaluationDependencies["evaluateRules"],
@@ -1046,9 +1060,103 @@ describe("createGatePendingAttemptEvaluator", () => {
     expect(fixture.decisions).toHaveLength(1);
     expect(fixture.decisions[0] && "gateType" in fixture.decisions[0]).toBe(true);
   });
+
+  it("returns the existing GateDecision when acceptance is already durable", async () => {
+    const fixture = dependencies(
+      async () => {
+        throw new Error("evaluateRules should not run when both decisions exist");
+      },
+      async () => ({ kind: "committed" }),
+    );
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => [
+        ...lifecycleRecords(),
+        authoritativeGateRecord(),
+        taskAcceptanceRecord(),
+      ],
+    });
+
+    const result = await evaluator.evaluateGatePendingAttempt(context());
+
+    expect(result).toMatchObject({ kind: "decided", decision: { gateType: "task", verdict: "PASS" } });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks when current GateDecision and AcceptanceDecision records conflict", async () => {
+    const fixture = dependencies(
+      async () => {
+        throw new Error("evaluateRules should not run for conflicting decisions");
+      },
+      async () => ({ kind: "committed" }),
+    );
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => [
+        ...lifecycleRecords(),
+        authoritativeGateRecord(),
+        taskAcceptanceRecord(),
+        { ...taskAcceptanceRecord(), sequence: 10 },
+      ],
+    });
+
+    await expect(evaluator.evaluateGatePendingAttempt(context())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "decision_integrity_violation",
+    });
+  });
+
+  it("blocks before gate evaluation when the task authorization is inactive", async () => {
+    const fixture = dependencies(
+      async () => {
+        throw new Error("evaluateRules should not run for an inactive authorization");
+      },
+      async () => ({ kind: "committed" }),
+      async () => null,
+    );
+
+    await expect(
+      createGatePendingAttemptEvaluator(fixture.dependencies).evaluateGatePendingAttempt(context()),
+    ).resolves.toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
 });
 
 describe("authorization identity", () => {
+  it("matches equal task review correlations", () => {
+    const correlation: ReviewCorrelation = {
+      reviewKind: "task-review",
+      reviewRound: 1,
+      taskExecutionRef: ref,
+    };
+
+    expect(sameReviewCorrelation(correlation, { ...correlation })).toBe(true);
+  });
+
+  it("does not match task and final review correlations", () => {
+    const taskCorrelation: ReviewCorrelation = {
+      reviewKind: "task-review",
+      reviewRound: 1,
+      taskExecutionRef: ref,
+    };
+    const finalCorrelation = {
+      reviewKind: "final-review",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      planFingerprint: { algorithm: "sha256", value: "fingerprint-1" },
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+    } as unknown as ReviewCorrelation;
+
+    expect(sameReviewCorrelation(taskCorrelation, finalCorrelation)).toBe(false);
+  });
+
+  it("fails closed for an unknown review correlation kind", () => {
+    const unknown = { reviewKind: "unknown" } as unknown as ReviewCorrelation;
+
+    expect(sameReviewCorrelation(unknown, unknown)).toBe(false);
+  });
+
   it("fails closed when authorization lookup throws", async () => {
     const correlation: ReviewCorrelation = {
       reviewKind: "task-review",

@@ -62,6 +62,29 @@ describe("JusticePlugin", () => {
     expect(order.slice(0, 3)).toEqual(["authorization", "wisdom", "projection"]);
   });
 
+  it("fails open when the observation authorization lookup throws", async () => {
+    const authorizationStore = (plugin as unknown as {
+      authorizationStore: {
+        findByAuthorizationId: (authorizationId: string) => Promise<ApprovedPlanBinding | null>;
+      };
+    }).authorizationStore;
+    vi.spyOn(authorizationStore, "findByAuthorizationId").mockRejectedValue(
+      new Error("authorization lookup failed"),
+    );
+
+    const handlerOptions = (plugin.getObservationHandler() as unknown as {
+      options: {
+        findAuthorizationById?: (
+          authorizationId: string,
+        ) => Promise<ApprovedPlanBinding | null>;
+      };
+    }).options;
+    const findAuthorizationById = handlerOptions.findAuthorizationById;
+    if (findAuthorizationById === undefined) throw new Error("authorization callback is missing");
+
+    await expect(findAuthorizationById("auth-1")).resolves.toBeNull();
+  });
+
   describe("mergePostToolUseResponses", () => {
     const proceed: HookResponse = { action: "proceed" };
     const skip: HookResponse = { action: "skip" };
