@@ -49,6 +49,36 @@ function createToolContext(agent = "sisyphus", sessionID = "session-1"): ToolCon
   };
 }
 
+function taskLifecycleEvents(): readonly ObservationRecord[] {
+  const states = [
+    ["pending", "authorized"],
+    ["authorized", "in_progress"],
+    ["in_progress", "worker_reported"],
+    ["worker_reported", "evidence_pending"],
+    ["evidence_pending", "review_pending"],
+    ["review_pending", "gate_pending"],
+  ] as const;
+  return states.map(([from, to], index) => ({
+    schemaVersion: 1,
+    sequence: index + 1,
+    timestamp: `2026-07-16T00:00:0${index + 1}Z`,
+    agentId: "atlas",
+    sessionId: "source-session",
+    writerId: "writer-1",
+    recordType: "observation",
+    taskId: "task-7.2",
+    kind: "task_lifecycle_transition",
+    parentSessionId: "source-session",
+    taskExecutionRef: {
+      authorizationId: "auth-1",
+      taskId: "task-7.2",
+      attemptId: "attempt-1",
+    },
+    from,
+    to,
+  })) as readonly ObservationRecord[];
+}
+
 function requireGateTool(adapter: OpenCodeAdapter): ToolDefinition {
   return defineJusticeGateTool(adapter);
 }
@@ -91,7 +121,9 @@ function evidenceEvent(sequence: number, kind: "test" | "build"): ObservationRec
   };
 }
 
-function reviewEvent(sequence: number): ObservationRecord {
+function reviewEvent(
+  sequence: number,
+): Extract<ObservationRecord, { readonly kind: "review_observed" }> {
   const item: ReviewItem = {
     itemKey: "review-major-1",
     evidenceId: "review-major-1",
@@ -119,7 +151,7 @@ const TEST_AND_REVIEW_GATES: readonly GateRule[] = [
   {
     id: "tests-pass",
     gateType: "task",
-    trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
     check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
     onViolation: "fail",
     onMissingEvidence: "fail",
@@ -128,7 +160,7 @@ const TEST_AND_REVIEW_GATES: readonly GateRule[] = [
   {
     id: "review-blocked",
     gateType: "task",
-    trigger: { on: "task_complete" },
+    trigger: { scope: "task", on: "task_complete" },
     check: { type: "review_open_items", minimumSeverity: "major" },
     onViolation: "fail",
     onMissingEvidence: "warn",
@@ -148,7 +180,7 @@ describe("justice_gate tool", () => {
     expect(hooks.tool).not.toHaveProperty("justice_gate");
   });
 
-  it("resolves Justice and the invoking agent lazily for an unscoped dry-run", async () => {
+  it("returns SKIP without resolving an agent for an unscoped dry-run", async () => {
     // Given
     const adapter = new OpenCodeAdapter(fakeInit());
     const definition = requireGateTool(adapter);
@@ -162,7 +194,7 @@ describe("justice_gate tool", () => {
 
     // Then
     expect(adapter.getJustice()).not.toBeNull();
-    expect(resolveAgentId).toHaveBeenCalledWith("AtLaS");
+    expect(resolveAgentId).not.toHaveBeenCalled();
     expect(skipResultSchema.parse(JSON.parse(output))).toEqual({
       verdict: "SKIP",
       reason: "no taskId provided",
@@ -232,9 +264,10 @@ describe("justice_gate tool", () => {
     const gateLoader = observationHandler.getGateLoader();
     if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
     vi.spyOn(logStore, "readAll").mockResolvedValue([
-      evidenceEvent(1, "test"),
-      evidenceEvent(2, "build"),
-      reviewEvent(3),
+      ...taskLifecycleEvents(),
+      evidenceEvent(7, "test"),
+      evidenceEvent(8, "build"),
+      { ...reviewEvent(9), isCompleteSnapshot: true },
     ]);
     vi.spyOn(gateLoader, "load").mockResolvedValue(TEST_AND_REVIEW_GATES);
     const definition = requireGateTool(adapter);
@@ -256,7 +289,7 @@ describe("justice_gate tool", () => {
       "Found 1 open review items matching minimum severity 'major'.",
     );
     expect(reviewRule?.evidenceRefs).toEqual([
-      expect.objectContaining({ evidenceId: "review-major-1", sequence: 3 }),
+      expect.objectContaining({ evidenceId: "review-major-1", sequence: 9 }),
     ]);
   });
 
@@ -292,7 +325,7 @@ describe("justice_gate tool", () => {
     const observationHandler = justice.getObservationHandler();
     const gateLoader = observationHandler.getGateLoader();
     if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
-    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue(taskLifecycleEvents());
     vi.spyOn(gateLoader, "load").mockRejectedValue(new Error("gate configuration unavailable"));
     const definition = requireGateTool(adapter);
 
@@ -317,13 +350,13 @@ describe("justice_gate tool", () => {
     const observationHandler = justice.getObservationHandler();
     const gateLoader = observationHandler.getGateLoader();
     if (gateLoader === undefined) throw new Error("Gate loader fixture is missing");
-    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue([]);
+    vi.spyOn(observationHandler.getLogStore(), "readAll").mockResolvedValue(taskLifecycleEvents());
     vi.spyOn(gateLoader, "load").mockResolvedValue(TEST_AND_REVIEW_GATES);
     const definition = requireGateTool(adapter);
 
     // When
     const output = requireStringResult(
-      await definition.execute({ taskId: "missing-task" }, createToolContext()),
+      await definition.execute({ taskId: "task-7.2" }, createToolContext()),
     );
 
     // Then

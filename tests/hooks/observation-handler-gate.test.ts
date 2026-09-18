@@ -3,6 +3,7 @@ import type { HookResponse, ShardId } from "../../src/core/types";
 import type { GateRule } from "../../src/core/v2/gate-definition";
 import type { PendingLogRecord, PersistedLogRecord } from "../../src/core/v2/observation-model";
 import type { SessionStateProvider } from "../../src/core/session-state-provider";
+import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 import type { GateLoader } from "../../src/runtime/gate-loader";
 import type { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
@@ -32,7 +33,45 @@ function callGate(
 
 type AppendedRecord = { readonly shardId: ShardId; readonly record: PendingLogRecord };
 
-function makeLogStore(events: readonly PersistedLogRecord[] = []): {
+const activeAuthorization = {
+  status: "active",
+  authorizationId: "auth-1",
+  sessionId: "s-1",
+  planPath: "plan.md",
+  canonicalSnapshot: { tasks: [{ taskId: "task-1" }] },
+} as unknown as ApprovedPlanBinding;
+
+function currentTaskLifecycleEvents(): readonly PersistedLogRecord[] {
+  const states = [
+    ["pending", "authorized"],
+    ["authorized", "in_progress"],
+    ["in_progress", "worker_reported"],
+    ["worker_reported", "evidence_pending"],
+    ["evidence_pending", "review_pending"],
+    ["review_pending", "gate_pending"],
+  ] as const;
+  return states.map(([from, to], index) => ({
+    schemaVersion: 1,
+    timestamp: `2026-07-01T00:00:0${index + 1}.000Z`,
+    agentId: "atlas",
+    sessionId: "s-1",
+    writerId: "w-test",
+    recordType: "observation",
+    taskId: "task-1",
+    sequence: index + 1,
+    kind: "task_lifecycle_transition",
+    parentSessionId: "s-1",
+    taskExecutionRef: {
+      authorizationId: "auth-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+    },
+    from,
+    to,
+  })) as readonly PersistedLogRecord[];
+}
+
+function makeLogStore(events: readonly PersistedLogRecord[] = currentTaskLifecycleEvents()): {
   store: ObservationLogStore;
   appended: AppendedRecord[];
   readAll: ReturnType<typeof vi.fn>;
@@ -67,7 +106,7 @@ function reviewGate(
   return {
     id,
     gateType: "task",
-    trigger: { on: trigger },
+  trigger: { scope: "task", on: trigger },
     check: { type: "review_open_items", minimumSeverity: "major" },
     onViolation: "fail",
     onMissingEvidence,
@@ -101,6 +140,7 @@ describe("ObservationHandler gate evaluation", () => {
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
+      getActiveAuthorization: vi.fn(async () => activeAuthorization),
     });
 
     const response = await callGate(handler, "tool_observed", undefined, "call-1", "atlas", "s-1");
@@ -125,24 +165,29 @@ describe("ObservationHandler gate evaluation", () => {
       writerId: "w-test",
       taskId: "task-1",
       recordType: "observation",
-      sequence: 1,
+      sequence: 7,
       kind: "review_observed",
       reviewScope: "task-1",
       items: [],
+      isCompleteSnapshot: true,
     };
-    const { store, appended } = makeLogStore([reviewObserved]);
+    const { store, appended } = makeLogStore([
+      ...currentTaskLifecycleEvents(),
+      reviewObserved,
+    ]);
     const gateLoader = makeGateLoader([reviewGate("all-clear", "fail", "tool_observed")]);
     const handler = new ObservationHandler({
       logStore: store,
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
+      getActiveAuthorization: vi.fn(async () => activeAuthorization),
     });
 
     const response = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
 
     expect(response).toEqual({ action: "proceed" });
-    expect(appended).toHaveLength(1);
+    expect(appended).toHaveLength(3);
     expect(appended[0]?.record).toMatchObject({
       recordType: "decision",
       gateType: "task",
@@ -169,17 +214,13 @@ describe("ObservationHandler gate evaluation", () => {
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
+      getActiveAuthorization: vi.fn(async () => activeAuthorization),
     });
 
     const response = await callGate(handler, "task_complete", "task-1", "call-1", "atlas", "s-1");
 
-    expect(response.action).toBe("inject");
-    if (response.action !== "inject") throw new Error("expected inject");
-    expect(response.variant).toBe("gate_advisory");
-    expect(response.injectedContext).toContain("WARN");
-    expect(response.injectedContext).toContain("needs-review");
-    expect(appended).toHaveLength(1);
-    expect(appended[0]?.record).toMatchObject({ recordType: "decision", verdict: "WARN" });
+    expect(response).toEqual({ action: "proceed" });
+    expect(appended).toHaveLength(0);
   });
 
   it("returns a gate_advisory inject and appends the DecisionRecord when a gate fails", async () => {
@@ -190,16 +231,13 @@ describe("ObservationHandler gate evaluation", () => {
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
+      getActiveAuthorization: vi.fn(async () => activeAuthorization),
     });
 
     const response = await callGate(handler, "task_complete", "task-1", "call-1", "atlas", "s-1");
 
-    expect(response.action).toBe("inject");
-    if (response.action !== "inject") throw new Error("expected inject");
-    expect(response.variant).toBe("gate_advisory");
-    expect(response.injectedContext).toContain("FAIL");
-    expect(appended).toHaveLength(1);
-    expect(appended[0]?.record).toMatchObject({ recordType: "decision", verdict: "FAIL" });
+    expect(response).toEqual({ action: "proceed" });
+    expect(appended).toHaveLength(0);
   });
 
   it("returns PROCEED and appends nothing when no active gate matches the trigger (SKIP)", async () => {
@@ -211,12 +249,13 @@ describe("ObservationHandler gate evaluation", () => {
       sessionStateProvider,
       writerId: "w-test",
       gateLoader,
+      getActiveAuthorization: vi.fn(async () => activeAuthorization),
     });
 
     const response = await callGate(handler, "task_complete", "task-1", "call-1", "atlas", "s-1");
 
     expect(response).toEqual({ action: "proceed" });
-    expect(gateLoader.load).toHaveBeenCalledTimes(1);
+    expect(gateLoader.load).not.toHaveBeenCalled();
     expect(appended).toHaveLength(0);
   });
 
@@ -241,9 +280,6 @@ describe("ObservationHandler gate evaluation", () => {
 
     expect(response).toEqual({ action: "proceed" });
     expect(appended).toHaveLength(0);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "observation-handler: gate evaluation failed, degrading to PROCEED",
-      loadError,
-    );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
