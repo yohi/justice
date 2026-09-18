@@ -120,6 +120,9 @@ export class ObservationHandler {
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
+      readonly findAuthorizationById?: (
+        authorizationId: string,
+      ) => Promise<ApprovedPlanBinding | null>;
       readonly getActiveAuthorization?: (
         parentSessionId: string,
         taskId: string,
@@ -146,6 +149,9 @@ export class ObservationHandler {
         }
       },
       findAuthorizationById: async (authorizationId) => {
+        if (this.options.findAuthorizationById !== undefined) {
+          return this.options.findAuthorizationById(authorizationId);
+        }
         if (this.options.getActiveAuthorization === undefined) return null;
         const records = await this.options.logStore.readAll();
         const task = records.find(
