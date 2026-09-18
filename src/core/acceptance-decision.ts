@@ -316,6 +316,40 @@ function blockedAcceptance(context: GatePendingAttemptContext): AcceptanceDecisi
       };
 }
 
+async function applyGateOutcomeLifecycle(
+  dependencies: GateEvaluationDependencies,
+  context: GatePendingAttemptContext,
+  decision: GateDecisionPayload,
+): Promise<{ readonly kind: "committed" | "failed" }> {
+  return context.scope === "task"
+    ? dependencies.appendTaskLifecycleTransition({
+        parentSessionId: context.parentSessionId,
+        taskExecutionRef: context.taskExecutionRef,
+        from: "gate_pending",
+        to: decision.verdict === "PASS" ? "accepted" : "rework_required",
+      })
+    : dependencies.appendPlanFinalizationTransition({
+        parentSessionId: context.parentSessionId,
+        authorizationId: context.authorizationId,
+        planPath: context.planPath,
+        finalizationAttemptId: context.finalizationAttemptId,
+        finalReviewRound: context.finalReviewRound,
+        from: "final_gate_pending",
+        to: decision.verdict === "PASS" ? "complete" : "final_rework_required",
+      });
+}
+
+async function appendBlockedAcceptanceIfMissing(
+  dependencies: GateEvaluationDependencies,
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+): Promise<{ readonly kind: "committed" | "failed" }> {
+  const existing = findCurrentAcceptanceDecision(await dependencies.readDurableRecords(), correlation);
+  if (existing.kind === "found") return { kind: "committed" };
+  if (existing.kind === "conflict") return { kind: "failed" };
+  return dependencies.appendDecision(pending(context, blockedAcceptance(context)));
+}
+
 export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDependencies): {
   readonly evaluateGatePendingAttempt: (
     context: GatePendingAttemptContext,
@@ -376,6 +410,14 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         !hasTerminalReview(records, context)
       )
         return { kind: "not_applicable" };
+      if (
+        context.scope === "task" &&
+        records.some(
+          (record) =>
+            isLegacyTaskGateDecisionRecord(record) && record.taskId === context.taskExecutionRef.taskId,
+        )
+      )
+        return { kind: "not_applicable" };
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
       const gate = findCurrentGateDecision(records, correlation);
@@ -392,6 +434,9 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         );
         if (appended.kind !== "committed")
           return { kind: "blocked", advisory: "acceptance_append_failed" };
+        const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, gate.decision);
+        if (lifecycle.kind !== "committed")
+          return { kind: "blocked", advisory: "lifecycle_append_failed" };
         return { kind: "decided", decision: gate.decision };
       }
       const gateContext: GateContext =
@@ -420,19 +465,23 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
               reviewScope: Array.from(state.reviewSummary.byScope.keys()),
               reviewSummary: state.reviewSummary,
             };
-      const result = await dependencies.evaluateRules({ context: gateContext, projected: state });
+      let result: GateRuleEvaluation;
+      try {
+        result = await dependencies.evaluateRules({ context: gateContext, projected: state });
+      } catch {
+        if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+          return { kind: "blocked", advisory: "review_authorization_not_active" };
+        const blocked = await appendBlockedAcceptanceIfMissing(dependencies, context, correlation);
+        if (blocked.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
+        return { kind: "blocked", advisory: "gate_evaluation_failed" };
+      }
       if (!("recordType" in result)) {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };
-        const existing = findCurrentAcceptanceDecision(
-          await dependencies.readDurableRecords(),
-          correlation,
-        );
-        if (existing.kind === "missing") {
-          const blocked = await dependencies.appendDecision(pending(context, blockedAcceptance(context)));
-          if (blocked.kind !== "committed")
-            return { kind: "blocked", advisory: "acceptance_append_failed" };
-        }
+        const blocked = await appendBlockedAcceptanceIfMissing(dependencies, context, correlation);
+        if (blocked.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
         return { kind: "blocked", advisory: "gate_evaluation_blocked" };
       }
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
@@ -440,28 +489,6 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       const gateAppended = await dependencies.appendDecision(pending(context, result));
       if (gateAppended.kind !== "committed")
         return { kind: "blocked", advisory: "gate_decision_append_failed" };
-      if (context.scope === "task") {
-        const lifecycle = await dependencies.appendTaskLifecycleTransition({
-          parentSessionId: context.parentSessionId,
-          taskExecutionRef: context.taskExecutionRef,
-          from: "gate_pending",
-          to: result.verdict === "PASS" ? "accepted" : "rework_required",
-        });
-        if (lifecycle.kind !== "committed")
-          return { kind: "blocked", advisory: "lifecycle_append_failed" };
-      } else {
-        const lifecycle = await dependencies.appendPlanFinalizationTransition({
-          parentSessionId: context.parentSessionId,
-          authorizationId: context.authorizationId,
-          planPath: context.planPath,
-          finalizationAttemptId: context.finalizationAttemptId,
-          finalReviewRound: context.finalReviewRound,
-          from: "final_gate_pending",
-          to: result.verdict === "PASS" ? "complete" : "final_rework_required",
-        });
-        if (lifecycle.kind !== "committed")
-          return { kind: "blocked", advisory: "lifecycle_append_failed" };
-      }
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
       const acceptanceAppended = await dependencies.appendDecision(
@@ -469,6 +496,9 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       );
       if (acceptanceAppended.kind !== "committed")
         return { kind: "blocked", advisory: "acceptance_append_failed" };
+      const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, result);
+      if (lifecycle.kind !== "committed")
+        return { kind: "blocked", advisory: "lifecycle_append_failed" };
       return { kind: "decided", decision: result };
     } catch {
       return { kind: "blocked", advisory: "gate_evaluation_failed" };
