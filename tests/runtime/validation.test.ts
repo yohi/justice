@@ -18,6 +18,7 @@ function validDecision(): Record<string, unknown> {
   return {
     ...validBase("decision"),
     gateType: "task",
+    taskId: "task-1",
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
@@ -195,6 +196,12 @@ describe("validateRecordSchema", () => {
 
   it("accepts a valid decision record", () => {
     expect(() => validateRecordSchema(validDecision())).not.toThrow();
+  });
+
+  it("rejects a legacy task GateDecision without a non-empty taskId", () => {
+    expect(() => validateRecordSchema({ ...validDecision(), taskId: undefined })).toThrow(
+      "Invalid legacy task GateDecision",
+    );
   });
 
   it("rejects a non-object record", () => {

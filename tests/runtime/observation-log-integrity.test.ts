@@ -103,6 +103,7 @@ function baseDecisionRecord(
     recordType: "decision",
     sequence,
     gateType: "task",
+    taskId: "task-1",
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
@@ -174,6 +175,13 @@ describe("observation log integrity", () => {
 describe("decision log integrity", () => {
   it("validates a complete decision record", () => {
     expect(() => validateRecordSchema(baseDecisionRecord(1))).not.toThrow();
+  });
+
+  it("replays legacy task GateDecision records only when taskId is present", () => {
+    expect(() => validateRecordSchema(baseDecisionRecord(1))).not.toThrow();
+    expect(() => validateRecordSchema(baseDecisionRecord(1, { taskId: undefined }))).toThrow(
+      "Invalid legacy task GateDecision",
+    );
   });
 
   it("throws for missing decision payload fields", () => {
