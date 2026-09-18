@@ -373,8 +373,8 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
         Object.hasOwn(r, "finalReviewRound")
       )
         throw new Error("Invalid task GateDecision scope");
-      if (!Object.hasOwn(r, "taskExecutionRef")) {
-        if (Object.hasOwn(r, "taskId") && (typeof r.taskId !== "string" || r.taskId.length === 0))
+      if (r.gateType === "task" && !Object.hasOwn(r, "taskExecutionRef")) {
+        if (typeof r.taskId !== "string" || r.taskId.length === 0)
           throw new Error("Invalid legacy task GateDecision");
         return;
       }

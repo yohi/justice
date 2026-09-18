@@ -78,11 +78,18 @@ export async function isCurrentActiveAuthorization(
     }
     return (
       binding.planPath === correlation.planPath &&
-      binding.planFingerprint.value === correlation.planFingerprint.value
+      samePlanFingerprint(binding.planFingerprint, correlation.planFingerprint)
     );
   } catch {
     return false;
   }
+}
+
+function samePlanFingerprint(
+  left: { readonly algorithm: string; readonly value: string },
+  right: { readonly algorithm: string; readonly value: string },
+): boolean {
+  return left.algorithm === right.algorithm && left.value === right.value;
 }
 
 function sameTask(left: TaskExecutionRef, right: TaskExecutionRef): boolean {
@@ -183,7 +190,7 @@ export function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorr
       left.planPath === right.planPath &&
       left.finalizationAttemptId === right.finalizationAttemptId &&
       left.finalReviewRound === right.finalReviewRound &&
-      left.planFingerprint.value === right.planFingerprint.value
+      samePlanFingerprint(left.planFingerprint, right.planFingerprint)
     );
   return false;
 }
@@ -289,6 +296,26 @@ function pending(
   };
 }
 
+function blockedAcceptance(context: GatePendingAttemptContext): AcceptanceDecisionPayload {
+  return context.scope === "task"
+    ? {
+        recordType: "decision",
+        kind: "task-acceptance",
+        taskId: context.taskExecutionRef.taskId,
+        taskExecutionRef: context.taskExecutionRef,
+        verdict: "blocked",
+      }
+    : {
+        recordType: "decision",
+        kind: "plan-acceptance",
+        authorizationId: context.authorizationId,
+        planPath: context.planPath,
+        finalizationAttemptId: context.finalizationAttemptId,
+        finalReviewRound: context.finalReviewRound,
+        verdict: "blocked",
+      };
+}
+
 export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDependencies): {
   readonly evaluateGatePendingAttempt: (
     context: GatePendingAttemptContext,
@@ -358,6 +385,8 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       if (gate.kind === "found" && acceptance.kind === "found")
         return { kind: "decided", decision: gate.decision };
       if (gate.kind === "found") {
+        if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+          return { kind: "blocked", advisory: "review_authorization_not_active" };
         const appended = await dependencies.appendDecision(
           pending(context, deriveAcceptanceDecision(gate.decision)),
         );
@@ -392,24 +421,36 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
               reviewSummary: state.reviewSummary,
             };
       const result = await dependencies.evaluateRules({ context: gateContext, projected: state });
-      if (!("recordType" in result))
+      if (!("recordType" in result)) {
+        if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+          return { kind: "blocked", advisory: "review_authorization_not_active" };
+        const existing = findCurrentAcceptanceDecision(
+          await dependencies.readDurableRecords(),
+          correlation,
+        );
+        if (existing.kind === "missing") {
+          const blocked = await dependencies.appendDecision(pending(context, blockedAcceptance(context)));
+          if (blocked.kind !== "committed")
+            return { kind: "blocked", advisory: "acceptance_append_failed" };
+        }
         return { kind: "blocked", advisory: "gate_evaluation_blocked" };
+      }
+      if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+        return { kind: "blocked", advisory: "review_authorization_not_active" };
       const gateAppended = await dependencies.appendDecision(pending(context, result));
       if (gateAppended.kind !== "committed")
         return { kind: "blocked", advisory: "gate_decision_append_failed" };
-      const derived = deriveAcceptanceDecision(result);
-      const acceptanceAppended = await dependencies.appendDecision(pending(context, derived));
-      if (acceptanceAppended.kind !== "committed")
-        return { kind: "blocked", advisory: "acceptance_append_failed" };
       if (context.scope === "task") {
-        await dependencies.appendTaskLifecycleTransition({
+        const lifecycle = await dependencies.appendTaskLifecycleTransition({
           parentSessionId: context.parentSessionId,
           taskExecutionRef: context.taskExecutionRef,
           from: "gate_pending",
           to: result.verdict === "PASS" ? "accepted" : "rework_required",
         });
+        if (lifecycle.kind !== "committed")
+          return { kind: "blocked", advisory: "lifecycle_append_failed" };
       } else {
-        await dependencies.appendPlanFinalizationTransition({
+        const lifecycle = await dependencies.appendPlanFinalizationTransition({
           parentSessionId: context.parentSessionId,
           authorizationId: context.authorizationId,
           planPath: context.planPath,
@@ -418,7 +459,16 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           from: "final_gate_pending",
           to: result.verdict === "PASS" ? "complete" : "final_rework_required",
         });
+        if (lifecycle.kind !== "committed")
+          return { kind: "blocked", advisory: "lifecycle_append_failed" };
       }
+      if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+        return { kind: "blocked", advisory: "review_authorization_not_active" };
+      const acceptanceAppended = await dependencies.appendDecision(
+        pending(context, deriveAcceptanceDecision(result)),
+      );
+      if (acceptanceAppended.kind !== "committed")
+        return { kind: "blocked", advisory: "acceptance_append_failed" };
       return { kind: "decided", decision: result };
     } catch {
       return { kind: "blocked", advisory: "gate_evaluation_failed" };

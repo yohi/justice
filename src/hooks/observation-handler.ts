@@ -17,6 +17,7 @@ import type { ApprovedPlanBinding } from "../core/plan-authorization";
 import { createAuthorizationReviewBoundary } from "../core/plan-authorization";
 import {
   advanceFinalizationAfterAllTasksAccepted as advanceFinalizationLifecycle,
+  appendPlanFinalizationTransition,
   appendTaskLifecycleTransition,
   recordWorkerReportedAndEvidence,
   requestCurrentTaskReview,
@@ -152,14 +153,7 @@ export class ObservationHandler {
         if (this.options.findAuthorizationById !== undefined) {
           return this.options.findAuthorizationById(authorizationId);
         }
-        if (this.options.getActiveAuthorization === undefined) return null;
-        const records = await this.options.logStore.readAll();
-        const task = records.find(
-          (record) => record.recordType === "observation" && record.taskId !== undefined,
-        );
-        return task === undefined
-          ? null
-          : this.options.getActiveAuthorization(task.sessionId, task.taskId ?? authorizationId);
+        return null;
       },
       withAuthorizationReviewBoundary: createAuthorizationReviewBoundary().withParentSession,
       appendTaskLifecycleTransition: async (input) => {
@@ -173,7 +167,17 @@ export class ObservationHandler {
           return 0;
         });
       },
-      appendPlanFinalizationTransition: async () => ({ kind: "failed" }),
+      appendPlanFinalizationTransition: async (input) => {
+        const shardId: ShardId = {
+          agentId: input.agentId ?? "system",
+          sessionId: input.sessionId ?? input.parentSessionId,
+          writerId: input.writerId ?? this.options.writerId,
+        };
+        return appendPlanFinalizationTransition(input, async (record) => {
+          await this.options.logStore.append(shardId, record);
+          return 0;
+        });
+      },
       evaluateRules: async ({ context, projected }) => {
         const loader = this.options.gateLoader;
         if (loader === undefined) return { verdict: "SKIP", reason: "gate loader unavailable" };
