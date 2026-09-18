@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HookResponse, ShardId } from "../../src/core/types";
+import type { HookResponse, ShardId, TaskCallBinding } from "../../src/core/types";
 import type { GateRule } from "../../src/core/v2/gate-definition";
 import type { PendingLogRecord, PersistedLogRecord } from "../../src/core/v2/observation-model";
 import type { SessionStateProvider } from "../../src/core/session-state-provider";
@@ -114,7 +114,19 @@ function reviewGate(
   };
 }
 
-const sessionStateProvider = {} as unknown as SessionStateProvider;
+const sessionStateProvider = {
+  getTaskCallBinding: vi.fn(
+    (): TaskCallBinding => ({
+      parentSessionId: "s-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: {
+        authorizationId: "auth-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+      },
+    }),
+  ),
+} as unknown as SessionStateProvider;
 
 describe("ObservationHandler gate evaluation", () => {
   it("returns PROCEED without touching the log when no gateLoader is configured", async () => {

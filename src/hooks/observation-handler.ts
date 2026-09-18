@@ -14,7 +14,10 @@ import type {
   TaskExecutionRef,
 } from "../core/types";
 import type { ApprovedPlanBinding } from "../core/plan-authorization";
-import { createAuthorizationReviewBoundary } from "../core/plan-authorization";
+import {
+  createAuthorizationReviewBoundary,
+  type AuthorizationReviewBoundary,
+} from "../core/plan-authorization";
 import {
   advanceFinalizationAfterAllTasksAccepted as advanceFinalizationLifecycle,
   appendPlanFinalizationTransition,
@@ -121,6 +124,7 @@ export class ObservationHandler {
       readonly workspaceRoot?: string;
       readonly logger?: { warn(message: string, error: unknown): void };
       readonly gateLoader?: GateLoader;
+      readonly authorizationReviewBoundary?: AuthorizationReviewBoundary;
       readonly findAuthorizationById?: (
         authorizationId: string,
       ) => Promise<ApprovedPlanBinding | null>;
@@ -135,6 +139,8 @@ export class ObservationHandler {
       ) => Promise<TaskProgressState | undefined>;
     },
   ) {
+    const authorizationReviewBoundary =
+      this.options.authorizationReviewBoundary ?? createAuthorizationReviewBoundary();
     this.gateEvaluator = createGatePendingAttemptEvaluator({
       readDurableRecords: () => this.options.logStore.readAll(),
       appendDecision: async (record) => {
@@ -155,7 +161,7 @@ export class ObservationHandler {
         }
         return null;
       },
-      withAuthorizationReviewBoundary: createAuthorizationReviewBoundary().withParentSession,
+      withAuthorizationReviewBoundary: authorizationReviewBoundary.withParentSession,
       appendTaskLifecycleTransition: async (input) => {
         const shardId: ShardId = {
           agentId: input.agentId ?? "system",
@@ -1008,23 +1014,26 @@ export class ObservationHandler {
   private async evaluateGateIfTriggered(
     trigger: "task_complete" | "tool_observed",
     taskId: string | undefined,
-    _callId: string | undefined,
+    callId: string | undefined,
     agentId: ObservationAgentId,
     sessionId: string,
-    getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
+    _getState: () => Promise<ProjectedState> = () => this.readProjectedState(),
   ): Promise<HookResponse> {
     try {
       if (this.options.gateLoader === undefined || taskId === undefined) return PROCEED;
-      const state = await getState();
-      const ref = Array.from(state.lifecycle.currentTaskExecutionRefs.values()).find(
-        (candidate) => candidate.taskId === taskId,
-      );
-      if (ref === undefined) return PROCEED;
+      if (callId === undefined) return PROCEED;
+      const binding = this.options.sessionStateProvider.getTaskCallBinding(callId);
+      if (
+        binding === undefined ||
+        binding.parentSessionId !== sessionId ||
+        binding.taskExecutionRef.taskId !== taskId
+      )
+        return PROCEED;
       const result = await this.gateEvaluator.evaluateGatePendingAttempt({
         scope: "task",
         trigger,
         parentSessionId: sessionId,
-        taskExecutionRef: ref,
+        taskExecutionRef: binding.taskExecutionRef,
         agentId,
         sessionId,
         writerId: this.options.writerId,

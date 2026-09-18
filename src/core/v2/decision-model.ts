@@ -42,6 +42,7 @@ export type PlanGateDecisionPayload = GateDecisionFields & {
   readonly gateType: "plan";
   readonly authorizationId: string;
   readonly planPath: string;
+  readonly planPathDigest?: string;
   readonly finalizationAttemptId: FinalizationAttemptId;
   readonly finalReviewRound: number;
 };
@@ -59,6 +60,7 @@ export type PlanAcceptanceDecisionPayload = {
   readonly kind: "plan-acceptance";
   readonly authorizationId: string;
   readonly planPath: string;
+  readonly planPathDigest?: string;
   readonly finalizationAttemptId: FinalizationAttemptId;
   readonly finalReviewRound: number;
   readonly verdict: "complete" | "rework-required" | "blocked";

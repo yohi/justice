@@ -13,6 +13,22 @@ const GateConfigSchema = z.strictObject({
 
 export function parseGateYaml(content: string): readonly GateRule[] {
   const parsed = parseYaml(content);
-  const validated = GateConfigSchema.parse(parsed);
+  const normalized = isRecord(parsed) && Array.isArray(parsed.gates)
+    ? {
+        ...parsed,
+        gates: parsed.gates.map((gate) => normalizeTaskGate(gate)),
+      }
+    : parsed;
+  const validated = GateConfigSchema.parse(normalized);
   return validated.gates;
+}
+
+function normalizeTaskGate(gate: unknown): unknown {
+  if (!isRecord(gate) || gate.gateType !== "task" || !isRecord(gate.trigger)) return gate;
+  if (gate.trigger.scope !== undefined) return gate;
+  return { ...gate, trigger: { ...gate.trigger, scope: "task" } };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -256,6 +256,48 @@ describe("validateRecordSchema", () => {
     );
   });
 
+  it("rejects a task GateDecision with plan-scoped fields", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecision(),
+        planPath: "plan.md",
+      }),
+    ).toThrow("Invalid task GateDecision scope");
+  });
+
+  it("rejects a malformed plan GateDecision", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[1],
+        finalReviewRound: 0,
+      }),
+    ).toThrow("Invalid plan GateDecision identity");
+  });
+
+  it("rejects malformed task and plan AcceptanceDecision records", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[2],
+        taskId: "different-task",
+      }),
+    ).toThrow("Invalid task AcceptanceDecision");
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[3],
+        verdict: "invalid",
+      }),
+    ).toThrow("Invalid plan AcceptanceDecision");
+  });
+
+  it("rejects an unknown AcceptanceDecision kind", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDecisionVariants()[2],
+        kind: "unknown-acceptance",
+      }),
+    ).toThrow("Invalid decision record: unknown acceptance kind");
+  });
+
   it("rejects a non-object record", () => {
     expect(() => validateRecordSchema("not-object")).toThrow("Invalid record: not an object");
   });

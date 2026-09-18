@@ -39,6 +39,19 @@ describe("GateRuleSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects a gate whose trigger scope does not match its gate type", () => {
+    const result = GateRuleSchema.safeParse({
+      id: "mismatched-trigger",
+      gateType: "task",
+      trigger: { scope: "plan", on: "final_review_complete" },
+      check: { type: "evidence_present", evidenceKind: "test" },
+      onViolation: "fail",
+      onMissingEvidence: "warn",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("rejects a gate rule missing required fields", () => {
     const result = GateRuleSchema.safeParse({
       id: "missing-violation-action",

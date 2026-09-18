@@ -11,6 +11,7 @@ import type {
   PendingDecisionRecord,
 } from "./v2/decision-model";
 import { orderEventsForProjection } from "./v2/integrity";
+import { hashString } from "./v2/hash";
 import type { PersistedLogRecord } from "./v2/observation-model";
 import type {
   PlanFinalizationTransitionInput,
@@ -100,12 +101,22 @@ function sameTask(left: TaskExecutionRef, right: TaskExecutionRef): boolean {
   );
 }
 
+function samePlanPath(
+  recordPath: string,
+  recordDigest: string | undefined,
+  correlationPath: string,
+): boolean {
+  return recordDigest === undefined
+    ? recordPath === correlationPath
+    : recordDigest === hashString(correlationPath);
+}
+
 function correlationMatchesGate(record: GateDecision, correlation: ReviewCorrelation): boolean {
   return correlation.reviewKind === "task-review"
     ? record.gateType === "task" && sameTask(record.taskExecutionRef, correlation.taskExecutionRef)
     : record.gateType === "plan" &&
         record.authorizationId === correlation.authorizationId &&
-        record.planPath === correlation.planPath &&
+        samePlanPath(record.planPath, record.planPathDigest, correlation.planPath) &&
         record.finalizationAttemptId === correlation.finalizationAttemptId &&
         record.finalReviewRound === correlation.finalReviewRound;
 }
@@ -119,7 +130,7 @@ function correlationMatchesAcceptance(
         sameTask(record.taskExecutionRef, correlation.taskExecutionRef)
     : record.kind === "plan-acceptance" &&
         record.authorizationId === correlation.authorizationId &&
-        record.planPath === correlation.planPath &&
+        samePlanPath(record.planPath, record.planPathDigest, correlation.planPath) &&
         record.finalizationAttemptId === correlation.finalizationAttemptId &&
         record.finalReviewRound === correlation.finalReviewRound;
 }
@@ -278,7 +289,10 @@ function hasTerminalReview(
       record.kind === "review_observed" &&
       record.isCompleteSnapshot === true &&
       record.items.length === 0 &&
-      (context.scope === "plan" || record.taskId === context.taskExecutionRef.taskId),
+      record.sessionId === context.sessionId &&
+      (context.scope === "plan"
+        ? record.reviewScope === "final"
+        : record.taskId === context.taskExecutionRef.taskId),
   );
 }
 
@@ -476,6 +490,8 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           return { kind: "blocked", advisory: "acceptance_append_failed" };
         return { kind: "blocked", advisory: "gate_evaluation_failed" };
       }
+      if ("verdict" in result && result.verdict === "SKIP")
+        return { kind: "not_applicable" };
       if (!("recordType" in result)) {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };

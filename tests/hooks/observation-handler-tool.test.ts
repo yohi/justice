@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
+import type { GatePendingAttemptResult } from "../../src/core/acceptance-decision";
+import type { GatePendingAttemptContext } from "../../src/core/v2/gate-context";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import type { HookResponse } from "../../src/core/types";
+import type { PendingLogRecord, PersistedLogRecord } from "../../src/core/v2/observation-model";
 import { toPhysicalPath } from "../../src/core/v2/shard-layout";
 import { project } from "../../src/core/v2/state-projection";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
@@ -16,6 +20,285 @@ import {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+const gateTaskExecutionRef = {
+  authorizationId: "auth-1",
+  taskId: "task-1",
+  attemptId: "attempt-1",
+} as const;
+
+const activeGateAuthorization = {
+  authorizationId: "auth-1",
+  sessionId: "session-1",
+  planPath: "plan.md",
+  planFingerprint: { algorithm: "sha256", value: "fingerprint-1" },
+  canonicalSnapshot: {
+    schema: "justice-plan-v1",
+    documentDigest: "document",
+    globalBodyDigest: "body",
+    tasks: [{ taskId: "task-1", title: "Task 1", canonicalBody: "## Task 1", digest: "digest" }],
+  },
+  fingerprintSchema: "justice-plan-v1",
+  approvedAt: "2026-09-18T00:00:00.000Z",
+  status: "active",
+} as unknown as ApprovedPlanBinding;
+
+function taskGateRecords(): readonly PersistedLogRecord[] {
+  const transitions = [
+    ["pending", "authorized"],
+    ["authorized", "in_progress"],
+    ["in_progress", "worker_reported"],
+    ["worker_reported", "evidence_pending"],
+    ["evidence_pending", "review_pending"],
+    ["review_pending", "gate_pending"],
+  ] as const;
+  return [
+    ...transitions.map(([from, to], index) => ({
+      schemaVersion: 1,
+      sequence: index + 1,
+      timestamp: `2026-09-18T00:00:0${index + 1}.000Z`,
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      taskId: "task-1",
+      kind: "task_lifecycle_transition",
+      parentSessionId: "session-1",
+      taskExecutionRef: gateTaskExecutionRef,
+      from,
+      to,
+    })),
+    {
+      schemaVersion: 1,
+      sequence: 7,
+      timestamp: "2026-09-18T00:00:07.000Z",
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      taskId: "task-1",
+      kind: "tool_executed",
+      toolName: "test",
+      callId: "test-call",
+      evidence: {
+        evidenceId: "e-test",
+        kind: "test",
+        sourceClass: "tool_output",
+        provenance: "observed",
+        toolOutputClass: "command_exec",
+        command: "bun test",
+        rawOutput: "pass",
+      },
+    },
+    {
+      schemaVersion: 1,
+      sequence: 8,
+      timestamp: "2026-09-18T00:00:08.000Z",
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      taskId: "task-1",
+      kind: "review_observed",
+      reviewScope: "task-1",
+      items: [],
+      isCompleteSnapshot: true,
+    },
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+function planGateRecords(): readonly PersistedLogRecord[] {
+  const transitions = [
+    ["tasks_pending", "all_tasks_accepted"],
+    ["all_tasks_accepted", "final_review_pending"],
+    ["final_review_pending", "final_gate_pending"],
+  ] as const;
+  return [
+    ...transitions.map(([from, to], index) => ({
+      schemaVersion: 1,
+      sequence: index + 1,
+      timestamp: `2026-09-18T00:01:0${index + 1}.000Z`,
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      kind: "plan_finalization_transition",
+      parentSessionId: "session-1",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      from,
+      to,
+    })),
+    {
+      schemaVersion: 1,
+      sequence: 4,
+      timestamp: "2026-09-18T00:01:04.000Z",
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-handler",
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "final",
+      items: [],
+      isCompleteSnapshot: true,
+    },
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+function taskGateContext(): Extract<GatePendingAttemptContext, { readonly scope: "task" }> {
+  return {
+    scope: "task",
+    trigger: "task_complete",
+    parentSessionId: "session-1",
+    taskExecutionRef: gateTaskExecutionRef,
+    agentId: "atlas",
+    sessionId: "session-1",
+    writerId: "w-handler",
+  };
+}
+
+function planGateContext(): Extract<GatePendingAttemptContext, { readonly scope: "plan" }> {
+  return {
+    scope: "plan",
+    trigger: "final_review_complete",
+    parentSessionId: "session-1",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    agentId: "atlas",
+    sessionId: "session-1",
+    writerId: "w-handler",
+  };
+}
+
+function gateRule(scope: "task" | "plan") {
+  return scope === "task"
+    ? {
+        id: "required-tests",
+        gateType: "task" as const,
+        trigger: { scope: "task" as const, on: "task_complete" as const },
+        check: { type: "evidence_present" as const, evidenceKind: "test" as const },
+        onViolation: "fail" as const,
+        onMissingEvidence: "fail" as const,
+        enabled: true,
+      }
+    : {
+        id: "review-clean",
+        gateType: "plan" as const,
+        trigger: { scope: "plan" as const, on: "final_review_complete" as const },
+        check: { type: "review_open_items" as const, minimumSeverity: "major" as const },
+        onViolation: "fail" as const,
+        onMissingEvidence: "fail" as const,
+        enabled: true,
+      };
+}
+
+type GateEvaluator = {
+  evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (
+    context: GatePendingAttemptContext,
+  ) => Promise<GatePendingAttemptResult>;
+};
+
+function gateEvaluatorOf(handler: ObservationHandler): GateEvaluator {
+  return (handler as unknown as { gateEvaluator: GateEvaluator }).gateEvaluator;
+}
+
+describe("ObservationHandler gate evaluator integration", () => {
+  it("fails open when GateDecision persistence rejects", async () => {
+    const append = vi.fn(async (_shard: unknown, record: PendingLogRecord): Promise<number> => {
+      if (record.recordType === "decision") throw new Error("decision append failed");
+      return 1;
+    });
+    const handler = new ObservationHandler({
+      logStore: {
+        readAll: async () => taskGateRecords(),
+        append,
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-handler",
+      findAuthorizationById: async () => activeGateAuthorization,
+      gateLoader: { load: async () => [gateRule("task")] },
+    });
+
+    const result = await gateEvaluatorOf(handler).evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(
+      taskGateContext(),
+    );
+
+    expect(result).toEqual({ kind: "blocked", advisory: "gate_decision_append_failed" });
+    expect(append).toHaveBeenCalled();
+  });
+
+  it("persists a task lifecycle transition after a passing GateDecision", async () => {
+    const appended: PendingLogRecord[] = [];
+    const append = vi.fn(async (_shard: unknown, record: PendingLogRecord): Promise<number> => {
+      appended.push(record);
+      return appended.length;
+    });
+    const handler = new ObservationHandler({
+      logStore: {
+        readAll: async () => taskGateRecords(),
+        append,
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-handler",
+      findAuthorizationById: async () => activeGateAuthorization,
+      gateLoader: { load: async () => [gateRule("task")] },
+    });
+
+    const result = await gateEvaluatorOf(handler).evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(
+      taskGateContext(),
+    );
+
+    expect(result).toMatchObject({ kind: "decided", decision: { gateType: "task", verdict: "PASS" } });
+    expect(appended).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordType: "observation",
+          kind: "task_lifecycle_transition",
+          from: "gate_pending",
+          to: "accepted",
+        }),
+      ]),
+    );
+  });
+
+  it("persists a plan lifecycle transition after a passing final GateDecision", async () => {
+    const appended: PendingLogRecord[] = [];
+    const append = vi.fn(async (_shard: unknown, record: PendingLogRecord): Promise<number> => {
+      appended.push(record);
+      return appended.length;
+    });
+    const handler = new ObservationHandler({
+      logStore: {
+        readAll: async () => planGateRecords(),
+        append,
+      } as unknown as ObservationLogStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-handler",
+      findAuthorizationById: async () => activeGateAuthorization,
+      gateLoader: { load: async () => [gateRule("plan")] },
+    });
+
+    const result = await gateEvaluatorOf(handler).evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(
+      planGateContext(),
+    );
+
+    expect(result).toMatchObject({ kind: "decided", decision: { gateType: "plan", verdict: "PASS" } });
+    expect(appended).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          recordType: "observation",
+          kind: "plan_finalization_transition",
+          from: "final_gate_pending",
+          to: "complete",
+        }),
+      ]),
+    );
+  });
+});
 
 describe("ObservationHandler tool observation", () => {
   it("retains the injected taskId across the JusticePlugin PreToolUse and PostToolUse flow", async () => {
