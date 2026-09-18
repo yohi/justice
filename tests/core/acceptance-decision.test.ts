@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createGatePendingAttemptEvaluator,
+  deriveAcceptanceDecision,
+  findCurrentAcceptanceDecision,
   findCurrentGateDecision,
   isCurrentActiveAuthorization,
   sameReviewCorrelation,
@@ -69,6 +71,96 @@ function lifecycleRecords(): readonly PersistedLogRecord[] {
   ] as unknown as readonly PersistedLogRecord[];
 }
 
+function planLifecycleRecords(): readonly PersistedLogRecord[] {
+  const states = [
+    ["tasks_pending", "all_tasks_accepted"],
+    ["all_tasks_accepted", "final_review_pending"],
+    ["final_review_pending", "final_gate_pending"],
+  ] as const;
+  return [
+    ...states.map(([from, to], index) => ({
+      schemaVersion: 1,
+      sequence: index + 1,
+      timestamp: `2026-09-18T00:00:0${index + 1}.000Z`,
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "writer-1",
+      recordType: "observation",
+      kind: "plan_finalization_transition",
+      parentSessionId: "session-1",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      from,
+      to,
+    })),
+    {
+      schemaVersion: 1,
+      sequence: 4,
+      timestamp: "2026-09-18T00:00:04.000Z",
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "writer-1",
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "final",
+      items: [],
+      isCompleteSnapshot: true,
+    },
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+function planGateRecord(verdict: "PASS" | "FAIL" = "PASS"): PersistedLogRecord {
+  return {
+    ...planLifecycleRecords()[0],
+    sequence: 5,
+    recordType: "decision",
+    gateType: "plan",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    verdict,
+    reachableEnforcementLevel: "L1",
+    appliedEnforcementLevel: "L0",
+    ruleResults: [],
+  } as unknown as PersistedLogRecord;
+}
+
+function planAcceptanceRecord(
+  verdict: "complete" | "rework-required" | "blocked" = "complete",
+): PersistedLogRecord {
+  return {
+    ...planLifecycleRecords()[0],
+    sequence: 6,
+    recordType: "decision",
+    kind: "plan-acceptance",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    verdict,
+  } as unknown as PersistedLogRecord;
+}
+
+function planGateEvaluation(
+  verdict: "PASS" | "FAIL" = "PASS",
+): GateEvaluationDependencies["evaluateRules"] {
+  return async () => ({
+    recordType: "decision",
+    gateType: "plan",
+    verdict,
+    reachableEnforcementLevel: "L1",
+    appliedEnforcementLevel: "L0",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    ruleResults: [],
+  });
+}
+
 function context(): Extract<GatePendingAttemptContext, { readonly scope: "task" }> {
   return {
     scope: "task",
@@ -81,10 +173,26 @@ function context(): Extract<GatePendingAttemptContext, { readonly scope: "task" 
   };
 }
 
+function planContext(): Extract<GatePendingAttemptContext, { readonly scope: "plan" }> {
+  return {
+    scope: "plan",
+    trigger: "final_review_complete",
+    parentSessionId: "session-1",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    agentId: "atlas",
+    sessionId: "session-1",
+    writerId: "writer-1",
+  };
+}
+
 function dependencies(
   evaluateRules: GateEvaluationDependencies["evaluateRules"],
   appendTaskLifecycleTransition: GateEvaluationDependencies["appendTaskLifecycleTransition"],
-  findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"] = async () => authorization,
+  findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"] = async () =>
+    authorization,
   appendDecision?: GateEvaluationDependencies["appendDecision"],
   withAuthorizationReviewBoundary: GateEvaluationDependencies["withAuthorizationReviewBoundary"] = async (
     _parentSessionId,
@@ -99,10 +207,12 @@ function dependencies(
     decisions,
     dependencies: {
       readDurableRecords: async () => lifecycleRecords(),
-      appendDecision: appendDecision ?? (async (record) => {
-        decisions.push(record);
-        return { kind: "committed" };
-      }),
+      appendDecision:
+        appendDecision ??
+        (async (record) => {
+          decisions.push(record);
+          return { kind: "committed" };
+        }),
       findAuthorizationById,
       withAuthorizationReviewBoundary,
       appendTaskLifecycleTransition,
@@ -173,7 +283,10 @@ function barrierDependencies(
   };
   const appendRecord = async (record: PendingDecisionRecord) => {
     decisions.push(record);
-    records = [...records, { ...record, sequence: records.length + 1 } as unknown as PersistedLogRecord];
+    records = [
+      ...records,
+      { ...record, sequence: records.length + 1 } as unknown as PersistedLogRecord,
+    ];
     return { kind: "committed" as const };
   };
   return {
@@ -209,6 +322,40 @@ function barrierDependencies(
       },
       appendPlanFinalizationTransition: async () => ({ kind: "committed" }),
       evaluateRules: wrappedEvaluateRules,
+      recordAdvisory: async () => undefined,
+    },
+  };
+}
+
+function planDependencies(
+  records: readonly PersistedLogRecord[],
+  evaluateRules: GateEvaluationDependencies["evaluateRules"],
+  findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"] = async () =>
+    authorization,
+  appendDecision?: GateEvaluationDependencies["appendDecision"],
+  appendPlanFinalizationTransition: GateEvaluationDependencies["appendPlanFinalizationTransition"] = async () => ({
+    kind: "committed",
+  }),
+): {
+  readonly dependencies: GateEvaluationDependencies;
+  readonly decisions: PendingDecisionRecord[];
+} {
+  const decisions: PendingDecisionRecord[] = [];
+  return {
+    decisions,
+    dependencies: {
+      readDurableRecords: async () => records,
+      appendDecision:
+        appendDecision ??
+        (async (record) => {
+          decisions.push(record);
+          return { kind: "committed" };
+        }),
+      findAuthorizationById,
+      withAuthorizationReviewBoundary: async (_parentSessionId, operation) => operation(),
+      appendTaskLifecycleTransition: async () => ({ kind: "committed" }),
+      appendPlanFinalizationTransition,
+      evaluateRules,
       recordAdvisory: async () => undefined,
     },
   };
@@ -334,7 +481,9 @@ describe("createGatePendingAttemptEvaluator", () => {
 
     const results = await Promise.all([first, second]);
     expect(results.filter((result) => result.kind === "decided")).toHaveLength(1);
-    expect(decisions.filter((record) => "kind" in record && record.kind === "task-acceptance")).toHaveLength(1);
+    expect(
+      decisions.filter((record) => "kind" in record && record.kind === "task-acceptance"),
+    ).toHaveLength(1);
   });
 
   it("coordinates two callers at the public boundary without duplicate decisions", async () => {
@@ -365,23 +514,26 @@ describe("createGatePendingAttemptEvaluator", () => {
     expect(fixture.decisions.filter((record) => "gateType" in record)).toHaveLength(1);
     expect(fixture.decisions.filter((record) => "kind" in record)).toHaveLength(1);
     expect(fixture.lifecycleTransitions).toEqual(["accepted"]);
-    expect(results.some((result) => result.kind === "blocked" && result.advisory.includes("integrity"))).toBe(false);
+    expect(
+      results.some((result) => result.kind === "blocked" && result.advisory.includes("integrity")),
+    ).toBe(false);
   });
 
   it("recovers one acceptance from one durable GateDecision under overlap", async () => {
-    const fixture = barrierDependencies([...
-      lifecycleRecords(),
-      authoritativeGateRecord(),
-    ], async () => ({
-      recordType: "decision",
-      gateType: "task",
-      verdict: "PASS",
-      reachableEnforcementLevel: "L1",
-      appliedEnforcementLevel: "L0",
-      taskId: "task-1",
-      taskExecutionRef: ref,
-      ruleResults: [],
-    }), 2);
+    const fixture = barrierDependencies(
+      [...lifecycleRecords(), authoritativeGateRecord()],
+      async () => ({
+        recordType: "decision",
+        gateType: "task",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        taskId: "task-1",
+        taskExecutionRef: ref,
+        ruleResults: [],
+      }),
+      2,
+    );
     const evaluator = createGatePendingAttemptEvaluator(fixture.dependencies);
     const first = evaluator.evaluateGatePendingAttempt(context());
     const second = evaluator.evaluateGatePendingAttempt(context());
@@ -435,7 +587,10 @@ describe("createGatePendingAttemptEvaluator", () => {
     },
     {
       name: "insufficient evidence",
-      outcome: (async () => ({ kind: "insufficient_evidence", reason: "missing evidence" as const })) as GateEvaluationDependencies["evaluateRules"],
+      outcome: (async () => ({
+        kind: "insufficient_evidence",
+        reason: "missing evidence" as const,
+      })) as GateEvaluationDependencies["evaluateRules"],
     },
   ])("deduplicates blocked AcceptanceDecision for concurrent $name", async ({ outcome }) => {
     const fixture = barrierDependencies(lifecycleRecords(), outcome, 2);
@@ -553,12 +708,299 @@ describe("createGatePendingAttemptEvaluator", () => {
       },
     );
 
-    const result = await createGatePendingAttemptEvaluator(fixture.dependencies).evaluateGatePendingAttempt(
-      context(),
-    );
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(context());
 
     expect(result).toEqual({ kind: "blocked", advisory: "acceptance_append_failed" });
     expect(lifecycle).toEqual([]);
+  });
+
+  it("evaluates a plan final gate and appends plan acceptance", async () => {
+    const lifecycleTransitions: string[] = [];
+    const fixture = planDependencies(
+      planLifecycleRecords(),
+      async () => ({
+        recordType: "decision",
+        gateType: "plan",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        authorizationId: "auth-1",
+        planPath: "plan.md",
+        finalizationAttemptId: "final-1",
+        finalReviewRound: 1,
+        ruleResults: [],
+      }),
+      undefined,
+      undefined,
+      async (input) => {
+        lifecycleTransitions.push(input.to);
+        return { kind: "committed" };
+      },
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result.kind).toBe("decided");
+    expect(fixture.decisions).toHaveLength(2);
+    expect(fixture.decisions[0]).toMatchObject({ gateType: "plan", verdict: "PASS" });
+    expect(fixture.decisions[1]).toMatchObject({
+      kind: "plan-acceptance",
+      verdict: "complete",
+    });
+    expect(lifecycleTransitions).toEqual(["complete"]);
+  });
+
+  it("recovers a plan acceptance from an existing plan GateDecision", async () => {
+    const lifecycleTransitions: string[] = [];
+    const fixture = planDependencies(
+      [...planLifecycleRecords(), planGateRecord()],
+      async () => {
+        throw new Error("evaluateRules should not run when a GateDecision exists");
+      },
+      undefined,
+      undefined,
+      async (input) => {
+        lifecycleTransitions.push(input.to);
+        return { kind: "committed" };
+      },
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result.kind).toBe("decided");
+    expect(fixture.decisions).toHaveLength(1);
+    expect(fixture.decisions[0]).toMatchObject({
+      kind: "plan-acceptance",
+      verdict: "complete",
+    });
+    expect(lifecycleTransitions).toEqual(["complete"]);
+  });
+
+  it("appends a blocked plan acceptance when Gate evaluation is blocked", async () => {
+    const fixture = planDependencies(planLifecycleRecords(), async () => ({
+      kind: "insufficient_evidence",
+      reason: "missing final evidence",
+    }));
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "gate_evaluation_blocked" });
+    expect(fixture.decisions).toHaveLength(1);
+    expect(fixture.decisions[0]).toMatchObject({
+      kind: "plan-acceptance",
+      verdict: "blocked",
+    });
+  });
+
+  it("blocks before appending a plan GateDecision when the append fails", async () => {
+    const fixture = planDependencies(
+      planLifecycleRecords(),
+      planGateEvaluation(),
+      undefined,
+      async () => ({ kind: "failed" }),
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "gate_decision_append_failed" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks before appending a plan GateDecision when authorization becomes inactive", async () => {
+    let lookupCount = 0;
+    const fixture = planDependencies(planLifecycleRecords(), planGateEvaluation(), async () => {
+      lookupCount += 1;
+      return lookupCount < 3
+        ? authorization
+        : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
+    });
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks when recovering plan acceptance cannot be appended", async () => {
+    const fixture = planDependencies(
+      [...planLifecycleRecords(), planGateRecord()],
+      async () => {
+        throw new Error("evaluateRules should not run when a GateDecision exists");
+      },
+      undefined,
+      async () => ({ kind: "failed" }),
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "acceptance_append_failed" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks when recovering plan lifecycle cannot be appended", async () => {
+    const fixture = planDependencies(
+      [...planLifecycleRecords(), planGateRecord()],
+      async () => {
+        throw new Error("evaluateRules should not run when a GateDecision exists");
+      },
+      undefined,
+      undefined,
+      async () => ({ kind: "failed" }),
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "lifecycle_append_failed" });
+    expect(fixture.decisions).toHaveLength(1);
+  });
+
+  it("blocks an existing plan GateDecision when authorization becomes inactive before acceptance", async () => {
+    let lookupCount = 0;
+    const fixture = planDependencies(
+      [...planLifecycleRecords(), planGateRecord()],
+      async () => {
+        throw new Error("evaluateRules should not run when a GateDecision exists");
+      },
+      async () => {
+        lookupCount += 1;
+        return lookupCount < 3
+          ? authorization
+          : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
+      },
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("does not append blocked acceptance when authorization becomes inactive after gate evaluation fails", async () => {
+    let lookupCount = 0;
+    const fixture = planDependencies(
+      planLifecycleRecords(),
+      async () => {
+        throw new Error("gate failed");
+      },
+      async () => {
+        lookupCount += 1;
+        return lookupCount < 3
+          ? authorization
+          : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
+      },
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("does not append blocked acceptance when authorization becomes inactive after a blocked evaluation", async () => {
+    let lookupCount = 0;
+    const fixture = planDependencies(
+      planLifecycleRecords(),
+      async () => ({ kind: "insufficient_evidence", reason: "missing final evidence" }),
+      async () => {
+        lookupCount += 1;
+        return lookupCount < 3
+          ? authorization
+          : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
+      },
+    );
+
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("reports acceptance append failure when blocked acceptance records conflict", async () => {
+    let readCount = 0;
+    const fixture = planDependencies(planLifecycleRecords(), async () => ({
+      kind: "insufficient_evidence",
+      reason: "missing final evidence",
+    }));
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => {
+        readCount += 1;
+        return readCount === 1
+          ? planLifecycleRecords()
+          : [
+              ...planLifecycleRecords(),
+              planAcceptanceRecord(),
+              { ...planAcceptanceRecord(), sequence: 7 },
+            ];
+      },
+    });
+
+    const result = await evaluator.evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "acceptance_append_failed" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("reports acceptance append failure when a failed gate evaluation finds conflicting blocked acceptances", async () => {
+    let readCount = 0;
+    const fixture = planDependencies(planLifecycleRecords(), async () => {
+      throw new Error("gate failed");
+    });
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => {
+        readCount += 1;
+        return readCount === 1
+          ? planLifecycleRecords()
+          : [
+              ...planLifecycleRecords(),
+              planAcceptanceRecord(),
+              { ...planAcceptanceRecord(), sequence: 7 },
+            ];
+      },
+    });
+
+    const result = await evaluator.evaluateGatePendingAttempt(planContext());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "acceptance_append_failed" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("degrades to a blocked result when durable records cannot be read", async () => {
+    const fixture = planDependencies(planLifecycleRecords(), planGateEvaluation());
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => {
+        throw new Error("read failed");
+      },
+    });
+
+    await expect(evaluator.evaluateGatePendingAttempt(planContext())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "gate_evaluation_failed",
+    });
   });
 
   it("appends exactly one blocked acceptance when Gate evaluation is blocked", async () => {
@@ -591,7 +1033,9 @@ describe("createGatePendingAttemptEvaluator", () => {
       async () => ({ kind: "committed" }),
       async () => {
         lookupCount += 1;
-        return lookupCount < 3 ? authorization : { ...authorization, status: "released" } as ApprovedPlanBinding;
+        return lookupCount < 3
+          ? authorization
+          : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
       },
     );
 
@@ -605,6 +1049,20 @@ describe("createGatePendingAttemptEvaluator", () => {
 });
 
 describe("authorization identity", () => {
+  it("fails closed when authorization lookup throws", async () => {
+    const correlation: ReviewCorrelation = {
+      reviewKind: "task-review",
+      reviewRound: 1,
+      taskExecutionRef: ref,
+    };
+
+    await expect(
+      isCurrentActiveAuthorization(correlation, async () => {
+        throw new Error("authorization lookup failed");
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("compares the Final Review fingerprint algorithm and value", async () => {
     const correlation = {
       reviewKind: "final-review",
@@ -615,7 +1073,68 @@ describe("authorization identity", () => {
       finalReviewRound: 1,
     } as unknown as Parameters<typeof isCurrentActiveAuthorization>[0];
 
-    await expect(isCurrentActiveAuthorization(correlation, async () => authorization)).resolves.toBe(false);
+    await expect(
+      isCurrentActiveAuthorization(correlation, async () => authorization),
+    ).resolves.toBe(false);
+  });
+
+  it("derives plan rework acceptance from a failing GateDecision", () => {
+    const gate = {
+      recordType: "decision",
+      gateType: "plan",
+      verdict: "FAIL",
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      ruleResults: [],
+    } satisfies Extract<
+      Parameters<typeof deriveAcceptanceDecision>[0],
+      { readonly gateType: "plan" }
+    >;
+
+    expect(deriveAcceptanceDecision(gate)).toEqual({
+      recordType: "decision",
+      kind: "plan-acceptance",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 1,
+      verdict: "rework-required",
+    });
+  });
+
+  it("reports conflicts among current GateDecision and AcceptanceDecision records", () => {
+    const correlation: ReviewCorrelation = {
+      reviewKind: "task-review",
+      reviewRound: 1,
+      taskExecutionRef: ref,
+    };
+    const firstGate = authoritativeGateRecord();
+    const secondGate = { ...firstGate, sequence: 9 };
+    const firstAcceptance = {
+      ...lifecycleRecords()[0],
+      sequence: 8,
+      recordType: "decision",
+      kind: "task-acceptance",
+      taskId: "task-1",
+      taskExecutionRef: ref,
+      verdict: "accepted",
+    } as unknown as PersistedLogRecord;
+    const secondAcceptance = { ...firstAcceptance, sequence: 10 };
+
+    expect(findCurrentGateDecision([firstGate, secondGate], correlation)).toEqual({
+      kind: "conflict",
+      advisory: "multiple current GateDecision records",
+    });
+    expect(findCurrentAcceptanceDecision([firstAcceptance, secondAcceptance], correlation)).toEqual(
+      {
+        kind: "conflict",
+        advisory: "multiple current AcceptanceDecision records",
+      },
+    );
   });
 
   it("does not treat Final Review correlations with different algorithms as equal", () => {
