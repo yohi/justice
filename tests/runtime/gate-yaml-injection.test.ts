@@ -14,6 +14,7 @@ gates:
   - id: injected
     gateType: task
     trigger:
+      scope: task
       on: task_complete
     check:
       type: invalid_check
@@ -52,6 +53,7 @@ gates:
   - id: required-tests
     gateType: task
     trigger:
+      scope: task
       on: task_complete
     check:
       type: evidence_present
@@ -80,6 +82,7 @@ gates:
   - id: required-tests
     gateType: task
     trigger:
+      scope: task
       on: task_complete
     check:
       type: evidence_present

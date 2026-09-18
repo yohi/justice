@@ -270,7 +270,7 @@ describe("ObservationHandler skill and task summary observation", () => {
     expect(response).toEqual({ action: "proceed" });
     expect(readAll).toHaveBeenCalled();
     expect(projectionCache.read).toHaveBeenCalled();
-    expect(gateLoader.load).toHaveBeenCalled();
+    expect(gateLoader.load).not.toHaveBeenCalled();
   });
 
   it("orders task completion observation, review, projection, and gate evaluation", async () => {

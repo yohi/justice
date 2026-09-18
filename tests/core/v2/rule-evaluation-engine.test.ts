@@ -26,10 +26,12 @@ type GateInput = {
 };
 
 const BASE_CONTEXT = {
+  scope: "task",
   trigger: "task_complete",
-  taskId: "task-1",
+  taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
   agentId: "atlas",
   sessionId: "session-1",
+  writerId: "writer-1",
   reviewScope: [],
 } satisfies GateContext;
 
@@ -89,7 +91,7 @@ function gate(input: GateInput): GateRule {
   return {
     id: input.id,
     gateType: "task",
-    trigger: { on: input.trigger ?? "task_complete" },
+    trigger: { scope: "task", on: input.trigger ?? "task_complete" },
     check: input.check,
     onViolation: input.onViolation ?? "fail",
     onMissingEvidence: input.onMissingEvidence ?? "warn",
@@ -213,19 +215,26 @@ describe("evaluate", () => {
     });
   });
 
-  it("skips task gate evaluation when taskId is undefined", () => {
+  it("evaluates task gate evaluation with an execution reference", () => {
     const result = evaluate(
       [gate({ id: "tests", check: { type: "evidence_present", evidenceKind: "test" } })],
       [],
       {
+        scope: "task",
         trigger: "task_complete",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
         agentId: "atlas",
         sessionId: "session-1",
+        writerId: "writer-1",
         reviewScope: [],
       },
     );
 
-    expect(result).toEqual({ verdict: "SKIP", reason: "no taskId provided" });
+    expect(result).toMatchObject({ verdict: "WARN" });
   });
 
   it("evaluates tool_observed after the caller resolves an active task", () => {

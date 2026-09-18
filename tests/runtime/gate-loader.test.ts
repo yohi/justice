@@ -13,7 +13,7 @@ gates:
   - id: required-tests
     description: "タスク完了前にテストが pass していること"
     gateType: task
-    trigger: { on: task_complete }
+    trigger: { scope: task, on: task_complete }
     check: { type: evidence_outcome, evidenceKind: test, requireOutcome: pass }
     onViolation: fail
     onMissingEvidence: warn
@@ -28,7 +28,7 @@ gates:
   - id: lint-clean
     description: "タスク完了前に lint が pass していること"
     gateType: task
-    trigger: { on: task_complete }
+    trigger: { scope: task, on: task_complete }
     check: { type: evidence_outcome, evidenceKind: lint, requireOutcome: pass }
     onViolation: warn
     onMissingEvidence: warn
@@ -42,7 +42,7 @@ authority: human_approved
 gates:
   - id: required-tests
     gateType: task
-    trigger: { on: task_complete }
+    trigger: { scope: task, on: task_complete }
     check: { type: evidence_outcome, evidenceKind: test, requireOutcome: pass }
     onViolation: warn
     onMissingEvidence: warn
@@ -153,7 +153,7 @@ describe("mergeWithDefaults", () => {
       id: "required-tests",
       description: "タスク完了前にテストが pass していること",
       gateType: "task",
-      trigger: { on: "task_complete" },
+      trigger: { scope: "task", on: "task_complete" },
       check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
       onViolation: "fail",
       onMissingEvidence: "warn",
@@ -170,7 +170,7 @@ describe("mergeWithDefaults", () => {
     const custom: GateRule = {
       id: "lint-clean",
       gateType: "task",
-      trigger: { on: "task_complete" },
+      trigger: { scope: "task", on: "task_complete" },
       check: { type: "evidence_outcome", evidenceKind: "lint", requireOutcome: "pass" },
       onViolation: "warn",
       onMissingEvidence: "warn",
@@ -187,7 +187,7 @@ describe("mergeWithDefaults", () => {
     const disabled: GateRule = {
       id: "required-tests",
       gateType: "task",
-      trigger: { on: "task_complete" },
+      trigger: { scope: "task", on: "task_complete" },
       check: { type: "evidence_outcome", evidenceKind: "test", requireOutcome: "pass" },
       onViolation: "warn",
       onMissingEvidence: "warn",
