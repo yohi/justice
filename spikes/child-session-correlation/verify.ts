@@ -272,13 +272,13 @@ function createMockModelServer(fixturePath: string) {
     });
   };
 
-  const jsonCompletion = (choices: Record<string, unknown>): Response =>
+  const jsonCompletion = (choice: Record<string, unknown>): Response =>
     new Response(
       JSON.stringify({
         id: `chatcmpl-${Math.random().toString(36).slice(2)}`,
         object: "chat.completion",
         model: "spike-model",
-        choices,
+        choices: [choice],
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }),
       { headers: { "content-type": "application/json" } },
@@ -638,11 +638,13 @@ async function main(): Promise<void> {
     };
     progress("waiting for opencode serve to report its bound port");
     let opencodePort = 0;
+    let baseUrl = "";
     const listenDeadline = Date.now() + READY_TIMEOUT_MS;
     while (Date.now() < listenDeadline) {
       const match = serveLog.text.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
       if (match?.[1]) {
         opencodePort = Number(match[1]);
+        baseUrl = `http://127.0.0.1:${opencodePort}`;
         break;
       }
       await Bun.sleep(100);
@@ -650,7 +652,6 @@ async function main(): Promise<void> {
     if (opencodePort === 0) {
       await reportServeFailure(`opencode serve did not report a bound port within ${READY_TIMEOUT_MS}ms`);
     } else {
-      const baseUrl = `http://127.0.0.1:${opencodePort}`;
       progress(`opencode serve listening on 127.0.0.1:${opencodePort}; probing readiness`);
       if (!(await waitForServer(baseUrl))) {
         await reportServeFailure(`opencode serve did not become ready within ${READY_TIMEOUT_MS}ms`);
@@ -781,14 +782,16 @@ async function main(): Promise<void> {
       }
 
       const observation = childObservationFromEvents(busEvents, childSessionId);
-      try {
-        const childRes = await fetch(`${baseUrl}/session/${childSessionId}/message`, { signal: AbortSignal.timeout(10_000) });
-        if (childRes.ok) {
-          const childMessages = (await childRes.json()) as unknown[];
-          observation.restMessages = childMessages.length;
+      if (baseUrl.length > 0) {
+        try {
+          const childRes = await fetch(`${baseUrl}/session/${childSessionId}/message`, { signal: AbortSignal.timeout(10_000) });
+          if (childRes.ok) {
+            const childMessages = (await childRes.json()) as unknown[];
+            observation.restMessages = childMessages.length;
+          }
+        } catch {
+          // REST corroboration is best-effort
         }
-      } catch {
-        // REST corroboration is best-effort
       }
       if (observation.messageEvents === 0 && observation.restMessages === 0) {
         fail(`no child-session message observations found for child session ${childSessionId}`);
