@@ -181,8 +181,10 @@ The observation plugin persists **only** the correlation envelope, nothing else:
 The mock model endpoint persists nothing: requests are matched and answered
 entirely in memory (message bodies and tool schemas are never written to
 disk). Raw SSE frames are parsed in memory and never written to disk. The
-only file the spike ever writes inside its temp workspace is the observation
-plugin's correlation envelope; the temp workspace itself is deleted on every
+only runtime observation data the spike persists is the observation plugin's
+correlation envelope. The temp workspace also contains one-off setup
+artifacts (`opencode.json`, the plugin module, a small fixture, and the
+OpenCode data directories) which are deleted with the workspace on every
 exit path.
 
 ## Notes and limits observed on this runtime
