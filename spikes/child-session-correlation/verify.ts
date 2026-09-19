@@ -27,7 +27,7 @@
  *
  * Usage: bun spikes/child-session-correlation/verify.ts
  */
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,13 +141,6 @@ function scrubDeep<T>(value: T, tmpRoot: string): T {
   return value;
 }
 
-async function getFreePort(): Promise<number> {
-  const probe = Bun.serve({ port: 0, fetch: () => new Response("ok") });
-  const port = probe.port;
-  probe.stop(true);
-  return port;
-}
-
 // ---------------------------------------------------------------------------
 // Scripted model endpoint (deterministic, no external providers or keys)
 // ---------------------------------------------------------------------------
@@ -199,14 +192,7 @@ type Decision =
   | { kind: "text"; text: string }
   | { kind: "tool_call"; id: string; name: string; args: Record<string, unknown> };
 
-function createMockModelServer(port: number, fixturePath: string, requestLogPath: string) {
-  const appendRequest = (line: string): void => {
-    try {
-      appendFileSync(requestLogPath, `${line}\n`);
-    } catch {
-      // diagnostics only
-    }
-  };
+function createMockModelServer(fixturePath: string) {
 
   const decide = (body: ChatRequest): Decision => {
     const text = firstUserText(body.messages);
@@ -299,7 +285,7 @@ function createMockModelServer(port: number, fixturePath: string, requestLogPath
     );
 
   return Bun.serve({
-    port,
+    port: 0,
     async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname !== "/v1/chat/completions") {
@@ -307,16 +293,6 @@ function createMockModelServer(port: number, fixturePath: string, requestLogPath
       }
       const body = (await req.json()) as ChatRequest;
       const decision = decide(body);
-      // Minimal request digest only — model request content (messages, tools)
-      // is never persisted; correlation needs no message bodies.
-      appendRequest(
-        JSON.stringify({
-          stream: body.stream === true,
-          thread: firstUserText(body.messages).includes(PARENT_MARKER) ? "parent" : "child",
-          taskCallsSoFar: countTaskToolCalls(body.messages),
-          decision: decision.kind === "text" ? "text" : `tool_call:${decision.name}`,
-        }),
-      );
       if (!body.stream) {
         if (decision.kind === "text") {
           return jsonCompletion({ index: 0, message: { role: "assistant", content: decision.text }, finish_reason: "stop" });
@@ -547,7 +523,6 @@ async function main(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
 
   const hookLogPath = join(outDir, "hook-log.jsonl");
-  const requestLogPath = join(outDir, "mock-requests.jsonl");
   const pluginPath = join(outDir, "justice-correlation-spike-plugin.js");
   const fixturePath = join(projectDir, "spike-fixture.txt");
 
@@ -561,8 +536,10 @@ async function main(): Promise<void> {
     ].join("\n"),
   );
 
-  const mockPort = await getFreePort();
-  const mock = createMockModelServer(mockPort, fixturePath, requestLogPath);
+  // The mock binds port 0 and exposes its actual bound port — no release-then-
+  // rebind window, so no other process can race us for the port.
+  const mock = createMockModelServer(fixturePath);
+  const mockPort = mock.port;
 
   writeFileSync(
     join(projectDir, "opencode.json"),
@@ -614,11 +591,10 @@ async function main(): Promise<void> {
     ),
   );
 
-  // Bind port 0 to have the OS assign a genuinely free port for opencode serve;
-  // a fixed random range can collide with other listeners and stall readiness.
-  const opencodePort = await getFreePort();
-  const baseUrl = `http://127.0.0.1:${opencodePort}`;
-  const server = Bun.spawn(["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(opencodePort)], {
+  // `--port 0` lets the runtime bind an OS-assigned port and report the
+  // actual bound port on its listening line — no release-then-rebind window,
+  // so no other process can race us for the port (TOCTOU-free).
+  const server = Bun.spawn(["opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"], {
     cwd: projectDir,
     env: {
       ...process.env,
@@ -630,7 +606,7 @@ async function main(): Promise<void> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  progress(`spawned opencode serve on 127.0.0.1:${opencodePort}`);
+  progress("spawned opencode serve with --port 0 (runtime reports its bound port)");
   // Drain serve output incrementally in memory for BLOCKED diagnostics only
   // (never persisted); a running server never closes its streams, so a
   // whole-stream text() read would never resolve.
@@ -655,12 +631,29 @@ async function main(): Promise<void> {
 
   let exitCode = 1;
   try {
-    progress("waiting for opencode serve readiness");
-    if (!(await waitForServer(baseUrl))) {
-      fail(`opencode serve did not become ready within ${READY_TIMEOUT_MS}ms`);
+    const reportServeFailure = async (why: string): Promise<void> => {
       const exited = await Promise.race([server.exited, Bun.sleep(1_000).then(() => "still-running")]);
       const tail = scrub(serveLog.text.trim(), tmpRoot, 400);
-      fail(`serve diagnostics: exit=${typeof exited === "number" ? exited : "running"} output="${tail || "<empty>"}"`);
+      fail(`${why} (exit=${typeof exited === "number" ? exited : "running"}, output="${tail || "<empty>"}")`);
+    };
+    progress("waiting for opencode serve to report its bound port");
+    let opencodePort = 0;
+    const listenDeadline = Date.now() + READY_TIMEOUT_MS;
+    while (Date.now() < listenDeadline) {
+      const match = serveLog.text.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
+      if (match?.[1]) {
+        opencodePort = Number(match[1]);
+        break;
+      }
+      await Bun.sleep(100);
+    }
+    if (opencodePort === 0) {
+      await reportServeFailure(`opencode serve did not report a bound port within ${READY_TIMEOUT_MS}ms`);
+    } else {
+      const baseUrl = `http://127.0.0.1:${opencodePort}`;
+      progress(`opencode serve listening on 127.0.0.1:${opencodePort}; probing readiness`);
+      if (!(await waitForServer(baseUrl))) {
+        await reportServeFailure(`opencode serve did not become ready within ${READY_TIMEOUT_MS}ms`);
     } else {
       progress("serve ready");
       // Start the SSE collector only after the server is accepting requests,
@@ -719,6 +712,7 @@ async function main(): Promise<void> {
           if (seen) break;
           await Bun.sleep(200);
         }
+      }
       }
     }
 

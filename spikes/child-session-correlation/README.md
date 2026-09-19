@@ -151,9 +151,12 @@ dispatches resolved to distinct child sessions.
      script instructs the parent model to call `task` twice (`subagent_type:
      "sp-review"`, then `"sp-final-review"`) and gives the `sp-review` child a
      `read` tool call so a child tool part is observable.
-3. Starts `opencode serve` with isolated `XDG_DATA_HOME`/`XDG_CONFIG_HOME`,
-   subscribes to `GET /event` (SSE, parsed in memory only), creates a session
-   via `POST /session`, and drives the turn via `POST /session/{id}/message`.
+3. Starts `opencode serve` with `--port 0` — the runtime binds an OS-assigned
+   port and reports it on its listening line, so no fixed port can be raced
+   away between reservation and bind — together with isolated
+   `XDG_DATA_HOME`/`XDG_CONFIG_HOME`; then it subscribes to `GET /event` (SSE,
+   parsed in memory only), creates a session via `POST /session`, and drives
+   the turn via `POST /session/{id}/message`.
 4. Correlates strictly from the payloads above, prints a JSON verdict with
    both redacted traces, and exits `0` only when both traces are complete.
 5. On `BLOCKED` (including an unreadable observation log), the verdict embeds
@@ -175,10 +178,12 @@ The observation plugin persists **only** the correlation envelope, nothing else:
   `{ kind, id, type, part: { sessionID, type, callID, tool, status } }` for
   `message.part.updated`.
 
-The mock model endpoint logs only a per-request digest (`stream`, thread kind,
-task-call count, decision kind) — never message bodies or tool schemas. Raw
-SSE frames are parsed in memory and never written to disk. The temp workspace
-is deleted on every exit path.
+The mock model endpoint persists nothing: requests are matched and answered
+entirely in memory (message bodies and tool schemas are never written to
+disk). Raw SSE frames are parsed in memory and never written to disk. The
+only file the spike ever writes inside its temp workspace is the observation
+plugin's correlation envelope; the temp workspace itself is deleted on every
+exit path.
 
 ## Notes and limits observed on this runtime
 
