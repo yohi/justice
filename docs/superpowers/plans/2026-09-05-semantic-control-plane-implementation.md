@@ -467,7 +467,7 @@ error taxonomy, validator registry, or separate authorization persistence implem
 | save 成功 + post-save reread 成功 + own fresh ID が loser | saved | latest durable active winner、なければ `null` を渡す | `null` | requested loser plan を publish / arm しない |
 | save 成功 + post-save reread 失敗 | saved | `null` を渡す | `null` | stale positive cache を clear し、requested plan を arm しない |
 
-- [ ] **Step 1: Write the failing persistence and hydration tests**
+- [x] **Step 1: Write the failing persistence and hydration tests**
 
 First extend `tests/core/atomic-persistence.test.ts`. Keep the existing default corrupted-JSON
 assertion unchanged so the generic persistence contract remains executable. Add focused strict-mode
@@ -1421,7 +1421,7 @@ the deterministic `plan_superseded` result of the real merge/retry path. Cache a
 core Store test. The hook integration fixture below constructs the same `AuthorizationStore`, the same shared
 boundary, and the PlanBridge that receives that Store explicitly.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run:
 
@@ -1465,7 +1465,7 @@ path. The Task 2.2 `Files` list above, this RED/GREEN command, and the Step 5 `g
 the `Files` list and `git add` scope contain the same eight paths, while the RED/GREEN command contains the same
 four test paths. Task 2.1 modules are consumed dependencies and are not added to the Task 2.2 commit.
 
-- [ ] **Step 3: Implement the authorization store**
+- [x] **Step 3: Implement the authorization store**
 
 First add the smallest strict-read opt-in to `src/core/atomic-persistence.ts`. Extend
 `AtomicPersistenceConfig<T>` with exactly one optional setting:
@@ -2342,7 +2342,7 @@ function invalidateSuperseded(
 }
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run:
 
@@ -2381,7 +2381,7 @@ each startup test names the corresponding Design §5.2 contract and Task 2.1 can
 the Task 2.2 `Files` list and `git add` scope contain the same eight paths, and the RED/GREEN command contains the
 same four test paths shown in this task.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add \
@@ -2547,7 +2547,7 @@ The two call sites are the `evidence_pending → review_pending` append in
 `requestCurrentTaskReview` and the `all_tasks_accepted → final_review_pending` append in
 `advanceFinalizationAfterAllTasksAccepted`.
 
-- [ ] **Step 1: Write the failing replay tests**
+- [x] **Step 1: Write the failing replay tests**
 
 ```ts
 it("keeps state for duplicate and illegal transitions", () => {
@@ -2717,7 +2717,7 @@ it("rotates the finalization identity only for actual final rework", async () =>
 });
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts`
 
@@ -2729,7 +2729,7 @@ inside Task 3.1. Preserve the existing task-Gate compatibility projection under
 ignore AcceptanceDecision and plan-scoped GateDecision records, while Task 3.2 uses its own
 current-identity decision lookups for authoritative Gate/Acceptance recovery.
 
-- [ ] **Step 3: Implement non-throwing transition outcomes**
+- [x] **Step 3: Implement non-throwing transition outcomes**
 
 Encode every lifecycle record in `observation-model.ts` with its task execution reference or finalization identity. Make duplicate identity leave state unchanged. Make illegal transitions leave state unchanged and emit an advisory record in the projection result. Do not throw from the projector for either case. Derive `all_tasks_accepted` from `ApprovedPlanBinding.canonicalSnapshot.tasks.map(task => task.taskId)`.
 
@@ -3053,13 +3053,13 @@ not construct a Review Dispatch state or a second authorization boundary. The Ta
 fixture above must exercise this actual `ObservationHandler.handlePostToolUse()` route rather than
 passing an ad-hoc dependency directly to a lifecycle helper.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/task-lifecycle.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/session-state-provider.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts tests/core/task-lifecycle.test.ts tests/core/v2/state-projection.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/core/session-state-provider.test.ts
@@ -3281,7 +3281,7 @@ All log reads, decision appends, Authorization lookups, lifecycle appends, and a
 task are injected ports supplied by `ObservationHandler` / `JusticePlugin`; `src/core` does not import
 runtime adapters, persistence implementations, or notifier implementations directly.
 
-- [ ] **Step 1: Write the failing task/Final Gate and recovery tests**
+- [x] **Step 1: Write the failing task/Final Gate and recovery tests**
 
 The test setup constructs one `gateEvaluator` with the existing log, Authorization, lifecycle, rule, and
 advisory mocks, then destructures its returned public and within-boundary entries; no test calls an
@@ -3737,14 +3737,14 @@ The tests must use only existing dependency ports and the factory's returned eva
 test-only production DI or expose queue internals. They must prove overlap with a barrier
 and controlled promises, not claim concurrency idempotency from sequential invocations.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts`
 
 Expected: FAIL because plan-scoped Gate selection, the four durable decision variants,
 restart validation, and Gate/Acceptance recovery are not implemented.
 
-- [ ] **Step 3: Implement scoped Gate selection**
+- [x] **Step 3: Implement scoped Gate selection**
 
 Define `GateRule.gateType` as `"task" | "plan"`. Define task triggers as `task_complete | tool_observed` and the plan trigger as `final_review_complete`. `evaluateGatePendingAttempt` must first read the durable projection and refuse to invoke `evaluate` unless its current lifecycle is `gate_pending` or `final_gate_pending` and the matching terminal review record is projected. Gate and Acceptance lookups are pure queries over the durable `PersistedLogRecord` stream: `findCurrentGateDecision` and `findCurrentAcceptanceDecision` scan projection order and match the complete task execution identity or finalization identity, so an old attempt or old final-review round is never reused. They do not add methods to `ProjectedLifecycle` and do not infer decisions from lifecycle state. The evaluator must inspect the same current identity for both existing durable decisions: an existing GateDecision and AcceptanceDecision are reused as the authoritative result and neither record is appended again; a missing GateDecision is evaluated and appended once; a GateDecision with no derived AcceptanceDecision derives and appends that decision once. Before invocation, resolve the correlation's authorizationId from the task execution ref or finalization identity and require the durable `AuthorizationStore` binding to be current `active`; released, invalidated, missing, unreadable, conflict-diverted, or otherwise uncertain bindings return a blocked / stale advisory without a GateDecision. After evaluation and immediately before the GateDecision-derived AcceptanceDecision append, re-read that durable binding and apply the same guard. Append a current-attempt GateDecision before deriving and durably recording the matching AcceptanceDecision. Map PASS to `accepted` / `complete`, WARN and FAIL to `rework_required` / `final_rework_required`, and errors, SKIP, or insufficient evidence to blocked while preserving `gate_pending` / `final_gate_pending`. A terminality race after Gate evaluation must not append `accepted` or `complete`.
 
@@ -4993,13 +4993,13 @@ be rejected; and every same-identity concurrent test to produce exactly one Gate
 AcceptanceDecision without an integrity conflict. Sequential recovery remains idempotent, and restart
 reconstructs state only from durable records.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/acceptance-decision.ts src/core/v2/decision-model.ts src/core/v2/gate-definition.ts src/core/v2/default-gates.ts src/core/v2/gate-context.ts src/core/v2/rule-evaluation-engine.ts src/core/v2/state-projection.ts src/core/v2/persistence-redaction.ts src/runtime/validation.ts src/hooks/observation-handler.ts src/runtime/justice-tools.ts tests/core/v2/rule-evaluation-engine.test.ts tests/core/v2/gate-yaml-parser.test.ts tests/core/v2/gate-definition.test.ts tests/core/v2/default-gates.test.ts tests/core/acceptance-decision.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/runtime/gate-loader.test.ts tests/runtime/gate-yaml-injection.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/rule-engine-determinism.test.ts tests/core/evidence-provenance.test.ts tests/core/v2/gate-provenance-gating.test.ts tests/runtime/justice-gate-tool.test.ts tests/core/observation-log-replay.test.ts tests/core/record-reference-resolution.test.ts tests/runtime/observation-log-integrity.test.ts tests/hooks/observation-handler-tool.test.ts tests/hooks/observation-handler-workflow-bootstrap.test.ts
@@ -5023,21 +5023,21 @@ GIT_MASTER=1 git commit -m "feat: Final Gateをplan scopeで評価"
 
 **Produces:** A committed spike report containing the exact runtime event/API, field paths, parent `callId`, child `sessionId`, and evidence for both `sp-review` and `sp-final-review`. This task does not add production adapter behavior or an adapter regression test.
 
-- [ ] **Step 1: Implement a runtime-only correlation probe**
+- [x] **Step 1: Implement a runtime-only correlation probe**
 
 Create `verify.ts` as a Bun-native TypeScript executable. It must run one `sp-review` and one `sp-final-review` dispatch against the installed runtime, collect only the runtime hook/event/API payloads needed for correlation, and fail non-zero when either trace has no non-empty runtime-provided parent call ID or child session ID. It must not infer either identity from prompt text, category, artifact path, or worker self-report.
 
-- [ ] **Step 2: Run the runtime spike**
+- [x] **Step 2: Run the runtime spike**
 
 Run: `devcontainer exec --workspace-folder . bun spikes/child-session-correlation/verify.ts`
 
 Expected: the report contains one task-review trace and one final-review trace, each with a non-empty parent call ID and child session ID.
 
-- [ ] **Step 3: Record the runtime contract and apply the exit condition**
+- [x] **Step 3: Record the runtime contract and apply the exit condition**
 
 Record the observed event/API name, exact parent-call field path, exact child-session field path, and the two redacted traces in `README.md`. If either trace lacks a runtime-provided child session ID correlated to its parent call ID, record the raw event shape, mark Phase 3 as BLOCKED, and stop before Task 3.4. Do not substitute artifact-path, category, prompt, or worker self-report for child-session evidence.
 
-- [ ] **Step 4: Commit after approval**
+- [x] **Step 4: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add spikes/child-session-correlation/verify.ts spikes/child-session-correlation/README.md
@@ -5369,7 +5369,7 @@ The Rust crate must use the exact manifest above. `build.rs` must call `napi_bui
 bunx napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js
 ```
 
-- [ ] **Step 1: Write the failing native-provider tests**
+- [x] **Step 1: Write the failing native-provider tests**
 
 Create `tests/runtime/linux-review-artifact-provider.test.ts` with the complete supported-path and
 publication contract below. The helper builds only a trusted `ReviewArtifactReservation` from the
@@ -5836,7 +5836,7 @@ helper error, malformed Markdown materialization, or skipped module is an invali
 fixture, unsupported matcher, addon setup failure, or skipped supported-platform suite is an invalid RED and
 must be fixed before implementation.
 
-- [ ] **Step 3: Implement the production provider**
+- [x] **Step 3: Implement the production provider**
 
 Implement the following files exactly. No pathname fallback, `bun:ffi`, generic storage abstraction, or
 second provider is allowed.
