@@ -43,4 +43,4 @@ RUN rustup toolchain install 1.85.1 \
     && rustup default 1.85.1 \
     && test "$(rustup show active-toolchain | cut -d' ' -f1)" = "1.85.1-x86_64-unknown-linux-gnu"
 
-USER root
+USER $USERNAME
