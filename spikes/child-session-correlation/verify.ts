@@ -45,39 +45,48 @@ const PARENT_PROMPT = `${PARENT_MARKER}: dispatch the two spike review workers i
 const CHILD_PROMPT_A = `${CHILD_A_MARKER}: inspect the fixture, then reply with DONE only.`;
 const CHILD_PROMPT_B = "SPIKE-CHILD-B: reply with DONE only.";
 
-const READY_TIMEOUT_MS = 30_000;
+// The server binds its port early (before init finishes), so a readiness fetch
+ // can connect but never answer; each attempt is individually timed out.
+const READY_TIMEOUT_MS = 60_000;
+const READY_FETCH_TIMEOUT_MS = 2_000;
 const TURN_TIMEOUT_MS = 240_000;
 
 type Verdict = "OK" | "BLOCKED";
 
-interface ToolExecuteBeforePayload {
+/**
+ * Correlation-only observation records. The spike persists just the
+ * runtime-provided fields needed to prove the parent-call -> child-session
+ * relationship; full tool args, tool output, model requests, and raw event
+ * payloads are never written to disk.
+ */
+interface ToolExecuteBeforeRecord {
+  kind: "tool.execute.before";
   tool: string;
   sessionID: string;
   callID: string;
-  args: Record<string, unknown>;
+  // The runtime passes tool args via the hook's output parameter (output.args);
+  // only the worker routing field is retained for the trace label.
+  subagent_type?: unknown;
 }
 
-interface ToolExecuteAfterPayload {
+interface ToolExecuteAfterRecord {
+  kind: "tool.execute.after";
   tool: string;
   sessionID: string;
   callID: string;
-  args: Record<string, unknown>;
-  title: string;
-  output: string;
-  metadata: Record<string, unknown>;
+  metadata?: { parentSessionId?: unknown; sessionId?: unknown };
 }
 
-interface HookRecord {
-  kind: "tool.execute.before" | "tool.execute.after" | "event";
-  tool?: string;
-  sessionID?: string;
-  callID?: string;
-  args?: Record<string, unknown>;
-  title?: string;
-  output?: string;
-  metadata?: Record<string, unknown>;
-  event?: { id?: string; type?: string; properties?: Record<string, unknown> };
+interface EventRecord {
+  kind: "event";
+  id?: unknown;
+  type?: unknown;
+  session?: { id?: unknown; parentID?: unknown };
+  sessionID?: unknown;
+  part?: { sessionID?: unknown; type?: unknown; callID?: unknown; tool?: unknown; status?: unknown };
 }
+
+type HookRecord = ToolExecuteBeforeRecord | ToolExecuteAfterRecord | EventRecord;
 
 interface BusEvent {
   id?: string;
@@ -108,6 +117,10 @@ const blockers: string[] = [];
 const fail = (message: string): void => {
   blockers.push(message);
 };
+// Timestamped stderr progress trace (diagnostics only; never parsed).
+const progress = (message: string): void => {
+  console.error(`[spike ${new Date().toISOString()}] ${message}`);
+};
 
 function scrub(value: string, tmpRoot: string, maxLen = 120): string {
   const replaced = value.split(tmpRoot).join("<tmp>");
@@ -133,11 +146,6 @@ async function getFreePort(): Promise<number> {
   const port = probe.port;
   probe.stop(true);
   return port;
-}
-
-function pickOpencodePort(): number {
-  // opencode receives an explicit --port; pick a random port in a private range.
-  return Math.floor(Math.random() * 20_000) + 20_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +306,17 @@ function createMockModelServer(port: number, fixturePath: string, requestLogPath
         return new Response(JSON.stringify({ path: url.pathname, note: "spike-mock-404" }), { status: 404 });
       }
       const body = (await req.json()) as ChatRequest;
-      appendRequest(JSON.stringify({ stream: body.stream, tools: body.tools?.map((t) => t.function?.name), messages: body.messages }));
       const decision = decide(body);
+      // Minimal request digest only — model request content (messages, tools)
+      // is never persisted; correlation needs no message bodies.
+      appendRequest(
+        JSON.stringify({
+          stream: body.stream === true,
+          thread: firstUserText(body.messages).includes(PARENT_MARKER) ? "parent" : "child",
+          taskCallsSoFar: countTaskToolCalls(body.messages),
+          decision: decision.kind === "text" ? "text" : `tool_call:${decision.name}`,
+        }),
+      );
       if (!body.stream) {
         if (decision.kind === "text") {
           return jsonCompletion({ index: 0, message: { role: "assistant", content: decision.text }, finish_reason: "stop" });
@@ -331,11 +348,41 @@ const append = (record) => {
   }
 };
 export const JusticeChildSessionCorrelationSpikePlugin = async () => ({
+  // Correlation-only persistence: record just the runtime-provided fields
+  // needed to prove the parent-call -> child-session relationship. Full tool
+  // args, tool output, model requests, and raw event payloads are never
+  // written to disk.
   event: async ({ event }) => {
-    append({ kind: "event", event: { id: event.id, type: event.type, properties: event.properties } });
+    const type = event?.type;
+    if (type === "session.created" || type === "session.updated" || type === "session.deleted") {
+      const info = event?.properties?.info ?? {};
+      append({ kind: "event", id: event?.id, type, session: { id: info.id, parentID: info.parentID } });
+      return;
+    }
+    if (type === "message.updated") {
+      append({ kind: "event", id: event?.id, type, sessionID: event?.properties?.sessionID });
+      return;
+    }
+    if (type === "message.part.updated") {
+      const part = event?.properties?.part ?? {};
+      append({
+        kind: "event",
+        id: event?.id,
+        type,
+        part: { sessionID: part.sessionID, type: part.type, callID: part.callID, tool: part.tool, status: part.state?.status },
+      });
+    }
   },
   "tool.execute.before": async (input, output) => {
-    append({ kind: "tool.execute.before", tool: input.tool, sessionID: input.sessionID, callID: input.callID, args: output.args });
+    // The runtime passes tool args via the hook's output parameter (output.args);
+    // only the worker routing field is retained for the trace label.
+    append({
+      kind: "tool.execute.before",
+      tool: input.tool,
+      sessionID: input.sessionID,
+      callID: input.callID,
+      subagent_type: output?.args?.subagent_type,
+    });
   },
   "tool.execute.after": async (input, output) => {
     append({
@@ -343,10 +390,7 @@ export const JusticeChildSessionCorrelationSpikePlugin = async () => ({
       tool: input.tool,
       sessionID: input.sessionID,
       callID: input.callID,
-      args: input.args,
-      title: output.title,
-      output: output.output,
-      metadata: output.metadata,
+      metadata: { parentSessionId: output?.metadata?.parentSessionId, sessionId: output?.metadata?.sessionId },
     });
   },
 });
@@ -385,7 +429,7 @@ async function waitForServer(baseUrl: string): Promise<boolean> {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseUrl}/config`);
+      const res = await fetch(`${baseUrl}/config`, { signal: AbortSignal.timeout(READY_FETCH_TIMEOUT_MS) });
       if (res.ok) return true;
     } catch {
       // not ready yet
@@ -397,7 +441,6 @@ async function waitForServer(baseUrl: string): Promise<boolean> {
 
 async function collectSseEvents(
   baseUrl: string,
-  rawPath: string,
   sink: BusEvent[],
   controller: AbortController,
 ): Promise<void> {
@@ -416,7 +459,7 @@ async function collectSseEvents(
           if (line.startsWith("data: ")) {
             const raw = line.slice("data: ".length);
             try {
-              appendFileSync(rawPath, `data: ${raw}\n\n`);
+              // Parsed into memory for corroboration; raw frames are never persisted.
               sink.push(JSON.parse(raw) as BusEvent);
             } catch {
               // ignore malformed frames
@@ -504,7 +547,6 @@ async function main(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
 
   const hookLogPath = join(outDir, "hook-log.jsonl");
-  const ssePath = join(outDir, "events.sse");
   const requestLogPath = join(outDir, "mock-requests.jsonl");
   const pluginPath = join(outDir, "justice-correlation-spike-plugin.js");
   const fixturePath = join(projectDir, "spike-fixture.txt");
@@ -572,7 +614,9 @@ async function main(): Promise<void> {
     ),
   );
 
-  const opencodePort = pickOpencodePort();
+  // Bind port 0 to have the OS assign a genuinely free port for opencode serve;
+  // a fixed random range can collide with other listeners and stall readiness.
+  const opencodePort = await getFreePort();
   const baseUrl = `http://127.0.0.1:${opencodePort}`;
   const server = Bun.spawn(["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(opencodePort)], {
     cwd: projectDir,
@@ -583,9 +627,27 @@ async function main(): Promise<void> {
       XDG_CONFIG_HOME: join(tmpRoot, "config"),
       OPENCODE_DISABLE_AUTOUPDATE: "true",
     },
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
   });
+  progress(`spawned opencode serve on 127.0.0.1:${opencodePort}`);
+  // Drain serve output incrementally in memory for BLOCKED diagnostics only
+  // (never persisted); a running server never closes its streams, so a
+  // whole-stream text() read would never resolve.
+  const serveLog = { text: "" };
+  const drainServeStream = async (stream: ReadableStream<Uint8Array> | undefined): Promise<void> => {
+    if (!stream) return;
+    const decoder = new TextDecoder();
+    try {
+      for await (const chunk of stream) {
+        serveLog.text += decoder.decode(chunk as Uint8Array, { stream: true });
+      }
+    } catch {
+      // stream ended or process killed
+    }
+  };
+  void drainServeStream(server.stdout);
+  void drainServeStream(server.stderr);
 
   const sseController = new AbortController();
   const busEvents: BusEvent[] = [];
@@ -593,23 +655,38 @@ async function main(): Promise<void> {
 
   let exitCode = 1;
   try {
+    progress("waiting for opencode serve readiness");
     if (!(await waitForServer(baseUrl))) {
       fail(`opencode serve did not become ready within ${READY_TIMEOUT_MS}ms`);
+      const exited = await Promise.race([server.exited, Bun.sleep(1_000).then(() => "still-running")]);
+      const tail = scrub(serveLog.text.trim(), tmpRoot, 400);
+      fail(`serve diagnostics: exit=${typeof exited === "number" ? exited : "running"} output="${tail || "<empty>"}"`);
     } else {
+      progress("serve ready");
       // Start the SSE collector only after the server is accepting requests,
       // otherwise the first fetch fails with ECONNREFUSED and the bus stays empty.
-      sseCollector = collectSseEvents(baseUrl, ssePath, busEvents, sseController);
+      sseCollector = collectSseEvents(baseUrl, busEvents, sseController);
       // Create the parent session and drive exactly two task() dispatches.
-      const createRes = await fetch(`${baseUrl}/session`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: "justice-spike-parent" }),
+      const createRes = await withTimeout(
+        fetch(`${baseUrl}/session`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "justice-spike-parent" }),
+        }),
+        30_000,
+        "POST /session",
+      ).catch((error: unknown) => {
+        fail(`POST /session failed: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
       });
-      if (!createRes.ok) {
+      if (!createRes) {
+        // blocker already recorded
+      } else if (!createRes.ok) {
         fail(`POST /session failed with HTTP ${createRes.status}`);
       } else {
         const parentSession = (await createRes.json()) as { id: string };
         const parentSessionId = parentSession.id;
+        progress("parent session created; driving dispatch turn");
 
         const promptRes = await withTimeout(
           fetch(`${baseUrl}/session/${parentSessionId}/message`, {
@@ -633,6 +710,7 @@ async function main(): Promise<void> {
             }
           }
         }
+        progress("dispatch turn complete; waiting for bus to settle");
 
         // Wait for the bus to settle (session.idle for the parent session).
         const idleDeadline = Date.now() + 30_000;
@@ -648,19 +726,27 @@ async function main(): Promise<void> {
     sseController.abort();
     await sseCollector;
 
-    // Runtime observation payloads.
-    const hookRecords: HookRecord[] = readFileSync(hookLogPath, "utf8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as HookRecord);
+    // Runtime observation payloads. A missing, unreadable, or partially
+    // written log means the correlation evidence itself is unavailable —
+    // fall through to the structured BLOCKED result below instead of crashing.
+    let hookRecords: HookRecord[] = [];
+    try {
+      hookRecords = readFileSync(hookLogPath, "utf8")
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as HookRecord);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      fail(`correlation evidence unavailable: observation log could not be read or parsed (${scrub(reason, tmpRoot, 160)})`);
+    }
 
     const beforeRecords = hookRecords.filter(
-      (r): r is ToolExecuteBeforePayload =>
-        r.kind === "tool.execute.before" && r.tool === "task" && Boolean(r.callID),
+      (r): r is ToolExecuteBeforeRecord =>
+        r.kind === "tool.execute.before" && r.tool === "task" && typeof r.callID === "string" && r.callID.length > 0,
     );
     const afterRecords = hookRecords.filter(
-      (r): r is ToolExecuteAfterPayload =>
-        r.kind === "tool.execute.after" && r.tool === "task" && Boolean(r.callID),
+      (r): r is ToolExecuteAfterRecord =>
+        r.kind === "tool.execute.after" && r.tool === "task" && typeof r.callID === "string" && r.callID.length > 0,
     );
 
     if (beforeRecords.length !== REQUIRED_WORKERS.length) {
@@ -686,7 +772,7 @@ async function main(): Promise<void> {
         fail(`after-hook metadata.parentSessionId (${parentSessionIdFromHook || "<empty>"}) does not match hook input sessionID (${before.sessionID}) for call ${parentCallId}`);
       }
 
-      const workerLabel = typeof before.args?.subagent_type === "string" ? before.args.subagent_type : "";
+      const workerLabel = typeof before.subagent_type === "string" ? before.subagent_type : "";
       if (!REQUIRED_WORKERS.includes(workerLabel as (typeof REQUIRED_WORKERS)[number])) {
         fail(`task dispatch for call ${parentCallId} does not carry a required worker subagent_type (observed: "${workerLabel}")`);
         continue;
@@ -702,7 +788,7 @@ async function main(): Promise<void> {
 
       const observation = childObservationFromEvents(busEvents, childSessionId);
       try {
-        const childRes = await fetch(`${baseUrl}/session/${childSessionId}/message`);
+        const childRes = await fetch(`${baseUrl}/session/${childSessionId}/message`, { signal: AbortSignal.timeout(10_000) });
         if (childRes.ok) {
           const childMessages = (await childRes.json()) as unknown[];
           observation.restMessages = childMessages.length;
@@ -725,8 +811,6 @@ async function main(): Promise<void> {
         hookAfterMetadata: {
           parentSessionId: parentSessionIdFromHook,
           sessionId: childSessionId,
-          model: after.metadata?.model,
-          truncated: after.metadata?.truncated,
         },
         childSessionEvent: {
           type: parentLinkEvent?.type ?? "<missing>",
@@ -749,6 +833,19 @@ async function main(): Promise<void> {
     }
 
     const verdict: Verdict = blockers.length === 0 && traces.length === REQUIRED_WORKERS.length ? "OK" : "BLOCKED";
+    const firstSessionBusEvent = busEvents.find((e) => e.type === "session.created" || e.type === "session.updated");
+    const rawFirstSessionEvent = firstSessionBusEvent
+      ? {
+          kind: "event",
+          id: firstSessionBusEvent.id,
+          type: firstSessionBusEvent.type,
+          session: {
+            id: (firstSessionBusEvent.properties?.info as Record<string, unknown> | undefined)?.id,
+            parentID: (firstSessionBusEvent.properties?.info as Record<string, unknown> | undefined)?.parentID,
+          },
+        }
+      : null;
+
     const result = {
       verdict,
       runtime: { cli: "opencode", version: PINNED_OPENCODE_VERSION, mode: "opencode serve (headless HTTP)" },
@@ -759,6 +856,7 @@ async function main(): Promise<void> {
       },
       fieldPaths: {
         parentCallId: "tool.execute.before hook input .callID (echoed in tool.execute.after input .callID and the parent session ToolPart.callID)",
+        taskArgs: "tool.execute.before hook output .args (the runtime passes tool args via the hook's output parameter, not input.args)",
         childSessionId: "tool.execute.after hook output .metadata.sessionId",
         parentSessionCorroboration: "tool.execute.after hook output .metadata.parentSessionId; event bus properties.info.parentID",
       },
@@ -775,10 +873,7 @@ async function main(): Promise<void> {
                 hookRecords.find((r) => r.kind === "tool.execute.after" && r.tool === "task") ?? null,
                 tmpRoot,
               ),
-              firstSessionEvent: scrubDeep(
-                busEvents.find((e) => e.type === "session.created" || e.type === "session.updated") ?? null,
-                tmpRoot,
-              ),
+              firstSessionEvent: scrubDeep(rawFirstSessionEvent, tmpRoot),
             },
           }
         : {}),
