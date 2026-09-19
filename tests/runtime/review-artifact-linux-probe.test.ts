@@ -43,6 +43,17 @@ const passingProbe: ProbeReport = {
 };
 
 describe("Linux review artifact probe publication gate", () => {
+  it("publishes a passing provider and forwards its artifact path", () => {
+    const artifactPath = ".justice/reviews/review.json";
+    const publication = decideProviderPublication(passingProbe);
+
+    expect(publication).toEqual({
+      status: "PUBLISHED",
+      provider: "LinuxOpenat2ReviewArtifactProvider",
+    });
+    expect(buildWorkerInputForPublication(publication, artifactPath)).toEqual({ artifactPath });
+  });
+
   it("blocks provider publication when the native probe fails", () => {
     const publication = decideProviderPublication(unsupportedProbe);
 

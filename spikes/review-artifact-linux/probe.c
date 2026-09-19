@@ -851,13 +851,23 @@ static bool renameat2_available(void) {
   return result == 0 || errno != ENOSYS;
 }
 
+static const char *detect_libc(void) {
+#ifdef _CS_GNU_LIBC_VERSION
+  char version[32];
+
+  return confstr(_CS_GNU_LIBC_VERSION, version, sizeof(version)) > 0 ? "glibc" : "unknown";
+#else
+  return "unknown";
+#endif
+}
+
 static void print_blocked_report(bool openat2_ok, bool renameat2_ok, const char *kernel) {
   size_t index;
 
   printf("{\"provider\":\"LinuxOpenat2ReviewArtifactProvider\",\"nativeApi\":{"
          "\"openat2\":%s,\"renameat2\":%s,\"descriptorRelative\":false,\"identityBoundLease\":false},"
-         "platform\":{\"os\":\"linux\",\"arch\":\"x86_64\",\"libc\":\"glibc\"},"
-         "kernel\":\"%s\",\"status\":\"BLOCKED\",\"cases\":{" ,
+         "\"platform\":{\"os\":\"linux\",\"arch\":\"x86_64\",\"libc\":\"glibc\"},"
+         "\"kernel\":\"%s\",\"status\":\"BLOCKED\",\"cases\":{" ,
          openat2_ok ? "true" : "false", renameat2_ok ? "true" : "false", kernel);
   for (index = 0; index < CASE_COUNT; ++index) {
     printf("%s\"%s\":{\"status\":\"BLOCKED\",\"detail\":\"required syscall unavailable\"}",
@@ -867,15 +877,16 @@ static void print_blocked_report(bool openat2_ok, bool renameat2_ok, const char 
 }
 
 static void print_report(const case_report_t *reports, bool passed, bool openat2_ok,
-                         bool renameat2_ok, const char *kernel) {
+                         bool renameat2_ok, const char *arch, const char *libc,
+                         const char *kernel) {
   size_t index;
 
   printf("{\"provider\":\"LinuxOpenat2ReviewArtifactProvider\",\"nativeApi\":{"
          "\"openat2\":%s,\"renameat2\":%s,\"openat\":true,\"linkat\":true,\"fstat\":true,"
          "\"pread\":true,\"pwrite\":true,\"unlinkat\":true,\"descriptorRelative\":true,"
-         "\"identityBoundLease\":true},\"platform\":{\"os\":\"linux\",\"arch\":\"x86_64\","
-         "\"libc\":\"glibc\"},\"kernel\":\"%s\",\"status\":\"%s\",\"cases\":{" ,
-         openat2_ok ? "true" : "false", renameat2_ok ? "true" : "false", kernel,
+         "\"identityBoundLease\":true},\"platform\":{\"os\":\"linux\",\"arch\":\"%s\","
+         "\"libc\":\"%s\"},\"kernel\":\"%s\",\"status\":\"%s\",\"cases\":{" ,
+         openat2_ok ? "true" : "false", renameat2_ok ? "true" : "false", arch, libc, kernel,
          passed ? "PASS" : "FAIL");
   for (index = 0; index < CASE_COUNT; ++index) {
     const case_report_t *current = &reports[index];
@@ -901,6 +912,7 @@ int main(int argc, char **argv) {
   layout_t layout;
   case_report_t reports[CASE_COUNT];
   struct utsname system_info;
+  const char *libc;
   bool openat2_ok;
   bool renameat2_ok;
   bool all_passed = true;
@@ -908,6 +920,7 @@ int main(int argc, char **argv) {
   if (argc != 2 || uname(&system_info) < 0) {
     return 2;
   }
+  libc = detect_libc();
   openat2_ok = openat2_available(argv[1]);
   renameat2_ok = renameat2_available();
   if (!openat2_ok || !renameat2_ok) {
@@ -934,7 +947,8 @@ int main(int argc, char **argv) {
   for (size_t index = 0; index < CASE_COUNT; ++index) {
     all_passed = all_passed && reports[index].passed;
   }
-  print_report(reports, all_passed, openat2_ok, renameat2_ok, system_info.release);
+  print_report(reports, all_passed, openat2_ok, renameat2_ok, system_info.machine, libc,
+               system_info.release);
   close_layout(&layout);
   return 0;
 }

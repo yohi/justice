@@ -23,8 +23,9 @@ ENV CARGO_HOME=/opt/justice/cargo
 ENV PATH=/opt/justice/bun/bin:/opt/justice/cargo/bin:${PATH}
 
 RUN install -d -o root -g root -m 0755 \
-    "$BUN_INSTALL" "$RUSTUP_HOME" "$CARGO_HOME" \
-    "$BUN_INSTALL/bin" "$CARGO_HOME/bin"
+    "$BUN_INSTALL" "$BUN_INSTALL/bin" \
+    && install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+    "$RUSTUP_HOME" "$CARGO_HOME" "$CARGO_HOME/bin"
 
 USER root
 RUN bun add --global --exact opencode-ai@1.18.29
