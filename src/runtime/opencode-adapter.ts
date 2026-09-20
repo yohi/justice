@@ -559,7 +559,13 @@ export class OpenCodeAdapter {
     output: { args: Record<string, unknown> },
   ): Promise<void> {
     try {
-      if (input.tool === "task") normalizeTaskToolInputInPlace(output.args);
+    if (input.tool === "task") {
+      normalizeTaskToolInputInPlace(output.args);
+      const category = output.args.category;
+      if (category === "sp-review" || category === "sp-final-review") {
+        output.args.run_in_background = false;
+      }
+    }
       if (this.#noOp) return;
 
       // Forward every tool except justice_* query tools, which must not perturb
@@ -595,7 +601,11 @@ export class OpenCodeAdapter {
       }
 
       if (input.tool === "task") {
-        normalizeTaskToolInputInPlace(output.args);
+      normalizeTaskToolInputInPlace(output.args);
+      const category = output.args.category;
+      if (category === "sp-review" || category === "sp-final-review") {
+        output.args.run_in_background = false;
+      }
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);

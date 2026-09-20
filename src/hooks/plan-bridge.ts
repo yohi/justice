@@ -60,6 +60,10 @@ export function normalizeTaskToolInputWithCategory(
   if (normalized.category === undefined) {
     normalized.category = category;
   }
+  const effectiveCategory = normalized.category;
+  if (effectiveCategory === "sp-review" || effectiveCategory === "sp-final-review") {
+    normalized.run_in_background = false;
+  }
   return normalized;
 }
 

@@ -9,6 +9,7 @@ import type {
   HookResponse,
   EventEvent,
   CompactionPayload,
+  ReservedReviewArtifactIo,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
 import { mergePostToolUseResponses, mergePreToolUseResponses } from "./hook-response-merger";
@@ -37,12 +38,23 @@ import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
 import { project, taskLifecycleKey } from "./v2/state-projection";
 import type { TaskProgressState } from "./v2/observation-model";
+import type {
+  PendingReviewDispatchTransitionRecord,
+  ReviewDispatchTransitionRecord,
+} from "./v2/observation-model";
 import {
   AuthorizationStore,
   createAuthorizationReviewBoundary,
   type AuthorizationReviewBoundary,
   type ApprovedPlanBinding,
 } from "./plan-authorization";
+import {
+  createReviewDirectiveSink,
+  createReviewDispatchState,
+  type ClaimReviewDispatchOutcome,
+  type ReviewDirectiveSink,
+} from "./review-dispatch-state";
+import { createReviewArtifactReservationPort } from "./review-artifact-reservation";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -93,6 +105,14 @@ function closeSessionTaskWindow(provider: SessionStateProvider, callId: string |
   } catch {
     // Fail-open: a task-window tracking failure must not break the hook flow.
   }
+}
+
+function resolveMandatoryReviewCategory(
+  event: PreToolUseEvent,
+): "sp-review" | "sp-final-review" | undefined {
+  if (event.payload.toolName !== "task") return undefined;
+  const category = event.payload.toolInput.category;
+  return category === "sp-review" || category === "sp-final-review" ? category : undefined;
 }
 
 export interface CreateGlobalFsResult {
@@ -268,6 +288,7 @@ export interface JusticePluginOptions {
    * Defaults to a newly generated UUID-based writer ID when not specified.
    */
   readonly writerId?: string;
+  readonly reservedReviewArtifactIo?: ReservedReviewArtifactIo;
 }
 
 export class JusticePlugin {
@@ -286,6 +307,8 @@ export class JusticePlugin {
   private readonly writerId: string;
   private readonly observationLogStore: ObservationLogStore;
   private readonly options: JusticePluginOptions;
+  private readonly reviewDirectiveSink: ReviewDirectiveSink;
+  private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
@@ -413,6 +436,33 @@ export class JusticePlugin {
       logger: options.logger,
       gateLoader: new FileGateLoader(fileReader, undefined, options.logger ?? console),
     });
+    this.reviewDirectiveSink = createReviewDirectiveSink();
+    const reviewArtifactReservation = createReviewArtifactReservationPort(
+      fileReader,
+      fileWriter,
+      options.reservedReviewArtifactIo,
+      (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
+      generateWriterId,
+    );
+    this.reviewDispatchState = createReviewDispatchState({
+      readDurableRecords: () => this.observationLogStore.readAll(),
+      readDurableAuthorizations: () => this.authorizationStore.hydrate(),
+      findAuthorizationById: (authorizationId) =>
+        this.authorizationStore.findByAuthorizationId(authorizationId),
+      appendReviewDispatchTransition: (input) => this.appendReviewDispatchTransition(input),
+      reserveReviewArtifact: reviewArtifactReservation.reserve,
+      injectReviewRequiredDirective: (delivery) => this.reviewDirectiveSink.deliver(delivery),
+      withAuthorizationReviewBoundary: this.authorizationReviewBoundary.withParentSession,
+      hydrateAuthorizationsBeforeReviewRecovery: () => this.authorizationStore.hydrate(),
+      recordAdvisory: (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
+      generateId: generateWriterId,
+    });
+    this.planBridge.setReviewDispatchCancellation(
+      this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
+    );
+    this.observationHandler.setReviewPendingCommittedHandler((parentSessionId) =>
+      this.reviewDispatchState.offerNextMandatoryReview(parentSessionId).then(() => undefined),
+    );
 
     // Ensure session cleanup propagates from loopHandler to all stateful handlers
     this.loopHandler.setSessionRemovedCallback((sessionId) => {
@@ -438,6 +488,10 @@ export class JusticePlugin {
         /* Ignore logging errors to preserve fail-open behavior */
       }
     }
+
+    await this.reviewDispatchState.recoverReviewDispatchesAfterRestart().catch((error: unknown) => {
+      this.options.logger?.warn("Failed to recover review dispatches during initialization", error);
+    });
 
     try {
       await this.tieredWisdomStore.loadAll();
@@ -492,18 +546,21 @@ export class JusticePlugin {
           event.sessionId !== undefined
             ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
             : undefined;
-        // The observation handler runs for EVERY tool; only the task tool also
-        // drives plan-bridge delegation. Run independent handlers in parallel.
-        const [observation, planBridge] = await Promise.all([
-          this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
+        const reviewCategory = resolveMandatoryReviewCategory(event);
+        const observation = await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
             this.options.logger?.warn("observation-handler pre-tool-use failed", err);
             return PROCEED;
-          }),
-          event.payload.toolName === "task"
-            ? this.planBridge.handlePreToolUse(event)
-            : Promise.resolve(PROCEED),
-        ]);
-        const response = mergePreToolUseResponses(observation, planBridge, (message) =>
+          });
+        const delegated =
+          reviewCategory === undefined
+            ? event.payload.toolName === "task"
+              ? await this.planBridge.handlePreToolUse(event).catch((err: unknown) => {
+                  this.options.logger?.warn("plan-bridge pre-tool-use failed", err);
+                  return PROCEED;
+                })
+              : PROCEED
+            : await this.claimReviewTask(event, reviewCategory);
+        const response = mergePreToolUseResponses(observation, delegated, (message) =>
           this.warnMergeConflict(message),
         );
         const taskId = resolveTaskIdFromModifiedPayload(
@@ -528,7 +585,7 @@ export class JusticePlugin {
             this.options.logger?.warn("failed to set active task window", err);
           }
         }
-        return response;
+        return this.mergePreToolUseWithReviewDeliveries(event.sessionId, response);
       }
       case "PostToolUse": {
         try {
@@ -758,6 +815,123 @@ export class JusticePlugin {
         }
       }
     }
+  }
+
+  private async appendReviewDispatchTransition(
+    input: PendingReviewDispatchTransitionRecord,
+  ): Promise<
+    | { readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord }
+    | { readonly kind: "failed" }
+  > {
+    try {
+      const sequence = await this.observationLogStore.append(
+        { agentId: input.agentId, sessionId: input.sessionId, writerId: input.writerId },
+        input,
+      );
+      return { kind: "committed", record: { ...input, sequence } };
+    } catch {
+      return { kind: "failed" };
+    }
+  }
+
+  private async recordReviewDispatchAdvisory(advisory: string, _cause?: unknown): Promise<void> {
+    try {
+      await this.observationLogStore.append(
+        { agentId: "system", sessionId: "review-dispatch", writerId: this.writerId },
+        {
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId: "system",
+          sessionId: "review-dispatch",
+          writerId: this.writerId,
+          recordType: "observation",
+          kind: "session_error",
+          errorKind: "review_dispatch_advisory",
+          message: advisory,
+        },
+      );
+    } catch {
+      return;
+    }
+  }
+
+  private async claimReviewTask(
+    event: PreToolUseEvent,
+    expectedCategory: "sp-review" | "sp-final-review",
+  ): Promise<HookResponse> {
+    const callId = event.callId;
+    if (callId === undefined || callId.trim().length === 0) {
+      await this.recordReviewDispatchAdvisory("review_call_id_missing");
+      return { action: "inject", injectedContext: "[JUSTICE: REVIEW CLAIM BLOCKED] review_call_id_missing" };
+    }
+    let outcome: ClaimReviewDispatchOutcome;
+    try {
+      outcome = await this.reviewDispatchState.claimReviewDispatch({
+        parentSessionId: event.sessionId,
+        callId,
+        expectedCategory,
+        agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+        sessionId: event.sessionId,
+        writerId: this.writerId,
+      });
+    } catch (error) {
+      await this.recordReviewDispatchAdvisory("review_claim_failed", error);
+      return { action: "inject", injectedContext: "[JUSTICE: REVIEW CLAIM BLOCKED] review_claim_failed" };
+    }
+    if (outcome.kind === "blocked") {
+      return {
+        action: "inject",
+        injectedContext: `[JUSTICE: REVIEW CLAIM BLOCKED] ${outcome.advisory}`,
+      };
+    }
+    this.sessionStateProvider.setTaskCallBinding(callId, outcome.taskCallBinding);
+    const artifactPath =
+      outcome.taskCallBinding.artifactReservation.status === "usable"
+        ? { review_artifact_path: outcome.taskCallBinding.artifactReservation.artifactPath }
+        : {};
+    return {
+      action: "inject",
+      injectedContext:
+        outcome.kind === "claimed"
+          ? "[JUSTICE: REVIEW CLAIMED]"
+          : "[JUSTICE: REVIEW CLAIMED] artifact_reservation_unusable",
+      modifiedPayload: {
+        args: {
+          category: expectedCategory,
+          run_in_background: false,
+          ...artifactPath,
+        },
+      },
+    };
+  }
+
+  private async mergePreToolUseWithReviewDeliveries(
+    parentSessionId: string,
+    response: HookResponse,
+  ): Promise<HookResponse> {
+    let deliveries;
+    try {
+      deliveries = await this.authorizationReviewBoundary.withParentSession(parentSessionId, () =>
+        this.reviewDirectiveSink.drainForParentSession(parentSessionId, (delivery) =>
+          this.reviewDispatchState.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+        ),
+      );
+    } catch (error) {
+      await this.recordReviewDispatchAdvisory("review_directive_delivery_validation_failed", error);
+      return response;
+    }
+    return deliveries.reduce(
+      (merged, delivery) =>
+        mergePreToolUseResponses(
+          merged,
+          {
+            action: "inject",
+            injectedContext: `[JUSTICE: REVIEW REQUIRED] ${delivery.directive.correlation.reviewKind}`,
+          },
+          (message) => this.warnMergeConflict(message),
+        ),
+      response,
+    );
   }
 
   private warnMergeConflict(message: string): void {
