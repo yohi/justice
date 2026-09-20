@@ -6,6 +6,7 @@ import {
   parseJusticeImplementCommandArguments,
 } from "../core/implement-command";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
+import type { ReservedReviewArtifactIo } from "../core/types";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import {
   isJusticeStartCommand,
@@ -186,6 +187,21 @@ export class OpenCodeAdapter {
       const notifier = new OpenCodeNotifier(this.#init.client.app.log);
       this.#notifier = notifier;
 
+      // Optional runtime capability (Task 3.4): reserved review artifact I/O
+      // backed by the native provider. Absent on unsupported runtimes, where
+      // review artifact reservation degrades fail-open to an unusable
+      // reservation inside the plugin instead of disabling initialization.
+      let reservedReviewArtifactIo: ReservedReviewArtifactIo | undefined;
+      try {
+        reservedReviewArtifactIo = localFs.createReservedReviewArtifactIo?.();
+      } catch (err) {
+        await this.log(
+          "warn",
+          "[Justice] review artifact reservation capability probe failed; reservation disabled",
+          err,
+        );
+      }
+
       // Bootstrap a globally-unique writerId for the Observation Log shards (D55/D39).
       // Fail-open: if the uniqueness probe cannot run (e.g. the workspace root is not
       // yet on disk), fall back to a fresh id so a missing directory never disables
@@ -208,6 +224,7 @@ export class OpenCodeAdapter {
           void this.log("error", "[Justice] internal error", err);
         },
         globalFileSystem: globalFs ?? undefined,
+        reservedReviewArtifactIo,
         notifier,
         writerId,
         workspaceRoot: root,

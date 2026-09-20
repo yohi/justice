@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { JusticePlugin } from "../../src/core/justice-plugin";
+import {
+  createReviewArtifactReservationPort,
+} from "../../src/core/review-artifact-reservation";
 import { NodeFileSystem } from "../../src/runtime/node-file-system";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -133,6 +137,33 @@ describe("NodeFileSystem", () => {
 
     it("should reject windows style separators for traversal (deleteFile)", async () => {
       await expect(fs.deleteFile("..\\..\\etc\\passwd")).rejects.toThrow("path traversal");
+    });
+  });
+
+  describe("review artifact reservation capabilities (unsupported runtime)", () => {
+    it("leaves createExclusiveMarker absent on the unsupported runtime", () => {
+      expect(fs.createExclusiveMarker).toBeUndefined();
+    });
+
+    it("leaves createReservedReviewArtifactIo absent on the unsupported runtime", () => {
+      expect(fs.createReservedReviewArtifactIo).toBeUndefined();
+    });
+
+    it("initializes JusticePlugin without the reservation capabilities", async () => {
+      const plugin = new JusticePlugin(fs, fs, { workspaceRoot: tempDir });
+      await plugin.initialize();
+      expect(plugin.getObservationHandler()).toBeDefined();
+    });
+
+    it("degrades the review artifact reservation to unusable without the capabilities", async () => {
+      // Mirrors the exact production composition in JusticePlugin:
+      // createReviewArtifactReservationPort(fileReader, fileWriter, options.reservedReviewArtifactIo, ...)
+      // with both capability slots absent (NodeFileSystem on the unsupported runtime).
+      const reservation = createReviewArtifactReservationPort(fs, fs, undefined, async () => {});
+      await expect(reservation.reserve()).resolves.toEqual({
+        status: "unusable",
+        reason: "artifact_storage_unavailable",
+      });
     });
   });
 });

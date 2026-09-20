@@ -1,4 +1,8 @@
-import type { FileReader, FileWriter } from "../core/types";
+import type {
+  FileReader,
+  FileWriter,
+  ReservedReviewArtifactIo,
+} from "../core/types";
 import { resolve, isAbsolute, relative, dirname, basename, join } from "node:path";
 import {
   mkdir as fsMkdir,
@@ -15,6 +19,25 @@ import {
 
 export class NodeFileSystem implements FileReader, FileWriter {
   private readonly rootDir: string;
+
+  /**
+   * Optional runtime capability: exclusive marker creation backed by the
+   * selected native review-artifact provider. This is a capability slot, not
+   * a promise that every runtime provides it: on runtimes without the native
+   * provider (current unsupported deployments) it stays `undefined` and no
+   * pathname-only fallback exists by design (resolveSafely + an absolute-path
+   * open is not an acceptable substitute). The provider binds this slot on
+   * supported deployments.
+   */
+  readonly createExclusiveMarker?: NonNullable<FileWriter["createExclusiveMarker"]>;
+
+  /**
+   * Optional runtime capability: reserved review artifact I/O factory bound to
+   * the same native provider as `createExclusiveMarker`. Stays `undefined` on
+   * unsupported runtimes; `OpenCodeAdapter` probes it with an optional call and
+   * review artifact reservation degrades fail-open to an unusable reservation.
+   */
+  readonly createReservedReviewArtifactIo?: () => ReservedReviewArtifactIo;
 
   constructor(rootDir: string) {
     this.rootDir = resolve(rootDir);
