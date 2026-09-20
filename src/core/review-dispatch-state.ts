@@ -22,7 +22,7 @@ import type {
   ReviewDispatchTransitionRecord,
   TaskLifecycleTransitionRecord,
 } from "./v2/observation-model";
-import { project } from "./v2/state-projection";
+import { project, taskLifecycleKey, type ProjectedState } from "./v2/state-projection";
 
 export type ReviewDispatchSlotKey = {
   readonly parentSessionId: string;
@@ -182,11 +182,13 @@ export function projectTaskCallBindings(records: readonly PersistedLogRecord[]):
 function activeBinding(
   correlation: ReviewCorrelation,
   authorizations: readonly ApprovedPlanBinding[],
+  parentSessionId: string,
 ): Extract<ApprovedPlanBinding, { readonly status: "active" }> | undefined {
   const binding = authorizations.find(
     (candidate) => candidate.authorizationId === authorizationIdFor(correlation),
   );
   if (binding?.status !== "active") return undefined;
+  if (binding.sessionId !== parentSessionId) return undefined;
   if (correlation.reviewKind === "task-review") {
     return binding.canonicalSnapshot.tasks.some(
       (task) => task.taskId === correlation.taskExecutionRef.taskId,
@@ -199,6 +201,111 @@ function activeBinding(
     binding.planFingerprint.value === correlation.planFingerprint.value
     ? binding
     : undefined;
+}
+
+function sameTaskExecutionRef(
+  left: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>["taskExecutionRef"],
+  right: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>["taskExecutionRef"],
+): boolean {
+  return (
+    left.authorizationId === right.authorizationId &&
+    left.taskId === right.taskId &&
+    left.attemptId === right.attemptId
+  );
+}
+
+function retryableSlot(slot: ReviewDispatchSlot): boolean {
+  return (
+    slot.state === "terminal" &&
+    (slot.terminalReason === "review_execution_failed" || slot.terminalReason === "lost_conclusive")
+  );
+}
+
+function currentTaskReviewCorrelation(
+  parentSessionId: string,
+  state: ProjectedState,
+  taskExecutionRef: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>["taskExecutionRef"],
+): Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }> | undefined {
+  const key = taskLifecycleKey(parentSessionId, taskExecutionRef);
+  const current = state.lifecycle.currentTaskExecutionRefs.get(key);
+  if (state.lifecycle.taskStates.get(key) !== "review_pending" || current === undefined) return undefined;
+  if (!sameTaskExecutionRef(current, taskExecutionRef)) return undefined;
+  const reviewRound = state.reviewDispatchSlots.reduce((round, slot) => {
+    if (slot.key.parentSessionId !== parentSessionId || slot.key.correlation.reviewKind !== "task-review") {
+      return round;
+    }
+    if (!sameTaskExecutionRef(slot.key.correlation.taskExecutionRef, taskExecutionRef)) return round;
+    return Math.max(round, slot.key.correlation.reviewRound + (retryableSlot(slot) ? 1 : 0));
+  }, 1);
+  return { reviewKind: "task-review", taskExecutionRef, reviewRound };
+}
+
+function currentFinalReviewCorrelation(
+  parentSessionId: string,
+  state: ProjectedState,
+  binding: Extract<ApprovedPlanBinding, { readonly status: "active" }>,
+): Extract<ReviewCorrelation, { readonly reviewKind: "final-review" }> | undefined {
+  const finalization = [...state.lifecycle.finalization.values()].find(
+    (value) =>
+      value.parentSessionId === parentSessionId &&
+      value.authorizationId === binding.authorizationId &&
+      value.planPath === binding.planPath &&
+      value.state === "final_review_pending",
+  );
+  if (finalization === undefined) return undefined;
+  const finalReviewRound = state.reviewDispatchSlots.reduce((round, slot) => {
+    if (slot.key.parentSessionId !== parentSessionId || slot.key.correlation.reviewKind !== "final-review") {
+      return round;
+    }
+    const correlation = slot.key.correlation;
+    if (
+      correlation.authorizationId !== finalization.authorizationId ||
+      correlation.planPath !== finalization.planPath ||
+      correlation.finalizationAttemptId !== finalization.finalizationAttemptId ||
+      correlation.planFingerprint.algorithm !== binding.planFingerprint.algorithm ||
+      correlation.planFingerprint.value !== binding.planFingerprint.value
+    ) {
+      return round;
+    }
+    return Math.max(round, correlation.finalReviewRound + (retryableSlot(slot) ? 1 : 0));
+  }, finalization.finalReviewRound);
+  return {
+    reviewKind: "final-review",
+    authorizationId: finalization.authorizationId,
+    planPath: finalization.planPath,
+    planFingerprint: binding.planFingerprint,
+    finalizationAttemptId: finalization.finalizationAttemptId,
+    finalReviewRound,
+  };
+}
+
+function currentLifecycleCorrelation(
+  parentSessionId: string,
+  state: ProjectedState,
+  authorizations: readonly ApprovedPlanBinding[],
+  correlation: ReviewCorrelation,
+): boolean {
+  const binding = activeBinding(correlation, authorizations, parentSessionId);
+  if (binding === undefined) return false;
+  if (correlation.reviewKind === "task-review") {
+    const current = currentTaskReviewCorrelation(parentSessionId, state, correlation.taskExecutionRef);
+    return current !== undefined && sameReviewCorrelation(current, correlation);
+  }
+  const current = currentFinalReviewCorrelation(parentSessionId, state, binding);
+  return current !== undefined && sameReviewCorrelation(current, correlation);
+}
+
+function staleSlotsFor(
+  parentSessionId: string,
+  state: ProjectedState,
+  authorizations: readonly ApprovedPlanBinding[],
+): readonly ReviewDispatchSlot[] {
+  return state.reviewDispatchSlots.filter(
+    (slot) =>
+      slot.key.parentSessionId === parentSessionId &&
+      (slot.state === "pending" || slot.state === "claimed") &&
+      !currentLifecycleCorrelation(parentSessionId, state, authorizations, slot.key.correlation),
+  );
 }
 
 function nextReviewRetryCorrelation(correlation: ReviewCorrelation): ReviewCorrelation {
@@ -222,7 +329,7 @@ function candidatesForParent(
   authorizations: readonly ApprovedPlanBinding[],
 ): readonly { readonly correlation: ReviewCorrelation; readonly category: "sp-review" | "sp-final-review"; readonly source: PersistedLogRecord }[] {
   const ordered = orderEventsForProjection(records);
-  const state = project(ordered, new Date(0).toISOString()).lifecycle;
+  const state = project(ordered, new Date(0).toISOString());
   const candidates: {
     correlation: ReviewCorrelation;
     category: "sp-review" | "sp-final-review";
@@ -231,7 +338,7 @@ function candidatesForParent(
   for (const record of ordered) {
     if (retryable(record) && record.parentSessionId === parentSessionId) {
       const correlation = nextReviewRetryCorrelation(record.correlation);
-      if (activeBinding(correlation, authorizations) !== undefined) {
+      if (currentLifecycleCorrelation(parentSessionId, state, authorizations, correlation)) {
         candidates.push({ correlation, category: record.expectedCategory, source: record });
       }
     }
@@ -242,63 +349,35 @@ function candidatesForParent(
       record.parentSessionId === parentSessionId &&
       record.to === "review_pending"
     ) {
-      const entry = [...state.currentTaskExecutionRefs.entries()].find(
-        ([key, ref]) =>
-          state.taskStates.get(key) === "review_pending" &&
-          ref.authorizationId === record.taskExecutionRef.authorizationId &&
-          ref.taskId === record.taskExecutionRef.taskId &&
-          ref.attemptId === record.taskExecutionRef.attemptId,
-      );
-      if (entry !== undefined) {
-        const matching = ordered.filter(
-          (item) =>
-            isReviewDispatchTransition(item) &&
-            item.correlation.reviewKind === "task-review" &&
-            item.correlation.taskExecutionRef.authorizationId === record.taskExecutionRef.authorizationId &&
-            item.correlation.taskExecutionRef.taskId === record.taskExecutionRef.taskId &&
-            item.correlation.taskExecutionRef.attemptId === record.taskExecutionRef.attemptId,
-        );
-        const reviewRound = matching.reduce(
-          (round, item) =>
-            isReviewDispatchTransition(item) && item.correlation.reviewKind === "task-review"
-              ? Math.max(round, item.correlation.reviewRound + (retryable(item) ? 1 : 0))
-              : round,
-          1,
-        );
-        const correlation: ReviewCorrelation = {
-          reviewKind: "task-review",
-          taskExecutionRef: record.taskExecutionRef,
-          reviewRound,
-        };
-        if (activeBinding(correlation, authorizations) !== undefined) {
-          candidates.push({ correlation, category: "sp-review", source: record });
-        }
+      const correlation = currentTaskReviewCorrelation(parentSessionId, state, record.taskExecutionRef);
+      if (
+        correlation !== undefined &&
+        activeBinding(correlation, authorizations, parentSessionId) !== undefined
+      ) {
+        candidates.push({ correlation, category: "sp-review", source: record });
       }
     } else if (
       isPlanFinalizationTransition(record) &&
       record.parentSessionId === parentSessionId &&
       record.to === "final_review_pending"
     ) {
-      const finalization = [...state.finalization.values()].find(
-        (value) =>
-          value.parentSessionId === parentSessionId &&
-          value.authorizationId === record.authorizationId &&
-          value.planPath === record.planPath &&
-          value.state === "final_review_pending",
-      );
       const binding = authorizations.find(
-        (candidate) => candidate.authorizationId === record.authorizationId && candidate.status === "active",
+        (candidate) =>
+          candidate.authorizationId === record.authorizationId &&
+          candidate.status === "active" &&
+          candidate.sessionId === parentSessionId,
       );
-      if (finalization !== undefined && binding?.status === "active") {
+      const correlation =
+        binding?.status === "active"
+          ? currentFinalReviewCorrelation(parentSessionId, state, binding)
+          : undefined;
+      if (
+        correlation !== undefined &&
+        correlation.finalizationAttemptId === record.finalizationAttemptId &&
+        correlation.finalReviewRound >= record.finalReviewRound
+      ) {
         candidates.push({
-          correlation: {
-            reviewKind: "final-review",
-            planPath: finalization.planPath,
-            authorizationId: finalization.authorizationId,
-            planFingerprint: binding.planFingerprint,
-            finalizationAttemptId: finalization.finalizationAttemptId,
-            finalReviewRound: finalization.finalReviewRound,
-          },
+          correlation,
           category: "sp-final-review",
           source: record,
         });
@@ -350,11 +429,7 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         authorizationIdFor(slot.key.correlation) === authorizationId &&
         (slot.state === "pending" || slot.state === "claimed"),
     );
-    if (slots.length > 1) {
-      await dependencies.recordAdvisory("review_dispatch_integrity_violation");
-      return;
-    }
-    if (slots[0] !== undefined) await appendTerminal(slots[0], "cancelled");
+    for (const slot of slots) await appendTerminal(slot, "cancelled");
   };
   const unreadable = async (parentSessionId: string, cause: unknown): Promise<void> => {
     try {
@@ -387,17 +462,11 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
       return { kind: "blocked" };
     }
     const records = await dependencies.readDurableRecords();
-    const slots = projectReviewDispatchSlots(records);
-    for (const slot of slots.filter(
-      (candidate) =>
-        candidate.key.parentSessionId === parentSessionId &&
-        (candidate.state === "pending" || candidate.state === "claimed") &&
-        activeBinding(candidate.key.correlation, authorizations) === undefined,
-    )) {
-      await cancelWithin(parentSessionId, authorizationIdFor(slot.key.correlation));
+    const state = project(records, new Date(0).toISOString());
+    for (const slot of staleSlotsFor(parentSessionId, state, authorizations)) {
+      await appendTerminal(slot, "cancelled");
     }
     const latestRecords = await dependencies.readDurableRecords();
-    const latestSlots = projectReviewDispatchSlots(latestRecords);
     let latestAuthorizations: readonly ApprovedPlanBinding[];
     try {
       latestAuthorizations = await dependencies.readDurableAuthorizations();
@@ -405,11 +474,13 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
       await unreadable(parentSessionId, cause);
       return { kind: "blocked" };
     }
+    const latestState = project(latestRecords, new Date(0).toISOString());
+    const latestSlots = latestState.reviewDispatchSlots;
     const outstanding = latestSlots.filter(
       (slot) =>
         slot.key.parentSessionId === parentSessionId &&
         (slot.state === "pending" || slot.state === "claimed") &&
-        activeBinding(slot.key.correlation, latestAuthorizations) !== undefined,
+        currentLifecycleCorrelation(parentSessionId, latestState, latestAuthorizations, slot.key.correlation),
     );
     if (outstanding.length > 1) {
       await dependencies.recordAdvisory("review_dispatch_integrity_violation");
@@ -462,11 +533,22 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         return { kind: "blocked", advisory: "review_authorization_unreadable" };
       }
       const records = await dependencies.readDurableRecords();
-      const outstanding = projectReviewDispatchSlots(records).filter(
+      const projected = project(records, new Date(0).toISOString());
+      for (const slot of staleSlotsFor(input.parentSessionId, projected, authorizations)) {
+        await appendTerminal(slot, "cancelled");
+      }
+      const latestRecords = await dependencies.readDurableRecords();
+      const latestProjected = project(latestRecords, new Date(0).toISOString());
+      const outstanding = latestProjected.reviewDispatchSlots.filter(
         (slot) =>
           slot.key.parentSessionId === input.parentSessionId &&
           (slot.state === "pending" || slot.state === "claimed") &&
-          activeBinding(slot.key.correlation, authorizations) !== undefined,
+          currentLifecycleCorrelation(
+            input.parentSessionId,
+            latestProjected,
+            authorizations,
+            slot.key.correlation,
+          ),
       );
       if (outstanding.length > 1) {
         await dependencies.recordAdvisory("review_dispatch_integrity_violation");
@@ -565,13 +647,25 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
     delivery: ReviewDirectiveDelivery,
   ): Promise<"inject" | "discard" | "retain"> => {
     try {
-      const slots = projectReviewDispatchSlots(await dependencies.readDurableRecords()).filter(
+      const authorizations = await dependencies.readDurableAuthorizations();
+      const state = project(await dependencies.readDurableRecords(), new Date(0).toISOString());
+      const slots = state.reviewDispatchSlots.filter(
         (slot) =>
           slot.state === "pending" &&
           slot.key.parentSessionId === delivery.parentSessionId &&
           sameReviewCorrelation(slot.key.correlation, delivery.directive.correlation),
       );
       if (slots.length !== 1) return "discard";
+      if (
+        !currentLifecycleCorrelation(
+          delivery.parentSessionId,
+          state,
+          authorizations,
+          delivery.directive.correlation,
+        )
+      ) {
+        return "discard";
+      }
       return (await isCurrentActiveAuthorization(
         delivery.directive.correlation,
         dependencies.findAuthorizationById,
@@ -579,8 +673,10 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         ? "inject"
         : "discard";
     } catch (cause) {
-      await dependencies.recordAdvisory("review_directive_delivery_unreadable", cause);
-      return "retain";
+      await dependencies
+        .recordAdvisory("review_directive_delivery_unreadable", cause)
+        .then(() => undefined, () => undefined);
+      return "discard";
     }
   };
   const recoverReviewDispatchesAfterRestart = async (): Promise<void> => {
@@ -588,28 +684,35 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
       await dependencies.hydrateAuthorizationsBeforeReviewRecovery();
       const records = await dependencies.readDurableRecords();
       const slots = projectReviewDispatchSlots(records);
+      const authorizations = await dependencies.readDurableAuthorizations();
+      const state = project(records, new Date(0).toISOString());
       for (const slot of slots) {
-        if (slot.state === "pending") {
+        if (slot.state === "pending" || slot.state === "claimed") {
           await dependencies.withAuthorizationReviewBoundary(slot.key.parentSessionId, async () => {
-            if (await isCurrentActiveAuthorization(slot.key.correlation, dependencies.findAuthorizationById)) {
+            const current = currentLifecycleCorrelation(
+              slot.key.parentSessionId,
+              state,
+              authorizations,
+              slot.key.correlation,
+            );
+            const active = await isCurrentActiveAuthorization(
+              slot.key.correlation,
+              dependencies.findAuthorizationById,
+            );
+            if (!current || !active) {
+              await appendTerminal(slot, "cancelled");
+            } else if (slot.state === "pending") {
               await dependencies.injectReviewRequiredDirective({
                 parentSessionId: slot.key.parentSessionId,
                 directive: { kind: "review_required", correlation: slot.key.correlation },
               });
-            } else {
-              await cancelWithin(
-                slot.key.parentSessionId,
-                authorizationIdFor(slot.key.correlation),
-              );
+            } else if (slot.artifactReservation?.status === "unusable") {
+              await appendTerminal(slot, "artifact_reservation_unusable");
             }
-          });
-        } else if (slot.state === "claimed" && slot.artifactReservation?.status === "unusable") {
-          await dependencies.withAuthorizationReviewBoundary(slot.key.parentSessionId, async () => {
-            await appendTerminal(slot, "artifact_reservation_unusable");
           });
         }
       }
-      const authorizations = await dependencies.readDurableAuthorizations();
+      const latestAuthorizations = await dependencies.readDurableAuthorizations();
       const parents = new Set<string>();
       for (const record of records) {
         if (
@@ -621,7 +724,7 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         }
       }
       for (const parent of parents) {
-        if (candidatesForParent(parent, records, authorizations).length > 0) {
+        if (candidatesForParent(parent, records, latestAuthorizations).length > 0) {
           await offerNextMandatoryReview(parent);
         }
       }
