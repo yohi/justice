@@ -14,7 +14,8 @@ const SYS_RENAMEAT2: libc::c_long = 316;
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const RESOLVE_BENEATH: u64 = 0x08;
-const AT_EMPTY_PATH: libc::c_int = 0x1000;
+const AT_FDCWD: libc::c_int = -100;
+const AT_SYMLINK_FOLLOW: libc::c_int = 0x400;
 const RENAME_NOREPLACE: libc::c_uint = 1;
 const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
 
@@ -457,16 +458,18 @@ fn mkdir_relative(dirfd: RawFd, path: &str, mode: libc::mode_t) -> io::Result<()
 }
 
 fn link_fd(source_fd: RawFd, target_dirfd: RawFd, target: &str) -> io::Result<()> {
+    let source = CString::new(format!("/proc/self/fd/{source_fd}"))
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
     let target = CString::new(target).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
-    let empty = c"";
-    // SAFETY: source_fd is an open artifact descriptor and both paths are validated relative leaves.
+    // SAFETY: `/proc/self/fd/<source_fd>` is the kernel-owned symlink for the
+    // live descriptor, and target is a validated leaf beneath the owned directory.
     let result = unsafe {
         libc::linkat(
-            source_fd,
-            empty.as_ptr(),
+            AT_FDCWD,
+            source.as_ptr(),
             target_dirfd,
             target.as_ptr(),
-            AT_EMPTY_PATH,
+            AT_SYMLINK_FOLLOW,
         )
     };
     if result != 0 {
