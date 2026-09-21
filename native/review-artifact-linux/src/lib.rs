@@ -420,7 +420,7 @@ fn open_relative(
         resolve: RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
     };
     // SAFETY: syscall receives valid pointers to NUL-terminated path and repr(C) open_how.
-    let fd = unsafe {
+    let fd = checked_syscall_fd(unsafe {
         libc::syscall(
             SYS_OPENAT2,
             dirfd,
@@ -428,12 +428,16 @@ fn open_relative(
             &raw const how,
             std::mem::size_of::<OpenHow>(),
         )
-    } as libc::c_int;
+    })?;
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: the syscall returned a newly owned file descriptor.
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn checked_syscall_fd(result: libc::c_long) -> io::Result<libc::c_int> {
+    libc::c_int::try_from(result).map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))
 }
 
 fn mkdir_relative(dirfd: RawFd, path: &str, mode: libc::mode_t) -> io::Result<()> {
@@ -603,7 +607,9 @@ fn into_owned_fd(file: std::fs::File) -> OwnedFd {
 
 #[cfg(test)]
 mod tests {
-    use super::{artifact_leaf, lease_leaf_from_path, probe_review_artifact_capabilities};
+    use super::{
+        artifact_leaf, checked_syscall_fd, lease_leaf_from_path, probe_review_artifact_capabilities,
+    };
 
     #[test]
     fn artifact_leaf_rejects_paths_outside_the_review_directory() {
@@ -628,5 +634,22 @@ mod tests {
         assert!(capabilities.glibc);
         assert!(capabilities.openat2);
         assert!(capabilities.renameat2);
+    }
+
+    #[test]
+    fn checked_syscall_fd_rejects_values_outside_c_int() {
+        let too_large = libc::c_long::try_from(i64::from(libc::c_int::MAX) + 1)
+            .expect("Linux x64 c_long can represent c_int::MAX + 1");
+
+        assert_eq!(
+            checked_syscall_fd(too_large)
+                .expect_err("out-of-range syscall result must fail")
+                .raw_os_error(),
+            Some(libc::EOVERFLOW)
+        );
+        assert_eq!(
+            checked_syscall_fd(-1).expect("-1 is a valid syscall error result"),
+            -1
+        );
     }
 }
