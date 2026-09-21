@@ -86,6 +86,9 @@ export type ReviewDispatchDependencies = {
     | { readonly kind: "failed" }
   >;
   readonly reserveReviewArtifact: () => Promise<ReviewArtifactReservation>;
+  readonly cleanupReviewArtifactReservation: (
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ) => Promise<void>;
   readonly injectReviewRequiredDirective: (delivery: ReviewDirectiveDelivery) => Promise<void>;
   readonly withAuthorizationReviewBoundary: AuthorizationReviewBoundary["withParentSession"];
   readonly hydrateAuthorizationsBeforeReviewRecovery: () => Promise<unknown>;
@@ -312,6 +315,13 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
     sessionId: record.sessionId,
     writerId: record.writerId,
   });
+  const recordAdvisorySafely = async (advisory: string, cause?: unknown): Promise<void> => {
+    try {
+      await dependencies.recordAdvisory(advisory, cause);
+    } catch {
+      return;
+    }
+  };
   const appendTerminal = async (
     slot: ReviewDispatchSlot,
     reason: "cancelled" | "artifact_reservation_unusable" | "review_execution_failed" | "lost_conclusive",
@@ -492,6 +502,13 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         artifactReservation: reservation,
       });
       if (claimed.kind !== "committed") {
+        if (reservation.status === "usable") {
+          try {
+            await dependencies.cleanupReviewArtifactReservation(reservation);
+          } catch (cause) {
+            await recordAdvisorySafely("review_artifact_reservation_cleanup_failed", cause);
+          }
+        }
         return { kind: "blocked", advisory: "review_claim_commit_failed" };
       }
       const binding: ReviewTaskCallBinding = {

@@ -144,6 +144,7 @@ function dispatchHarness() {
     records: [] as PersistedLogRecord[],
     authorizations: [activeAuthorization()] as ApprovedPlanBinding[],
     reservation: usableReservation,
+    cleanupCalls: [] as ReviewArtifactReservation[],
     appendKind: "committed" as "committed" | "failed",
     readRecordsFailure: false,
     readAuthorizationsFailure: false,
@@ -156,7 +157,11 @@ function dispatchHarness() {
     advisoryFailure: false,
     id: 0,
   };
-  const dependencies: ReviewDispatchDependencies = {
+  const dependencies: ReviewDispatchDependencies & {
+    readonly cleanupReviewArtifactReservation: (
+      reservation: ReviewArtifactReservation,
+    ) => Promise<void>;
+  } = {
     readDurableRecords: async () => {
       if (state.readRecordsFailure) throw new Error("records unavailable");
       return state.records;
@@ -190,6 +195,9 @@ function dispatchHarness() {
       return { kind: "committed", record };
     },
     reserveReviewArtifact: async () => state.reservation,
+    cleanupReviewArtifactReservation: async (reservation: ReviewArtifactReservation) => {
+      state.cleanupCalls.push(reservation);
+    },
     injectReviewRequiredDirective: async (delivery) => {
       state.directives.push(delivery);
     },
@@ -629,6 +637,7 @@ describe("review dispatch state machine", () => {
       kind: "blocked",
       advisory: "review_claim_commit_failed",
     });
+    expect(failed.state.cleanupCalls).toEqual([usableReservation]);
 
     const terminal = dispatchHarness();
     seedReviewPending(terminal.state.records);

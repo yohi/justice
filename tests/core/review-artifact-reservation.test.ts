@@ -15,6 +15,8 @@ const artifactIo: ReservedReviewArtifactIo = {
 describe("createReviewArtifactReservationPort", () => {
   it("returns unusable without an exclusive marker capability", async () => {
     const files = createMockFileSystem();
+    const fileExists = vi.spyOn(files, "fileExists");
+    const writeFile = vi.spyOn(files, "writeFile");
     const reserve = createReviewArtifactReservationPort(
       files,
       files,
@@ -27,8 +29,8 @@ describe("createReviewArtifactReservationPort", () => {
       status: "unusable",
       reason: "artifact_storage_unavailable",
     });
-    expect(files.fileExists).not.toHaveBeenCalled();
-    expect(files.writeFile).not.toHaveBeenCalled();
+    expect(fileExists).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
   });
 
   it("reserves the exact marker-backed artifact path", async () => {

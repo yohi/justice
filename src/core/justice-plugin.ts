@@ -451,6 +451,9 @@ export class JusticePlugin {
         this.authorizationStore.findByAuthorizationId(authorizationId),
       appendReviewDispatchTransition: (input) => this.appendReviewDispatchTransition(input),
       reserveReviewArtifact: reviewArtifactReservation.reserve,
+      cleanupReviewArtifactReservation: async (reservation) => {
+        await reviewArtifactReservation.artifactIo?.cleanup(reservation);
+      },
       injectReviewRequiredDirective: (delivery) => this.reviewDirectiveSink.deliver(delivery),
       withAuthorizationReviewBoundary: this.authorizationReviewBoundary.withParentSession,
       hydrateAuthorizationsBeforeReviewRecovery: () => this.authorizationStore.hydrate(),
