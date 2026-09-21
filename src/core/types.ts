@@ -35,11 +35,41 @@ export type TaskExecutionRef = {
   readonly taskId: string;
   readonly attemptId: string;
 };
-export type TaskCallBinding = {
+export type ReviewArtifactInodeIdentity = {
+  readonly device: string;
+  readonly inode: string;
+};
+export type ReviewArtifactReservation =
+  | {
+      readonly status: "usable";
+      readonly artifactId: string;
+      readonly artifactPath: string;
+      readonly leasePath: string;
+      readonly artifactIdentity: ReviewArtifactInodeIdentity;
+    }
+  | {
+      readonly status: "unusable";
+      readonly reason:
+        | "artifact_storage_unavailable"
+        | "artifact_path_collision_exhausted"
+        | "artifact_path_invalid"
+        | "reservation_internal_error";
+    };
+export type ImplementationTaskCallBinding = {
+  readonly purpose: "implementation";
   readonly parentSessionId: string;
   readonly authorizationId: string;
   readonly taskExecutionRef: TaskExecutionRef;
 };
+export type ReviewTaskCallBinding = {
+  readonly purpose: "task_review" | "final_review";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly expectedCategory: "sp-review" | "sp-final-review";
+  readonly artifactReservation: ReviewArtifactReservation;
+};
+export type TaskCallBinding = ImplementationTaskCallBinding | ReviewTaskCallBinding;
 export type ReviewKind = "task-review" | "final-review";
 export type TaskReviewCorrelation = {
   readonly reviewKind: "task-review";
@@ -55,6 +85,10 @@ export type FinalReviewCorrelation = {
   readonly finalReviewRound: number;
 };
 export type ReviewCorrelation = TaskReviewCorrelation | FinalReviewCorrelation;
+export type ReviewRequiredDirective = {
+  readonly kind: "review_required";
+  readonly correlation: ReviewCorrelation;
+};
 export type ReviewPendingCommittedHandler = (parentSessionId: string) => Promise<void>;
 
 /** plan.md内の個別ステップ */
@@ -454,6 +488,29 @@ export interface FileWriter {
    * Implementations must reject path traversal and rethrow other filesystem errors.
    */
   link?(from: string, to: string): Promise<void>;
+  createExclusiveMarker?(
+    path: string,
+  ): Promise<
+    | {
+        readonly kind: "created";
+        readonly leasePath: string;
+        readonly artifactIdentity: ReviewArtifactInodeIdentity;
+      }
+    | { readonly kind: "occupied" }
+  >;
+}
+
+export interface ReservedReviewArtifactIo {
+  writeExisting(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+    content: string,
+  ): Promise<void>;
+  readOnce(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ): Promise<string>;
+  cleanup(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ): Promise<"removed" | "replacement_retained">;
 }
 
 /** コンテキスト削減戦略 */

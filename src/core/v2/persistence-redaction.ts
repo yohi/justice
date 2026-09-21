@@ -204,6 +204,8 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
         planPath: redactForPersistence(record.planPath),
         ...(record.reason === undefined ? {} : { reason: redactForPersistence(record.reason) }),
       };
+    case "review_dispatch_transition":
+      return record;
     // Each bootstrap kind is spread under its own literal `kind` so the result
     // stays assignable to a single PendingObservationRecord member.
     case "workflow_started":

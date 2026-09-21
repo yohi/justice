@@ -74,6 +74,28 @@ function createObservationHandler(): ObservationHandler & {
 }
 
 describe("normalizeTaskToolInputWithCategory", () => {
+  it.each(["sp-review", "sp-final-review"] as const)(
+    "forces %s to run in the foreground",
+    (category) => {
+      const result = normalizeTaskToolInputWithCategory(
+        { prompt: "review", runInBackground: true, run_in_background: true },
+        category,
+      );
+
+      expect(result.run_in_background).toBe(false);
+      expect(result).not.toHaveProperty("runInBackground");
+    },
+  );
+
+  it("preserves a non-review category's execution mode", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "implement", run_in_background: true },
+      "sp-implementation",
+    );
+
+    expect(result.run_in_background).toBe(true);
+  });
+
   it("removes forbidden task fields and preserves prompt", () => {
     const input = {
       prompt: "do work",

@@ -22,6 +22,35 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["sp-review", "sp-final-review"] as const)(
+    "forces %s to run in the foreground on the final task wire payload",
+    async (category) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      vi.spyOn(justice, "handleEvent").mockResolvedValue({
+        action: "inject",
+        injectedContext: "review claim",
+        modifiedPayload: {
+          args: { category, run_in_background: true },
+        },
+      });
+      const args: Record<string, unknown> = {
+        category,
+        runInBackground: true,
+      };
+
+      await adapter.onToolExecuteBefore(
+        { tool: "task", sessionID: "s", callID: "review-call" },
+        { args },
+      );
+
+      expect(args.category).toBe(category);
+      expect(args.run_in_background).toBe(false);
+      expect(args).not.toHaveProperty("runInBackground");
+    },
+  );
+
   it("(a) forwards a non-task tool (bash) as PreToolUse with callId and toolInput", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

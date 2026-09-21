@@ -1,5 +1,11 @@
 // src/core/v2/state-projection.ts
-import type { FullEvidenceRef, TaskExecutionRef } from "../types";
+import type {
+  FullEvidenceRef,
+  ReviewTaskCallBinding,
+  TaskCallBinding,
+  TaskExecutionRef,
+} from "../types";
+import type { ReviewDispatchSlot } from "../review-dispatch-state";
 import {
   computeMaxSequenceByShard,
   computeSourceHash,
@@ -45,6 +51,8 @@ export type ProjectedState = {
   readonly tasks: ReadonlyMap<string, ProjectedTask>;
   readonly reviewSummary: ReviewSummary;
   readonly lifecycle: ProjectedLifecycle;
+  readonly reviewDispatchSlots: readonly ReviewDispatchSlot[];
+  readonly taskCallBindings: readonly TaskCallBinding[];
 };
 
 export type FinalizationContext = {
@@ -286,6 +294,80 @@ function applyDecisionEvent(
   taskState.status = event.verdict;
 }
 
+function reviewCorrelationKey(parentSessionId: string, correlation: ReviewDispatchSlot["key"]["correlation"]): string {
+  return JSON.stringify([parentSessionId, correlation]);
+}
+
+function foldReviewDispatchSlots(events: readonly PersistedLogRecord[]): readonly ReviewDispatchSlot[] {
+  const slots = new Map<string, ReviewDispatchSlot>();
+  for (const event of events) {
+    if (
+      event.recordType !== "observation" ||
+      event.kind !== "review_dispatch_transition"
+    ) {
+      continue;
+    }
+    const key = reviewCorrelationKey(event.parentSessionId, event.correlation);
+    const current = slots.get(key);
+    const envelope = {
+      agentId: event.agentId,
+      sessionId: event.sessionId,
+      writerId: event.writerId,
+    };
+    if (event.from === null && event.to === "pending" && current === undefined) {
+      slots.set(key, {
+        key: { parentSessionId: event.parentSessionId, correlation: event.correlation },
+        expectedCategory: event.expectedCategory,
+        state: "pending",
+        ...envelope,
+      });
+    } else if (
+      event.from === "pending" &&
+      event.to === "claimed" &&
+      current?.state === "pending"
+    ) {
+      slots.set(key, {
+        ...current,
+        state: "claimed",
+        callId: event.callId,
+        artifactReservation: event.artifactReservation,
+        ...envelope,
+      });
+    } else if (
+      event.to === "terminal" &&
+      current !== undefined &&
+      current.state === event.from &&
+      (event.from !== "claimed" || current.callId === event.callId)
+    ) {
+      slots.set(key, {
+        ...current,
+        state: "terminal",
+        terminalReason: event.terminalReason,
+        ...envelope,
+      });
+    }
+  }
+  return [...slots.values()];
+}
+
+function taskCallBindingsFor(slots: readonly ReviewDispatchSlot[]): readonly TaskCallBinding[] {
+  const bindings: ReviewTaskCallBinding[] = [];
+  for (const slot of slots) {
+    if (slot.state !== "claimed" || slot.callId === undefined || slot.artifactReservation === undefined) {
+      continue;
+    }
+    bindings.push({
+      purpose: slot.key.correlation.reviewKind === "task-review" ? "task_review" : "final_review",
+      parentSessionId: slot.key.parentSessionId,
+      callId: slot.callId,
+      correlation: slot.key.correlation,
+      expectedCategory: slot.expectedCategory,
+      artifactReservation: slot.artifactReservation,
+    });
+  }
+  return bindings;
+}
+
 /**
  * Pure deterministic fold from an event log to `ProjectedState` (§6.3).
  * Ordering is delegated to `orderEventsForProjection` so replays are stable.
@@ -294,6 +376,7 @@ function applyDecisionEvent(
  */
 export function project(events: readonly PersistedLogRecord[], rebuiltAt: string): ProjectedState {
   const sorted = orderEventsForProjection(events);
+  const reviewDispatchSlots = foldReviewDispatchSlots(sorted);
 
   const maxSequenceByShard = computeMaxSequenceByShard(sorted);
   const tasks = new Map<string, MutableTask>();
@@ -330,6 +413,8 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
     },
     tasks,
     lifecycle,
+    reviewDispatchSlots,
+    taskCallBindings: taskCallBindingsFor(reviewDispatchSlots),
     reviewSummary: aggregateReviews(
       sorted.filter((event): event is ObservationRecord => event.recordType === "observation"),
     ),
@@ -353,6 +438,8 @@ type SerializedProjectedState = {
     readonly taskStates: Record<string, TaskProgressState>;
     readonly finalization: Record<string, FinalizationContext>;
   };
+  readonly reviewDispatchSlots?: readonly ReviewDispatchSlot[];
+  readonly taskCallBindings?: readonly TaskCallBinding[];
 };
 
 /**
@@ -382,6 +469,8 @@ export function toSerializableProjectedState(state: ProjectedState): SerializedP
       taskStates: Object.fromEntries(state.lifecycle.taskStates),
       finalization: Object.fromEntries(state.lifecycle.finalization),
     },
+    reviewDispatchSlots: state.reviewDispatchSlots,
+    taskCallBindings: state.taskCallBindings,
   };
 }
 
@@ -418,5 +507,7 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
       >,
       finalization: new Map(Object.entries(raw.lifecycle?.finalization ?? {})),
     },
+    reviewDispatchSlots: raw.reviewDispatchSlots ?? [],
+    taskCallBindings: raw.taskCallBindings ?? [],
   };
 }

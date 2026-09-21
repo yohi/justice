@@ -501,6 +501,7 @@ export class ObservationHandler {
           state: lifecycleState,
         });
         this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
+          purpose: "implementation",
           parentSessionId: event.sessionId,
           authorizationId: authorization.authorizationId,
           taskExecutionRef: attempt.taskExecutionRef,
@@ -515,6 +516,7 @@ export class ObservationHandler {
       const taskExecutionRef = readTaskExecutionRef(event.payload.toolInput);
       if (taskExecutionRef !== undefined) {
         this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
+          purpose: "implementation",
           parentSessionId: event.sessionId,
           authorizationId: taskExecutionRef.authorizationId,
           taskExecutionRef,
@@ -724,8 +726,9 @@ export class ObservationHandler {
       event.callId === undefined
         ? undefined
         : this.options.sessionStateProvider.getTaskCallBinding(event.callId);
-    const ref = binding?.taskExecutionRef;
-    if (ref === undefined || ref.taskId !== taskId) return;
+    if (binding === undefined || binding.purpose !== "implementation") return;
+    const ref = binding.taskExecutionRef;
+    if (ref.taskId !== taskId) return;
     const dependencies: LifecycleNotificationDependencies = {
       onReviewPendingCommitted: this.reviewPendingCommittedHandler,
       recordAdvisory: (advisory, cause) => this.appendLifecycleAdvisory(advisory, cause),
@@ -1025,6 +1028,7 @@ export class ObservationHandler {
       const binding = this.options.sessionStateProvider.getTaskCallBinding(callId);
       if (
         binding === undefined ||
+        binding.purpose !== undefined && binding.purpose !== "implementation" ||
         binding.parentSessionId !== sessionId ||
         binding.taskExecutionRef.taskId !== taskId
       )

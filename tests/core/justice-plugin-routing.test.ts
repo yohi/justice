@@ -72,6 +72,24 @@ describe("JusticePlugin routing guard", () => {
     expect(response).toEqual({ action: "inject", injectedContext: "plan pre" });
   });
 
+  it("keeps a mandatory review task out of the implementation PlanBridge route", async () => {
+    const plugin = createPlugin();
+    const observation = plugin.getObservationHandler();
+    const planBridge = plugin.getPlanBridge();
+    const observationSpy = vi.spyOn(observation, "handlePreToolUse");
+    const planSpy = vi.spyOn(planBridge, "handlePreToolUse");
+
+    await plugin.handleEvent({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: { category: "sp-review" } },
+      sessionId: "s-1",
+      callId: "review-call",
+    } as PreToolUseEvent);
+
+    expect(observationSpy).not.toHaveBeenCalled();
+    expect(planSpy).not.toHaveBeenCalled();
+  });
+
   it("invokes observation handler, plan-bridge and task-feedback for a task PostToolUse", async () => {
     const plugin = createPlugin();
     const observation = plugin.getObservationHandler();

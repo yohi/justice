@@ -497,6 +497,30 @@ describe("redactPendingLogRecord", () => {
     });
   });
 
+  it("preserves review dispatch transitions without redacting identity fields", () => {
+    const record: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: "review-transition-1",
+      parentSessionId: "parent-1",
+      correlation: {
+        reviewKind: "task-review",
+        taskExecutionRef: {
+          authorizationId: "auth-1",
+          taskId: "task-1",
+          attemptId: "attempt-1",
+        },
+        reviewRound: 1,
+      },
+      expectedCategory: "sp-review",
+      from: null,
+      to: "pending",
+    };
+
+    expect(redactPendingLogRecord(record)).toBe(record);
+  });
+
   it("rejects an unknown record kind at the runtime boundary", () => {
     const record: PendingLogRecord = {
       ...baseEnvelope,
