@@ -6,7 +6,7 @@
 
 **Architecture:** A Rust N-API addon owns descriptor-relative filesystem operations and inode-bound reservation handles. A focused TypeScript adapter loads and probes only the bundled Linux x86_64 glibc addon, then maps it to the existing `FileWriter.createExclusiveMarker` and `ReservedReviewArtifactIo` contracts. `OpenCodeAdapter` creates the provider once and injects it into `NodeFileSystem`; unsupported or failed initialization leaves both capability slots absent.
 
-**Tech Stack:** Bun, TypeScript 6, Vitest, Rust 1.85.1, `napi` 3.12.2, `napi-derive` 3.6.3, `libc` 0.2.177, `@napi-rs/cli` 3.2.0, Linux `openat2(2)`, `renameat2(2)`, `openat(2)`, `linkat(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)` only where it is not used for verified quarantine deletion.
+**Tech Stack:** Bun, TypeScript 6, Vitest, Rust 1.88.0, `napi` 3.12.2, `napi-derive` 3.6.8, `libc` 0.2.177, `@napi-rs/cli` 3.2.0, Linux `openat2(2)`, `renameat2(2)`, `openat(2)`, `linkat(2)`, `fstat(2)`, `pread(2)`, `pwrite(2)`, and `unlinkat(2)` only where it is not used for verified quarantine deletion.
 
 ## Global Constraints
 
@@ -41,7 +41,7 @@
 
 - [ ] **Step 1: Define the pinned Rust manifest and N-API build hook**
 
-Use Rust 1.85.1 with minimal profile and `x86_64-unknown-linux-gnu`. Use the exact crate dependencies `libc = "=0.2.177"`, `napi = { version = "=3.12.2", default-features = false, features = ["napi8"] }`, `napi-derive = "=3.6.3"`, and build dependency `napi-build = "=2.4.1"`. Set `crate-type = ["cdylib"]` and call `napi_build::setup()` from `build.rs`.
+Use Rust 1.88.0 with minimal profile and `x86_64-unknown-linux-gnu`. Use the exact crate dependencies `libc = "=0.2.177"`, `napi = { version = "=3.12.2", default-features = false, features = ["napi8"] }`, `napi-derive = "=3.6.8"`, and build dependency `napi-build = "=2.4.1"`. Set `crate-type = ["cdylib"]` and call `napi_build::setup()` from `build.rs`.
 
 - [ ] **Step 2: Write failing native unit tests for path validation and capability probing**
 
@@ -69,8 +69,8 @@ Run:
 
 ```bash
 cargo fmt --manifest-path native/review-artifact-linux/Cargo.toml -- --check
-cargo test --manifest-path native/review-artifact-linux/Cargo.toml
-cargo clippy --manifest-path native/review-artifact-linux/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path native/review-artifact-linux/Cargo.toml --features test
+cargo clippy --manifest-path native/review-artifact-linux/Cargo.toml --all-targets --features test -- -D warnings
 ```
 
 Expected: all native tests pass, clippy has no errors, and no test uses an unverified pathname fallback.
@@ -167,7 +167,7 @@ Expected: supported sentinel composition passes, provider failure remains fail-o
 
 - [ ] **Step 1: Add package and development-container prerequisites**
 
-Update the lockfile through Bun, install Rust 1.85.1 and the GNU target in the devcontainer, and retain existing Bun/OpenCode setup. Do not make the native addon a runtime dependency for unsupported hosts.
+Update the lockfile through Bun, install Rust 1.88.0 and the GNU target in the devcontainer, and retain existing Bun/OpenCode setup. Do not make the native addon a runtime dependency for unsupported hosts.
 
 - [ ] **Step 2: Add the native build gate to CI**
 
@@ -206,11 +206,15 @@ Run `git status --short`, `git diff --check`, `git diff --stat`, and `git diff`.
 - [ ] **Step 3: Commit the design documents**
 
 ```bash
+GIT_MASTER=1 git add docs/superpowers/specs/2026-09-21-review-artifact-provider-wiring-design.md docs/superpowers/plans/2026-09-21-review-artifact-provider-wiring.md
+GIT_MASTER=1 git commit -m "docs: review artifact provider配線を設計"
 ```
 
 - [ ] **Step 4: Commit the implementation**
 
 ```bash
+GIT_MASTER=1 git add .github/workflows/ci.yml .github/workflows/release.yml bun.lock docs/superpowers/plans/2026-09-21-review-artifact-provider-wiring.md native/review-artifact-linux/Cargo.lock native/review-artifact-linux/Cargo.toml native/review-artifact-linux/build.rs native/review-artifact-linux/src/lib.rs package.json rust-toolchain.toml src/runtime/linux-review-artifact-provider.ts src/runtime/node-file-system.ts src/runtime/opencode-adapter.ts tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/node-file-system.test.ts
+GIT_MASTER=1 git commit -m "feat: Linux review artifact providerを追加"
 ```
 
 - [ ] **Step 5: Push the current branch and report evidence**
