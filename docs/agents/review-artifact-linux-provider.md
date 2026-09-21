@@ -7,7 +7,7 @@ published. The supported deployment is Linux x86_64 with glibc and working
 ## Supported environment
 
 The probe was compiled and executed inside the root-selected devcontainer with
-OpenCode `1.18.29` and Rust `1.85.1-x86_64-unknown-linux-gnu`. The exact probe
+OpenCode `1.18.29` and Rust `1.88.0-x86_64-unknown-linux-gnu`. The exact probe
 JSON was:
 
 ```json

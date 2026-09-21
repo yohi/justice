@@ -6,6 +6,7 @@ import {
   parseJusticeImplementCommandArguments,
 } from "../core/implement-command";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
+import type { ReservedReviewArtifactIo } from "../core/types";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import {
   isJusticeStartCommand,
@@ -15,6 +16,8 @@ import { parseReviewResolutionArtifact } from "../core/review-resolution-artifac
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import { normalizeTaskToolInputInPlace, resolveTaskIdFromToolInput } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
+import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
+import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -172,7 +175,18 @@ export class OpenCodeAdapter {
       const root = this.#workspaceRoot;
       if (root === null) return;
 
-      const localFs = new NodeFileSystem(root);
+      let reviewArtifactProvider: LinuxOpenat2ReviewArtifactProvider | undefined;
+      try {
+        reviewArtifactProvider = createLinuxOpenat2ReviewArtifactProvider(root);
+      } catch (err) {
+        reviewArtifactProvider = undefined;
+        await this.log(
+          "warn",
+          "[Justice] review artifact provider initialization failed; reservation disabled",
+          err,
+        );
+      }
+      const localFs = new NodeFileSystem(root, reviewArtifactProvider);
       const loggerAdapter: NonNullable<JusticePluginOptions["logger"]> = {
         warn: (msg, ...extra) => {
           void this.log("warn", msg, ...extra);
@@ -185,6 +199,21 @@ export class OpenCodeAdapter {
       const globalFs = await createGlobalFs(loggerAdapter);
       const notifier = new OpenCodeNotifier(this.#init.client.app.log);
       this.#notifier = notifier;
+
+      // Optional runtime capability (Task 3.4): reserved review artifact I/O
+      // backed by the native provider. Absent on unsupported runtimes, where
+      // review artifact reservation degrades fail-open to an unusable
+      // reservation inside the plugin instead of disabling initialization.
+      let reservedReviewArtifactIo: ReservedReviewArtifactIo | undefined;
+      try {
+        reservedReviewArtifactIo = localFs.createReservedReviewArtifactIo?.();
+      } catch (err) {
+        await this.log(
+          "warn",
+          "[Justice] review artifact reservation capability probe failed; reservation disabled",
+          err,
+        );
+      }
 
       // Bootstrap a globally-unique writerId for the Observation Log shards (D55/D39).
       // Fail-open: if the uniqueness probe cannot run (e.g. the workspace root is not
@@ -208,6 +237,7 @@ export class OpenCodeAdapter {
           void this.log("error", "[Justice] internal error", err);
         },
         globalFileSystem: globalFs ?? undefined,
+        reservedReviewArtifactIo,
         notifier,
         writerId,
         workspaceRoot: root,

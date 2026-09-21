@@ -35,13 +35,13 @@ RUN test "$(whoami)" = "root" \
 
 RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
     | RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
-      sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.85.1
-RUN rustup toolchain install 1.85.1 \
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.88.0
+RUN rustup toolchain install 1.88.0 \
     --profile minimal \
     --component rustfmt \
     --component clippy \
     --target x86_64-unknown-linux-gnu \
-    && rustup default 1.85.1 \
-    && test "$(rustup show active-toolchain | cut -d' ' -f1)" = "1.85.1-x86_64-unknown-linux-gnu"
+    && rustup default 1.88.0 \
+    && test "$(rustup show active-toolchain | cut -d' ' -f1)" = "1.88.0-x86_64-unknown-linux-gnu"
 
 USER $USERNAME
