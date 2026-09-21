@@ -16,6 +16,7 @@ import {
   rmdir as fsRmdir,
   readdir,
 } from "node:fs/promises";
+import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 
 export class NodeFileSystem implements FileReader, FileWriter {
   private readonly rootDir: string;
@@ -39,8 +40,12 @@ export class NodeFileSystem implements FileReader, FileWriter {
    */
   readonly createReservedReviewArtifactIo?: () => ReservedReviewArtifactIo;
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, provider?: LinuxOpenat2ReviewArtifactProvider) {
     this.rootDir = resolve(rootDir);
+    this.createExclusiveMarker = provider?.createExclusiveMarker;
+    this.createReservedReviewArtifactIo = provider === undefined
+      ? undefined
+      : () => provider.reservedReviewArtifactIo;
   }
 
   async readFile(path: string): Promise<string> {

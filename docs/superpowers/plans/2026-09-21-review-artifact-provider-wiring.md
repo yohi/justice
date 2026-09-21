@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Supported deployment is Linux x86_64 with glibc and working `openat2(2)` and `renameat2(2)`.
-- The native crate package name is `justice_review_artifact_linux` and the addon path is `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`.
+- The native crate package name is `justice_review_artifact_linux`; with `@napi-rs/cli --no-js --platform`, the emitted addon path is `dist/native/index.linux-x64-gnu.node`.
 - `openReviewArtifactRoot(rootDir)` is the only native operation accepting a host path; every later operation is descriptor-relative and beneath `.justice/reviews`.
 - Exclusive creation uses `O_CREAT | O_EXCL | O_NOFOLLOW`; lease creation is identity-bound with `linkat` from the opened artifact descriptor.
 - Read and write reopen both artifact and lease and verify `st_dev`/`st_ino` against the durable reservation identity.
@@ -93,7 +93,7 @@ Test all unsupported environment combinations: non-Linux, non-x86_64, non-glibc,
 
 - [ ] **Step 2: Implement addon loading and capability gating**
 
-Load only `../../dist/native/justice_review_artifact_linux.linux-x64-gnu.node` via `createRequire(import.meta.url)`. Check `process.platform`, `process.arch`, glibc availability from `process.report`, addon capability results, and root initialization in separate guarded blocks. Return `undefined` at every failed boundary.
+Load only `../../dist/native/index.linux-x64-gnu.node` via `createRequire(import.meta.url)`. Check `process.platform`, `process.arch`, glibc availability from `process.report`, addon capability results, and root initialization in separate guarded blocks. Return `undefined` at every failed boundary.
 
 - [ ] **Step 3: Adapt exclusive marker and reserved I/O**
 
@@ -109,7 +109,7 @@ Run:
 
 ```bash
 bun run build:native:review-artifact
-test -f dist/native/justice_review_artifact_linux.linux-x64-gnu.node
+test -f dist/native/index.linux-x64-gnu.node
 bun run test -- tests/runtime/linux-review-artifact-provider.test.ts tests/runtime/linux-review-artifact-provider-security.test.ts
 ```
 

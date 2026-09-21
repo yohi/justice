@@ -4,6 +4,7 @@ import {
   createReviewArtifactReservationPort,
 } from "../../src/core/review-artifact-reservation";
 import { NodeFileSystem } from "../../src/runtime/node-file-system";
+import type { LinuxOpenat2ReviewArtifactProvider } from "../../src/runtime/linux-review-artifact-provider";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,6 +165,26 @@ describe("NodeFileSystem", () => {
         status: "unusable",
         reason: "artifact_storage_unavailable",
       });
+    });
+  });
+
+  describe("review artifact reservation capabilities (supported runtime)", () => {
+    it("publishes both capabilities from the injected provider", () => {
+      const artifactIo = {
+        writeExisting: async () => {},
+        readOnce: async () => "",
+        cleanup: async () => "removed" as const,
+      };
+      const provider: LinuxOpenat2ReviewArtifactProvider = {
+        createExclusiveMarker: async () => ({ kind: "occupied" as const }),
+        reservedReviewArtifactIo: artifactIo,
+        close: () => {},
+      };
+
+      const supportedFs = new NodeFileSystem(tempDir, provider);
+
+      expect(supportedFs.createExclusiveMarker).toBe(provider.createExclusiveMarker);
+      expect(supportedFs.createReservedReviewArtifactIo?.()).toBe(artifactIo);
     });
   });
 });

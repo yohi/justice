@@ -16,6 +16,7 @@ import { parseReviewResolutionArtifact } from "../core/review-resolution-artifac
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import { normalizeTaskToolInputInPlace, resolveTaskIdFromToolInput } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
+import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -173,7 +174,18 @@ export class OpenCodeAdapter {
       const root = this.#workspaceRoot;
       if (root === null) return;
 
-      const localFs = new NodeFileSystem(root);
+      let reviewArtifactProvider;
+      try {
+        reviewArtifactProvider = createLinuxOpenat2ReviewArtifactProvider(root);
+      } catch (err) {
+        reviewArtifactProvider = undefined;
+        await this.log(
+          "warn",
+          "[Justice] review artifact provider initialization failed; reservation disabled",
+          err,
+        );
+      }
+      const localFs = new NodeFileSystem(root, reviewArtifactProvider);
       const loggerAdapter: NonNullable<JusticePluginOptions["logger"]> = {
         warn: (msg, ...extra) => {
           void this.log("warn", msg, ...extra);
