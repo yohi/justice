@@ -100,7 +100,7 @@ function seedReviewPending(records: PersistedLogRecord[]): void {
   records.push(...transitions.map(([from, to], index) => taskLifecycle(index + 1, from, to)));
 }
 
-function seedFinalReviewPending(records: PersistedLogRecord[]): void {
+function seedFinalReviewPending(records: PersistedLogRecord[], firstSequence = 1): void {
   records.push(
     {
       schemaVersion: 1,
@@ -109,7 +109,7 @@ function seedFinalReviewPending(records: PersistedLogRecord[]): void {
       sessionId: "parent-1",
       writerId: "writer-1",
       recordType: "observation",
-      sequence: 1,
+      sequence: firstSequence,
       kind: "plan_finalization_transition",
       parentSessionId: "parent-1",
       authorizationId: "auth-1",
@@ -126,7 +126,7 @@ function seedFinalReviewPending(records: PersistedLogRecord[]): void {
       sessionId: "parent-1",
       writerId: "writer-1",
       recordType: "observation",
-      sequence: 2,
+      sequence: firstSequence + 1,
       kind: "plan_finalization_transition",
       parentSessionId: "parent-1",
       authorizationId: "auth-1",
@@ -582,7 +582,9 @@ describe("review dispatch state machine", () => {
 
   it("blocks offer and claim when multiple active slots exist", async () => {
     const harness = dispatchHarness();
-    harness.state.records.push(pending(), finalPending(2));
+    seedReviewPending(harness.state.records);
+    seedFinalReviewPending(harness.state.records, 6);
+    harness.state.records.push(pending(8), finalPending(9));
 
     await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
       kind: "blocked",

@@ -429,6 +429,10 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         authorizationIdFor(slot.key.correlation) === authorizationId &&
         (slot.state === "pending" || slot.state === "claimed"),
     );
+    if (slots.length > 1) {
+      await recordAdvisorySafely("review_dispatch_integrity_violation");
+      return;
+    }
     for (const slot of slots) await appendTerminal(slot, "cancelled");
   };
   const unreadable = async (parentSessionId: string, cause: unknown): Promise<void> => {
@@ -676,7 +680,7 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
       await dependencies
         .recordAdvisory("review_directive_delivery_unreadable", cause)
         .then(() => undefined, () => undefined);
-      return "discard";
+      return "retain";
     }
   };
   const recoverReviewDispatchesAfterRestart = async (): Promise<void> => {
@@ -687,7 +691,7 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
       const authorizations = await dependencies.readDurableAuthorizations();
       const state = project(records, new Date(0).toISOString());
       for (const slot of slots) {
-        if (slot.state === "pending" || slot.state === "claimed") {
+        if (slot.state === "pending") {
           await dependencies.withAuthorizationReviewBoundary(slot.key.parentSessionId, async () => {
             const current = currentLifecycleCorrelation(
               slot.key.parentSessionId,
@@ -701,11 +705,21 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
             );
             if (!current || !active) {
               await appendTerminal(slot, "cancelled");
-            } else if (slot.state === "pending") {
+            } else {
               await dependencies.injectReviewRequiredDirective({
                 parentSessionId: slot.key.parentSessionId,
                 directive: { kind: "review_required", correlation: slot.key.correlation },
               });
+            }
+          });
+        } else if (slot.state === "claimed") {
+          await dependencies.withAuthorizationReviewBoundary(slot.key.parentSessionId, async () => {
+            const active = await isCurrentActiveAuthorization(
+              slot.key.correlation,
+              dependencies.findAuthorizationById,
+            );
+            if (!active) {
+              await appendTerminal(slot, "cancelled");
             } else if (slot.artifactReservation?.status === "unusable") {
               await appendTerminal(slot, "artifact_reservation_unusable");
             }
