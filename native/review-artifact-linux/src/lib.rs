@@ -239,13 +239,19 @@ impl ReviewArtifactRoot {
                 status: "replacement_retained".to_string(),
             });
         }
-        rename_noreplace(
+        if let Err(error) = rename_noreplace(
             reviews_fd.as_raw_fd(),
             artifact_leaf,
             quarantine_fd.as_raw_fd(),
             quarantine_artifact,
-        )
-        .map_err(|error| cleanup_status(&error))?;
+        ) {
+            if error.raw_os_error() == Some(libc::EEXIST) {
+                return Ok(CleanupResult {
+                    status: "replacement_retained".to_string(),
+                });
+            }
+            return Err(cleanup_status(&error));
+        }
         if let Err(error) = rename_noreplace(
             leases_fd.as_raw_fd(),
             lease_leaf,

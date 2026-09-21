@@ -17,6 +17,7 @@ import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import { normalizeTaskToolInputInPlace, resolveTaskIdFromToolInput } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
 import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
+import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
@@ -174,7 +175,7 @@ export class OpenCodeAdapter {
       const root = this.#workspaceRoot;
       if (root === null) return;
 
-      let reviewArtifactProvider;
+      let reviewArtifactProvider: LinuxOpenat2ReviewArtifactProvider | undefined;
       try {
         reviewArtifactProvider = createLinuxOpenat2ReviewArtifactProvider(root);
       } catch (err) {

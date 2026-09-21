@@ -149,6 +149,41 @@ describe("LinuxOpenat2ReviewArtifactProvider publication", () => {
     }
   });
 
+  it("returns replacement_retained when the artifact quarantine destination exists", async () => {
+    if (process.platform !== "linux" || process.arch !== "x64") return;
+
+    const rootDir = await mkdtemp(join(tmpdir(), "justice-review-artifact-"));
+    const provider = createLinuxOpenat2ReviewArtifactProvider(rootDir);
+    try {
+      expect(provider).toBeDefined();
+      if (provider === undefined) return;
+
+      const artifactPath = ".justice/reviews/review.json";
+      const marker = await provider.createExclusiveMarker(artifactPath);
+      expect(marker.kind).toBe("created");
+      if (marker.kind !== "created") return;
+
+      const reservation = {
+        status: "usable" as const,
+        artifactId: "review",
+        artifactPath,
+        leasePath: marker.leasePath,
+        artifactIdentity: marker.artifactIdentity,
+      };
+      await writeFile(
+        join(rootDir, ".justice/reviews/.quarantine/review.artifact"),
+        "existing quarantine artifact",
+      );
+
+      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe(
+        "replacement_retained",
+      );
+    } finally {
+      provider?.close();
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when cleanup cannot move the lease to quarantine", async () => {
     if (process.platform !== "linux" || process.arch !== "x64") return;
 

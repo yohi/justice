@@ -1,28 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 
+const mockedNativeAddon = vi.hoisted(() => ({ value: undefined as unknown }));
+
+vi.mock("node:module", () => ({
+  createRequire: (): (() => unknown) => (): unknown => {
+    if (mockedNativeAddon.value instanceof Error) throw mockedNativeAddon.value;
+    return mockedNativeAddon.value;
+  },
+}));
+
 async function withMockedNativeAddon<T>(
   addon: unknown,
   callback: (providerModule: typeof import("../../src/runtime/linux-review-artifact-provider")) =>
     | T
     | Promise<T>,
 ): Promise<T> {
+  mockedNativeAddon.value = addon;
   vi.resetModules();
-  vi.doMock("node:module", () => ({
-    createRequire: (): (() => unknown) => (): unknown => {
-      if (addon instanceof Error) throw addon;
-      return addon;
-    },
-  }));
   try {
     return await callback(await import("../../src/runtime/linux-review-artifact-provider"));
   } finally {
-    vi.doUnmock("node:module");
+    mockedNativeAddon.value = undefined;
     vi.resetModules();
   }
 }
 
 describe("LinuxOpenat2ReviewArtifactProvider native boundaries", () => {
-  it("fails open when the native addon cannot be loaded or has an invalid API", async () => {
+  it("fails open when the native addon cannot be loaded", async () => {
     if (process.platform !== "linux" || process.arch !== "x64") return;
 
     await withMockedNativeAddon(new Error("addon unavailable"), ({
@@ -30,6 +34,11 @@ describe("LinuxOpenat2ReviewArtifactProvider native boundaries", () => {
     }) => {
       expect(createProvider("/tmp")).toBeUndefined();
     });
+  });
+
+  it("fails open when the native addon has an invalid API", async () => {
+    if (process.platform !== "linux" || process.arch !== "x64") return;
+
     await withMockedNativeAddon({}, ({
       createLinuxOpenat2ReviewArtifactProvider: createProvider,
     }) => {
