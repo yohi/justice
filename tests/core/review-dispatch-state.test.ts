@@ -147,9 +147,13 @@ function dispatchHarness() {
     appendKind: "committed" as "committed" | "failed",
     readRecordsFailure: false,
     readAuthorizationsFailure: false,
+    readAuthorizationsFailureAfter: undefined as number | undefined,
+    readAuthorizationsCount: 0,
     lookupAuthorization: undefined as ApprovedPlanBinding | null | undefined,
+    lookupSequence: undefined as (ApprovedPlanBinding | null)[] | undefined,
     directives: [] as ReviewDirectiveDelivery[],
     advisories: [] as string[],
+    advisoryFailure: false,
     id: 0,
   };
   const dependencies: ReviewDispatchDependencies = {
@@ -158,13 +162,24 @@ function dispatchHarness() {
       return state.records;
     },
     readDurableAuthorizations: async () => {
-      if (state.readAuthorizationsFailure) throw new Error("authorizations unavailable");
+      state.readAuthorizationsCount += 1;
+      if (
+        state.readAuthorizationsFailure ||
+        (state.readAuthorizationsFailureAfter !== undefined &&
+          state.readAuthorizationsCount > state.readAuthorizationsFailureAfter)
+      ) {
+        throw new Error("authorizations unavailable");
+      }
       return state.authorizations;
     },
-    findAuthorizationById: async () =>
-      state.lookupAuthorization === undefined
+    findAuthorizationById: async () => {
+      if (state.lookupSequence !== undefined && state.lookupSequence.length > 0) {
+        return state.lookupSequence.shift() ?? null;
+      }
+      return state.lookupAuthorization === undefined
         ? (state.authorizations[0] ?? null)
-        : state.lookupAuthorization,
+        : state.lookupAuthorization;
+    },
     appendReviewDispatchTransition: async (input) => {
       if (state.appendKind === "failed") return { kind: "failed" };
       const record = {
@@ -181,6 +196,7 @@ function dispatchHarness() {
     withAuthorizationReviewBoundary: async (_parentSessionId, operation) => operation(),
     hydrateAuthorizationsBeforeReviewRecovery: async () => undefined,
     recordAdvisory: async (advisory) => {
+      if (state.advisoryFailure) throw new Error("advisory unavailable");
       state.advisories.push(advisory);
     },
     generateId: () => `transition-${++state.id}`,
@@ -218,6 +234,18 @@ function pending(sequence = 1): ReviewDispatchTransitionRecord {
     ...base,
     sequence,
     transitionId: `transition-${sequence}`,
+    from: null,
+    to: "pending",
+  };
+}
+
+function finalPending(sequence = 1): ReviewDispatchTransitionRecord {
+  return {
+    ...base,
+    sequence,
+    transitionId: `final-transition-${sequence}`,
+    correlation: finalCorrelation,
+    expectedCategory: "sp-final-review",
     from: null,
     to: "pending",
   };
@@ -460,6 +488,148 @@ describe("review dispatch state machine", () => {
     await expect(failed.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
       kind: "blocked",
     });
+  });
+
+  it("cancels stale slots and reports ambiguous authorization slots", async () => {
+    const ambiguous = dispatchHarness();
+    ambiguous.state.records.push(pending(), finalPending(2));
+
+    await ambiguous.dispatch.cancelReviewDispatchesForTerminalAuthorization("parent-1", "auth-1");
+
+    expect(ambiguous.state.advisories).toContain("review_dispatch_integrity_violation");
+    expect(projectReviewDispatchSlots(ambiguous.state.records)).toMatchObject([
+      { state: "pending" },
+      { state: "pending" },
+    ]);
+
+    const stale = dispatchHarness();
+    stale.state.authorizations = [];
+    stale.state.records.push(pending());
+
+    await expect(stale.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "none",
+    });
+    expect(projectReviewDispatchSlots(stale.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+  });
+
+  it("cancels pending slots when the second authorization read fails", async () => {
+    const harness = dispatchHarness();
+    harness.state.readAuthorizationsFailureAfter = 1;
+    seedReviewPending(harness.state.records);
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "blocked",
+    });
+    expect(harness.state.advisories).toContain("review_authorization_unreadable");
+    expect(projectReviewDispatchSlots(harness.state.records)).toEqual([]);
+  });
+
+  it("keeps authorization failures fail-open when advisory recording fails", async () => {
+    const harness = dispatchHarness();
+    harness.state.readAuthorizationsFailure = true;
+    harness.state.advisoryFailure = true;
+    seedReviewPending(harness.state.records);
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "blocked",
+    });
+    expect(projectReviewDispatchSlots(harness.state.records)).toEqual([]);
+  });
+
+  it("blocks offer and claim when multiple active slots exist", async () => {
+    const harness = dispatchHarness();
+    harness.state.records.push(pending(), finalPending(2));
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "blocked",
+    });
+    await expect(harness.dispatch.claimReviewDispatch(claimInput())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "review_dispatch_integrity_violation",
+    });
+    expect(harness.state.advisories).toContain("review_dispatch_integrity_violation");
+  });
+
+  it("blocks an offer when its authorization becomes terminal", async () => {
+    const harness = dispatchHarness();
+    harness.state.lookupAuthorization = null;
+    seedReviewPending(harness.state.records);
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "blocked",
+    });
+  });
+
+  it("cancels an offer when authorization changes during the append", async () => {
+    const harness = dispatchHarness();
+    harness.state.lookupSequence = [activeAuthorization(), null];
+    seedReviewPending(harness.state.records);
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "blocked",
+    });
+    expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+  });
+
+  it("blocks claims when authorization hydration fails", async () => {
+    const harness = dispatchHarness();
+    harness.state.readAuthorizationsFailure = true;
+
+    await expect(harness.dispatch.claimReviewDispatch(claimInput())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "review_authorization_unreadable",
+    });
+  });
+
+  it("blocks claim commits and terminal authorizations", async () => {
+    const failed = dispatchHarness();
+    seedReviewPending(failed.state.records);
+    await failed.dispatch.offerNextMandatoryReview("parent-1");
+    failed.state.appendKind = "failed";
+
+    await expect(failed.dispatch.claimReviewDispatch(claimInput())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "review_claim_commit_failed",
+    });
+
+    const terminal = dispatchHarness();
+    seedReviewPending(terminal.state.records);
+    await terminal.dispatch.offerNextMandatoryReview("parent-1");
+    terminal.state.lookupAuthorization = null;
+
+    await expect(terminal.dispatch.claimReviewDispatch(claimInput())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "review_authorization_terminal",
+    });
+    expect(projectReviewDispatchSlots(terminal.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+  });
+
+  it("cancels terminalization and recovery for inactive authorizations", async () => {
+    const terminal = dispatchHarness();
+    terminal.state.records.push(pending(), claimed());
+    terminal.state.lookupAuthorization = null;
+
+    await expect(
+      terminal.dispatch.terminalizeReviewFailure({ ...claimInput(), correlation }, "lost_conclusive"),
+    ).resolves.toEqual({ kind: "blocked" });
+    expect(projectReviewDispatchSlots(terminal.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+
+    const recovery = dispatchHarness();
+    recovery.state.records.push(pending());
+    recovery.state.lookupAuthorization = null;
+
+    await expect(recovery.dispatch.recoverReviewDispatchesAfterRestart()).resolves.toBeUndefined();
+    expect(projectReviewDispatchSlots(recovery.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
   });
 
   it("validates queued directives and recovers pending and unusable claimed slots", async () => {
