@@ -18,6 +18,60 @@ import {
   type TaskLifecycleTransitionInput,
 } from "../../src/core/task-lifecycle";
 import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
+import type {
+  ClaimInput,
+  ClaimReviewDispatchOutcome,
+  ReviewDirectiveSink,
+} from "../../src/core/review-dispatch-state";
+import type { ReviewCorrelation, ReviewTaskCallBinding } from "../../src/core/types";
+import type { PendingReviewDispatchTransitionRecord } from "../../src/core/v2/observation-model";
+
+type ReviewDispatchStateForTest = {
+  claimReviewDispatch(input: ClaimInput): Promise<ClaimReviewDispatchOutcome>;
+  recoverReviewDispatchesAfterRestart(): Promise<void>;
+  validateQueuedReviewDirectiveWithinParentSessionClaim(
+    delivery: Parameters<ReviewDirectiveSink["deliver"]>[0],
+  ): Promise<"inject" | "discard" | "retain">;
+};
+
+type JusticePluginInternals = {
+  readonly reviewDispatchState: ReviewDispatchStateForTest;
+  readonly reviewDirectiveSink: ReviewDirectiveSink;
+};
+
+function internalsOf(target: JusticePlugin): JusticePluginInternals {
+  return target as unknown as JusticePluginInternals;
+}
+
+const taskReviewCorrelation: ReviewCorrelation = {
+  reviewKind: "task-review",
+  taskExecutionRef: {
+    authorizationId: "auth-1",
+    taskId: "task-1",
+    attemptId: "attempt-1",
+  },
+  reviewRound: 1,
+};
+
+function makeReviewBinding(
+  overrides: Partial<ReviewTaskCallBinding> = {},
+): ReviewTaskCallBinding {
+  return {
+    purpose: "task_review",
+    parentSessionId: "s-1",
+    callId: "call-1",
+    correlation: taskReviewCorrelation,
+    expectedCategory: "sp-review",
+    artifactReservation: {
+      status: "usable",
+      artifactId: "artifact-1",
+      artifactPath: ".justice/reviews/artifact-1.json",
+      leasePath: ".justice/reviews/artifact-1.lease",
+      artifactIdentity: { device: "device-1", inode: "inode-1" },
+    },
+    ...overrides,
+  };
+}
 
 describe("JusticePlugin", () => {
   let reader: FileReader;
@@ -246,6 +300,177 @@ describe("JusticePlugin", () => {
       expect(spy).toHaveBeenCalledWith(event);
     });
 
+    it("fails open when PlanBridge pre-tool handling rejects", async () => {
+      vi.spyOn(plugin.getPlanBridge(), "handlePreToolUse").mockRejectedValue(
+        new Error("plan bridge failed"),
+      );
+
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "task", toolInput: {} },
+          sessionId: "s-1",
+        }),
+      ).resolves.toEqual({ action: "proceed" });
+    });
+
+    it("blocks a mandatory review claim when the tool call has no call id", async () => {
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "task", toolInput: { category: "sp-review" } },
+          sessionId: "s-1",
+        }),
+      ).resolves.toEqual({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW CLAIM BLOCKED] review_call_id_missing",
+      });
+    });
+
+    it("returns a blocked review claim advisory from the dispatch state", async () => {
+      const state = internalsOf(plugin).reviewDispatchState;
+      vi.spyOn(state, "claimReviewDispatch").mockResolvedValue({
+        kind: "blocked",
+        advisory: "review_not_pending",
+      });
+
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "task", toolInput: { category: "sp-review" } },
+          sessionId: "s-1",
+          callId: "call-1",
+        }),
+      ).resolves.toMatchObject({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW CLAIM BLOCKED] review_not_pending",
+      });
+    });
+
+    it("fails open when the review claim state rejects", async () => {
+      const state = internalsOf(plugin).reviewDispatchState;
+      vi.spyOn(state, "claimReviewDispatch").mockRejectedValue(new Error("claim failed"));
+
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "task", toolInput: { category: "sp-review" } },
+          sessionId: "s-1",
+          callId: "call-1",
+        }),
+      ).resolves.toMatchObject({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW CLAIM BLOCKED] review_claim_failed",
+      });
+    });
+
+    it("stores a usable review binding and injects its artifact path", async () => {
+      const binding = makeReviewBinding();
+      const state = internalsOf(plugin).reviewDispatchState;
+      vi.spyOn(state, "claimReviewDispatch").mockResolvedValue({
+        kind: "claimed",
+        taskCallBinding: binding,
+      });
+
+      const response = await plugin.handleEvent({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { category: "sp-review" } },
+        sessionId: "s-1",
+        callId: "call-1",
+      });
+
+      expect(response).toMatchObject({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW CLAIMED]",
+        modifiedPayload: {
+          args: {
+            category: "sp-review",
+            run_in_background: false,
+            review_artifact_path: ".justice/reviews/artifact-1.json",
+          },
+        },
+      });
+      expect(plugin.getSessionStateProvider().getTaskCallBinding("call-1")).toEqual(binding);
+    });
+
+    it("keeps a claimed review executable when artifact reservation is unusable", async () => {
+      const binding = makeReviewBinding({
+        artifactReservation: { status: "unusable", reason: "reservation_internal_error" },
+      });
+      const state = internalsOf(plugin).reviewDispatchState;
+      vi.spyOn(state, "claimReviewDispatch").mockResolvedValue({
+        kind: "claimed_unusable",
+        taskCallBinding: binding,
+        artifactPathOmitted: true,
+        advisory: "artifact_reservation_unusable",
+      });
+
+      const response = await plugin.handleEvent({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { category: "sp-review" } },
+        sessionId: "s-1",
+        callId: "call-1",
+      });
+
+      expect(response).toMatchObject({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW CLAIMED] artifact_reservation_unusable",
+        modifiedPayload: {
+          args: { category: "sp-review", run_in_background: false },
+        },
+      });
+      expect(response).not.toHaveProperty("modifiedPayload.args.review_artifact_path");
+    });
+
+    it("injects a queued review directive after validation", async () => {
+      const { reviewDirectiveSink, reviewDispatchState } = internalsOf(plugin);
+      await reviewDirectiveSink.deliver({
+        parentSessionId: "s-1",
+        directive: { kind: "review_required", correlation: taskReviewCorrelation },
+      });
+      vi.spyOn(
+        reviewDispatchState,
+        "validateQueuedReviewDirectiveWithinParentSessionClaim",
+      ).mockResolvedValue("inject");
+      vi.spyOn(plugin.getObservationHandler(), "handlePreToolUse").mockResolvedValue({
+        action: "proceed",
+      });
+
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "bash", toolInput: {} },
+          sessionId: "s-1",
+        }),
+      ).resolves.toEqual({
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW REQUIRED] task-review",
+      });
+    });
+
+    it("fails open when queued review directive validation rejects", async () => {
+      const { reviewDirectiveSink, reviewDispatchState } = internalsOf(plugin);
+      await reviewDirectiveSink.deliver({
+        parentSessionId: "s-1",
+        directive: { kind: "review_required", correlation: taskReviewCorrelation },
+      });
+      vi.spyOn(
+        reviewDispatchState,
+        "validateQueuedReviewDirectiveWithinParentSessionClaim",
+      ).mockRejectedValue(new Error("directive validation failed"));
+      vi.spyOn(plugin.getObservationHandler(), "handlePreToolUse").mockResolvedValue({
+        action: "proceed",
+      });
+
+      await expect(
+        plugin.handleEvent({
+          type: "PreToolUse",
+          payload: { toolName: "bash", toolInput: {} },
+          sessionId: "s-1",
+        }),
+      ).resolves.toEqual({ action: "proceed" });
+    });
+
     it("uses the authorization-scoped lifecycle state when resuming rework", async () => {
       const parentSessionId = "parent-1";
       const taskId = "task-1";
@@ -369,6 +594,61 @@ describe("JusticePlugin", () => {
     });
   });
 
+  describe("review dispatch persistence wiring", () => {
+    const pendingTransition: PendingReviewDispatchTransitionRecord = {
+      schemaVersion: 1,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      agentId: "unknown",
+      sessionId: "s-1",
+      writerId: "w-review-test",
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: "transition-1",
+      parentSessionId: "s-1",
+      correlation: taskReviewCorrelation,
+      expectedCategory: "sp-review",
+      from: null,
+      to: "pending",
+    };
+
+    it("returns the committed review dispatch transition with its sequence", async () => {
+      const testPlugin = new JusticePlugin(reader, writer, {
+        writerId: pendingTransition.writerId,
+      });
+      const append = (
+        testPlugin as unknown as {
+          appendReviewDispatchTransition: (
+            input: PendingReviewDispatchTransitionRecord,
+          ) => Promise<unknown>;
+        }
+      ).appendReviewDispatchTransition.bind(testPlugin);
+
+      await expect(append(pendingTransition)).resolves.toMatchObject({
+        kind: "committed",
+        record: { ...pendingTransition, sequence: expect.any(Number) },
+      });
+    });
+
+    it("returns failed when the review dispatch log append rejects", async () => {
+      const testPlugin = new JusticePlugin(reader, writer, {
+        writerId: pendingTransition.writerId,
+      });
+      const observationLogStore = (
+        testPlugin as unknown as { observationLogStore: ObservationLogStore }
+      ).observationLogStore;
+      vi.spyOn(observationLogStore, "append").mockRejectedValue(new Error("append failed"));
+      const append = (
+        testPlugin as unknown as {
+          appendReviewDispatchTransition: (
+            input: PendingReviewDispatchTransitionRecord,
+          ) => Promise<unknown>;
+        }
+      ).appendReviewDispatchTransition.bind(testPlugin);
+
+      await expect(append(pendingTransition)).resolves.toEqual({ kind: "failed" });
+    });
+  });
+
   describe("session cleanup propagation", () => {
     it("awaits persistence during explicit session destruction", async () => {
       const tiered = plugin.getTieredWisdomStore();
@@ -413,6 +693,22 @@ describe("JusticePlugin", () => {
       plugin.getLoopHandler().removeSession(sessionId);
 
       expect(taskFeedbackSessions.sessions.has(sessionId)).toBe(false);
+    });
+
+    it("continues session cleanup when one handler throws", () => {
+      const warn = vi.fn();
+      const testPlugin = new JusticePlugin(reader, writer, {
+        logger: { warn, error: vi.fn() },
+      });
+      vi.spyOn(testPlugin.getPlanBridge(), "destroySession").mockImplementation(() => {
+        throw new Error("plan cleanup failed");
+      });
+      const clearActivePlan = vi.spyOn(testPlugin.getTaskFeedback(), "clearActivePlan");
+
+      testPlugin.getLoopHandler().removeSession("s-cleanup");
+
+      expect(warn).toHaveBeenCalledWith("Justice session cleanup failed", expect.any(Error));
+      expect(clearActivePlan).toHaveBeenCalledWith("s-cleanup");
     });
   });
 
@@ -501,6 +797,21 @@ describe("JusticePlugin", () => {
       await expect(plugin.initialize()).resolves.toBeUndefined();
       expect(loadAll).toHaveBeenCalledOnce();
       expect(projection).toHaveBeenCalledOnce();
+    });
+
+    it("continues initialization when review-dispatch recovery rejects", async () => {
+      const warn = vi.fn();
+      const testPlugin = new JusticePlugin(reader, writer, {
+        logger: { warn, error: vi.fn() },
+      });
+      vi.spyOn(internalsOf(testPlugin).reviewDispatchState, "recoverReviewDispatchesAfterRestart")
+        .mockRejectedValue(new Error("review recovery failed"));
+
+      await expect(testPlugin.initialize()).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "Failed to recover review dispatches during initialization",
+        expect.any(Error),
+      );
     });
   });
 });

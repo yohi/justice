@@ -139,6 +139,26 @@ describe("createReviewArtifactReservationPort", () => {
     },
   );
 
+  it("fails open when the default artifact ID factory is unavailable", async () => {
+    const files = createMockFileSystem();
+    files.createExclusiveMarker = vi.fn(async () => ({
+      kind: "created" as const,
+      leasePath: ".justice/reviews/.leases/artifact.lease",
+      artifactIdentity: { device: "1", inode: "2" },
+    }));
+    const recordAdvisory = vi.fn(async () => undefined);
+    const reserve = createReviewArtifactReservationPort(files, files, artifactIo, recordAdvisory).reserve;
+
+    await expect(reserve()).resolves.toEqual({
+      status: "unusable",
+      reason: "reservation_internal_error",
+    });
+    expect(recordAdvisory).toHaveBeenCalledWith(
+      "review_artifact_reservation_internal_error",
+      expect.any(Error),
+    );
+  });
+
   it("converts marker failures and advisory failures to a fail-open result", async () => {
     const files = createMockFileSystem();
     files.createExclusiveMarker = vi.fn(async () => {

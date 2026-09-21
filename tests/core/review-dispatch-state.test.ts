@@ -269,6 +269,15 @@ function claimed(sequence = 2): ReviewDispatchTransitionRecord {
   };
 }
 
+function finalClaimed(sequence = 2): ReviewDispatchTransitionRecord {
+  return {
+    ...claimed(sequence),
+    transitionId: `final-transition-${sequence}`,
+    correlation: finalCorrelation,
+    expectedCategory: "sp-final-review",
+  };
+}
+
 function claimedUnusable(sequence = 2): ReviewDispatchTransitionRecord {
   return {
     ...base,
@@ -307,6 +316,28 @@ describe("durable review dispatch projection", () => {
         expectedCategory: "sp-review",
         correlation,
       },
+    ]);
+  });
+
+  it("projects final-review bindings and rejects terminal transitions for another call", () => {
+    const records = [
+      finalPending(),
+      finalClaimed(2),
+      {
+        ...finalClaimed(3),
+        transitionId: "final-terminal-3",
+        from: "claimed" as const,
+        to: "terminal" as const,
+        callId: "other-call",
+        terminalReason: "review_execution_failed" as const,
+      },
+    ];
+
+    expect(projectReviewDispatchSlots(records)).toMatchObject([
+      { state: "claimed", expectedCategory: "sp-final-review", callId: "call-1" },
+    ]);
+    expect(projectTaskCallBindings(records)).toMatchObject([
+      { purpose: "final_review", expectedCategory: "sp-final-review", callId: "call-1" },
     ]);
   });
 
@@ -518,12 +549,15 @@ describe("review dispatch state machine", () => {
     const harness = dispatchHarness();
     harness.state.readAuthorizationsFailureAfter = 1;
     seedReviewPending(harness.state.records);
+    harness.state.records.push(pending(6));
 
     await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
       kind: "blocked",
     });
     expect(harness.state.advisories).toContain("review_authorization_unreadable");
-    expect(projectReviewDispatchSlots(harness.state.records)).toEqual([]);
+    expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
   });
 
   it("keeps authorization failures fail-open when advisory recording fails", async () => {
