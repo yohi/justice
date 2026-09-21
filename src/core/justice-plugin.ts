@@ -550,10 +550,13 @@ export class JusticePlugin {
             ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
             : undefined;
         const reviewCategory = resolveMandatoryReviewCategory(event);
-        const observation = await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
-            this.options.logger?.warn("observation-handler pre-tool-use failed", err);
-            return PROCEED;
-          });
+        const observation =
+          reviewCategory === undefined
+            ? await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
+                this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+                return PROCEED;
+              })
+            : PROCEED;
         const delegated =
           reviewCategory === undefined
             ? event.payload.toolName === "task"

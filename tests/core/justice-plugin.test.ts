@@ -393,6 +393,27 @@ describe("JusticePlugin", () => {
       expect(plugin.getSessionStateProvider().getTaskCallBinding("call-1")).toEqual(binding);
     });
 
+    it("does not invoke implementation observation for a review task", async () => {
+      const binding = makeReviewBinding();
+      const state = internalsOf(plugin).reviewDispatchState;
+      const observation = vi
+        .spyOn(plugin.getObservationHandler(), "handlePreToolUse")
+        .mockResolvedValue({ action: "proceed" });
+      vi.spyOn(state, "claimReviewDispatch").mockResolvedValue({
+        kind: "claimed",
+        taskCallBinding: binding,
+      });
+
+      await plugin.handleEvent({
+        type: "PreToolUse",
+        payload: { toolName: "task", toolInput: { category: "sp-review", task_id: "task-1" } },
+        sessionId: "s-1",
+        callId: "call-1",
+      });
+
+      expect(observation).not.toHaveBeenCalled();
+    });
+
     it("keeps a claimed review executable when artifact reservation is unusable", async () => {
       const binding = makeReviewBinding({
         artifactReservation: { status: "unusable", reason: "reservation_internal_error" },

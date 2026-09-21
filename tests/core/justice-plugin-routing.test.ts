@@ -86,7 +86,7 @@ describe("JusticePlugin routing guard", () => {
       callId: "review-call",
     } as PreToolUseEvent);
 
-    expect(observationSpy).toHaveBeenCalledOnce();
+    expect(observationSpy).not.toHaveBeenCalled();
     expect(planSpy).not.toHaveBeenCalled();
   });
 
