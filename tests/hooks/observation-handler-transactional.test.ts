@@ -98,6 +98,11 @@ describe("ObservationHandler delegated child binding", () => {
     expect(project(await logStore.readAll(), "2026-09-22T00:00:00.500Z").taskCallBindings).toHaveLength(1);
 
     const countBeforeBinding = (await logStore.readAll()).length;
+    await handler.handleDelegatedExecutionRelation({
+      ...childRelation,
+      parentCallId: "unknown-call",
+    });
+    expect((await logStore.readAll()).length).toBe(countBeforeBinding);
 
     const originalAppend = logStore.append.bind(logStore);
     let releaseFirstAppend: () => void = () => undefined;
@@ -153,5 +158,83 @@ describe("ObservationHandler delegated child binding", () => {
     { ...childRelation, parentSessionId: "stale-parent" },
   ])("rejects an untrusted child relation", (relation) => {
     expect(bindObservedChild(taskClaim, relation)).toEqual({ kind: "stale" });
+  });
+
+  it("omits taskId when it persists a finalization binding", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+    });
+    const envelope = {
+      schemaVersion: 1 as const,
+      timestamp: "2026-09-22T00:00:00.000Z",
+      agentId: "atlas" as const,
+      sessionId: "parent-session",
+      writerId: "w-1",
+      recordType: "observation" as const,
+    };
+    const pending = {
+      ...envelope,
+      kind: "review_dispatch_transition" as const,
+      transitionId: "final-pending-1",
+      parentSessionId: "parent-session",
+      correlation: finalClaim.correlation,
+      expectedCategory: "sp-final-review" as const,
+      from: null,
+      to: "pending" as const,
+    };
+    const claimed = {
+      ...pending,
+      transitionId: "final-claimed-1",
+      from: "pending" as const,
+      to: "claimed" as const,
+      callId: "parent-call",
+      artifactReservation: finalClaim.artifactReservation,
+    };
+    await logStore.append(
+      { agentId: "atlas", sessionId: "parent-session", writerId: "w-1" },
+      pending,
+    );
+    await logStore.append(
+      { agentId: "atlas", sessionId: "parent-session", writerId: "w-1" },
+      claimed,
+    );
+
+    const response = await handler.handleDelegatedExecutionRelation({
+      ...childRelation,
+      category: "sp-final-review",
+      runtimeEventId: "runtime-final-review",
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    const binding = (await logStore.readAll()).find(
+      (record) => record.recordType === "observation" && record.kind === "delegated_execution_binding",
+    );
+    expect(binding).toBeDefined();
+    expect(binding).not.toHaveProperty("taskId");
+  });
+
+  it("fails open when reading delegated relation records fails", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const logger = { warn: vi.fn() };
+    vi.spyOn(logStore, "readAll").mockRejectedValue(new Error("read failed"));
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+      logger,
+    });
+
+    await expect(handler.handleDelegatedExecutionRelation(childRelation)).resolves.toEqual({
+      action: "proceed",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler: delegated execution binding failed, degrading to PROCEED",
+      expect.any(Error),
+    );
   });
 });

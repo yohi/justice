@@ -173,6 +173,57 @@ function validPlanFinalizationTransition(): Record<string, unknown> {
   };
 }
 
+function validReviewDispatchTransition(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...validBase("observation"),
+    kind: "review_dispatch_transition",
+    transitionId: "transition-1",
+    parentSessionId: "ses-1",
+    correlation: {
+      reviewKind: "task-review",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      reviewRound: 1,
+    },
+    expectedCategory: "sp-review",
+    from: null,
+    to: "pending",
+    ...overrides,
+  };
+}
+
+function validDelegatedExecutionBinding(): Record<string, unknown> {
+  const relation = {
+    kind: "delegated_execution_relation_observed",
+    provenance: "observed",
+    runtimeEventId: "runtime-event-1",
+    parentSessionId: "ses-1",
+    parentCallId: "call-1",
+    childSessionId: "child-1",
+    category: "sp-review",
+  };
+  const taskExecutionRef = {
+    authorizationId: "auth-1",
+    taskId: "task-1",
+    attemptId: "attempt-1",
+  };
+
+  return {
+    ...validBase("observation"),
+    kind: "delegated_execution_binding",
+    relation,
+    binding: {
+      relationId: relation.runtimeEventId,
+      parentSessionId: relation.parentSessionId,
+      parentCallId: relation.parentCallId,
+      childSessionId: relation.childSessionId,
+      scope: { kind: "task", taskExecutionRef, reviewRound: 1 },
+      correlation: { reviewKind: "task-review", taskExecutionRef, reviewRound: 1 },
+    },
+  };
+}
+
 describe("validateRecordSchema", () => {
   it("accepts a valid tool_executed record", () => {
     expect(() => validateRecordSchema(validToolExecuted())).not.toThrow();
@@ -185,6 +236,102 @@ describe("validateRecordSchema", () => {
   it("accepts lifecycle transition records", () => {
     expect(() => validateRecordSchema(validTaskLifecycleTransition())).not.toThrow();
     expect(() => validateRecordSchema(validPlanFinalizationTransition())).not.toThrow();
+  });
+
+  it("accepts a pending review dispatch transition", () => {
+    expect(() => validateRecordSchema(validReviewDispatchTransition())).not.toThrow();
+  });
+
+  it("accepts a claimed review dispatch transition with an artifact reservation", () => {
+    expect(
+      () =>
+        validateRecordSchema(
+          validReviewDispatchTransition({
+            transitionId: "claimed-1",
+            from: "pending",
+            to: "claimed",
+            callId: "call-1",
+            artifactReservation: { status: "unusable", reason: "artifact_storage_unavailable" },
+          }),
+        ),
+    ).not.toThrow();
+  });
+
+  it("accepts a terminal final-review dispatch transition without a call ID", () => {
+    expect(
+      () =>
+        validateRecordSchema(
+          validReviewDispatchTransition({
+            transitionId: "terminal-1",
+            correlation: {
+              reviewKind: "final-review",
+              planPath: "docs/plans/example.md",
+              authorizationId: "auth-1",
+              planFingerprint: { algorithm: "sha256", value: "fingerprint" },
+              finalizationAttemptId: "final-1",
+              finalReviewRound: 1,
+            },
+            expectedCategory: "sp-final-review",
+            from: "claimed",
+            to: "terminal",
+            terminalReason: "completed",
+          }),
+        ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { name: "missing transition ID", override: { transitionId: undefined } },
+    { name: "missing correlation", override: { correlation: undefined } },
+    { name: "invalid expected category", override: { expectedCategory: "sp-reviewer" } },
+  ])("rejects malformed review dispatch envelopes: $name", ({ override }) => {
+    expect(() => validateRecordSchema(validReviewDispatchTransition(override))).toThrow(
+      "Invalid review_dispatch_transition record",
+    );
+  });
+
+  it("rejects a claimed review dispatch without its call ID or artifact reservation", () => {
+    expect(() =>
+      validateRecordSchema(
+        validReviewDispatchTransition({ from: "pending", to: "claimed" }),
+      ),
+    ).toThrow("Invalid claimed review_dispatch_transition record");
+  });
+
+  it("rejects an invalid review dispatch state transition", () => {
+    expect(() =>
+      validateRecordSchema(
+        validReviewDispatchTransition({ from: "pending", to: "complete" }),
+      ),
+    ).toThrow("Invalid review_dispatch_transition state");
+  });
+
+  it("accepts a delegated execution binding with a task review scope", () => {
+    expect(() => validateRecordSchema(validDelegatedExecutionBinding())).not.toThrow();
+  });
+
+  it("rejects a delegated execution binding whose relation and binding disagree", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validDelegatedExecutionBinding(),
+        binding: {
+          relationId: "different-runtime-event",
+          parentSessionId: "ses-1",
+          parentCallId: "call-1",
+          childSessionId: "child-1",
+          scope: {
+            kind: "task",
+            taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+            reviewRound: 1,
+          },
+          correlation: {
+            reviewKind: "task-review",
+            taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+            reviewRound: 1,
+          },
+        },
+      }),
+    ).toThrow("Invalid delegated_execution_binding record");
   });
 
   it.each([

@@ -254,7 +254,7 @@ describe("project() task fold", () => {
       binding,
     } satisfies ObservationRecord;
 
-    expect(projectDelegatedExecutionBindings([record])).toEqual([binding]);
+    expect(projectDelegatedExecutionBindings([record, { ...record, sequence: 2 }])).toEqual([binding]);
     expect(projectObservedReviewExecution([record], binding)).toMatchObject({
       reviewExecutionEventId: "runtime-event-1",
       parentSessionId: "s1",
