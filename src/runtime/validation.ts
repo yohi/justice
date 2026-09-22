@@ -344,16 +344,63 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       r.to === "terminal" &&
       isOneOf(r.terminalReason, [
         "completed",
+        "completed_with_findings",
+        "review_incomplete",
         "cancelled",
         "review_execution_failed",
         "lost_conclusive",
         "artifact_reservation_unusable",
+        "artifact_missing",
+        "artifact_read_failed",
+        "artifact_json_invalid",
+        "artifact_schema_invalid",
       ]) &&
       (r.callId === undefined || typeof r.callId === "string")
     ) {
       return;
     }
     throw new Error("Invalid review_dispatch_transition state");
+  } else if (kind === "review_artifact_cleanup") {
+    validateReviewArtifactCleanupRecord(r);
+  } else if (kind === "review_completion_staged") {
+    if (typeof r.parentSessionId !== "string" || !isObject(r.staging)) {
+      throw new Error("Invalid review_completion_staged record");
+    }
+  } else if (kind === "review_artifact_failure_staged") {
+    if (
+      typeof r.parentSessionId !== "string" ||
+      typeof r.callId !== "string" ||
+      !isValidReviewCorrelation(r.correlation) ||
+      !isOneOf(r.terminalReason, [
+        "artifact_missing",
+        "artifact_read_failed",
+        "artifact_json_invalid",
+        "artifact_schema_invalid",
+      ])
+    ) {
+      throw new Error("Invalid review_artifact_failure_staged record");
+    }
+  } else if (kind === "review_post_tooluse_pending") {
+    if (
+      typeof r.parentSessionId !== "string" ||
+      typeof r.callId !== "string" ||
+      !isOneOf(r.purpose, ["task_review", "final_review"]) ||
+      !isValidReviewCorrelation(r.trustedCorrelation)
+    ) {
+      throw new Error("Invalid review_post_tooluse_pending record");
+    }
+  } else if (kind === "review_artifact_read_started") {
+    if (
+      typeof r.parentSessionId !== "string" ||
+      typeof r.callId !== "string" ||
+      !isValidReviewCorrelation(r.correlation) ||
+      typeof r.artifactId !== "string" ||
+      r.artifactId.length === 0 ||
+      typeof r.artifactPath !== "string" ||
+      r.artifactPath.length === 0
+    ) {
+      throw new Error("Invalid review_artifact_read_started record");
+    }
   } else if (kind === "delegated_execution_binding") {
     if (!isValidDelegatedExecutionBindingRecord(r)) {
       throw new Error("Invalid delegated_execution_binding record");
@@ -386,6 +433,31 @@ function isValidReviewCorrelation(value: unknown): boolean {
     typeof value.finalizationAttemptId === "string" &&
     isPositiveReviewRound(value.finalReviewRound)
   );
+}
+
+function isValidReviewArtifactCleanupStatus(value: unknown): boolean {
+  return isOneOf(value, [
+    "cleaned",
+    "quarantine_retained",
+    "replacement_retained",
+    "cleanup_incomplete",
+  ]);
+}
+
+function validateReviewArtifactCleanupRecord(r: Record<string, unknown>): void {
+  const common =
+    r.recordType === "observation" &&
+    typeof r.parentSessionId === "string" &&
+    r.parentSessionId.length > 0 &&
+    typeof r.callId === "string" &&
+    r.callId.length > 0 &&
+    isValidReviewCorrelation(r.correlation) &&
+    typeof r.artifactId === "string" &&
+    r.artifactId.length > 0;
+  const phase =
+    (r.phase === "started" && r.status === undefined) ||
+    (r.phase === "finished" && isValidReviewArtifactCleanupStatus(r.status));
+  if (!common || !phase) throw new Error("Invalid review_artifact_cleanup record");
 }
 
 function isValidDelegatedExecutionBindingRecord(value: Record<string, unknown>): boolean {

@@ -3,6 +3,12 @@ export { NoOpNotifier, formatBanner, iconFor } from "./core/justice-notifier";
 export { PlanParser } from "./core/plan-parser";
 export { DEFAULT_PERSONA, PersonaClassifier, classifyPersona } from "./core/persona-classifier";
 export { ReviewRejectionDetector } from "./core/review-rejection-detector";
+export {
+  assembleReviewCompletionStaging,
+  classifyReviewCompletion,
+  createReviewCompletionDomain,
+  parseReviewWorkerResult,
+} from "./core/review-artifact";
 export { PlanCompletionDetector } from "./core/plan-completion-detector";
 export {
   REVIEW_REJECTION_PATTERNS,

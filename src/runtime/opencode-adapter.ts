@@ -5,7 +5,7 @@ import {
   parseJusticeImplementCommandArguments,
 } from "../core/implement-command";
 import { JusticePlugin, createGlobalFs, type JusticePluginOptions } from "../core/justice-plugin";
-import type { ReservedReviewArtifactIo } from "../core/types";
+import type { HookResponse, ReservedReviewArtifactIo } from "../core/types";
 import { matchesLoopError } from "../core/loop-error-patterns";
 import {
   isJusticeStartCommand,
@@ -21,6 +21,8 @@ import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
 import type { DelegatedExecutionRelationObserved } from "../core/types";
+
+const PROCEED: HookResponse = { action: "proceed" };
 
 export interface OpenCodeLogEntry {
   readonly level: "info" | "warn" | "error";
@@ -643,7 +645,7 @@ export class OpenCodeAdapter {
   async onToolExecuteBefore(
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
-  ): Promise<void> {
+  ): Promise<HookResponse> {
     try {
     if (input.tool === "task") {
       this.#rememberReviewCategory(input, output.args);
@@ -653,14 +655,14 @@ export class OpenCodeAdapter {
         output.args.run_in_background = false;
       }
     }
-      if (this.#noOp) return;
+      if (this.#noOp) return PROCEED;
 
       // Forward every tool except justice_* query tools, which must not perturb
       // the canonical Observation Log (D50).
-      if (input.tool.startsWith("justice_")) return;
+      if (input.tool.startsWith("justice_")) return PROCEED;
       await this.ensureInitialized();
       const justice = this.#justice;
-      if (!justice) return;
+      if (!justice) return PROCEED;
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
@@ -675,14 +677,14 @@ export class OpenCodeAdapter {
 
       if (response.action !== "inject") {
         this.#rememberReviewCategory(input, output.args);
-        return;
+        return response;
       }
 
       const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
       output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
 
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
-      if (!modified?.args) return;
+      if (!modified?.args) return response;
 
       for (const [key, value] of Object.entries(modified.args)) {
         if (key === "prompt") continue;
@@ -698,8 +700,10 @@ export class OpenCodeAdapter {
       }
       this.#rememberReviewCategory(input, output.args);
       }
+      return response;
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
+      return PROCEED;
     }
   }
 
