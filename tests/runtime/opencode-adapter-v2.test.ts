@@ -83,6 +83,54 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     });
   });
 
+  it("does not reuse a review category after a task completes without a child relation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-session", callID: "reused-call" },
+      { args: { subagent_type: "sp-review" } },
+    );
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-session",
+        callID: "reused-call",
+        args: { subagent_type: "sp-review" },
+      },
+      { output: "completed without a child session" },
+    );
+    spy.mockClear();
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-session", callID: "reused-call" },
+      { args: { subagent_type: "deep" } },
+    );
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-session",
+        callID: "reused-call",
+        args: { subagent_type: "deep" },
+      },
+      {
+        output: "completed with a child session",
+        metadata: { sessionId: "child-session", parentSessionId: "parent-session" },
+      },
+    );
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-reused-call",
+        type: "session.created",
+        properties: { info: { id: "child-session", parentID: "parent-session" } },
+      },
+    });
+
+    expect(spy.mock.calls.some(([event]) => event.type === "DelegatedExecutionRelationObserved")).toBe(false);
+  });
+
   it.each(["session.deleted", "session.removed"] as const)(
     "clears pending child relation state on %s",
     async (eventType) => {

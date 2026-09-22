@@ -848,12 +848,13 @@ export class OpenCodeAdapter {
     const category = this.#reviewCategoriesByCallId.get(key);
     const childSessionId = typeof metadata?.sessionId === "string" ? metadata.sessionId : "";
     const parentSessionId = typeof metadata?.parentSessionId === "string" ? metadata.parentSessionId : "";
+    if (category === undefined) return;
     if (
-      category === undefined ||
       childSessionId.length === 0 ||
       parentSessionId.length === 0 ||
       parentSessionId !== input.sessionID
     ) {
+      this.#reviewCategoriesByCallId.delete(key);
       return;
     }
     this.#pendingChildRelations.set(key, {
