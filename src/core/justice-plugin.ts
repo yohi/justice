@@ -44,7 +44,7 @@ import {
   projectObservedReviewExecution,
   taskLifecycleKey,
 } from "./v2/state-projection";
-import type { TaskProgressState } from "./v2/observation-model";
+import type { PersistedLogRecord, TaskProgressState } from "./v2/observation-model";
 import type {
   PendingReviewDispatchTransitionRecord,
   ReviewDispatchTransitionRecord,
@@ -494,6 +494,8 @@ export class JusticePlugin {
       appendReviewArtifactReadAttempt: appendReviewObservation,
       appendReviewArtifactFailureStaging: appendReviewObservation,
       appendReviewPostToolUsePending: appendReviewObservation,
+      appendReviewObserved: appendReviewObservation,
+      appendReviewArtifactCleanupRecord: appendReviewObservation,
       appendReviewDispatchTransition: (record) => this.appendReviewDispatchTransition(record),
       readAndAssembleMatchingArtifact: async (
         postToolUse,
@@ -521,6 +523,17 @@ export class JusticePlugin {
           return { kind: "failure", reason: "artifact_read_failed" };
         }
       },
+      cleanupArtifact: async (reservation) => {
+        if (reviewArtifactReservation.artifactIo === undefined) return "cleanup_incomplete";
+        const result = await reviewArtifactReservation.artifactIo.cleanup(reservation);
+        return result === "removed" ? "cleaned" : "replacement_retained";
+      },
+      evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (context) =>
+        this.observationHandler.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context),
+      appendTaskLifecycleTransition: (input) =>
+        this.observationHandler.appendTaskLifecycleTransition(input),
+      appendPlanFinalizationTransition: (input) =>
+        this.observationHandler.appendPlanFinalizationTransition(input),
       recordAdvisory: (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
       dispatch: {
         withReviewDispatchParentSessionClaim:
@@ -684,7 +697,9 @@ export class JusticePlugin {
         try {
           if (event.payload.toolName === "task") {
             const reviewResponse = await this.routeReviewTaskPostToolUse(event);
-            if (reviewResponse !== undefined) return reviewResponse;
+            if (reviewResponse !== undefined) {
+              return this.mergePreToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
+            }
           }
           // Keep the window open while observation associates the tool result with its task.
           const [observation, planBridge, taskFeedback] = await Promise.all([
@@ -716,6 +731,13 @@ export class JusticePlugin {
       case "DelegatedExecutionRelationObserved":
         return this.observationHandler
           .handleDelegatedExecutionRelation(event.payload)
+          .then(async (response) => {
+            await this.reviewCompletionDomain.recoverPendingReviewCompletionsForBinding(
+              event.payload.parentSessionId,
+              event.payload.parentCallId,
+            );
+            return response;
+          })
           .catch((err: unknown) => {
             this.options.logger?.warn("observation-handler delegated relation failed", err);
             return PROCEED;
@@ -964,7 +986,13 @@ export class JusticePlugin {
     event: PreToolUseEvent,
   ): Promise<HookResponse | undefined> {
     if (event.payload.toolName !== "write") return undefined;
-    const records = await this.observationLogStore.readAll();
+    let records: readonly PersistedLogRecord[];
+    try {
+      records = await this.observationLogStore.readAll();
+    } catch (error: unknown) {
+      await this.recordReviewDispatchAdvisory("review_artifact_write_rejected", error);
+      return { action: "skip", reason: "review_artifact_write_rejected" };
+    }
     const delegated = projectDelegatedExecutionBindings(records).find(
       (candidate) => candidate.childSessionId === event.sessionId,
     );

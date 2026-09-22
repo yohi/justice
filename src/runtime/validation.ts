@@ -363,7 +363,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
   } else if (kind === "review_artifact_cleanup") {
     validateReviewArtifactCleanupRecord(r);
   } else if (kind === "review_completion_staged") {
-    if (typeof r.parentSessionId !== "string" || !isObject(r.staging)) {
+    if (!isNonEmptyString(r.parentSessionId) || !isValidReviewCompletionStaging(r.staging)) {
       throw new Error("Invalid review_completion_staged record");
     }
   } else if (kind === "review_artifact_failure_staged") {
@@ -396,8 +396,7 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       !isValidReviewCorrelation(r.correlation) ||
       typeof r.artifactId !== "string" ||
       r.artifactId.length === 0 ||
-      typeof r.artifactPath !== "string" ||
-      r.artifactPath.length === 0
+      !isValidMandatoryRelativePath(r.artifactPath)
     ) {
       throw new Error("Invalid review_artifact_read_started record");
     }
@@ -432,6 +431,58 @@ function isValidReviewCorrelation(value: unknown): boolean {
     typeof value.planFingerprint.value === "string" &&
     typeof value.finalizationAttemptId === "string" &&
     isPositiveReviewRound(value.finalReviewRound)
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isValidObservedReviewExecution(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    value.schemaVersion === 1 &&
+    value.provenance === "observed" &&
+    isNonEmptyString(value.reviewExecutionEventId) &&
+    isNonEmptyString(value.parentSessionId) &&
+    isNonEmptyString(value.callId) &&
+    isNonEmptyString(value.childSessionId) &&
+    isValidReviewCorrelation(value.correlation)
+  );
+}
+
+function isValidReviewCompletionStaging(value: unknown): boolean {
+  if (!isObject(value) || !isNonEmptyString(value.callId) || !isValidReviewCorrelation(value.correlation)) {
+    return false;
+  }
+  if (!isObject(value.artifactConsumption)) return false;
+  if (
+    !isNonEmptyString(value.artifactConsumption.artifactId) ||
+    !isSha256Digest(value.artifactConsumption.digest) ||
+    !isObject(value.reviewArtifact) ||
+    value.reviewArtifact.schemaVersion !== 1 ||
+    !isValidObservedReviewExecution(value.reviewArtifact.observedExecution) ||
+    !isObject(value.observedExecution) ||
+    !isValidObservedReviewExecution(value.observedExecution) ||
+    !Array.isArray(value.reviewArtifact.findings)
+  ) {
+    return false;
+  }
+  return (
+    isOneOf(value.reviewArtifact.reviewKind, ["task-review", "final-review"]) &&
+    isOneOf(value.reviewArtifact.reviewSource, ["sp-review", "sp-final-review"]) &&
+    typeof value.reviewArtifact.complete === "boolean" &&
+    isValidReviewCorrelation(value.reviewArtifact.correlation) &&
+    JSON.stringify(value.reviewArtifact.correlation) === JSON.stringify(value.correlation) &&
+    JSON.stringify(value.observedExecution.correlation) === JSON.stringify(value.correlation) &&
+    value.reviewArtifact.findings.every(
+      (finding) =>
+        isObject(finding) &&
+        isNonEmptyString(finding.itemKey) &&
+        isOneOf(finding.severity, ["critical", "major", "minor"]) &&
+        isNonEmptyString(finding.summary) &&
+        isNonEmptyString(finding.location),
+    )
   );
 }
 

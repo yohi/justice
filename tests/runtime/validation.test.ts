@@ -1159,6 +1159,17 @@ describe("validateRecordSchema", () => {
       }),
     ).toThrow("Invalid record: unknown observation kind: unknown_kind");
   });
+
+  it("rejects a review completion staging record without its trusted nested payload", () => {
+    expect(() =>
+      validateRecordSchema({
+        ...validBase("observation"),
+        kind: "review_completion_staged",
+        parentSessionId: "ses-1",
+        staging: { callId: "call-1" },
+      }),
+    ).toThrow("Invalid review_completion_staged record");
+  });
 });
 
 describe("validateShardSequences", () => {

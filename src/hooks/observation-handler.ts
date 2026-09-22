@@ -35,6 +35,7 @@ import {
 } from "../core/task-lifecycle";
 import type { PendingObservationRecord, TaskProgressState } from "../core/v2/observation-model";
 import type { ObservationMessagePayload } from "../core/v2/message-payload";
+import type { GatePendingAttemptContext } from "../core/v2/gate-context";
 import {
   buildMessageRecord,
   buildReviewObservedRecord,
@@ -258,6 +259,40 @@ export class ObservationHandler {
 
   getLogStore(): ReadOnlyObservationLog {
     return this.options.logStore;
+  }
+
+  evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(
+    context: GatePendingAttemptContext,
+  ) {
+    return this.gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context);
+  }
+
+  async appendTaskLifecycleTransition(input: Parameters<typeof appendTaskLifecycleTransition>[0]) {
+    const shardId: ShardId = {
+      agentId: input.agentId ?? "system",
+      sessionId: input.sessionId ?? input.parentSessionId,
+      writerId: input.writerId ?? this.options.writerId,
+    };
+    return appendTaskLifecycleTransition(input, async (record) => {
+      await this.options.logStore.append(shardId, record);
+      this.scheduleProjectionRefresh();
+      return 0;
+    });
+  }
+
+  async appendPlanFinalizationTransition(
+    input: Parameters<typeof appendPlanFinalizationTransition>[0],
+  ) {
+    const shardId: ShardId = {
+      agentId: input.agentId ?? "system",
+      sessionId: input.sessionId ?? input.parentSessionId,
+      writerId: input.writerId ?? this.options.writerId,
+    };
+    return appendPlanFinalizationTransition(input, async (record) => {
+      await this.options.logStore.append(shardId, record);
+      this.scheduleProjectionRefresh();
+      return 0;
+    });
   }
 
   getProjectionCache(): ProjectionCacheAccess | undefined {
