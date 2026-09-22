@@ -529,6 +529,7 @@ export function toSerializableProjectedState(state: ProjectedState): SerializedP
     },
     reviewDispatchSlots: state.reviewDispatchSlots,
     taskCallBindings: state.taskCallBindings,
+    delegatedExecutionBindings: state.delegatedExecutionBindings,
   };
 }
 

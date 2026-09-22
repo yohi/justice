@@ -215,7 +215,7 @@ function planFinalizationEvent(
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
-  it("rebuilds a durable delegated binding and its observed execution", () => {
+  it("projects and round-trips a durable delegated binding and its observed execution", () => {
     const relation: DelegatedExecutionRelationObserved = {
       kind: "delegated_execution_relation_observed",
       provenance: "observed",
@@ -262,6 +262,11 @@ describe("project() task fold", () => {
       childSessionId: "child-1",
       correlation: binding.correlation,
     });
+
+    const restored = fromSerializableProjectedState(
+      JSON.parse(JSON.stringify(toSerializableProjectedState(project([record], REBUILT_AT)))) as unknown,
+    );
+    expect(restored.delegatedExecutionBindings).toEqual([binding]);
 
     expect(projectObservedReviewExecution([], binding)).toBeUndefined();
     expect(
