@@ -12,7 +12,7 @@ import type {
   ReviewItem,
   TaskProgressState,
 } from "../../../src/core/v2/observation-model";
-import type { TaskExecutionRef } from "../../../src/core/types";
+import type { ReviewCorrelation, TaskExecutionRef } from "../../../src/core/types";
 
 function toolEvent(
   seq: number,
@@ -212,6 +212,55 @@ function planFinalizationEvent(
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
+  it("projects a claimed review slot into a durable task call binding", () => {
+    const correlation = {
+      reviewKind: "task-review",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      reviewRound: 1,
+    } as const satisfies ReviewCorrelation;
+    const pending = {
+      schemaVersion: 1 as const,
+      sequence: 1,
+      timestamp: "2026-07-06T00:00:01Z",
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      kind: "review_dispatch_transition" as const,
+      transitionId: "pending-1",
+      parentSessionId: "s1",
+      correlation,
+      expectedCategory: "sp-review" as const,
+      from: null,
+      to: "pending" as const,
+    } satisfies ObservationRecord;
+    const claimed = {
+      ...pending,
+      sequence: 2,
+      timestamp: "2026-07-06T00:00:02Z",
+      transitionId: "claimed-1",
+      from: "pending" as const,
+      to: "claimed" as const,
+      callId: "call-1",
+      artifactReservation: {
+        status: "usable" as const,
+        artifactId: "artifact-1",
+        artifactPath: ".justice/reviews/artifact-1.json",
+        leasePath: ".justice/reviews/.leases/artifact-1.lease",
+        artifactIdentity: { device: "1", inode: "2" },
+      },
+    } satisfies ObservationRecord;
+
+    const state = project([claimed, pending], REBUILT_AT);
+
+    expect(state.reviewDispatchSlots).toMatchObject([
+      { state: "claimed", callId: "call-1", key: { parentSessionId: "s1", correlation } },
+    ]);
+    expect(state.taskCallBindings).toMatchObject([
+      { purpose: "task_review", callId: "call-1", expectedCategory: "sp-review", correlation },
+    ]);
+  });
+
   it("projects lifecycle records without aborting later records", () => {
     const invalidRecord = {
       schemaVersion: 1 as const,
