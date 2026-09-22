@@ -7,6 +7,8 @@ import * as pluginModule from "../../src/core/justice-plugin";
 import * as writerIdModule from "../../src/runtime/writer-id";
 import { fakeInit } from "../helpers/fake-opencode-init";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import { capturedRuntimeEvents } from "../helpers/captured-runtime-events";
+import type { DelegatedExecutionRelationObserved } from "../../src/core/types";
 
 /**
  * Task 3.2 — Adapter Extension: the adapter forwards ALL tool executions
@@ -18,6 +20,288 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it.each(["sp-review", "sp-final-review"] as const)(
+    "forwards the observed %s child relation through JusticePlugin",
+    async (category) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+      await adapter.replay(capturedRuntimeEvents(category, "parent-call", "child-session"));
+
+      expect(spy.mock.calls.some(([event]) => event.type === "DelegatedExecutionRelationObserved")).toBe(true);
+      expect(spy.mock.calls.find(([event]) => event.type === "DelegatedExecutionRelationObserved")?.[0]).toMatchObject({
+        type: "DelegatedExecutionRelationObserved",
+        sessionId: "parent-session",
+        payload: {
+          runtimeEventId: `runtime-event-${category}`,
+          parentCallId: "parent-call",
+          childSessionId: "child-session",
+          category,
+          provenance: "observed",
+        },
+      });
+    },
+  );
+
+  it("keys child relation correlation by parent session and call ID", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-a", callID: "shared-call" },
+      { args: { subagent_type: "sp-review" } },
+    );
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-b", callID: "shared-call" },
+      { args: { subagent_type: "sp-final-review" } },
+    );
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-a",
+        type: "session.created",
+        properties: { info: { id: "child-a", parentID: "parent-a" } },
+      },
+    });
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-a",
+        callID: "shared-call",
+        args: { subagent_type: "sp-review" },
+      },
+      { output: "done", metadata: { sessionId: "child-a", parentSessionId: "parent-a" } },
+    );
+
+    expect(spy.mock.calls.find(([event]) => event.type === "DelegatedExecutionRelationObserved")?.[0]).toMatchObject({
+      sessionId: "parent-a",
+      payload: { parentSessionId: "parent-a", parentCallId: "shared-call", category: "sp-review" },
+    });
+  });
+
+  it("does not reuse a review category after a task completes without a child relation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-session", callID: "reused-call" },
+      { args: { subagent_type: "sp-review" } },
+    );
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-session",
+        callID: "reused-call",
+        args: { subagent_type: "sp-review" },
+      },
+      { output: "completed without a child session" },
+    );
+    spy.mockClear();
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-session", callID: "reused-call" },
+      { args: { subagent_type: "deep" } },
+    );
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-session",
+        callID: "reused-call",
+        args: { subagent_type: "deep" },
+      },
+      {
+        output: "completed with a child session",
+        metadata: { sessionId: "child-session", parentSessionId: "parent-session" },
+      },
+    );
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-reused-call",
+        type: "session.created",
+        properties: { info: { id: "child-session", parentID: "parent-session" } },
+      },
+    });
+
+    expect(spy.mock.calls.some(([event]) => event.type === "DelegatedExecutionRelationObserved")).toBe(false);
+  });
+
+  it.each(["session.deleted", "session.removed"] as const)(
+    "clears pending child relation state on %s",
+    async (eventType) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+      await adapter.onToolExecuteBefore(
+        { tool: "task", sessionID: "parent-session", callID: "parent-call" },
+        { args: { subagent_type: "sp-review" } },
+      );
+      await adapter.onEvent({
+        event: {
+          type: eventType,
+          properties: { info: { id: "parent-session" } },
+        },
+      });
+      await adapter.onEvent({
+        event: {
+          id: "runtime-event-child",
+          type: "session.created",
+          properties: { info: { id: "child-session", parentID: "parent-session" } },
+        },
+      });
+      await adapter.onToolExecuteAfter(
+        {
+          tool: "task",
+          sessionID: "parent-session",
+          callID: "parent-call",
+          args: { subagent_type: "sp-review" },
+        },
+        {
+          output: "done",
+          metadata: { sessionId: "child-session", parentSessionId: "parent-session" },
+        },
+      );
+
+      expect(spy.mock.calls.some(([event]) => event.type === "DelegatedExecutionRelationObserved")).toBe(false);
+    },
+  );
+
+  it.each(["sp-review", "sp-final-review"] as const)(
+    "forwards a child relation when the child event arrives after tool completion for %s",
+    async (category) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+      const [before, created, after] = capturedRuntimeEvents(category, "late-call", "late-child");
+      if (before === undefined || created === undefined || after === undefined) {
+        throw new Error("captured relation fixture is incomplete");
+      }
+
+      await adapter.replay([before, after, created]);
+
+      expect(spy.mock.calls.find(([event]) => event.type === "DelegatedExecutionRelationObserved")?.[0]).toMatchObject({
+        type: "DelegatedExecutionRelationObserved",
+        sessionId: "parent-session",
+        payload: {
+          runtimeEventId: `runtime-event-${category}`,
+          parentCallId: "late-call",
+          childSessionId: "late-child",
+          category,
+        },
+      });
+    },
+  );
+
+  it("clears pending and child relation state when the parent session is removed", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-session", callID: "parent-call" },
+      { args: { subagent_type: "sp-review" } },
+    );
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-session",
+        callID: "parent-call",
+        args: { subagent_type: "sp-review" },
+      },
+      {
+        output: "done",
+        metadata: { sessionId: "pending-child", parentSessionId: "parent-session" },
+      },
+    );
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-stored-child",
+        type: "session.created",
+        properties: { info: { id: "stored-child", parentID: "parent-session" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "session.removed",
+        properties: { info: { id: "parent-session" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-pending-child",
+        type: "session.created",
+        properties: { info: { id: "pending-child", parentID: "parent-session" } },
+      },
+    });
+
+    expect(spy.mock.calls.some(([event]) => event.type === "DelegatedExecutionRelationObserved")).toBe(false);
+  });
+
+  it("ignores session events without complete child relation identifiers", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+
+    await adapter.onEvent({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "child", parentID: "parent" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "",
+        type: "session.created",
+        properties: { info: { id: "child", parentID: "parent" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-missing-child",
+        type: "session.created",
+        properties: { info: { parentID: "parent" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-missing-parent",
+        type: "session.created",
+        properties: { info: { id: "child" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "runtime-event-empty-identifiers",
+        type: "session.created",
+        properties: { info: { id: "", parentID: "" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "session.deleted",
+        properties: { info: { id: "" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        type: "session.deleted",
+        properties: { info: { id: 42 } },
+      },
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -1157,6 +1441,62 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
       payload: { sessionId: "s", agentName: "atlas" },
     });
     expect(res).toEqual({ action: "proceed" });
+  });
+
+  it("routes observed delegated relations to the observation handler", async () => {
+    const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
+    const relation: DelegatedExecutionRelationObserved = {
+      kind: "delegated_execution_relation_observed",
+      provenance: "observed",
+      runtimeEventId: "runtime-event-1",
+      parentSessionId: "parent-session",
+      parentCallId: "parent-call",
+      childSessionId: "child-session",
+      category: "sp-review",
+    };
+    const handlerSpy = vi
+      .spyOn(plugin.getObservationHandler(), "handleDelegatedExecutionRelation")
+      .mockResolvedValue({ action: "proceed" });
+
+    const response = await plugin.handleEvent({
+      type: "DelegatedExecutionRelationObserved",
+      sessionId: "parent-session",
+      callId: "parent-call",
+      payload: relation,
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(handlerSpy).toHaveBeenCalledWith(relation);
+  });
+
+  it("fails open when delegated relation handling rejects", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter(), { logger });
+    const relation: DelegatedExecutionRelationObserved = {
+      kind: "delegated_execution_relation_observed",
+      provenance: "observed",
+      runtimeEventId: "runtime-event-1",
+      parentSessionId: "parent-session",
+      parentCallId: "parent-call",
+      childSessionId: "child-session",
+      category: "sp-review",
+    };
+    vi.spyOn(plugin.getObservationHandler(), "handleDelegatedExecutionRelation").mockRejectedValue(
+      new Error("binding failed"),
+    );
+
+    await expect(
+      plugin.handleEvent({
+        type: "DelegatedExecutionRelationObserved",
+        sessionId: "parent-session",
+        callId: "parent-call",
+        payload: relation,
+      }),
+    ).resolves.toEqual({ action: "proceed" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "observation-handler delegated relation failed",
+      expect.any(Error),
+    );
   });
 
   it("returns PROCEED for observation-kind Message payloads without invoking plan-bridge", async () => {

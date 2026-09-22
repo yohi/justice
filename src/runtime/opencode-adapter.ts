@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Hooks, ToolDefinition } from "@opencode-ai/plugin";
-import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import {
   isJusticeImplementCommand,
   parseJusticeImplementCommandArguments,
@@ -21,6 +20,7 @@ import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
+import type { DelegatedExecutionRelationObserved } from "../core/types";
 
 export interface OpenCodeLogEntry {
   readonly level: "info" | "warn" | "error";
@@ -72,19 +72,43 @@ type CommandExecuteBeforePart = CommandExecuteBeforeOutput["parts"][number];
 
 interface GenericEventInput {
   readonly event: {
+    readonly id?: string;
     readonly type: string;
     readonly properties?: object;
   };
 }
 
+export type ReplayRuntimeEvent =
+  | {
+      readonly kind: "tool.execute.before";
+      readonly input: { readonly tool: string; readonly sessionID: string; readonly callID: string };
+      readonly output: { readonly args: Record<string, unknown> };
+    }
+  | {
+      readonly kind: "tool.execute.after";
+      readonly input: {
+        readonly tool: string;
+        readonly sessionID: string;
+        readonly callID: string;
+        readonly args: Record<string, unknown>;
+      };
+      readonly output: { readonly output: string; readonly metadata?: Record<string, unknown> };
+    }
+  | { readonly kind: "event"; readonly event: GenericEventInput["event"] };
+
 function toRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function isSessionDeletedEvent(event: GenericEventInput["event"]): event is EventSessionDeleted {
+function getSessionRemovalId(event: GenericEventInput["event"]): string | undefined {
   const properties = toRecord(event.properties);
   const info = toRecord(properties.info);
-  return event.type === "session.deleted" && typeof info.id === "string";
+  if (event.type !== "session.deleted" && event.type !== "session.removed") return undefined;
+  return typeof info.id === "string" ? info.id : undefined;
+}
+
+function relationKey(parentSessionId: string, callId: string): string {
+  return `${parentSessionId}\u0000${callId}`;
 }
 
 export class OpenCodeAdapter {
@@ -95,6 +119,23 @@ export class OpenCodeAdapter {
   #justice: JusticePlugin | null = null;
   #notifier: OpenCodeNotifier | null = null;
   #initPromise: Promise<void> | null = null;
+  readonly #reviewCategoriesByCallId = new Map<
+    string,
+    { readonly parentSessionId: string; readonly category: "sp-review" | "sp-final-review" }
+  >();
+  readonly #pendingChildRelations = new Map<
+    string,
+    {
+      readonly parentSessionId: string;
+      readonly parentCallId: string;
+      readonly childSessionId: string;
+      readonly category: "sp-review" | "sp-final-review";
+    }
+  >();
+  readonly #childSessionEvents = new Map<
+    string,
+    { readonly runtimeEventId: string; readonly parentSessionId: string }
+  >();
 
   constructor(init: OpenCodePluginInit, options: OpenCodeAdapterOptions = {}) {
     const project =
@@ -168,6 +209,18 @@ export class OpenCodeAdapter {
 
     this.#initPromise = this.#runInit();
     await this.#initPromise;
+  }
+
+  async replay(events: readonly ReplayRuntimeEvent[]): Promise<void> {
+    for (const event of events) {
+      if (event.kind === "tool.execute.before") {
+        await this.onToolExecuteBefore(event.input, event.output);
+      } else if (event.kind === "tool.execute.after") {
+        await this.onToolExecuteAfter(event.input, event.output);
+      } else {
+        await this.onEvent({ event: event.event });
+      }
+    }
   }
 
   async #runInit(): Promise<void> {
@@ -257,12 +310,15 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      if (isSessionDeletedEvent(input.event)) {
-        await this.#handleSessionDeleted(input.event.properties.info.id);
+      const sessionRemovalId = getSessionRemovalId(input.event);
+      if (sessionRemovalId !== undefined) {
+        this.#clearChildRelationState(sessionRemovalId);
+        await this.#handleSessionDeleted(sessionRemovalId);
         return;
       }
 
       const properties = toRecord(input.event.properties);
+      await this.#captureChildSessionEvent(input.event.id, input.event.type, properties);
 
       switch (input.event.type) {
         case "message.updated":
@@ -590,6 +646,7 @@ export class OpenCodeAdapter {
   ): Promise<void> {
     try {
     if (input.tool === "task") {
+      this.#rememberReviewCategory(input, output.args);
       normalizeTaskToolInputInPlace(output.args);
       const category = output.args.category;
       if (category === "sp-review" || category === "sp-final-review") {
@@ -616,7 +673,10 @@ export class OpenCodeAdapter {
         },
       });
 
-      if (response.action !== "inject") return;
+      if (response.action !== "inject") {
+        this.#rememberReviewCategory(input, output.args);
+        return;
+      }
 
       const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
       output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
@@ -636,6 +696,7 @@ export class OpenCodeAdapter {
       if (category === "sp-review" || category === "sp-final-review") {
         output.args.run_in_background = false;
       }
+      this.#rememberReviewCategory(input, output.args);
       }
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
@@ -667,6 +728,8 @@ export class OpenCodeAdapter {
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) return;
+
+      await this.#rememberChildRelation(input, output.metadata);
 
       const rawReviewResolutionArtifact = output.metadata?.reviewResolutionArtifact;
       const canPromoteReviewResolutionArtifact =
@@ -760,6 +823,111 @@ export class OpenCodeAdapter {
     } catch (err) {
       await this.log("error", "[Justice] onToolExecuteAfter failure", err);
     }
+  }
+
+  #rememberReviewCategory(
+    input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
+    args: Record<string, unknown>,
+  ): void {
+    if (input.tool !== "task") return;
+    const rawCategory = args.category ?? args.subagent_type;
+    normalizeTaskToolInputInPlace(args);
+    const category = rawCategory;
+    if (category !== "sp-review" && category !== "sp-final-review") return;
+    this.#reviewCategoriesByCallId.set(relationKey(input.sessionID, input.callID), {
+      parentSessionId: input.sessionID,
+      category,
+    });
+  }
+
+  async #rememberChildRelation(
+    input: { readonly sessionID: string; readonly callID: string },
+    metadata: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const key = relationKey(input.sessionID, input.callID);
+    const category = this.#reviewCategoriesByCallId.get(key);
+    const childSessionId = typeof metadata?.sessionId === "string" ? metadata.sessionId : "";
+    const parentSessionId = typeof metadata?.parentSessionId === "string" ? metadata.parentSessionId : "";
+    if (category === undefined) return;
+    if (
+      childSessionId.length === 0 ||
+      parentSessionId.length === 0 ||
+      parentSessionId !== input.sessionID
+    ) {
+      this.#reviewCategoriesByCallId.delete(key);
+      return;
+    }
+    this.#pendingChildRelations.set(key, {
+      parentSessionId,
+      parentCallId: input.callID,
+      childSessionId,
+      category: category.category,
+    });
+    await this.#tryForwardChildRelation(key);
+  }
+
+  async #captureChildSessionEvent(
+    runtimeEventId: string | undefined,
+    eventType: string,
+    properties: Record<string, unknown>,
+  ): Promise<void> {
+    if (eventType !== "session.created" && eventType !== "session.updated") return;
+    if (runtimeEventId === undefined || runtimeEventId.length === 0) return;
+    const info = toRecord(properties.info);
+    const childSessionId = typeof info.id === "string" ? info.id : "";
+    const parentSessionId = typeof info.parentID === "string" ? info.parentID : "";
+    if (childSessionId.length === 0 || parentSessionId.length === 0) return;
+    this.#childSessionEvents.set(childSessionId, { runtimeEventId, parentSessionId });
+    for (const [callId, pending] of this.#pendingChildRelations) {
+      if (pending.childSessionId === childSessionId) {
+        await this.#tryForwardChildRelation(callId);
+      }
+    }
+  }
+
+  #clearChildRelationState(sessionId: string): void {
+    if (sessionId.length === 0) return;
+    for (const [key, category] of this.#reviewCategoriesByCallId) {
+      if (category.parentSessionId === sessionId) this.#reviewCategoriesByCallId.delete(key);
+    }
+    for (const [key, pending] of this.#pendingChildRelations) {
+      if (pending.parentSessionId === sessionId || pending.childSessionId === sessionId) {
+        this.#pendingChildRelations.delete(key);
+        this.#reviewCategoriesByCallId.delete(key);
+      }
+    }
+    for (const [childSessionId, childEvent] of this.#childSessionEvents) {
+      if (childSessionId === sessionId || childEvent.parentSessionId === sessionId) {
+        this.#childSessionEvents.delete(childSessionId);
+      }
+    }
+  }
+
+  async #tryForwardChildRelation(key: string): Promise<void> {
+    const pending = this.#pendingChildRelations.get(key);
+    if (pending === undefined) return;
+    const childEvent = this.#childSessionEvents.get(pending.childSessionId);
+    if (childEvent === undefined || childEvent.parentSessionId !== pending.parentSessionId) return;
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (justice === null) return;
+    const relation: DelegatedExecutionRelationObserved = {
+      kind: "delegated_execution_relation_observed",
+      provenance: "observed",
+      runtimeEventId: childEvent.runtimeEventId,
+      parentSessionId: pending.parentSessionId,
+      parentCallId: pending.parentCallId,
+      childSessionId: pending.childSessionId,
+      category: pending.category,
+    };
+    this.#pendingChildRelations.delete(key);
+    this.#reviewCategoriesByCallId.delete(key);
+    await justice.handleEvent({
+      type: "DelegatedExecutionRelationObserved",
+      sessionId: pending.parentSessionId,
+      callId: pending.parentCallId,
+      payload: relation,
+    });
   }
 
   /**

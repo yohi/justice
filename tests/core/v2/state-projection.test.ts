@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   fromSerializableProjectedState,
+  projectDelegatedExecutionBindings,
+  projectObservedReviewExecution,
   project,
   toSerializableProjectedState,
 } from "../../../src/core/v2/state-projection";
@@ -13,6 +15,7 @@ import type {
   TaskProgressState,
 } from "../../../src/core/v2/observation-model";
 import type { ReviewCorrelation, TaskExecutionRef } from "../../../src/core/types";
+import type { DelegatedExecutionBinding, DelegatedExecutionRelationObserved } from "../../../src/core/types";
 
 function toolEvent(
   seq: number,
@@ -212,6 +215,73 @@ function planFinalizationEvent(
 const REBUILT_AT = "2026-07-06T00:00:00.000Z";
 
 describe("project() task fold", () => {
+  it("projects and round-trips a durable delegated binding and its observed execution", () => {
+    const relation: DelegatedExecutionRelationObserved = {
+      kind: "delegated_execution_relation_observed",
+      provenance: "observed",
+      runtimeEventId: "runtime-event-1",
+      parentSessionId: "s1",
+      parentCallId: "call-1",
+      childSessionId: "child-1",
+      category: "sp-review",
+    };
+    const binding: DelegatedExecutionBinding = {
+      parentSessionId: "s1",
+      parentCallId: "call-1",
+      childSessionId: "child-1",
+      relationId: relation.runtimeEventId,
+      scope: {
+        kind: "task",
+        taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+        reviewRound: 1,
+      },
+      correlation: {
+        reviewKind: "task-review",
+        taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+        reviewRound: 1,
+      },
+    };
+    const record = {
+      schemaVersion: 1 as const,
+      sequence: 1,
+      timestamp: REBUILT_AT,
+      agentId: "atlas" as const,
+      sessionId: "s1",
+      writerId: "w1",
+      recordType: "observation" as const,
+      kind: "delegated_execution_binding" as const,
+      relation,
+      binding,
+    } satisfies ObservationRecord;
+
+    expect(projectDelegatedExecutionBindings([record, { ...record, sequence: 2 }])).toEqual([binding]);
+    expect(projectObservedReviewExecution([record], binding)).toMatchObject({
+      reviewExecutionEventId: "runtime-event-1",
+      parentSessionId: "s1",
+      callId: "call-1",
+      childSessionId: "child-1",
+      correlation: binding.correlation,
+    });
+
+    const restored = fromSerializableProjectedState(
+      JSON.parse(JSON.stringify(toSerializableProjectedState(project([record], REBUILT_AT)))) as unknown,
+    );
+    expect(restored.delegatedExecutionBindings).toEqual([binding]);
+
+    expect(projectObservedReviewExecution([], binding)).toBeUndefined();
+    expect(
+      projectObservedReviewExecution([{ ...record, sequence: 2 }, record], binding),
+    ).toBeUndefined();
+    expect(
+      projectObservedReviewExecution([record], { ...binding, childSessionId: "stale-child" }),
+    ).toBeUndefined();
+    expect(
+      projectObservedReviewExecution(
+        [{ ...record, relation: { ...relation, provenance: "declared" } }],
+        binding,
+      ),
+    ).toBeUndefined();
+  });
   it("projects a claimed review slot into a durable task call binding", () => {
     const correlation = {
       reviewKind: "task-review",

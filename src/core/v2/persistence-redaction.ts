@@ -206,6 +206,8 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
       };
     case "review_dispatch_transition":
       return record;
+    case "delegated_execution_binding":
+      return record;
     // Each bootstrap kind is spread under its own literal `kind` so the result
     // stays assignable to a single PendingObservationRecord member.
     case "workflow_started":
