@@ -323,9 +323,105 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     ) {
       throw new Error("Invalid plan_finalization_transition record");
     }
+  } else if (kind === "review_dispatch_transition") {
+    if (
+      typeof r.transitionId !== "string" ||
+      typeof r.parentSessionId !== "string" ||
+      !isValidReviewCorrelation(r.correlation) ||
+      !isOneOf(r.expectedCategory, ["sp-review", "sp-final-review"])
+    ) {
+      throw new Error("Invalid review_dispatch_transition record");
+    }
+    if (r.from === null && r.to === "pending") return;
+    if (r.from === "pending" && r.to === "claimed") {
+      if (typeof r.callId !== "string" || !isObject(r.artifactReservation)) {
+        throw new Error("Invalid claimed review_dispatch_transition record");
+      }
+      return;
+    }
+    if (
+      (r.from === "pending" || r.from === "claimed") &&
+      r.to === "terminal" &&
+      isOneOf(r.terminalReason, [
+        "completed",
+        "cancelled",
+        "review_execution_failed",
+        "lost_conclusive",
+        "artifact_reservation_unusable",
+      ]) &&
+      (r.callId === undefined || typeof r.callId === "string")
+    ) {
+      return;
+    }
+    throw new Error("Invalid review_dispatch_transition state");
+  } else if (kind === "delegated_execution_binding") {
+    if (!isValidDelegatedExecutionBindingRecord(r)) {
+      throw new Error("Invalid delegated_execution_binding record");
+    }
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);
   }
+}
+
+function isValidTaskExecutionRef(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    typeof value.authorizationId === "string" &&
+    typeof value.taskId === "string" &&
+    typeof value.attemptId === "string"
+  );
+}
+
+function isValidReviewCorrelation(value: unknown): boolean {
+  if (!isObject(value) || !isOneOf(value.reviewKind, ["task-review", "final-review"])) return false;
+  if (value.reviewKind === "task-review") {
+    return isValidTaskExecutionRef(value.taskExecutionRef) && isPositiveReviewRound(value.reviewRound);
+  }
+  return (
+    isValidMandatoryRelativePath(value.planPath) &&
+    typeof value.authorizationId === "string" &&
+    isObject(value.planFingerprint) &&
+    value.planFingerprint.algorithm === "sha256" &&
+    typeof value.planFingerprint.value === "string" &&
+    typeof value.finalizationAttemptId === "string" &&
+    isPositiveReviewRound(value.finalReviewRound)
+  );
+}
+
+function isValidDelegatedExecutionBindingRecord(value: Record<string, unknown>): boolean {
+  if (!isObject(value.relation) || !isObject(value.binding)) return false;
+  const relation = value.relation;
+  const binding = value.binding;
+  return (
+    relation.kind === "delegated_execution_relation_observed" &&
+    relation.provenance === "observed" &&
+    typeof relation.runtimeEventId === "string" &&
+    typeof relation.parentSessionId === "string" &&
+    typeof relation.parentCallId === "string" &&
+    typeof relation.childSessionId === "string" &&
+    isOneOf(relation.category, ["sp-review", "sp-final-review"]) &&
+    typeof binding.relationId === "string" &&
+    binding.relationId === relation.runtimeEventId &&
+    typeof binding.parentSessionId === "string" &&
+    binding.parentSessionId === relation.parentSessionId &&
+    typeof binding.parentCallId === "string" &&
+    binding.parentCallId === relation.parentCallId &&
+    typeof binding.childSessionId === "string" &&
+    binding.childSessionId === relation.childSessionId &&
+    isObject(binding.scope) &&
+    (binding.scope.kind === "task"
+      ? isValidTaskExecutionRef(binding.scope.taskExecutionRef) &&
+        isPositiveReviewRound(binding.scope.reviewRound)
+      : binding.scope.kind === "finalization" &&
+        isValidMandatoryRelativePath(binding.scope.planPath) &&
+        typeof binding.scope.authorizationId === "string" &&
+        isObject(binding.scope.planFingerprint) &&
+        binding.scope.planFingerprint.algorithm === "sha256" &&
+        typeof binding.scope.planFingerprint.value === "string" &&
+        typeof binding.scope.finalizationAttemptId === "string" &&
+        isPositiveReviewRound(binding.scope.finalReviewRound)) &&
+    isValidReviewCorrelation(binding.correlation)
+  );
 }
 
 function validateDecisionRecord(r: Record<string, unknown>): void {

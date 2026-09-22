@@ -4,6 +4,9 @@ import { normalizeReviewResolutionArtifact } from "../core/review-resolution-art
 import { resolveTaskIdFromToolInput } from "../core/task-packager";
 import type {
   HookResponse,
+  DelegatedExecutionBinding,
+  DelegatedExecutionRelationObserved,
+  ReviewTaskCallBinding,
   ObservationAgentId,
   PostToolUseEvent,
   PreToolUseEvent,
@@ -46,7 +49,11 @@ import {
 } from "../core/v2/record-builder";
 import { detectSkillInvoked } from "../core/v2/skill-invoked-detector";
 import { buildReflectionEvent } from "../core/v2/reflection-event";
-import { project, type ProjectedState } from "../core/v2/state-projection";
+import {
+  project,
+  projectDelegatedExecutionBindings,
+  type ProjectedState,
+} from "../core/v2/state-projection";
 import { hashString } from "../core/v2/hash";
 import { extractTaskSummaryClaims } from "../core/v2/task-summary-claim-extractor";
 import type { DeclaredClaim } from "../core/v2/declared-claim-extractor";
@@ -76,6 +83,54 @@ type ReviewObservationOutcome =
 // parts that never finalize (e.g. streaming truncation) must not grow forever.
 const MESSAGE_ROLE_BUFFER_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes idle
 const MESSAGE_ROLE_BUFFER_MAX_ENTRIES = 1000;
+
+export type BindObservedChildResult =
+  | { readonly kind: "bound"; readonly binding: DelegatedExecutionBinding }
+  | { readonly kind: "stale" };
+
+export function bindObservedChild(
+  claim: ReviewTaskCallBinding,
+  relation: DelegatedExecutionRelationObserved,
+): BindObservedChildResult {
+  if (
+    relation.provenance !== "observed" ||
+    relation.parentSessionId !== claim.parentSessionId ||
+    relation.parentCallId !== claim.callId ||
+    relation.category !== claim.expectedCategory ||
+    relation.runtimeEventId.trim().length === 0 ||
+    relation.childSessionId.trim().length === 0
+  ) {
+    return { kind: "stale" };
+  }
+
+  const scope =
+    claim.correlation.reviewKind === "task-review"
+      ? {
+          kind: "task" as const,
+          taskExecutionRef: claim.correlation.taskExecutionRef,
+          reviewRound: claim.correlation.reviewRound,
+        }
+      : {
+          kind: "finalization" as const,
+          planPath: claim.correlation.planPath,
+          authorizationId: claim.correlation.authorizationId,
+          planFingerprint: claim.correlation.planFingerprint,
+          finalizationAttemptId: claim.correlation.finalizationAttemptId,
+          finalReviewRound: claim.correlation.finalReviewRound,
+        };
+
+  return {
+    kind: "bound",
+    binding: {
+      relationId: relation.runtimeEventId,
+      parentSessionId: claim.parentSessionId,
+      parentCallId: claim.callId,
+      childSessionId: relation.childSessionId,
+      scope,
+      correlation: claim.correlation,
+    },
+  };
+}
 
 type ProjectionCacheAccess = {
   readonly read?: () => Promise<ProjectedState | undefined>;
@@ -114,6 +169,7 @@ export class ObservationHandler {
   private projectionRefresh: Promise<void> = Promise.resolve();
   private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
   private readonly gateEvaluator;
+  private readonly authorizationReviewBoundary: AuthorizationReviewBoundary;
 
   constructor(
     private readonly options: {
@@ -141,6 +197,7 @@ export class ObservationHandler {
   ) {
     const authorizationReviewBoundary =
       this.options.authorizationReviewBoundary ?? createAuthorizationReviewBoundary();
+    this.authorizationReviewBoundary = authorizationReviewBoundary;
     this.gateEvaluator = createGatePendingAttemptEvaluator({
       readDurableRecords: () => this.options.logStore.readAll(),
       appendDecision: async (record) => {
@@ -276,6 +333,65 @@ export class ObservationHandler {
       );
     }
     return PROCEED;
+  }
+
+  async handleDelegatedExecutionRelation(
+    relation: DelegatedExecutionRelationObserved,
+  ): Promise<HookResponse> {
+    return this.authorizationReviewBoundary.withParentSession(relation.parentSessionId, async () => {
+      try {
+        const records = await this.options.logStore.readAll();
+        const projected = project(records, new Date().toISOString());
+        const claim = projected.taskCallBindings.find(
+          (binding): binding is ReviewTaskCallBinding =>
+            (binding.purpose === "task_review" || binding.purpose === "final_review") &&
+            binding.parentSessionId === relation.parentSessionId &&
+            binding.callId === relation.parentCallId,
+        );
+        if (claim === undefined) return PROCEED;
+
+        const result = bindObservedChild(claim, relation);
+        if (result.kind === "stale") return PROCEED;
+        if (
+          projectDelegatedExecutionBindings(records).some(
+            (binding) =>
+              binding.relationId === result.binding.relationId ||
+              (binding.parentSessionId === result.binding.parentSessionId &&
+                binding.parentCallId === result.binding.parentCallId),
+          )
+        ) {
+          return PROCEED;
+        }
+
+        const agentId = this.options.sessionStateProvider.getAgentId(relation.parentSessionId);
+        const taskId =
+          result.binding.scope.kind === "task"
+            ? result.binding.scope.taskExecutionRef.taskId
+            : undefined;
+        await this.options.logStore.append(
+          { agentId, sessionId: relation.parentSessionId, writerId: this.options.writerId },
+          {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId,
+            sessionId: relation.parentSessionId,
+            writerId: this.options.writerId,
+            recordType: "observation",
+            ...(taskId === undefined ? {} : { taskId }),
+            kind: "delegated_execution_binding",
+            relation,
+            binding: result.binding,
+          },
+        );
+        this.scheduleProjectionRefresh();
+      } catch (error) {
+        this.options.logger?.warn(
+          "observation-handler: delegated execution binding failed, degrading to PROCEED",
+          error,
+        );
+      }
+      return PROCEED;
+    });
   }
 
   async initializeProjectionCache(): Promise<void> {

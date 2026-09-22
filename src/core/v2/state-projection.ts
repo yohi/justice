@@ -1,5 +1,7 @@
 // src/core/v2/state-projection.ts
 import type {
+  DelegatedExecutionBinding,
+  ObservedReviewExecutionV1,
   FullEvidenceRef,
   ReviewTaskCallBinding,
   TaskCallBinding,
@@ -53,6 +55,7 @@ export type ProjectedState = {
   readonly lifecycle: ProjectedLifecycle;
   readonly reviewDispatchSlots: readonly ReviewDispatchSlot[];
   readonly taskCallBindings: readonly TaskCallBinding[];
+  readonly delegatedExecutionBindings: readonly DelegatedExecutionBinding[];
 };
 
 export type FinalizationContext = {
@@ -368,6 +371,59 @@ function taskCallBindingsFor(slots: readonly ReviewDispatchSlot[]): readonly Tas
   return bindings;
 }
 
+type DelegatedBindingRecord = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "delegated_execution_binding" }
+>;
+
+export function projectDelegatedExecutionBindings(
+  records: readonly PersistedLogRecord[],
+): readonly DelegatedExecutionBinding[] {
+  const bindings = new Map<string, DelegatedExecutionBinding>();
+  for (const record of records) {
+    if (record.recordType !== "observation" || record.kind !== "delegated_execution_binding") {
+      continue;
+    }
+    const bindingRecord = record as DelegatedBindingRecord;
+    if (!bindings.has(bindingRecord.binding.relationId)) {
+      bindings.set(bindingRecord.binding.relationId, bindingRecord.binding);
+    }
+  }
+  return [...bindings.values()];
+}
+
+export function projectObservedReviewExecution(
+  records: readonly PersistedLogRecord[],
+  delegatedBinding: DelegatedExecutionBinding,
+): ObservedReviewExecutionV1 | undefined {
+  const candidates = records.filter(
+    (record): record is DelegatedBindingRecord =>
+      record.recordType === "observation" &&
+      record.kind === "delegated_execution_binding" &&
+      record.relation.runtimeEventId === delegatedBinding.relationId,
+  );
+  if (candidates.length !== 1) return undefined;
+  const record = candidates[0];
+  if (record === undefined) return undefined;
+  if (
+    record.relation.provenance !== "observed" ||
+    record.binding.parentSessionId !== delegatedBinding.parentSessionId ||
+    record.binding.parentCallId !== delegatedBinding.parentCallId ||
+    record.binding.childSessionId !== delegatedBinding.childSessionId
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    provenance: "observed",
+    reviewExecutionEventId: record.relation.runtimeEventId,
+    parentSessionId: record.binding.parentSessionId,
+    callId: record.binding.parentCallId,
+    childSessionId: record.binding.childSessionId,
+    correlation: record.binding.correlation,
+  };
+}
+
 /**
  * Pure deterministic fold from an event log to `ProjectedState` (§6.3).
  * Ordering is delegated to `orderEventsForProjection` so replays are stable.
@@ -415,6 +471,7 @@ export function project(events: readonly PersistedLogRecord[], rebuiltAt: string
     lifecycle,
     reviewDispatchSlots,
     taskCallBindings: taskCallBindingsFor(reviewDispatchSlots),
+    delegatedExecutionBindings: projectDelegatedExecutionBindings(sorted),
     reviewSummary: aggregateReviews(
       sorted.filter((event): event is ObservationRecord => event.recordType === "observation"),
     ),
@@ -440,6 +497,7 @@ type SerializedProjectedState = {
   };
   readonly reviewDispatchSlots?: readonly ReviewDispatchSlot[];
   readonly taskCallBindings?: readonly TaskCallBinding[];
+  readonly delegatedExecutionBindings?: readonly DelegatedExecutionBinding[];
 };
 
 /**
@@ -509,5 +567,6 @@ export function fromSerializableProjectedState(obj: unknown): ProjectedState {
     },
     reviewDispatchSlots: raw.reviewDispatchSlots ?? [],
     taskCallBindings: raw.taskCallBindings ?? [],
+    delegatedExecutionBindings: raw.delegatedExecutionBindings ?? [],
   };
 }

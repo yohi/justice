@@ -7,6 +7,7 @@ import type {
   TaskExecutionRef,
   ReviewArtifactReservation,
   ReviewCorrelation,
+  DelegatedExecutionBindingRecord,
 } from "../types";
 // type-only mutual import with decision-model — safe: the cycle is erased at emit. Do NOT change to a value import.
 import type { PendingDecisionRecord, DecisionRecord } from "./decision-model";
@@ -296,6 +297,7 @@ export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanActivatedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & DelegatedExecutionBindingRecord)
   | PendingReviewDispatchTransitionRecord;
 export type LifecycleObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)

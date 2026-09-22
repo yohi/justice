@@ -71,6 +71,51 @@ export type ReviewTaskCallBinding = {
 };
 export type TaskCallBinding = ImplementationTaskCallBinding | ReviewTaskCallBinding;
 export type ReviewKind = "task-review" | "final-review";
+export type ExecutionScope =
+  | {
+      readonly kind: "task";
+      readonly taskExecutionRef: TaskExecutionRef;
+      readonly reviewRound: number;
+    }
+  | {
+      readonly kind: "finalization";
+      readonly planPath: string;
+      readonly authorizationId: string;
+      readonly planFingerprint: PlanFingerprint;
+      readonly finalizationAttemptId: string;
+      readonly finalReviewRound: number;
+    };
+export type DelegatedExecutionRelationObserved = {
+  readonly kind: "delegated_execution_relation_observed";
+  readonly provenance: "observed" | "declared";
+  readonly runtimeEventId: string;
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly childSessionId: string;
+  readonly category: "sp-review" | "sp-final-review";
+};
+export type DelegatedExecutionBinding = {
+  readonly relationId: string;
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly childSessionId: string;
+  readonly scope: ExecutionScope;
+  readonly correlation: ReviewCorrelation;
+};
+export type ObservedReviewExecutionV1 = {
+  readonly schemaVersion: 1;
+  readonly provenance: "observed";
+  readonly reviewExecutionEventId: string;
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly childSessionId: string;
+  readonly correlation: ReviewCorrelation;
+};
+export type DelegatedExecutionBindingRecord = {
+  readonly kind: "delegated_execution_binding";
+  readonly relation: DelegatedExecutionRelationObserved;
+  readonly binding: DelegatedExecutionBinding;
+};
 export type TaskReviewCorrelation = {
   readonly reviewKind: "task-review";
   readonly taskExecutionRef: TaskExecutionRef;
@@ -292,12 +337,20 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryableErrors: Object.freeze(["syntax_error", "type_error"]),
 };
 
+export interface DelegatedExecutionRelationObservedEvent {
+  readonly type: "DelegatedExecutionRelationObserved";
+  readonly payload: DelegatedExecutionRelationObserved;
+  readonly sessionId: string;
+  readonly callId?: string;
+}
+
 /** OmO Hook イベントの Discriminated Union */
 export type HookEvent =
   | MessageEvent
   | PreToolUseEvent
   | PostToolUseEvent
   | EventEvent
+  | DelegatedExecutionRelationObservedEvent
   | AgentMappedEvent;
 
 export interface MessageEvent {

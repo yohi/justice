@@ -622,6 +622,14 @@ export class JusticePlugin {
         }
       }
 
+      case "DelegatedExecutionRelationObserved":
+        return this.observationHandler
+          .handleDelegatedExecutionRelation(event.payload)
+          .catch((err: unknown) => {
+            this.options.logger?.warn("observation-handler delegated relation failed", err);
+            return PROCEED;
+          });
+
       case "Event":
         return this.handleEventType(event);
       case "AgentMapped": {
