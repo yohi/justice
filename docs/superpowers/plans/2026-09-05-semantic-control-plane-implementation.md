@@ -8782,7 +8782,7 @@ this.planBridge.setReviewDispatchCancellation(
 This is a one-time direct dependency injection, not a second boundary, public cancellation wrapper, or generic
 container. It must occur before `initialize()` can call `restoreActivePlans()`.
 
-- [ ] **Step 1: Write the failing dispatch, claim, offer, and recovery tests**
+- [x] **Step 1: Write the failing dispatch, claim, offer, and recovery tests**
 
 The test setup constructs one `reviewDispatchState` with the existing injected ports and destructures
 its returned operations (`claimReviewDispatch`, `offerNextMandatoryReview`, `terminalizeReviewFailure`,
@@ -10127,7 +10127,7 @@ it("keeps an uncertain recovered claim blocked without redispatch", async () => 
 });
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
 
@@ -10141,7 +10141,7 @@ escapes `offerNextMandatoryReview` / `claimReviewDispatch`; the runtime fail-ope
 rejection is not normalized to the existing non-blocking HookResponse. The failures must not be caused by an
 undefined advisory, missing helper, invented `PROCEED` type, or invalid matcher.
 
-- [ ] **Step 3: Implement durable dispatch and claim**
+- [x] **Step 3: Implement durable dispatch and claim**
 
 The same Step 3 must add the production composition and PreToolUse route below. The code is
 part of the Task 3.4 implementation, not an appendix or a later integration task. Adapter
@@ -11878,7 +11878,7 @@ async function recoverReviewDispatchesAfterRestart(): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts`
 
@@ -11895,7 +11895,7 @@ The unreadable-Authorization assertions must additionally prove:
   seeded `null -> pending` transition plus one same-parent `pending -> terminal(cancelled)` transition;
   it invokes the real `plugin.handleEvent()` and does not mock `handleEvent()` or the claim operation.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/review-dispatch-state.ts src/core/review-artifact-reservation.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/hooks/observation-handler.ts src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts src/runtime/node-file-system.ts src/core/justice-plugin.ts tests/helpers/mock-file-system.ts tests/core/review-dispatch-state.test.ts tests/core/review-artifact-reservation.test.ts tests/core/v2/state-projection.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/node-file-system.test.ts tests/core/justice-plugin-routing.test.ts
@@ -11945,7 +11945,7 @@ It also exports `CapturedReviewKind = "task-review" | "final-review"`; the helpe
 accepts the exact runtime categories `"sp-review" | "sp-final-review"` and maps them to that kind only
 after the relation fixture has been validated.
 
-- [ ] **Step 1: Write failing adapter and durable-binding tests from the spike fixtures**
+- [x] **Step 1: Write failing adapter and durable-binding tests from the spike fixtures**
 
 ```ts
 it.each(["sp-review", "sp-final-review"] as const)(
@@ -11980,23 +11980,23 @@ it("rebuilds the durable binding after restart", () => {
 });
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts`
 
 Expected: FAIL because the adapter does not expose the spike-proven relation and no durable child binding exists.
 
-- [ ] **Step 3: Implement runtime relation extraction and durable binding append**
+- [x] **Step 3: Implement runtime relation extraction and durable binding append**
 
 Use only the event/API and field paths recorded by the successful Task 3.3 spike. The adapter converts that runtime relation into `DelegatedExecutionRelationObserved` and forwards it through the existing `JusticePlugin.handleEvent()` boundary. The observation handler accepts it only when `parentCallId` matches a current claimed slot, derives task or finalization `ExecutionScope` from that slot's trusted correlation, and appends `DelegatedExecutionBinding` durably. Reject unknown parent calls and stale child relations without state mutation. A matching review PostToolUse remains non-authoritative until this binding is present in the durable projection. Task 3.5 itself does not import Task 3.6. At the integrated observation-handler boundary added in Task 3.6, if PostToolUse arrived first, invoke `recoverPendingReviewCompletionsForBinding` only after the binding append commits; that operation acquires and holds the same per-parent boundary while replaying its durable `ReviewPostToolUsePendingRecord`. If replay fails, the marker remains for startup recovery. This boundary prevents binding append and completion replay from racing a later PostToolUse handler.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/runtime/opencode-adapter.ts src/core/types.ts src/hooks/observation-handler.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts tests/helpers/captured-runtime-events.ts tests/runtime/opencode-adapter-v2.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/v2/state-projection.test.ts
