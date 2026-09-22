@@ -158,6 +158,7 @@ function dispatchHarness() {
     directives: [] as ReviewDirectiveDelivery[],
     advisories: [] as string[],
     advisoryFailure: false,
+    advisorySyncFailure: false,
     id: 0,
   };
   const dependencies: ReviewDispatchDependencies & {
@@ -206,9 +207,11 @@ function dispatchHarness() {
     },
     withAuthorizationReviewBoundary: async (_parentSessionId, operation) => operation(),
     hydrateAuthorizationsBeforeReviewRecovery: async () => undefined,
-    recordAdvisory: async (advisory) => {
-      if (state.advisoryFailure) throw new Error("advisory unavailable");
+    recordAdvisory: (advisory) => {
+      if (state.advisorySyncFailure) throw new Error("advisory unavailable");
+      if (state.advisoryFailure) return Promise.reject(new Error("advisory unavailable"));
       state.advisories.push(advisory);
+      return Promise.resolve();
     },
     generateId: () => `transition-${++state.id}`,
     now: () => "2026-09-20T00:00:10.000Z",
@@ -798,6 +801,22 @@ describe("review dispatch state machine", () => {
     await harness.dispatch.offerNextMandatoryReview("parent-1");
     await expect(harness.dispatch.recoverReviewDispatchesAfterRestart()).resolves.toBeUndefined();
     expect(harness.state.directives.at(-1)?.directive.correlation).toEqual(correlation);
+  });
+
+  it("retains a queued directive when advisory recording throws synchronously", async () => {
+    const harness = dispatchHarness();
+    seedReviewPending(harness.state.records);
+    await harness.dispatch.offerNextMandatoryReview("parent-1");
+    harness.state.readRecordsFailure = true;
+    harness.state.advisorySyncFailure = true;
+    const delivery: ReviewDirectiveDelivery = {
+      parentSessionId: "parent-1",
+      directive: { kind: "review_required", correlation },
+    };
+
+    await expect(
+      harness.dispatch.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+    ).resolves.toBe("retain");
   });
 
   it("recovers an unusable claimed slot and records unreadable authorization failures", async () => {

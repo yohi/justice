@@ -677,9 +677,7 @@ export function createReviewDispatchState(dependencies: ReviewDispatchDependenci
         ? "inject"
         : "discard";
     } catch (cause) {
-      await dependencies
-        .recordAdvisory("review_directive_delivery_unreadable", cause)
-        .then(() => undefined, () => undefined);
+      await recordAdvisorySafely("review_directive_delivery_unreadable", cause);
       return "retain";
     }
   };
