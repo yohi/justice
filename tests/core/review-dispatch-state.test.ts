@@ -10,6 +10,7 @@ import {
 import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 import type {
   PersistedLogRecord,
+  PlanFinalizationTransitionRecord,
   ReviewDispatchTransitionRecord,
   TaskLifecycleTransitionRecord,
 } from "../../src/core/v2/observation-model";
@@ -100,42 +101,44 @@ function seedReviewPending(records: PersistedLogRecord[]): void {
   records.push(...transitions.map(([from, to], index) => taskLifecycle(index + 1, from, to)));
 }
 
-function seedFinalReviewPending(records: PersistedLogRecord[], firstSequence = 1): void {
+function finalizationTransition(
+  sequence: number,
+  finalizationAttemptId: string,
+  from: PlanFinalizationTransitionRecord["from"],
+  to: PlanFinalizationTransitionRecord["to"],
+): PersistedLogRecord {
+  return {
+    schemaVersion: 1,
+    timestamp: `2026-09-20T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+    agentId: "atlas",
+    sessionId: "parent-1",
+    writerId: "writer-1",
+    recordType: "observation",
+    sequence,
+    kind: "plan_finalization_transition",
+    parentSessionId: "parent-1",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    finalizationAttemptId,
+    finalReviewRound: 1,
+    from,
+    to,
+  };
+}
+
+function seedFinalReviewPending(
+  records: PersistedLogRecord[],
+  firstSequence = 1,
+  finalizationAttemptId = "finalization-1",
+): void {
   records.push(
-    {
-      schemaVersion: 1,
-      timestamp: "2026-09-20T00:00:01.000Z",
-      agentId: "atlas",
-      sessionId: "parent-1",
-      writerId: "writer-1",
-      recordType: "observation",
-      sequence: firstSequence,
-      kind: "plan_finalization_transition",
-      parentSessionId: "parent-1",
-      authorizationId: "auth-1",
-      planPath: "plan.md",
-      finalizationAttemptId: "finalization-1",
-      finalReviewRound: 1,
-      from: "tasks_pending",
-      to: "all_tasks_accepted",
-    },
-    {
-      schemaVersion: 1,
-      timestamp: "2026-09-20T00:00:02.000Z",
-      agentId: "atlas",
-      sessionId: "parent-1",
-      writerId: "writer-1",
-      recordType: "observation",
-      sequence: firstSequence + 1,
-      kind: "plan_finalization_transition",
-      parentSessionId: "parent-1",
-      authorizationId: "auth-1",
-      planPath: "plan.md",
-      finalizationAttemptId: "finalization-1",
-      finalReviewRound: 1,
-      from: "all_tasks_accepted",
-      to: "final_review_pending",
-    },
+    finalizationTransition(firstSequence, finalizationAttemptId, "tasks_pending", "all_tasks_accepted"),
+    finalizationTransition(
+      firstSequence + 1,
+      finalizationAttemptId,
+      "all_tasks_accepted",
+      "final_review_pending",
+    ),
   );
 }
 
@@ -280,6 +283,15 @@ function claimed(sequence = 2): ReviewDispatchTransitionRecord {
 function finalClaimed(sequence = 2): ReviewDispatchTransitionRecord {
   return {
     ...claimed(sequence),
+    transitionId: `final-transition-${sequence}`,
+    correlation: finalCorrelation,
+    expectedCategory: "sp-final-review",
+  };
+}
+
+function finalTerminal(sequence = 3): ReviewDispatchTransitionRecord {
+  return {
+    ...terminal("call-1", sequence),
     transitionId: `final-transition-${sequence}`,
     correlation: finalCorrelation,
     expectedCategory: "sp-final-review",
@@ -455,6 +467,19 @@ describe("review dispatch state machine", () => {
     });
   });
 
+  it("cancels stale slots before checking claim availability", async () => {
+    const harness = dispatchHarness();
+    harness.state.records.push(pending());
+
+    await expect(harness.dispatch.claimReviewDispatch(claimInput())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "review_claim_unavailable",
+    });
+    expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+  });
+
   it("returns a usable claim with an unusable artifact and terminalizes it", async () => {
     const harness = dispatchHarness();
     harness.state.reservation = { status: "unusable", reason: "artifact_storage_unavailable" };
@@ -487,6 +512,41 @@ describe("review dispatch state machine", () => {
     ).resolves.toMatchObject({
       kind: "claimed",
       taskCallBinding: { purpose: "final_review", expectedCategory: "sp-final-review" },
+    });
+  });
+
+  it("does not advance a final review round for a current pending slot", async () => {
+    const harness = dispatchHarness();
+    seedFinalReviewPending(harness.state.records);
+    harness.state.records.push(finalPending(3));
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "deferred",
+    });
+  });
+
+  it("advances a final review round after a matching failed dispatch", async () => {
+    const harness = dispatchHarness();
+    seedFinalReviewPending(harness.state.records);
+    harness.state.records.push(finalPending(3), finalClaimed(4), finalTerminal(5));
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "offered",
+      correlation: { ...finalCorrelation, finalReviewRound: 2 },
+    });
+  });
+
+  it("ignores a finalization transition from an older attempt", async () => {
+    const harness = dispatchHarness();
+    seedFinalReviewPending(harness.state.records);
+    harness.state.records.push(
+      finalizationTransition(3, "finalization-1", "final_review_pending", "final_rework_required"),
+      finalizationTransition(4, "finalization-2", "final_rework_required", "final_review_pending"),
+    );
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "offered",
+      correlation: { ...finalCorrelation, finalizationAttemptId: "finalization-2" },
     });
   });
 
@@ -551,6 +611,40 @@ describe("review dispatch state machine", () => {
     expect(projectReviewDispatchSlots(stale.state.records)).toMatchObject([
       { state: "terminal", terminalReason: "cancelled" },
     ]);
+  });
+
+  it("does not offer a review for an authorization from another parent session", async () => {
+    const harness = dispatchHarness();
+    harness.state.authorizations = [{ ...activeAuthorization(), sessionId: "other-parent" }];
+    seedReviewPending(harness.state.records);
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "none",
+    });
+  });
+
+  it("cancels a pending final slot when its finalization is no longer projected", async () => {
+    const harness = dispatchHarness();
+    harness.state.records.push(finalPending());
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "none",
+    });
+    expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "cancelled" },
+    ]);
+  });
+
+  it("does not offer a final review for an inactive authorization", async () => {
+    const harness = dispatchHarness();
+    seedFinalReviewPending(harness.state.records);
+    harness.state.authorizations = [
+      { ...activeAuthorization(), status: "released", releasedAt: "2026-09-20T00:01:00.000Z" },
+    ];
+
+    await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+      kind: "none",
+    });
   });
 
   it("cancels pending slots when the second authorization read fails", async () => {
@@ -721,5 +815,27 @@ describe("review dispatch state machine", () => {
       kind: "blocked",
     });
     expect(unreadable.state.advisories).toContain("review_authorization_unreadable");
+  });
+
+  it("leaves terminal and usable claimed slots unchanged during recovery", async () => {
+    const terminalized = dispatchHarness();
+    terminalized.state.records.push(pending(), claimed(), terminal("call-1"));
+
+    await terminalized.dispatch.recoverReviewDispatchesAfterRestart();
+
+    expect(terminalized.state.records).toHaveLength(3);
+    expect(projectReviewDispatchSlots(terminalized.state.records)).toMatchObject([
+      { state: "terminal", terminalReason: "review_execution_failed" },
+    ]);
+
+    const usable = dispatchHarness();
+    usable.state.records.push(pending(), claimed());
+
+    await usable.dispatch.recoverReviewDispatchesAfterRestart();
+
+    expect(usable.state.records).toHaveLength(2);
+    expect(projectReviewDispatchSlots(usable.state.records)).toMatchObject([
+      { state: "claimed", callId: "call-1", artifactReservation: usableReservation },
+    ]);
   });
 });
