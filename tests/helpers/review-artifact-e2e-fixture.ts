@@ -18,15 +18,15 @@ import type {
   ReviewArtifactInodeIdentity,
   ReviewArtifactReservation,
   ReviewCorrelation,
+  ShardId,
   TaskExecutionRef,
 } from "../../src/core/types";
 import type {
-  AcceptanceDecision,
   PersistedEnvelope,
   PersistedLogRecord,
   PendingEnvelope,
 } from "../../src/core/v2/observation-model";
-import type { ShardId } from "../../src/core/v2/shard-layout";
+import type { AcceptanceDecision, GateDecision } from "../../src/core/v2/decision-model";
 import type { TaskProgressState } from "../../src/core/task-lifecycle";
 
 export type UsableReviewArtifactReservation = Extract<
@@ -332,17 +332,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     };
   const cleanupArtifact: ReviewCompletionDependenciesForTest["cleanupArtifact"] = async (
     usableReservation,
-  ) => {
-    const outcome = await baseArtifactIo.cleanup(usableReservation);
-    if (outcome === "quarantine_retained") {
-      await recordAdvisory("review_artifact_cleanup_retained");
-    } else if (outcome === "replacement_retained") {
-      await recordAdvisory("review_artifact_identity_mismatch");
-    } else if (outcome === "cleanup_incomplete") {
-      await recordAdvisory("review_artifact_cleanup_incomplete");
-    }
-    return outcome;
-  };
+  ) => baseArtifactIo.cleanup(usableReservation);
   const completion = createReviewCompletionDomain({
     readDurableRecords: () => logStore.readAll(),
     findAuthorizationById,

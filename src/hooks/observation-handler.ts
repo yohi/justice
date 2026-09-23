@@ -226,7 +226,7 @@ export class ObservationHandler {
           sessionId: input.sessionId ?? input.parentSessionId,
           writerId: input.writerId ?? this.options.writerId,
         };
-        return appendTaskLifecycleTransition(input, async (record) => {
+        return appendTaskLifecycleTransition({ ...input, agentId: shardId.agentId, sessionId: shardId.sessionId, writerId: shardId.writerId }, async (record) => {
           await this.options.logStore.append(shardId, record);
           return 0;
         });
@@ -237,7 +237,7 @@ export class ObservationHandler {
           sessionId: input.sessionId ?? input.parentSessionId,
           writerId: input.writerId ?? this.options.writerId,
         };
-        return appendPlanFinalizationTransition(input, async (record) => {
+        return appendPlanFinalizationTransition({ ...input, agentId: shardId.agentId, sessionId: shardId.sessionId, writerId: shardId.writerId }, async (record) => {
           await this.options.logStore.append(shardId, record);
           return 0;
         });
@@ -273,7 +273,7 @@ export class ObservationHandler {
       sessionId: input.sessionId ?? input.parentSessionId,
       writerId: input.writerId ?? this.options.writerId,
     };
-    return appendTaskLifecycleTransition(input, async (record) => {
+    return appendTaskLifecycleTransition({ ...input, agentId: shardId.agentId, sessionId: shardId.sessionId, writerId: shardId.writerId }, async (record) => {
       await this.options.logStore.append(shardId, record);
       this.scheduleProjectionRefresh();
       return 0;
@@ -288,7 +288,7 @@ export class ObservationHandler {
       sessionId: input.sessionId ?? input.parentSessionId,
       writerId: input.writerId ?? this.options.writerId,
     };
-    return appendPlanFinalizationTransition(input, async (record) => {
+    return appendPlanFinalizationTransition({ ...input, agentId: shardId.agentId, sessionId: shardId.sessionId, writerId: shardId.writerId }, async (record) => {
       await this.options.logStore.append(shardId, record);
       this.scheduleProjectionRefresh();
       return 0;

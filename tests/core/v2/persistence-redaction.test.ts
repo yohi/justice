@@ -521,6 +521,66 @@ describe("redactPendingLogRecord", () => {
     expect(redactPendingLogRecord(record)).toBe(record);
   });
 
+  it("redacts finding summary and location in staged and terminal review artifacts", () => {
+    const correlation = {
+      reviewKind: "task-review" as const,
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      reviewRound: 1,
+    };
+    const observedExecution = {
+      schemaVersion: 1 as const,
+      provenance: "observed" as const,
+      reviewExecutionEventId: "event-1",
+      parentSessionId: "parent-1",
+      callId: "call-1",
+      childSessionId: "child-1",
+      correlation,
+    };
+    const reviewArtifact = {
+      schemaVersion: 1 as const,
+      reviewKind: "task-review" as const,
+      reviewSource: "sp-review" as const,
+      correlation,
+      observedExecution,
+      complete: true,
+      findings: [{ itemKey: "finding-1", severity: "major" as const, summary: "token /home/user/key", location: "GITHUB_TOKEN=ghp_1234567890" }],
+    };
+    const staged: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "review_completion_staged",
+      parentSessionId: "parent-1",
+      staging: {
+        callId: "call-1",
+        correlation,
+        artifactConsumption: { artifactId: "artifact-1", digest: "sha256:digest" },
+        reviewArtifact,
+        observedExecution,
+      },
+    };
+    const terminal: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: "transition-1",
+      parentSessionId: "parent-1",
+      correlation,
+      expectedCategory: "sp-review",
+      from: "claimed",
+      to: "terminal",
+      callId: "call-1",
+      terminalReason: "completed_with_findings",
+      reviewArtifact,
+    };
+
+    expect(redactPendingLogRecord(staged)).toMatchObject({
+      staging: { reviewArtifact: { findings: [{ summary: "token [REDACTED_PATH]", location: "[REDACTED_ENV]" }] } },
+    });
+    expect(redactPendingLogRecord(terminal)).toMatchObject({
+      reviewArtifact: { findings: [{ summary: "token [REDACTED_PATH]", location: "[REDACTED_ENV]" }] },
+    });
+  });
+
   it("rejects an unknown record kind at the runtime boundary", () => {
     const record: PendingLogRecord = {
       ...baseEnvelope,

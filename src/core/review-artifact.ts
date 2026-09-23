@@ -119,9 +119,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isFinding(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
-    typeof value.itemKey === "string" &&
-    typeof value.summary === "string" &&
-    typeof value.location === "string" &&
+    typeof value.itemKey === "string" && value.itemKey.length > 0 &&
+    typeof value.summary === "string" && value.summary.length > 0 &&
+    typeof value.location === "string" && value.location.length > 0 &&
     (value.severity === "critical" || value.severity === "major" || value.severity === "minor")
   );
 }
@@ -482,11 +482,29 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     if (terminal.terminalReason !== "completed") {
       if (terminal.terminalReason === "completed_with_findings") {
         const lifecycle = project(await dependencies.readDurableRecords(), new Date().toISOString()).lifecycle;
-        const result = terminal.correlation.reviewKind === "task-review"
-          ? dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required" })
-          : dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required" });
-        void lifecycle;
-        await result;
+        const task = terminal.correlation.reviewKind === "task-review";
+        let pending: boolean;
+        if (terminal.correlation.reviewKind === "task-review") {
+          pending = lifecycle.taskStates.get(
+              taskLifecycleKey(terminal.parentSessionId, terminal.correlation.taskExecutionRef),
+            ) === "review_pending";
+        } else {
+          const correlation = terminal.correlation;
+          pending = Array.from(lifecycle.finalization.values()).some(
+            (finalization) =>
+              finalization.parentSessionId === terminal.parentSessionId &&
+              finalization.authorizationId === correlation.authorizationId &&
+              finalization.planPath === correlation.planPath &&
+              finalization.finalizationAttemptId === correlation.finalizationAttemptId &&
+              finalization.finalReviewRound === correlation.finalReviewRound &&
+              finalization.state === "final_review_pending",
+          );
+        }
+        if (!pending) return { kind: "terminalized" };
+        const result = task
+          ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required" })
+          : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required" });
+        if (result.kind !== "committed") return { kind: "blocked" };
         return { kind: "terminalized" };
       }
       return { kind: "blocked" };

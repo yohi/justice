@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   arrangeReviewArtifactCompletionFixture,
 } from "../helpers/review-artifact-e2e-fixture";
+import { parseReviewWorkerResult } from "../../src/core/review-artifact";
 
 /**
  * Task 3.6 — review artifact I/O and completion-domain coverage. The fixture
@@ -13,6 +14,20 @@ import {
 describe("review artifact completion (Task 3.6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("rejects a finding with any empty required text field", () => {
+    const finding = { itemKey: "item-1", severity: "major", summary: "summary", location: "src/file.ts" };
+
+    for (const field of ["itemKey", "summary", "location"] as const) {
+      expect(
+        parseReviewWorkerResult({
+          schemaVersion: 1,
+          complete: true,
+          findings: [{ ...finding, [field]: "" }],
+        }),
+      ).toBeUndefined();
+    }
   });
 
   it("reads exactly once from matching artifact, lease, and durable identities", async () => {
