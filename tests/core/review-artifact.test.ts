@@ -30,6 +30,29 @@ describe("review artifact completion (Task 3.6)", () => {
     }
   });
 
+  it("keeps only the supported finding fields from worker output", () => {
+    const result = parseReviewWorkerResult({
+      schemaVersion: 1,
+      complete: true,
+      findings: [
+        {
+          itemKey: "item-1",
+          severity: "major",
+          summary: "summary",
+          location: "src/file.ts",
+          injected: "untrusted extra property",
+        },
+      ],
+    });
+
+    expect(result?.findings[0]).toEqual({
+      itemKey: "item-1",
+      severity: "major",
+      summary: "summary",
+      location: "src/file.ts",
+    });
+  });
+
   it("reads exactly once from matching artifact, lease, and durable identities", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
     await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);

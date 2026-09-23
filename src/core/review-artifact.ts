@@ -23,6 +23,7 @@ import type {
   ObservationAgentId,
   ObservedReviewExecutionV1,
   ReviewArtifactFailureReason,
+  ReviewArtifactFindingV1,
   ReviewArtifactV1,
   ReviewArtifactCleanupStatus,
   ReviewArtifactReservation,
@@ -116,7 +117,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isFinding(value: unknown): boolean {
+function isFinding(value: unknown): value is ReviewArtifactFindingV1 {
   if (!isRecord(value)) return false;
   return (
     typeof value.itemKey === "string" && value.itemKey.length > 0 &&
@@ -134,7 +135,14 @@ export function parseReviewWorkerResult(value: unknown): ReviewWorkerResultV1 | 
   return {
     schemaVersion: 1,
     complete: value.complete,
-    findings: Object.freeze(value.findings.map((finding) => ({ ...finding }))) as ReviewWorkerResultV1["findings"],
+    findings: Object.freeze(
+      value.findings.map((finding) => ({
+        itemKey: finding.itemKey,
+        severity: finding.severity,
+        summary: finding.summary,
+        location: finding.location,
+      })),
+    ),
   };
 }
 

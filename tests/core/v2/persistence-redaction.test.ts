@@ -581,6 +581,40 @@ describe("redactPendingLogRecord", () => {
     });
   });
 
+  it("drops extra properties from review_observed items", () => {
+    const item = {
+      itemKey: "finding-1",
+      evidenceId: "evidence-1",
+      severity: "major" as const,
+      summary: "summary",
+      location: "src/file.ts",
+      status: "open" as const,
+    };
+    Reflect.set(item, "injected", "untrusted extra property");
+    const record: PendingLogRecord = {
+      ...baseEnvelope,
+      recordType: "observation",
+      kind: "review_observed",
+      reviewScope: "task:task-1",
+      items: [item],
+    };
+
+    const result = redactPendingLogRecord(record);
+
+    expect(result).toMatchObject({
+      kind: "review_observed",
+      items: [{
+        itemKey: "finding-1",
+        evidenceId: "evidence-1",
+        severity: "major",
+        summary: "summary",
+        location: "src/file.ts",
+        status: "open",
+      }],
+    });
+    expect(result).not.toHaveProperty("items.0.injected");
+  });
+
   it("rejects an unknown record kind at the runtime boundary", () => {
     const record: PendingLogRecord = {
       ...baseEnvelope,

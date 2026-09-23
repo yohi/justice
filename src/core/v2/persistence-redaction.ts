@@ -104,7 +104,8 @@ function redactReviewArtifact(artifact: ReviewArtifactV1): ReviewArtifactV1 {
   return {
     ...artifact,
     findings: artifact.findings.map((finding) => ({
-      ...finding,
+      itemKey: finding.itemKey,
+      severity: finding.severity,
       summary: redactForPersistence(finding.summary),
       location: redactForPersistence(finding.location),
     })),
@@ -188,9 +189,12 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
       return {
         ...record,
         items: record.items.map((item) => ({
-          ...item,
+          itemKey: item.itemKey,
+          evidenceId: item.evidenceId,
+          severity: item.severity,
           summary: redactForPersistence(item.summary),
           location: redactForPersistence(item.location),
+          status: item.status,
         })),
         ...(record.resolutionMarkers === undefined
           ? {}

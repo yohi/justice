@@ -1,4 +1,4 @@
-import { join, basename, dirname, isAbsolute, resolve, parse, sep } from "node:path";
+import { join, basename, dirname, isAbsolute, relative, resolve, parse, sep } from "node:path";
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import type {
@@ -986,8 +986,25 @@ export class JusticePlugin {
   ): Promise<HookResponse | undefined> {
     if (event.payload.toolName !== "write") return undefined;
     const input = event.payload.toolInput;
-    const filePath =
-      typeof input.filePath === "string" ? normalizeSafeRelativePath(input.filePath) : null;
+    let filePath: string | null = null;
+    if (typeof input.filePath === "string") {
+      if (isAbsolute(input.filePath)) {
+        const workspaceRoot = this.options.workspaceRoot;
+        if (workspaceRoot !== undefined) {
+          const relativePath = relative(resolve(workspaceRoot), resolve(input.filePath));
+          if (
+            relativePath !== "" &&
+            relativePath !== ".." &&
+            !relativePath.startsWith(`..${sep}`) &&
+            !isAbsolute(relativePath)
+          ) {
+            filePath = normalizeSafeRelativePath(relativePath);
+          }
+        }
+      } else {
+        filePath = normalizeSafeRelativePath(input.filePath);
+      }
+    }
     let records: readonly PersistedLogRecord[];
     try {
       records = await this.observationLogStore.readAll();

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { resolve } from "node:path";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { mergePostToolUseResponses } from "../../src/core/hook-response-merger";
 import type {
@@ -278,6 +279,27 @@ describe("JusticePlugin", () => {
   });
 
   describe("handleEvent", () => {
+    it("blocks an absolute workspace review artifact write when durable log reading fails", async () => {
+      const workspaceRoot = resolve("/workspace");
+      const fs = createMockFileSystem();
+      const testPlugin = new JusticePlugin(fs, fs, { workspaceRoot });
+      const logStore = (testPlugin as unknown as { observationLogStore: ObservationLogStore })
+        .observationLogStore;
+      vi.spyOn(logStore, "readAll").mockRejectedValue(new Error("log read failed"));
+
+      await expect(testPlugin.handleEvent({
+        type: "PreToolUse",
+        payload: {
+          toolName: "write",
+          toolInput: {
+            filePath: resolve(workspaceRoot, ".justice/reviews/artifact-1.json"),
+            content: "untrusted review artifact",
+          },
+        },
+        sessionId: "child-session",
+      })).resolves.toEqual({ action: "skip", reason: "review_artifact_write_rejected" });
+    });
+
     it("should route Message events to PlanBridge", async () => {
       const spy = vi.spyOn(plugin.getPlanBridge(), "handleMessage");
       const event: MessageEvent = {
