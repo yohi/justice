@@ -537,6 +537,23 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(fs.writtenFiles["plan.md"]).toContain("- [x] second");
   });
 
+  it("does not update progress when the active plan differs from the authorization binding", async () => {
+    const fs: MockFileSystem = createMockFileSystem({
+      "plan.md": progressPlan,
+      "other-plan.md": progressPlan,
+    });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "other-plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["other-plan.md"]).toBe(progressPlan);
+  });
+
   it("does not update plan progress from an old terminal authorization decision", async () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });

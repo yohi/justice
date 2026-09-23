@@ -71,7 +71,6 @@ import {
 } from "./review-artifact";
 import {
   findCurrentAcceptanceDecision,
-  isCurrentActiveAuthorization,
 } from "./acceptance-decision";
 import { PlanParser } from "./plan-parser";
 import { updatePlanProgress } from "./progress-updater";
@@ -1118,15 +1117,20 @@ export class JusticePlugin {
       // invalidated authorization must not advance plan progress. The primary
       // defense is Task 3.2 (no accepted decision after terminality); this
       // guard keeps the updater honest even if such a record exists.
+      const binding = await this.authorizationStore.findByAuthorizationId(
+        correlation.taskExecutionRef.authorizationId,
+      );
       if (
-        !(await isCurrentActiveAuthorization(correlation, (authorizationId) =>
-          this.authorizationStore.findByAuthorizationId(authorizationId),
-        ))
+        binding === null ||
+        binding.status !== "active" ||
+        !binding.canonicalSnapshot.tasks.some(
+          (candidate) => candidate.taskId === correlation.taskExecutionRef.taskId,
+        )
       ) {
         return;
       }
       const planPath = this.planBridge.getActivePlan(parentSessionId);
-      if (planPath === null) return;
+      if (planPath === null || binding.planPath !== planPath) return;
       const content = await this.fileReader.readFile(planPath);
       const task = new PlanParser()
         .parse(content)
