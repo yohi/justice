@@ -628,7 +628,7 @@ export interface ReservedReviewArtifactIo {
   ): Promise<string>;
   cleanup(
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ): Promise<"removed" | "replacement_retained">;
+  ): Promise<ReviewArtifactCleanupStatus>;
 }
 
 /** コンテキスト削減戦略 */

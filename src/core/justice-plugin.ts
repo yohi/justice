@@ -525,8 +525,7 @@ export class JusticePlugin {
       },
       cleanupArtifact: async (reservation) => {
         if (reviewArtifactReservation.artifactIo === undefined) return "cleanup_incomplete";
-        const result = await reviewArtifactReservation.artifactIo.cleanup(reservation);
-        return result === "removed" ? "cleaned" : "replacement_retained";
+        return reviewArtifactReservation.artifactIo.cleanup(reservation);
       },
       evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (context) =>
         this.observationHandler.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context),
@@ -1042,7 +1041,15 @@ export class JusticePlugin {
     event: Extract<HookEvent, { readonly type: "PostToolUse" }>,
   ): Promise<HookResponse | undefined> {
     if (event.callId === undefined || event.callId.trim().length === 0) return undefined;
-    const records = await this.observationLogStore.readAll();
+    let records: readonly PersistedLogRecord[];
+    try {
+      records = await this.observationLogStore.readAll();
+    } catch (error: unknown) {
+      // Fail-open (N2): a durable-log read failure must not escape the hook
+      // boundary; degrade to PROCEED after recording an advisory.
+      await this.recordReviewDispatchAdvisory("review_post_tooluse_read_failed", error);
+      return undefined;
+    }
     const binding = projectTaskCallBindings(records).find(
       (candidate): candidate is ReviewTaskCallBinding =>
         "callId" in candidate &&
@@ -1057,13 +1064,18 @@ export class JusticePlugin {
     const observedExecution =
       delegated === undefined ? undefined : projectObservedReviewExecution(records, delegated);
     const outcome = await this.reviewCompletionDomain.consumeReviewCompletion({
-      parentSessionId: event.sessionId,
-      callId: event.callId,
-      postToolUse: { type: "PostToolUse", sessionId: event.sessionId, callId: event.callId },
-      ...(observedExecution === undefined ? {} : { observedExecution }),
-      agentId: this.sessionStateProvider.getAgentId(event.sessionId),
-      writerId: this.writerId,
-    });
+        parentSessionId: event.sessionId,
+        callId: event.callId,
+        postToolUse: { type: "PostToolUse", sessionId: event.sessionId, callId: event.callId },
+        ...(observedExecution === undefined ? {} : { observedExecution }),
+        agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+        writerId: this.writerId,
+      })
+      .catch(async (error: unknown) => {
+        // Fail-open (N2): completion consumption errors degrade to PROCEED.
+        await this.recordReviewDispatchAdvisory("review_post_tooluse_consume_failed", error);
+        return { kind: "blocked" as const };
+      });
     return outcome.kind === "terminalized"
       ? { action: "inject", injectedContext: "[JUSTICE: REVIEW COMPLETION RECORDED]" }
       : { action: "proceed" };

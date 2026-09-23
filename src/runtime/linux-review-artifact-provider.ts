@@ -156,11 +156,18 @@ export function createLinuxOpenat2ReviewArtifactProvider(
     cleanup: async (reservation) => {
       try {
         const result = root.cleanupExistingReservation(descriptorFor(reservation));
-        if (result.status === "replacement_retained") return "replacement_retained";
-        if (result.status === "cleaned" || result.status === "quarantine_retained") {
-          return "removed";
+        switch (result.status) {
+          case "cleaned":
+            return "cleaned" as const;
+          case "quarantine_retained":
+            return "quarantine_retained" as const;
+          case "replacement_retained":
+            return "replacement_retained" as const;
+          case "cleanup_incomplete":
+            return "cleanup_incomplete" as const;
+          default:
+            throw safeNativeError("artifact_cleanup_failed", result.status);
         }
-        throw safeNativeError("artifact_cleanup_failed", result.status);
       } catch (cause: unknown) {
         throw safeNativeError("artifact_cleanup_failed", cause);
       }

@@ -221,6 +221,8 @@ export type ReviewObservedRecord = {
   readonly isCompleteSnapshot?: boolean;
   readonly items: readonly ReviewItem[];
   readonly resolutionMarkers?: readonly ResolutionMarker[];
+  /** Review correlation of the attempt that produced this observation (N3 dedup key). */
+  readonly correlation?: import("../types").ReviewCorrelation;
 };
 
 /**

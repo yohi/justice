@@ -65,7 +65,7 @@ describe("LinuxOpenat2ReviewArtifactProvider publication", () => {
       await expect(provider.reservedReviewArtifactIo.readOnce(reservation)).resolves.toBe(
         '{"ok":true}',
       );
-      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe("removed");
+      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe("quarantine_retained");
 
       provider.close();
       provider.close();
@@ -207,9 +207,7 @@ describe("LinuxOpenat2ReviewArtifactProvider publication", () => {
       };
       await rm(join(rootDir, marker.leasePath));
 
-      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).rejects.toThrow(
-        "artifact_cleanup_failed",
-      );
+      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe("cleanup_incomplete");
     } finally {
       provider?.close();
       await rm(rootDir, { recursive: true, force: true });

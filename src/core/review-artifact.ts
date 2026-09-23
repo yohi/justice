@@ -9,6 +9,7 @@ import {
   project,
   projectDelegatedExecutionBindings,
   projectObservedReviewExecution,
+  taskLifecycleKey,
 } from "./v2/state-projection";
 import {
   projectReviewDispatchSlots,
@@ -187,7 +188,8 @@ export type ReviewCompletionDependencies = {
   readonly appendReviewArtifactReadAttempt: (input: PendingReviewArtifactReadAttemptRecord) => Promise<{ readonly kind: "committed"; readonly record: PersistedReviewArtifactReadAttemptRecord } | { readonly kind: "failed" }>;
   readonly appendReviewArtifactFailureStaging: (input: PendingReviewArtifactFailureStagingRecord) => Promise<{ readonly kind: "committed"; readonly record: PersistedReviewArtifactFailureStagingRecord } | { readonly kind: "failed" }>;
   readonly appendReviewPostToolUsePending: (input: PendingReviewPostToolUseRecord) => Promise<{ readonly kind: "committed" } | { readonly kind: "failed" }>;
-  readonly appendReviewObserved: (input: PendingEnvelope & { readonly recordType: "observation"; readonly kind: "review_observed"; readonly reviewScope: string; readonly isCompleteSnapshot: boolean; readonly items: readonly { readonly itemKey: string; readonly evidenceId: string; readonly severity: "critical" | "major" | "minor"; readonly summary: string; readonly location: string; readonly status: "open" }[] }) => Promise<{ readonly kind: "committed" } | { readonly kind: "failed" }>;
+  readonly appendReviewObserved: (input: PendingEnvelope & { readonly recordType: "observation"; readonly kind: "review_observed"; readonly reviewScope: string; readonly isCompleteSnapshot: boolean; readonly correlation?: ReviewCorrelation; readonly items: readonly { readonly itemKey: string; readonly evidenceId: string; readonly severity: "critical" | "major" | "minor"; readonly summary: string; readonly location: string; readonly status: "open" }[] }) => Promise<{ readonly kind: "committed" } | { readonly kind: "failed" }>;
+
   readonly appendReviewArtifactCleanupRecord: (input: PendingReviewArtifactCleanupRecord) => Promise<{ readonly kind: "committed"; readonly record: PersistedReviewArtifactCleanupRecord } | { readonly kind: "failed" }>;
   readonly appendReviewDispatchTransition: (input: PendingReviewDispatchTransitionRecord) => Promise<{ readonly kind: "committed"; readonly record: ReviewDispatchTransitionRecord } | { readonly kind: "failed" }>;
   readonly readAndAssembleMatchingArtifact: (postToolUse: MatchingReviewParentPostToolUse, binding: ReviewTaskCallBinding, delegatedBinding: DelegatedExecutionBinding, correlation: ReviewCorrelation, observedExecution: ObservedReviewExecutionV1) => Promise<ReviewCompletionStaging | ReviewArtifactReadFailure>;
@@ -209,6 +211,105 @@ function envelope(input: ReviewCompletionInput): Pick<PendingEnvelope, "schemaVe
 
 function claimedSlot(records: readonly PersistedLogRecord[], parentSessionId: string, callId: string): ClaimedSlot | undefined {
   return projectReviewDispatchSlots(records).find((slot): slot is ClaimedSlot => slot.state === "claimed" && slot.key.parentSessionId === parentSessionId && slot.callId === callId);
+}
+
+function purposeForCorrelation(
+  correlation: ReviewCorrelation,
+): "task_review" | "final_review" {
+  return correlation.reviewKind === "task-review" ? "task_review" : "final_review";
+}
+
+/**
+ * True when the binding's purpose, correlation, and reservation identity all
+ * agree with the durable staging (N1: every present field must be compared
+ * before terminalizing from restart recovery).
+ */
+function stagingMatchesSlot(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+  slot: ClaimedSlot,
+): boolean {
+  if (!sameReviewCorrelation(slot.key.correlation, staging.staging.correlation)) return false;
+  const binding = projectTaskCallBindings(records).find(
+    (candidate): candidate is ReviewTaskCallBinding =>
+      candidate.purpose !== "implementation" &&
+      candidate.parentSessionId === staging.parentSessionId &&
+      candidate.callId === staging.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
+  );
+  if (binding === undefined) return false;
+  if (binding.purpose !== purposeForCorrelation(staging.staging.correlation)) return false;
+  return (
+    binding.artifactReservation.status === "usable" &&
+    binding.artifactReservation.artifactId === staging.staging.artifactConsumption.artifactId
+  );
+}
+
+/**
+ * Restart-recovery identity check (N1): the observed child binding recorded in
+ * the durable staging must still match the CURRENT durable child binding for
+ * the same parent/call, and the purpose must agree with the correlation.
+ */
+function stagingMatchesCurrentIdentity(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+): boolean {
+  const delegated = projectDelegatedExecutionBindings(records).find(
+    (candidate) =>
+      candidate.parentSessionId === staging.parentSessionId &&
+      candidate.parentCallId === staging.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
+  );
+  if (delegated === undefined) return false;
+  if (delegated.childSessionId !== staging.staging.observedExecution.childSessionId) return false;
+  return stagingMatchesSlotWithCurrentBinding(records, staging);
+}
+
+function stagingMatchesSlotWithCurrentBinding(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+): boolean {
+  const binding = projectTaskCallBindings(records).find(
+    (candidate): candidate is ReviewTaskCallBinding =>
+      candidate.purpose !== "implementation" &&
+      candidate.parentSessionId === staging.parentSessionId &&
+      candidate.callId === staging.staging.callId &&
+      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
+  );
+  if (binding === undefined) return false;
+  return (
+    binding.purpose === purposeForCorrelation(staging.staging.correlation) &&
+    binding.artifactReservation.status === "usable" &&
+    binding.artifactReservation.artifactId === staging.staging.artifactConsumption.artifactId
+  );
+}
+
+/**
+ * Resolves the usable artifact reservation for a terminal from the durable
+ * claimed transition matching the terminal's identity; used so cleanup never
+ * trusts a stale reservation reference.
+ */
+function usableReservationForTerminal(
+  records: readonly PersistedLogRecord[],
+  terminal: ReviewDispatchTransitionRecord,
+): Extract<ReviewArtifactReservation, { readonly status: "usable" }> | undefined {
+  if (!("callId" in terminal) || terminal.callId === undefined) return undefined;
+  const claimed = records.find(
+    (record): record is ReviewDispatchTransitionRecord & {
+      readonly from: "pending";
+      readonly to: "claimed";
+      readonly callId: string;
+      readonly artifactReservation: ReviewArtifactReservation;
+    } =>
+      record.recordType === "observation" &&
+      record.kind === "review_dispatch_transition" &&
+      record.from === "pending" &&
+      record.to === "claimed" &&
+      record.parentSessionId === terminal.parentSessionId &&
+      record.callId === terminal.callId &&
+      sameReviewCorrelation(record.correlation, terminal.correlation),
+  );
+  return claimed?.artifactReservation.status === "usable" ? claimed.artifactReservation : undefined;
 }
 
 export function createReviewCompletionDomain(dependencies: ReviewCompletionDependencies) {
@@ -256,7 +357,11 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         record.recordType === "observation" &&
         record.kind === "review_observed" &&
         record.sessionId === staging.parentSessionId &&
-        (taskId === undefined ? record.reviewScope === "final" : record.taskId === taskId),
+        (taskId === undefined ? record.reviewScope === "final" : record.taskId === taskId) &&
+        // Deduplicate per review attempt, not per task: a later review round
+        // for the same task must append its new findings (N3).
+        record.correlation !== undefined &&
+        sameReviewCorrelation(record.correlation, artifact.correlation),
     );
     if (existing) return true;
     const items = artifact.findings.map((finding) => ({
@@ -277,6 +382,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         kind: "review_observed",
         reviewScope: taskId === undefined ? "final" : `task:${taskId}`,
         isCompleteSnapshot: artifact.complete,
+        correlation: artifact.correlation,
         items,
       })
     ).kind === "committed";
@@ -331,7 +437,10 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       ...identity,
       phase: "started",
     });
-    if (started.kind !== "committed") return;
+    if (started.kind !== "committed") {
+      await dependencies.recordAdvisory("review_artifact_cleanup_start_append_failed");
+      return;
+    }
     let status: ReviewArtifactCleanupStatus;
     try {
       status = await dependencies.cleanupArtifact(reservation);
@@ -352,8 +461,15 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       phase: "finished",
       status,
     });
-    if (finished.kind !== "committed") await dependencies.recordAdvisory("review_artifact_cleanup_outcome_uncertain");
-    else if (status === "replacement_retained") await dependencies.recordAdvisory("review_artifact_identity_mismatch");
+    if (finished.kind !== "committed") {
+      await dependencies.recordAdvisory("review_artifact_cleanup_outcome_uncertain");
+    } else if (status === "replacement_retained") {
+      await dependencies.recordAdvisory("review_artifact_identity_mismatch");
+    } else if (status === "quarantine_retained") {
+      await dependencies.recordAdvisory("review_artifact_cleanup_retained");
+    } else if (status === "cleanup_incomplete") {
+      await dependencies.recordAdvisory("review_artifact_cleanup_incomplete");
+    }
   };
 
   const ensureTerminalReviewOutcomeApplied = async (
@@ -379,7 +495,9 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     const lifecycle = project(records, new Date().toISOString()).lifecycle;
     const task = terminal.correlation.reviewKind === "task-review";
     const pending = task
-      ? lifecycle.taskStates.get(terminal.correlation.taskExecutionRef.taskId) === "review_pending"
+      ? lifecycle.taskStates.get(
+          taskLifecycleKey(terminal.parentSessionId, terminal.correlation.taskExecutionRef),
+        ) === "review_pending"
       : Array.from(lifecycle.finalization.values()).some(
           (finalization) => finalization.state === "final_review_pending",
         );
@@ -421,7 +539,22 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       if (observed === undefined) return { kind: "stale" as const };
       const attempt = await dependencies.appendReviewArtifactReadAttempt({ ...envelope(input), kind: "review_artifact_read_started", parentSessionId: input.parentSessionId, callId: input.callId, correlation: slot.key.correlation, artifactId: binding.artifactReservation.artifactId, artifactPath: binding.artifactReservation.artifactPath });
       if (attempt.kind !== "committed") return { kind: "blocked" as const };
-      const assembled = await dependencies.readAndAssembleMatchingArtifact(input.postToolUse, binding, delegated, slot.key.correlation, observed);
+      // A reader throw must not escape to the outer fail-open catch (N1/§4.8.1):
+      // convert it to a durable artifact_read_failed staging + terminal through
+      // the already-committed read-attempt marker, without rereading.
+      let assembled: import("./types").ReviewCompletionStaging | ReviewArtifactReadFailure;
+      try {
+        assembled = await dependencies.readAndAssembleMatchingArtifact(
+          input.postToolUse,
+          binding,
+          delegated,
+          slot.key.correlation,
+          observed,
+        );
+      } catch (error: unknown) {
+        await dependencies.recordAdvisory("review_artifact_read_unhandled", error);
+        assembled = { kind: "failure", reason: "artifact_read_failed" };
+      }
       if ("reason" in assembled) {
         const failure = await dependencies.appendReviewArtifactFailureStaging({ ...envelope(input), kind: "review_artifact_failure_staged", parentSessionId: input.parentSessionId, callId: input.callId, correlation: slot.key.correlation, terminalReason: assembled.reason });
         if (failure.kind !== "committed") return { kind: "blocked" };
@@ -458,6 +591,18 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       );
       for (const completion of staged) {
         await recoverStagedReviewCompletion(completion);
+      }
+      const failureStagings = records.filter(
+        (record): record is PersistedReviewArtifactFailureStagingRecord =>
+          record.recordType === "observation" &&
+          record.kind === "review_artifact_failure_staged",
+      );
+      for (const failureStaging of failureStagings) {
+        try {
+          await recoverStagedArtifactFailure(failureStaging);
+        } catch (error: unknown) {
+          await dependencies.recordAdvisory("review_artifact_failure_recovery_failed", error);
+        }
       }
       const pendingPostToolUse = records.filter(
         (record): record is import("./v2/observation-model").PersistedReviewPostToolUseRecord =>
@@ -556,16 +701,38 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         const records = await dependencies.readDurableRecords();
         const existingTerminal = findMatchingTerminalForStaging(records, staging);
         if (existingTerminal !== undefined) {
+          // Identity must be re-validated against the CURRENT projection before
+          // replaying review_observed or terminal outcomes from durable staging (N1).
+          if (!stagingMatchesCurrentIdentity(records, staging)) {
+            await dependencies.recordAdvisory("review_staged_completion_identity_mismatch");
+            return { kind: "stale" };
+          }
+          // Authorization must be active BEFORE any terminalization replay (N1).
+          if (!(await isCurrentActiveAuthorization(staging.staging.correlation, dependencies.findAuthorizationById))) {
+            await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
+            return { kind: "blocked" };
+          }
           if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
           const outcome = await ensureTerminalReviewOutcomeApplied(existingTerminal);
-          const slot = claimedSlot(records, staging.parentSessionId, staging.staging.callId);
-          if (slot?.artifactReservation?.status === "usable") {
-            await clean(existingTerminal, slot.artifactReservation);
+          const current = await dependencies.readDurableRecords();
+          const reservation = usableReservationForTerminal(current, existingTerminal);
+          if (reservation !== undefined) {
+            await clean(existingTerminal, reservation);
           }
           return outcome;
         }
         const slot = claimedSlot(records, staging.parentSessionId, staging.staging.callId);
-        if (slot === undefined) return { kind: "stale" };
+        if (slot === undefined || !stagingMatchesSlot(records, staging, slot)) {
+          if (slot !== undefined) {
+            await dependencies.recordAdvisory("review_staged_completion_identity_mismatch");
+          }
+          return { kind: "stale" };
+        }
+        // Authorization must still be active BEFORE appending the terminal (N1).
+        if (!(await isCurrentActiveAuthorization(slot.key.correlation, dependencies.findAuthorizationById))) {
+          await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
+          return { kind: "blocked" };
+        }
         const terminal = await dependencies.appendReviewDispatchTransition(terminalFor(staging, slot));
         if (terminal.kind !== "committed") return { kind: "blocked" };
         if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
@@ -580,6 +747,97 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       },
     ).catch(async (error: unknown): Promise<ReviewCompletionOutcome> => {
       await dependencies.recordAdvisory("review_staged_completion_recovery_failed", error);
+      return { kind: "blocked" };
+    });
+
+  const findMatchingArtifactFailureTerminal = (
+    records: readonly PersistedLogRecord[],
+    staged: PersistedReviewArtifactFailureStagingRecord,
+  ): ReviewDispatchTransitionRecord | undefined =>
+    records.find(
+      (record): record is ReviewDispatchTransitionRecord =>
+        record.recordType === "observation" &&
+        record.kind === "review_dispatch_transition" &&
+        record.to === "terminal" &&
+        record.parentSessionId === staged.parentSessionId &&
+        record.callId === staged.callId &&
+        sameReviewCorrelation(record.correlation, staged.correlation) &&
+        record.terminalReason === staged.terminalReason,
+    );
+
+  /**
+   * Recovers a durable `review_artifact_failure_staged` record that was left
+   * without its matching terminal transition (e.g. a crash between the two
+   * appends). Converts the staging to the terminal `artifact_*` reason WITHOUT
+   * rereading the artifact; identity and active Authorization are validated
+   * first and any mismatch leaves durable state untouched (N1).
+   */
+  const recoverStagedArtifactFailure = async (
+    staged: PersistedReviewArtifactFailureStagingRecord,
+  ): Promise<ReviewCompletionOutcome> =>
+    dependencies.dispatch.withReviewDispatchParentSessionClaim(
+      staged.parentSessionId,
+      async (): Promise<ReviewCompletionOutcome> => {
+        const records = await dependencies.readDurableRecords();
+        const existingTerminal = findMatchingArtifactFailureTerminal(records, staged);
+        if (existingTerminal !== undefined) {
+          const reservation = usableReservationForTerminal(records, existingTerminal);
+          if (reservation !== undefined) {
+            await clean(existingTerminal, reservation);
+          }
+          return { kind: "blocked" };
+        }
+        const slot = projectReviewDispatchSlots(records).find(
+          (candidate): candidate is ClaimedSlot =>
+            candidate.state === "claimed" &&
+            candidate.key.parentSessionId === staged.parentSessionId &&
+            candidate.callId === staged.callId &&
+            sameReviewCorrelation(candidate.key.correlation, staged.correlation),
+        );
+        if (slot === undefined) return { kind: "stale" };
+        const binding = projectTaskCallBindings(records).find(
+          (candidate): candidate is ReviewTaskCallBinding =>
+            candidate.purpose !== "implementation" &&
+            candidate.parentSessionId === staged.parentSessionId &&
+            candidate.callId === staged.callId &&
+            sameReviewCorrelation(candidate.correlation, staged.correlation),
+        );
+        if (binding === undefined || binding.purpose !== purposeForCorrelation(staged.correlation)) {
+          await dependencies.recordAdvisory("review_staged_failure_identity_mismatch");
+          return { kind: "stale" };
+        }
+        if (!(await isCurrentActiveAuthorization(staged.correlation, dependencies.findAuthorizationById))) {
+          await dependencies.recordAdvisory("review_staged_failure_authorization_inactive");
+          return { kind: "blocked" };
+        }
+        const terminal = await dependencies.appendReviewDispatchTransition({
+          schemaVersion: 1,
+          timestamp: new Date().toISOString(),
+          agentId: staged.agentId,
+          sessionId: staged.sessionId,
+          writerId: staged.writerId,
+          recordType: "observation",
+          kind: "review_dispatch_transition",
+          transitionId: randomUUID(),
+          parentSessionId: staged.parentSessionId,
+          correlation: staged.correlation,
+          expectedCategory: slot.expectedCategory,
+          from: "claimed",
+          to: "terminal",
+          callId: staged.callId,
+          terminalReason: staged.terminalReason,
+        });
+        if (terminal.kind !== "committed") return { kind: "blocked" };
+        if (binding.artifactReservation.status === "usable") {
+          await clean(terminal.record, binding.artifactReservation);
+        }
+        await dependencies.dispatch.offerNextMandatoryReviewWithinParentSessionClaim(
+          staged.parentSessionId,
+        );
+        return { kind: "blocked" };
+      },
+    ).catch(async (error: unknown): Promise<ReviewCompletionOutcome> => {
+      await dependencies.recordAdvisory("review_artifact_failure_recovery_failed", error);
       return { kind: "blocked" };
     });
 
@@ -613,11 +871,60 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     });
   };
 
+  const ensureConsumedReviewArtifactCleaned = async (
+    staged: PersistedReviewCompletionStagingRecord,
+    terminal: ReviewDispatchTransitionRecord,
+  ): Promise<void> => {
+    // Only clean when the terminal actually matches this staging (N1 identity).
+    const matching = findMatchingTerminalForStaging(
+      await dependencies.readDurableRecords(),
+      staged,
+    );
+    if (matching === undefined || matching.transitionId !== terminal.transitionId) return;
+    if (!("terminalReason" in matching)) return;
+    if (matching.terminalReason !== "completed" && matching.terminalReason !== "completed_with_findings" && matching.terminalReason !== "review_incomplete") {
+      return;
+    }
+    const records = await dependencies.readDurableRecords();
+    const reservation = usableReservationForTerminal(records, terminal);
+    if (reservation === undefined) {
+      await dependencies.recordAdvisory("review_artifact_cleanup_reservation_missing");
+      return;
+    }
+    await clean(terminal, reservation);
+  };
+
+  const ensureFailedReviewArtifactCleaned = async (
+    terminal: ReviewDispatchTransitionRecord,
+  ): Promise<void> => {
+    if (!("terminalReason" in terminal)) return;
+    const reason = terminal.terminalReason;
+    if (
+      reason !== "cancelled" &&
+      reason !== "artifact_missing" &&
+      reason !== "artifact_read_failed" &&
+      reason !== "artifact_json_invalid" &&
+      reason !== "artifact_schema_invalid"
+    ) {
+      return;
+    }
+    const records = await dependencies.readDurableRecords();
+    const reservation = usableReservationForTerminal(records, terminal);
+    if (reservation === undefined) {
+      await dependencies.recordAdvisory("review_artifact_cleanup_reservation_missing");
+      return;
+    }
+    await clean(terminal, reservation);
+  };
+
   return {
     consumeReviewCompletion,
     recoverPendingReviewCompletionsForBinding,
     recoverStagedReviewCompletion,
+    recoverStagedArtifactFailure,
     recoverStagedReviewCompletionsAfterRestart,
+    ensureConsumedReviewArtifactCleaned,
+    ensureFailedReviewArtifactCleaned,
     findMatchingTerminalForStaging,
   };
 }

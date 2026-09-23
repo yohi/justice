@@ -368,8 +368,8 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
   } else if (kind === "review_artifact_failure_staged") {
     if (
-      typeof r.parentSessionId !== "string" ||
-      typeof r.callId !== "string" ||
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
       !isValidReviewCorrelation(r.correlation) ||
       !isOneOf(r.terminalReason, [
         "artifact_missing",
@@ -382,20 +382,43 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     }
   } else if (kind === "review_post_tooluse_pending") {
     if (
-      typeof r.parentSessionId !== "string" ||
-      typeof r.callId !== "string" ||
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
       !isOneOf(r.purpose, ["task_review", "final_review"]) ||
       !isValidReviewCorrelation(r.trustedCorrelation)
     ) {
       throw new Error("Invalid review_post_tooluse_pending record");
     }
+    // Optional child/observed-execution fields are validated strictly (I4):
+    // when present they must agree with each other and with the trusted
+    // correlation so a forged marker cannot smuggle a mismatched binding.
+    if (r.childSessionId !== undefined && !isNonEmptyString(r.childSessionId)) {
+      throw new Error("Invalid review_post_tooluse_pending childSessionId");
+    }
+    if (r.observedExecution !== undefined) {
+      if (!isValidObservedReviewExecution(r.observedExecution)) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution");
+      }
+      if (r.childSessionId === undefined) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution without childSessionId");
+      }
+      const observed = r.observedExecution;
+      if (
+        !isObject(observed) ||
+        observed.childSessionId !== r.childSessionId ||
+        observed.parentSessionId !== r.parentSessionId ||
+        observed.callId !== r.callId ||
+        JSON.stringify(observed.correlation) !== JSON.stringify(r.trustedCorrelation)
+      ) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution identity");
+      }
+    }
   } else if (kind === "review_artifact_read_started") {
     if (
-      typeof r.parentSessionId !== "string" ||
-      typeof r.callId !== "string" ||
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
       !isValidReviewCorrelation(r.correlation) ||
-      typeof r.artifactId !== "string" ||
-      r.artifactId.length === 0 ||
+      !isNonEmptyString(r.artifactId) ||
       !isValidMandatoryRelativePath(r.artifactPath)
     ) {
       throw new Error("Invalid review_artifact_read_started record");
