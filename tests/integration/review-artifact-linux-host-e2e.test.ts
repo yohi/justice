@@ -12,6 +12,7 @@ import { NodeFileSystem } from "../../src/runtime/node-file-system";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 
 const SUPPORTED_OPENCODE_VERSION = /^1\.18\.\d+$/u;
+const RUN_LIVE_HOST_E2E = process.env.JUSTICE_RUN_LIVE_HOST_E2E === "1";
 const exec = promisify(execFile);
 const pluginPath = fileURLToPath(new URL("../../dist/opencode-plugin.js", import.meta.url));
 
@@ -148,7 +149,7 @@ async function seedMandatoryReview(rootDir: string, parentSessionId: string, cat
     parentSessionId, correlation, expectedCategory: category, from: null, to: "pending" });
 }
 
-describe("review artifact supported-host acceptance (Task 3.6)", () => {
+describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (Task 3.6)", () => {
   it.each(["sp-review", "sp-final-review"] as const)(
     "dispatches real %s task and rejects a child write through the built plugin",
     async (category) => {
