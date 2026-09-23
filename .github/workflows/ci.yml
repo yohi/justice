@@ -12,6 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: oven-sh/setup-bun@v2
+      - name: Install supported OpenCode CLI
+        run: bun install --global opencode-ai@1.18.29
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - run: bun install --frozen-lockfile
@@ -27,8 +29,8 @@ jobs:
           cargo clippy --manifest-path native/review-artifact-linux/Cargo.toml --all-targets --features test -- -D warnings
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun run test
       - run: bun run build
+      - run: bun run test
       - run: bun run vitest run --config vitest.dist.config.ts
       - run: bun run vitest run --config vitest.integration.config.ts
       - name: Upload Build Artifact
