@@ -502,8 +502,8 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         }
         if (!pending) return { kind: "terminalized" };
         const result = task
-          ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required" })
-          : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required" });
+          ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
+          : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
         if (result.kind !== "committed") return { kind: "blocked" };
         return { kind: "terminalized" };
       }
@@ -521,8 +521,8 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         );
     if (pending) {
       const transition = task
-        ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "gate_pending" })
-        : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_gate_pending" });
+        ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
+        : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
       if (transition.kind !== "committed") return { kind: "blocked" };
     }
     const context: GatePendingAttemptContext = task

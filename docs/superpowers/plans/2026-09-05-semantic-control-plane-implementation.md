@@ -12746,7 +12746,7 @@ run. Thus a successful startup missing-plan invalidation observes the terminal A
 recovery phases, while an uncertain restoration runs neither positive phase. Do not add a coordinator,
 lifecycle manager, transaction layer, or DI container.
 
-- [ ] **Step 1: Write the failing ordering, decision, and anti-replay tests**
+- [x] **Step 1: Write the failing ordering, decision, and anti-replay tests**
 
 The test setup constructs one `reviewCompletionDomain` with the existing artifact, log, lifecycle, Gate,
 Authorization, advisory, and `reviewDispatchState` ports, then destructures the returned completion
@@ -14636,7 +14636,7 @@ The replacement flow must assert that the normal filesystem writer is never call
 are not reached, the outside target remains unchanged, the symlink remains retained, and the durable advisory is
 `review_artifact_identity_mismatch`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run:
 
@@ -14655,7 +14655,7 @@ compile and fail for the intended unimplemented or incorrect `review_artifact_cl
 behavior. A missing helper/type, shell syntax error, validator-test setup error, or other setup/compile failure
 is not acceptable RED evidence.
 
-- [ ] **Step 3: Implement the fixed protocol**
+- [x] **Step 3: Implement the fixed protocol**
 
 Wire the production PostToolUse route in this task. `JusticePlugin` must store one
 `reviewCompletionDomain` created from the same `observationLogStore`, `authorizationStore`,
@@ -16853,7 +16853,7 @@ async function recoverStagedReviewCompletionsAfterRestart(): Promise<void> {
 
 Replace the `Promise.all` path for task PostToolUse in `JusticePlugin` with `runTaskPostToolUseSequentially`. Keep independent non-task handlers unchanged.
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run:
 
@@ -16873,7 +16873,7 @@ cleanup state. Only `finished(cleanup_incomplete)` is re-evaluable. `cleaned`, `
 `replacement_retained` are terminal, while started-without-finished projects `outcome_uncertain`; none of those
 terminal/uncertain states may automatically re-enter the provider.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/review-artifact.ts src/core/review-dispatch-state.ts src/core/session-state-provider.ts src/core/types.ts src/core/v2/observation-model.ts src/core/v2/state-projection.ts src/core/hook-response-merger.ts src/hooks/observation-handler.ts src/core/justice-plugin.ts src/runtime/validation.ts src/runtime/opencode-adapter.ts src/opencode-plugin.ts tests/helpers/mock-file-system.ts tests/helpers/review-artifact-e2e-fixture.ts tests/core/review-artifact.test.ts tests/core/review-artifact-reservation.test.ts tests/core/session-state-provider.test.ts tests/core/v2/state-projection.test.ts tests/runtime/validation.test.ts tests/core/hook-response-merger.test.ts tests/hooks/observation-handler-transactional.test.ts tests/core/justice-plugin-routing.test.ts tests/core/justice-plugin.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/integration/opencode-plugin.test.ts tests/integration/review-artifact-linux-e2e.test.ts tests/integration/review-artifact-linux-host-e2e.test.ts

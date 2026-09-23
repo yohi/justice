@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { validateRecordSchema, validateShardSequences } from "../../src/runtime/validation";
-import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
+import type { PendingLogRecord, PersistedLogRecord } from "../../src/core/v2/observation-model";
+import { projectReviewArtifactCleanupState } from "../../src/core/v2/state-projection";
+import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import { createMockFileSystem } from "../helpers/mock-file-system";
 
 function validBase(recordType: "observation" | "decision"): Record<string, unknown> {
   return {
@@ -222,6 +225,45 @@ function validDelegatedExecutionBinding(): Record<string, unknown> {
       correlation: { reviewKind: "task-review", taskExecutionRef, reviewRound: 1 },
     },
   };
+}
+
+const cleanupIdentity = {
+  parentSessionId: "ses-1",
+  callId: "call-1",
+  correlation: {
+    reviewKind: "task-review",
+    taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    reviewRound: 1,
+  },
+  artifactId: "artifact-1",
+} as const;
+
+const malformedCorrelation = {
+  reviewKind: "task-review",
+  taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1" },
+  reviewRound: 1,
+} as const;
+
+function validCleanupRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...validBase("observation"),
+    kind: "review_artifact_cleanup",
+    ...cleanupIdentity,
+    phase: "started",
+    ...overrides,
+  };
+}
+
+async function appendAndReplay(record: Record<string, unknown>): Promise<PersistedLogRecord> {
+  const files = createMockFileSystem();
+  const store = new ObservationLogStore(files, files, "w-1");
+  await store.append(
+    { agentId: "atlas", sessionId: "ses-1", writerId: "w-1" },
+    record as unknown as PendingLogRecord,
+  );
+  const [persisted] = await store.readAll();
+  if (persisted === undefined) throw new Error("cleanup fixture did not replay its appended record");
+  return persisted;
 }
 
 describe("validateRecordSchema", () => {
@@ -1169,6 +1211,32 @@ describe("validateRecordSchema", () => {
         staging: { callId: "call-1" },
       }),
     ).toThrow("Invalid review_completion_staged record");
+  });
+
+  it.each([
+    { phase: "started" as const },
+    { phase: "finished" as const, status: "cleaned" as const },
+    { phase: "finished" as const, status: "quarantine_retained" as const },
+    { phase: "finished" as const, status: "replacement_retained" as const },
+    { phase: "finished" as const, status: "cleanup_incomplete" as const },
+  ])("validates and replays review_artifact_cleanup %#", async (phase) => {
+    const persisted = await appendAndReplay(validCleanupRecord(phase));
+
+    expect(() => validateRecordSchema(persisted)).not.toThrow();
+    expect(projectReviewArtifactCleanupState([persisted], cleanupIdentity)).not.toEqual({
+      kind: "not_started",
+    });
+  });
+
+  it.each([
+    validCleanupRecord({ phase: "started", status: "cleaned" }),
+    validCleanupRecord({ phase: "finished" }),
+    validCleanupRecord({ phase: "finished", status: "unknown_status" }),
+    validCleanupRecord({ artifactId: "" }),
+    validCleanupRecord({ callId: "" }),
+    validCleanupRecord({ correlation: malformedCorrelation }),
+  ])("rejects malformed review_artifact_cleanup replay authority", (record) => {
+    expect(() => validateRecordSchema(record)).toThrow(/review_artifact_cleanup/u);
   });
 });
 
