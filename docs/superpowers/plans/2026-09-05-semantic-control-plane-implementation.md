@@ -16882,6 +16882,8 @@ GIT_MASTER=1 git commit -m "feat: review artifact消費とacceptanceをtransacti
 
 ### Task 3.7: Update plan progress only after accepted task decisions
 
+> **Progress:** Implementation, task review, verification, and commit are complete. Four existing tests outside the original file list were updated because they asserted the removed worker-success progress write. Restart-recovery progress synchronization is deferred for follow-up.
+
 **Requirement:** JUS-P0-02, JUS-P0-04, INV-06, INV-08, INV-19.
 
 **Files:**
@@ -16897,7 +16899,7 @@ GIT_MASTER=1 git commit -m "feat: review artifact消費とacceptanceをtransacti
 
 **Produces:** `updatePlanProgress(content: string, task: PlanTask, decision: TaskAcceptanceDecision): ProgressUpdateResult`.
 
-- [ ] **Step 1: Write the failing progress tests**
+- [x] **Step 1: Write the failing progress tests**
 
 ```ts
 it("does not update a checkbox for rework-required or blocked", () => {
@@ -16942,13 +16944,13 @@ it("does not update progress from an old terminal authorization decision", async
 });
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: FAIL because worker feedback writes progress directly.
 
-- [ ] **Step 3: Implement accepted-only progress updates**
+- [x] **Step 3: Implement accepted-only progress updates**
 
 Return the input unchanged unless `decision.verdict === "accepted"` and its `taskExecutionRef.taskId` equals `task.id`. For an accepted non-empty task, update every unchecked step in source order with the existing `PlanParser.updateCheckbox()` operation; preserve already checked steps and never touch another task. A zero-step task follows existing parser semantics and returns deterministic unchanged/no-op. Remove direct `PlanParser.updateCheckbox()` calls from TaskFeedback success and failure paths. `JusticePlugin` invokes the updater only after Task 3.2 has durably recorded the accepted decision and the same projected decision remains current for its active authorizationId; an old released / invalidated authorization's replayed decision is ignored. The primary defense remains Task 3.2, which must not create such an accepted decision after terminality. `ProgressUpdater` itself receives no `AuthorizationStore` dependency, and `TaskFeedbackHandler` must not infer acceptance from worker success.
 
@@ -16971,13 +16973,13 @@ export function updatePlanProgress(
 }
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
 GIT_MASTER=1 git add src/core/progress-updater.ts src/hooks/task-feedback.ts src/core/justice-plugin.ts tests/core/progress-updater.test.ts tests/hooks/task-feedback.test.ts tests/core/justice-plugin-routing.test.ts

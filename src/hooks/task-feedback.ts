@@ -257,36 +257,17 @@ export class TaskFeedbackHandler {
   ): Promise<HookResponse> {
     // Determine retryCount from accumulated retryCounts
     const totalRetries = [...session.retryCounts.values()].reduce((a, b) => a + b, 0);
-    let planUpdated = false;
 
-    try {
-      const planContent = await this.fileReader.readFile(session.planPath);
-      const tasks = this.parser.parse(planContent);
-      const task = tasks.find((t) => t.id === session.activeTaskId);
-
-      if (task) {
-        // Check all incomplete steps
-        let updatedContent = planContent;
-        for (const step of task.steps) {
-          if (!step.checked) {
-            updatedContent = this.parser.updateCheckbox(updatedContent, step.lineNumber, true);
-          }
-        }
-        await this.fileWriter.writeFile(session.planPath, updatedContent);
-        planUpdated = true;
-        await this.emitReflectionEvent({
-          trigger: "task_succeeded",
-          planRef: { path: session.planPath, taskId: session.activeTaskId },
-          intent: "check_complete",
-          sessionId,
-        });
-      }
-    } catch (err) {
-      console.warn(
-        `[JUSTICE] Failed to update plan.md after success: ${err instanceof Error ? err.message : String(err)}`,
-        err,
-      );
-    }
+    // Worker success never implies acceptance (Task 3.7): plan.md checkboxes
+    // advance only after a durable accepted TaskAcceptanceDecision, applied by
+    // JusticePlugin's progress updater. The reflection event and learning
+    // extraction are kept here.
+    await this.emitReflectionEvent({
+      trigger: "task_succeeded",
+      planRef: { path: session.planPath, taskId: session.activeTaskId },
+      intent: "check_complete",
+      sessionId,
+    });
 
     // Extract and accumulate learnings from success
     const learnings = this.learningExtractor.extract(
@@ -300,7 +281,7 @@ export class TaskFeedbackHandler {
 
     return {
       action: "inject",
-      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md ${planUpdated ? "updated" : "was not updated"}. ✅]`,
+      injectedContext: `[JUSTICE: Task ${session.activeTaskId} completed successfully. plan.md progress awaits review acceptance. ✅]`,
     };
   }
 

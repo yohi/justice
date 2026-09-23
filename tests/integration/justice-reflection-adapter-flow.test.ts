@@ -73,7 +73,10 @@ describe("OpenCodeAdapter reflection flow", () => {
 
     // Then
     expect(before.args.task_id).toBe("task-1");
-    expect(mockFs.writtenFiles["plan.md"]).toContain("- [x] Init");
+    // Success no longer writes plan.md (Task 3.7): checkbox progress awaits a
+    // durable accepted TaskAcceptanceDecision from the review flow.
+    expect(mockFs.writtenFiles["plan.md"]).toContain("- [ ] Init");
+    expect(mockFs.writtenFiles["plan.md"]).not.toContain("- [x] Init");
     const events = await adapter.getJustice()?.getObservationHandler().getLogStore().readAll();
     const reflection = events?.find(
       (event) => event.recordType === "observation" && event.kind === "reflection",

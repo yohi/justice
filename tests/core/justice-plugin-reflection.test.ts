@@ -121,7 +121,7 @@ describe("JusticePlugin reflection event integration", () => {
     expect(reflectionSpy).not.toHaveBeenCalled();
   });
 
-  it("does not emit a success reflection when completion writing fails", async () => {
+  it("emits a success reflection without writing plan.md even when plan writes fail", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
@@ -145,11 +145,13 @@ describe("JusticePlugin reflection event integration", () => {
       },
     });
 
-    // Then
-    expect(reflectionSpy).not.toHaveBeenCalled();
+    // Then: success no longer writes plan.md (Task 3.7) — the reflection is
+    // emitted unconditionally and checkbox progress awaits review acceptance.
+    expect(reflectionSpy).toHaveBeenCalledTimes(1);
+    expect(files.get("plan.md")).toContain("- [ ] Init");
     expect(response).toMatchObject({
       action: "inject",
-      injectedContext: expect.stringContaining("plan.md was not updated"),
+      injectedContext: expect.stringContaining("completed successfully"),
     });
   });
 
