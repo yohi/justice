@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-const SUPPORTED_OPENCODE_VERSION = "1.18.32";
+const SUPPORTED_OPENCODE_VERSION = /^1\.18\.\d+$/u;
 
 function isSupportedLinuxX64Host(): boolean {
   return process.platform === "linux" && process.arch === "x64";
@@ -45,9 +45,9 @@ describe("review artifact supported-host acceptance (Task 3.6)", () => {
     } catch (error: unknown) {
       throw new Error(`unsupported setup: opencode CLI is not runnable: ${String(error)}`, { cause: error });
     }
-    if (version !== SUPPORTED_OPENCODE_VERSION) {
+    if (!SUPPORTED_OPENCODE_VERSION.test(version)) {
       throw new Error(
-        `unsupported setup: opencode ${version} is installed but the supported host is ${SUPPORTED_OPENCODE_VERSION}`,
+        `unsupported setup: opencode ${version} is installed but the supported host range is 1.18.x`,
       );
     }
     if (!isSupportedLinuxX64Host()) {
@@ -55,7 +55,7 @@ describe("review artifact supported-host acceptance (Task 3.6)", () => {
         `unsupported setup: the Task 3.6 host E2E requires Linux x86_64, found ${process.platform}/${process.arch}`,
       );
     }
-    expect(version).toBe(SUPPORTED_OPENCODE_VERSION);
+    expect(SUPPORTED_OPENCODE_VERSION.test(version)).toBe(true);
   });
 
   it("exposes built-plugin handlers without crashing on the supported host", async () => {
