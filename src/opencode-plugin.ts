@@ -8,7 +8,7 @@ import {
 import { debugLog } from "./runtime/debug";
 import type { HookResponse, ReviewArtifactWriteSkipReason } from "./core/types";
 
-export class ReviewArtifactWriteCancelled extends Error {
+class ReviewArtifactWriteCancelled extends Error {
   readonly reason: ReviewArtifactWriteSkipReason;
 
   constructor(reason: ReviewArtifactWriteSkipReason) {

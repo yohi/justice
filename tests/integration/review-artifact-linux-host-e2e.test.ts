@@ -11,7 +11,7 @@ import { PlanParser } from "../../src/core/plan-parser";
 import { NodeFileSystem } from "../../src/runtime/node-file-system";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 
-const SUPPORTED_OPENCODE_VERSION = "1.18.29";
+const SUPPORTED_OPENCODE_VERSION = /^1\.18\.\d+$/u;
 const exec = promisify(execFile);
 const pluginPath = fileURLToPath(new URL("../../dist/opencode-plugin.js", import.meta.url));
 
@@ -67,9 +67,9 @@ async function supportedHostVersion(): Promise<void> {
   } catch (cause: unknown) {
     throw new Error("unsupported setup: opencode CLI is not runnable", { cause });
   }
-  if (version !== SUPPORTED_OPENCODE_VERSION) {
+  if (!SUPPORTED_OPENCODE_VERSION.test(version)) {
     throw new Error(
-      `unsupported setup: opencode ${version} is installed but the supported host is ${SUPPORTED_OPENCODE_VERSION}`,
+      `unsupported setup: opencode ${version} is installed but the supported host range is 1.18.x`,
     );
   }
   if (process.platform !== "linux" || process.arch !== "x64") {

@@ -985,10 +985,14 @@ export class JusticePlugin {
     event: PreToolUseEvent,
   ): Promise<HookResponse | undefined> {
     if (event.payload.toolName !== "write") return undefined;
+    const input = event.payload.toolInput;
+    const filePath =
+      typeof input.filePath === "string" ? normalizeSafeRelativePath(input.filePath) : null;
     let records: readonly PersistedLogRecord[];
     try {
       records = await this.observationLogStore.readAll();
     } catch (error: unknown) {
+      if (filePath === null || !filePath.startsWith(".justice/reviews/")) return undefined;
       await this.recordReviewDispatchAdvisory("review_artifact_write_rejected", error);
       return { action: "skip", reason: "review_artifact_write_rejected" };
     }
@@ -1010,9 +1014,6 @@ export class JusticePlugin {
         candidate.callId === delegated.parentCallId &&
         JSON.stringify(candidate.correlation) === JSON.stringify(slot.key.correlation),
     );
-    const input = event.payload.toolInput;
-    const filePath =
-      typeof input.filePath === "string" ? normalizeSafeRelativePath(input.filePath) : null;
     const content = typeof input.content === "string" ? input.content : undefined;
     if (
       binding === undefined ||

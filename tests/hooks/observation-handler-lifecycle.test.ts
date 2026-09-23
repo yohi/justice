@@ -244,6 +244,42 @@ describe("ObservationHandler lifecycle notifications", () => {
     expect(records).toHaveLength(2);
   });
 
+  it("writes lifecycle record envelopes with the resolved shard identifiers", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+    });
+
+    await handler.appendTaskLifecycleTransition({
+      parentSessionId: "parent-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      from: "review_pending",
+      to: "rework_required",
+    });
+    await handler.appendPlanFinalizationTransition({
+      parentSessionId: "parent-1",
+      authorizationId: "auth-1",
+      planPath: "plan.md",
+      finalizationAttemptId: "final-1",
+      finalReviewRound: 2,
+      from: "final_review_pending",
+      to: "final_rework_required",
+    });
+
+    const records = await logStore.readAll();
+    const lifecycleRecords = records.filter(
+      (record) => record.recordType === "observation" &&
+        (record.kind === "task_lifecycle_transition" || record.kind === "plan_finalization_transition"),
+    );
+    expect(lifecycleRecords).toHaveLength(2);
+    expect(lifecycleRecords.every(
+      (record) => record.agentId === "system" && record.sessionId === "parent-1" && record.writerId === "w-1",
+    )).toBe(true);
+  });
+
   it("notifies after the durable review-pending transition", async () => {
     const { reader, writer, files } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-1");
