@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -163,7 +163,7 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (
         const tools = hostTools(await runHost(rootDir,
           `Use the real task tool with category ${category} and run_in_background=false. ` +
           `The child must use its committed review_artifact_path: create a symlink at that path ` +
-          `pointing to outside-target.json, then attempt the real write tool with filePath ` +
+          `pointing to ${outsidePath}, then attempt the real write tool with filePath ` +
           `equal to review_artifact_path and JSON content {"schemaVersion":1,"complete":true,"findings":[]}. ` +
           `Report the write tool error. Do not replace this with a simulated call.`, parentSessionId,
         ));
@@ -176,6 +176,9 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (
         if (typeof artifactPath !== "string" || !artifactPath.startsWith(".justice/reviews/")) {
           throw new Error("unsupported setup: child did not receive the committed review_artifact_path");
         }
+        const artifactAbsolutePath = resolve(rootDir, artifactPath);
+        expect((await lstat(artifactAbsolutePath)).isSymbolicLink()).toBe(true);
+        expect(await realpath(artifactAbsolutePath)).toBe(await realpath(outsidePath));
         const write = tools.find((tool) => tool.tool === "write" && tool.input.filePath === artifactPath);
         if (write === undefined) throw new Error("unsupported setup: pinned host did not dispatch the child write tool");
         expect(write.status).toBe("error");
