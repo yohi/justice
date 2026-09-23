@@ -6,7 +6,10 @@ function buildPlan(taskId: string): string {
   return `## ${taskId}: sample task\n\n- [ ] step one\n`;
 }
 
-function buildPostToolUseEvent(sessionId: string): {
+function buildPostToolUseEvent(
+  sessionId: string,
+  payload: { toolResult: string; error: boolean },
+): {
   type: "PostToolUse";
   sessionId: string;
   payload: {
@@ -20,8 +23,7 @@ function buildPostToolUseEvent(sessionId: string): {
     sessionId,
     payload: {
       toolName: "task",
-      toolResult: "task completed",
-      error: false,
+      ...payload,
     },
   };
 }
@@ -35,7 +37,14 @@ describe("FF-005", () => {
 
     handler.setActivePlan("session-1", planPath, "task-1");
 
-    await handler.handlePostToolUse(buildPostToolUseEvent("session-1"));
+    // FF-005 + Task 3.7: success no longer writes plan.md; the remaining
+    // allowlisted write is the escalation error note on the registered path.
+    await handler.handlePostToolUse(
+      buildPostToolUseEvent("session-1", {
+        toolResult: "Task timed out after 300s.",
+        error: true,
+      }),
+    );
 
     expect(writer.writeFile).toHaveBeenCalledWith(planPath, expect.any(String));
   });
@@ -52,7 +61,12 @@ describe("FF-005", () => {
 
     handler.setActivePlan("session-1", planPath, "task-1");
 
-    await handler.handlePostToolUse(buildPostToolUseEvent("session-1"));
+    await handler.handlePostToolUse(
+      buildPostToolUseEvent("session-1", {
+        toolResult: "Task timed out after 300s.",
+        error: true,
+      }),
+    );
 
     expect(writer.writeFile).toHaveBeenCalledTimes(1);
     expect(writer.writeFile).toHaveBeenCalledWith(planPath, expect.any(String));

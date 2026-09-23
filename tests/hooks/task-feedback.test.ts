@@ -21,7 +21,7 @@ describe("TaskFeedbackHandler", () => {
     vi.restoreAllMocks();
   });
   describe("handlePostToolUse", () => {
-    it("should update checkbox on success", async () => {
+    it("should not write the plan on success (progress awaits review acceptance)", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });
       const writer = createMockFileWriter();
       const handler = new TaskFeedbackHandler(reader, writer);
@@ -40,8 +40,12 @@ describe("TaskFeedbackHandler", () => {
 
       const response = await handler.handlePostToolUse(event);
       expect(response.action).toBe("inject");
-      // Verify plan.md was written with checkbox checked
-      expect(writer.writtenFiles["plan.md"]).toContain("[x] Setup structure");
+      // Success no longer implies acceptance: plan.md checkboxes advance only
+      // after a durable accepted TaskAcceptanceDecision (Task 3.7).
+      expect(writer.writeFile).not.toHaveBeenCalled();
+      if (response.action === "inject") {
+        expect(response.injectedContext).toContain("completed successfully");
+      }
     });
 
     it("should append error note on escalation (test_failure)", async () => {

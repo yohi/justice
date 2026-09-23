@@ -13,7 +13,7 @@ describe("Feedback Flow Integration", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-  it("should complete full success flow: task() → format → classify → checkbox update", async () => {
+  it("should complete full success flow: task() → format → classify → reflection + learning", async () => {
     const plan = ["## Task 1: Setup", "- [ ] Create project", "- [ ] Setup structure"].join("\n");
 
     const reader = createMockFileReader({ "plan.md": plan });
@@ -34,11 +34,10 @@ describe("Feedback Flow Integration", () => {
     const response = await handler.handlePostToolUse(event);
     expect(response.action).toBe("inject");
 
-    // Verify plan.md was updated
-    const updatedPlan = writer.writtenFiles["plan.md"];
-    expect(updatedPlan).toBeDefined();
-    expect(updatedPlan).toContain("[x] Create project");
-    expect(updatedPlan).toContain("[x] Setup structure");
+    // Success no longer implies acceptance (Task 3.7): plan.md checkboxes
+    // advance only after a durable accepted TaskAcceptanceDecision.
+    expect(writer.writeFile).not.toHaveBeenCalled();
+    expect(writer.writtenFiles["plan.md"]).toBeUndefined();
   });
 
   it("should complete full escalation flow: retry exhaustion → error note → escalation message", async () => {

@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
-import type { MessageEvent, PostToolUseEvent, PreToolUseEvent } from "../../src/core/types";
+import { AuthorizationStore } from "../../src/core/plan-authorization";
+import type { MessageEvent, PostToolUseEvent, PreToolUseEvent, ReviewCorrelation } from "../../src/core/types";
 import type { ObservationMessagePayload } from "../../src/core/v2/message-payload";
-import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
+import {
+  createMockFileReader,
+  createMockFileSystem,
+  createMockFileWriter,
+  type MockFileSystem,
+} from "../helpers/mock-file-system";
 
 function createPlugin(): JusticePlugin {
   return new JusticePlugin(createMockFileReader({}), createMockFileWriter());
@@ -316,5 +322,253 @@ describe("JusticePlugin routing guard", () => {
         injectedContext: "plan post\n\n---\n\nfeedback post",
       }),
     );
+  });
+});
+
+
+const progressPlan = ["## Task 1: Implement", "- [ ] first", "- [ ] second"].join("\n");
+const PROGRESS_WRITER_ID = "w-routing";
+
+function taskReviewCorrelation(authorizationId: string): ReviewCorrelation {
+  return {
+    reviewKind: "task-review",
+    taskExecutionRef: { authorizationId, taskId: "task-1", attemptId: "attempt-1" },
+    reviewRound: 1,
+  };
+}
+
+function reviewPostToolUseEvent(): PostToolUseEvent {
+  return {
+    type: "PostToolUse",
+    sessionId: "s-1",
+    callId: "review-call",
+    payload: { toolName: "task", toolResult: "review complete", error: false },
+  } as PostToolUseEvent;
+}
+
+type PluginInternals = {
+  authorizationStore: AuthorizationStore;
+  observationLogStore: {
+    append: (
+      shardId: { agentId: string; sessionId: string; writerId: string },
+      record: Record<string, unknown>,
+    ) => Promise<number>;
+  };
+  reviewCompletionDomain: {
+    consumeReviewCompletion: (input: unknown) => Promise<{ kind: string }>;
+  };
+};
+
+function internalsOf(plugin: JusticePlugin): PluginInternals {
+  return plugin as unknown as PluginInternals;
+}
+
+async function approvePlanAuthorization(plugin: JusticePlugin): Promise<string> {
+  const binding = await internalsOf(plugin).authorizationStore.approve({
+    sessionId: "s-1",
+    planPath: "plan.md",
+    planFingerprint: { algorithm: "sha256", value: "fingerprint" },
+    canonicalSnapshot: {
+      schema: "justice-plan-v1",
+      documentDigest: "doc-digest",
+      globalBodyDigest: "body-digest",
+      tasks: [
+        {
+          taskId: "task-1",
+          title: "Implement",
+          canonicalBody: "- [ ] first\n- [ ] second",
+          digest: "task-digest",
+        },
+      ],
+    },
+    approvedAt: "2026-09-05T00:00:00.000Z",
+  });
+  if (binding === null) throw new Error("test setup: authorization approval failed");
+  return binding.authorizationId;
+}
+
+async function appendObservation(
+  plugin: JusticePlugin,
+  record: Record<string, unknown>,
+): Promise<void> {
+  const store = internalsOf(plugin).observationLogStore;
+  await store.append(
+    { agentId: "system", sessionId: "s-1", writerId: PROGRESS_WRITER_ID },
+    {
+      schemaVersion: 1,
+      timestamp: "2026-09-05T00:00:00.000Z",
+      agentId: "system",
+      sessionId: "s-1",
+      writerId: PROGRESS_WRITER_ID,
+      ...record,
+    },
+  );
+}
+
+async function seedClaimedReviewDispatch(
+  plugin: JusticePlugin,
+  authorizationId: string,
+): Promise<void> {
+  const correlation = taskReviewCorrelation(authorizationId);
+  await appendObservation(plugin, {
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: "t-pending",
+    parentSessionId: "s-1",
+    correlation,
+    expectedCategory: "sp-review",
+    from: null,
+    to: "pending",
+  });
+  await appendObservation(plugin, {
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: "t-claimed",
+    parentSessionId: "s-1",
+    correlation,
+    expectedCategory: "sp-review",
+    from: "pending",
+    to: "claimed",
+    callId: "review-call",
+    artifactReservation: {
+      status: "usable",
+      artifactId: "a-1",
+      artifactPath: ".justice/reviews/a-1.md",
+      leasePath: ".justice/reviews/a-1.md.lease",
+      artifactIdentity: { device: "d", inode: "i" },
+    },
+  });
+}
+
+async function seedAcceptedDecision(
+  plugin: JusticePlugin,
+  authorizationId: string,
+): Promise<void> {
+  await appendObservation(plugin, {
+    recordType: "decision",
+    kind: "task-acceptance",
+    taskId: "task-1",
+    taskExecutionRef: { authorizationId, taskId: "task-1", attemptId: "attempt-1" },
+    verdict: "accepted",
+  });
+}
+
+function mockTerminalReviewCompletion(plugin: JusticePlugin): void {
+  vi.spyOn(
+    internalsOf(plugin).reviewCompletionDomain,
+    "consumeReviewCompletion",
+  ).mockResolvedValue({ kind: "terminalized" });
+}
+
+describe("JusticePlugin accepted-decision progress updates", () => {
+  it("does not update plan progress when there is no active plan", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(progressPlan);
+  });
+
+  it("does not update plan progress when the accepted task is absent from the active plan", async () => {
+    const planWithoutAcceptedTask = "## Task 2: Other\n- [ ] untouched";
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": planWithoutAcceptedTask });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(planWithoutAcceptedTask);
+  });
+
+  it("does not rewrite plan progress when every step is already checked", async () => {
+    const completedPlan = "## Task 1: Implement\n- [x] first\n- [x] second";
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": completedPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(completedPlan);
+  });
+
+  it("does not update plan progress until the acceptance decision is durably recorded", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    // No task-acceptance decision exists in the durable log yet.
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(progressPlan);
+  });
+
+  it("updates plan progress for a durable accepted decision on the active authorization", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    const response = await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(response).toEqual({
+      action: "inject",
+      injectedContext: "[JUSTICE: REVIEW COMPLETION RECORDED]",
+    });
+    expect(fs.writtenFiles["plan.md"]).toContain("- [x] first");
+    expect(fs.writtenFiles["plan.md"]).toContain("- [x] second");
+  });
+
+  it("does not update progress when the active plan differs from the authorization binding", async () => {
+    const fs: MockFileSystem = createMockFileSystem({
+      "plan.md": progressPlan,
+      "other-plan.md": progressPlan,
+    });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "other-plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["other-plan.md"]).toBe(progressPlan);
+  });
+
+  it("does not update plan progress from an old terminal authorization decision", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const store = internalsOf(plugin).authorizationStore;
+    const authorizationId = await approvePlanAuthorization(plugin);
+    const released = await store.release(authorizationId, "2026-09-05T01:00:00.000Z");
+    expect(released.kind).toBe("saved");
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    // Replayed accepted decision from the now-released authorization.
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(progressPlan);
   });
 });

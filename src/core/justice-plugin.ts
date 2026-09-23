@@ -10,6 +10,7 @@ import type {
   EventEvent,
   CompactionPayload,
   ReservedReviewArtifactIo,
+  ReviewCorrelation,
   ReviewTaskCallBinding,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
@@ -68,6 +69,11 @@ import {
   assembleReviewCompletionStaging,
   createReviewCompletionDomain,
 } from "./review-artifact";
+import {
+  findCurrentAcceptanceDecision,
+} from "./acceptance-decision";
+import { PlanParser } from "./plan-parser";
+import { updatePlanProgress } from "./progress-updater";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -306,6 +312,7 @@ export interface JusticePluginOptions {
 
 export class JusticePlugin {
   private readonly fileReader: FileReader;
+  private readonly fileWriter: FileWriter;
   private readonly planBridge: PlanBridge;
   private readonly taskFeedback: TaskFeedbackHandler;
   private readonly compactionProtector: CompactionProtector;
@@ -326,6 +333,7 @@ export class JusticePlugin {
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
+    this.fileWriter = fileWriter;
     this.options = options;
     this.telemetry = new TelemetryStore(fileReader, fileWriter);
     const metrics = new WisdomMetrics();
@@ -1077,9 +1085,65 @@ export class JusticePlugin {
         await this.recordReviewDispatchAdvisory("review_post_tooluse_consume_failed", error);
         return { kind: "blocked" as const };
       });
+    const correlation = binding.correlation;
+    if (outcome.kind === "terminalized" && correlation.reviewKind === "task-review") {
+      // Task 3.7: Task 3.2 has now durably recorded the acceptance decision for
+      // this review task. Advance the matching plan task's checkboxes while the
+      // decision is still current for its active authorizationId. Fail-open:
+      // progress update failures record an advisory and never block the
+      // PostToolUse response.
+      await this.updatePlanProgressAfterAcceptance(event.sessionId, correlation);
+    }
     return outcome.kind === "terminalized"
       ? { action: "inject", injectedContext: "[JUSTICE: REVIEW COMPLETION RECORDED]" }
       : { action: "proceed" };
+  }
+
+  private async updatePlanProgressAfterAcceptance(
+    parentSessionId: string,
+    correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
+  ): Promise<void> {
+    try {
+      const records = await this.observationLogStore.readAll();
+      const acceptance = findCurrentAcceptanceDecision(records, correlation);
+      if (
+        acceptance.kind !== "found" ||
+        acceptance.decision.kind !== "task-acceptance" ||
+        acceptance.decision.verdict !== "accepted"
+      ) {
+        return;
+      }
+      // INV-19: an accepted decision replayed from an old released or
+      // invalidated authorization must not advance plan progress. The primary
+      // defense is Task 3.2 (no accepted decision after terminality); this
+      // guard keeps the updater honest even if such a record exists.
+      const binding = await this.authorizationStore.findByAuthorizationId(
+        correlation.taskExecutionRef.authorizationId,
+      );
+      if (
+        binding === null ||
+        binding.status !== "active" ||
+        !binding.canonicalSnapshot.tasks.some(
+          (candidate) => candidate.taskId === correlation.taskExecutionRef.taskId,
+        )
+      ) {
+        return;
+      }
+      const planPath = this.planBridge.getActivePlan(parentSessionId);
+      if (planPath === null || binding.planPath !== planPath) return;
+      const content = await this.fileReader.readFile(planPath);
+      const task = new PlanParser()
+        .parse(content)
+        .find((candidate) => candidate.id === correlation.taskExecutionRef.taskId);
+      if (task === undefined) return;
+      const result = updatePlanProgress(content, task, acceptance.decision);
+      if (!result.updated) return;
+      await this.fileWriter.writeFile(planPath, result.content);
+    } catch (error: unknown) {
+      // Fail-open: I/O or progress update failures degrade to an advisory and
+      // leave the PostToolUse response unchanged.
+      await this.recordReviewDispatchAdvisory("plan_progress_update_failed", error);
+    }
   }
 
   private warnInitializationRecoveryFailure(phase: string, error: unknown): void {
