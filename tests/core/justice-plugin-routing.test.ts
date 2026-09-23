@@ -461,6 +461,49 @@ function mockTerminalReviewCompletion(plugin: JusticePlugin): void {
 }
 
 describe("JusticePlugin accepted-decision progress updates", () => {
+  it("does not update plan progress when there is no active plan", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(progressPlan);
+  });
+
+  it("does not update plan progress when the accepted task is absent from the active plan", async () => {
+    const planWithoutAcceptedTask = "## Task 2: Other\n- [ ] untouched";
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": planWithoutAcceptedTask });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(planWithoutAcceptedTask);
+  });
+
+  it("does not rewrite plan progress when every step is already checked", async () => {
+    const completedPlan = "## Task 1: Implement\n- [x] first\n- [x] second";
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": completedPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(fs.writtenFiles["plan.md"]).toBe(completedPlan);
+  });
+
   it("does not update plan progress until the acceptance decision is durably recorded", async () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
