@@ -344,16 +344,85 @@ function validateObservationRecord(r: Record<string, unknown>): void {
       r.to === "terminal" &&
       isOneOf(r.terminalReason, [
         "completed",
+        "completed_with_findings",
+        "review_incomplete",
         "cancelled",
         "review_execution_failed",
         "lost_conclusive",
         "artifact_reservation_unusable",
+        "artifact_missing",
+        "artifact_read_failed",
+        "artifact_json_invalid",
+        "artifact_schema_invalid",
       ]) &&
       (r.callId === undefined || typeof r.callId === "string")
     ) {
       return;
     }
     throw new Error("Invalid review_dispatch_transition state");
+  } else if (kind === "review_artifact_cleanup") {
+    validateReviewArtifactCleanupRecord(r);
+  } else if (kind === "review_completion_staged") {
+    if (!isNonEmptyString(r.parentSessionId) || !isValidReviewCompletionStaging(r.staging)) {
+      throw new Error("Invalid review_completion_staged record");
+    }
+  } else if (kind === "review_artifact_failure_staged") {
+    if (
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
+      !isValidReviewCorrelation(r.correlation) ||
+      !isOneOf(r.terminalReason, [
+        "artifact_missing",
+        "artifact_read_failed",
+        "artifact_json_invalid",
+        "artifact_schema_invalid",
+      ])
+    ) {
+      throw new Error("Invalid review_artifact_failure_staged record");
+    }
+  } else if (kind === "review_post_tooluse_pending") {
+    if (
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
+      !isOneOf(r.purpose, ["task_review", "final_review"]) ||
+      !isValidReviewCorrelation(r.trustedCorrelation)
+    ) {
+      throw new Error("Invalid review_post_tooluse_pending record");
+    }
+    // Optional child/observed-execution fields are validated strictly (I4):
+    // when present they must agree with each other and with the trusted
+    // correlation so a forged marker cannot smuggle a mismatched binding.
+    if (r.childSessionId !== undefined && !isNonEmptyString(r.childSessionId)) {
+      throw new Error("Invalid review_post_tooluse_pending childSessionId");
+    }
+    if (r.observedExecution !== undefined) {
+      if (!isValidObservedReviewExecution(r.observedExecution)) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution");
+      }
+      if (r.childSessionId === undefined) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution without childSessionId");
+      }
+      const observed = r.observedExecution;
+      if (
+        !isObject(observed) ||
+        observed.childSessionId !== r.childSessionId ||
+        observed.parentSessionId !== r.parentSessionId ||
+        observed.callId !== r.callId ||
+        JSON.stringify(observed.correlation) !== JSON.stringify(r.trustedCorrelation)
+      ) {
+        throw new Error("Invalid review_post_tooluse_pending observedExecution identity");
+      }
+    }
+  } else if (kind === "review_artifact_read_started") {
+    if (
+      !isNonEmptyString(r.parentSessionId) ||
+      !isNonEmptyString(r.callId) ||
+      !isValidReviewCorrelation(r.correlation) ||
+      !isNonEmptyString(r.artifactId) ||
+      !isValidMandatoryRelativePath(r.artifactPath)
+    ) {
+      throw new Error("Invalid review_artifact_read_started record");
+    }
   } else if (kind === "delegated_execution_binding") {
     if (!isValidDelegatedExecutionBindingRecord(r)) {
       throw new Error("Invalid delegated_execution_binding record");
@@ -386,6 +455,83 @@ function isValidReviewCorrelation(value: unknown): boolean {
     typeof value.finalizationAttemptId === "string" &&
     isPositiveReviewRound(value.finalReviewRound)
   );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isValidObservedReviewExecution(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    value.schemaVersion === 1 &&
+    value.provenance === "observed" &&
+    isNonEmptyString(value.reviewExecutionEventId) &&
+    isNonEmptyString(value.parentSessionId) &&
+    isNonEmptyString(value.callId) &&
+    isNonEmptyString(value.childSessionId) &&
+    isValidReviewCorrelation(value.correlation)
+  );
+}
+
+function isValidReviewCompletionStaging(value: unknown): boolean {
+  if (!isObject(value) || !isNonEmptyString(value.callId) || !isValidReviewCorrelation(value.correlation)) {
+    return false;
+  }
+  if (!isObject(value.artifactConsumption)) return false;
+  if (
+    !isNonEmptyString(value.artifactConsumption.artifactId) ||
+    !isSha256Digest(value.artifactConsumption.digest) ||
+    !isObject(value.reviewArtifact) ||
+    value.reviewArtifact.schemaVersion !== 1 ||
+    !isValidObservedReviewExecution(value.reviewArtifact.observedExecution) ||
+    !isObject(value.observedExecution) ||
+    !isValidObservedReviewExecution(value.observedExecution) ||
+    !Array.isArray(value.reviewArtifact.findings)
+  ) {
+    return false;
+  }
+  return (
+    isOneOf(value.reviewArtifact.reviewKind, ["task-review", "final-review"]) &&
+    isOneOf(value.reviewArtifact.reviewSource, ["sp-review", "sp-final-review"]) &&
+    typeof value.reviewArtifact.complete === "boolean" &&
+    isValidReviewCorrelation(value.reviewArtifact.correlation) &&
+    JSON.stringify(value.reviewArtifact.correlation) === JSON.stringify(value.correlation) &&
+    JSON.stringify(value.observedExecution.correlation) === JSON.stringify(value.correlation) &&
+    value.reviewArtifact.findings.every(
+      (finding) =>
+        isObject(finding) &&
+        isNonEmptyString(finding.itemKey) &&
+        isOneOf(finding.severity, ["critical", "major", "minor"]) &&
+        isNonEmptyString(finding.summary) &&
+        isNonEmptyString(finding.location),
+    )
+  );
+}
+
+function isValidReviewArtifactCleanupStatus(value: unknown): boolean {
+  return isOneOf(value, [
+    "cleaned",
+    "quarantine_retained",
+    "replacement_retained",
+    "cleanup_incomplete",
+  ]);
+}
+
+function validateReviewArtifactCleanupRecord(r: Record<string, unknown>): void {
+  const common =
+    r.recordType === "observation" &&
+    typeof r.parentSessionId === "string" &&
+    r.parentSessionId.length > 0 &&
+    typeof r.callId === "string" &&
+    r.callId.length > 0 &&
+    isValidReviewCorrelation(r.correlation) &&
+    typeof r.artifactId === "string" &&
+    r.artifactId.length > 0;
+  const phase =
+    (r.phase === "started" && r.status === undefined) ||
+    (r.phase === "finished" && isValidReviewArtifactCleanupStatus(r.status));
+  if (!common || !phase) throw new Error("Invalid review_artifact_cleanup record");
 }
 
 function isValidDelegatedExecutionBindingRecord(value: Record<string, unknown>): boolean {

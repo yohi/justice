@@ -10,6 +10,7 @@ import type {
   EventEvent,
   CompactionPayload,
   ReservedReviewArtifactIo,
+  ReviewTaskCallBinding,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
 import { mergePostToolUseResponses, mergePreToolUseResponses } from "./hook-response-merger";
@@ -31,13 +32,19 @@ import { generateWriterId } from "../runtime/writer-id";
 import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
+import { normalizeSafeRelativePath } from "./trigger-detector";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
 import { AtomicPersistence, type SaveResult } from "./atomic-persistence";
 import { WisdomArchive, type ArchivedWisdom } from "./wisdom-archive";
-import { project, taskLifecycleKey } from "./v2/state-projection";
-import type { TaskProgressState } from "./v2/observation-model";
+import {
+  project,
+  projectDelegatedExecutionBindings,
+  projectObservedReviewExecution,
+  taskLifecycleKey,
+} from "./v2/state-projection";
+import type { PersistedLogRecord, TaskProgressState } from "./v2/observation-model";
 import type {
   PendingReviewDispatchTransitionRecord,
   ReviewDispatchTransitionRecord,
@@ -53,8 +60,14 @@ import {
   createReviewDispatchState,
   type ClaimReviewDispatchOutcome,
   type ReviewDirectiveSink,
+  projectReviewDispatchSlots,
+  projectTaskCallBindings,
 } from "./review-dispatch-state";
 import { createReviewArtifactReservationPort } from "./review-artifact-reservation";
+import {
+  assembleReviewCompletionStaging,
+  createReviewCompletionDomain,
+} from "./review-artifact";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -309,6 +322,7 @@ export class JusticePlugin {
   private readonly options: JusticePluginOptions;
   private readonly reviewDirectiveSink: ReviewDirectiveSink;
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
+  private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
@@ -460,6 +474,75 @@ export class JusticePlugin {
       recordAdvisory: (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
       generateId: generateWriterId,
     });
+    const appendReviewObservation = async <T extends import("./v2/observation-model").PendingObservationRecord>(
+      record: T,
+    ): Promise<{ readonly kind: "committed"; readonly record: T & { readonly sequence: number } } | { readonly kind: "failed" }> => {
+      try {
+        const sequence = await this.observationLogStore.append(
+          { agentId: record.agentId, sessionId: record.sessionId, writerId: record.writerId },
+          record,
+        );
+        return { kind: "committed", record: { ...record, sequence } };
+      } catch {
+        return { kind: "failed" };
+      }
+    };
+    this.reviewCompletionDomain = createReviewCompletionDomain({
+      readDurableRecords: () => this.observationLogStore.readAll(),
+      findAuthorizationById: (authorizationId) => this.authorizationStore.findByAuthorizationId(authorizationId),
+      appendReviewCompletionStaging: appendReviewObservation,
+      appendReviewArtifactReadAttempt: appendReviewObservation,
+      appendReviewArtifactFailureStaging: appendReviewObservation,
+      appendReviewPostToolUsePending: appendReviewObservation,
+      appendReviewObserved: appendReviewObservation,
+      appendReviewArtifactCleanupRecord: appendReviewObservation,
+      appendReviewDispatchTransition: (record) => this.appendReviewDispatchTransition(record),
+      readAndAssembleMatchingArtifact: async (
+        postToolUse,
+        binding,
+        delegatedBinding,
+        correlation,
+        observedExecution,
+      ) => {
+        if (this.options.reservedReviewArtifactIo === undefined) {
+          return { kind: "failure", reason: "artifact_read_failed" };
+        }
+        if (binding.artifactReservation.status !== "usable") {
+          return { kind: "failure", reason: "artifact_read_failed" };
+        }
+        try {
+          return assembleReviewCompletionStaging(
+            postToolUse,
+            binding,
+            delegatedBinding,
+            correlation,
+            observedExecution,
+            await this.options.reservedReviewArtifactIo.readOnce(binding.artifactReservation),
+          );
+        } catch {
+          return { kind: "failure", reason: "artifact_read_failed" };
+        }
+      },
+      cleanupArtifact: async (reservation) => {
+        if (reviewArtifactReservation.artifactIo === undefined) return "cleanup_incomplete";
+        return reviewArtifactReservation.artifactIo.cleanup(reservation);
+      },
+      evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (context) =>
+        this.observationHandler.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context),
+      appendTaskLifecycleTransition: (input) =>
+        this.observationHandler.appendTaskLifecycleTransition(input),
+      appendPlanFinalizationTransition: (input) =>
+        this.observationHandler.appendPlanFinalizationTransition(input),
+      recordAdvisory: (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
+      dispatch: {
+        withReviewDispatchParentSessionClaim:
+          this.reviewDispatchState.withReviewDispatchParentSessionClaim,
+        offerNextMandatoryReviewWithinParentSessionClaim:
+          this.reviewDispatchState.offerNextMandatoryReviewWithinParentSessionClaim,
+        cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim:
+          this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
+      },
+    });
     this.planBridge.setReviewDispatchCancellation(
       this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim,
     );
@@ -482,8 +565,9 @@ export class JusticePlugin {
    * This should be called before handling events.
    */
   async initialize(): Promise<void> {
+    let authorizationRecoveryReady = false;
     try {
-      await this.planBridge.restoreActivePlans();
+      authorizationRecoveryReady = (await this.planBridge.restoreActivePlans()) === "authoritative";
     } catch (error) {
       try {
         this.options.logger?.warn(`Failed to restore authorization during initialization: ${error}`);
@@ -492,14 +576,18 @@ export class JusticePlugin {
       }
     }
 
-    await this.reviewDispatchState.recoverReviewDispatchesAfterRestart().catch((error: unknown) => {
-      this.options.logger?.warn("Failed to recover review dispatches during initialization", error);
-    });
-
     try {
       await this.tieredWisdomStore.loadAll();
       await this.telemetry.load();
       await this.observationHandler.initializeProjectionCache();
+      if (authorizationRecoveryReady) {
+        await this.reviewCompletionDomain
+          .recoverStagedReviewCompletionsAfterRestart()
+          .catch((error: unknown) => this.warnInitializationRecoveryFailure("staged completion", error));
+        await this.reviewDispatchState
+          .recoverReviewDispatchesAfterRestart()
+          .catch((error: unknown) => this.warnInitializationRecoveryFailure("review dispatches", error));
+      }
       try {
         await this.options.notifier?.notify({
           level: "info",
@@ -550,6 +638,13 @@ export class JusticePlugin {
             ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
             : undefined;
         const reviewCategory = resolveMandatoryReviewCategory(event);
+        const artifactWrite =
+          reviewCategory === undefined
+            ? await this.handleReviewArtifactWrite(event).catch((err: unknown) => {
+                this.options.logger?.warn("review-artifact write routing failed", err);
+                return PROCEED;
+              })
+            : undefined;
         const observation =
           reviewCategory === undefined
             ? await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
@@ -566,8 +661,12 @@ export class JusticePlugin {
                 })
               : PROCEED
             : await this.claimReviewTask(event, reviewCategory);
-        const response = mergePreToolUseResponses(observation, delegated, (message) =>
-          this.warnMergeConflict(message),
+        const response = mergePreToolUseResponses(
+          mergePreToolUseResponses(observation, delegated, (message) =>
+            this.warnMergeConflict(message),
+          ),
+          artifactWrite ?? PROCEED,
+          (message) => this.warnMergeConflict(message),
         );
         const taskId = resolveTaskIdFromModifiedPayload(
           response.action === "inject" ? response.modifiedPayload : undefined,
@@ -595,6 +694,12 @@ export class JusticePlugin {
       }
       case "PostToolUse": {
         try {
+          if (event.payload.toolName === "task") {
+            const reviewResponse = await this.routeReviewTaskPostToolUse(event);
+            if (reviewResponse !== undefined) {
+              return this.mergePreToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
+            }
+          }
           // Keep the window open while observation associates the tool result with its task.
           const [observation, planBridge, taskFeedback] = await Promise.all([
             this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
@@ -625,6 +730,13 @@ export class JusticePlugin {
       case "DelegatedExecutionRelationObserved":
         return this.observationHandler
           .handleDelegatedExecutionRelation(event.payload)
+          .then(async (response) => {
+            await this.reviewCompletionDomain.recoverPendingReviewCompletionsForBinding(
+              event.payload.parentSessionId,
+              event.payload.parentCallId,
+            );
+            return response;
+          })
           .catch((err: unknown) => {
             this.options.logger?.warn("observation-handler delegated relation failed", err);
             return PROCEED;
@@ -866,6 +978,115 @@ export class JusticePlugin {
       );
     } catch {
       return;
+    }
+  }
+
+  private async handleReviewArtifactWrite(
+    event: PreToolUseEvent,
+  ): Promise<HookResponse | undefined> {
+    if (event.payload.toolName !== "write") return undefined;
+    const input = event.payload.toolInput;
+    const filePath =
+      typeof input.filePath === "string" ? normalizeSafeRelativePath(input.filePath) : null;
+    let records: readonly PersistedLogRecord[];
+    try {
+      records = await this.observationLogStore.readAll();
+    } catch (error: unknown) {
+      if (filePath === null || !filePath.startsWith(".justice/reviews/")) return undefined;
+      await this.recordReviewDispatchAdvisory("review_artifact_write_rejected", error);
+      return { action: "skip", reason: "review_artifact_write_rejected" };
+    }
+    const delegated = projectDelegatedExecutionBindings(records).find(
+      (candidate) => candidate.childSessionId === event.sessionId,
+    );
+    if (delegated === undefined) return undefined;
+    const slot = projectReviewDispatchSlots(records).find(
+      (candidate) =>
+        candidate.state === "claimed" &&
+        candidate.key.parentSessionId === delegated.parentSessionId &&
+        candidate.callId === delegated.parentCallId,
+    );
+    const binding = projectTaskCallBindings(records).find(
+      (candidate): candidate is ReviewTaskCallBinding =>
+        candidate.purpose !== "implementation" &&
+        slot !== undefined &&
+        candidate.parentSessionId === delegated.parentSessionId &&
+        candidate.callId === delegated.parentCallId &&
+        JSON.stringify(candidate.correlation) === JSON.stringify(slot.key.correlation),
+    );
+    const content = typeof input.content === "string" ? input.content : undefined;
+    if (
+      binding === undefined ||
+      binding.artifactReservation.status !== "usable" ||
+      filePath !== binding.artifactReservation.artifactPath ||
+      content === undefined ||
+      this.options.reservedReviewArtifactIo === undefined
+    ) {
+      await this.recordReviewDispatchAdvisory("review_artifact_write_rejected");
+      return { action: "skip", reason: "review_artifact_write_rejected" };
+    }
+    try {
+      await this.options.reservedReviewArtifactIo.writeExisting(
+        binding.artifactReservation,
+        content,
+      );
+      await this.recordReviewDispatchAdvisory("review_artifact_write_committed");
+      return { action: "skip", reason: "review_artifact_write_committed" };
+    } catch (error: unknown) {
+      await this.recordReviewDispatchAdvisory("review_artifact_write_rejected", error);
+      return { action: "skip", reason: "review_artifact_write_rejected" };
+    }
+  }
+
+  private async routeReviewTaskPostToolUse(
+    event: Extract<HookEvent, { readonly type: "PostToolUse" }>,
+  ): Promise<HookResponse | undefined> {
+    if (event.callId === undefined || event.callId.trim().length === 0) return undefined;
+    let records: readonly PersistedLogRecord[];
+    try {
+      records = await this.observationLogStore.readAll();
+    } catch (error: unknown) {
+      // Fail-open (N2): a durable-log read failure must not escape the hook
+      // boundary; degrade to PROCEED after recording an advisory.
+      await this.recordReviewDispatchAdvisory("review_post_tooluse_read_failed", error);
+      return undefined;
+    }
+    const binding = projectTaskCallBindings(records).find(
+      (candidate): candidate is ReviewTaskCallBinding =>
+        "callId" in candidate &&
+        candidate.parentSessionId === event.sessionId &&
+        candidate.callId === event.callId,
+    );
+    if (binding === undefined) return undefined;
+    const delegated = projectDelegatedExecutionBindings(records).find(
+      (candidate) =>
+        candidate.parentSessionId === event.sessionId && candidate.parentCallId === event.callId,
+    );
+    const observedExecution =
+      delegated === undefined ? undefined : projectObservedReviewExecution(records, delegated);
+    const outcome = await this.reviewCompletionDomain.consumeReviewCompletion({
+        parentSessionId: event.sessionId,
+        callId: event.callId,
+        postToolUse: { type: "PostToolUse", sessionId: event.sessionId, callId: event.callId },
+        ...(observedExecution === undefined ? {} : { observedExecution }),
+        agentId: this.sessionStateProvider.getAgentId(event.sessionId),
+        writerId: this.writerId,
+      })
+      .catch(async (error: unknown) => {
+        // Fail-open (N2): completion consumption errors degrade to PROCEED.
+        await this.recordReviewDispatchAdvisory("review_post_tooluse_consume_failed", error);
+        return { kind: "blocked" as const };
+      });
+    return outcome.kind === "terminalized"
+      ? { action: "inject", injectedContext: "[JUSTICE: REVIEW COMPLETION RECORDED]" }
+      : { action: "proceed" };
+  }
+
+  private warnInitializationRecoveryFailure(phase: string, error: unknown): void {
+    try {
+      this.options.logger?.warn(`Failed to recover ${phase} during initialization`, error);
+    } catch {
+      void 0;
     }
   }
 

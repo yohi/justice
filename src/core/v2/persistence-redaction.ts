@@ -5,6 +5,7 @@ import type {
   ToolOutputEvidence,
   WorkflowBootstrapAudit,
 } from "./observation-model";
+import type { ReviewArtifactV1 } from "../types";
 import { redactForPersistence } from "./redaction";
 import { hashString } from "./hash";
 
@@ -96,6 +97,17 @@ function redactWorkflowBootstrapAudit(audit: WorkflowBootstrapAudit): WorkflowBo
       ? {}
       : { designPath: redactForPersistence(audit.designPath) }),
     ...(audit.planPath === undefined ? {} : { planPath: redactForPersistence(audit.planPath) }),
+  };
+}
+
+function redactReviewArtifact(artifact: ReviewArtifactV1): ReviewArtifactV1 {
+  return {
+    ...artifact,
+    findings: artifact.findings.map((finding) => ({
+      ...finding,
+      summary: redactForPersistence(finding.summary),
+      location: redactForPersistence(finding.location),
+    })),
   };
 }
 
@@ -205,8 +217,26 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
         ...(record.reason === undefined ? {} : { reason: redactForPersistence(record.reason) }),
       };
     case "review_dispatch_transition":
-      return record;
+      return "reviewArtifact" in record && record.reviewArtifact !== undefined
+        ? { ...record, reviewArtifact: redactReviewArtifact(record.reviewArtifact) }
+        : record;
     case "delegated_execution_binding":
+      return record;
+    case "review_completion_staged":
+      return {
+        ...record,
+        staging: {
+          ...record.staging,
+          reviewArtifact: redactReviewArtifact(record.staging.reviewArtifact),
+        },
+      };
+    case "review_artifact_failure_staged":
+      return record;
+    case "review_post_tooluse_pending":
+      return record;
+    case "review_artifact_read_started":
+      return record;
+    case "review_artifact_cleanup":
       return record;
     // Each bootstrap kind is spread under its own literal `kind` so the result
     // stays assignable to a single PendingObservationRecord member.

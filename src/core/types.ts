@@ -111,6 +111,66 @@ export type ObservedReviewExecutionV1 = {
   readonly childSessionId: string;
   readonly correlation: ReviewCorrelation;
 };
+
+export type ReviewArtifactFindingV1 = {
+  readonly itemKey: string;
+  readonly severity: "critical" | "major" | "minor";
+  readonly summary: string;
+  readonly location: string;
+};
+
+export type ReviewWorkerResultV1 = {
+  readonly schemaVersion: 1;
+  readonly complete: boolean;
+  readonly findings: readonly ReviewArtifactFindingV1[];
+};
+
+export type ReviewArtifactV1 = {
+  readonly schemaVersion: 1;
+  readonly reviewKind: ReviewKind;
+  readonly reviewSource: "sp-review" | "sp-final-review";
+  readonly correlation: ReviewCorrelation;
+  readonly observedExecution: ObservedReviewExecutionV1;
+  readonly complete: boolean;
+  readonly findings: readonly ReviewArtifactFindingV1[];
+};
+
+export type CleanReviewArtifactV1 = ReviewArtifactV1 & {
+  readonly complete: true;
+  readonly findings: readonly [];
+};
+
+export type ReviewArtifactWithFindingsV1 = ReviewArtifactV1 & {
+  readonly complete: true;
+  readonly findings: readonly [ReviewArtifactFindingV1, ...ReviewArtifactFindingV1[]];
+};
+
+export type IncompleteReviewArtifactV1 = ReviewArtifactV1 & { readonly complete: false };
+
+export type ReviewArtifactConsumption = {
+  readonly artifactId: string;
+  readonly digest: string;
+};
+
+export type ReviewCompletionStaging = {
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactConsumption: ReviewArtifactConsumption;
+  readonly reviewArtifact: ReviewArtifactV1;
+  readonly observedExecution: ObservedReviewExecutionV1;
+};
+
+export type ReviewArtifactFailureReason =
+  | "artifact_missing"
+  | "artifact_read_failed"
+  | "artifact_json_invalid"
+  | "artifact_schema_invalid";
+
+export type ReviewArtifactCleanupStatus =
+  | "cleaned"
+  | "quarantine_retained"
+  | "replacement_retained"
+  | "cleanup_incomplete";
 export type DelegatedExecutionBindingRecord = {
   readonly kind: "delegated_execution_binding";
   readonly relation: DelegatedExecutionRelationObserved;
@@ -454,7 +514,12 @@ export interface ProceedResponse {
 
 export interface SkipResponse {
   readonly action: "skip";
+  readonly reason?: ReviewArtifactWriteSkipReason;
 }
+
+export type ReviewArtifactWriteSkipReason =
+  | "review_artifact_write_committed"
+  | "review_artifact_write_rejected";
 
 export interface InjectResponse {
   readonly action: "inject";
@@ -563,7 +628,7 @@ export interface ReservedReviewArtifactIo {
   ): Promise<string>;
   cleanup(
     reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
-  ): Promise<"removed" | "replacement_retained">;
+  ): Promise<ReviewArtifactCleanupStatus>;
 }
 
 /** コンテキスト削減戦略 */

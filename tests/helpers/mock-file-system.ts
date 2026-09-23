@@ -1,7 +1,14 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture-backed maps by dynamic path. */
 import { vi } from "vitest";
 import { dirname } from "node:path";
-import type { FileReader, FileWriter } from "../../src/core/types";
+import type {
+  FileReader,
+  FileWriter,
+  ReservedReviewArtifactIo,
+  ReviewArtifactCleanupStatus,
+  ReviewArtifactInodeIdentity,
+  ReviewArtifactReservation,
+} from "../../src/core/types";
 import { AuthorizationStore, createAuthorizationReviewBoundary } from "../../src/core/plan-authorization";
 import type { PlanBridge } from "../../src/hooks/plan-bridge";
 
@@ -235,4 +242,97 @@ export function wirePlanBridgeAuthorization(bridge: PlanBridge): void {
     authorizationStore: new AuthorizationStore(files, files, boundary),
     authorizationReviewBoundary: boundary,
   });
+}
+
+interface MockReservedReviewArtifactIo extends ReservedReviewArtifactIo {
+  readonly reviewArtifactIdentities: Map<string, ReviewArtifactInodeIdentity>;
+}
+
+/**
+ * Deterministic in-memory capability double for the reserved review artifact I/O
+ * port. Identity checks mirror the native provider semantics: a write or read
+ * is only permitted while the inode identity of the artifact path still matches
+ * the reservation. Cleanup unlinks both paths only when the identities still
+ * match, and reports the exact `ReviewArtifactCleanupStatus` (N4).
+ */
+export function createMockReservedReviewArtifactIo(
+  files: MockFileSystem,
+): MockReservedReviewArtifactIo {
+  const reviewArtifactIdentities = new Map<string, ReviewArtifactInodeIdentity>();
+
+  const identityMatches = async (
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+    path: string,
+  ): Promise<boolean> => {
+    const current = reviewArtifactIdentities.get(path);
+    return (
+      current !== undefined &&
+      current.device === reservation.artifactIdentity.device &&
+      current.inode === reservation.artifactIdentity.inode
+    );
+  };
+
+  return {
+    reviewArtifactIdentities,
+    writeExisting: vi.fn(
+      async (
+        reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+        content: string,
+      ): Promise<void> => {
+        if (!(await identityMatches(reservation, reservation.artifactPath))) {
+          throw new Error("review artifact identity mismatch");
+        }
+        // eslint-disable-next-line no-param-reassign
+        files.writtenFiles[reservation.artifactPath] = content;
+      },
+    ),
+    readOnce: vi.fn(
+      async (
+        reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+      ): Promise<string> => {
+        if (!(await identityMatches(reservation, reservation.artifactPath))) {
+          throw new Error("review artifact identity mismatch");
+        }
+        const content = files.writtenFiles[reservation.artifactPath];
+        if (content === undefined) {
+          const error = new Error(
+            `ENOENT: review artifact missing: ${reservation.artifactPath}`,
+          ) as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+        return content;
+      },
+    ),
+    cleanup: vi.fn(
+      async (
+        reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+      ): Promise<ReviewArtifactCleanupStatus> => {
+        if (!(await identityMatches(reservation, reservation.artifactPath))) {
+          return "replacement_retained";
+        }
+        const leaseIdentity = reviewArtifactIdentities.get(reservation.leasePath);
+        if (
+          leaseIdentity === undefined ||
+          leaseIdentity.device !== reservation.artifactIdentity.device ||
+          leaseIdentity.inode !== reservation.artifactIdentity.inode
+        ) {
+          // The leaf artifact matched but its lease no longer does: the native
+          // provider would quarantine the artifact instead of unlinking it.
+          return "quarantine_retained";
+        }
+        // Route both unlinks through the (possibly failing) files.deleteFile so
+        // a lease unlink failure maps to cleanup_incomplete.
+        try {
+          await files.deleteFile(reservation.artifactPath);
+          await files.deleteFile(reservation.leasePath);
+        } catch {
+          return "cleanup_incomplete";
+        }
+        reviewArtifactIdentities.delete(reservation.artifactPath);
+        reviewArtifactIdentities.delete(reservation.leasePath);
+        return "cleaned";
+      },
+    ),
+  };
 }

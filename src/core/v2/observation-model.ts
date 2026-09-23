@@ -6,6 +6,11 @@ import type {
   WorkflowStartSource,
   TaskExecutionRef,
   ReviewArtifactReservation,
+  ReviewArtifactCleanupStatus,
+  ReviewArtifactFailureReason,
+  ReviewArtifactConsumption,
+  ReviewArtifactV1,
+  ReviewCompletionStaging,
   ReviewCorrelation,
   DelegatedExecutionBindingRecord,
 } from "../types";
@@ -151,10 +156,13 @@ export type PlanFinalizationTransitionRecord = {
 };
 export type ReviewDispatchTerminalReason =
   | "completed"
+  | "completed_with_findings"
+  | "review_incomplete"
   | "cancelled"
   | "review_execution_failed"
   | "lost_conclusive"
-  | "artifact_reservation_unusable";
+  | "artifact_reservation_unusable"
+  | ReviewArtifactFailureReason;
 export type ReviewDispatchTransitionPayload = {
   readonly kind: "review_dispatch_transition";
   readonly transitionId: string;
@@ -174,6 +182,8 @@ export type ReviewDispatchTransitionPayload = {
       readonly to: "terminal";
       readonly callId?: string;
       readonly terminalReason: ReviewDispatchTerminalReason;
+      readonly artifactConsumption?: ReviewArtifactConsumption;
+      readonly reviewArtifact?: ReviewArtifactV1;
     }
 );
 export type PendingReviewDispatchTransitionRecord = PendingEnvelope &
@@ -211,6 +221,8 @@ export type ReviewObservedRecord = {
   readonly isCompleteSnapshot?: boolean;
   readonly items: readonly ReviewItem[];
   readonly resolutionMarkers?: readonly ResolutionMarker[];
+  /** Review correlation of the attempt that produced this observation (N3 dedup key). */
+  readonly correlation?: import("../types").ReviewCorrelation;
 };
 
 /**
@@ -283,6 +295,84 @@ export type WorkflowBootstrapRecord =
 
 export type WorkflowBootstrapRecordKind = WorkflowBootstrapRecord["kind"];
 
+export type ReviewCompletionStagingRecord = {
+  readonly kind: "review_completion_staged";
+  readonly parentSessionId: string;
+  readonly staging: ReviewCompletionStaging;
+};
+
+export type ReviewArtifactFailureStagingRecord = {
+  readonly kind: "review_artifact_failure_staged";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly terminalReason: ReviewArtifactFailureReason;
+};
+
+export type ReviewPostToolUsePendingRecord = {
+  readonly kind: "review_post_tooluse_pending";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly purpose: "task_review" | "final_review";
+  readonly trustedCorrelation: ReviewCorrelation;
+  readonly childSessionId?: string;
+  readonly observedExecution?: import("../types").ObservedReviewExecutionV1;
+};
+
+export type ReviewArtifactReadAttemptRecord = {
+  readonly kind: "review_artifact_read_started";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactId: string;
+  readonly artifactPath: string;
+};
+
+export type ReviewArtifactCleanupRecord = {
+  readonly kind: "review_artifact_cleanup";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: ReviewCorrelation;
+  readonly artifactId: string;
+} &
+  (
+    | { readonly phase: "started" }
+    | { readonly phase: "finished"; readonly status: ReviewArtifactCleanupStatus }
+  );
+
+export type PendingReviewCompletionStagingRecord =
+  PendingEnvelope &
+  { readonly recordType: "observation" } &
+  ReviewCompletionStagingRecord;
+export type PendingReviewArtifactFailureStagingRecord =
+  PendingEnvelope &
+  { readonly recordType: "observation" } &
+  ReviewArtifactFailureStagingRecord;
+export type PendingReviewPostToolUseRecord =
+  PendingEnvelope &
+  { readonly recordType: "observation" } &
+  ReviewPostToolUsePendingRecord;
+export type PendingReviewArtifactReadAttemptRecord =
+  PendingEnvelope &
+  { readonly recordType: "observation" } &
+  ReviewArtifactReadAttemptRecord;
+export type PendingReviewArtifactCleanupRecord =
+  PendingEnvelope &
+  { readonly recordType: "observation" } &
+  ReviewArtifactCleanupRecord;
+
+export type PersistedReviewCompletionStagingRecord =
+  PendingReviewCompletionStagingRecord & { readonly sequence: number };
+export type PersistedReviewArtifactFailureStagingRecord =
+  PendingReviewArtifactFailureStagingRecord & { readonly sequence: number };
+export type PersistedReviewPostToolUseRecord = PendingReviewPostToolUseRecord & {
+  readonly sequence: number;
+};
+export type PersistedReviewArtifactReadAttemptRecord =
+  PendingReviewArtifactReadAttemptRecord & { readonly sequence: number };
+export type PersistedReviewArtifactCleanupRecord =
+  PendingReviewArtifactCleanupRecord & { readonly sequence: number };
+
 export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & ToolExecutedRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & MessageRecord)
@@ -298,7 +388,12 @@ export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & DelegatedExecutionBindingRecord)
-  | PendingReviewDispatchTransitionRecord;
+  | PendingReviewDispatchTransitionRecord
+  | PendingReviewCompletionStagingRecord
+  | PendingReviewArtifactFailureStagingRecord
+  | PendingReviewPostToolUseRecord
+  | PendingReviewArtifactReadAttemptRecord
+  | PendingReviewArtifactCleanupRecord;
 export type LifecycleObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord)

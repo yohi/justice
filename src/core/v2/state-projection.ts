@@ -17,6 +17,7 @@ import type {
   Evidence,
   ObservationRecord,
   PersistedLogRecord,
+  PersistedReviewArtifactCleanupRecord,
   PlanFinalizationState,
   TaskProgressState,
 } from "./observation-model";
@@ -72,6 +73,37 @@ export type ProjectedLifecycle = {
   readonly taskStates: ReadonlyMap<string, TaskProgressState>;
   readonly finalization: ReadonlyMap<string, FinalizationContext>;
 };
+
+export type ProjectedReviewArtifactCleanupState =
+  | { readonly kind: "not_started" }
+  | { readonly kind: "outcome_uncertain" }
+  | { readonly kind: "finished"; readonly status: "cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete" };
+
+export type ReviewArtifactCleanupIdentity = {
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly correlation: import("../types").ReviewCorrelation;
+  readonly artifactId: string;
+};
+
+export function projectReviewArtifactCleanupState(
+  records: readonly PersistedLogRecord[],
+  identity: ReviewArtifactCleanupIdentity,
+): ProjectedReviewArtifactCleanupState {
+  const matching = orderEventsForProjection(records).filter(
+    (record): record is PersistedReviewArtifactCleanupRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_artifact_cleanup" &&
+      record.parentSessionId === identity.parentSessionId &&
+      record.callId === identity.callId &&
+      record.artifactId === identity.artifactId &&
+      JSON.stringify(record.correlation) === JSON.stringify(identity.correlation),
+  );
+  const latest = matching.at(-1);
+  if (latest === undefined) return { kind: "not_started" };
+  if (latest.phase === "started") return { kind: "outcome_uncertain" };
+  return { kind: "finished", status: latest.status };
+}
 
 type MutableTask = {
   status: TaskStatus;

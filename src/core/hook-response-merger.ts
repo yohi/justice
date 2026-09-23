@@ -1,6 +1,27 @@
-import type { HookResponse, InjectResponse } from "./types";
+import type {
+  HookResponse,
+  InjectResponse,
+  ReviewArtifactWriteSkipReason,
+  SkipResponse,
+} from "./types";
 
 export type HookResponseConflictLogger = (message: string) => void;
+
+function mergeSkipResponses(
+  responses: readonly HookResponse[],
+  onConflict?: HookResponseConflictLogger,
+): SkipResponse {
+  const reasons = responses.flatMap((response) =>
+    response.action === "skip" && response.reason !== undefined ? [response.reason] : [],
+  );
+  const uniqueReasons = [...new Set<ReviewArtifactWriteSkipReason>(reasons)];
+  if (uniqueReasons.length > 1) {
+    onConflict?.("Conflicting review-artifact skip reasons; rejecting the host write");
+    return { action: "skip", reason: "review_artifact_write_rejected" };
+  }
+  const reason = uniqueReasons[0];
+  return reason === undefined ? { action: "skip" } : { action: "skip", reason };
+}
 
 export function mergePreToolUseResponses(
   a: HookResponse,
@@ -8,7 +29,7 @@ export function mergePreToolUseResponses(
   onConflict?: HookResponseConflictLogger,
 ): HookResponse {
   if (a.action === "skip" || b.action === "skip") {
-    return { action: "skip" };
+    return mergeSkipResponses([a, b], onConflict);
   }
 
   if (a.action === "inject" && b.action === "inject") {
@@ -49,7 +70,7 @@ export function mergePostToolUseResponses(
   onConflict?: HookResponseConflictLogger,
 ): HookResponse {
   if (responses.some((response) => response.action === "skip")) {
-    return { action: "skip" };
+    return mergeSkipResponses(responses, onConflict);
   }
 
   const injects = responses.filter(

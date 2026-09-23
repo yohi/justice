@@ -6,6 +6,22 @@ import {
   type OpenCodePluginInit,
 } from "./runtime/opencode-adapter";
 import { debugLog } from "./runtime/debug";
+import type { HookResponse, ReviewArtifactWriteSkipReason } from "./core/types";
+
+class ReviewArtifactWriteCancelled extends Error {
+  readonly reason: ReviewArtifactWriteSkipReason;
+
+  constructor(reason: ReviewArtifactWriteSkipReason) {
+    super(`review artifact write cancelled: ${reason}`);
+    this.name = "ReviewArtifactWriteCancelled";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+function cancellationReason(response: HookResponse | undefined): ReviewArtifactWriteSkipReason | undefined {
+  return response?.action === "skip" ? response.reason : undefined;
+}
 
 export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
   const { options, warnings } = validatePluginOptions(pluginOptions);
@@ -48,10 +64,12 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
       await adapter.onChatParams(input);
     },
     "tool.execute.before": async (input, output): Promise<void> => {
-      await adapter.onToolExecuteBefore(
+      const response = await adapter.onToolExecuteBefore(
         input as { tool: string; sessionID: string; callID: string },
         output as { args: Record<string, unknown> },
       );
+      const reason = cancellationReason(response);
+      if (reason !== undefined) throw new ReviewArtifactWriteCancelled(reason);
 
       const justiceInstance = adapter.getJustice();
       if (!justiceInstance && !adapter.isNoOp()) {
