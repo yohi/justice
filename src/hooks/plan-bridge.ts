@@ -121,6 +121,8 @@ export class PlanBridge {
   private readonly activePlanPaths: Map<string, string> = new Map();
   private readonly implementationArmedSessions: Map<string, { readonly planPath: string }> =
     new Map();
+  private readonly activeAuthorizationIds = new Map<string, string>();
+  private readonly cancelledImplementationSessions = new Set<string>();
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
   private readonly lastCompletionInputs: Map<
@@ -198,6 +200,8 @@ export class PlanBridge {
     activeBinding: Extract<ApprovedPlanBinding, { readonly status: "active" }> | null,
   ): void {
     this.setActivePlan(parentSessionId, activeBinding?.planPath ?? null);
+    if (activeBinding === null) this.activeAuthorizationIds.delete(parentSessionId);
+    else this.activeAuthorizationIds.set(parentSessionId, activeBinding.authorizationId);
   }
 
   async restoreActivePlans(): Promise<AuthorizationRestorationOutcome> {
@@ -342,6 +346,7 @@ export class PlanBridge {
    * Validates the path using TriggerDetector to prevent path traversal.
    */
   setActivePlan(sessionId: string, planPath: string | null): void {
+    this.activeAuthorizationIds.delete(sessionId);
     if (!planPath) {
       this.activePlanPaths.delete(sessionId);
       this.implementationArmedSessions.delete(sessionId);
@@ -375,6 +380,8 @@ export class PlanBridge {
    */
   destroySession(sessionId: string): void {
     this.activePlanPaths.delete(sessionId);
+    this.activeAuthorizationIds.delete(sessionId);
+    this.cancelledImplementationSessions.delete(sessionId);
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
@@ -538,8 +545,18 @@ export class PlanBridge {
 
   async handleImplementationArm(
     sessionId: string,
-    request: ImplementationArmRequest,
+    request:
+      | ImplementationArmRequest
+      | {
+          readonly source: "command" | "fallback_marker";
+          readonly planPath: string;
+          readonly approved: boolean;
+        },
   ): Promise<ImplementationArmResult> {
+    if ("action" in request && request.action === "cancel") {
+      return this.handleImplementationCancellation(sessionId);
+    }
+
     const planPath = this.resolveActivatablePlanPath(request.planPath);
     if (planPath === null || !(await this.isArtifactReadable(planPath))) {
       return {
@@ -613,6 +630,7 @@ export class PlanBridge {
       };
     }
 
+    this.cancelledImplementationSessions.delete(sessionId);
     this.implementationArmedSessions.set(sessionId, { planPath: approved.planPath });
 
     return {
@@ -620,6 +638,45 @@ export class PlanBridge {
       planPath: approved.planPath,
       directiveStage: "implementation_arm",
       guidance: formatWorkflowDirective({ stage: "implementation_arm", planPath: approved.planPath }),
+    };
+  }
+
+  private async handleImplementationCancellation(sessionId: string): Promise<ImplementationArmResult> {
+    const dependencies = this.authorizationDependencies;
+    if (dependencies === null) return this.implementationArmRequiredResult();
+
+    const authorizationId = this.activeAuthorizationIds.get(sessionId);
+    if (authorizationId === undefined) {
+      this.implementationArmedSessions.delete(sessionId);
+      this.cancelledImplementationSessions.add(sessionId);
+      return this.implementationArmRequiredResult();
+    }
+    this.implementationArmedSessions.delete(sessionId);
+
+    let released: Awaited<ReturnType<typeof dependencies.authorizationStore.release>>;
+    try {
+      released = await dependencies.authorizationStore.release(
+        authorizationId,
+        new Date().toISOString(),
+      );
+    } catch {
+      return this.implementationArmRequiredResult();
+    }
+    if (released.kind !== "saved") return this.implementationArmRequiredResult();
+
+    this.activePlanPaths.delete(sessionId);
+    this.activeAuthorizationIds.delete(sessionId);
+    this.implementationArmedSessions.delete(sessionId);
+    this.cancelledImplementationSessions.add(sessionId);
+    return this.implementationArmRequiredResult();
+  }
+
+  private implementationArmRequiredResult(): ImplementationArmResult {
+    return {
+      armed: false,
+      planPath: null,
+      directiveStage: "implementation_arm_required",
+      guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
     };
   }
 
@@ -802,6 +859,10 @@ export class PlanBridge {
   async handlePreToolUse(event: HookEvent): Promise<HookResponse> {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
+
+    if (this.cancelledImplementationSessions.has(event.sessionId)) {
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
+    }
 
     // Need an active plan to provide context for this session
     const activePlanPath = this.getActivePlan(event.sessionId);

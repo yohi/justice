@@ -2404,7 +2404,6 @@ GIT_MASTER=1 git commit -m "feat: plan authorizationをdurable bindingへ置換"
 
 - Modify: `src/core/implement-command.ts`
 - Modify: `src/core/types.ts`
-- Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Test: `tests/core/implement-command.test.ts`
 - Test: `tests/runtime/opencode-adapter.test.ts`
@@ -2415,7 +2414,7 @@ GIT_MASTER=1 git commit -m "feat: plan authorizationをdurable bindingへ置換"
 
 **Produces:** `ImplementationArmRequest` discriminated union with `{ readonly source: "command"; readonly action: "approve"; readonly planPath: string; readonly approved: boolean }` and `{ readonly source: "command"; readonly action: "cancel" }`.
 
-- [ ] **Step 1: Write the failing cancellation tests**
+- [x] **Step 1: Write the failing cancellation tests**
 
 ```ts
 it("parses pathless cancel", () => {
@@ -2456,13 +2455,13 @@ it("treats cancel without an active binding as an idempotent no-op", async () =>
 });
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
 Expected: FAIL because `--cancel` is rejected.
 
-- [ ] **Step 3: Implement cancellation**
+- [x] **Step 3: Implement cancellation**
 
 Accept exactly one of `--approved` and `--cancel`. Approve requires exactly one safe `--plan`; cancel forbids `--plan`. Reject both flags, duplicate flags, missing approve plan, and unsafe paths. In `PlanBridge.handleImplementationArm`, branch on `action` before resolving a plan path. For cancel, resolve only the current session's single active binding and call public `release`; only its `saved` result persists `active -> released` and clears the active plan cache. Every non-saved result is non-armed and fail-closed. With no active binding, return the deterministic non-armed no-op result without persistence I/O. After either successful release or no-op, later `handlePreToolUse` returns the existing unauthorized advisory. Task 2.3 owns parsing and durable Authorization release only. Task 3.4 replaces this cache path with its one outer release-plus-cancellation operation after Review Dispatch exists; it is the sole owner of connecting successful terminalization, and fingerprint-driven invalidation, to the existing Review Dispatch `cancelled` transition. Do not anticipate it here with a Phase 3 dependency or a second cancellation mechanism.
 
@@ -2471,16 +2470,16 @@ if (cancel) return { source: "command", action: "cancel" };
 return { source: "command", action: "approve", planPath, approved };
 ```
 
-- [ ] **Step 4: Confirm GREEN**
+- [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit after approval**
+- [x] **Step 5: Commit after approval**
 
 ```bash
-GIT_MASTER=1 git add src/core/implement-command.ts src/core/types.ts src/runtime/opencode-adapter.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
+GIT_MASTER=1 git add docs/superpowers/plans/2026-09-05-semantic-control-plane-implementation.md src/core/implement-command.ts src/core/types.ts src/hooks/plan-bridge.ts tests/core/implement-command.test.ts tests/runtime/opencode-adapter.test.ts tests/hooks/plan-bridge-authorization.test.ts
 GIT_MASTER=1 git commit -m "feat: plan authorizationのcancelを追加"
 ```
 
