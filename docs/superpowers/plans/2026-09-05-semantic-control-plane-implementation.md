@@ -1,7 +1,7 @@
 # Semantic Control Plane Implementation Plan
 
 > **PLAN STATUS: FINALIZED / NOT SELF-AUTHORIZING**
-> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents unless the user explicitly overrides this restriction for a named task. Task 4.1CA received separate authorization, was implemented and reviewed, and was committed as `d3e6ae5`; PR #261 is open. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is accepted and the Task 1.2 host-resolved config provider is implemented and accepted, and requires its own separate authorization. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes record progress and do not authorize other tasks.
+> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents unless the user explicitly overrides this restriction for a named task. Task 4.1CA received separate authorization, was implemented and reviewed, and was committed as `d3e6ae5`; PR #261 is open. Task 4.2CA received separate authorization after Task 4.1CA and the Task 1.2 host-resolved config provider were implemented and accepted, was implemented and reviewed, and was committed as `6b10b91`; PR #263 is open. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes record progress and do not authorize other tasks.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -29,7 +29,7 @@
 - A failed I/O boundary returns `PROCEED`; it must not produce `Authorized`, `Accepted`, or `Complete`.
 - Mandatory `sp-review` and `sp-final-review` calls canonicalize `run_in_background` to `false`.
 - A Phase 3 runtime spike that cannot prove `parentCallId -> childSessionId` correlation blocks Phase 3 and JUS-P0-04 completion.
-- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity. v4.0.0 active scope is deterministic configuration assurance only. Task 4.1CA is PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED. Task 4.2CA remains PLANNED / NOT EXECUTABLE until Task 4.1CA is separately authorized, implemented, and accepted and Task 1.2 host-resolved config provider is implemented and accepted; Task 4.2CA then still requires its own separate implementation authorization.
+- Phase 4 historical negative evidence remains immutable: Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` are BLOCKED, and Option D/F remain not adopted. `COMMAND-ENVELOPE-1 = PASS` remains fixed within its original scope; `docs/spikes/2026-09-controller-routing-command-envelope-2.md` records `COMMAND-ENVELOPE-2 = BLOCKED` and confirms RG-010. Option G is not authorized as a production successor. Task 4.1G/4.2G are BLOCKED / NOT EXECUTABLE and `sessionId` alone is never invocation identity. v4.0.0 active scope is deterministic configuration assurance only. Task 4.1CA is PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED. Task 4.2CA was implemented and reviewed after Task 4.1CA and the Task 1.2 host-resolved config provider were implemented and accepted, and is committed as `6b10b91` with PR #263 open.
 - A Phase 3 secure Review Artifact capability spike that cannot prove the supported Linux `openat2(2)` provider blocks Phase 3 and JUS-P0-04 completion before Task 3.4; an unsupported runtime is fail-open for execution but never a P0 completion waiver.
 - v4.0.0's supported Review Artifact deployment is Bun 1.x on Linux x86_64 with glibc and Linux kernel 5.6 or newer. The provider is the bundled Node-API addon `dist/native/justice_review_artifact_linux.linux-x64-gnu.node`; `bun:ffi`, pathname-only helpers, and a generic storage backend are not accepted providers.
 - The native addon build is pinned by `rust-toolchain.toml`: Rust `1.85.1`, `profile = "minimal"`, components `rustfmt` and `clippy`, and target `x86_64-unknown-linux-gnu`. The devcontainer provisions `rustup` and `build-essential`, never an unpinned apt `rustc`/`cargo` pair; `rustup show active-toolchain` must report `1.85.1-x86_64-unknown-linux-gnu` before native build.
@@ -16990,11 +16990,11 @@ GIT_MASTER=1 git commit -m "feat: accepted decision後だけplan progressを更�
 ## Phase 4: Controller Routing Configuration Assurance — JUS-P0-01
 
 > [!CAUTION]
-> **CURRENT PHASE STATUS: PLAN FINALIZED / Task 4.1CA NOT AUTHORIZED / Task 4.2CA NOT EXECUTABLE**
+> **CURRENT PHASE STATUS: PLAN FINALIZED / Task 4.1CA IMPLEMENTED (PR #261) / Task 4.2CA IMPLEMENTED (PR #263)**
 >
 > v4.0.0 P0 guarantees only deterministic configuration assurance:
 > desired controller -> exact pinned-command expectation -> effective configuration inspection -> doctor assessment.
-> `configured` never means runtime applied. Task 4.1CA is specified by this finalized plan but is not implemented on this branch and has not received implementation authorization. No Phase 4 implementation is authorized by this document finalization.
+> `configured` never means runtime applied. Task 4.1CA is specified by this finalized plan and is implemented on this branch (`d3e6ae5`, PR #261). Task 4.2CA is also implemented on this branch (`6b10b91`, PR #263). Both received separate implementation authorization and review.
 >
 > Task 4.0, `SESSION-SAFETY-1`, and `COMMAND-TERMINAL-1` remain immutable BLOCKED evidence. Option D and Option F
 > remain not adopted. The distinct Option G evidence in
@@ -19481,9 +19481,9 @@ GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
 
 ### Task 4.2CA: Wire host-resolved configuration inspection and doctor diagnostics
 
-> **STATUS: PLANNED / NOT EXECUTABLE**
+> **STATUS: IMPLEMENTED / REVIEWED / PR #263 OPEN**
 >
-> This task depends on accepted Task 4.1CA and an implemented + accepted host-resolved config provider from Task 1.2. Plan finalization does not authorize this task; a separate explicit implementation authorization is required after both dependencies are satisfied. It does not add runtime message correlation, command hook state, routing observation persistence, or terminal correlation.
+> This task depends on accepted Task 4.1CA and an implemented + accepted host-resolved config provider from Task 1.2. Separate explicit implementation authorization was granted after both dependencies were satisfied. It does not add runtime message correlation, command hook state, routing observation persistence, or terminal correlation. Implemented in `6b10b91`; task review approved with only non-blocking minor findings.
 
 **Requirement:** JUS-P0-01-03 through JUS-P0-01-05, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27.
 
@@ -19500,7 +19500,7 @@ GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
 
 **Consumes:** Task 4.1CA assessment and Task 1.2 `DoctorEffectiveConfigResult` projected from the supported host's resolved configuration. Local `SOURCE_PRIORITY` scans are advisory only and are never controller-configuration authority.
 
-- [ ] **Step 1: Write failing host-resolved config and doctor tests**
+- [x] **Step 1: Write failing host-resolved config and doctor tests**
 
   - Cover all four exact expected command/agent pairs from an injected host-resolved snapshot.
   - Cover snapshot available + missing command -> `missing`.
@@ -19511,7 +19511,7 @@ GIT_MASTER=1 git commit -m "feat: controller configuration assuranceを定義"
   - Assert raw `opencode debug config` stdout/stderr, command body, provider options, credentials, and unrelated config values never appear in diagnostics or persistence.
   - Assert no test uses `command.execute.before`, `chat.params`, `message.updated`, `command.executed`, runtime actual-controller attribution, terminal correlation, or `controller_routing_observed` persistence.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
@@ -19522,7 +19522,7 @@ devcontainer exec --workspace-folder . bun run vitest run \
 
 Expected: behavioral failures because doctor does not yet consume host-resolved command definitions for controller configuration assessment or emit the exact remediation template.
 
-- [ ] **Step 3: Wire only the host-resolved config and doctor path**
+- [x] **Step 3: Wire only the host-resolved config and doctor path**
 
   1. Reuse Task 1.2's resolved-config reader/projection. Do not create a second source merge implementation.
   2. `opencode debug config` is the standalone authority for supported OpenCode `1.18.29`; `client.config.get()` is only an equivalent adapter when the exact same instance/workspace context is guaranteed.
@@ -19532,7 +19532,7 @@ Expected: behavioral failures because doctor does not yet consume host-resolved 
   6. Update README and SPEC in the implementation change, explicitly stating `configured != applied` and `local source scan != configured authority`.
   7. Do not modify `src/runtime/opencode-adapter.ts`, `src/hooks/observation-handler.ts`, event schemas, session state, or routing-observation persistence for this task.
 
-- [ ] **Step 4: Run focused tests and all repository gates**
+- [x] **Step 4: Run focused tests and all repository gates**
 
 ```bash
 devcontainer exec --workspace-folder . bun run test
@@ -19543,7 +19543,9 @@ devcontainer exec --workspace-folder . bun run build
 
 Expected: configured/missing/misconfigured/unsupported diagnostics and exact remediation pass without a runtime routing claim, local source merge authority, secret-bearing output, or new warnings.
 
-- [ ] **Step 5: Commit only after implementation authorization**
+- [x] **Step 5: Commit only after implementation authorization**
+>
+> Committed as `6b10b91`; pushed to branch `feature/task-4.2CA-host-resolved-doctor`; PR #263 open.
 
 ```bash
 GIT_MASTER=1 git add src/core/doctor-config.ts src/core/doctor-categories.ts src/runtime/doctor-cli.ts README.md SPEC.md tests/core/justice-doctor-config.test.ts tests/core/doctor-categories.test.ts tests/runtime/doctor-cli.test.ts
@@ -20849,7 +20851,7 @@ The v4.0.0 replacement sequence is finalized as a plan: **Task 4.1CA = PLANNED /
 | 3.7       | JUS-P0-02, JUS-P0-04, Design §3.3 and §5.4, INV-06, INV-08, INV-19                               | accepted-only full progress update and old terminal-Authorization decision rejection tests                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 4.0       | JUS-P0-01 supported-host historical capability evidence                                          | **COMPLETED / BLOCKED:** immutable negative evidence; not reinterpreted by Option G |
 | 4.1CA     | JUS-P0-01, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27                                | **PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED:** pure configuration assurance only; source/test implementation intentionally absent from this documentation-only branch |
-| 4.2CA     | JUS-P0-01, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27                                        | **PLANNED / NOT EXECUTABLE:** depends on accepted 4.1CA and implemented + accepted Task 1.2 host-resolved config provider; separate implementation authorization required |
+| 4.2CA     | JUS-P0-01, Design §3.4, §3.5, §4.1, §5.1, INV-26, INV-27                                        | **IMPLEMENTED / REVIEWED / PR #263 OPEN:** host-resolved `DoctorEffectiveConfigResult` wired into 4.1CA assessment; redacted per-command diagnostics and exact four-command remediation/template; `configured != applied` and local scan non-authority documented |
 | 4.1G      | JUS-P0-01, Design §4.1, INV-01, INV-24, INV-25                                                   | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** `COMMAND-ENVELOPE-2` confirms RG-010; Option G is not an authorized production successor |
 | 4.2G      | JUS-P0-01, Design §3.2, §3.3, §4.1, §5.1, INV-24, INV-25                                        | **HISTORICAL / BLOCKED / NOT EXECUTABLE:** blocked by 4.1G and confirmed RG-010; no runtime wiring or durable audit sequence is authorized |
 | old 4.1   | Historical rejected per-invocation candidate                                                      | **HISTORICAL / BLOCKED / NOT EXECUTABLE** |
