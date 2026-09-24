@@ -1,7 +1,7 @@
 # Semantic Control Plane Implementation Plan
 
 > **PLAN STATUS: FINALIZED / NOT SELF-AUTHORIZING**
-> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents unless the user explicitly overrides this restriction for a named task. Task 4.1CA received separate authorization and its Steps 1–4 are implemented and reviewed; Step 5 commit is pending. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is committed and accepted and the Task 1.2 host-resolved config provider is implemented and accepted, and requires its own separate authorization. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes record progress and do not authorize other tasks.
+> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents unless the user explicitly overrides this restriction for a named task. Task 4.1CA received separate authorization, was implemented and reviewed, and was committed as `d3e6ae5`; PR #261 is open. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is accepted and the Task 1.2 host-resolved config provider is implemented and accepted, and requires its own separate authorization. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes record progress and do not authorize other tasks.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -19408,9 +19408,9 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 ### Task 4.1CA: Define the pure controller configuration assurance contract
 
-> **STATUS: IMPLEMENTED / REVIEWED / COMMIT PENDING**
+> **STATUS: IMPLEMENTED / REVIEWED / COMMITTED (`d3e6ae5`)**
 >
-> Implementation authorization was explicitly granted for Task 4.1CA only. Steps 1–4 are implemented and reviewed; Step 5 (commit) is pending explicit commit approval. This task creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. Checkboxes record execution progress and do not authorize other tasks.
+> Implementation authorization was explicitly granted for Task 4.1CA only. Steps 1–5 are implemented, reviewed, and committed; PR #261 is open. This task creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. Checkboxes record execution progress and do not authorize other tasks.
 
 **Requirement:** JUS-P0-01-01 through JUS-P0-01-05, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27.
 
@@ -19473,7 +19473,7 @@ do not exist. Broken fixtures or runtime-host probing are not acceptable RED evi
 Expected: all mapping and configuration status tests pass, with `configured != runtime applied` represented in the
 type and behavior contract.
 
-- [ ] **Step 5: Commit only after implementation authorization**
+- [x] **Step 5: Commit only after implementation authorization**
 
 ```bash
 GIT_MASTER=1 git add src/core/types.ts src/core/routing-decision.ts src/core/workflow-router.ts src/core/controller-routing.ts tests/core/routing-decision.test.ts tests/core/controller-routing.test.ts
