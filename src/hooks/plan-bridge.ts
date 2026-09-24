@@ -647,7 +647,23 @@ export class PlanBridge {
     const dependencies = this.authorizationDependencies;
     if (dependencies === null) return this.implementationArmRequiredResult();
 
-    const authorizationId = this.activeAuthorizationIds.get(sessionId);
+    let authorizationId = this.activeAuthorizationIds.get(sessionId);
+    if (authorizationId === undefined) {
+      let bindings: readonly ApprovedPlanBinding[];
+      try {
+        bindings = await dependencies.authorizationStore.hydrate();
+      } catch {
+        return this.implementationArmRequiredResult();
+      }
+      const activeBindings = bindings.filter(
+        (binding) => binding.sessionId === sessionId && binding.status === "active",
+      );
+      if (activeBindings.length === 1) {
+        authorizationId = activeBindings[0]?.authorizationId;
+      } else if (activeBindings.length > 1) {
+        return this.implementationArmRequiredResult();
+      }
+    }
     if (authorizationId === undefined) {
       this.implementationArmedSessions.delete(sessionId);
       this.cancelledImplementationSessions.add(sessionId);

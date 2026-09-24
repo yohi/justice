@@ -4,6 +4,11 @@ import type { FileReader } from "../../src/core/types";
 import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import {
+  createAuthorizationReviewBoundary,
+  AuthorizationStore,
+} from "../../src/core/plan-authorization";
+import {
+  createMockFileSystem,
   createMockFileReader,
   createMockFileWriter,
   wirePlanBridgeAuthorization,
@@ -334,5 +339,28 @@ describe("PlanBridge.handleImplementationArm", () => {
     bridge.destroySession("session-1");
 
     expect(bridge.isImplementationArmed("session-1")).toBe(false);
+  });
+
+  it("releases the durable session authorization when the in-memory id is missing", async () => {
+    const files = createMockFileSystem({ "plan.md": planContent });
+    const boundary = createAuthorizationReviewBoundary();
+    const authorizationStore = new AuthorizationStore(files, files, boundary);
+    const reader = createMockFileReader({ "plan.md": planContent });
+    const bridge = new PlanBridge(reader, createLoopHandler(reader), undefined, createMockNotifier());
+    bridge.setAuthorizationDependencies({ authorizationStore, authorizationReviewBoundary: boundary });
+    await bridge.handleImplementationArm("session-cancel-recovery", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    (bridge as unknown as { activeAuthorizationIds: Map<string, string> }).activeAuthorizationIds.delete(
+      "session-cancel-recovery",
+    );
+
+    await bridge.handleImplementationArm("session-cancel-recovery", { source: "command", action: "cancel" });
+
+    const bindings = await authorizationStore.hydrate();
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.status).toBe("released");
   });
 });

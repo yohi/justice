@@ -84,7 +84,7 @@ describe("PlanBridge authorization restoration", () => {
       bridge.handleImplementationArm("s1", { source: "command", action: "cancel" }),
     ).resolves.toMatchObject({ armed: false });
     expect(release).not.toHaveBeenCalled();
-    expect(hydrate).not.toHaveBeenCalled();
+    expect(hydrate).toHaveBeenCalledOnce();
   });
 
   it("keeps the active plan when releasing its authorization fails", async () => {
