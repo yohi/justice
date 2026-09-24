@@ -241,11 +241,14 @@ export interface WorkflowStartRequest {
 }
 
 /** `/justice-implement` コマンドで生成される実装許可リクエスト */
-export interface ImplementationArmRequest {
-  readonly source: WorkflowStartSource;
-  readonly planPath: string;
-  readonly approved: boolean;
-}
+export type ImplementationArmRequest =
+  | {
+      readonly source: "command";
+      readonly action: "approve";
+      readonly planPath: string;
+      readonly approved: boolean;
+    }
+  | { readonly source: "command"; readonly action: "cancel" };
 
 /** `/justice-implement` 実行結果 */
 export interface ImplementationArmResult {

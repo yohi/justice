@@ -31,6 +31,92 @@ function createFixture() {
 }
 
 describe("PlanBridge authorization restoration", () => {
+  it("releases the active authorization after setting the same plan path again", async () => {
+    const { bridge, store } = createFixture();
+    const approved = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(approved.armed).toBe(true);
+
+    bridge.setActivePlan("s1", "docs/plan.md");
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    const bindings = await store.hydrate();
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.status).toBe("released");
+  });
+
+  it("releases authorization and rejects subsequent task authorization", async () => {
+    const { bridge, store } = createFixture();
+    const approveRequest = {
+      source: "command" as const,
+      action: "approve" as const,
+      planPath: "docs/plan.md",
+      approved: true,
+    };
+    await bridge.handleImplementationArm("s1", approveRequest);
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "cancelled-call",
+      payload: { toolName: "task", toolInput: { prompt: "run", task_id: "task-1" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    if (response.action !== "inject") throw new Error("expected unauthorized advisory");
+    expect(response.injectedContext).toContain("IMPLEMENTATION UNAUTHORIZED");
+    expect(bridge.getActivePlan("s1")).toBeNull();
+    expect((await store.hydrate()).find((binding) => binding.sessionId === "s1")).toMatchObject({
+      status: "released",
+    });
+  });
+
+  it("treats cancel without an active binding as an idempotent no-op", async () => {
+    const { bridge, store } = createFixture();
+    const release = vi.spyOn(store, "release");
+    const hydrate = vi.spyOn(store, "hydrate");
+
+    await expect(
+      bridge.handleImplementationArm("s1", { source: "command", action: "cancel" }),
+    ).resolves.toMatchObject({ armed: false });
+    expect(release).not.toHaveBeenCalled();
+    expect(hydrate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the active plan when releasing its authorization fails", async () => {
+    const { bridge, store } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      action: "approve",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    vi.spyOn(store, "release").mockResolvedValue({ kind: "failed" });
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect(bridge.getActivePlan("s1")).toBe("docs/plan.md");
+  });
+
+  it("keeps the active plan when authorization release throws", async () => {
+    const { bridge, store } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      action: "approve",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    vi.spyOn(store, "release").mockRejectedValue(new Error("release failed"));
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect(bridge.getActivePlan("s1")).toBe("docs/plan.md");
+  });
+
   it("fails closed when implementation arm is requested before wiring", async () => {
     const files = createMockFileSystem({ "docs/plan.md": plan });
     const bridge = new PlanBridge(files);

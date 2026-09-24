@@ -19,10 +19,25 @@ describe("isJusticeImplementCommand", () => {
 });
 
 describe("parseJusticeImplementCommandArguments", () => {
+  it("parses pathless cancel", () => {
+    expect(parseJusticeImplementCommandArguments("--cancel")).toEqual({
+      source: "command",
+      action: "cancel",
+    });
+  });
+
+  it.each(["--plan docs/p.md --cancel", "--approved --cancel", "--cancel --cancel"])(
+    "rejects incompatible cancel flags: %s",
+    (argumentsString) => {
+      expect(parseJusticeImplementCommandArguments(argumentsString)).toBeNull();
+    },
+  );
+
   it("parses --plan and --approved", () => {
     const result = parseJusticeImplementCommandArguments("--plan docs/plans/feature.md --approved");
     expect(result).toEqual({
       source: "command",
+      action: "approve",
       planPath: "docs/plans/feature.md",
       approved: true,
     });

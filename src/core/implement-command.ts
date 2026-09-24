@@ -39,6 +39,7 @@ export function parseJusticeImplementCommandArguments(
 
   let planPath: string | null = null;
   let approved = false;
+  let cancel = false;
   let i = 0;
 
   while (i < args.length) {
@@ -54,8 +55,13 @@ export function parseJusticeImplementCommandArguments(
         continue;
       }
       case "--approved":
-        if (approved) return null;
+        if (approved || cancel) return null;
         approved = true;
+        i += 1;
+        continue;
+      case "--cancel":
+        if (cancel || approved) return null;
+        cancel = true;
         i += 1;
         continue;
       default:
@@ -63,10 +69,14 @@ export function parseJusticeImplementCommandArguments(
     }
   }
 
+  if (cancel) {
+    return planPath === null ? { source: "command", action: "cancel" } : null;
+  }
   if (planPath === null) return null;
 
   return {
     source: "command",
+    action: "approve",
     planPath,
     approved,
   };

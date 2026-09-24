@@ -656,11 +656,29 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
 
     expect(handleImplementationArm).toHaveBeenCalledWith("session-1", {
       source: "command",
+      action: "approve",
       planPath: "plan.md",
       approved: true,
     });
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).toMatchObject({ text: "[JUSTICE: IMPLEMENTATION ARMED]" });
+  });
+
+  it("forwards explicit authorization cancellation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi.spyOn(justice.getPlanBridge(), "handleImplementationArm");
+
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-implement", arguments: "--cancel", sessionID: "session-1" },
+      { parts: [] },
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("session-1", {
+      source: "command",
+      action: "cancel",
+    });
   });
 
   it("fails open for /justice-implement when lazy initialization leaves justice unavailable", async () => {
