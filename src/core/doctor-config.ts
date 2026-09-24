@@ -4,6 +4,12 @@
 // ファイル探索は src/runtime/doctor-cli.ts の責務であり、本モジュールは
 // 「設定ファイルの内容（文字列）→ specifier 抽出・診断コード」を担う。
 
+import {
+  assessControllerConfiguration,
+  PINNED_COMMAND_WORKFLOW_MAP,
+  type ControllerConfigurationAssessment,
+} from "./controller-routing";
+import { createControllerRoutingDecision } from "./routing-decision";
 export type ConfigSourceId =
   | "remote"
   | "global"
@@ -292,6 +298,35 @@ export function projectDoctorEffectiveConfig(resolvedConfig: unknown): DoctorEff
     kind: "available",
     view: { effectiveCategoryNames, effectiveCommandDefinitions },
   };
+}
+
+/**
+ * host-resolved projection（Task 1.2）から4件の pinned command の
+ * controller configuration 評価（Task 4.1CA）を純粋に導出する。
+ *
+ * 評価へ渡すのは effectiveConfigAvailable と正規化済みの
+ * DoctorEffectiveCommandDefinition のみであり、生の resolved config や
+ * ローカルソース走査（SourceScanResult）は一切消費しない。
+ * host 結果が unsupported の場合、全 pinned command は
+ * unsupported / effective_config_unsupported と評価され、ローカルソースに
+ * 完全な設定があっても configured にはならない。
+ */
+export function assessDoctorControllerConfiguration(
+  effectiveConfig: DoctorEffectiveConfigResult,
+): readonly ControllerConfigurationAssessment[] {
+  const available = effectiveConfig.kind === "available";
+  const view = available ? effectiveConfig.view : undefined;
+
+  return Array.from(
+    PINNED_COMMAND_WORKFLOW_MAP.entries(),
+    ([pinnedCommand, workflow]) =>
+      assessControllerConfiguration({
+        decision: createControllerRoutingDecision(workflow, "workflow_rule"),
+        pinnedCommand,
+        effectiveConfigAvailable: available,
+        effectiveDefinition: view?.effectiveCommandDefinitions.get(pinnedCommand),
+      }),
+  );
 }
 
 export function scanConfigContent(source: ConfigSourceId, content: string): SourceScanResult {

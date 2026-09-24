@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { ALL_SP_CATEGORIES, checkSpCategoryPresence } from "../../src/core/doctor-categories";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ALL_SP_CATEGORIES,
+  DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS,
+  checkSpCategoryPresence,
+  formatControllerRemediationLines,
+} from "../../src/core/doctor-categories";
 import { projectDoctorEffectiveConfig } from "../../src/core/doctor-config";
 import { scanConfigContent } from "../../src/core/doctor-config";
+import {
+  PINNED_COMMAND_WORKFLOW_MAP,
+  WORKFLOW_DESIRED_CONTROLLERS,
+} from "../../src/core/workflow-router";
 
 describe("checkSpCategoryPresence()", () => {
   it("reports exactly the missing required categories from a resolved host snapshot", () => {
@@ -53,5 +62,66 @@ describe("checkSpCategoryPresence()", () => {
         "sp-architecture",
       ],
     });
+  });
+});
+
+describe("DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS", () => {
+  it("exposes exactly the four pinned commands with their desired controllers in order", () => {
+    expect(DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS).toEqual([
+      { pinnedCommand: "justice-implement-brainstorming", desiredController: "sisyphus" },
+      { pinnedCommand: "justice-implement-writing-plans", desiredController: "sisyphus" },
+      {
+        pinnedCommand: "justice-implement-subagent-driven-development",
+        desiredController: "atlas",
+      },
+      { pinnedCommand: "justice-implement-executing-plans", desiredController: "sisyphus" },
+    ]);
+  });
+
+  it("is derived from the controller-routing SSOT maps without local duplication", () => {
+    expect(DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS.map((e) => e.pinnedCommand)).toEqual([
+      ...PINNED_COMMAND_WORKFLOW_MAP.keys(),
+    ]);
+    for (const expectation of DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS) {
+      const workflow = PINNED_COMMAND_WORKFLOW_MAP.get(expectation.pinnedCommand);
+      if (workflow === undefined) throw new Error("missing workflow mapping");
+      expect(WORKFLOW_DESIRED_CONTROLLERS.get(workflow)).toBe(expectation.desiredController);
+    }
+  });
+
+  it("fails fast when a pinned workflow has no desired controller", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/core/workflow-router", () => ({
+      PINNED_COMMAND_WORKFLOW_MAP: new Map([
+        ["justice-implement-brainstorming", "brainstorming"],
+      ]),
+      WORKFLOW_DESIRED_CONTROLLERS: new Map(),
+    }));
+    try {
+      await expect(import("../../src/core/doctor-categories")).rejects.toThrow(
+        "No desired controller for workflow: brainstorming",
+      );
+    } finally {
+      vi.doUnmock("../../src/core/workflow-router");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("formatControllerRemediationLines()", () => {
+  it("emits the exact four-command template lines with only agent assignments", () => {
+    expect(formatControllerRemediationLines()).toEqual([
+      `    "justice-implement-brainstorming": { "agent": "sisyphus" }`,
+      `    "justice-implement-writing-plans": { "agent": "sisyphus" }`,
+      `    "justice-implement-subagent-driven-development": { "agent": "atlas" }`,
+      `    "justice-implement-executing-plans": { "agent": "sisyphus" }`,
+    ]);
+  });
+
+  it("never carries command bodies, provider options, or credentials", () => {
+    const rendered = JSON.stringify(formatControllerRemediationLines());
+    expect(rendered).not.toContain("template");
+    expect(rendered).not.toContain("model");
+    expect(rendered).not.toContain("apiKey");
   });
 });

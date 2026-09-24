@@ -2,7 +2,7 @@
 
 > Superpowers と oh-my-openagent を繋ぐ神経系プラグイン。
 
-![Tests](https://img.shields.io/badge/tests-1469%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2193%20passing-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)
 ![Bun](https://img.shields.io/badge/runtime-Bun-black)
 
@@ -493,6 +493,13 @@ bunx @yohi/justice doctor
 Justice エントリは部分文字列では判定しません。パッケージ specifier は version / subpath を除いた base name が `justice` または `justice-` で始まる場合だけ、絶対パス entry はパス segment が `justice` または `justice-` で始まる場合だけ検出します。したがって `injustice-report` や `no-justice-helper` は検出対象外です。
 
 v3.0.0 未満では root specifier の配布エントリがプラグイン契約に適合せずロードに失敗する問題がありました。root specifier を利用する場合は v3.0.0 以降へ更新してください。
+
+**controller configuration 診断（v4.0.0）**: サポート対象ホスト（OpenCode `1.18.29`）では `opencode debug config` で解決した実効設定（host-resolved snapshot）を authority として、必須 `sp-*` category の有無に加えて、4つの pinned command（`justice-implement-brainstorming` / `justice-implement-writing-plans` / `justice-implement-subagent-driven-development` / `justice-implement-executing-plans`）の `agent` が desired controller（`sisyphus` / `atlas`）と exact 一致するかを診断します。結果はコマンド単位で `configured` / `missing` / `misconfigured` / `unsupported` として表示され、未設定・不一致時には4件すべての修復テンプレート（`command.<name>.agent`）を出力します。
+
+- **`configured != applied`**: doctor の `configured` は設定上の exact 一致を示すだけで、実行時にその controller への委譲が適用・観測されたことを意味しません。
+- **`local source scan != configured authority`**: 設定ファイルのローカル走査（`SOURCE_PRIORITY` スキャン）は非 authority の修復ヒントとしてのみ表示されます。controller 設定の authority は常に host-resolved snapshot であり、ホスト検証や resolved config 取得が unavailable / failed / timeout / unparseable / context-unverified の場合は `unsupported` となり、ローカル設定に完全な4件があっても `configured` にはなりません。
+- **advisory**: controller 設定の findings（missing / misconfigured）は L0 advisory であり終了コードに影響しません。host-resolved config の `unsupported` は従来どおり非ゼロ終了となります。
+- **redaction**: 診断には pinned command 名・診断状態・（`agent_invalid` 時の）設定済み agent 名・desired controller 以外の設定値（コマンド本文、provider option、認証情報、無関係の設定値）は含まれず、secret は最終出力時に redact されます。`opencode debug config` の生の stdout/stderr は決して出力されません。
 
 - **全ツール・メッセージ観測**: `tool.execute.*` / `message.*` イベントを `.justice/events/<agentId>/<sessionId>/<writerId>.jsonl` へ追記専用（append-only）で記録します。テスト実行結果・lint/build 出力・レビュー指摘などが対象です（コード本文やチャット全文は保持しません）。
 - **品質ゲート (`.justice/gate.yaml`)**: タスク完了時（`task_complete`）およびツール実行観測時（`tool_observed`）に、テスト・ビルド・未解決レビュー指摘を判定します。既定は3種の gate（`required-tests` / `build-green` / `review-clean`）で、それぞれテスト合格・ビルド合格・未解決レビュー指摘の不存在を判定し、すべて `warn`（advisory）始まりです。lint は既定 gate には含まれず、プロジェクトの `.justice/gate.yaml` でカスタム gate を追加した場合のみ対象となります。既定 gate を上書き・無効化（`enabled: false`）することもできます。

@@ -16,12 +16,18 @@ import {
   scanConfigContent,
   scanUnreadableSource,
   isJusticeSpecifier,
+  assessDoctorControllerConfiguration,
   type ConfigSourceId,
   type DoctorEffectiveConfigResult,
   type DoctorEffectiveConfigUnsupportedReason,
   type SourceScanResult,
 } from "../core/doctor-config";
-import { ALL_SP_CATEGORIES, checkSpCategoryPresence } from "../core/doctor-categories";
+import {
+  ALL_SP_CATEGORIES,
+  checkSpCategoryPresence,
+  formatControllerRemediationLines,
+} from "../core/doctor-categories";
+import type { ControllerConfigurationAssessment } from "../core/controller-routing";
 import {
   formatConfigDiagnostics,
   formatLogScanLines,
@@ -326,6 +332,27 @@ async function checkGateYaml(deps: DoctorDeps, lines: string[]): Promise<string>
   return `  .justice/gate.yaml: 有効（実効 gate: ${gateIds.join(", ")}）`;
 }
 
+/**
+ * controller configuration 評価1件を doctor の診断行へ整形する。
+ * 出力するのは pinned command 名・状態・理由・（許容される場合のみ）設定済み agent 名と
+ * desired controller のみであり、コマンド本文や生の設定値は含まない。
+ */
+export function formatControllerAssessmentLine(assessment: ControllerConfigurationAssessment): string {
+  const desiredNote = `期待 agent: ${assessment.desiredController}`;
+  switch (assessment.status) {
+    case "configured":
+      return `  ✓ ${assessment.pinnedCommand}: configured (agent: ${assessment.configuredController ?? "unknown"})`;
+    case "missing":
+      return `  ✗ ${assessment.pinnedCommand}: missing (${assessment.reason} / ${desiredNote})`;
+    case "misconfigured":
+      return assessment.reason === "agent_invalid"
+        ? `  ✗ ${assessment.pinnedCommand}: misconfigured (${assessment.reason} / 設定値: ${assessment.configuredController ?? "unknown"} / ${desiredNote})`
+        : `  ✗ ${assessment.pinnedCommand}: misconfigured (${assessment.reason} / ${desiredNote})`;
+    case "unsupported":
+      return `  ✗ ${assessment.pinnedCommand}: unsupported (${assessment.reason} / ${desiredNote})`;
+  }
+}
+
 export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const detector = new SecretPatternDetector();
   const lines: string[] = [];
@@ -360,6 +387,21 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       failed = true;
       lines.push(`  ✗ 必須 sp-* category 不足: ${categoryPresence.missing.join(", ")}`);
     }
+  }
+
+  // 検査 2b: 4件の pinned command の controller configuration（Task 4.1CA 評価の接続）
+  // L0 advisory: findings は終了コードに影響しない（host unsupported の失敗は既存の検査 2 が担う）。
+  const controllerAssessments = assessDoctorControllerConfiguration(effectiveConfig);
+  lines.push(...controllerAssessments.map(formatControllerAssessmentLine));
+  if (controllerAssessments.some((assessment) => assessment.status !== "configured")) {
+    lines.push(
+      "  ! 4件の pinned command の修復テンプレート（command.agent を exact 一致で設定・configured != applied）:",
+      ...formatControllerRemediationLines(),
+    );
+  } else {
+    lines.push(
+      `  ✓ pinned command の controller 設定: ${controllerAssessments.length}件すべて configured（configured != applied）`,
+    );
   }
 
   // 検査 3: specifier 解決とローダ契約判定

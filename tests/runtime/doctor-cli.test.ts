@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDoctorHostCommandRunner,
   createDoctorHostConfigReader,
+  formatControllerAssessmentLine,
   resolveCacheRoot,
   runDoctor,
   runStatus,
@@ -11,7 +12,13 @@ import {
   type DoctorHostProcess,
   type DoctorDeps,
 } from "../../src/runtime/doctor-cli";
-import { isJusticeSpecifier } from "../../src/core/doctor-config";
+import type { ControllerConfigurationAssessment } from "../../src/core/controller-routing";
+import { ALL_SP_CATEGORIES } from "../../src/core/doctor-categories";
+import {
+  isJusticeSpecifier,
+  projectDoctorEffectiveConfig,
+  type DoctorEffectiveCommandDefinition,
+} from "../../src/core/doctor-config";
 import {
   formatConfigDiagnostics,
   formatContractResult,
@@ -55,6 +62,15 @@ function mockReader(files: Record<string, string>): FileReader {
   };
 }
 
+function allFourConfiguredCommands(): ReadonlyMap<string, DoctorEffectiveCommandDefinition> {
+  return new Map<string, DoctorEffectiveCommandDefinition>([
+    ["justice-implement-brainstorming", { kind: "valid", agent: "sisyphus" }],
+    ["justice-implement-writing-plans", { kind: "valid", agent: "sisyphus" }],
+    ["justice-implement-subagent-driven-development", { kind: "valid", agent: "atlas" }],
+    ["justice-implement-executing-plans", { kind: "valid", agent: "sisyphus" }],
+  ]);
+}
+
 function baseDeps(overrides: Partial<DoctorDeps>): DoctorDeps {
   return {
     fileReader: mockReader({}),
@@ -69,16 +85,8 @@ function baseDeps(overrides: Partial<DoctorDeps>): DoctorDeps {
     hostConfigReader: async () => ({
       kind: "available",
       view: {
-        effectiveCategoryNames: [
-          "sp-mechanical",
-          "sp-implementation",
-          "sp-integration",
-          "sp-review",
-          "sp-final-review",
-          "sp-deep",
-          "sp-architecture",
-        ],
-        effectiveCommandDefinitions: new Map(),
+        effectiveCategoryNames: ALL_SP_CATEGORIES,
+        effectiveCommandDefinitions: allFourConfiguredCommands(),
       },
     }),
     ...overrides,
@@ -301,6 +309,29 @@ describe("runDoctor()", () => {
       }),
     );
     expect(result.text).not.toContain(token);
+  });
+
+  it("redacts mixed-case credential pairs and uppercase environment values", async () => {
+    const configuredCredential = "apiKey=lowercase-value API_KEY=UPPERCASE_VALUE";
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "available",
+          view: {
+            effectiveCategoryNames: ALL_SP_CATEGORIES,
+            effectiveCommandDefinitions: new Map([
+              ["justice-implement-brainstorming", { kind: "valid", agent: configuredCredential }],
+              ["justice-implement-writing-plans", { kind: "valid", agent: "sisyphus" }],
+              ["justice-implement-subagent-driven-development", { kind: "valid", agent: "atlas" }],
+              ["justice-implement-executing-plans", { kind: "valid", agent: "sisyphus" }],
+            ]),
+          },
+        }),
+      }),
+    );
+
+    expect(result.text).not.toContain("lowercase-value");
+    expect(result.text).not.toContain("UPPERCASE_VALUE");
   });
 
   it("covers configCandidates enumeration paths", async () => {
@@ -641,5 +672,220 @@ describe("resolveCacheRoot()", () => {
 
   it("falls back to ~/.cache when XDG_CACHE_HOME is undefined", () => {
     expect(resolveCacheRoot({}, "/home/user")).toBe("/home/user/.cache/opencode");
+  });
+});
+
+const UNSUPPORTED_REASONS = [
+  "resolved_config_command_unavailable",
+  "resolved_config_command_failed",
+  "resolved_config_host_version_unsupported",
+  "resolved_config_timeout",
+  "resolved_config_invalid_json",
+  "resolved_config_context_unverified",
+  "resolved_config_shape_invalid",
+] as const;
+
+describe("runDoctor() controller configuration", () => {
+  it("formats incomplete controller assessments with safe fallback labels", () => {
+    const configuredWithoutAgent: ControllerConfigurationAssessment = {
+      workflow: "brainstorming",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-brainstorming",
+      status: "configured",
+    };
+    const misconfiguredWithoutAgent: ControllerConfigurationAssessment = {
+      workflow: "writing-plans",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-writing-plans",
+      status: "misconfigured",
+      reason: "agent_missing",
+    };
+
+    expect(formatControllerAssessmentLine(configuredWithoutAgent)).toContain("agent: unknown");
+    expect(formatControllerAssessmentLine(misconfiguredWithoutAgent)).not.toContain("設定値:");
+  });
+
+  it("reports all four pinned commands as configured for the exact host-resolved snapshot", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.text).toContain(
+      "  ✓ justice-implement-brainstorming: configured (agent: sisyphus)",
+    );
+    expect(result.text).toContain(
+      "  ✓ justice-implement-subagent-driven-development: configured (agent: atlas)",
+    );
+    expect(result.text).toContain("4件すべて configured");
+    expect(result.text).not.toContain("修復テンプレート");
+  });
+
+  it("reports missing pinned commands and emits the exact four-command remediation template", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        fileReader: mockReader(healthyFixture()),
+        importer: async () => ({ default: async () => ({}) }),
+        hostConfigReader: async () => ({
+          kind: "available",
+          view: {
+            effectiveCategoryNames: ALL_SP_CATEGORIES,
+            effectiveCommandDefinitions: new Map(),
+          },
+        }),
+      }),
+    );
+
+    expect(result.text).toContain(
+      "  ✗ justice-implement-brainstorming: missing (command_missing / 期待 agent: sisyphus)",
+    );
+    expect(result.text).toContain(
+      "  ✗ justice-implement-executing-plans: missing (command_missing / 期待 agent: sisyphus)",
+    );
+    expect(result.text).toContain(
+      "  ! 4件の pinned command の修復テンプレート（command.agent を exact 一致で設定・configured != applied）:",
+    );
+    expect(result.text).toContain(
+      `    "justice-implement-subagent-driven-development": { "agent": "atlas" }`,
+    );
+    // controller 設定の findings は L0 advisory であり、host unsupported 以外は終了コードに影響しない。
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("reports misconfigured agents, naming the configured agent only where allowed", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "available",
+          view: {
+            effectiveCategoryNames: ALL_SP_CATEGORIES,
+            effectiveCommandDefinitions: new Map<string, DoctorEffectiveCommandDefinition>([
+              ["justice-implement-brainstorming", { kind: "valid", agent: "my-custom-agent" }],
+              ["justice-implement-writing-plans", { kind: "valid" }],
+              ["justice-implement-subagent-driven-development", { kind: "invalid" }],
+              ["justice-implement-executing-plans", { kind: "valid", agent: "sisyphus" }],
+            ]),
+          },
+        }),
+      }),
+    );
+
+    expect(result.text).toContain(
+      "  ✗ justice-implement-brainstorming: misconfigured (agent_invalid / 設定値: my-custom-agent / 期待 agent: sisyphus)",
+    );
+    expect(result.text).toContain(
+      "  ✗ justice-implement-writing-plans: misconfigured (agent_missing / 期待 agent: sisyphus)",
+    );
+    expect(result.text).toContain(
+      "  ✗ justice-implement-subagent-driven-development: misconfigured (invalid_command_definition / 期待 agent: atlas)",
+    );
+    expect(result.text).toContain(
+      "  ✓ justice-implement-executing-plans: configured (agent: sisyphus)",
+    );
+  });
+
+  it.each(UNSUPPORTED_REASONS)(
+    "keeps every pinned command unsupported when the host result is unsupported (%s)",
+    async (reason) => {
+      const result = await runDoctor(
+        baseDeps({ hostConfigReader: async () => ({ kind: "unsupported", reason }) }),
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.text).toContain(`host-resolved config unsupported: ${reason}`);
+      expect(result.text).toContain(
+        "  ✗ justice-implement-brainstorming: unsupported (effective_config_unsupported / 期待 agent: sisyphus)",
+      );
+      expect(result.text).toContain("修復テンプレート");
+      expect(result.text).not.toContain("configured (agent:");
+      expect(result.text).not.toContain("4件すべて configured");
+    },
+  );
+
+  it("does not let a local config source with the exact four pairs emit configured controller output when the host is unsupported", async () => {
+    const localConfig = "/proj/opencode.json";
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "unsupported",
+          reason: "resolved_config_host_version_unsupported",
+        }),
+        fileReader: mockReader({
+          ...healthyFixture(),
+          [localConfig]: JSON.stringify({
+            plugin: ["@yohi/justice@3.0.0"],
+            command: {
+              "justice-implement-brainstorming": { agent: "sisyphus" },
+              "justice-implement-writing-plans": { agent: "sisyphus" },
+              "justice-implement-subagent-driven-development": { agent: "atlas" },
+              "justice-implement-executing-plans": { agent: "sisyphus" },
+            },
+          }),
+        }),
+        importer: async () => ({ default: async () => ({}) }),
+      }),
+    );
+
+    expect(result.text).toContain("resolved_config_host_version_unsupported");
+    expect(result.text).toContain(
+      "unsupported (effective_config_unsupported / 期待 agent:",
+    );
+    expect(result.text).not.toContain("✓ justice-implement-");
+    expect(result.text).not.toContain("4件すべて configured");
+  });
+
+  it("never emits raw command bodies, provider options, credentials, or unrelated config values from the host snapshot", async () => {
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () =>
+          projectDoctorEffectiveConfig({
+            category: Object.fromEntries(
+              ALL_SP_CATEGORIES.map((name) => [
+                name,
+                { model: "provider/model-x", secret: "do-not-leak" },
+              ]),
+            ),
+            command: {
+              "justice-implement-brainstorming": {
+                agent: "sisyphus",
+                template: "do-not-leak-body",
+              },
+              "justice-implement-writing-plans": { agent: "sisyphus" },
+              "justice-implement-subagent-driven-development": { agent: "atlas" },
+              "justice-implement-executing-plans": { agent: "sisyphus" },
+            },
+            provider: { apiKey: "sk-do-not-leak" },
+          }),
+      }),
+    );
+
+    expect(result.text).not.toContain("do-not-leak");
+    expect(result.text).not.toContain("provider/model-x");
+    // runtime routing / observation mechanisms are out of scope for the doctor path
+    expect(result.text).not.toContain("command.execute.before");
+    expect(result.text).not.toContain("chat.params");
+    expect(result.text).not.toContain("message.updated");
+    expect(result.text).not.toContain("command.executed");
+    expect(result.text).not.toContain("controller_routing_observed");
+  });
+
+  it("surfaces a host version mismatch through the real reader as unsupported with the remediation template", async () => {
+    const runner: DoctorHostCommandRunner = async (args) =>
+      args[1] === "--version"
+        ? commandResult({ stdout: "1.18.28\n" })
+        : commandResult({ stdout: "{}" });
+    const result = await runDoctor(
+      baseDeps({ hostConfigReader: createDoctorHostConfigReader(runner) }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("resolved_config_host_version_unsupported");
+    expect(result.text).toContain(
+      "unsupported (effective_config_unsupported / 期待 agent: sisyphus)",
+    );
+    expect(result.text).toContain("修復テンプレート");
   });
 });
