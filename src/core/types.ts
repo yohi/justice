@@ -332,6 +332,31 @@ export type TaskCategory =
 
 export type ControllerAgent = "sisyphus" | "atlas" | "oracle" | "momus" | "hephaestus";
 
+/** controller routing の対象となる4つのワークフロー（exact 一致のみ） */
+export type ControllerWorkflow =
+  | "brainstorming"
+  | "writing-plans"
+  | "subagent-driven-development"
+  | "executing-plans";
+
+/** controller configuration assurance が検査対象とする4つの pinned command（exact 一致のみ） */
+export type ControllerPinnedCommand =
+  | "justice-implement-brainstorming"
+  | "justice-implement-writing-plans"
+  | "justice-implement-subagent-driven-development"
+  | "justice-implement-executing-plans";
+
+/**
+ * 期待されるコントローラ（desired controller）のルーティング決定。
+ * `configured != runtime applied` — 実行への適用や実際のコントローラの観測を意味しない。
+ */
+export type ControllerRoutingDecision = {
+  readonly kind: "controller";
+  readonly workflow: ControllerWorkflow;
+  readonly controller: ControllerAgent;
+  readonly reason: RoutingReason;
+};
+
 export type ExecutionRole =
   | "mechanical"
   | "implementation"
@@ -359,11 +384,7 @@ export type RoutingReason =
   | "compatibility_fallback";
 
 export type RoutingDecision =
-  | {
-      readonly kind: "controller";
-      readonly controller: ControllerAgent;
-      readonly reason: RoutingReason;
-    }
+  | ControllerRoutingDecision
   | {
       readonly kind: "worker";
       readonly executionRole: ExecutionRole;

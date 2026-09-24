@@ -1,7 +1,7 @@
 # Semantic Control Plane Implementation Plan
 
 > **PLAN STATUS: FINALIZED / NOT SELF-AUTHORIZING**
-> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents. Task 4.1CA is PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is separately authorized, implemented, and accepted and the Task 1.2 host-resolved config provider is implemented and accepted. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes are procedural templates, not execution authority.
+> For agentic workers: this document is the accepted implementation plan, but it does not itself authorize source / test edits. Execute only a task that receives separate explicit implementation authorization. Do not dispatch subagents unless the user explicitly overrides this restriction for a named task. Task 4.1CA received separate authorization and its Steps 1–4 are implemented and reviewed; Step 5 commit is pending. Task 4.2CA remains NOT EXECUTABLE until Task 4.1CA is committed and accepted and the Task 1.2 host-resolved config provider is implemented and accepted, and requires its own separate authorization. Task 4.1G/4.2G and historical Task 4.1/4.2 remain excluded. Checkboxes record progress and do not authorize other tasks.
 
 **Goal:** Implement the Justice v4.0.0 Semantic Control Plane for JUS-P0-01 through JUS-P0-04 with durable, attempt-scoped authorization, review, gate, and acceptance state.
 
@@ -19408,9 +19408,9 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 
 ### Task 4.1CA: Define the pure controller configuration assurance contract
 
-> **STATUS: PLANNED / NOT EXECUTABLE / IMPLEMENTATION AUTHORIZATION NOT GRANTED**
+> **STATUS: IMPLEMENTED / REVIEWED / COMMIT PENDING**
 >
-> This replacement task is the finalized v4.0.0 pure configuration-assurance implementation contract, but its source/test implementation is intentionally absent from this documentation-only branch. A separate explicit implementation authorization is required before any step below may modify source or tests. It creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. The procedural checkboxes below are an implementation recipe, not execution authority.
+> Implementation authorization was explicitly granted for Task 4.1CA only. Steps 1–4 are implemented and reviewed; Step 5 (commit) is pending explicit commit approval. This task creates no runtime invocation, message, event, terminal-envelope, or observation-persistence contract. Checkboxes record execution progress and do not authorize other tasks.
 
 **Requirement:** JUS-P0-01-01 through JUS-P0-01-05, Design §3.1, §3.2, §4.1, §5.1, INV-01, INV-26, INV-27.
 
@@ -19431,7 +19431,7 @@ GIT_MASTER=1 git commit -m "docs: verify controller routing failure lifecycle"
 and a redacted reason; it contains no `routingStatus`, `executionOutcome`, actual controller, terminal envelope, or
 session/message/event identity.
 
-- [ ] **Step 1: Write failing pure-domain tests**
+- [x] **Step 1: Write failing pure-domain tests**
 
   - Cover all four workflow-to-controller mappings and all four exact pinned-command mappings.
   - Cover `configured`, missing command -> `missing`, wrong agent -> `misconfigured`, missing agent ->
@@ -19447,7 +19447,7 @@ session/message/event identity.
   - Assert `configured` has no runtime-applied field or semantic implication and that the assessment accepts no
     session, message, event, or execution state.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 ```bash
 devcontainer exec --workspace-folder . bun run vitest run \
@@ -19458,7 +19458,7 @@ devcontainer exec --workspace-folder . bun run vitest run \
 Expected: behavioral/type-contract failures because the exact command expectation and configuration-only assessment
 do not exist. Broken fixtures or runtime-host probing are not acceptable RED evidence.
 
-- [ ] **Step 3: Implement the minimal pure contract**
+- [x] **Step 3: Implement the minimal pure contract**
 
   1. Preserve controller-versus-worker decision separation and make the controller decision explicitly a desired
      controller decision.
@@ -19468,7 +19468,7 @@ do not exist. Broken fixtures or runtime-host probing are not acceptable RED evi
      can deterministically be classified as `misconfigured`.
   5. Do not add session state, message state, event hooks, terminal envelopes, runtime observations, or persistence.
 
-- [ ] **Step 4: Run the Step 2 command and confirm GREEN**
+- [x] **Step 4: Run the Step 2 command and confirm GREEN**
 
 Expected: all mapping and configuration status tests pass, with `configured != runtime applied` represented in the
 type and behavior contract.
