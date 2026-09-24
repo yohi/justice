@@ -311,6 +311,29 @@ describe("runDoctor()", () => {
     expect(result.text).not.toContain(token);
   });
 
+  it("redacts mixed-case credential pairs and uppercase environment values", async () => {
+    const configuredCredential = "apiKey=lowercase-value API_KEY=UPPERCASE_VALUE";
+    const result = await runDoctor(
+      baseDeps({
+        hostConfigReader: async () => ({
+          kind: "available",
+          view: {
+            effectiveCategoryNames: ALL_SP_CATEGORIES,
+            effectiveCommandDefinitions: new Map([
+              ["justice-implement-brainstorming", { kind: "valid", agent: configuredCredential }],
+              ["justice-implement-writing-plans", { kind: "valid", agent: "sisyphus" }],
+              ["justice-implement-subagent-driven-development", { kind: "valid", agent: "atlas" }],
+              ["justice-implement-executing-plans", { kind: "valid", agent: "sisyphus" }],
+            ]),
+          },
+        }),
+      }),
+    );
+
+    expect(result.text).not.toContain("lowercase-value");
+    expect(result.text).not.toContain("UPPERCASE_VALUE");
+  });
+
   it("covers configCandidates enumeration paths", async () => {
     const result = await runDoctor(
       baseDeps({
