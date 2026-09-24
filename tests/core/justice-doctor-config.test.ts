@@ -1,6 +1,8 @@
 // tests/core/justice-doctor-config.test.ts
 import { describe, expect, it } from "vitest";
+import type { ControllerConfigurationAssessment } from "../../src/core/controller-routing";
 import {
+  assessDoctorControllerConfiguration,
   isJusticeSpecifier,
   mergeSourceScans,
   parseJsonc,
@@ -10,6 +12,7 @@ import {
   stripComments,
   type SourceScanResult,
 } from "../../src/core/doctor-config";
+import type { ControllerPinnedCommand } from "../../src/core/types";
 
 describe("parseJsonc()", () => {
   it("parses JSONC with line/block comments and trailing commas", () => {
@@ -407,6 +410,194 @@ describe("scanUnreadableSource()", () => {
     );
     expect(result.diagnostics).toEqual([
       { code: "unsupported_config_source", source: "env_config_content" },
+    ]);
+  });
+});
+
+describe("assessDoctorControllerConfiguration()", () => {
+  const findAssessment = (
+    assessments: readonly ControllerConfigurationAssessment[],
+    pinnedCommand: ControllerPinnedCommand,
+  ): ControllerConfigurationAssessment => {
+    const found = assessments.find((assessment) => assessment.pinnedCommand === pinnedCommand);
+    if (found === undefined) throw new Error(`assessment not found: ${pinnedCommand}`);
+    return found;
+  };
+
+  const exactFourSnapshot = {
+    category: {},
+    command: {
+      "justice-implement-brainstorming": { agent: "sisyphus", template: "do-not-copy" },
+      "justice-implement-writing-plans": { agent: "sisyphus" },
+      "justice-implement-subagent-driven-development": { agent: "atlas" },
+      "justice-implement-executing-plans": { agent: "sisyphus" },
+    },
+  } as const;
+
+  it("assesses all four exact expected command/agent pairs as configured from an injected host-resolved snapshot", () => {
+    const result = assessDoctorControllerConfiguration(
+      projectDoctorEffectiveConfig(exactFourSnapshot),
+    );
+
+    expect(result).toEqual([
+      {
+        workflow: "brainstorming",
+        desiredController: "sisyphus",
+        pinnedCommand: "justice-implement-brainstorming",
+        configuredController: "sisyphus",
+        status: "configured",
+      },
+      {
+        workflow: "writing-plans",
+        desiredController: "sisyphus",
+        pinnedCommand: "justice-implement-writing-plans",
+        configuredController: "sisyphus",
+        status: "configured",
+      },
+      {
+        workflow: "subagent-driven-development",
+        desiredController: "atlas",
+        pinnedCommand: "justice-implement-subagent-driven-development",
+        configuredController: "atlas",
+        status: "configured",
+      },
+      {
+        workflow: "executing-plans",
+        desiredController: "sisyphus",
+        pinnedCommand: "justice-implement-executing-plans",
+        configuredController: "sisyphus",
+        status: "configured",
+      },
+    ]);
+  });
+
+  it("reports a snapshot-available pinned command without a definition as missing", () => {
+    const result = assessDoctorControllerConfiguration(
+      projectDoctorEffectiveConfig({
+        category: {},
+        command: {
+          "justice-implement-brainstorming": { agent: "sisyphus" },
+          "justice-implement-writing-plans": { agent: "sisyphus" },
+          "justice-implement-subagent-driven-development": { agent: "atlas" },
+        },
+      }),
+    );
+
+    expect(findAssessment(result, "justice-implement-executing-plans")).toEqual({
+      workflow: "executing-plans",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-executing-plans",
+      status: "missing",
+      reason: "command_missing",
+    });
+  });
+
+  it.each([
+    ["recognized but wrong agent", { agent: "oracle" }, "oracle"],
+    ["unrecognized custom agent", { agent: "my-custom-agent" }, "my-custom-agent"],
+  ] as const)(
+    "reports a snapshot-available %s as misconfigured/agent_invalid",
+    (_label, definition, configuredAgent) => {
+      const result = assessDoctorControllerConfiguration(
+        projectDoctorEffectiveConfig({
+          category: {},
+          command: { "justice-implement-brainstorming": definition },
+        }),
+      );
+
+      expect(findAssessment(result, "justice-implement-brainstorming")).toEqual({
+        workflow: "brainstorming",
+        desiredController: "sisyphus",
+        pinnedCommand: "justice-implement-brainstorming",
+        configuredController: configuredAgent,
+        status: "misconfigured",
+        reason: "agent_invalid",
+      });
+    },
+  );
+
+  it("reports a snapshot-available definition without an agent as misconfigured/agent_missing", () => {
+    const result = assessDoctorControllerConfiguration(
+      projectDoctorEffectiveConfig({
+        category: {},
+        command: { "justice-implement-writing-plans": { template: "do-not-copy" } },
+      }),
+    );
+
+    expect(findAssessment(result, "justice-implement-writing-plans")).toEqual({
+      workflow: "writing-plans",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-writing-plans",
+      status: "misconfigured",
+      reason: "agent_missing",
+    });
+  });
+
+  it("reports a snapshot-available non-string agent as misconfigured/invalid_command_definition", () => {
+    const result = assessDoctorControllerConfiguration(
+      projectDoctorEffectiveConfig({
+        category: {},
+        command: { "justice-implement-writing-plans": { agent: 42 } },
+      }),
+    );
+
+    expect(findAssessment(result, "justice-implement-writing-plans")).toEqual({
+      workflow: "writing-plans",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-writing-plans",
+      status: "misconfigured",
+      reason: "invalid_command_definition",
+    });
+  });
+
+  it.each([
+    "resolved_config_command_unavailable",
+    "resolved_config_command_failed",
+    "resolved_config_host_version_unsupported",
+    "resolved_config_timeout",
+    "resolved_config_invalid_json",
+    "resolved_config_context_unverified",
+    "resolved_config_shape_invalid",
+  ] as const)(
+    "yields unsupported for every pinned command when the host result is unsupported (%s)",
+    (reason) => {
+      const result = assessDoctorControllerConfiguration({ kind: "unsupported", reason });
+
+      expect(result).toHaveLength(4);
+      for (const assessment of result) {
+        expect(assessment.status).toBe("unsupported");
+        expect(assessment.reason).toBe("effective_config_unsupported");
+        expect(assessment.configuredController).toBeUndefined();
+      }
+    },
+  );
+
+  it("does not let a local config source with the exact four pairs convert an unsupported host result into configured", () => {
+    const localScan = scanConfigContent(
+      "project",
+      JSON.stringify({ command: exactFourSnapshot.command }),
+    );
+    const result = assessDoctorControllerConfiguration({
+      kind: "unsupported",
+      reason: "resolved_config_host_version_unsupported",
+    });
+
+    // The local scan is advisory-only: no API converts SourceScanResult into assessments.
+    expect(localScan.readable).toBe(true);
+    expect(result.some((assessment) => assessment.status === "configured")).toBe(false);
+    expect(
+      result.every((assessment) => assessment.reason === "effective_config_unsupported"),
+    ).toBe(true);
+  });
+
+  it("assesses exactly the four pinned commands of the controller-routing SSOT", () => {
+    const result = assessDoctorControllerConfiguration(projectDoctorEffectiveConfig({}));
+
+    expect(result.map((assessment) => assessment.pinnedCommand)).toEqual([
+      "justice-implement-brainstorming",
+      "justice-implement-writing-plans",
+      "justice-implement-subagent-driven-development",
+      "justice-implement-executing-plans",
     ]);
   });
 });

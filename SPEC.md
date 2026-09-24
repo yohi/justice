@@ -1055,6 +1055,36 @@ volumeModifier:   stepCount >= 5 で +1
 
 - `categoryModifier` の対象は `TaskCategory` 全種。`sp-*` category は `isTaskCategory` ガードにより modifier 0 として扱う（`SpCategory | TaskCategory` union への routing core 拡張への適合）。
 - `activeTask === undefined` の場合は従来どおり `MAX_RETRIES_BEFORE_ESCALATION` 環境変数をフォールバック値として使用する。
+
+### 5.27 doctor の controller configuration 診断 — host-resolved authority
+
+`justice doctor`（`src/runtime/doctor-cli.ts` 検査 2）は、host-resolved projection
+（`projectDoctorEffectiveConfig`、OpenCode `1.18.29` の `opencode debug config` が standalone authority。
+`client.config.get()` は同一インスタンス / workspace コンテキストが保証される場合の equivalent adapter）から、
+`assessDoctorControllerConfiguration(effectiveConfig)` を介して4件の pinned command の controller 設定を評価する
+（`src/core/doctor-config.ts` → Task 4.1CA `assessControllerConfiguration`）。
+
+- **評価対象（exact 4件のみ）**: `DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS`（`src/core/doctor-categories.ts`）が
+  `PINNED_COMMAND_WORKFLOW_MAP` / `WORKFLOW_DESIRED_CONTROLLERS` の SSOT から導出する
+  `justice-implement-brainstorming → sisyphus` / `justice-implement-writing-plans → sisyphus` /
+  `justice-implement-subagent-driven-development → atlas` / `justice-implement-executing-plans → sisyphus`。
+- **評価への入力**: `effectiveConfigAvailable` と正規化済み `DoctorEffectiveCommandDefinition` のみ。
+  `DoctorCommandDefinitionDiagnostic`、ローカルスキャン diagnostics、生の resolved config は渡さない。
+- **状態**: コマンド単位で `configured` / `missing`（`command_missing`）/ `misconfigured`
+  （`invalid_command_definition` / `agent_missing` / `agent_invalid`）/ `unsupported`（`effective_config_unsupported`）。
+  ホスト検証・resolved config 取得が unavailable / failed / timeout / unparseable / context-unverified /
+  shape-invalid の場合は全コマンドが `unsupported` となり、ローカルソース走査で補完しない。
+- **`configured != applied`**: `configured` は設定上の exact 一致を示すのみで、runtime への適用、
+  actual controller の帰属、terminal correlation を一切含まない（INV-26 / INV-27）。
+- **`local source scan != configured authority`**: `SOURCE_PRIORITY` によるローカル設定走査は
+  非 authority の修復ヒントであり、`unsupported` な host 結果を `configured` に変換しない。
+- **修復テンプレート**: `formatControllerRemediationLines()` が4件の `command.<name>.agent` 割当のみを
+  exact に出力する（コマンド本文・provider option・認証情報は含まない）。
+- **redaction と advisory**: 診断行は pinned command 名・状態・理由・desired controller、
+  および `agent_invalid` 時の設定済み agent 名のみを含み、`opencode debug config` の生の stdout/stderr や
+  無関係の設定値は出力されない（最終出力は `redactForPersistence` を経由）。controller 設定の findings は
+  L0 advisory であり終了コードに影響しない。host-resolved config の `unsupported` は従来どおり非ゼロ終了。
+  routing observation persistence（`controller_routing_observed` など）には一切関与しない。
 ---
 
 ## 6. ファイル I/O インターフェース (File I/O Interfaces)
