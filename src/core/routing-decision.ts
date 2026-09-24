@@ -1,11 +1,13 @@
 import type {
-  ControllerAgent,
+  ControllerRoutingDecision,
+  ControllerWorkflow,
   ExecutionRole,
   RoutingDecision,
   RoutingReason,
   SpCategory,
   TaskCategory,
 } from "./types";
+import { WORKFLOW_DESIRED_CONTROLLERS } from "./workflow-router";
 
 const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
   ExecutionRole,
@@ -20,11 +22,20 @@ const VALID_EXECUTION_ROLE_CATEGORIES: ReadonlyMap<
   ["architecture", new Set(["sp-architecture"])],
 ]);
 
+/**
+ * workflow から desired controller を解決する純粋ファクトリ。
+ * 4つの controller workflow の exact マッピングのみを受理し、
+ * 実行への適用（runtime applied）を意味するフィールドは持たない。
+ */
 export function createControllerRoutingDecision(
-  controller: ControllerAgent,
+  workflow: ControllerWorkflow,
   reason: RoutingReason,
-): RoutingDecision {
-  return { kind: "controller", controller, reason };
+): ControllerRoutingDecision {
+  const controller = WORKFLOW_DESIRED_CONTROLLERS.get(workflow);
+  if (controller === undefined) {
+    throw new Error(`Unknown controller workflow: ${workflow}`);
+  }
+  return { kind: "controller", workflow, controller, reason };
 }
 
 export function createWorkerRoutingDecision(
