@@ -337,7 +337,7 @@ async function checkGateYaml(deps: DoctorDeps, lines: string[]): Promise<string>
  * 出力するのは pinned command 名・状態・理由・（許容される場合のみ）設定済み agent 名と
  * desired controller のみであり、コマンド本文や生の設定値は含まない。
  */
-function formatControllerAssessmentLine(assessment: ControllerConfigurationAssessment): string {
+export function formatControllerAssessmentLine(assessment: ControllerConfigurationAssessment): string {
   const desiredNote = `期待 agent: ${assessment.desiredController}`;
   switch (assessment.status) {
     case "configured":

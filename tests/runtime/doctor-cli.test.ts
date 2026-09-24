@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDoctorHostCommandRunner,
   createDoctorHostConfigReader,
+  formatControllerAssessmentLine,
   resolveCacheRoot,
   runDoctor,
   runStatus,
@@ -11,6 +12,7 @@ import {
   type DoctorHostProcess,
   type DoctorDeps,
 } from "../../src/runtime/doctor-cli";
+import type { ControllerConfigurationAssessment } from "../../src/core/controller-routing";
 import { ALL_SP_CATEGORIES } from "../../src/core/doctor-categories";
 import {
   isJusticeSpecifier,
@@ -661,6 +663,25 @@ const UNSUPPORTED_REASONS = [
 ] as const;
 
 describe("runDoctor() controller configuration", () => {
+  it("formats incomplete controller assessments with safe fallback labels", () => {
+    const configuredWithoutAgent: ControllerConfigurationAssessment = {
+      workflow: "brainstorming",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-brainstorming",
+      status: "configured",
+    };
+    const misconfiguredWithoutAgent: ControllerConfigurationAssessment = {
+      workflow: "writing-plans",
+      desiredController: "sisyphus",
+      pinnedCommand: "justice-implement-writing-plans",
+      status: "misconfigured",
+      reason: "agent_missing",
+    };
+
+    expect(formatControllerAssessmentLine(configuredWithoutAgent)).toContain("agent: unknown");
+    expect(formatControllerAssessmentLine(misconfiguredWithoutAgent)).not.toContain("設定値:");
+  });
+
   it("reports all four pinned commands as configured for the exact host-resolved snapshot", async () => {
     const result = await runDoctor(
       baseDeps({

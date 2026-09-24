@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ALL_SP_CATEGORIES,
   DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS,
@@ -86,6 +86,24 @@ describe("DOCTOR_CONTROLLER_COMMAND_EXPECTATIONS", () => {
       const workflow = PINNED_COMMAND_WORKFLOW_MAP.get(expectation.pinnedCommand);
       if (workflow === undefined) throw new Error("missing workflow mapping");
       expect(WORKFLOW_DESIRED_CONTROLLERS.get(workflow)).toBe(expectation.desiredController);
+    }
+  });
+
+  it("fails fast when a pinned workflow has no desired controller", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/core/workflow-router", () => ({
+      PINNED_COMMAND_WORKFLOW_MAP: new Map([
+        ["justice-implement-brainstorming", "brainstorming"],
+      ]),
+      WORKFLOW_DESIRED_CONTROLLERS: new Map(),
+    }));
+    try {
+      await expect(import("../../src/core/doctor-categories")).rejects.toThrow(
+        "No desired controller for workflow: brainstorming",
+      );
+    } finally {
+      vi.doUnmock("../../src/core/workflow-router");
+      vi.resetModules();
     }
   });
 });
