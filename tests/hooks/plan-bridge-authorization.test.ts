@@ -70,6 +70,36 @@ describe("PlanBridge authorization restoration", () => {
     expect(hydrate).not.toHaveBeenCalled();
   });
 
+  it("keeps the active plan when releasing its authorization fails", async () => {
+    const { bridge, store } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      action: "approve",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    vi.spyOn(store, "release").mockResolvedValue({ kind: "failed" });
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect(bridge.getActivePlan("s1")).toBe("docs/plan.md");
+  });
+
+  it("keeps the active plan when authorization release throws", async () => {
+    const { bridge, store } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      action: "approve",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    vi.spyOn(store, "release").mockRejectedValue(new Error("release failed"));
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect(bridge.getActivePlan("s1")).toBe("docs/plan.md");
+  });
+
   it("fails closed when implementation arm is requested before wiring", async () => {
     const files = createMockFileSystem({ "docs/plan.md": plan });
     const bridge = new PlanBridge(files);
