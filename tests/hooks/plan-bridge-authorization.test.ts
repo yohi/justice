@@ -31,6 +31,23 @@ function createFixture() {
 }
 
 describe("PlanBridge authorization restoration", () => {
+  it("releases the active authorization after setting the same plan path again", async () => {
+    const { bridge, store } = createFixture();
+    const approved = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    expect(approved.armed).toBe(true);
+
+    bridge.setActivePlan("s1", "docs/plan.md");
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    const bindings = await store.hydrate();
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.status).toBe("released");
+  });
+
   it("releases authorization and rejects subsequent task authorization", async () => {
     const { bridge, store } = createFixture();
     const approveRequest = {

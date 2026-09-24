@@ -346,8 +346,8 @@ export class PlanBridge {
    * Validates the path using TriggerDetector to prevent path traversal.
    */
   setActivePlan(sessionId: string, planPath: string | null): void {
-    this.activeAuthorizationIds.delete(sessionId);
     if (!planPath) {
+      this.activeAuthorizationIds.delete(sessionId);
       this.activePlanPaths.delete(sessionId);
       this.implementationArmedSessions.delete(sessionId);
       return;
@@ -357,12 +357,14 @@ export class PlanBridge {
     const validatedRef = this.triggerDetector.detectPlanReference(planPath);
     if (validatedRef) {
       if (this.getActivePlan(sessionId) !== validatedRef.planPath) {
+        this.activeAuthorizationIds.delete(sessionId);
         this.implementationArmedSessions.delete(sessionId);
       }
       // Trust the validated and normalized path
       this.activePlanPaths.set(sessionId, validatedRef.planPath);
     } else {
       // If invalid, clear it to be safe
+      this.activeAuthorizationIds.delete(sessionId);
       this.activePlanPaths.delete(sessionId);
       this.implementationArmedSessions.delete(sessionId);
     }
