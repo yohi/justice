@@ -627,6 +627,9 @@ export class JusticePlugin {
         await this.reviewCompletionDomain
           .recoverStagedReviewCompletionsAfterRestart()
           .catch((error: unknown) => this.warnInitializationRecoveryFailure("staged completion", error));
+        await this.recoverPendingFinalizations().catch((error: unknown) =>
+          this.warnInitializationRecoveryFailure("finalization after staged completion", error),
+        );
         await this.reviewDispatchState
           .recoverReviewDispatchesAfterRestart()
           .catch((error: unknown) => this.warnInitializationRecoveryFailure("review dispatches", error));
@@ -765,6 +768,7 @@ export class JusticePlugin {
               event.payload.parentSessionId,
               event.payload.parentCallId,
             );
+            await this.recoverPendingFinalizations(event.payload.parentSessionId);
             return response;
           })
           .catch((err: unknown) => {
@@ -1127,41 +1131,43 @@ export class JusticePlugin {
     correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
   ): Promise<void> {
     try {
-      const records = await this.observationLogStore.readAll();
-      const acceptance = findCurrentAcceptanceDecision(records, correlation);
-      if (
-        acceptance.kind !== "found" ||
-        acceptance.decision.kind !== "task-acceptance" ||
-        acceptance.decision.verdict !== "accepted"
-      ) {
-        return;
-      }
-      // INV-19: an accepted decision replayed from an old released or
-      // invalidated authorization must not advance plan progress. The primary
-      // defense is Task 3.2 (no accepted decision after terminality); this
-      // guard keeps the updater honest even if such a record exists.
-      const binding = await this.authorizationStore.findByAuthorizationId(
-        correlation.taskExecutionRef.authorizationId,
-      );
-      if (
-        binding === null ||
-        binding.status !== "active" ||
-        !binding.canonicalSnapshot.tasks.some(
-          (candidate) => candidate.taskId === correlation.taskExecutionRef.taskId,
-        )
-      ) {
-        return;
-      }
-      const planPath = this.planBridge.getActivePlan(parentSessionId);
-      if (planPath === null || binding.planPath !== planPath) return;
-      const content = await this.fileReader.readFile(planPath);
-      const task = new PlanParser()
-        .parse(content)
-        .find((candidate) => candidate.id === correlation.taskExecutionRef.taskId);
-      if (task === undefined) return;
-      const result = updatePlanProgress(content, task, acceptance.decision);
-      if (!result.updated) return;
-      await this.fileWriter.writeFile(planPath, result.content);
+      await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
+        const records = await this.observationLogStore.readAll();
+        const acceptance = findCurrentAcceptanceDecision(records, correlation);
+        if (
+          acceptance.kind !== "found" ||
+          acceptance.decision.kind !== "task-acceptance" ||
+          acceptance.decision.verdict !== "accepted"
+        ) {
+          return;
+        }
+        // INV-19: an accepted decision replayed from an old released or
+        // invalidated authorization must not advance plan progress. The primary
+        // defense is Task 3.2 (no accepted decision after terminality); this
+        // guard keeps the updater honest even if such a record exists.
+        const binding = await this.authorizationStore.findByAuthorizationId(
+          correlation.taskExecutionRef.authorizationId,
+        );
+        if (
+          binding === null ||
+          binding.status !== "active" ||
+          !binding.canonicalSnapshot.tasks.some(
+            (candidate) => candidate.taskId === correlation.taskExecutionRef.taskId,
+          )
+        ) {
+          return;
+        }
+        const planPath = this.planBridge.getActivePlan(parentSessionId);
+        if (planPath === null || binding.planPath !== planPath) return;
+        const content = await this.fileReader.readFile(planPath);
+        const task = new PlanParser()
+          .parse(content)
+          .find((candidate) => candidate.id === correlation.taskExecutionRef.taskId);
+        if (task === undefined) return;
+        const result = updatePlanProgress(content, task, acceptance.decision);
+        if (!result.updated) return;
+        await this.fileWriter.writeFile(planPath, result.content);
+      });
     } catch (error: unknown) {
       // Fail-open: I/O or progress update failures degrade to an advisory and
       // leave the PostToolUse response unchanged.
@@ -1244,25 +1250,18 @@ export class JusticePlugin {
     return result.kind === "committed";
   }
 
-  private async recoverPendingFinalizations(): Promise<void> {
+  private async recoverPendingFinalizations(parentSessionId?: string): Promise<void> {
     const bindings = await this.authorizationStore.hydrate();
     for (const binding of bindings) {
-      if (binding.status !== "active") continue;
+      if (binding.status !== "active" ||
+        (parentSessionId !== undefined && binding.sessionId !== parentSessionId)) continue;
       try {
         const committed = await this.authorizationReviewBoundary.withParentSession(
           binding.sessionId,
           async () => {
             const current = await this.authorizationStore.findByAuthorizationId(binding.authorizationId);
             const records = await this.observationLogStore.readAll();
-            const state = project(records, new Date().toISOString());
-            const unfinished = [...state.lifecycle.finalization.values()].some(
-              (candidate) =>
-                candidate.parentSessionId === binding.sessionId &&
-                candidate.authorizationId === binding.authorizationId &&
-                candidate.planPath === binding.planPath &&
-                candidate.state === "all_tasks_accepted",
-            );
-            return unfinished && this.advanceFinalizationWithinBoundary(binding.sessionId, current, records);
+            return this.advanceFinalizationWithinBoundary(binding.sessionId, current, records);
           },
         );
         if (committed) await this.reviewDispatchState.offerNextMandatoryReview(binding.sessionId);
