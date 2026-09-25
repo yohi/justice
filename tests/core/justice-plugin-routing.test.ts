@@ -457,6 +457,7 @@ type PluginInternals = {
       readonly parentSessionId: string;
       readonly directive: ReviewRequiredDirective;
     }) => Promise<void>;
+    drainForParentSession: (parentSessionId: string) => Promise<readonly unknown[]>;
   };
   reviewDispatchState: {
     validateQueuedReviewDirectiveWithinParentSessionClaim: (
@@ -599,6 +600,22 @@ function mockTerminalReviewCompletion(plugin: JusticePlugin): void {
 }
 
 describe("JusticePlugin PostToolUse review directive delivery", () => {
+  it("keeps a PostToolUse result when queued review validation rejects", async () => {
+    const plugin = createPlugin();
+    const drain = vi.spyOn(internalsOf(plugin).reviewDirectiveSink, "drainForParentSession")
+      .mockRejectedValue(new Error("review directive validation unavailable"));
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s-1",
+      callId: "ordinary-call",
+      payload: { toolName: "bash", toolResult: "ok", error: false },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(drain).toHaveBeenCalledOnce();
+  });
+
   it("merges a current pending review directive into the task completion response", async () => {
     const fs = createMockFileSystem();
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
