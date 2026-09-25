@@ -309,6 +309,7 @@ export class ObservationHandler {
 
   async advanceFinalizationAfterAllTasksAccepted(
     input: FinalizationAdvanceInput,
+    notifyReviewPending = true,
   ): Promise<FinalizationAdvanceResult> {
     const agentId = this.options.sessionStateProvider.getAgentId(input.parentSessionId);
     const shardId: ShardId = {
@@ -327,7 +328,7 @@ export class ObservationHandler {
       return sequence;
     };
     const dependencies: LifecycleNotificationDependencies = {
-      onReviewPendingCommitted: this.reviewPendingCommittedHandler,
+      onReviewPendingCommitted: notifyReviewPending ? this.reviewPendingCommittedHandler : undefined,
       recordAdvisory: (advisory, cause) => this.appendLifecycleAdvisory(advisory, cause),
     };
     return advanceFinalizationLifecycle(input, appendRecord, dependencies);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { AuthorizationStore } from "../../src/core/plan-authorization";
+import { buildCanonicalSnapshot, computePlanFingerprint } from "../../src/core/plan-fingerprint";
 import type {
   MessageEvent,
   PostToolUseEvent,
@@ -707,6 +708,121 @@ describe("JusticePlugin accepted-decision progress updates", () => {
         record.recordType === "observation" && record.kind === "plan_finalization_transition",
     );
     expect(finalizationTransitions).toHaveLength(2);
+  });
+
+  it("keeps authorization release behind the finalization commit for the same parent", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+
+    let entered: () => void = () => undefined;
+    const atCommit = new Promise<void>((resolve) => { entered = resolve; });
+    let proceed: () => void = () => undefined;
+    const resume = new Promise<void>((resolve) => { proceed = resolve; });
+    const handler = plugin.getObservationHandler();
+    const originalAdvance = handler.advanceFinalizationAfterAllTasksAccepted.bind(handler);
+    vi.spyOn(handler, "advanceFinalizationAfterAllTasksAccepted").mockImplementation(async (input, notify) => {
+      entered();
+      await resume;
+      return originalAdvance(input, notify);
+    });
+
+    const completion = plugin.handleEvent(reviewPostToolUseEvent());
+    await atCommit;
+    let released = false;
+    const release = internalsOf(plugin).authorizationStore
+      .release(authorizationId, new Date().toISOString())
+      .then(() => { released = true; });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+    const releasedBeforeCommit = released;
+    proceed();
+    await Promise.all([completion, release]);
+
+    expect(releasedBeforeCommit).toBe(false);
+  });
+
+  it("resumes an all-tasks-accepted finalization after restart with its original identity", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const binding = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: new Date().toISOString(),
+    });
+    if (binding === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedTaskLifecycle(first, binding.authorizationId, "task-1");
+    await first.getObservationHandler().appendPlanFinalizationTransition({
+      parentSessionId: "s-1",
+      authorizationId: binding.authorizationId,
+      planPath: "plan.md",
+      finalizationAttemptId: "finalization-before-restart",
+      finalReviewRound: 1,
+      from: "tasks_pending",
+      to: "all_tasks_accepted",
+    });
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+    await restarted.initialize();
+    const records = await internalsOf(restarted).observationLogStore.readAll();
+    const resumed = records.filter((record) =>
+      record.kind === "plan_finalization_transition" && record.to === "final_review_pending"
+    );
+    const pending = records.filter((record) =>
+      record.kind === "review_dispatch_transition" && record.to === "pending"
+    );
+
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.finalizationAttemptId).toBe("finalization-before-restart");
+    expect(pending).toHaveLength(1);
+
+    const again = new JusticePlugin(fs, fs, { writerId: "w-restarted-again" });
+    await again.initialize();
+    const afterReplay = await internalsOf(again).observationLogStore.readAll();
+    expect(afterReplay.filter((record) =>
+      record.kind === "plan_finalization_transition" && record.to === "final_review_pending"
+    )).toHaveLength(1);
+    expect(afterReplay.filter((record) =>
+      record.kind === "review_dispatch_transition" && record.to === "pending"
+    )).toHaveLength(1);
+  });
+
+  it("does not resume finalization from a released authorization after restart", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const binding = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: new Date().toISOString(),
+    });
+    if (binding === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedTaskLifecycle(first, binding.authorizationId, "task-1");
+    await first.getObservationHandler().appendPlanFinalizationTransition({
+      parentSessionId: "s-1",
+      authorizationId: binding.authorizationId,
+      planPath: "plan.md",
+      finalizationAttemptId: "released-finalization",
+      finalReviewRound: 1,
+      from: "tasks_pending",
+      to: "all_tasks_accepted",
+    });
+    await internalsOf(first).authorizationStore.release(binding.authorizationId, new Date().toISOString());
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+    await restarted.initialize();
+    const records = await internalsOf(restarted).observationLogStore.readAll();
+
+    expect(records.some((record) =>
+      record.kind === "plan_finalization_transition" && record.to === "final_review_pending"
+    )).toBe(false);
   });
 
   it("does not update plan progress when there is no active plan", async () => {

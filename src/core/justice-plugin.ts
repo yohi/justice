@@ -362,7 +362,6 @@ export class JusticePlugin {
   private readonly reviewDirectiveSink: ReviewDirectiveSink;
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
   private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
-  private readonly finalizationAdvanceTails = new Map<string, Promise<void>>();
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
@@ -622,6 +621,9 @@ export class JusticePlugin {
       await this.telemetry.load();
       await this.observationHandler.initializeProjectionCache();
       if (authorizationRecoveryReady) {
+        await this.recoverPendingFinalizations().catch((error: unknown) =>
+          this.warnInitializationRecoveryFailure("finalization", error),
+        );
         await this.reviewCompletionDomain
           .recoverStagedReviewCompletionsAfterRestart()
           .catch((error: unknown) => this.warnInitializationRecoveryFailure("staged completion", error));
@@ -1171,18 +1173,8 @@ export class JusticePlugin {
     parentSessionId: string,
     correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
   ): Promise<void> {
-    const predecessor = (this.finalizationAdvanceTails.get(parentSessionId) ?? Promise.resolve()).catch(
-      () => undefined,
-    );
-    let releaseCurrent: () => void = () => undefined;
-    const completion = new Promise<void>((resolve) => {
-      releaseCurrent = resolve;
-    });
-    const currentTail = predecessor.then(() => completion);
-    this.finalizationAdvanceTails.set(parentSessionId, currentTail);
-    await predecessor;
     try {
-      try {
+      const committed = await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
         const records = await this.observationLogStore.readAll();
         const acceptance = findCurrentAcceptanceDecision(records, correlation);
         if (
@@ -1190,70 +1182,92 @@ export class JusticePlugin {
           acceptance.decision.kind !== "task-acceptance" ||
           acceptance.decision.verdict !== "accepted"
         ) {
-          return;
+          return false;
         }
 
         const binding = await this.authorizationStore.findByAuthorizationId(
           correlation.taskExecutionRef.authorizationId,
         );
-        if (
-          binding === null ||
-          binding.status !== "active" ||
-          binding.sessionId !== parentSessionId ||
-          this.planBridge.getActivePlan(parentSessionId) !== binding.planPath
-        ) {
-          return;
-        }
+        return this.advanceFinalizationWithinBoundary(parentSessionId, binding, records);
+      });
+      if (committed) await this.reviewDispatchState.offerNextMandatoryReview(parentSessionId);
+    } catch (error: unknown) {
+      await this.recordReviewDispatchAdvisory("finalization_advance_failed", error);
+    }
+  }
 
-        const taskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
-        const projected = project(records, new Date().toISOString());
-        if (
-          taskIds.length === 0 ||
-          !taskIds.every(
-            (taskId) =>
-              projected.lifecycle.taskStates.get(
-                taskLifecycleKey(parentSessionId, {
-                  authorizationId: binding.authorizationId,
-                  taskId,
-                }),
-              ) === "accepted",
-          )
-        ) {
-          return;
-        }
+  private async advanceFinalizationWithinBoundary(
+    parentSessionId: string,
+    binding: ApprovedPlanBinding | null,
+    records: readonly PersistedLogRecord[],
+  ): Promise<boolean> {
+    if (
+      binding?.status !== "active" ||
+      binding.sessionId !== parentSessionId ||
+      this.planBridge.getActivePlan(parentSessionId) !== binding.planPath
+    ) return false;
 
-        const finalization = [...projected.lifecycle.finalization.values()].find(
-          (candidate) =>
-            candidate.parentSessionId === parentSessionId &&
-            candidate.authorizationId === binding.authorizationId &&
-            candidate.planPath === binding.planPath,
+    const taskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
+    const projected = project(records, new Date().toISOString());
+    if (
+      taskIds.length === 0 ||
+      !taskIds.every((taskId) =>
+        projected.lifecycle.taskStates.get(
+          taskLifecycleKey(parentSessionId, { authorizationId: binding.authorizationId, taskId }),
+        ) === "accepted",
+      )
+    ) return false;
+
+    const finalization = [...projected.lifecycle.finalization.values()].find(
+      (candidate) =>
+        candidate.parentSessionId === parentSessionId &&
+        candidate.authorizationId === binding.authorizationId &&
+        candidate.planPath === binding.planPath,
+    );
+    if (
+      finalization !== undefined &&
+      finalization.state !== "tasks_pending" &&
+      finalization.state !== "all_tasks_accepted"
+    ) return false;
+
+    const result = await this.observationHandler.advanceFinalizationAfterAllTasksAccepted({
+      parentSessionId,
+      authorizationId: binding.authorizationId,
+      planPath: binding.planPath,
+      ...(finalization?.state === "all_tasks_accepted"
+        ? { finalizationAttemptId: finalization.finalizationAttemptId }
+        : {}),
+    }, false);
+    if (result.kind === "failed") {
+      await this.recordReviewDispatchAdvisory("finalization_advance_failed");
+    }
+    return result.kind === "committed";
+  }
+
+  private async recoverPendingFinalizations(): Promise<void> {
+    const bindings = await this.authorizationStore.hydrate();
+    for (const binding of bindings) {
+      if (binding.status !== "active") continue;
+      try {
+        const committed = await this.authorizationReviewBoundary.withParentSession(
+          binding.sessionId,
+          async () => {
+            const current = await this.authorizationStore.findByAuthorizationId(binding.authorizationId);
+            const records = await this.observationLogStore.readAll();
+            const state = project(records, new Date().toISOString());
+            const unfinished = [...state.lifecycle.finalization.values()].some(
+              (candidate) =>
+                candidate.parentSessionId === binding.sessionId &&
+                candidate.authorizationId === binding.authorizationId &&
+                candidate.planPath === binding.planPath &&
+                candidate.state === "all_tasks_accepted",
+            );
+            return unfinished && this.advanceFinalizationWithinBoundary(binding.sessionId, current, records);
+          },
         );
-        if (
-          finalization !== undefined &&
-          finalization.state !== "tasks_pending" &&
-          finalization.state !== "all_tasks_accepted"
-        ) {
-          return;
-        }
-
-        const result = await this.observationHandler.advanceFinalizationAfterAllTasksAccepted({
-          parentSessionId,
-          authorizationId: binding.authorizationId,
-          planPath: binding.planPath,
-          ...(finalization?.state === "all_tasks_accepted"
-            ? { finalizationAttemptId: finalization.finalizationAttemptId }
-            : {}),
-        });
-        if (result.kind === "failed") {
-          await this.recordReviewDispatchAdvisory("finalization_advance_failed");
-        }
+        if (committed) await this.reviewDispatchState.offerNextMandatoryReview(binding.sessionId);
       } catch (error: unknown) {
         await this.recordReviewDispatchAdvisory("finalization_advance_failed", error);
-      }
-    } finally {
-      releaseCurrent();
-      if (this.finalizationAdvanceTails.get(parentSessionId) === currentTail) {
-        this.finalizationAdvanceTails.delete(parentSessionId);
       }
     }
   }
