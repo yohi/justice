@@ -4,7 +4,7 @@
 
 **Goal:** Automatically request Final Review after every approved canonical task is durably accepted, and provide controllers with structured review directive context.
 
-**Architecture:** Extend the existing task-review PostToolUse path to read durable records, verify acceptance for every task in the current active authorization's canonical snapshot, and invoke the existing finalization lifecycle API only when no finalization has begun. Keep the lifecycle append and notification path authoritative. Add a pure formatter for the discriminated `ReviewRequiredDirective` correlation and use it for both PreToolUse and PostToolUse delivery.
+**Architecture:** Extend the existing task-review PostToolUse path to read durable records, verify acceptance for every task in the current active authorization's canonical snapshot, and invoke the existing finalization lifecycle API only when no finalization has begun. Before updating plan progress or advancing finalization, re-read the approved plan and verify its current semantic fingerprint under the same parent-session authorization/review boundary; invalidate and stop on mismatch, and fail closed for unreadable or uncertain state. Keep the lifecycle append and notification path authoritative. Add a pure formatter for the discriminated `ReviewRequiredDirective` correlation and use it for both PreToolUse and PostToolUse delivery.
 
 **Tech Stack:** TypeScript, Bun, Vitest.
 
@@ -45,15 +45,29 @@
 - Consumes: `ReviewRequiredDirective` (`task-review` or `final-review` correlation).
 - Produces: `formatReviewDirective(directive: ReviewRequiredDirective): string`, rendering the review kind and all identity fields relevant to that correlation variant.
 
-- [x] Add routing assertions for task-review context containing `taskId`, `attemptId`, and `reviewRound`, and final-review context containing `planPath`, `authorizationId`, `finalizationAttemptId`, and `finalReviewRound`.
+- [x] Add routing assertions for task-review context containing `authorizationId`, `taskId`, `attemptId`, and `reviewRound`, and final-review context containing `planPath`, `authorizationId`, `planFingerprint.algorithm`, `planFingerprint.value`, `finalizationAttemptId`, and `finalReviewRound`.
 - [x] Run the targeted routing test and confirm the assertions fail against the current title-only injection.
 - [x] Implement the formatter with exhaustive discriminated-union handling; derive `sp-review` / `sp-final-review` category from `reviewKind` rather than assuming category is stored on the directive.
 - [x] Replace both title-only injected contexts with `formatReviewDirective(delivery.directive)`.
 - [x] Run the targeted routing test and confirm it passes.
 
+### Task 2a: Revalidate plan authority before progress and Final Review advancement
+
+**Files:**
+- Modify: `src/core/justice-plugin.ts`
+- Test: `tests/core/justice-plugin-routing.test.ts`
+
+**Interfaces:**
+- Consumes: the accepted task-review correlation and `isAuthorizationPlanCurrent()` within the parent-session authorization/review boundary.
+- Produces: no progress mutation, Final Review lifecycle transition, or directive when the approved plan fingerprint is stale or cannot be verified.
+
+- [x] Add regression coverage for semantic plan mutation and plan-read failure after the final task acceptance.
+- [x] Revalidate the current authorization plan fingerprint before progress updates and Final Review advancement.
+- [x] Verify a current unchanged plan still advances, while changed or unreadable plans do not.
+
 ### Task 3: Verify repository quality gates
 
-**Files:** None beyond Tasks 1 and 2.
+**Files:** None beyond Tasks 1, 2, and 2a.
 
 - [x] In `.devcontainer/`, run `bun run test`.
 - [x] In `.devcontainer/`, run `bun run typecheck`.

@@ -88,6 +88,7 @@ function formatReviewDirective(directive: ReviewRequiredDirective): string {
         "[JUSTICE: REVIEW REQUIRED]",
         "**Review kind**: task-review",
         "**Category**: sp-review",
+        `**Authorization ID**: ${correlation.taskExecutionRef.authorizationId}`,
         `**Task ID**: ${correlation.taskExecutionRef.taskId}`,
         `**Attempt ID**: ${correlation.taskExecutionRef.attemptId}`,
         `**Review round**: ${correlation.reviewRound}`,
@@ -99,6 +100,8 @@ function formatReviewDirective(directive: ReviewRequiredDirective): string {
         "**Category**: sp-final-review",
         `**Plan path**: ${correlation.planPath}`,
         `**Authorization ID**: ${correlation.authorizationId}`,
+        `**Plan fingerprint algorithm**: ${correlation.planFingerprint.algorithm}`,
+        `**Plan fingerprint**: ${correlation.planFingerprint.value}`,
         `**Finalization attempt ID**: ${correlation.finalizationAttemptId}`,
         `**Final review round**: ${correlation.finalReviewRound}`,
       ].join("\n");
@@ -1150,6 +1153,7 @@ export class JusticePlugin {
   ): Promise<void> {
     try {
       await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
+        if (!(await this.isAuthorizationPlanCurrent(correlation))) return;
         const records = await this.observationLogStore.readAll();
         const acceptance = findCurrentAcceptanceDecision(records, correlation);
         if (
@@ -1199,6 +1203,7 @@ export class JusticePlugin {
   ): Promise<void> {
     try {
       const committed = await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
+        if (!(await this.isAuthorizationPlanCurrent(correlation))) return false;
         const records = await this.observationLogStore.readAll();
         const acceptance = findCurrentAcceptanceDecision(records, correlation);
         if (

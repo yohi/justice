@@ -1272,6 +1272,10 @@ export type ReviewRequiredDirective = {
 `correlation.reviewKind` から導出し、task review の `taskId` / `attemptId` や final review の
 `planPath` / `finalizationAttemptId` も correlation から参照する。Directive にこれらの重複
 フィールドを持たせないことで、相互に矛盾する review identity を型上表現できないようにする。
+Controller へ整形して注入する場合も、task review の `authorizationId` / `taskId` / `attemptId` /
+`reviewRound` と、final review の `planPath` / `authorizationId` / `planFingerprint` /
+`finalizationAttemptId` / `finalReviewRound` をすべて correlation から表示する。表示文は authority
+ではなく、dispatch / claim は引き続き durable correlation を使う。
 
 - Justice が `ReviewPending` / `FinalReviewPending` に到達した場合、Controller (Atlas) へ `ReviewRequiredDirective` を inject する。task-review 時は `correlation.taskExecutionRef`、final-review 時は `correlation` に含まれる current finalization identity を使用する。
 - Controller はこの directive を受けて `task(category="sp-review" | "sp-final-review")` を発行する。
@@ -2282,6 +2286,7 @@ Progress、positive lifecycle transition を行わない。
 - "tests passed" 等の自己申告 (declared evidence) だけでは Gate PASS 不可。
 - Gate PASS より先に plan.md を完了状態にしない。
 - 全 task accepted 後:
+  - progress 更新または Final Review へ進む直前、同じ `AuthorizationReviewBoundary` 内で active binding、plan path、および承認済み canonical task set に対する現在の semantic fingerprint を再確認する。mismatch は Authorization を invalidation して Review Dispatch を cancel し、読取・計算不能や persistence uncertainty は progress 更新と Final Review を行わず advisory に留める。
   - `PlanFinalizationState = all_tasks_accepted`
   - `task(category="sp-final-review")`
   - Final Gate PASS → `PlanFinalizationState = complete`

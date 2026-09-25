@@ -448,11 +448,12 @@ function internalsOf(plugin: JusticePlugin): PluginInternals {
 async function approvePlanAuthorization(
   plugin: JusticePlugin,
   taskIds: readonly string[] = ["task-1"],
+  planContent = progressPlan,
 ): Promise<string> {
   const binding = await internalsOf(plugin).authorizationStore.approve({
     sessionId: "s-1",
     planPath: "plan.md",
-    planFingerprint: { algorithm: "sha256", value: "fingerprint" },
+    planFingerprint: computePlanFingerprint(planContent, taskIds),
     canonicalSnapshot: {
       schema: "justice-plan-v1",
       documentDigest: "doc-digest",
@@ -611,6 +612,7 @@ describe("JusticePlugin PostToolUse review directive delivery", () => {
         "[JUSTICE: REVIEW REQUIRED]",
         "**Review kind**: task-review",
         "**Category**: sp-review",
+        `**Authorization ID**: ${authorizationId}`,
         "**Task ID**: task-1",
         "**Attempt ID**: attempt-1",
         "**Review round**: 1",
@@ -619,6 +621,7 @@ describe("JusticePlugin PostToolUse review directive delivery", () => {
         "[JUSTICE: REVIEW REQUIRED]",
         "**Review kind**: task-review",
         "**Category**: sp-review",
+        `**Authorization ID**: ${authorizationId}`,
         "**Task ID**: task-1",
         "**Attempt ID**: attempt-1",
         "**Review round**: 1",
@@ -667,8 +670,68 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(response.injectedContext).toContain("**Review kind**: final-review");
     expect(response.injectedContext).toContain("**Category**: sp-final-review");
     expect(response.injectedContext).toContain(`**Authorization ID**: ${authorizationId}`);
+    expect(response.injectedContext).toContain("**Plan fingerprint algorithm**: sha256");
+    expect(response.injectedContext).toContain(
+      `**Plan fingerprint**: ${computePlanFingerprint(progressPlan, ["task-1"]).value}`,
+    );
     expect(response.injectedContext).toContain("**Finalization attempt ID**:");
     expect(response.injectedContext).toContain("**Final review round**: 1");
+  });
+
+  it("does not start Final Review when the approved plan changes after task acceptance", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+    await fs.writeFile("plan.md", progressPlan.replace("Implement", "Redesign"));
+
+    const response = await plugin.handleEvent(reviewPostToolUseEvent());
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    const binding = await internalsOf(plugin).authorizationStore.findByAuthorizationId(authorizationId);
+
+    expect(binding?.status).toBe("invalidated");
+    expect(await fs.readFile("plan.md")).toBe(progressPlan.replace("Implement", "Redesign"));
+    expect(
+      records.some(
+        (record) =>
+          record.recordType === "observation" &&
+          record.kind === "plan_finalization_transition" &&
+          record.to === "final_review_pending",
+      ),
+    ).toBe(false);
+    expect(response.action === "inject" && response.injectedContext).not.toContain("final-review");
+  });
+
+  it("does not start Final Review when the approved plan cannot be read", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+    const readFile = fs.readFile;
+    fs.readFile = async (path) => {
+      if (path === "plan.md") throw new Error("plan read unavailable");
+      return readFile(path);
+    };
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+
+    expect(
+      records.some(
+        (record) =>
+          record.recordType === "observation" &&
+          record.kind === "plan_finalization_transition" &&
+          record.to === "final_review_pending",
+      ),
+    ).toBe(false);
   });
 
   it("does not append another finalization after a duplicate accepted-review PostToolUse", async () => {
@@ -1024,7 +1087,7 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     const fs = createMockFileSystem({ "plan.md": plan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
     plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
-    const authorizationId = await approvePlanAuthorization(plugin, ["task-1", "task-2"]);
+    const authorizationId = await approvePlanAuthorization(plugin, ["task-1", "task-2"], plan);
     for (const [taskId, callId] of [["task-1", "review-call-1"], ["task-2", "review-call-2"]]) {
       await seedClaimedReviewDispatch(plugin, authorizationId, taskId, callId);
       await seedAcceptedDecision(plugin, authorizationId, taskId);

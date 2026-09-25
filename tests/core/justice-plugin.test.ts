@@ -469,6 +469,7 @@ describe("JusticePlugin", () => {
           "[JUSTICE: REVIEW REQUIRED]",
           "**Review kind**: task-review",
           "**Category**: sp-review",
+          "**Authorization ID**: auth-1",
           "**Task ID**: task-1",
           "**Attempt ID**: attempt-1",
           "**Review round**: 1",
