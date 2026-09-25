@@ -62,6 +62,22 @@ describe("review artifact completion (Task 3.6)", () => {
     await expect(fixture.durableAcceptanceDecisions()).resolves.toEqual([]);
   });
 
+  it("terminalizes a reserved artifact reader exception as artifact_read_failed", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    fixture.readReservedArtifact.mockRejectedValueOnce(new Error("reserved read failed"));
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "blocked" });
+
+    await expect(fixture.durableFailureStaging()).resolves.toMatchObject({
+      terminalReason: "artifact_read_failed",
+    });
+    expect(fixture.recordAdvisory).toHaveBeenCalledWith(
+      "review_artifact_read_unhandled",
+      expect.any(Error),
+    );
+    expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
+  });
+
   it("retains a replacement path during terminal cleanup and records an advisory", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("terminalized");
     await fixture.replaceArtifactWithDifferentInode("replacement artifact");

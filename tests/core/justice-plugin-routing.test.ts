@@ -1100,6 +1100,40 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(fs.writtenFiles["plan.md"]).toContain("- [x] second");
   });
 
+  it("continues finalization when an accepted task progress write fails", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+    const writeFile = fs.writeFile;
+    let failProgressWrite = true;
+    fs.writeFile = async (path, content): Promise<void> => {
+      if (path === "plan.md" && failProgressWrite) {
+        failProgressWrite = false;
+        throw new Error("progress write unavailable");
+      }
+      await writeFile(path, content);
+    };
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    expect(records.some(
+      (record) => record.recordType === "observation" &&
+        record.kind === "plan_finalization_transition" &&
+        record.to === "final_review_pending",
+    )).toBe(true);
+    expect(records.some(
+      (record) => record.recordType === "observation" &&
+        record.kind === "session_error" &&
+        record.message === "plan_progress_update_failed",
+    )).toBe(true);
+  });
+
   it("preserves both plan progress updates when accepted task reviews complete concurrently", async () => {
     const plan = [
       "## Task 1: First",
