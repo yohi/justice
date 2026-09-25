@@ -1292,6 +1292,7 @@ justice/
 │   │   ├── review-rejection-detector.ts — Prometheus 却下シグナルの検出・抽出
 │   │   ├── plan-completion-detector.ts — A+Bハイブリッド完了検知によるスキル・計画完了検出
 │   │   ├── session-state-provider.ts   — sessionId→AgentId マッピングと callId 単位の task 窓管理 (v2)
+│   │   ├── acceptance-decision.ts      — Gate/Acceptance 決定評価・相関検証・ライフサイクル遷移 (v2)
 │   │   ├── review-artifact.ts          — レビュー成果物ライフサイクルと完了レコード生成
 │   │   ├── review-artifact-reservation.ts — 成果物排他予約ポートとフォールバック遮断
 │   │   ├── review-dispatch-state.ts    — レビューディスパッチ状態遷移機械
@@ -1800,3 +1801,45 @@ Linux x86_64 glibc 環境において、カーネルシステムコール `opena
 5. **フェイルオープンとフォールバック禁止**: 非Linux、非x86_64、非glibc、アドオン不在、システムコール不在の環境ではプロバイダ生成が `undefined` を返し、pathname-only 操作へのフォールバックは行いません。成果物予約が不能な場合もセッション実行自体は継続します。
 
 実機検証手順および監査証拠は [`docs/agents/review-artifact-linux-provider.md`](docs/agents/review-artifact-linux-provider.md) を参照してください。
+
+### 15.15 セマンティック制御プレーン レビュー指摘事項修正仕様（Gate Evaluation & Acceptance Decisions）
+
+セマンティック制御プレーンの堅牢性向上とレビュー指摘対応（2026-09-18）に基づき、以下の仕様が確立されています。
+
+#### 1. スコープ対応の端末レビュー相関 (`hasTerminalReview`)
+- **目的**: 無関係なセッションや別タスクのレビューによって計画ゲートが誤って充足される脆弱性を防ぎます。
+- **仕様**:
+  - `context.scope === "task"`: 観測レコード（`review_observed`）が現在のセッション（`sessionId`）に属し、現在のタスクID（`taskId === context.taskExecutionRef.taskId`）と一致し、指摘ゼロの完全スナップショット（`isCompleteSnapshot === true && items.length === 0`）であることを要求します。
+  - `context.scope === "plan"`: 観測レコードが現在のセッションに属し、確立された `final` レビュースコープ（`reviewScope === "final"`）を持ち、指摘ゼロの完全スナップショットであることを要求します。
+
+#### 2. Gate 評価結果における SKIP と証拠不足の厳密な分離
+- **目的**: ゲート条件非該当（SKIP）と証拠不足（insufficient_evidence）の判定を明確に区別し、不要な決定永続化やアドバイザリの誤発火を防ぎます。
+- **仕様**:
+  - `verdict: "SKIP"`: 評価対象外（トリガー条件不一致等）の場合、`{ kind: "not_applicable" }` を返し、決定の追記（`appendDecision`）やアドバイザリ記録を一切行いません。
+  - `kind: "insufficient_evidence"`: 証拠不足の場合は既存のブロック動作を維持し、`appendBlockedAcceptanceIfMissing` により blocked な受入決定（`AcceptanceDecision`）を永続化し、アドバイザリを発行します。
+
+#### 3. タスクゲート YAML スコープの補完正規化 (`parseGateYaml`)
+- **目的**: タスクゲート定義において `trigger.scope` の冗長な記述を省略可能にしつつ、計画ゲートの厳格性を維持します。
+- **仕様**:
+  - `gateType === "task"` かつ `trigger.scope` が省略されている場合のみ、`GateConfigSchema.parse`（Zod）の実行前に自動で `scope: "task"` を補完します。
+  - `gateType === "plan"` の場合はスコープを補完せず、`scope: "plan"` の指定が必須となります。省略時または不一致時は Zod バリデーションエラーとなります。未知のフィールドの厳格な拒否（`strictObject`）はそのまま維持されます。
+
+#### 4. 計画決定パスの秘匿化とダイジェスト同一性 (`planPathDigest`)
+- **目的**: ログ永続化時にホスト上の絶対パスや詳細パスを秘匿化しつつ、決定の再突合および後方互換リプレイを可能にします。
+- **仕様**:
+  - `PlanGateDecisionPayload` および `PlanAcceptanceDecisionPayload` にオプショナルの `planPathDigest?: string` を定義します。
+  - 永続化秘匿化境界（`redactPendingLogRecord`）において、ダイジェストが未設定の場合は生の `planPath` から SHA-256 ハッシュを計算して `planPathDigest` に保持し、`planPath` は `[REDACTED_PATH]` に秘匿化します（既存のダイジェストは保持）。
+  - 決定照合関数（`samePlanPath`）は、レコードに `planPathDigest` が存在する場合はハッシュ値で照合し、ダイジェストを持たないレガシーレコードの場合のみ生パス文字列一致で比較するフォールバックを提供します。
+
+#### 5. プラグイン認可境界 (`AuthorizationReviewBoundary`) の共有
+- **目的**: 同一親セッションに対する認可状態の変更とゲート決定評価の排他制御・直列化を単一のキューで保証します。
+- **仕様**:
+  - `JusticePlugin` は自身が生成・保持する `AuthorizationReviewBoundary` インスタンスを `ObservationHandler` に注入します。
+  - `ObservationHandler`（および `GatePendingAttemptEvaluator`）はその注入された `withParentSession` コールバックを使用し、独立した境界インスタンスの二重生成を防止します。
+
+#### 6. callId に拘束された厳密なタスクゲート評価
+- **目的**: 並行タスク実行時や無関係なツール実行時におけるタスク窓の混同・誤評価を防止します。
+- **仕様**:
+  - `evaluateGateIfTriggered` は呼び出し識別子 `callId` を必須とし、`sessionStateProvider.getTaskCallBinding(callId)` を参照します。
+  - `binding` が存在し、`binding.parentSessionId === sessionId`、`binding.taskExecutionRef.taskId === taskId`、かつ `binding.purpose === "implementation"`（実装目的）である場合にのみ、その `taskExecutionRef` を用いてゲート評価を実行します。
+  - いずれかの条件を満たさない場合は直ちに `PROCEED` を返却し、かつて存在したプロジェクション全体から全タスクを探索するグローバルフォールバックは廃止されました。
