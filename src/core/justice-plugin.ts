@@ -12,6 +12,7 @@ import type {
   CompactionPayload,
   ReservedReviewArtifactIo,
   ReviewCorrelation,
+  ReviewRequiredDirective,
   ReviewTaskCallBinding,
 } from "./types";
 import { isLegacyMessagePayload } from "./types";
@@ -77,6 +78,36 @@ import { PlanParser } from "./plan-parser";
 import { updatePlanProgress } from "./progress-updater";
 
 const PROCEED: HookResponse = { action: "proceed" };
+
+function formatReviewDirective(directive: ReviewRequiredDirective): string {
+  const correlation = directive.correlation;
+  switch (correlation.reviewKind) {
+    case "task-review":
+      return [
+        "[JUSTICE: REVIEW REQUIRED]",
+        "**Review kind**: task-review",
+        "**Category**: sp-review",
+        `**Task ID**: ${correlation.taskExecutionRef.taskId}`,
+        `**Attempt ID**: ${correlation.taskExecutionRef.attemptId}`,
+        `**Review round**: ${correlation.reviewRound}`,
+      ].join("\n");
+    case "final-review":
+      return [
+        "[JUSTICE: REVIEW REQUIRED]",
+        "**Review kind**: final-review",
+        "**Category**: sp-final-review",
+        `**Plan path**: ${correlation.planPath}`,
+        `**Authorization ID**: ${correlation.authorizationId}`,
+        `**Finalization attempt ID**: ${correlation.finalizationAttemptId}`,
+        `**Final review round**: ${correlation.finalReviewRound}`,
+      ].join("\n");
+    default: {
+      const exhaustiveCheck: never = correlation;
+      void exhaustiveCheck;
+      return exhaustiveCheck;
+    }
+  }
+}
 
 function createArchive(
   fileReader: FileReader,
@@ -331,6 +362,7 @@ export class JusticePlugin {
   private readonly reviewDirectiveSink: ReviewDirectiveSink;
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
   private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
+  private readonly finalizationAdvanceTails = new Map<string, Promise<void>>();
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
@@ -1081,6 +1113,7 @@ export class JusticePlugin {
       // progress update failures record an advisory and never block the
       // PostToolUse response.
       await this.updatePlanProgressAfterAcceptance(event.sessionId, correlation);
+      await this.advanceFinalizationAfterAllTasksAccepted(event.sessionId, correlation);
     }
     return outcome.kind === "terminalized"
       ? { action: "inject", injectedContext: "[JUSTICE: REVIEW COMPLETION RECORDED]" }
@@ -1131,6 +1164,97 @@ export class JusticePlugin {
       // Fail-open: I/O or progress update failures degrade to an advisory and
       // leave the PostToolUse response unchanged.
       await this.recordReviewDispatchAdvisory("plan_progress_update_failed", error);
+    }
+  }
+
+  private async advanceFinalizationAfterAllTasksAccepted(
+    parentSessionId: string,
+    correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
+  ): Promise<void> {
+    const predecessor = (this.finalizationAdvanceTails.get(parentSessionId) ?? Promise.resolve()).catch(
+      () => undefined,
+    );
+    let releaseCurrent: () => void = () => undefined;
+    const completion = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const currentTail = predecessor.then(() => completion);
+    this.finalizationAdvanceTails.set(parentSessionId, currentTail);
+    await predecessor;
+    try {
+      try {
+        const records = await this.observationLogStore.readAll();
+        const acceptance = findCurrentAcceptanceDecision(records, correlation);
+        if (
+          acceptance.kind !== "found" ||
+          acceptance.decision.kind !== "task-acceptance" ||
+          acceptance.decision.verdict !== "accepted"
+        ) {
+          return;
+        }
+
+        const binding = await this.authorizationStore.findByAuthorizationId(
+          correlation.taskExecutionRef.authorizationId,
+        );
+        if (
+          binding === null ||
+          binding.status !== "active" ||
+          binding.sessionId !== parentSessionId ||
+          this.planBridge.getActivePlan(parentSessionId) !== binding.planPath
+        ) {
+          return;
+        }
+
+        const taskIds = binding.canonicalSnapshot.tasks.map((task) => task.taskId);
+        const projected = project(records, new Date().toISOString());
+        if (
+          taskIds.length === 0 ||
+          !taskIds.every(
+            (taskId) =>
+              projected.lifecycle.taskStates.get(
+                taskLifecycleKey(parentSessionId, {
+                  authorizationId: binding.authorizationId,
+                  taskId,
+                }),
+              ) === "accepted",
+          )
+        ) {
+          return;
+        }
+
+        const finalization = [...projected.lifecycle.finalization.values()].find(
+          (candidate) =>
+            candidate.parentSessionId === parentSessionId &&
+            candidate.authorizationId === binding.authorizationId &&
+            candidate.planPath === binding.planPath,
+        );
+        if (
+          finalization !== undefined &&
+          finalization.state !== "tasks_pending" &&
+          finalization.state !== "all_tasks_accepted"
+        ) {
+          return;
+        }
+
+        const result = await this.observationHandler.advanceFinalizationAfterAllTasksAccepted({
+          parentSessionId,
+          authorizationId: binding.authorizationId,
+          planPath: binding.planPath,
+          ...(finalization?.state === "all_tasks_accepted"
+            ? { finalizationAttemptId: finalization.finalizationAttemptId }
+            : {}),
+        });
+        if (result.kind === "failed") {
+          await this.recordReviewDispatchAdvisory("finalization_advance_failed");
+        }
+      } catch (error: unknown) {
+        await this.recordReviewDispatchAdvisory("finalization_advance_failed", error);
+      }
+    } finally {
+      releaseCurrent();
+      if (this.finalizationAdvanceTails.get(parentSessionId) === currentTail) {
+        this.finalizationAdvanceTails.delete(parentSessionId);
+      }
     }
   }
 
@@ -1213,7 +1337,7 @@ export class JusticePlugin {
           merged,
           {
             action: "inject",
-            injectedContext: `[JUSTICE: REVIEW REQUIRED] ${delivery.directive.correlation.reviewKind}`,
+            injectedContext: formatReviewDirective(delivery.directive),
           },
           (message) => this.warnMergeConflict(message),
         ),
@@ -1260,7 +1384,7 @@ export class JusticePlugin {
         response,
         ...deliveries.map((delivery) => ({
           action: "inject" as const,
-          injectedContext: `[JUSTICE: REVIEW REQUIRED] ${delivery.directive.correlation.reviewKind}`,
+          injectedContext: formatReviewDirective(delivery.directive),
         })),
       ],
       (message) => this.warnMergeConflict(message),

@@ -417,6 +417,7 @@ type PluginInternals = {
       shardId: { agentId: string; sessionId: string; writerId: string },
       record: Record<string, unknown>,
     ) => Promise<number>;
+    readAll: () => Promise<readonly Record<string, unknown>[]>;
   };
   reviewCompletionDomain: {
     consumeReviewCompletion: (input: unknown) => Promise<{ kind: string }>;
@@ -438,7 +439,10 @@ function internalsOf(plugin: JusticePlugin): PluginInternals {
   return plugin as unknown as PluginInternals;
 }
 
-async function approvePlanAuthorization(plugin: JusticePlugin): Promise<string> {
+async function approvePlanAuthorization(
+  plugin: JusticePlugin,
+  taskIds: readonly string[] = ["task-1"],
+): Promise<string> {
   const binding = await internalsOf(plugin).authorizationStore.approve({
     sessionId: "s-1",
     planPath: "plan.md",
@@ -447,14 +451,12 @@ async function approvePlanAuthorization(plugin: JusticePlugin): Promise<string> 
       schema: "justice-plan-v1",
       documentDigest: "doc-digest",
       globalBodyDigest: "body-digest",
-      tasks: [
-        {
-          taskId: "task-1",
-          title: "Implement",
-          canonicalBody: "- [ ] first\n- [ ] second",
-          digest: "task-digest",
-        },
-      ],
+      tasks: taskIds.map((taskId) => ({
+        taskId,
+        title: `Implement ${taskId}`,
+        canonicalBody: "- [ ] first\n- [ ] second",
+        digest: `task-digest-${taskId}`,
+      })),
     },
     approvedAt: "2026-09-05T00:00:00.000Z",
   });
@@ -528,6 +530,33 @@ async function seedAcceptedDecision(
   });
 }
 
+async function seedAcceptedTaskLifecycle(
+  plugin: JusticePlugin,
+  authorizationId: string,
+  taskId: string,
+): Promise<void> {
+  const taskExecutionRef = { authorizationId, taskId, attemptId: `attempt-${taskId}` };
+  const transitions = [
+    ["pending", "authorized"],
+    ["authorized", "in_progress"],
+    ["in_progress", "worker_reported"],
+    ["worker_reported", "evidence_pending"],
+    ["evidence_pending", "review_pending"],
+    ["review_pending", "gate_pending"],
+    ["gate_pending", "accepted"],
+  ] as const;
+  for (const [from, to] of transitions) {
+    await appendObservation(plugin, {
+      recordType: "observation",
+      kind: "task_lifecycle_transition",
+      parentSessionId: "s-1",
+      taskExecutionRef,
+      from,
+      to,
+    });
+  }
+}
+
 function mockTerminalReviewCompletion(plugin: JusticePlugin): void {
   vi.spyOn(
     internalsOf(plugin).reviewCompletionDomain,
@@ -569,13 +598,117 @@ describe("JusticePlugin PostToolUse review directive delivery", () => {
 
     expect(response).toEqual({
       action: "inject",
-      injectedContext: "[JUSTICE: REVIEW REQUIRED] task-review",
-      normalInjectedContext: "[JUSTICE: REVIEW REQUIRED] task-review",
+      injectedContext: [
+        "[JUSTICE: REVIEW REQUIRED]",
+        "**Review kind**: task-review",
+        "**Category**: sp-review",
+        "**Task ID**: task-1",
+        "**Attempt ID**: attempt-1",
+        "**Review round**: 1",
+      ].join("\n"),
+      normalInjectedContext: [
+        "[JUSTICE: REVIEW REQUIRED]",
+        "**Review kind**: task-review",
+        "**Category**: sp-review",
+        "**Task ID**: task-1",
+        "**Attempt ID**: attempt-1",
+        "**Review round**: 1",
+      ].join("\n"),
     });
   });
 });
 
 describe("JusticePlugin accepted-decision progress updates", () => {
+  it("does not start Final Review until every canonical task is accepted", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin, ["task-1", "task-2"]);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    expect(
+      records.some(
+        (record) =>
+          record.recordType === "observation" && record.kind === "plan_finalization_transition",
+      ),
+    ).toBe(false);
+  });
+
+  it("starts Final Review and delivers its identity after every canonical task is accepted", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin, ["task-1", "task-2"]);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-2");
+    mockTerminalReviewCompletion(plugin);
+
+    const response = await plugin.handleEvent(reviewPostToolUseEvent());
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected Final Review directive");
+    expect(response.injectedContext).toContain("**Review kind**: final-review");
+    expect(response.injectedContext).toContain("**Category**: sp-final-review");
+    expect(response.injectedContext).toContain(`**Authorization ID**: ${authorizationId}`);
+    expect(response.injectedContext).toContain("**Finalization attempt ID**:");
+    expect(response.injectedContext).toContain("**Final review round**: 1");
+  });
+
+  it("does not append another finalization after a duplicate accepted-review PostToolUse", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+    const firstRead = await internalsOf(plugin).observationLogStore.readAll();
+    await plugin.handleEvent(reviewPostToolUseEvent());
+    const secondRead = await internalsOf(plugin).observationLogStore.readAll();
+
+    const countFinalizationTransitions = (records: readonly Record<string, unknown>[]): number =>
+      records.filter(
+        (record) =>
+          record.recordType === "observation" && record.kind === "plan_finalization_transition",
+      ).length;
+    expect(countFinalizationTransitions(firstRead)).toBe(2);
+    expect(countFinalizationTransitions(secondRead)).toBe(2);
+  });
+
+  it("serializes simultaneous final-task acceptances into one finalization", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    mockTerminalReviewCompletion(plugin);
+
+    await Promise.all([
+      plugin.handleEvent(reviewPostToolUseEvent()),
+      plugin.handleEvent(reviewPostToolUseEvent()),
+    ]);
+
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    const finalizationTransitions = records.filter(
+      (record) =>
+        record.recordType === "observation" && record.kind === "plan_finalization_transition",
+    );
+    expect(finalizationTransitions).toHaveLength(2);
+  });
+
   it("does not update plan progress when there is no active plan", async () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
