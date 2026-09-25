@@ -938,6 +938,37 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(await fs.readFile("plan.md")).toContain("- [x] first");
   });
 
+  it("keeps initialization fail-open when restoring accepted task progress cannot write", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorization = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorization === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedDecision(first, authorization.authorizationId);
+    await seedAcceptedTaskLifecycle(first, authorization.authorizationId, "task-1");
+    const writeFile = fs.writeFile;
+    fs.writeFile = async (path, content): Promise<void> => {
+      if (path === "plan.md") throw new Error("progress restore write unavailable");
+      await writeFile(path, content);
+    };
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+    await expect(restarted.initialize()).resolves.toBeUndefined();
+
+    const records = await internalsOf(restarted).observationLogStore.readAll();
+    expect(records.some(
+      (record) => record.recordType === "observation" &&
+        record.kind === "session_error" &&
+        record.message === "plan_progress_update_failed",
+    )).toBe(true);
+    fs.writeFile = writeFile;
+  });
+
   it("invalidates authorization before review when plan semantics changed", async () => {
     const fs = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
@@ -1131,6 +1162,28 @@ describe("JusticePlugin accepted-decision progress updates", () => {
       (record) => record.recordType === "observation" &&
         record.kind === "session_error" &&
         record.message === "plan_progress_update_failed",
+    )).toBe(true);
+  });
+
+  it("records an advisory when the all-tasks-accepted finalization cannot be committed", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    vi.spyOn(plugin.getObservationHandler(), "advanceFinalizationAfterAllTasksAccepted")
+      .mockResolvedValue({ kind: "failed" });
+    mockTerminalReviewCompletion(plugin);
+
+    await plugin.handleEvent(reviewPostToolUseEvent());
+
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    expect(records.some(
+      (record) => record.recordType === "observation" &&
+        record.kind === "session_error" &&
+        record.message === "finalization_advance_failed",
     )).toBe(true);
   });
 
