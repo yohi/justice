@@ -244,9 +244,14 @@ impl ReviewArtifactRoot {
             0,
         ) {
             Ok(fd) => fd,
-            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+            Err(error) if lease_open_error_status(&error) == Some("cleanup_incomplete") => {
                 return Ok(CleanupResult {
                     status: "cleanup_incomplete".to_string(),
+                });
+            }
+            Err(error) if lease_open_error_status(&error) == Some("replacement_retained") => {
+                return Ok(CleanupResult {
+                    status: "replacement_retained".to_string(),
                 });
             }
             Err(error) => return Err(cleanup_status(&error)),
@@ -664,6 +669,14 @@ fn cleanup_status(error: &io::Error) -> Error {
     }
 }
 
+fn lease_open_error_status(error: &io::Error) -> Option<&'static str> {
+    match error.raw_os_error() {
+        Some(libc::ENOENT) => Some("cleanup_incomplete"),
+        Some(libc::ELOOP) => Some("replacement_retained"),
+        _ => None,
+    }
+}
+
 fn into_owned_fd(file: std::fs::File) -> OwnedFd {
     let raw = file.into_raw_fd();
     // SAFETY: ownership of the file descriptor was transferred by forgetting the File.
@@ -673,7 +686,8 @@ fn into_owned_fd(file: std::fs::File) -> OwnedFd {
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_leaf, checked_syscall_fd, lease_leaf_from_path, probe_review_artifact_capabilities,
+        artifact_leaf, checked_syscall_fd, lease_leaf_from_path, lease_open_error_status,
+        probe_review_artifact_capabilities,
     };
 
     #[test]
@@ -689,6 +703,22 @@ mod tests {
         assert!(lease_leaf_from_path(".justice/reviews/.leases/id.lease").is_ok());
         assert!(lease_leaf_from_path(".justice/reviews/id.lease").is_err());
         assert!(lease_leaf_from_path(".justice/reviews/.leases/../id.lease").is_err());
+    }
+
+    #[test]
+    fn lease_open_error_status_classifies_symlink_replacements_only() {
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::ELOOP)),
+            Some("replacement_retained")
+        );
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::ENOENT)),
+            Some("cleanup_incomplete")
+        );
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::EACCES)),
+            None
+        );
     }
 
     #[test]
