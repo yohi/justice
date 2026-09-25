@@ -53,6 +53,11 @@ jobs:
           name: justice-dist
           path: dist/
         if: ${{ steps.release.outputs.release_created }}
+      - name: Verify published package includes native review artifact provider
+        run: |
+          npm pack --dry-run --json --ignore-scripts |
+            node -e 'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => { const packages = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!packages[0]?.files?.some((file) => file.path === "dist/native/index.linux-x64-gnu.node")) { console.error("Native review artifact provider is missing from the npm package"); process.exitCode = 1; } });'
+        if: ${{ steps.release.outputs.release_created }}
       - name: Publish to GitHub Packages
         run: npm publish --ignore-scripts
         env:

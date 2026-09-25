@@ -1767,16 +1767,16 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 
 `REQUIREMENTS_2026-08-29.md` に記載されていた routing 要件のうち、Controller と Worker の分離、category-first routing、model/provider independence、`ExecutionRole` から OMO category への写像、Worker payload からの `agent` / `subagent_type` / `model` 等の除去は、現行実装および本仕様の §3.2、§4.1b、§5.7、§14 に統合済みである。これらの要件は `REQUIREMENTS*` ファイルではなく本仕様を正とする。
 
-一方、以下は要求として保持するが、現行実装の契約ではない。
+以下の要求は、現行で利用可能な構成要素と、まだ実現していない継続実行の契約を区別する。
 
 | 要求 | 状態 | 現行仕様との関係 |
 |---|---|---|
-| FR-601 Plan-scoped Authorization | 保留 | 現行は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
-| FR-602 Authorization Binding | 保留 | session、plan path、plan fingerprint への binding は未導入 |
-| FR-603 Plan Mutation | 保留 | fingerprint mismatch による無効化は未導入 |
-| FR-604 Continuous Execution | 保留 | 同一承認 plan の複数 task 継続実行は将来拡張 |
+| FR-601 Plan-scoped Authorization | 部分実装 | 計画に紐づく承認は永続化するが、実装委譲は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
+| FR-602 Authorization Binding | 実装済み | 承認を session、plan path、plan fingerprint に紐づけ、`.justice/authorizations.json` に保存する |
+| FR-603 Plan Mutation | 部分実装 | `task()` の PreToolUse 時に計画を再読込し、fingerprint mismatch を検出すると承認を無効化する。ファイル変更時の即時監視は行わない |
+| FR-604 Continuous Execution | 保留 | 同一承認 plan でも各 `task()` の前に再度 arm が必要。連続委譲の自動認可は将来拡張 |
 
-これらを実装済みとして扱ってはならない。導入時は authorization のライフサイクル、plan fingerprint、既存の fail-open 境界、および `implementation_unauthorized` の挙動を同時に再設計する。
+FR-601 と FR-604 の継続実行契約、および FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および `implementation_unauthorized` の挙動を整合させる。
 
 upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。
 
@@ -1796,8 +1796,7 @@ Linux x86_64 glibc 環境において、カーネルシステムコール `opena
 1. **記述子相対解決**: ホストパスを受け付けるのはルート初期化（`openReviewArtifactRoot(rootDir)`）のみであり、以降のすべての成果物・リース・隔離操作は `.justice/reviews` ディレクトリ記述子からの `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` 相対操作で行われます。
 2. **排他作成と inode 拘束リース**: 排他マーカーは `O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC` で作成され、開かれた記述子から `linkat` で `.justice/reviews/.leases/<id>.lease` ハードリンクを作成して inode を拘束します。
 3. **厳格な再オープンと identity 検証**: `writeExisting` および `readOnce` 時には、成果物とリースの双方を記述子相対で再オープンし、`st_dev`/`st_ino` が耐久予約 identity と一致することを検証します。
-4. **物理隔離と Unlink 禁止**: クリーンアップ時、検証済みの隔離ファイル（quarantine leaf）に対して `unlinkat` による物理削除は行いません。`renameat2(..., RENAME_NOREPLACE)` で `.justice/reviews/.quarantine/` へ退避し、`quarantine_retained` または `replacement_retained` を返します。
+4. **物理隔離と Unlink 禁止**: クリーンアップ前に成果物とリースの双方を再オープンして耐久予約 identity と照合し、不一致なら元のファイルを移動せず `replacement_retained` を返します。`renameat2(..., RENAME_NOREPLACE)` で `.justice/reviews/.quarantine/` へ退避した後も双方の identity と元の名前の不在を確認し、不確実な場合は `cleanup_incomplete` として隔離ファイルを保持します。検証済みの隔離ファイルに対して `unlinkat` による物理削除は行いません。
 5. **フェイルオープンとフォールバック禁止**: 非Linux、非x86_64、非glibc、アドオン不在、システムコール不在の環境ではプロバイダ生成が `undefined` を返し、pathname-only 操作へのフォールバックは行いません。成果物予約が不能な場合もセッション実行自体は継続します。
 
 実機検証手順および監査証拠は [`docs/agents/review-artifact-linux-provider.md`](docs/agents/review-artifact-linux-provider.md) を参照してください。
-

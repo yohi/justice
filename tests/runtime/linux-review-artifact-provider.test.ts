@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -143,6 +143,47 @@ describe("LinuxOpenat2ReviewArtifactProvider publication", () => {
       await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe(
         "replacement_retained",
       );
+    } finally {
+      provider?.close();
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a replacement lease during cleanup without moving the artifact", async () => {
+    if (process.platform !== "linux" || process.arch !== "x64") return;
+
+    const rootDir = await mkdtemp(join(tmpdir(), "justice-review-artifact-"));
+    const provider = createLinuxOpenat2ReviewArtifactProvider(rootDir);
+    try {
+      expect(provider).toBeDefined();
+      if (provider === undefined) return;
+
+      const artifactPath = ".justice/reviews/review.json";
+      const marker = await provider.createExclusiveMarker(artifactPath);
+      expect(marker.kind).toBe("created");
+      if (marker.kind !== "created") return;
+
+      const leasePath = join(rootDir, marker.leasePath);
+      await rm(leasePath);
+      // The lease path is returned by the provider under the isolated temporary root.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      await writeFile(leasePath, "replacement lease");
+
+      const reservation = {
+        status: "usable" as const,
+        artifactId: "review",
+        artifactPath,
+        leasePath: marker.leasePath,
+        artifactIdentity: marker.artifactIdentity,
+      };
+      await expect(provider.reservedReviewArtifactIo.cleanup(reservation)).resolves.toBe(
+        "replacement_retained",
+      );
+      // Both paths remain under the isolated temporary root.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      expect(await readFile(leasePath, "utf8")).toBe("replacement lease");
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      expect(await readFile(join(rootDir, artifactPath), "utf8")).toBe("");
     } finally {
       provider?.close();
       await rm(rootDir, { recursive: true, force: true });
