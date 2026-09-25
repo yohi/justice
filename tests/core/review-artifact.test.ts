@@ -40,6 +40,28 @@ describe("review artifact completion (Task 3.6)", () => {
     expect(fixture.parseAndAssemble).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for the delegated child binding before consuming a review result", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed_without_child_binding");
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "awaiting_child_binding" });
+
+    const pending = (await fixture.durableRecords()).filter(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_post_tooluse_pending",
+    );
+    expect(pending).toHaveLength(1);
+    expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
+  });
+
+  it("does not read a reserved artifact when the read-attempt marker cannot be persisted", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed_with_failed_read_attempt");
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "blocked" });
+
+    expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
+    expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
+  });
+
   it("moves a clean live completion through exactly one Gate and Acceptance decision", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
     await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
