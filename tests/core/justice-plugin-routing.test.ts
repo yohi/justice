@@ -240,6 +240,30 @@ describe("JusticePlugin routing guard", () => {
     expect(plugin.getSessionStateProvider().getActiveTaskId("call-1")).toBeUndefined();
   });
 
+  it("continues task PostToolUse routing when task feedback rejects", async () => {
+    const warn = vi.fn();
+    const routedEvent: PostToolUseEvent = {
+      type: "PostToolUse",
+      sessionId: "s-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: {}, toolResult: "ok", error: false },
+    };
+    const configured = new JusticePlugin(createMockFileReader({}), createMockFileWriter(), {
+      logger: { warn, error: vi.fn() },
+    });
+    const observationSpy = vi.spyOn(configured.getObservationHandler(), "handlePostToolUse");
+    const planBridgeSpy = vi.spyOn(configured.getPlanBridge(), "handlePostToolUse");
+    vi.spyOn(configured.getTaskFeedback(), "handlePostToolUse").mockRejectedValue(new Error("feedback failed"));
+
+    const response = await configured.handleEvent(routedEvent);
+
+    expect(observationSpy).toHaveBeenCalledOnce();
+    expect(planBridgeSpy).toHaveBeenCalledOnce();
+    expect(configured.getTaskFeedback().handlePostToolUse).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith("task-feedback post-tool-use failed", expect.any(Error));
+    expect(response).toEqual({ action: "proceed" });
+  });
+
   it("routes a user Message to plan-bridge.handleMessage", async () => {
     const plugin = createPlugin();
     const observation = plugin.getObservationHandler();
@@ -716,7 +740,7 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
     mockTerminalReviewCompletion(plugin);
     const readFile = fs.readFile;
-    fs.readFile = async (path) => {
+    fs.readFile = async (path): Promise<string> => {
       if (path === "plan.md") throw new Error("plan read unavailable");
       return readFile(path);
     };
