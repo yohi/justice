@@ -5817,7 +5817,7 @@ on behavior assertions, not on a missing symbol, malformed fixture, unsupported 
 or absent `.node` file. The test runner must load the built native addon for supported Linux cases;
 unsupported publication is covered by the pure environment guard matrix and must not be silently skipped.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 Run:
 
