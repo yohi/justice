@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { AuthorizationStore } from "../../src/core/plan-authorization";
-import type { MessageEvent, PostToolUseEvent, PreToolUseEvent, ReviewCorrelation } from "../../src/core/types";
+import type {
+  MessageEvent,
+  PostToolUseEvent,
+  PreToolUseEvent,
+  ReviewCorrelation,
+  ReviewRequiredDirective,
+} from "../../src/core/types";
 import type { ObservationMessagePayload } from "../../src/core/v2/message-payload";
 import {
   createMockFileReader,
@@ -125,6 +131,64 @@ describe("JusticePlugin routing guard", () => {
         injectedContext: "plan post\n\n---\n\nfeedback post",
       }),
     );
+  });
+
+  it("runs task PostToolUse handlers in transactional order", async () => {
+    const plugin = createPlugin();
+    const order: string[] = [];
+    let releaseObservation: (() => void) | undefined;
+    let releasePlanBridge: (() => void) | undefined;
+    let markObservationStarted: (() => void) | undefined;
+    let markPlanBridgeStarted: (() => void) | undefined;
+    let markTaskFeedbackStarted: (() => void) | undefined;
+    const observationDone = new Promise<void>((resolve) => {
+      releaseObservation = resolve;
+    });
+    const planBridgeDone = new Promise<void>((resolve) => {
+      releasePlanBridge = resolve;
+    });
+    const observationStarted = new Promise<void>((resolve) => {
+      markObservationStarted = resolve;
+    });
+    const planBridgeStarted = new Promise<void>((resolve) => {
+      markPlanBridgeStarted = resolve;
+    });
+    const taskFeedbackStarted = new Promise<void>((resolve) => {
+      markTaskFeedbackStarted = resolve;
+    });
+    vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse").mockImplementation(async () => {
+      order.push("observation");
+      markObservationStarted?.();
+      await observationDone;
+      return { action: "proceed" };
+    });
+    vi.spyOn(plugin.getPlanBridge(), "handlePostToolUse").mockImplementation(async () => {
+      order.push("planBridge");
+      markPlanBridgeStarted?.();
+      await planBridgeDone;
+      return { action: "proceed" };
+    });
+    vi.spyOn(plugin.getTaskFeedback(), "handlePostToolUse").mockImplementation(async () => {
+      order.push("taskFeedback");
+      markTaskFeedbackStarted?.();
+      return { action: "proceed" };
+    });
+
+    const handling = plugin.handleEvent({
+      type: "PostToolUse",
+      payload: { toolName: "task", toolResult: "ok", error: false },
+      sessionId: "s-1",
+    } as PostToolUseEvent);
+
+    await observationStarted;
+    expect(order).toEqual(["observation"]);
+    releaseObservation?.();
+    await planBridgeStarted;
+    expect(order).toEqual(["observation", "planBridge"]);
+    releasePlanBridge?.();
+    await taskFeedbackStarted;
+    await handling;
+    expect(order).toEqual(["observation", "planBridge", "taskFeedback"]);
   });
 
   it("keeps the task window open until every PostToolUse handler settles", async () => {
@@ -357,6 +421,17 @@ type PluginInternals = {
   reviewCompletionDomain: {
     consumeReviewCompletion: (input: unknown) => Promise<{ kind: string }>;
   };
+  reviewDirectiveSink: {
+    deliver: (delivery: {
+      readonly parentSessionId: string;
+      readonly directive: ReviewRequiredDirective;
+    }) => Promise<void>;
+  };
+  reviewDispatchState: {
+    validateQueuedReviewDirectiveWithinParentSessionClaim: (
+      delivery: unknown,
+    ) => Promise<"inject" | "discard" | "retain">;
+  };
 };
 
 function internalsOf(plugin: JusticePlugin): PluginInternals {
@@ -459,6 +534,46 @@ function mockTerminalReviewCompletion(plugin: JusticePlugin): void {
     "consumeReviewCompletion",
   ).mockResolvedValue({ kind: "terminalized" });
 }
+
+describe("JusticePlugin PostToolUse review directive delivery", () => {
+  it("merges a current pending review directive into the task completion response", async () => {
+    const fs = createMockFileSystem();
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    const correlation = taskReviewCorrelation(authorizationId);
+    await appendObservation(plugin, {
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: "t-pending",
+      parentSessionId: "s-1",
+      correlation,
+      expectedCategory: "sp-review",
+      from: null,
+      to: "pending",
+    });
+    await internalsOf(plugin).reviewDirectiveSink.deliver({
+      parentSessionId: "s-1",
+      directive: { kind: "review_required", correlation },
+    });
+    vi.spyOn(
+      internalsOf(plugin).reviewDispatchState,
+      "validateQueuedReviewDirectiveWithinParentSessionClaim",
+    ).mockResolvedValue("inject");
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s-1",
+      callId: "implementation-call",
+      payload: { toolName: "task", toolResult: "implemented", error: false },
+    } as PostToolUseEvent);
+
+    expect(response).toEqual({
+      action: "inject",
+      injectedContext: "[JUSTICE: REVIEW REQUIRED] task-review",
+      normalInjectedContext: "[JUSTICE: REVIEW REQUIRED] task-review",
+    });
+  });
+});
 
 describe("JusticePlugin accepted-decision progress updates", () => {
   it("does not update plan progress when there is no active plan", async () => {

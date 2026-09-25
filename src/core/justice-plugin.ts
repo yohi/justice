@@ -6,6 +6,7 @@ import type {
   FileWriter,
   HookEvent,
   PreToolUseEvent,
+  PostToolUseEvent,
   HookResponse,
   EventEvent,
   CompactionPayload,
@@ -705,31 +706,18 @@ export class JusticePlugin {
           if (event.payload.toolName === "task") {
             const reviewResponse = await this.routeReviewTaskPostToolUse(event);
             if (reviewResponse !== undefined) {
-              return this.mergePreToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
+              return this.mergePostToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
             }
           }
           // Keep the window open while observation associates the tool result with its task.
-          const [observation, planBridge, taskFeedback] = await Promise.all([
-            this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
-              this.options.logger?.warn("observation-handler post-tool-use failed", err);
-              return PROCEED;
-            }),
+          const response =
             event.payload.toolName === "task"
-              ? this.planBridge.handlePostToolUse(event).catch((err) => {
-                  this.options.logger?.warn("plan-bridge post-tool-use failed", err);
+              ? await this.runTaskPostToolUseSequentially(event)
+              : await this.observationHandler.handlePostToolUse(event).catch((err: unknown) => {
+                  this.options.logger?.warn("observation-handler post-tool-use failed", err);
                   return PROCEED;
-                })
-              : Promise.resolve(PROCEED),
-            event.payload.toolName === "task"
-              ? this.taskFeedback.handlePostToolUse(event).catch((err) => {
-                  this.options.logger?.warn("task-feedback post-tool-use failed", err);
-                  return PROCEED;
-                })
-              : Promise.resolve(PROCEED),
-          ]);
-          return mergePostToolUseResponses([observation, planBridge, taskFeedback], (message) =>
-            this.warnMergeConflict(message),
-          );
+                });
+          return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
         } finally {
           closeSessionTaskWindow(this.sessionStateProvider, event.callId);
         }
@@ -1230,6 +1218,52 @@ export class JusticePlugin {
           (message) => this.warnMergeConflict(message),
         ),
       response,
+    );
+  }
+
+  private async runTaskPostToolUseSequentially(event: PostToolUseEvent): Promise<HookResponse> {
+    const observation = await this.observationHandler.handlePostToolUse(event).catch((error: unknown) => {
+      this.options.logger?.warn("observation-handler post-tool-use failed", error);
+      return PROCEED;
+    });
+    const planBridge = await this.planBridge.handlePostToolUse(event).catch((error: unknown) => {
+      this.options.logger?.warn("plan-bridge post-tool-use failed", error);
+      return PROCEED;
+    });
+    const taskFeedback = await this.taskFeedback.handlePostToolUse(event).catch((error: unknown) => {
+      this.options.logger?.warn("task-feedback post-tool-use failed", error);
+      return PROCEED;
+    });
+    return mergePostToolUseResponses([observation, planBridge, taskFeedback], (message) =>
+      this.warnMergeConflict(message),
+    );
+  }
+
+  private async mergePostToolUseWithReviewDeliveries(
+    parentSessionId: string,
+    response: HookResponse,
+  ): Promise<HookResponse> {
+    let deliveries;
+    try {
+      deliveries = await this.authorizationReviewBoundary.withParentSession(parentSessionId, () =>
+        this.reviewDirectiveSink.drainForParentSession(parentSessionId, (delivery) =>
+          this.reviewDispatchState.validateQueuedReviewDirectiveWithinParentSessionClaim(delivery),
+        ),
+      );
+    } catch (error) {
+      await this.recordReviewDispatchAdvisory("review_directive_delivery_validation_failed", error);
+      return response;
+    }
+    if (deliveries.length === 0) return response;
+    return mergePostToolUseResponses(
+      [
+        response,
+        ...deliveries.map((delivery) => ({
+          action: "inject" as const,
+          injectedContext: `[JUSTICE: REVIEW REQUIRED] ${delivery.directive.correlation.reviewKind}`,
+        })),
+      ],
+      (message) => this.warnMergeConflict(message),
     );
   }
 
