@@ -950,10 +950,34 @@ export class PlanBridge {
       currentFingerprint.value !== binding.planFingerprint.value
     ) {
       try {
-        await dependencies.authorizationStore.invalidateForFingerprint(
-          binding.authorizationId,
-          currentFingerprint,
-          new Date().toISOString(),
+        await dependencies.authorizationReviewBoundary.withParentSession(
+          event.sessionId,
+          async () => {
+            const mutation = await dependencies.authorizationStore
+              .invalidateForFingerprintWithinAuthorizationReviewBoundary(
+                event.sessionId,
+                binding.authorizationId,
+                currentFingerprint,
+                new Date().toISOString(),
+              );
+            if (mutation.kind !== "saved") return;
+
+            const cancellation =
+              this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim;
+            if (cancellation === null) return;
+            try {
+              await cancellation(event.sessionId, binding.authorizationId);
+            } catch (error: unknown) {
+              this.safeNotify(
+                event.sessionId,
+                undefined,
+                "warning",
+                "escalation",
+                "Review dispatch cancellation failed",
+                `Failed to cancel review dispatches after plan invalidation: ${String(error)}`,
+              );
+            }
+          },
         );
       } catch (error) {
         this.safeNotify(

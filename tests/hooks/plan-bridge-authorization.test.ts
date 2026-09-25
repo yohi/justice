@@ -456,6 +456,63 @@ describe("PlanBridge authorization restoration", () => {
     });
   });
 
+  it("cancels review dispatches after durably invalidating a changed plan", async () => {
+    const { bridge, store, files } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    const binding = (await store.hydrate()).find((candidate) => candidate.status === "active");
+    if (binding === undefined) throw new Error("test setup: active binding is missing");
+    const cancellation = vi.fn(async () => {
+      await expect(store.findByAuthorizationId(binding.authorizationId)).resolves.toMatchObject({
+        status: "invalidated",
+      });
+    });
+    bridge.setReviewDispatchCancellation(cancellation);
+    files.writtenFiles["docs/plan.md"] = "## Task 1: Changed\n- [ ] implement\n";
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(cancellation).toHaveBeenCalledExactlyOnceWith("s1", binding.authorizationId);
+    expect(bridge.getActivePlan("s1")).toBeNull();
+  });
+
+  it("clears stale plan state when review cancellation fails after invalidation", async () => {
+    const { bridge, store, files } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+    const cancellation = vi.fn(async () => {
+      throw new Error("cancellation failed");
+    });
+    bridge.setReviewDispatchCancellation(cancellation);
+    files.writtenFiles["docs/plan.md"] = "## Task 1: Changed\n- [ ] implement\n";
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "s1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { prompt: "run" } },
+    });
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(cancellation).toHaveBeenCalledOnce();
+    expect(bridge.getActivePlan("s1")).toBeNull();
+    expect((await store.hydrate()).find((binding) => binding.sessionId === "s1")).toMatchObject({
+      status: "invalidated",
+    });
+  });
+
   it("returns unauthorized when the active plan file is missing", async () => {
     const { bridge, files } = createFixture();
     const armed = await bridge.handleImplementationArm("s1", {
