@@ -37,6 +37,10 @@ role-prompt.md          →     task-feedback (PostToolUse)        ←   compact
                                PlanParser · TaskPackager · ErrorClassifier
                                DependencyAnalyzer · CategoryClassifier
                                WisdomStore · LearningExtractor · ...
+                             ↕
+                             ランタイム / ネイティブ境界:
+                               NodeFileSystem · Linux Review Artifact Provider
+                               (Rust N-API openat2/renameat2 記述子相対 I/O)
 ```
 
 ### 主な設計原則
@@ -645,6 +649,7 @@ bun run typecheck       # tsc --noEmit
 bun run lint            # ESLint
 bun run format          # Prettier によるフォーマット
 bun run build           # dist/ ディレクトリへのコンパイル
+bun run build:native:review-artifact # Linux native N-API アドオンのビルド
 ```
 
 ## 開発環境
@@ -674,3 +679,4 @@ VS Code の **Remote Containers** 拡張機能を使用してリポジトリを�
 - **[SPEC.md](./SPEC.md)** — 完全な仕様書 (アーキテクチャ、データモデル、コンポーネント仕様、API)
 - **[AGENTS.md](./AGENTS.md)** — このプロジェクト向けの AI エージェントのコーディングガイドライン
 - **[upstream-drift.md](./docs/agents/upstream-drift.md)** — upstream compatibility audit と再検証手順
+- **[review-artifact-linux-provider.md](./docs/agents/review-artifact-linux-provider.md)** — Linux Review Artifact Provider の検証条件と監査証跡

@@ -24,6 +24,7 @@ Before declaring any task complete, run all four commands fresh and confirm they
 - `src/core/` — pure business logic; `src/core/v2/` is the observation/evidence/gate engine
 - `src/hooks/` — OmO hook handlers that coordinate core logic with the plugin lifecycle
 - `src/runtime/` — Node/OpenCode adapters and all runtime I/O boundaries
+- `native/` — Rust N-API descriptor-relative Linux filesystem operations
 - `tests/` — ordinary unit tests use injected mocks; `tests/preflight-verification.test.ts` intentionally reads the committed `SPEC.md`, while designated real-fs integration suites remain explicit exceptions
 
 ## Non-Negotiable Invariants
@@ -52,4 +53,5 @@ If a change appears to require breaking an invariant, stop and ask first.
 - [SPEC.md](./SPEC.md) — full architecture, contracts, event routing, data models; read before design-level changes.
 - [README.md](./README.md) — user installation and command syntax (`/justice-start`, `/justice-implement`).
 - [docs/agents/upstream-drift.md](./docs/agents/upstream-drift.md) — upstream error classification and retry rules; read only when modifying error classification.
+- [docs/agents/review-artifact-linux-provider.md](./docs/agents/review-artifact-linux-provider.md) — Linux review artifact provider probe and audit conditions; read when modifying review artifact operations.
 - For exact function signatures and call paths, query the codebase directly rather than relying on docs.
