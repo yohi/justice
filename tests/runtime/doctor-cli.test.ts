@@ -766,7 +766,7 @@ describe("runDoctor() controller configuration", () => {
               ["justice-implement-brainstorming", { kind: "valid", agent: "my-custom-agent" }],
               ["justice-implement-writing-plans", { kind: "valid" }],
               ["justice-implement-subagent-driven-development", { kind: "invalid" }],
-              ["justice-implement-executing-plans", { kind: "valid", agent: "sisyphus" }],
+              ["justice-implement-executing-plans", { kind: "valid", agent: "oracle" }],
             ]),
           },
         }),
@@ -783,7 +783,7 @@ describe("runDoctor() controller configuration", () => {
       "  ✗ justice-implement-subagent-driven-development: misconfigured (invalid_command_definition / 期待 agent: atlas)",
     );
     expect(result.text).toContain(
-      "  ✓ justice-implement-executing-plans: configured (agent: sisyphus)",
+      "  ✗ justice-implement-executing-plans: misconfigured (agent_mismatch / 設定値: oracle / 期待 agent: sisyphus)",
     );
   });
 

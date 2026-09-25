@@ -493,11 +493,11 @@ describe("assessDoctorControllerConfiguration()", () => {
   });
 
   it.each([
-    ["recognized but wrong agent", { agent: "oracle" }, "oracle"],
-    ["unrecognized custom agent", { agent: "my-custom-agent" }, "my-custom-agent"],
+    ["recognized but wrong agent", { agent: "oracle" }, "oracle", "agent_mismatch"],
+    ["unrecognized custom agent", { agent: "my-custom-agent" }, "my-custom-agent", "agent_invalid"],
   ] as const)(
-    "reports a snapshot-available %s as misconfigured/agent_invalid",
-    (_label, definition, configuredAgent) => {
+    "reports a snapshot-available %s as misconfigured with its distinct reason",
+    (_label, definition, configuredAgent, reason) => {
       const result = assessDoctorControllerConfiguration(
         projectDoctorEffectiveConfig({
           category: {},
@@ -511,7 +511,7 @@ describe("assessDoctorControllerConfiguration()", () => {
         pinnedCommand: "justice-implement-brainstorming",
         configuredController: configuredAgent,
         status: "misconfigured",
-        reason: "agent_invalid",
+        reason,
       });
     },
   );

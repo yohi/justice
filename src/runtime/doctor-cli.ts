@@ -345,7 +345,7 @@ export function formatControllerAssessmentLine(assessment: ControllerConfigurati
     case "missing":
       return `  ✗ ${assessment.pinnedCommand}: missing (${assessment.reason} / ${desiredNote})`;
     case "misconfigured":
-      return assessment.reason === "agent_invalid"
+      return assessment.reason === "agent_invalid" || assessment.reason === "agent_mismatch"
         ? `  ✗ ${assessment.pinnedCommand}: misconfigured (${assessment.reason} / 設定値: ${assessment.configuredController ?? "unknown"} / ${desiredNote})`
         : `  ✗ ${assessment.pinnedCommand}: misconfigured (${assessment.reason} / ${desiredNote})`;
     case "unsupported":
