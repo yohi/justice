@@ -831,6 +831,50 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     )).toBe(true);
   });
 
+  it("updates accepted task progress when restoring an active authorization after restart", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorization = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorization === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedDecision(first, authorization.authorizationId);
+    await seedAcceptedTaskLifecycle(first, authorization.authorizationId, "task-1");
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+    await restarted.initialize();
+
+    expect(await fs.readFile("plan.md")).toContain("- [x] first");
+  });
+
+  it("invalidates authorization before review when plan semantics changed", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await internalsOf(plugin).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorizationId === null) throw new Error("test setup: authorization approval failed");
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    await fs.writeFile("plan.md", `${progressPlan}\n- Additional requirement`);
+
+    const planIsCurrent = await (plugin as unknown as {
+      isAuthorizationPlanCurrent: (correlation: ReviewCorrelation) => Promise<boolean>;
+    }).isAuthorizationPlanCurrent(taskReviewCorrelation(authorizationId.authorizationId));
+
+    expect(planIsCurrent).toBe(false);
+    await expect(
+      internalsOf(plugin).authorizationStore.findByAuthorizationId(authorizationId.authorizationId),
+    ).resolves.toMatchObject({ status: "invalidated" });
+  });
+
   it("checks canonical task acceptance after a delayed review child binding is recorded", async () => {
     const fs = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });

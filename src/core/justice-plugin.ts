@@ -36,6 +36,7 @@ import { FileGateLoader } from "../runtime/gate-loader";
 import { StateProjectionCache } from "../runtime/state-projection-cache";
 import { resolveTaskIdFromModifiedPayload, resolveTaskIdFromToolInput } from "./task-packager";
 import { normalizeSafeRelativePath } from "./trigger-detector";
+import { computePlanFingerprint } from "./plan-fingerprint";
 import type { ObservationMessagePayload } from "./v2/message-payload";
 import { WisdomMetrics } from "./wisdom-metrics";
 import { TelemetryStore } from "./telemetry-store";
@@ -530,6 +531,7 @@ export class JusticePlugin {
     this.reviewCompletionDomain = createReviewCompletionDomain({
       readDurableRecords: () => this.observationLogStore.readAll(),
       findAuthorizationById: (authorizationId) => this.authorizationStore.findByAuthorizationId(authorizationId),
+      isAuthorizationPlanCurrent: (correlation) => this.isAuthorizationPlanCurrent(correlation),
       appendReviewCompletionStaging: appendReviewObservation,
       appendReviewArtifactReadAttempt: appendReviewObservation,
       appendReviewArtifactFailureStaging: appendReviewObservation,
@@ -573,6 +575,16 @@ export class JusticePlugin {
         this.observationHandler.appendTaskLifecycleTransition(input),
       appendPlanFinalizationTransition: (input) =>
         this.observationHandler.appendPlanFinalizationTransition(input),
+      releaseCompletedAuthorization: async (parentSessionId, authorizationId) => {
+        const result = await this.authorizationStore.releaseWithinAuthorizationReviewBoundary(
+          parentSessionId,
+          authorizationId,
+          new Date().toISOString(),
+        );
+        if (result.kind !== "saved" && result.kind !== "already_terminal") {
+          await this.recordReviewDispatchAdvisory("completed_authorization_release_failed");
+        }
+      },
       recordAdvisory: (advisory, cause) => this.recordReviewDispatchAdvisory(advisory, cause),
       dispatch: {
         withReviewDispatchParentSessionClaim:
@@ -627,6 +639,11 @@ export class JusticePlugin {
         await this.reviewCompletionDomain
           .recoverStagedReviewCompletionsAfterRestart()
           .catch((error: unknown) => this.warnInitializationRecoveryFailure("staged completion", error));
+        for (const binding of await this.authorizationStore.hydrate()) {
+          if (binding.status === "active") {
+            await this.recoverAcceptedTaskProgress(binding.sessionId);
+          }
+        }
         await this.recoverPendingFinalizations().catch((error: unknown) =>
           this.warnInitializationRecoveryFailure("finalization after staged completion", error),
         );
@@ -768,6 +785,7 @@ export class JusticePlugin {
               event.payload.parentSessionId,
               event.payload.parentCallId,
             );
+            await this.recoverAcceptedTaskProgress(event.payload.parentSessionId);
             await this.recoverPendingFinalizations(event.payload.parentSessionId);
             return response;
           })
@@ -1268,6 +1286,96 @@ export class JusticePlugin {
       } catch (error: unknown) {
         await this.recordReviewDispatchAdvisory("finalization_advance_failed", error);
       }
+    }
+  }
+
+  private async recoverAcceptedTaskProgress(parentSessionId: string): Promise<void> {
+    try {
+      const records = await this.observationLogStore.readAll();
+      const accepted = records.filter(
+        (record): record is Extract<
+          PersistedLogRecord,
+          { readonly recordType: "decision"; readonly kind: "task-acceptance" }
+        > =>
+          record.recordType === "decision" &&
+          "kind" in record &&
+          record.kind === "task-acceptance" &&
+          record.verdict === "accepted",
+      );
+      for (const decision of accepted) {
+        const correlation = {
+          reviewKind: "task-review",
+          taskExecutionRef: decision.taskExecutionRef,
+          reviewRound: 1,
+        } as const;
+        const planCurrent = await this.authorizationReviewBoundary.withParentSession(
+          parentSessionId,
+          () => this.isAuthorizationPlanCurrent(correlation),
+        );
+        if (!planCurrent) continue;
+        await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
+          const binding = await this.authorizationStore.findByAuthorizationId(
+            decision.taskExecutionRef.authorizationId,
+          );
+          const planPath = this.planBridge.getActivePlan(parentSessionId);
+          if (
+            binding?.status !== "active" ||
+            binding.sessionId !== parentSessionId ||
+            planPath !== binding.planPath ||
+            !binding.canonicalSnapshot.tasks.some(
+              (task) => task.taskId === decision.taskExecutionRef.taskId,
+            )
+          ) return;
+          const content = await this.fileReader.readFile(planPath);
+          const task = new PlanParser().parse(content).find(
+            (candidate) => candidate.id === decision.taskExecutionRef.taskId,
+          );
+          if (task === undefined) return;
+          const update = updatePlanProgress(content, task, decision);
+          if (update.updated) await this.fileWriter.writeFile(planPath, update.content);
+        });
+      }
+    } catch (error: unknown) {
+      await this.recordReviewDispatchAdvisory("plan_progress_update_failed", error);
+    }
+  }
+
+  private async isAuthorizationPlanCurrent(correlation: ReviewCorrelation): Promise<boolean> {
+    const authorizationId = correlation.reviewKind === "task-review"
+      ? correlation.taskExecutionRef.authorizationId
+      : correlation.authorizationId;
+    try {
+      const binding = await this.authorizationStore.findByAuthorizationId(authorizationId);
+      if (binding?.status !== "active") return false;
+      const safePath = normalizeSafeRelativePath(binding.planPath);
+      if (safePath === null) return false;
+      const content = await this.fileReader.readFile(safePath);
+      const fingerprint = computePlanFingerprint(
+        content,
+        binding.canonicalSnapshot.tasks.map((task) => task.taskId),
+      );
+      if (
+        fingerprint.algorithm === binding.planFingerprint.algorithm &&
+        fingerprint.value === binding.planFingerprint.value
+      ) return true;
+
+      const invalidation = await this.authorizationStore.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+        binding.sessionId,
+        binding.authorizationId,
+        fingerprint,
+        new Date().toISOString(),
+      );
+      if (invalidation.kind === "saved") {
+        await this.reviewDispatchState.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+          binding.sessionId,
+          binding.authorizationId,
+        );
+        this.planBridge.setActivePlan(binding.sessionId, null);
+      }
+      return false;
+    } catch (error: unknown) {
+      await this.recordReviewDispatchAdvisory("review_plan_fingerprint_check_failed", error);
+      return false;
     }
   }
 
