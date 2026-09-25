@@ -221,7 +221,11 @@ impl ReviewArtifactRoot {
     ) -> Result<CleanupResult> {
         let (reviews_fd, leases_fd, quarantine_fd) = self.directory_fds()?;
         let artifact_leaf = artifact_leaf(&descriptor.artifact_path)?;
+        let expected_lease = lease_leaf(artifact_leaf)?;
         let lease_leaf = lease_leaf_from_path(&descriptor.lease_path)?;
+        if lease_leaf != expected_lease {
+            return Err(Error::from_reason("artifact_path_invalid"));
+        }
         let quarantine_artifact = quarantine_leaf(artifact_leaf, "artifact")?;
         let quarantine_lease = quarantine_leaf(lease_leaf, "lease")?;
         let artifact_fd = open_relative(
@@ -233,8 +237,30 @@ impl ReviewArtifactRoot {
         .map_err(|error| map_io_error(&error, "artifact_cleanup_failed"))?;
         let actual = file_identity(&artifact_fd)
             .map_err(|error| map_io_error(&error, "artifact_cleanup_failed"))?;
+        let opened_lease = match open_relative(
+            leases_fd.as_raw_fd(),
+            lease_leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        ) {
+            Ok(fd) => fd,
+            Err(error) if lease_open_error_status(&error) == Some("cleanup_incomplete") => {
+                return Ok(CleanupResult {
+                    status: "cleanup_incomplete".to_string(),
+                });
+            }
+            Err(error) if lease_open_error_status(&error) == Some("replacement_retained") => {
+                return Ok(CleanupResult {
+                    status: "replacement_retained".to_string(),
+                });
+            }
+            Err(error) => return Err(cleanup_status(&error)),
+        };
+        let lease_identity = file_identity(&opened_lease)
+            .map_err(|error| map_io_error(&error, "artifact_cleanup_failed"))?;
         if actual.device != descriptor.artifact_identity.device
             || actual.inode != descriptor.artifact_identity.inode
+            || lease_identity != actual
         {
             return Ok(CleanupResult {
                 status: "replacement_retained".to_string(),
@@ -244,7 +270,7 @@ impl ReviewArtifactRoot {
             reviews_fd.as_raw_fd(),
             artifact_leaf,
             quarantine_fd.as_raw_fd(),
-            quarantine_artifact,
+            &quarantine_artifact,
         ) {
             if error.raw_os_error() == Some(libc::EEXIST) {
                 return Ok(CleanupResult {
@@ -257,7 +283,7 @@ impl ReviewArtifactRoot {
             leases_fd.as_raw_fd(),
             lease_leaf,
             quarantine_fd.as_raw_fd(),
-            quarantine_lease,
+            &quarantine_lease,
         ) {
             return Ok(CleanupResult {
                 status: if error.raw_os_error() == Some(libc::EEXIST) {
@@ -265,6 +291,29 @@ impl ReviewArtifactRoot {
                 } else {
                     "cleanup_incomplete".to_string()
                 },
+            });
+        }
+        let moved_artifact = open_relative(
+            quarantine_fd.as_raw_fd(),
+            &quarantine_artifact,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+        .and_then(|fd| file_identity(&fd));
+        let moved_lease = open_relative(
+            quarantine_fd.as_raw_fd(),
+            &quarantine_lease,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+        .and_then(|fd| file_identity(&fd));
+        if moved_artifact.as_ref().ok() != Some(&actual)
+            || moved_lease.as_ref().ok() != Some(&actual)
+            || !leaf_is_absent(reviews_fd.as_raw_fd(), artifact_leaf)
+            || !leaf_is_absent(leases_fd.as_raw_fd(), lease_leaf)
+        {
+            return Ok(CleanupResult {
+                status: "cleanup_incomplete".to_string(),
             });
         }
         Ok(CleanupResult {
@@ -414,6 +463,18 @@ fn file_identity(fd: &OwnedFd) -> io::Result<NativeIdentity> {
     })
 }
 
+fn leaf_is_absent(dirfd: RawFd, leaf: &str) -> bool {
+    matches!(
+        open_relative(
+            dirfd,
+            leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        ),
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT)
+    )
+}
+
 fn open_relative(
     dirfd: RawFd,
     path: &str,
@@ -488,7 +549,7 @@ fn unlink_relative(dirfd: RawFd, path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn rename_noreplace(from_dirfd: RawFd, from: &str, to_dirfd: RawFd, to: String) -> io::Result<()> {
+fn rename_noreplace(from_dirfd: RawFd, from: &str, to_dirfd: RawFd, to: &str) -> io::Result<()> {
     let from = CString::new(from).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
     let to = CString::new(to).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
     // SAFETY: both paths are validated leaves beneath owned directory descriptors.
@@ -608,6 +669,14 @@ fn cleanup_status(error: &io::Error) -> Error {
     }
 }
 
+fn lease_open_error_status(error: &io::Error) -> Option<&'static str> {
+    match error.raw_os_error() {
+        Some(libc::ENOENT) => Some("cleanup_incomplete"),
+        Some(libc::ELOOP) => Some("replacement_retained"),
+        _ => None,
+    }
+}
+
 fn into_owned_fd(file: std::fs::File) -> OwnedFd {
     let raw = file.into_raw_fd();
     // SAFETY: ownership of the file descriptor was transferred by forgetting the File.
@@ -617,7 +686,8 @@ fn into_owned_fd(file: std::fs::File) -> OwnedFd {
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_leaf, checked_syscall_fd, lease_leaf_from_path, probe_review_artifact_capabilities,
+        artifact_leaf, checked_syscall_fd, lease_leaf_from_path, lease_open_error_status,
+        probe_review_artifact_capabilities,
     };
 
     #[test]
@@ -633,6 +703,22 @@ mod tests {
         assert!(lease_leaf_from_path(".justice/reviews/.leases/id.lease").is_ok());
         assert!(lease_leaf_from_path(".justice/reviews/id.lease").is_err());
         assert!(lease_leaf_from_path(".justice/reviews/.leases/../id.lease").is_err());
+    }
+
+    #[test]
+    fn lease_open_error_status_classifies_symlink_replacements_only() {
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::ELOOP)),
+            Some("replacement_retained")
+        );
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::ENOENT)),
+            Some("cleanup_incomplete")
+        );
+        assert_eq!(
+            lease_open_error_status(&std::io::Error::from_raw_os_error(libc::EACCES)),
+            None
+        );
     }
 
     #[test]

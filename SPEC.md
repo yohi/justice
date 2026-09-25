@@ -1099,10 +1099,37 @@ interface FileReader {
 
 interface FileWriter {
   writeFile(path: string, content: string): Promise<void>;
+  /** オプショナル: ネイティブプロバイダによる排他マーカー生成 */
+  readonly createExclusiveMarker?: (
+    path: string,
+  ) => Promise<
+    | {
+        readonly kind: "created";
+        readonly leasePath: string;
+        readonly artifactIdentity: ReviewArtifactInodeIdentity;
+      }
+    | { readonly kind: "occupied" }
+  >;
+}
+
+interface ReservedReviewArtifactIo {
+  writeExisting(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+    content: string,
+  ): Promise<void>;
+  readOnce(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ): Promise<string>;
+  cleanup(
+    reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }>,
+  ): Promise<ReviewArtifactCleanupStatus>;
 }
 ```
 
 **`NodeFileSystem`** クラスは、`Bun.file` や `node:fs/promises` を用いて、これら両方のインターフェースを実際に実装しています。
+
+**二重能力スロットの不可分性（All-or-Nothing）**:
+`NodeFileSystem` は、サポートされた同一のネイティブプロバイダ（Linux `openat2` / `renameat2`）が存在する場合にのみ `createExclusiveMarker` と `createReservedReviewArtifactIo` の両方を同時に公開します。未サポート環境では両スロットを `undefined` とし、汎用 `node:fs` による pathname-only 代替（`resolveSafely` + `open`）へのフォールバックは明示的に行いません。これにより、成果物予約は `artifact_storage_unavailable` としてフェイルオープンに縮退します。
 
 **セキュリティ:** すべての引数パスは、パストラバーサル攻撃を防ぐためにルートディレクトリに基づき正当性検証されます。
 シンボリックリンクについても比較の前に `realpath` で厳密に解決します。
@@ -1265,6 +1292,10 @@ justice/
 │   │   ├── review-rejection-detector.ts — Prometheus 却下シグナルの検出・抽出
 │   │   ├── plan-completion-detector.ts — A+Bハイブリッド完了検知によるスキル・計画完了検出
 │   │   ├── session-state-provider.ts   — sessionId→AgentId マッピングと callId 単位の task 窓管理 (v2)
+│   │   ├── acceptance-decision.ts      — Gate/Acceptance 決定評価・相関検証・ライフサイクル遷移 (v2)
+│   │   ├── review-artifact.ts          — レビュー成果物ライフサイクルと完了レコード生成
+│   │   ├── review-artifact-reservation.ts — 成果物排他予約ポートとフォールバック遮断
+│   │   ├── review-dispatch-state.ts    — レビューディスパッチ状態遷移機械
 │   │   ├── review-resolution-artifact.ts — justice_review resolve 入力の正規化・検証 (v2)
 │   │   ├── review-snapshot-artifact.ts — code_review ツール経由の完全スナップショット契約 (v2)
 │   │   ├── hook-response-merger.ts     — PostToolUse 複数レスポンスの合流規則 (v2)
@@ -1285,6 +1316,7 @@ justice/
 │   │   └── observation-handler.ts    — 全 tool/message 観測を Observation Log へ記録し Gate 評価を発火 (v2)
 │   ├── runtime/
 │   │   ├── node-file-system.ts       — 実際の Bun.file ベースによるファイルの読み書き
+│   │   ├── linux-review-artifact-provider.ts — Linux openat2/renameat2 ネイティブプロバイダアダプタ
 │   │   ├── opencode-adapter.ts       — OpenCode hook ↔ Justice HookEvent adapter
 │   │   ├── opencode-notifier.ts      — client.app.log を使用したログ通知処理
 │   │   ├── observation-log-store.ts  — per-writer segment JSONL への直列化 atomic append (v2)
@@ -1298,6 +1330,11 @@ justice/
 │   │   └── skill-invoked-record-validator.ts — skill_invoked レコードの schema 検証 (v2)
 │   ├── opencode-plugin.ts            — OpenCode Plugin entrypoint
 │   └── index.ts                      — 上記の外部・公開APIの全エクスポート（v2 内部モジュールは非公開）
+├── native/
+│   └── review-artifact-linux/        — Rust N-API 実装クレート (openat2/renameat2 記述子相対操作)
+│       ├── Cargo.toml
+│       ├── build.rs
+│       └── src/lib.rs
 ├── tests/
 │   ├── core/          — コア層に対するテスト用ファイル群
 │   ├── hooks/         — フック層に対するテスト・ファイル群
@@ -1731,15 +1768,78 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 
 `REQUIREMENTS_2026-08-29.md` に記載されていた routing 要件のうち、Controller と Worker の分離、category-first routing、model/provider independence、`ExecutionRole` から OMO category への写像、Worker payload からの `agent` / `subagent_type` / `model` 等の除去は、現行実装および本仕様の §3.2、§4.1b、§5.7、§14 に統合済みである。これらの要件は `REQUIREMENTS*` ファイルではなく本仕様を正とする。
 
-一方、以下は要求として保持するが、現行実装の契約ではない。
+以下の要求は、現行で利用可能な構成要素と、まだ実現していない継続実行の契約を区別する。
 
 | 要求 | 状態 | 現行仕様との関係 |
 |---|---|---|
-| FR-601 Plan-scoped Authorization | 保留 | 現行は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
-| FR-602 Authorization Binding | 保留 | session、plan path、plan fingerprint への binding は未導入 |
-| FR-603 Plan Mutation | 保留 | fingerprint mismatch による無効化は未導入 |
-| FR-604 Continuous Execution | 保留 | 同一承認 plan の複数 task 継続実行は将来拡張 |
+| FR-601 Plan-scoped Authorization | 部分実装 | 計画に紐づく承認は永続化するが、実装委譲は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
+| FR-602 Authorization Binding | 実装済み | 承認を session、plan path、plan fingerprint に紐づけ、`.justice/authorizations.json` に保存する |
+| FR-603 Plan Mutation | 部分実装 | `task()` の PreToolUse 時に計画を再読込し、fingerprint mismatch を検出すると承認を無効化する。ファイル変更時の即時監視は行わない |
+| FR-604 Continuous Execution | 保留 | 同一承認 plan でも各 `task()` の前に再度 arm が必要。連続委譲の自動認可は将来拡張 |
 
-これらを実装済みとして扱ってはならない。導入時は authorization のライフサイクル、plan fingerprint、既存の fail-open 境界、および `implementation_unauthorized` の挙動を同時に再設計する。
+FR-601 と FR-604 の継続実行契約、および FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および `implementation_unauthorized` の挙動を整合させる。
 
 upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。
+
+### 15.14 Linux Review Artifact Provider 連携仕様
+
+#### 目的
+Linux x86_64 glibc 環境において、カーネルシステムコール `openat2(2)` および `renameat2(2)` を用いたファイル記述子相対（descriptor-relative）の安全なレビュー成果物I/O境界を確立し、シンボリックリンク攻撃、祖先ディレクトリ置換攻撃、競合状態を防止します。
+
+#### アーキテクチャと合成境界
+- **`native/review-artifact-linux`**: Rust N-API 実装クレート（パッケージ名 `justice_review_artifact_linux`）。`openReviewArtifactRoot`、`probeReviewArtifactCapabilities` を同期エクスポートし、ビルド成果物は `dist/native/index.linux-x64-gnu.node` として生成されます。
+- **`src/runtime/linux-review-artifact-provider.ts`**: プラットフォーム（Linux x86_64 glibc）およびシステムコールの可用性を検査（プローブ）し、ネイティブアドオンを `FileWriter.createExclusiveMarker` および `ReservedReviewArtifactIo` 契約へ適応させます。
+- **`src/runtime/opencode-adapter.ts`**: 初期化時（`#runInit`）にプロバイダをワークスペースルートに対して1回だけ生成し、`NodeFileSystem` に注入します。プロバイダ生成エラーはアダプタ初期化を脱出せず、警告ログを出力してプロバイダなしで継続します。
+- **`src/runtime/node-file-system.ts`**: プロバイダから得た `createExclusiveMarker` と `createReservedReviewArtifactIo` の2つの能力スロットを条件付きで公開します。プロバイダ不在時は汎用ファイルシステム操作へのフォールバックを行いません。
+- **`src/core/review-artifact-reservation.ts`**: 両スロットが存在する場合のみ成果物の排他予約を試行し、いずれかが欠けている場合は `artifact_storage_unavailable` として安全に無効化（縮退）します。
+
+#### 不変条件とセキュリティ契約
+1. **記述子相対解決**: ホストパスを受け付けるのはルート初期化（`openReviewArtifactRoot(rootDir)`）のみであり、以降のすべての成果物・リース・隔離操作は `.justice/reviews` ディレクトリ記述子からの `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS` 相対操作で行われます。
+2. **排他作成と inode 拘束リース**: 排他マーカーは `O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC` で作成され、開かれた記述子から `linkat` で `.justice/reviews/.leases/<id>.lease` ハードリンクを作成して inode を拘束します。
+3. **厳格な再オープンと identity 検証**: `writeExisting` および `readOnce` 時には、成果物とリースの双方を記述子相対で再オープンし、`st_dev`/`st_ino` が耐久予約 identity と一致することを検証します。
+4. **物理隔離と Unlink 禁止**: クリーンアップ前に成果物とリースの双方を再オープンして耐久予約 identity と照合し、不一致なら元のファイルを移動せず `replacement_retained` を返します。`renameat2(..., RENAME_NOREPLACE)` で `.justice/reviews/.quarantine/` へ退避した後も双方の identity と元の名前の不在を確認し、不確実な場合は `cleanup_incomplete` として隔離ファイルを保持します。検証済みの隔離ファイルに対して `unlinkat` による物理削除は行いません。
+5. **フェイルオープンとフォールバック禁止**: 非Linux、非x86_64、非glibc、アドオン不在、システムコール不在の環境ではプロバイダ生成が `undefined` を返し、pathname-only 操作へのフォールバックは行いません。成果物予約が不能な場合もセッション実行自体は継続します。
+
+実機検証手順および監査証拠は [`docs/agents/review-artifact-linux-provider.md`](docs/agents/review-artifact-linux-provider.md) を参照してください。
+
+### 15.15 セマンティック制御プレーン レビュー指摘事項修正仕様（Gate Evaluation & Acceptance Decisions）
+
+セマンティック制御プレーンの堅牢性向上とレビュー指摘対応（2026-09-18）に基づき、以下の仕様が確立されています。
+
+#### 1. スコープ対応の端末レビュー相関 (`hasTerminalReview`)
+- **目的**: 無関係なセッションや別タスクのレビューによって計画ゲートが誤って充足される脆弱性を防ぎます。
+- **仕様**:
+  - `context.scope === "task"`: 観測レコード（`review_observed`）が現在のセッション（`sessionId`）に属し、現在のタスクID（`taskId === context.taskExecutionRef.taskId`）と一致し、指摘ゼロの完全スナップショット（`isCompleteSnapshot === true && items.length === 0`）であることを要求します。
+  - `context.scope === "plan"`: 観測レコードが現在のセッションに属し、確立された `final` レビュースコープ（`reviewScope === "final"`）を持ち、指摘ゼロの完全スナップショットであることを要求します。
+
+#### 2. Gate 評価結果における SKIP と証拠不足の厳密な分離
+- **目的**: ゲート条件非該当（SKIP）と証拠不足（insufficient_evidence）の判定を明確に区別し、不要な決定永続化やアドバイザリの誤発火を防ぎます。
+- **仕様**:
+  - `verdict: "SKIP"`: 評価対象外（トリガー条件不一致等）の場合、`{ kind: "not_applicable" }` を返し、決定の追記（`appendDecision`）やアドバイザリ記録を一切行いません。
+  - `kind: "insufficient_evidence"`: 証拠不足の場合は既存のブロック動作を維持し、`appendBlockedAcceptanceIfMissing` により blocked な受入決定（`AcceptanceDecision`）を永続化し、アドバイザリを発行します。
+
+#### 3. タスクゲート YAML スコープの補完正規化 (`parseGateYaml`)
+- **目的**: タスクゲート定義において `trigger.scope` の冗長な記述を省略可能にしつつ、計画ゲートの厳格性を維持します。
+- **仕様**:
+  - `gateType === "task"` かつ `trigger.scope` が省略されている場合のみ、`GateConfigSchema.parse`（Zod）の実行前に自動で `scope: "task"` を補完します。
+  - `gateType === "plan"` の場合はスコープを補完せず、`scope: "plan"` の指定が必須となります。省略時または不一致時は Zod バリデーションエラーとなります。未知のフィールドの厳格な拒否（`strictObject`）はそのまま維持されます。
+
+#### 4. 計画決定パスの秘匿化とダイジェスト同一性 (`planPathDigest`)
+- **目的**: ログ永続化時にホスト上の絶対パスや詳細パスを秘匿化しつつ、決定の再突合および後方互換リプレイを可能にします。
+- **仕様**:
+  - `PlanGateDecisionPayload` および `PlanAcceptanceDecisionPayload` にオプショナルの `planPathDigest?: string` を定義します。
+  - 永続化秘匿化境界（`redactPendingLogRecord`）において、ダイジェストが未設定の場合は生の `planPath` から SHA-256 ハッシュを計算して `planPathDigest` に保持し、`planPath` は `[REDACTED_PATH]` に秘匿化します（既存のダイジェストは保持）。
+  - 決定照合関数（`samePlanPath`）は、レコードに `planPathDigest` が存在する場合はハッシュ値で照合し、ダイジェストを持たないレガシーレコードの場合のみ生パス文字列一致で比較するフォールバックを提供します。
+
+#### 5. プラグイン認可境界 (`AuthorizationReviewBoundary`) の共有
+- **目的**: 同一親セッションに対する認可状態の変更とゲート決定評価の排他制御・直列化を単一のキューで保証します。
+- **仕様**:
+  - `JusticePlugin` は自身が生成・保持する `AuthorizationReviewBoundary` インスタンスを `ObservationHandler` に注入します。
+  - `ObservationHandler`（および `GatePendingAttemptEvaluator`）はその注入された `withParentSession` コールバックを使用し、独立した境界インスタンスの二重生成を防止します。
+
+#### 6. callId に拘束された厳密なタスクゲート評価
+- **目的**: 並行タスク実行時や無関係なツール実行時におけるタスク窓の混同・誤評価を防止します。
+- **仕様**:
+  - `evaluateGateIfTriggered` は呼び出し識別子 `callId` を必須とし、`sessionStateProvider.getTaskCallBinding(callId)` を参照します。
+  - `binding` が存在し、`binding.parentSessionId === sessionId`、`binding.taskExecutionRef.taskId === taskId`、かつ `binding.purpose === "implementation"`（実装目的）である場合にのみ、その `taskExecutionRef` を用いてゲート評価を実行します。
+  - いずれかの条件を満たさない場合は直ちに `PROCEED` を返却し、かつて存在したプロジェクション全体から全タスクを探索するグローバルフォールバックは廃止されました。
