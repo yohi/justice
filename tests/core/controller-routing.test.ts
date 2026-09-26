@@ -128,7 +128,7 @@ describe("controller configuration assessment", () => {
     expect(assessment.configuredController).toBe("my-custom-agent");
   });
 
-  it("returns misconfigured/agent_invalid for a recognized agent unequal to the desired controller", () => {
+  it("returns misconfigured/agent_mismatch for a recognized agent unequal to the desired controller", () => {
     const assessment = assessControllerConfiguration({
       decision: brainstormingDecision,
       pinnedCommand: brainstormingCommand,
@@ -136,7 +136,7 @@ describe("controller configuration assessment", () => {
       effectiveDefinition: { kind: "valid", agent: "oracle" },
     });
     expect(assessment.status).toBe("misconfigured");
-    expect(assessment.reason).toBe("agent_invalid");
+    expect(assessment.reason).toBe("agent_mismatch");
     expect(assessment.configuredController).toBe("oracle");
   });
 

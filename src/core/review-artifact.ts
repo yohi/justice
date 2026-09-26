@@ -184,6 +184,7 @@ type ClaimedSlot = ReviewDispatchSlot & { readonly state: "claimed"; readonly ca
 export type ReviewCompletionDependencies = {
   readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
   readonly findAuthorizationById: (authorizationId: string) => Promise<import("./plan-authorization").ApprovedPlanBinding | null>;
+  readonly isAuthorizationPlanCurrent?: (correlation: ReviewCorrelation) => Promise<boolean>;
   readonly appendReviewCompletionStaging: (input: PendingReviewCompletionStagingRecord) => Promise<{ readonly kind: "committed"; readonly record: PendingReviewCompletionStagingRecord & { readonly sequence: number } } | { readonly kind: "failed" }>;
   readonly appendReviewArtifactReadAttempt: (input: PendingReviewArtifactReadAttemptRecord) => Promise<{ readonly kind: "committed"; readonly record: PersistedReviewArtifactReadAttemptRecord } | { readonly kind: "failed" }>;
   readonly appendReviewArtifactFailureStaging: (input: PendingReviewArtifactFailureStagingRecord) => Promise<{ readonly kind: "committed"; readonly record: PersistedReviewArtifactFailureStagingRecord } | { readonly kind: "failed" }>;
@@ -198,6 +199,7 @@ export type ReviewCompletionDependencies = {
   readonly evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: (context: GatePendingAttemptContext) => Promise<{ readonly kind: "not_applicable" } | { readonly kind: "decided"; readonly decision: unknown } | { readonly kind: "blocked"; readonly advisory: string }>;
   readonly appendTaskLifecycleTransition: (input: TaskLifecycleTransitionInput) => Promise<{ readonly kind: "committed" | "failed" }>;
   readonly appendPlanFinalizationTransition: (input: PlanFinalizationTransitionInput) => Promise<{ readonly kind: "committed" | "failed" }>;
+  readonly releaseCompletedAuthorization?: (parentSessionId: string, authorizationId: string) => Promise<void>;
   readonly dispatch: {
     readonly withReviewDispatchParentSessionClaim: <T>(parentSessionId: string, operation: () => Promise<T>) => Promise<T>;
     readonly offerNextMandatoryReviewWithinParentSessionClaim: (parentSessionId: string) => Promise<unknown>;
@@ -537,6 +539,30 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       : { kind: "stale" };
   };
 
+  const releaseCompletedPlanAuthorization = async (
+    correlation: ReviewCorrelation,
+    parentSessionId: string,
+  ): Promise<void> => {
+    if (correlation.reviewKind !== "final-review" || dependencies.releaseCompletedAuthorization === undefined) return;
+    const records = await dependencies.readDurableRecords();
+    const acceptance = findCurrentAcceptanceDecision(records, correlation);
+    const finalization = [...project(records, new Date().toISOString()).lifecycle.finalization.values()].find(
+      (candidate) =>
+        candidate.parentSessionId === parentSessionId &&
+        candidate.authorizationId === correlation.authorizationId &&
+        candidate.planPath === correlation.planPath &&
+        candidate.finalizationAttemptId === correlation.finalizationAttemptId &&
+        candidate.finalReviewRound === correlation.finalReviewRound,
+    );
+    if (
+      acceptance.kind !== "found" ||
+      acceptance.decision.kind !== "plan-acceptance" ||
+      acceptance.decision.verdict !== "complete" ||
+      finalization?.state !== "complete"
+    ) return;
+    await dependencies.releaseCompletedAuthorization(parentSessionId, correlation.authorizationId);
+  };
+
   const consumeReviewCompletion = async (input: ReviewCompletionInput): Promise<ReviewCompletionOutcome> =>
     dependencies.dispatch.withReviewDispatchParentSessionClaim(input.parentSessionId, async (): Promise<ReviewCompletionOutcome> => {
       const records = await dependencies.readDurableRecords();
@@ -546,6 +572,10 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       if (binding === undefined || binding.artifactReservation.status !== "usable") return { kind: "blocked" as const };
       if (!(await isCurrentActiveAuthorization(slot.key.correlation, dependencies.findAuthorizationById))) {
         await dependencies.dispatch.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(input.parentSessionId, authorizationIdFor(slot.key.correlation));
+        return { kind: "blocked" as const };
+      }
+      if (dependencies.isAuthorizationPlanCurrent !== undefined &&
+        !(await dependencies.isAuthorizationPlanCurrent(slot.key.correlation))) {
         return { kind: "blocked" as const };
       }
       const delegated = projectDelegatedExecutionBindings(records).find((candidate) => candidate.parentSessionId === input.parentSessionId && candidate.parentCallId === input.callId && sameReviewCorrelation(candidate.correlation, slot.key.correlation));
@@ -591,6 +621,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       if (terminal.kind !== "committed") return { kind: "blocked" };
       if (!(await appendReviewObserved(staged.record))) return { kind: "blocked" };
       const outcome = await ensureTerminalReviewOutcomeApplied(terminal.record);
+      await releaseCompletedPlanAuthorization(slot.key.correlation, input.parentSessionId);
       await clean(terminal.record, binding.artifactReservation);
       await dependencies.dispatch.offerNextMandatoryReviewWithinParentSessionClaim(input.parentSessionId);
       return outcome;
@@ -730,8 +761,13 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
             await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
             return { kind: "blocked" };
           }
+          if (dependencies.isAuthorizationPlanCurrent !== undefined &&
+            !(await dependencies.isAuthorizationPlanCurrent(staging.staging.correlation))) {
+            return { kind: "blocked" };
+          }
           if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
           const outcome = await ensureTerminalReviewOutcomeApplied(existingTerminal);
+          await releaseCompletedPlanAuthorization(staging.staging.correlation, staging.parentSessionId);
           const current = await dependencies.readDurableRecords();
           const reservation = usableReservationForTerminal(current, existingTerminal);
           if (reservation !== undefined) {
@@ -751,10 +787,15 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
           await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
           return { kind: "blocked" };
         }
+        if (dependencies.isAuthorizationPlanCurrent !== undefined &&
+          !(await dependencies.isAuthorizationPlanCurrent(slot.key.correlation))) {
+          return { kind: "blocked" };
+        }
         const terminal = await dependencies.appendReviewDispatchTransition(terminalFor(staging, slot));
         if (terminal.kind !== "committed") return { kind: "blocked" };
         if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
         const outcome = await ensureTerminalReviewOutcomeApplied(terminal.record);
+        await releaseCompletedPlanAuthorization(staging.staging.correlation, staging.parentSessionId);
         if (slot.artifactReservation?.status === "usable") {
           await clean(terminal.record, slot.artifactReservation);
         }

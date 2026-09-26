@@ -40,6 +40,28 @@ describe("review artifact completion (Task 3.6)", () => {
     expect(fixture.parseAndAssemble).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for the delegated child binding before consuming a review result", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed_without_child_binding");
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "awaiting_child_binding" });
+
+    const pending = (await fixture.durableRecords()).filter(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_post_tooluse_pending",
+    );
+    expect(pending).toHaveLength(1);
+    expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
+  });
+
+  it("does not read a reserved artifact when the read-attempt marker cannot be persisted", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed_with_failed_read_attempt");
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "blocked" });
+
+    expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
+    expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
+  });
+
   it("moves a clean live completion through exactly one Gate and Acceptance decision", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
     await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
@@ -60,6 +82,22 @@ describe("review artifact completion (Task 3.6)", () => {
     expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
     await expect(fixture.durableGateDecisions()).resolves.toEqual([]);
     await expect(fixture.durableAcceptanceDecisions()).resolves.toEqual([]);
+  });
+
+  it("terminalizes a reserved artifact reader exception as artifact_read_failed", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    fixture.readReservedArtifact.mockRejectedValueOnce(new Error("reserved read failed"));
+
+    await expect(fixture.consume()).resolves.toMatchObject({ kind: "blocked" });
+
+    await expect(fixture.durableFailureStaging()).resolves.toMatchObject({
+      terminalReason: "artifact_read_failed",
+    });
+    expect(fixture.recordAdvisory).toHaveBeenCalledWith(
+      "review_artifact_read_unhandled",
+      expect.any(Error),
+    );
+    expect(fixture.parseAndAssemble).not.toHaveBeenCalled();
   });
 
   it("retains a replacement path during terminal cleanup and records an advisory", async () => {

@@ -1071,7 +1071,8 @@ volumeModifier:   stepCount >= 5 で +1
 - **評価への入力**: `effectiveConfigAvailable` と正規化済み `DoctorEffectiveCommandDefinition` のみ。
   `DoctorCommandDefinitionDiagnostic`、ローカルスキャン diagnostics、生の resolved config は渡さない。
 - **状態**: コマンド単位で `configured` / `missing`（`command_missing`）/ `misconfigured`
-  （`invalid_command_definition` / `agent_missing` / `agent_invalid`）/ `unsupported`（`effective_config_unsupported`）。
+  （`invalid_command_definition` / `agent_missing` / `agent_invalid` / `agent_mismatch`）/ `unsupported`（`effective_config_unsupported`）。
+  未認識の agent は `agent_invalid`、認識済みで期待値と異なる agent は `agent_mismatch` とする。
   ホスト検証・resolved config 取得が unavailable / failed / timeout / unparseable / context-unverified /
   shape-invalid の場合は全コマンドが `unsupported` となり、ローカルソース走査で補完しない。
 - **`configured != applied`**: `configured` は設定上の exact 一致を示すのみで、runtime への適用、
@@ -1081,7 +1082,7 @@ volumeModifier:   stepCount >= 5 で +1
 - **修復テンプレート**: `formatControllerRemediationLines()` が4件の `command.<name>.agent` 割当のみを
   exact に出力する（コマンド本文・provider option・認証情報は含まない）。
 - **redaction と advisory**: 診断行は pinned command 名・状態・理由・desired controller、
-  および `agent_invalid` 時の設定済み agent 名のみを含み、`opencode debug config` の生の stdout/stderr や
+  および `agent_invalid` / `agent_mismatch` 時の設定済み agent 名のみを含み、`opencode debug config` の生の stdout/stderr や
   無関係の設定値は出力されない（最終出力は `redactForPersistence` を経由）。controller 設定の findings は
   L0 advisory であり終了コードに影響しない。host-resolved config の `unsupported` は従来どおり非ゼロ終了。
   routing observation persistence（`controller_routing_observed` など）には一切関与しない。

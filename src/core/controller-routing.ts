@@ -17,6 +17,12 @@ import { PINNED_COMMAND_WORKFLOW_MAP, WORKFLOW_DESIRED_CONTROLLERS } from "./wor
 /** exact four-command expectation を controller configuration domain から利用できるように再エクスポートする。 */
 export { PINNED_COMMAND_WORKFLOW_MAP, resolvePinnedCommandWorkflow } from "./workflow-router";
 
+const CONTROLLER_AGENTS = ["sisyphus", "atlas", "oracle", "momus", "hephaestus"] as const satisfies readonly ControllerAgent[];
+
+export function isRecognizedControllerAgent(value: unknown): value is ControllerAgent {
+  return typeof value === "string" && CONTROLLER_AGENTS.some((agent) => agent === value);
+}
+
 export type ControllerConfigurationStatus =
   | "configured"
   | "missing"
@@ -25,14 +31,15 @@ export type ControllerConfigurationStatus =
 
 /**
  * 評価結果の理由。列挙値のみで構成され、生の設定値（コマンド本文や agent 以外の値）を含まない。
- * `agent_invalid` は「agent が desired controller と exact 一致しない」全てのケース
- * （未認識の custom agent / 認識済みだが不一致な agent の双方）を表す。
+ * `agent_invalid` は未認識の agent、`agent_mismatch` は認識済みだが
+ * desired controller と異なる agent を表す。
  */
 export type ControllerConfigurationReason =
   | "command_missing"
   | "invalid_command_definition"
   | "agent_missing"
   | "agent_invalid"
+  | "agent_mismatch"
   | "effective_config_unsupported";
 
 /**
@@ -65,8 +72,9 @@ export type ControllerConfigurationAssessmentInput = {
  *   2. 定義なし                           -> missing
  *   3. kind === "invalid"                 -> misconfigured / invalid_command_definition
  *   4. kind === "valid" かつ agent なし    -> misconfigured / agent_missing
- *   5. agent が desired controller と不一致 -> misconfigured / agent_invalid
- *   6. agent が exact 一致                 -> configured
+ *   5. 未認識 agent                         -> misconfigured / agent_invalid
+ *   6. 認識済みで desired と不一致          -> misconfigured / agent_mismatch
+ *   7. agent が exact 一致                  -> configured
  *
  * agent の比較は exact equality のみ（trim / 大小文字の正規化 / エイリアスは不採用）。
  */
@@ -137,7 +145,7 @@ export function assessControllerConfiguration(
       pinnedCommand,
       configuredController: configuredAgent,
       status: "misconfigured",
-      reason: "agent_invalid",
+      reason: isRecognizedControllerAgent(configuredAgent) ? "agent_mismatch" : "agent_invalid",
     };
   }
 

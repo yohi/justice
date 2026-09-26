@@ -34,7 +34,11 @@ export type UsableReviewArtifactReservation = Extract<
   { readonly status: "usable" }
 >;
 
-export type CompletionFixtureMode = "claimed" | "terminalized";
+export type CompletionFixtureMode =
+  | "claimed"
+  | "claimed_without_child_binding"
+  | "claimed_with_failed_read_attempt"
+  | "terminalized";
 
 export type ReviewArtifactCompletionFixture = {
   readonly files: MockFileSystem;
@@ -213,31 +217,33 @@ export async function arrangeReviewArtifactCompletionFixture(
     callId,
     artifactReservation: reservation,
   });
-  await appendPendingRecord({
-    ...envelope(),
-    kind: "delegated_execution_binding",
-    relation: {
-      kind: "delegated_execution_relation_observed",
-      provenance: "observed",
-      runtimeEventId: "review-artifact-execution",
-      parentSessionId,
-      parentCallId: callId,
-      childSessionId,
-      category: "sp-review",
-    },
-    binding: {
-      relationId: "review-artifact-execution",
-      parentSessionId,
-      parentCallId: callId,
-      childSessionId,
-      scope: {
-        kind: "task",
-        taskExecutionRef,
-        reviewRound: 1,
+  if (mode !== "claimed_without_child_binding") {
+    await appendPendingRecord({
+      ...envelope(),
+      kind: "delegated_execution_binding",
+      relation: {
+        kind: "delegated_execution_relation_observed",
+        provenance: "observed",
+        runtimeEventId: "review-artifact-execution",
+        parentSessionId,
+        parentCallId: callId,
+        childSessionId,
+        category: "sp-review",
       },
-      correlation,
-    },
-  });
+      binding: {
+        relationId: "review-artifact-execution",
+        parentSessionId,
+        parentCallId: callId,
+        childSessionId,
+        scope: {
+          kind: "task",
+          taskExecutionRef,
+          reviewRound: 1,
+        },
+        correlation,
+      },
+    });
+  }
 
   // Seed the task lifecycle into `review_pending` so the clean-completion path
   // can transition to `gate_pending` and evaluate the real Gate evaluator.
@@ -340,10 +346,12 @@ export async function arrangeReviewArtifactCompletionFixture(
       kind: "committed" as const,
       record: await appendPendingRecord(input),
     }),
-    appendReviewArtifactReadAttempt: async (input) => ({
-      kind: "committed" as const,
-      record: await appendPendingRecord(input),
-    }),
+    appendReviewArtifactReadAttempt: async (input) => mode === "claimed_with_failed_read_attempt"
+      ? { kind: "failed" as const }
+      : {
+          kind: "committed" as const,
+          record: await appendPendingRecord(input),
+        },
     appendReviewArtifactFailureStaging: async (input) => ({
       kind: "committed" as const,
       record: await appendPendingRecord(input),
