@@ -209,8 +209,8 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
          │                                │                               │
          │                                │                               │
   (3) /justice-implement --approved ─────>│                               │
-         │                          次の task() を                         │
-         │                          1 回だけ許可                           │
+         │                          承認済み Plan に含まれる task() を      │
+         │                          継続して許可                           │
          │                                │─────────────────────────────>│
          │                                │                         task() で実装
          │                                │<──────── 完了 / 失敗を観測 ────┤
@@ -225,7 +225,7 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
          │                                │                               │
   (4) 実装 PR を確認・承認・マージ <────────────────────────────────────────────┤
          │                                │                               │
-         └─ plan.md 完了 → 次タスクへ (3) / 全完了なら終了 ──────────────────┘
+         └─ plan.md 完了 → 同じ承認で次タスクへ / 全完了なら終了 ────────────┘
 ```
 
 | # | フェーズ | 主体 | 詳細 |
@@ -332,7 +332,7 @@ Justice は stage ごとに純粋な `WorkflowDirective` を解決します。di
 後続の `task()` に plan context を渡すには、人間による承認・マージを確認した後、
 `/justice-implement --plan <planPath> --approved` を実行する必要があります。
 
-明示的にアームされた次の1回の `task()` に限り、Justice は既存の `skills`、
+承認済み Plan の実装委譲では、Justice は既存の `skills`、
 `loadSkills`、互換入力の `load_skills` を、呼び出し元の順序を保って重複なく内部の
 `loadSkills` へ正規化します。そのうえで `test-driven-development` と
 `verification-before-completion` を追加し、OMO wire payload の `load_skills` と

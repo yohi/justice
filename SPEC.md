@@ -367,7 +367,7 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 **セッション状態:**
 
 - `Map<sessionId, planPath>` — セッションごとに状態を分離（`PlanBridge.activePlanPaths`）
-- `Map<sessionId, { planPath }>` — 次の1回の `task()` に限る実装許可を plan パスへ束縛（`PlanBridge.implementationArmedSessions`）
+- `Map<sessionId, { planPath }>` — コマンドでのアーム状態を記録する補助状態。実装認可の権威は永続化された `ApprovedPlanBinding` が持つ（`PlanBridge.implementationArmedSessions`）
 - ※ `PlanBridge` では TTL/LRU によるクリーンアップは実施されません。この管理責務は `TaskFeedbackHandler` または他のコンポーネントに委ねられます。
 
 **委譲キーワード (英語/日本語対応):**
@@ -382,11 +382,11 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 `OpenCodeAdapter.onCommandExecuteBefore` は以下の 2 つのコマンドを処理する:
 
 - `justice-start`: ワークフロー・ブートストラップを開始し、design/plan/レビュー段階の guidance を注入する。
-- `justice-implement`: active plan に対して次の `task()` での実装委譲を 1 回だけ許可し、`[JUSTICE: IMPLEMENTATION ARMED]` guidance を注入する。
+- `justice-implement`: active plan に対する継続的な実装委譲を許可し、`[JUSTICE: IMPLEMENTATION ARMED]` guidance を注入する。
 
 どちらのコマンドも skill や `task()` を起動せず、純粋に synthetic text part を注入するのみである。
 
-`/justice-start` はワークフロー・ブートストラップを開始し、`/justice-implement` は次の実装委譲をアームする OpenCode コマンドフックである。
+`/justice-start` はワークフロー・ブートストラップを開始し、`/justice-implement` は承認済み Plan をアームする OpenCode コマンドフックである。
 
 | プロパティ | 設定値 |
 |----------|-------|
@@ -403,10 +403,10 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
    a. `resolveBootstrapPhase(request)` — **design → plan → 成果物準備済みの順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。`"plan_ready"` は計画成果物が読み取り可能であることだけを表し、レビュー、承認、マージ、実装認可を表さない。
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
    c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
-   d. workflow-start のたびに既存の実装 arm を失効させる。同じ plan パスでの再開も例外ではない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
-5. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、次の `task()` 委譲に対する実装 arm の guidance を返す。
-6. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は次の実装委譲の許可を示す。
-7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` が active plan と同じパスを明示的にアームした場合だけ、次の1回の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
+   d. workflow-start のたびにメモリ内のアーム補助状態をクリアする。同じ plan パスでの再開も例外ではないが、永続化された Plan 認可は失効させない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
+5. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
+6. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は Plan 単位の実装許可を示す。
+7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` により active Plan を承認した場合、その Plan に含まれる `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
 注入した policy の `directiveStage`、その policy が推奨する
@@ -444,8 +444,8 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 | `review_remediation` | `receiving-code-review` | `invoke_skill` | `artifact_ready` | 指摘修正と同一レビューの再実行 |
 | `review_clear` | なし | `await_human_approval` | `external_unverified` | 完全な指摘なしスナップショットの観測 |
 | `implementation` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | 読み取り可能な plan context での実装委譲 |
-| `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | active plan に対する未アームまたは stale arm の委譲への安全側通知 |
-| `implementation_arm` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | `/justice-implement` による次回の実装委譲の許可 |
+| `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | active plan に対する認可不在または失効済み認可の委譲への安全側通知 |
+| `implementation_arm` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | `/justice-implement` による Plan 単位の実装委譲の許可 |
 | `implementation_arm_required` | なし | `await_human_approval` | `external_unverified` | 未アーム状態、または要求された plan が読めないなど不完全・失敗した arm リクエストへの安全側通知 |
 
 `plan_ready`、`plan_activated`、`review_clear` は、承認・マージ・実装認可を意味
@@ -453,27 +453,29 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 停止しない。将来、信頼済みの人間承認 artifact を導入した場合にのみ
 `implementation_authorized` を導出できる。
 
-`PlanBridge.handlePreToolUse()` は active plan を持つ `task()` に対し、plan を読む前に
-単発 arm を消費する。arm の `planPath` が現在の active plan と一致しない場合は stale
-arm を破棄する。未アームまたは stale arm の呼び出しは
+`PlanBridge.handlePreToolUse()` は active plan を持つ `task()` に対し、認可済みの
+session / planPath と現行 Plan の fingerprint を照合する。認可不在または失効済み
+認可の呼び出しは
 `implementation_unauthorized` advisory だけを返し、plan 読み込み、delegation 構築、
 wisdom/persona 解決、loop 状態更新、completion 入力記録、`modifiedPayload` 生成を
 行わない。Adapter は全ての `task()` 呼び出しで、早期 return の前にも元の
 `output.args` object を差し替えずに sanitize・canonicalize する。したがって未アーム
 経路でも `taskId` / `loadSkills` / `runInBackground` はそれぞれ `task_id` /
 `load_skills` / `run_in_background` になり、禁止された routing field は除去される。
-未アーム経路で `injectedContext` 以外の plan context、delegation metadata、追加スキルを
+認可されない経路で `injectedContext` 以外の plan context、delegation metadata、追加スキルを
 注入しないという境界は維持される。
 
-一致する arm がある場合のみ、呼び出し元の `skills`、`loadSkills`、legacy
+一致する Plan 認可がある場合のみ、呼び出し元の `skills`、`loadSkills`、legacy
 `load_skills` を一つの内部 `loadSkills` 配列へ正規化する。呼び出し元の順序を維持しつつ、
 `implementation` policy の固定スキルだけを重複なく末尾に加え、
 `modifiedPayload.args` と委譲 context の両方へ渡す。Adapter の最終 output payload
 からは入力時の `skills`、`loadSkills`、`load_skills` を除去し、canonical な
 `load_skills` だけを生成する。Adapter はその `modifiedPayload.args` を実際の OMO
 tool 引数へ同じ object identity のまま適用し、PostToolUse の `skill_invoked` 観測も
-両方の入力形式を読む。arm はこの1回で
-消費され、active plan の変更・クリア、または workflow-start の再実行でも失効する。
+両方の入力形式を読む。Plan 認可は最初の `task()` では消費されず、明示的な cancel、
+Plan の意味的変更、または完了後の release まで有効とする。`task_id` を省略した場合も
+PlanBridge が選んだ task ID を ObservationHandler に渡す。ObservationHandler は
+PlanBridge の検証後に lifecycle を永続化し、成功後にのみ call binding を公開する。
 active plan がない `task()` は PlanBridge の拡張対象外であり plan context は渡さないが、
 Adapter の共通 sanitize・canonicalize は適用される。
 
@@ -1773,7 +1775,7 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 
 | 要求 | 状態 | 現行仕様との関係 |
 |---|---|---|
-| FR-601 Plan-scoped Authorization | 部分実装 | 計画に紐づく承認は永続化するが、実装委譲は `/justice-implement` ごとに次の1回の `task()` だけを arm する one-shot 契約（§4.1b） |
+| FR-601 Plan-scoped Authorization | 実装済み | 計画に紐づく承認を永続化し、複数の実装委譲で再利用する。現行 fingerprint を委譲時に照合する（§4.1b） |
 | FR-602 Authorization Binding | 実装済み | 承認を session、plan path、plan fingerprint に紐づけ、`.justice/authorizations.json` に保存する |
 | FR-603 Plan Mutation | 部分実装 | `task()` の PreToolUse 時に計画を再読込し、fingerprint mismatch を検出すると承認を無効化する。ファイル変更時の即時監視は行わない |
 | FR-604 Continuous Execution | 保留 | 同一承認 plan でも各 `task()` の前に再度 arm が必要。連続委譲の自動認可は将来拡張 |
