@@ -1283,6 +1283,7 @@ export class JusticePlugin {
           binding.sessionId,
           async () => {
             const current = await this.authorizationStore.findByAuthorizationId(binding.authorizationId);
+            if (!(await this.isAuthorizationPlanCurrentById(binding.authorizationId))) return false;
             const records = await this.observationLogStore.readAll();
             return this.advanceFinalizationWithinBoundary(binding.sessionId, current, records);
           },
@@ -1308,24 +1309,14 @@ export class JusticePlugin {
           record.verdict === "accepted",
       );
       for (const decision of accepted) {
-        const correlation = {
-          reviewKind: "task-review",
-          taskExecutionRef: decision.taskExecutionRef,
-          reviewRound: 1,
-        } as const;
-        const planCurrent = await this.authorizationReviewBoundary.withParentSession(
-          parentSessionId,
-          () => this.isAuthorizationPlanCurrent(correlation),
-        );
-        if (!planCurrent) continue;
         await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
           const binding = await this.authorizationStore.findByAuthorizationId(
             decision.taskExecutionRef.authorizationId,
           );
+          if (binding?.status !== "active" || binding.sessionId !== parentSessionId) return;
+          if (!(await this.isAuthorizationPlanCurrentById(binding.authorizationId))) return;
           const planPath = this.planBridge.getActivePlan(parentSessionId);
           if (
-            binding?.status !== "active" ||
-            binding.sessionId !== parentSessionId ||
             planPath !== binding.planPath ||
             !binding.canonicalSnapshot.tasks.some(
               (task) => task.taskId === decision.taskExecutionRef.taskId,
@@ -1349,6 +1340,10 @@ export class JusticePlugin {
     const authorizationId = correlation.reviewKind === "task-review"
       ? correlation.taskExecutionRef.authorizationId
       : correlation.authorizationId;
+    return this.isAuthorizationPlanCurrentById(authorizationId);
+  }
+
+  private async isAuthorizationPlanCurrentById(authorizationId: string): Promise<boolean> {
     try {
       const binding = await this.authorizationStore.findByAuthorizationId(authorizationId);
       if (binding?.status !== "active") return false;

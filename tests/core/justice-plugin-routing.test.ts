@@ -906,6 +906,42 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     )).toHaveLength(1);
   });
 
+  it("does not resume finalization when the authorization plan changed before recovery", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const binding = await internalsOf(plugin).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: new Date().toISOString(),
+    });
+    if (binding === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedTaskLifecycle(plugin, binding.authorizationId, "task-1");
+    await plugin.getObservationHandler().appendPlanFinalizationTransition({
+      parentSessionId: "s-1",
+      authorizationId: binding.authorizationId,
+      planPath: "plan.md",
+      finalizationAttemptId: "stale-finalization",
+      finalReviewRound: 1,
+      from: "tasks_pending",
+      to: "all_tasks_accepted",
+    });
+    await fs.writeFile("plan.md", `${progressPlan}\n- Additional requirement`);
+
+    await (plugin as unknown as {
+      recoverPendingFinalizations: (parentSessionId: string) => Promise<void>;
+    }).recoverPendingFinalizations("s-1");
+
+    const records = await internalsOf(plugin).observationLogStore.readAll();
+    expect(records.some((record) =>
+      record.kind === "plan_finalization_transition" && record.to === "final_review_pending"
+    )).toBe(false);
+    await expect(
+      internalsOf(plugin).authorizationStore.findByAuthorizationId(binding.authorizationId),
+    ).resolves.toMatchObject({ status: "invalidated" });
+  });
+
   it("starts Final Review after restart when all canonical tasks were accepted before finalization began", async () => {
     const fs = createMockFileSystem({ "plan.md": progressPlan });
     const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
@@ -981,6 +1017,30 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     await restarted.initialize();
 
     expect(await fs.readFile("plan.md")).toContain("- [x] first");
+  });
+
+  it("does not invalidate another session's authorization while recovering accepted progress", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorization = await internalsOf(plugin).authorizationStore.approve({
+      sessionId: "other-session",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorization === null) throw new Error("test setup: authorization approval failed");
+    await seedAcceptedDecision(plugin, authorization.authorizationId);
+    await fs.writeFile("plan.md", `${progressPlan}\n- Additional requirement`);
+
+    await (plugin as unknown as {
+      recoverAcceptedTaskProgress: (parentSessionId: string) => Promise<void>;
+    }).recoverAcceptedTaskProgress("s-1");
+
+    await expect(
+      internalsOf(plugin).authorizationStore.findByAuthorizationId(authorization.authorizationId),
+    ).resolves.toMatchObject({ status: "active", sessionId: "other-session" });
+    expect(await fs.readFile("plan.md")).toContain("- [ ] first");
   });
 
   it("keeps initialization fail-open when restoring accepted task progress cannot write", async () => {
