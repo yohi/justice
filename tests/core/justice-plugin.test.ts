@@ -13,6 +13,7 @@ import type {
 } from "../../src/core/types";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import { buildCanonicalSnapshot, computePlanFingerprint } from "../../src/core/plan-fingerprint";
 import {
   appendTaskLifecycleTransition,
   type TaskLifecycleTransitionInput,
@@ -505,26 +506,23 @@ describe("JusticePlugin", () => {
       const taskId = "task-1";
       const authorizationId = "auth-1";
       const writerId = "w-lifecycle";
+      const planContent = "## Task 1: Rework\n- [ ] Fix\n";
       const binding = {
         authorizationId,
         sessionId: parentSessionId,
         planPath: "plan.md",
-        planFingerprint: { algorithm: "sha256", value: "plan-fingerprint" },
-        canonicalSnapshot: {
-          schema: "justice-plan-v1",
-          documentDigest: "document-digest",
-          globalBodyDigest: "body-digest",
-          tasks: [{ taskId, title: "Rework", canonicalBody: "## Task 1: Rework", digest: "digest" }],
-        },
+        planFingerprint: computePlanFingerprint(planContent, [taskId]),
+        canonicalSnapshot: buildCanonicalSnapshot(planContent, [taskId]),
         fingerprintSchema: "justice-plan-v1",
         approvedAt: "2026-01-01T00:00:00.000Z",
         status: "active",
       } satisfies ApprovedPlanBinding;
       const fs = createMockFileSystem({
-        "plan.md": "## Task 1: Rework\n- [ ] Fix\n",
+        "plan.md": planContent,
         ".justice/authorizations.json": JSON.stringify([binding]),
       });
       const testPlugin = new JusticePlugin(fs, fs, { writerId });
+      await testPlugin.getPlanBridge().restoreActivePlans();
       const logStore = new ObservationLogStore(fs, fs, writerId);
       const taskExecutionRef = { authorizationId, taskId, attemptId: "attempt-1" };
       const shardId = { agentId: "unknown" as const, sessionId: parentSessionId, writerId };

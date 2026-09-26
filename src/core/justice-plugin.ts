@@ -711,13 +711,6 @@ export class JusticePlugin {
                 return PROCEED;
               })
             : undefined;
-        const observation =
-          reviewCategory === undefined
-            ? await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
-                this.options.logger?.warn("observation-handler pre-tool-use failed", err);
-                return PROCEED;
-              })
-            : PROCEED;
         const delegated =
           reviewCategory === undefined
             ? event.payload.toolName === "task"
@@ -727,6 +720,26 @@ export class JusticePlugin {
                 })
               : PROCEED
             : await this.claimReviewTask(event, reviewCategory);
+        const delegatedTaskId = resolveTaskIdFromModifiedPayload(
+          delegated.action === "inject" ? delegated.modifiedPayload : undefined,
+        );
+        const observationEvent: PreToolUseEvent =
+          event.payload.toolName === "task"
+            ? {
+                ...event,
+                payload: {
+                  ...event.payload,
+                  toolInput: delegatedTaskId === undefined ? {} : { task_id: delegatedTaskId },
+                },
+              }
+            : event;
+        const observation =
+          reviewCategory === undefined
+            ? await this.observationHandler.handlePreToolUse(observationEvent).catch((err: unknown) => {
+                this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+                return PROCEED;
+              })
+            : PROCEED;
         const response = mergePreToolUseResponses(
           mergePreToolUseResponses(observation, delegated, (message) =>
             this.warnMergeConflict(message),

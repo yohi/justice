@@ -994,11 +994,6 @@ export class PlanBridge {
       return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
-    const armed = this.consumeImplementationArm(event.sessionId);
-    if (armed === null) {
-      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
-    }
-
     this.completionDetector.recordPreToolUseInvocation(
       event.sessionId,
       event.callId,
@@ -1027,6 +1022,10 @@ export class PlanBridge {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
+    }
+    const requestedTaskId = resolveTaskIdFromToolInput(event.payload.toolInput);
+    if (requestedTaskId !== undefined && requestedTaskId !== initialDelegation.taskId) {
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     const persona = this.resolveDelegationPersona(event.sessionId);
