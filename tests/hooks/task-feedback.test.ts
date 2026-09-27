@@ -75,6 +75,27 @@ describe("TaskFeedbackHandler", () => {
       }
     });
 
+    it("omits split guidance when the active task is absent from the plan", async () => {
+      const reader = createMockFileReader({ "plan.md": "## Task 2: Implement\n- [ ] Write code" });
+      const handler = new TaskFeedbackHandler(reader, createMockFileWriter());
+      handler.setActivePlan("session-missing-task", "plan.md", "task-1");
+
+      const response = await handler.handlePostToolUse({
+        type: "PostToolUse",
+        payload: {
+          toolName: "task",
+          toolResult: "FAIL tests/setup.test.ts\nTests: 0 passed, 1 failed",
+          error: true,
+        },
+        sessionId: "session-missing-task",
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action === "inject") {
+        expect(response.injectedContext).not.toContain("JUSTICE AI 提案");
+      }
+    });
+
     it("logs plan inspection errors with a fixed format string", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });
       const error = new Error("plan read failed: %s");
