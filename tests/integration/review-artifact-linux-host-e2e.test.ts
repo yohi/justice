@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { execFile, spawn } from "node:child_process";
-import { once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -97,6 +96,18 @@ async function runHost(rootDir: string, prompt: string, sessionId?: string): Pro
   return stdout;
 }
 
+function waitForProcessExit(serverProcess: ReturnType<typeof spawn>): Promise<void> {
+  if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) return Promise.resolve();
+  return new Promise((resolveExit) => {
+    const onExit = (): void => {
+      serverProcess.removeListener("exit", onExit);
+      resolveExit();
+    };
+    serverProcess.once("exit", onExit);
+    if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) onExit();
+  });
+}
+
 async function startHostApi(rootDir: string): Promise<{ readonly baseUrl: string; readonly stop: () => Promise<void> }> {
   const socket = createServer();
   await new Promise<void>((resolveListen, reject) => {
@@ -117,24 +128,25 @@ async function startHostApi(rootDir: string): Promise<{ readonly baseUrl: string
     env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
     stdio: "ignore",
   });
-  let exited = false;
-  void once(serverProcess, "exit").then(() => { exited = true; });
-
   try {
     for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (exited) throw new Error("OpenCode server exited before becoming ready");
+      if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) {
+        throw new Error("OpenCode server exited before becoming ready");
+      }
       try {
         const response = await fetch(`${baseUrl}/global/health`, { signal: AbortSignal.timeout(1_000) });
         if (response.ok) {
           return {
             baseUrl,
             stop: async (): Promise<void> => {
-              if (exited) return;
+              if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) return;
+              const gracefulExit = waitForProcessExit(serverProcess);
               serverProcess.kill("SIGTERM");
-              await Promise.race([once(serverProcess, "exit"), new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
-              if (!exited) {
+              await Promise.race([gracefulExit, new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
+              if (serverProcess.exitCode === null && serverProcess.signalCode === null) {
+                const forcedExit = waitForProcessExit(serverProcess);
                 serverProcess.kill("SIGKILL");
-                await once(serverProcess, "exit");
+                await forcedExit;
               }
             },
           };
