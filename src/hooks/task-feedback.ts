@@ -303,7 +303,8 @@ export class TaskFeedbackHandler {
       }
     } catch (err) {
       console.warn(
-        `[JUSTICE] Failed to inspect plan during escalation: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] Failed to inspect plan during escalation: %s",
+        err instanceof Error ? err.message : String(err),
         err,
       );
     }

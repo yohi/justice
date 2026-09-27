@@ -75,6 +75,31 @@ describe("TaskFeedbackHandler", () => {
       }
     });
 
+    it("logs plan inspection errors with a fixed format string", async () => {
+      const reader = createMockFileReader({ "plan.md": samplePlan });
+      const error = new Error("plan read failed: %s");
+      vi.spyOn(reader, "readFile").mockRejectedValue(error);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const handler = new TaskFeedbackHandler(reader, createMockFileWriter());
+      handler.setActivePlan("session-log-format", "plan.md", "task-1");
+
+      await handler.handlePostToolUse({
+        type: "PostToolUse",
+        payload: {
+          toolName: "task",
+          toolResult: "FAIL tests/setup.test.ts\nTests: 0 passed, 1 failed",
+          error: true,
+        },
+        sessionId: "session-log-format",
+      });
+
+      expect(warn).toHaveBeenCalledWith(
+        "[JUSTICE] Failed to inspect plan during escalation: %s",
+        error.message,
+        error,
+      );
+    });
+
     it("should proceed silently for retryable errors (Layer 1)", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });
       const writer = createMockFileWriter();
