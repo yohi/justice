@@ -83,12 +83,14 @@ readonly rawBody: string;
 to `PlanTask`.
 
 In `src/core/plan-parser.ts`, make `parse(content: string): PlanTask[]`:
-- normalize CRLF to LF for scanning only;
-- track Markdown backtick/tilde fences;
+- derive a scan representation that treats CRLF/LF uniformly while retaining offsets into the original `content`;
+- track Markdown backtick/tilde fences in that scan representation;
 - recognize task headings only while outside a fence;
-- record each real task section's start/end line indexes;
-- assign `rawBody` from the normalized original lines without checkbox canonicalization or semantic rewriting;
-- preserve current checkbox parsing, status derivation, and line-number semantics.
+- record each real task section's start/end offsets in the original `content`;
+- assign `rawBody` by slicing the original `content` with those offsets, so original Markdown and line endings are preserved exactly;
+- preserve current checkbox parsing, status derivation, and 1-based line-number semantics.
+
+Do not build `rawBody` from a newline-normalized copy.
 
 Do not import task-section logic from `plan-fingerprint.ts`; keep this bridge local and avoid expanding the refactor surface.
 
