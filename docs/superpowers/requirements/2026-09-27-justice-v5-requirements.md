@@ -174,11 +174,37 @@ Unknown or missing proof is blocking.
 
 ### JUS5-CONFIG-01
 
-`omo.jsonc` is the current OmO configuration Source of Truth.
+The authority for **configured state** is the OmO v5 **effective configuration resolution**, not any single `omo.jsonc` file.
 
 ### JUS5-CONFIG-02
 
 Legacy `oh-my-opencode.jsonc` / `oh-my-openagent.jsonc` may be detected as migration inputs but must not be documented as current primary configuration.
+
+### JUS5-CONFIG-03
+
+When filesystem resolution is required, Justice must reproduce the OmO v5 layer order:
+
+1. user layer: `~/.omo/omo.jsonc`, falling back to `~/.omo/omo.json`;
+2. project layers: `.omo/omo.jsonc`, falling back to `.omo/omo.json`, from the farthest ancestor to the nearest project directory;
+3. the nearest project layer has the highest file-layer precedence;
+4. the home directory is not double-counted as a project layer.
+
+### JUS5-CONFIG-04
+
+After file-layer merge, Justice must account for the OmO v5 effective-view order for the OpenCode harness:
+
+```text
+shared base
+→ [opencode]
+→ selected profile base
+→ selected profile [opencode]
+```
+
+Profile selection and loader diagnostics are part of configured-state interpretation.
+
+### JUS5-CONFIG-05
+
+If OmO exposes a compatible effective-config API, Justice should use that as configured-state authority. If not, Justice may inspect files only by following the same precedence/resolution semantics and must report the source layers and diagnostics used.
 
 ---
 
@@ -278,13 +304,16 @@ Authorization remains plan-scoped and human-controlled.
 
 ### JUS5-AUTH-02
 
-Authorization must durably correlate at least:
+Authorization must durably bind the exact approved Requirements → Design → Plan chain, not only the Plan.
+
+The semantic binding must include at least:
 
 - authorization identity;
-- plan path;
-- plan fingerprint;
-- canonical snapshot;
-- fingerprint schema;
+- artifact-chain identity;
+- Requirements identity/path, revision, and fingerprint;
+- Design identity/path, revision, and fingerprint;
+- Plan identity/path, fingerprint, and canonical snapshot;
+- fingerprint/projection schema versions;
 - approval time;
 - status.
 
@@ -313,6 +342,31 @@ A substantive Design change invalidates downstream Plan authority until the Plan
 ### JUS5-AUTH-06
 
 AI review, PR creation, or PR merge must not silently substitute for explicit human plan authorization.
+
+### JUS5-AUTH-07
+
+A substantive Requirements change invalidates the bound Design and all downstream Plan authority until:
+
+```text
+Requirements reconciliation
+→ Design reconciliation
+→ Plan reconciliation
+→ explicit human approval
+→ new artifact-chain authorization
+```
+
+### JUS5-AUTH-08
+
+A substantive Design change invalidates the bound Plan and requires Plan reconciliation, explicit human approval, and a new artifact-chain authorization before affected acceptance may resume.
+
+### JUS5-AUTH-09
+
+A Superpowers `Ruling:` may guide workflow execution but does not rewrite Justice authority.
+
+- a non-substantive Ruling may be recorded as execution context without invalidating the chain;
+- a Ruling that changes a normative Requirements/Design/Plan obligation may allow Superpowers execution to continue, but Justice acceptance remains blocked;
+- substantive Rulings require artifact reconciliation and the human re-approval required by JUS5-AUTH-07/JUS5-AUTH-08;
+- a Ruling alone must never convert a `VIOLATED` or `NOT_PROVEN` clause into `SATISFIED`.
 
 ---
 
@@ -353,7 +407,7 @@ Justice must not require a per-task fresh reviewer when Superpowers does not req
 
 ---
 
-## 12. Delegation boundary
+## 12. Delegation boundary and execution correlation
 
 ### JUS5-TASK-01
 
@@ -376,6 +430,83 @@ Justice must not force worker payload fields that seize OmO routing authority, i
 ### JUS5-TASK-04
 
 Justice may enforce its semantic category boundary where compatible with the current OmO task contract.
+
+### JUS5-CORR-01 — OmO task_id ownership
+
+Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
+
+OmO `task_id` remains exclusively owned by OmO as its continuation-session identifier (`ses_...`). Justice must preserve a legitimate incoming OmO `task_id` unchanged.
+
+### JUS5-CORR-02 — Canonical execution-call key
+
+Justice's canonical runtime correlation key is:
+
+```text
+parentSessionId + parentCallId
+```
+
+observed from the OpenCode tool-execution hook. Justice binds its semantic identities to that runtime call in durable `.justice/` sidecar state rather than overloading OmO tool arguments.
+
+### JUS5-CORR-03 — ExecutionCorrelation binding
+
+The durable execution binding must semantically contain at least:
+
+```text
+ExecutionCorrelation
+├─ authorizationId
+├─ artifactChainId
+├─ planIdentity
+├─ taskIdentity
+├─ executionMethod
+├─ parentSessionId
+├─ parentCallId
+├─ childSessionId?
+├─ omoContinuationSessionId?
+├─ dispatchRevision
+└─ status
+```
+
+Exact persistence layout is an implementation detail; these identity relationships are not.
+
+### JUS5-CORR-04 — Correlation lifecycle
+
+The supported lifecycle is:
+
+```text
+PreToolUse(task)
+  → bind authorized semantic task to (parentSessionId, parentCallId)
+
+PostToolUse/task metadata and session-created/session-updated observation
+  → attach the observed childSessionId when available
+
+PostToolUse / review / verification
+  → resolve the evidence subject through the durable binding
+
+Recovery
+  → rebuild correlation from durable sidecar state, not ephemeral maps
+```
+
+A persistence/correlation failure may remain fail-open for runtime execution but must leave the affected evidence `NOT_PROVEN`.
+
+### JUS5-CORR-05 — Continuations
+
+When a legitimate OmO `task_id=ses_...` continuation is present:
+
+- Justice must not replace or reinterpret it;
+- Justice may associate it with an already-observed child-session relation only when that relation is already trusted;
+- an unverified continuation-session identifier is runtime metadata, not proof of Justice task identity.
+
+### JUS5-CORR-06 — category / subagent_type boundary
+
+Justice follows the OmO public XOR contract and must not create a payload containing both `category` and `subagent_type`.
+
+- explicit `subagent_type`: preserve it; do not add/replace it with a Justice category;
+- explicit `category`: preserve/validate the category; do not add `subagent_type`;
+- neither target on a non-continuation worker call: Justice may supply a semantic category only when the current authorized workflow and classifier provide an authoritative category decision;
+- both targets supplied by a caller: Justice must not choose between them as routing authority; record a routing-contract violation and do not treat that call as trusted acceptance evidence;
+- continuation calls: do not inject a semantic category merely to satisfy a new-task target contract.
+
+Justice does not rely on OmO's defensive runtime normalization of an invalid both-target payload.
 
 ---
 
@@ -433,6 +564,81 @@ Scoped re-review must preserve:
 ### JUS5-REV-05
 
 Review text alone is not authoritative. Trusted evidence requires task/revision/workflow provenance.
+
+### JUS5-REV-06 — Review detection
+
+Justice must not dispatch reviews. A review becomes trusted only when a versioned Superpowers review-dispatch profile recognizes the already-dispatched reviewer and correlates it with:
+
+- execution method;
+- review kind;
+- artifact chain;
+- task identity when applicable;
+- parent session/call;
+- observed child session where available;
+- implementation base/head or equivalent reviewed revision range.
+
+Ambiguous classification is untrusted and fail-closed for acceptance.
+
+### JUS5-REV-07 — Conformance Contract delivery
+
+For a supported Superpowers review that is required to produce semantic conformance evidence, Justice must use the existing OpenCode `tool.execute.before` task-call extension point to enrich that same reviewer prompt with a read-only Justice Conformance Contract reference and structured-result instructions.
+
+Justice must not create another reviewer dispatch.
+
+If a future supported host cannot provide an equivalent safe extension point, semantic conformance review on that host is unsupported until a focused compatibility spike proves one.
+
+### JUS5-REV-08 — Structured review result
+
+Trusted semantic review evidence must carry a versioned result containing at least:
+
+- review correlation identity;
+- review kind;
+- artifact-chain identity;
+- task identity where applicable;
+- reviewed revision/range;
+- quality verdict/findings;
+- clause results containing `clauseId`, `SATISFIED | VIOLATED | NOT_PROVEN`, and supporting evidence/reference.
+
+### JUS5-REV-09 — Invalid review evidence
+
+The following must not satisfy review/conformance gates:
+
+- missing structured result;
+- malformed result;
+- stale reviewed revision;
+- wrong artifact chain;
+- wrong task/plan;
+- untrusted provenance;
+- missing required clause result.
+
+Required missing clause results become `NOT_PROVEN`.
+
+### JUS5-REV-10 — Quality severity and parked findings
+
+Justice v5 canonical quality severity is:
+
+```text
+critical | important | minor
+```
+
+Legacy Justice `major` may be read only as historical/migration input and normalizes to `important`; it is not the v5 canonical vocabulary.
+
+Gate semantics:
+
+- open `critical` or `important` findings are blocking;
+- `minor` findings do not block task progression but must remain visible and be included in final review;
+- a Superpowers parked finding or `Ruling:` is not a resolution;
+- a parked critical/important finding remains Justice-blocking until a later trusted review explicitly clears/resolves it or an explicit human review-resolution artifact adjudicates it;
+- a human quality adjudication cannot satisfy a normative conformance clause that remains `VIOLATED` or `NOT_PROVEN`;
+- the final review must explicitly disposition carried minor/parked findings; any finding still critical/important at final completion blocks `PlanComplete`.
+
+### JUS5-REV-11 — Evidence storage capability
+
+Directly observed structured reviewer output, correlated by the trusted execution binding, may be persisted as Justice evidence without requiring Linux-native review-artifact reservation.
+
+When Justice imports or hands off file-based review artifacts, an untrusted/plain-file fallback must never be promoted to trusted evidence merely because secure reservation is unavailable.
+
+Doctor must report the secure review-artifact capability. If a required evidence path depends on unavailable secure storage and no directly observed trusted result exists, acceptance is fail-closed.
 
 ---
 
@@ -497,6 +703,56 @@ Final Conformance must cover at least:
 ### JUS5-CONFORM-09
 
 A final review of an older revision is not proof for a newer candidate tree.
+
+### JUS5-PROJ-01 — Canonical normative sources
+
+Normative Clause Projection must use deterministic source identities.
+
+**Requirements:** every `JUS5-*` requirement block is canonical. A block's prose obligation is clause suffix `/0`; each ordered bullet/list item that states an independent obligation receives deterministic suffix `/1`, `/2`, ... within that source revision. Source revision/fingerprint is part of evidence identity, so a changed list invalidates prior clause evidence.
+
+**Design:** the canonical design source is the explicit normative Design Contract Registry (`INV-*` plus `J5D-*` IDs). Free prose is explanatory unless incorporated by a registered contract.
+
+**Plan:** projection must deterministically enumerate the current Superpowers v6 plan's normative structural units, including at least:
+
+- Goal;
+- Architecture;
+- Tech Stack constraints;
+- Global Constraints;
+- each Task's Files;
+- Interfaces / Consumes / Produces;
+- exact signatures;
+- exact values;
+- test assertions;
+- expected verification results.
+
+The Plan's `Spec` reference identifies the bound Design artifact rather than creating a duplicate normative clause.
+
+### JUS5-PROJ-02 — Projection completeness state
+
+Every Conformance Contract has:
+
+```text
+projectionStatus =
+  COMPLETE
+  | INCOMPLETE
+  | INVALID
+```
+
+Only `COMPLETE` contracts may contribute to acceptance.
+
+At minimum, the following are fail-closed:
+
+- duplicate clause IDs;
+- missing required source artifact;
+- ambiguous source anchor;
+- unsupported or structurally ambiguous Plan format;
+- parser/projection failure;
+- source fingerprint/revision mismatch;
+- a normative structural unit that cannot be mapped to exactly one canonical clause identity.
+
+### JUS5-PROJ-03 — Projection schema version
+
+The projection schema/version must be durable and included in the approved artifact chain, Conformance Contract, and resulting clause evidence. Evidence produced under an incompatible projection schema must not satisfy current acceptance.
 
 ---
 
@@ -634,6 +890,33 @@ Justice must not cause already completed Superpowers tasks to be re-dispatched.
 ### JUS5-REC-03
 
 Justice/Superpowers state conflict must be surfaced, not silently overwritten.
+
+### JUS5-PERSIST-01 — v5 state schema
+
+Every v5 authoritative persistent record must carry or be governed by an explicit v5-compatible schema version. The exact file split is an implementation detail.
+
+### JUS5-PERSIST-02 — v4 authorization
+
+A v4 plan-only authorization must not be automatically promoted to a v5 Requirements→Design→Plan artifact-chain authorization. Human reconciliation/re-approval is required before it can authorize v5 acceptance.
+
+### JUS5-PERSIST-03 — v4 review state
+
+v4 Justice-owned review-dispatch/scheduling records are historical only. They must not schedule v5 reviews and must not satisfy v5 review or conformance gates.
+
+### JUS5-PERSIST-04 — v4 observations/evidence
+
+v4 raw observations may be retained/imported as historical or untrusted input, but evidence lacking v5 artifact-chain, correlation, projection-schema, and clause identities must not satisfy v5 acceptance.
+
+### JUS5-PERSIST-05 — migration failure / unknown schema
+
+Unknown, newer, malformed, or unsuccessfully migrated authoritative state must:
+
+- remain preserved rather than silently overwritten or downgraded;
+- produce an explicit diagnostic;
+- leave affected v5 acceptance fail-closed;
+- never fabricate missing Requirements/Design lineage.
+
+Runtime execution may remain fail-open when safe.
 
 ---
 
