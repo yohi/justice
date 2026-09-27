@@ -346,9 +346,9 @@ Plans that use only dependency semantics Justice already understands continue to
 
 If a plan contains dependency semantics that Justice v4 does not model safely, Justice must not infer parallelizability.
 
-For this bridge, a Superpowers-style structured `Interfaces` task contract is treated as such an unknown/richer dependency semantic.
+For this bridge, the exact Superpowers v6.4.2 task marker `**Interfaces:**` is the compatibility signal for such richer dependency semantics. Detection must be fence-aware and must match a trimmed, non-fenced line exactly; arbitrary prose containing the word "Interfaces" must not switch the plan into conservative mode.
 
-Justice does not parse `Interfaces` into a graph.
+If any real parsed task contains that `**Interfaces:**` marker, the plan uses conservative dependency mode. Justice does not parse `Consumes` or `Produces` into a graph in v4.
 
 Instead:
 
