@@ -244,43 +244,12 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 ### 有効化（OpenCode側の設定）
 
-> [!IMPORTANT]
-> `/justice-start` は **OpenCode の組み込みコマンドではありません**。Justice の `command.execute.before` フックは、`justice-start` という名前の OpenCode コマンドが実際に存在し実行されたときにのみ発火します。したがって、**利用者自身がコマンドを登録しない限りコマンド自体が存在せず、`/justice-start` は使えません**。Justice プラグインはこの設定をランタイムで書き込みません（「プラグイン/フックの登録」と同様、設定ファイルへの記述は利用者側の作業です）。
+`/justice-start` と `/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
 
-登録方法は次の 2 通りです。どちらか一方を選べば有効化されます。
-
-**方法 A: Markdown ファイル**
-
-`.opencode/commands/justice-start.md`（プロジェクト単位）または `~/.config/opencode/commands/justice-start.md`（グローバル）を作成します。**ファイル名がコマンド名になります。** frontmatter がメタデータ、本文が template（LLM に送られるプロンプト）です。
-
-```markdown
----
-description: Start a Justice-managed development workflow
----
-$ARGUMENTS
-```
-
-**方法 B: `opencode.jsonc` の `command` オブジェクト**
-
-設定ファイルの `command` オブジェクトに、コマンド名をキーとして登録します。`template` は **必須** プロパティです。
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "command": {
-    "justice-start": {
-      "template": "$ARGUMENTS",
-      "description": "Start a Justice-managed development workflow"
-    }
-  }
-}
-```
-
-**`$ARGUMENTS` と template について:**
-
-- `$ARGUMENTS` は、コマンド名の後に入力した文字列全体がそのまま渡されるプレースホルダーです（`/justice-start ship the feature --plan plan.md` なら `ship the feature --plan plan.md`）。
-- Justice のフックは同じ引数文字列を独自にパースするため、**template の内容自体は Justice の動作に影響しません**。template が決めるのは「LLM に送られるプロンプト」だけで、Justice のガイダンス注入は `output.parts` への追記という別経路で行われます。そのため、最も単純で安全な template は `"$ARGUMENTS"`（入力をそのままプロンプトにする）です。
-- どちらの方式でも `agent` / `model` の指定は **省略可能** です。省略した場合は、現在の会話のエージェント・モデルがそのまま使われます。
+> [!NOTE]
+> 自動登録される template は `$ARGUMENTS` です。`$ARGUMENTS` は、コマンド名の後に入力した文字列全体がそのまま渡されるプレースホルダーです（`/justice-start ship the feature --plan plan.md` なら `ship the feature --plan plan.md`）。
+> Justice のフックは同じ引数文字列を独自にパースするため、**template の内容自体は Justice の動作に影響しません**。template が決めるのは「LLM に送られるプロンプト」だけで、Justice のガイダンス注入は `output.parts` への追記という別経路で行われます。そのため、最も単純で安全な template は `"$ARGUMENTS"`（入力をそのままプロンプトにする）です。
+> `agent` / `model` の指定は **省略可能** です。省略した場合は、現在の会話のエージェント・モデルがそのまま使われます。
 
 ### 基本的な使い方
 
@@ -426,16 +395,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 ### 有効化（OpenCode側の設定）
 
-`/justice-start` と同様に、`/justice-implement` は OpenCode の組み込みコマンドではありません。利用者がコマンドを登録する必要があります。
-
-**`.opencode/commands/justice-implement.md`**:
-
-```markdown
----
-description: Arm the next Justice-managed implementation delegation
----
-$ARGUMENTS
-```
+`/justice-implement` も `/justice-start` と同様、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先されます。
 
 ## 推奨 Worker モデルプロファイル
 
