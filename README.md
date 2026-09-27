@@ -396,6 +396,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 ### 有効化（OpenCode側の設定）
 
 `/justice-implement` も `/justice-start` と同様、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先されます。
+詳細な挙動（`$ARGUMENTS`、template、衝突時の優先）は `/justice-start` の有効化節を参照してください。
 
 ## 推奨 Worker モデルプロファイル
 
