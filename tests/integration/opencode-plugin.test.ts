@@ -92,9 +92,11 @@ describe("OpenCodePlugin (integration)", () => {
   it("fails open when the config hook throws", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
-    const config = new Proxy({ command: {} }, {
-      set() { throw new Error("registration failed"); },
-    });
+    const config = {
+      command: new Proxy<Record<string, unknown>>({}, {
+        set() { throw new Error("registration failed"); },
+      }),
+    };
 
     await expect(
       handlers.config?.(config as never),

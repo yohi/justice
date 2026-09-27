@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -93,6 +95,97 @@ async function runHost(rootDir: string, prompt: string, sessionId?: string): Pro
     throw new Error("unsupported setup: pinned host could not execute the review scenario", { cause });
   }
   return stdout;
+}
+
+async function startHostApi(rootDir: string): Promise<{ readonly baseUrl: string; readonly stop: () => Promise<void> }> {
+  const socket = createServer();
+  await new Promise<void>((resolveListen, reject) => {
+    socket.once("error", reject);
+    socket.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = socket.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("unsupported setup: could not reserve a local OpenCode API port");
+  }
+  await new Promise<void>((resolveClose, reject) => {
+    socket.close((error) => error === undefined ? resolveClose() : reject(error));
+  });
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const serverProcess = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(address.port)], {
+    cwd: rootDir,
+    env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
+    stdio: "ignore",
+  });
+  let exited = false;
+  void once(serverProcess, "exit").then(() => { exited = true; });
+
+  try {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (exited) throw new Error("OpenCode server exited before becoming ready");
+      try {
+        const response = await fetch(`${baseUrl}/global/health`, { signal: AbortSignal.timeout(1_000) });
+        if (response.ok) {
+          return {
+            baseUrl,
+            stop: async (): Promise<void> => {
+              serverProcess.kill("SIGTERM");
+              await Promise.race([once(serverProcess, "exit"), new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
+            },
+          };
+        }
+      } catch {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+      }
+    }
+    throw new Error("OpenCode server did not become ready within 15 seconds");
+  } catch (cause: unknown) {
+    serverProcess.kill("SIGTERM");
+    throw new Error("unsupported setup: OpenCode API server could not start", { cause });
+  }
+}
+
+async function hostApiPost(baseUrl: string, path: string, body: unknown): Promise<{ readonly response: Response; readonly value: unknown }> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (cause: unknown) {
+    throw new Error("unsupported setup: OpenCode API request could not complete", { cause });
+  }
+  const text = await response.text();
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    value = text;
+  }
+  return { response, value };
+}
+
+function unsupportedForAuthentication(response: Response, value: unknown): void {
+  const detail = typeof value === "string" ? value : JSON.stringify(value);
+  if (response.status === 401 || response.status === 403 || /unauthorized|authentication|api key|provider.{0,20}not configured/iu.test(detail)) {
+    throw new Error("unsupported setup: OpenCode host authentication or provider is unavailable");
+  }
+}
+
+function nestedHostTools(value: unknown): readonly HostTool[] {
+  if (Array.isArray(value)) return value.flatMap(nestedHostTools);
+  if (!isRecord(value)) return [];
+  const own = value.type === "tool" && typeof value.tool === "string" && isRecord(value.state)
+    ? [{
+        tool: value.tool,
+        input: isRecord(value.state.input) ? value.state.input : {},
+        output: typeof value.state.output === "string" ? value.state.output : "",
+        status: typeof value.state.status === "string" ? value.state.status : "",
+      }]
+    : [];
+  return [...own, ...Object.values(value).flatMap(nestedHostTools)];
 }
 
 async function seedMandatoryReview(rootDir: string, parentSessionId: string, category: "sp-review" | "sp-final-review"): Promise<void> {
@@ -194,46 +287,95 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (
 });
 
 describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on supported host", () => {
-  it.each([
-    ["justice-start", "/justice-start host registration check"],
-    ["justice-implement", "/justice-implement --plan docs/host-plan.md --approved"],
-  ] as const)("loads and invokes %s without a configured command definition", async (_name, command) => {
+  it("executes justice-start through the host Command service", async () => {
     await supportedHostVersion();
     const rootDir = await mkdtemp(`${tmpdir()}/justice-command-host-e2e-`);
+    let host: Awaited<ReturnType<typeof startHostApi>> | undefined;
+    try {
+      host = await startHostApi(rootDir);
+      const directory = encodeURIComponent(rootDir);
+      const session = await hostApiPost(host.baseUrl, `/session?directory=${directory}`, {});
+      unsupportedForAuthentication(session.response, session.value);
+      expect(session.response.ok).toBe(true);
+      if (!isRecord(session.value) || typeof session.value.id !== "string") {
+        throw new Error("unsupported setup: OpenCode did not return a session ID");
+      }
+
+      const invoked = await hostApiPost(
+        host.baseUrl,
+        `/session/${encodeURIComponent(session.value.id)}/command?directory=${directory}`,
+        { command: "justice-start", arguments: "host command service integration check" },
+      );
+      unsupportedForAuthentication(invoked.response, invoked.value);
+      expect(invoked.response.ok).toBe(true);
+
+      const records = await new ObservationLogStore(
+        new NodeFileSystem(rootDir),
+        new NodeFileSystem(rootDir),
+        "w-command-e2e",
+      ).readAll();
+      expect(records.some((record) => record.recordType === "observation" && record.kind === "workflow_started")).toBe(true);
+    } finally {
+      await host?.stop();
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }, 150_000);
+
+  it("reflects justice-implement arming in the next real task tool call", async () => {
+    await supportedHostVersion();
+    const rootDir = await mkdtemp(`${tmpdir()}/justice-command-host-e2e-`);
+    let host: Awaited<ReturnType<typeof startHostApi>> | undefined;
     try {
       const planPath = "docs/host-plan.md";
       await mkdir(resolve(rootDir, "docs"), { recursive: true });
-      await writeFile(resolve(rootDir, planPath), "## Task 1: host task\n- [ ] verify\n", "utf8");
-
-      let stdout: string;
-      try {
-        ({ stdout } = await exec("opencode", [
-          "run", "--format", "json", "--dir", rootDir, command,
-        ], {
-          cwd: rootDir,
-          timeout: 120_000,
-          maxBuffer: 8 * 1024 * 1024,
-          env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
-        }));
-      } catch (cause: unknown) {
-        throw new Error(`unsupported setup: host could not execute ${_name}`, { cause });
+      const planContent = "## Task 1: host task\n- [ ] verify host task command\n";
+      await writeFile(resolve(rootDir, planPath), planContent, "utf8");
+      host = await startHostApi(rootDir);
+      const directory = encodeURIComponent(rootDir);
+      const session = await hostApiPost(host.baseUrl, `/session?directory=${directory}`, {});
+      unsupportedForAuthentication(session.response, session.value);
+      expect(session.response.ok).toBe(true);
+      if (!isRecord(session.value) || typeof session.value.id !== "string") {
+        throw new Error("unsupported setup: OpenCode did not return a session ID");
       }
+      const sessionId = session.value.id;
 
-      const logs = new ObservationLogStore(new NodeFileSystem(rootDir), new NodeFileSystem(rootDir), "w-command-e2e");
-      const records = await logs.readAll();
-      if (_name === "justice-start") {
-        if (!records.some((record) => record.recordType === "observation" && record.kind === "workflow_started")) {
-          throw new Error("unsupported setup: justice-start did not produce a workflow_started observation");
-        }
-      } else {
-        const calls = hostTools(stdout);
-        const task = calls.find((tool) => tool.tool === "task");
-        if (task === undefined) {
-          throw new Error("unsupported setup: justice-implement did not reach a real task() invocation");
-        }
-        expect(task.input.prompt).toEqual(expect.stringContaining("[JUSTICE: IMPLEMENTATION]"));
-      }
+      const taskIds = new PlanParser().parse(planContent).map((task) => task.id);
+      const fs = new NodeFileSystem(rootDir);
+      const approved = await new AuthorizationStore(fs, fs, createAuthorizationReviewBoundary()).approve({
+        sessionId,
+        planPath,
+        canonicalSnapshot: buildCanonicalSnapshot(planContent, taskIds),
+        planFingerprint: computePlanFingerprint(planContent, taskIds),
+        approvedAt: "2026-09-27T00:00:00.000Z",
+      });
+      expect(approved?.status).toBe("active");
+
+      const arm = await hostApiPost(
+        host.baseUrl,
+        `/session/${encodeURIComponent(sessionId)}/command?directory=${directory}`,
+        { command: "justice-implement", arguments: `--plan ${planPath} --approved` },
+      );
+      unsupportedForAuthentication(arm.response, arm.value);
+      expect(arm.response.ok).toBe(true);
+
+      const taskRequest = await hostApiPost(
+        host.baseUrl,
+        `/session/${encodeURIComponent(sessionId)}/message?directory=${directory}`,
+        {
+          parts: [{
+            type: "text",
+            text: "Call the task tool exactly once with the approved plan task. Use a short prompt and do not claim completion.",
+          }],
+        },
+      );
+      unsupportedForAuthentication(taskRequest.response, taskRequest.value);
+      expect(taskRequest.response.ok).toBe(true);
+      const task = nestedHostTools(taskRequest.value).find((tool) => tool.tool === "task");
+      expect(task).toBeDefined();
+      expect(task?.input.prompt).toEqual(expect.stringContaining("[JUSTICE: IMPLEMENTATION]"));
     } finally {
+      await host?.stop();
       await rm(rootDir, { recursive: true, force: true });
     }
   }, 150_000);
