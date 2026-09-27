@@ -246,6 +246,8 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 `/justice-start` と `/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
 
+この衝突優先の保証は、`config.command` に含まれる利用者定義を対象とします。`.opencode/commands/*.md` で定義したコマンドは OpenCode が別経路で読み込む可能性があり、`config` hook からその定義を確認できません。Markdown 定義との優先順位はサポート対象ホストでの opt-in E2E による確認が必要です。
+
 > [!NOTE]
 > 自動登録される template は `$ARGUMENTS` です。`$ARGUMENTS` は、コマンド名の後に入力した文字列全体がそのまま渡されるプレースホルダーです（`/justice-start ship the feature --plan plan.md` なら `ship the feature --plan plan.md`）。
 > Justice のフックは同じ引数文字列を独自にパースするため、**template の内容自体は Justice の動作に影響しません**。template が決めるのは「LLM に送られるプロンプト」だけで、Justice のガイダンス注入は `output.parts` への追記という別経路で行われます。そのため、最も単純で安全な template は `"$ARGUMENTS"`（入力をそのままプロンプトにする）です。

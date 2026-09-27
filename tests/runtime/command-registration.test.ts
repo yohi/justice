@@ -85,6 +85,7 @@ describe("registerJusticeCommands", () => {
     expect(registered).not.toBe(JUSTICE_COMMAND_DEFINITIONS["justice-start"]);
     registered!.template = "changed";
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe("$ARGUMENTS");
+    expect(Object.isFrozen(JUSTICE_COMMAND_DEFINITIONS)).toBe(true);
     expect(Object.isFrozen(JUSTICE_COMMAND_DEFINITIONS["justice-start"])).toBe(true);
   });
 

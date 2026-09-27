@@ -113,6 +113,25 @@ describe("OpenCodePlugin (integration)", () => {
     );
   });
 
+  it("fails open when formatting a registration error would throw", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const hostileError = { toString: () => { throw new Error("formatting failed"); } };
+    const config = {
+      command: new Proxy<Record<string, unknown>>({}, {
+        set() { throw hostileError; },
+      }),
+    };
+
+    await expect(handlers.config?.(config as never)).resolves.toBeUndefined();
+
+    const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    expect(logFn).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: expect.stringContaining("Failed to auto-register slash commands"),
+    }));
+  });
+
   it("invokes lazy init only once across multiple hook entries", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);

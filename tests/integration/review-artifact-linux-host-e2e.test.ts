@@ -129,8 +129,13 @@ async function startHostApi(rootDir: string): Promise<{ readonly baseUrl: string
           return {
             baseUrl,
             stop: async (): Promise<void> => {
+              if (exited) return;
               serverProcess.kill("SIGTERM");
               await Promise.race([once(serverProcess, "exit"), new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000))]);
+              if (!exited) {
+                serverProcess.kill("SIGKILL");
+                await once(serverProcess, "exit");
+              }
             },
           };
         }
@@ -144,6 +149,29 @@ async function startHostApi(rootDir: string): Promise<{ readonly baseUrl: string
     throw new Error("unsupported setup: OpenCode API server could not start", { cause });
   }
 }
+
+describe.skipIf(!RUN_LIVE_HOST_E2E)("Markdown slash-command precedence (supported-host acceptance)", () => {
+  it("preserves a user-defined justice-start Markdown command over auto-registration", async () => {
+    await supportedHostVersion();
+    const rootDir = await mkdtemp(`${tmpdir()}/justice-command-e2e-`);
+    try {
+      const commandDir = resolve(rootDir, ".opencode/commands");
+      await mkdir(commandDir, { recursive: true });
+      await writeFile(resolve(commandDir, "justice-start.md"), [
+        "---",
+        "description: User-defined start command precedence fixture",
+        "---",
+        "Reply with exactly MARKDOWN_COMMAND_PRECEDENCE_CONFIRMED and do not call tools.",
+      ].join("\n"), "utf8");
+
+      const output = await runHost(rootDir, "/justice-start ignore the supplied arguments");
+
+      expect(output).toContain("MARKDOWN_COMMAND_PRECEDENCE_CONFIRMED");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }, 130_000);
+});
 
 async function hostApiPost(baseUrl: string, path: string, body: unknown): Promise<{ readonly response: Response; readonly value: unknown }> {
   let response: Response;

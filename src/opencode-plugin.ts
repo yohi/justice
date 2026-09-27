@@ -24,6 +24,14 @@ function cancellationReason(response: HookResponse | undefined): ReviewArtifactW
   return response?.action === "skip" ? response.reason : undefined;
 }
 
+function safeErrorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "unprintable error";
+  }
+}
+
 export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
   const { options, warnings } = validatePluginOptions(pluginOptions);
   // 警告の出力は runtime 境界の責務（core は @opencode-ai/* を import できない）。
@@ -60,7 +68,7 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
         await adapter.log(
           "warn",
           `[Justice] Failed to auto-register slash commands: ${
-            error instanceof Error ? error.message : String(error)
+            safeErrorMessage(error)
           }`,
         );
       }
