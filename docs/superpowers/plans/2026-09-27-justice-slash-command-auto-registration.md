@@ -31,6 +31,7 @@
 | `src/opencode-plugin.ts` | 返す hooks に `config` を追加し、初期化済み `adapter` 経由で登録関数を呼び出す |
 | `tests/runtime/command-registration.test.ts`（新規） | `registerJusticeCommands` の純粋関数に対するユニットテスト |
 | `tests/integration/opencode-plugin.test.ts` | `OpenCodePlugin` 返却 hooks に `config` が含まれ、正しく動作することを検証する統合テスト |
+| `tests/integration/review-artifact-linux-host-e2e.test.ts` | 対応 OpenCode v1 とビルド済みプラグインを使い、起動後に Justice slash command が登録・実行されることを検証する opt-in host E2E |
 | `README.md` | 手動登録手順を削除し、自動登録が行われる旨を記載 |
 | `SPEC.md` | §4 hook routing / §4.1a / §8 OpenCode mapping と component map に登録責務を追記 |
 
@@ -405,6 +406,32 @@ GIT_MASTER=1 git add src/opencode-plugin.ts tests/integration/opencode-plugin.te
 GIT_MASTER=1 git commit -m "feat: OpenCode プラグインに config フックを追加"
 ```
 
+### Host E2E: OpenCode 起動後のコマンド登録と実行を確認
+
+**Files:**
+- Modify: `tests/integration/review-artifact-linux-host-e2e.test.ts`
+
+既存の `JUSTICE_RUN_LIVE_HOST_E2E=1` opt-in と supported-host guard を再利用する。隔離した一時 workspace の OpenCode 設定にビルド済み `dist/opencode-plugin.js` を指定し、`justice-start` と `justice-implement` の command definition を設定に事前登録せず起動する。
+
+各 slash command を OpenCode v1 の実際の command invocation 経由で実行し、単なる `handlers.config` の mutation ではなく、起動時の plugin loading と Command service の登録経路を通ることを確認する。観測は既存 E2E の JSON 出力・Observation Log など、実行結果として機械判定できる契約に対して行い、自然言語の回答文には依存しない。`justice-start` は `workflow_started` の記録を、`justice-implement` は承認済み plan に対する arm の動作が次の `task()` に反映されることを検証する。認証や外部モデルに依存して実行不能な場合は unsupported setup として明示し、通常の mock test に置き換えない。
+
+### Step 1: Write the failing host E2E
+
+`tests/integration/review-artifact-linux-host-e2e.test.ts` に、両コマンドを個別に実行するテストを追加する。設定は `{ plugin: [pluginPath] }` とし、command definition は追加しない。コマンドの起動後に登録が成功しなければ host の unknown-command 経路となり、Justice 側の実行効果が観測されないことを確認できるようにする。
+
+Run:
+```bash
+JUSTICE_RUN_LIVE_HOST_E2E=1 bun run test tests/integration/review-artifact-linux-host-e2e.test.ts
+```
+
+Expected: 新しい host E2E がコマンド登録・実行の欠落を検出する（未実装時は unsupported command / execution effect absent）。
+
+### Step 2: Run the host E2E after implementation
+
+同じコマンドを、`bun run build` の後に実行する。
+
+Expected: 対応する OpenCode v1 host 上で両 slash command が plugin startup 後に利用可能で、各コマンドの実行効果が観測できる。その他の host E2E と既存の `handlers.config` テストも維持する。
+
 ---
 
 ## Task 3: README と SPEC の command registration 契約を更新
@@ -520,6 +547,7 @@ GIT_MASTER=1 git push
 - [ ] `src/runtime/command-registration.ts` が作成され、テストでカバーされている
 - [ ] `src/opencode-plugin.ts` が `config` フックを返し、fail-open になっている
 - [ ] `tests/integration/opencode-plugin.test.ts` に `config` フックの統合テストが追加されている
+- [ ] `tests/integration/review-artifact-linux-host-e2e.test.ts` が対応 OpenCode v1 と built plugin の startup / command registration / 両 slash command の実行効果を検証している
 - [ ] `README.md` の指定された2つの有効化 subsection が自動登録契約に更新され、必要な `$ARGUMENTS` / template 説明が維持されている
 - [ ] `SPEC.md` に registration/execution の責務分離、host contract、collision/fail-open/alias isolation、file map が反映されている
 - [ ] canonical definitions と登録 Config が mutable object reference を共有しないことを mutation isolation test で確認する
