@@ -82,7 +82,6 @@ describe("Feedback Flow Integration", () => {
       expect(response.injectedContext).toContain("Task Escalation");
     }
 
-    // Verify error note was appended to plan.md
-    expect(writer.writtenFiles["plan.md"]).toContain("⚠️ **Error**");
+    expect(writer.writeFile).not.toHaveBeenCalled();
   });
 });

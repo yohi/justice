@@ -652,28 +652,30 @@ export class ObservationHandler {
           taskId,
           state: lifecycleState,
         });
+        const committed = await this.appendInitialImplementationLifecycle(
+          event,
+          attempt.taskExecutionRef,
+          lifecycleState,
+        );
+        if (!committed) return PROCEED;
         this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
           purpose: "implementation",
           parentSessionId: event.sessionId,
           authorizationId: authorization.authorizationId,
           taskExecutionRef: attempt.taskExecutionRef,
         });
-        await this.appendInitialImplementationLifecycle(
-          event,
-          attempt.taskExecutionRef,
-          lifecycleState,
-        );
         return PROCEED;
       }
       const taskExecutionRef = readTaskExecutionRef(event.payload.toolInput);
       if (taskExecutionRef !== undefined) {
-        this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
-          purpose: "implementation",
-          parentSessionId: event.sessionId,
-          authorizationId: taskExecutionRef.authorizationId,
-          taskExecutionRef,
-        });
-        await this.appendInitialImplementationLifecycle(event, taskExecutionRef);
+        if (await this.appendInitialImplementationLifecycle(event, taskExecutionRef)) {
+          this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
+            purpose: "implementation",
+            parentSessionId: event.sessionId,
+            authorizationId: taskExecutionRef.authorizationId,
+            taskExecutionRef,
+          });
+        }
       }
       return PROCEED;
     } catch (error) {
@@ -914,7 +916,7 @@ export class ObservationHandler {
     event: PreToolUseEvent,
     taskExecutionRef: TaskExecutionRef,
     state: TaskProgressState = "authorized",
-  ): Promise<void> {
+  ): Promise<boolean> {
     const agentId = this.options.sessionStateProvider.getAgentId(event.sessionId);
     const shardId: ShardId = {
       agentId,
@@ -930,7 +932,7 @@ export class ObservationHandler {
         taskId: taskExecutionRef.taskId,
       });
     if (state === "rework_required") {
-      await appendTaskLifecycleTransition(
+      const rework = await appendTaskLifecycleTransition(
         {
           agentId,
           sessionId: event.sessionId,
@@ -943,7 +945,7 @@ export class ObservationHandler {
         },
         appendRecord,
       );
-      return;
+      return rework.kind === "committed";
     }
     const authorized = await appendTaskLifecycleTransition(
       {
@@ -958,8 +960,8 @@ export class ObservationHandler {
       },
       appendRecord,
     );
-    if (authorized.kind === "failed") return;
-    await appendTaskLifecycleTransition(
+    if (authorized.kind === "failed") return false;
+    const inProgress = await appendTaskLifecycleTransition(
       {
         agentId,
         sessionId: event.sessionId,
@@ -972,6 +974,7 @@ export class ObservationHandler {
       },
       appendRecord,
     );
+    return inProgress.kind === "committed";
   }
 
   private async appendLifecycleAdvisory(advisory: string, _cause?: unknown): Promise<void> {

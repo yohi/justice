@@ -43,7 +43,6 @@ type ReflectionEventInput = {
 
 export class TaskFeedbackHandler {
   private readonly fileReader: FileReader;
-  private readonly fileWriter: FileWriter;
   private readonly formatter: FeedbackFormatter;
   private readonly classifier: ErrorClassifier;
   private readonly parser: PlanParser;
@@ -57,12 +56,11 @@ export class TaskFeedbackHandler {
 
   constructor(
     fileReader: FileReader,
-    fileWriter: FileWriter,
+    _fileWriter: FileWriter,
     wisdomStore?: WisdomStoreInterface,
     telemetry?: TelemetryStore,
   ) {
     this.fileReader = fileReader;
-    this.fileWriter = fileWriter;
     this.formatter = new FeedbackFormatter();
     this.classifier = new ErrorClassifier();
     this.parser = new PlanParser();
@@ -296,13 +294,6 @@ export class TaskFeedbackHandler {
     try {
       const planContent = await this.fileReader.readFile(session.planPath);
 
-      const updatedContent = this.parser.appendErrorNote(
-        planContent,
-        action.taskId,
-        `${action.errorClass}: ${action.message}`,
-      );
-      await this.fileWriter.writeFile(session.planPath, updatedContent);
-
       // Generate split suggestion
       const tasks = this.parser.parse(planContent);
       const activeTask = tasks.find((t) => t.id === action.taskId);
@@ -310,20 +301,20 @@ export class TaskFeedbackHandler {
         const suggestion = this.splitter.suggestSplit(activeTask, action.errorClass);
         splitSuggestionContext = "\n\n" + this.splitter.formatAsPlanMarkdown(suggestion);
       }
-
-      await this.emitReflectionEvent({
-        trigger: "task_error",
-        planRef: { path: session.planPath, taskId: action.taskId },
-        intent: "append_error_note",
-        note: `${action.errorClass}: ${action.message}`,
-        sessionId,
-      });
     } catch (err) {
       console.warn(
-        `[JUSTICE] Failed to append error note during escalation: ${err instanceof Error ? err.message : String(err)}`,
+        "[JUSTICE] Failed to inspect plan during escalation: %s",
+        err instanceof Error ? err.message : String(err),
         err,
       );
     }
+    await this.emitReflectionEvent({
+      trigger: "task_error",
+      planRef: { path: session.planPath, taskId: action.taskId },
+      intent: "append_error_note",
+      note: `${action.errorClass}: ${action.message}`,
+      sessionId,
+    });
 
     // Extract and accumulate learnings from escalation
     const learnings = this.learningExtractor.extract(

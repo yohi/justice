@@ -671,21 +671,40 @@ export class PlanBridge {
     }
     this.implementationArmedSessions.delete(sessionId);
 
-    let released: Awaited<ReturnType<typeof dependencies.authorizationStore.release>>;
+    let released: Awaited<
+      ReturnType<typeof dependencies.authorizationStore.releaseWithinAuthorizationReviewBoundary>
+    >;
     try {
-      released = await dependencies.authorizationStore.release(
-        authorizationId,
-        new Date().toISOString(),
+      released = await dependencies.authorizationReviewBoundary.withParentSession(
+        sessionId,
+        async () => {
+          const result = await dependencies.authorizationStore.releaseWithinAuthorizationReviewBoundary(
+            sessionId,
+            authorizationId,
+            new Date().toISOString(),
+          );
+          if (result.kind === "saved") {
+            this.activePlanPaths.delete(sessionId);
+            this.activeAuthorizationIds.delete(sessionId);
+            this.cancelledImplementationSessions.add(sessionId);
+          }
+          if (
+            result.kind === "saved" &&
+            this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim !== null
+          ) {
+            await this.cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim(
+              sessionId,
+              authorizationId,
+            );
+          }
+          return result;
+        },
       );
     } catch {
       return this.implementationArmRequiredResult();
     }
     if (released.kind !== "saved") return this.implementationArmRequiredResult();
 
-    this.activePlanPaths.delete(sessionId);
-    this.activeAuthorizationIds.delete(sessionId);
-    this.implementationArmedSessions.delete(sessionId);
-    this.cancelledImplementationSessions.add(sessionId);
     return this.implementationArmRequiredResult();
   }
 
@@ -994,11 +1013,6 @@ export class PlanBridge {
       return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
-    const armed = this.consumeImplementationArm(event.sessionId);
-    if (armed === null) {
-      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
-    }
-
     this.completionDetector.recordPreToolUseInvocation(
       event.sessionId,
       event.callId,
@@ -1027,6 +1041,10 @@ export class PlanBridge {
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
+    }
+    const requestedTaskId = resolveTaskIdFromToolInput(event.payload.toolInput);
+    if (requestedTaskId !== undefined && requestedTaskId !== initialDelegation.taskId) {
+      return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
     const persona = this.resolveDelegationPersona(event.sessionId);

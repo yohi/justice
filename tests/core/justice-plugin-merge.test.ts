@@ -5,6 +5,40 @@ import type { HookResponse, PostToolUseEvent } from "../../src/core/types";
 import { createMockFileReader, createMockFileWriter } from "../helpers/mock-file-system";
 
 describe("mergePostToolUseResponses", () => {
+  it("preserves task input attributes when observing a delegated task id", async () => {
+    const plugin = new JusticePlugin(createMockFileReader({}), createMockFileWriter());
+    const handleObservation = vi
+      .spyOn(plugin.getObservationHandler(), "handlePreToolUse")
+      .mockResolvedValue({ action: "proceed" });
+    vi.spyOn(plugin.getPlanBridge(), "handlePreToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "PlanBridge context",
+      modifiedPayload: { args: { task_id: "task-delegated" } },
+    });
+    const originalToolInput = {
+      prompt: "original prompt",
+      run_in_background: true,
+      task_id: "task-original",
+    };
+
+    await plugin.handleEvent({
+      type: "PreToolUse",
+      payload: { toolName: "task", toolInput: originalToolInput },
+      sessionId: "s-1",
+    });
+
+    expect(handleObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          toolInput: {
+            ...originalToolInput,
+            task_id: "task-delegated",
+          },
+        }),
+      }),
+    );
+  });
+
   it("combines inject responses into a single payload", () => {
     const merged = mergePostToolUseResponses([
       {

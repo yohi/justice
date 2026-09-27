@@ -119,6 +119,7 @@ describe("PlanBridge.handlePostToolUse", () => {
       throw new Error("expected authorized task injection");
     }
     expect(authorizedResponse.modifiedPayload).toBeDefined();
+    await bridge.handleImplementationArm("s-unauthorized", { source: "command", action: "cancel" });
 
     const unauthorizedResponse = await bridge.handlePreToolUse({
       type: "PreToolUse",

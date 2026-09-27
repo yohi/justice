@@ -69,8 +69,7 @@ describe("Advanced Error Flow Integration", () => {
       expect(resp4.injectedContext).toContain("task-1.1"); // Split suggestion
     }
 
-    // Check that plan.md was updated with the error note
-    expect(writer.writtenFiles["plan.md"]).toContain("⚠️ **Error**");
+    expect(writer.writeFile).not.toHaveBeenCalled();
   });
 
   it("should immediately escalate and split when loop-detector event is emitted", async () => {
@@ -94,7 +93,6 @@ describe("Advanced Error Flow Integration", () => {
       expect(response.injectedContext).toContain("task-1.1");
     }
 
-    // Check plan.md
-    expect(writer.writtenFiles["plan.md"]).toContain("loop_detected: Infinite loop");
+    expect(writer.writeFile).not.toHaveBeenCalled();
   });
 });

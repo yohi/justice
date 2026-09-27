@@ -75,6 +75,49 @@ describe("PlanBridge authorization restoration", () => {
     });
   });
 
+  it("cancels review dispatch after a durable session cancellation while holding the parent boundary", async () => {
+    const { bridge, store, boundary } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command", planPath: "docs/plan.md", approved: true,
+    });
+    let insideBoundary = false;
+    const cancellationStates: string[] = [];
+    const originalWithParentSession = boundary.withParentSession;
+    vi.spyOn(boundary, "withParentSession").mockImplementation(async (sessionId, operation) =>
+      originalWithParentSession(sessionId, async () => {
+        insideBoundary = true;
+        try {
+          return await operation();
+        } finally {
+          insideBoundary = false;
+        }
+      }));
+    bridge.setReviewDispatchCancellation(async (_sessionId, authorizationId) => {
+      const binding = await store.findByAuthorizationId(authorizationId);
+      cancellationStates.push(`${insideBoundary}:${binding?.status}`);
+    });
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect(cancellationStates).toEqual(["true:released"]);
+    expect(bridge.getActivePlan("s1")).toBeNull();
+  });
+
+  it("clears cached authority when dispatch cancellation fails after a durable release", async () => {
+    const { bridge, store } = createFixture();
+    await bridge.handleImplementationArm("s1", {
+      source: "command", planPath: "docs/plan.md", approved: true,
+    });
+    bridge.setReviewDispatchCancellation(async () => {
+      throw new Error("dispatch unavailable");
+    });
+
+    await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
+
+    expect((await store.hydrate())[0]?.status).toBe("released");
+    expect(bridge.getActivePlan("s1")).toBeNull();
+  });
+
   it("treats cancel without an active binding as an idempotent no-op", async () => {
     const { bridge, store } = createFixture();
     const release = vi.spyOn(store, "release");
@@ -95,7 +138,7 @@ describe("PlanBridge authorization restoration", () => {
       planPath: "docs/plan.md",
       approved: true,
     });
-    vi.spyOn(store, "release").mockResolvedValue({ kind: "failed" });
+    vi.spyOn(store, "releaseWithinAuthorizationReviewBoundary").mockResolvedValue({ kind: "failed" });
 
     await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
 
@@ -110,7 +153,7 @@ describe("PlanBridge authorization restoration", () => {
       planPath: "docs/plan.md",
       approved: true,
     });
-    vi.spyOn(store, "release").mockRejectedValue(new Error("release failed"));
+    vi.spyOn(store, "releaseWithinAuthorizationReviewBoundary").mockRejectedValue(new Error("release failed"));
 
     await bridge.handleImplementationArm("s1", { source: "command", action: "cancel" });
 

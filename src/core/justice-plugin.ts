@@ -163,10 +163,10 @@ function closeSessionTaskWindow(provider: SessionStateProvider, callId: string |
 }
 
 function resolveMandatoryReviewCategory(
-  event: PreToolUseEvent,
+  event: PreToolUseEvent | PostToolUseEvent,
 ): "sp-review" | "sp-final-review" | undefined {
   if (event.payload.toolName !== "task") return undefined;
-  const category = event.payload.toolInput.category;
+  const category = event.payload.toolInput?.category;
   return category === "sp-review" || category === "sp-final-review" ? category : undefined;
 }
 
@@ -366,6 +366,7 @@ export class JusticePlugin {
   private readonly reviewDirectiveSink: ReviewDirectiveSink;
   private readonly reviewDispatchState: ReturnType<typeof createReviewDispatchState>;
   private readonly reviewCompletionDomain: ReturnType<typeof createReviewCompletionDomain>;
+  private readonly reviewCallsBySession = new Map<string, Set<string>>();
 
   constructor(fileReader: FileReader, fileWriter: FileWriter, options: JusticePluginOptions = {}) {
     this.fileReader = fileReader;
@@ -704,6 +705,11 @@ export class JusticePlugin {
             ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
             : undefined;
         const reviewCategory = resolveMandatoryReviewCategory(event);
+        if (reviewCategory !== undefined && event.callId !== undefined) {
+          const calls = this.reviewCallsBySession.get(event.sessionId) ?? new Set<string>();
+          calls.add(event.callId);
+          this.reviewCallsBySession.set(event.sessionId, calls);
+        }
         const artifactWrite =
           reviewCategory === undefined
             ? await this.handleReviewArtifactWrite(event).catch((err: unknown) => {
@@ -711,13 +717,6 @@ export class JusticePlugin {
                 return PROCEED;
               })
             : undefined;
-        const observation =
-          reviewCategory === undefined
-            ? await this.observationHandler.handlePreToolUse(event).catch((err: unknown) => {
-                this.options.logger?.warn("observation-handler pre-tool-use failed", err);
-                return PROCEED;
-              })
-            : PROCEED;
         const delegated =
           reviewCategory === undefined
             ? event.payload.toolName === "task"
@@ -727,6 +726,29 @@ export class JusticePlugin {
                 })
               : PROCEED
             : await this.claimReviewTask(event, reviewCategory);
+        const delegatedTaskId = resolveTaskIdFromModifiedPayload(
+          delegated.action === "inject" ? delegated.modifiedPayload : undefined,
+        );
+        let observationEvent: PreToolUseEvent = event;
+        if (event.payload.toolName === "task") {
+          const toolInput = Object.fromEntries(
+            Object.entries(event.payload.toolInput).filter(
+              ([key]) => !["task_id", "taskId", "authorizationId", "attemptId"].includes(key),
+            ),
+          );
+          if (delegatedTaskId !== undefined) toolInput.task_id = delegatedTaskId;
+          observationEvent = {
+            ...event,
+            payload: { ...event.payload, toolInput },
+          };
+        }
+        const observation =
+          reviewCategory === undefined
+            ? await this.observationHandler.handlePreToolUse(observationEvent).catch((err: unknown) => {
+                this.options.logger?.warn("observation-handler pre-tool-use failed", err);
+                return PROCEED;
+              })
+            : PROCEED;
         const response = mergePreToolUseResponses(
           mergePreToolUseResponses(observation, delegated, (message) =>
             this.warnMergeConflict(message),
@@ -765,6 +787,13 @@ export class JusticePlugin {
             if (reviewResponse !== undefined) {
               return this.mergePostToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
             }
+            // The caller's category cannot authorize a review completion, but it
+            // can keep an unclaimed review result out of implementation feedback.
+            if (
+              resolveMandatoryReviewCategory(event) !== undefined ||
+              (event.callId !== undefined &&
+                this.reviewCallsBySession.get(event.sessionId)?.has(event.callId))
+            ) return PROCEED;
           }
           // Keep the window open while observation associates the tool result with its task.
           const response =
@@ -777,6 +806,11 @@ export class JusticePlugin {
           return this.mergePostToolUseWithReviewDeliveries(event.sessionId, response);
         } finally {
           closeSessionTaskWindow(this.sessionStateProvider, event.callId);
+          if (event.callId !== undefined) {
+            const calls = this.reviewCallsBySession.get(event.sessionId);
+            calls?.delete(event.callId);
+            if (calls?.size === 0) this.reviewCallsBySession.delete(event.sessionId);
+          }
         }
       }
 
@@ -979,6 +1013,7 @@ export class JusticePlugin {
   }
 
   private destroySessionState(sessionId: string): void {
+    this.reviewCallsBySession.delete(sessionId);
     const cleanupSteps: readonly (() => void)[] = [
       (): void => this.planBridge.destroySession(sessionId),
       (): void => this.taskFeedback.clearActivePlan(sessionId),

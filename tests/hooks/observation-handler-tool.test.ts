@@ -528,6 +528,29 @@ describe("ObservationHandler tool observation", () => {
     );
   });
 
+  it("does not bind an authorized task when its initial lifecycle record fails", async () => {
+    const sessionState = new SessionStateProvider();
+    const append = vi.fn(async (): Promise<number> => {
+      throw new Error("lifecycle append failed");
+    });
+    const handler = new ObservationHandler({
+      logStore: { append } as unknown as ObservationLogStore,
+      sessionStateProvider: sessionState,
+      writerId: "w-handler",
+      getActiveAuthorization: async () => activeGateAuthorization,
+    });
+
+    await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-1",
+      callId: "call-lifecycle-failure",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    expect(append).toHaveBeenCalledOnce();
+    expect(sessionState.getTaskCallBinding("call-lifecycle-failure")).toBeUndefined();
+  });
+
   it("closes the task window when taskId lookup fails", async () => {
     const closeActiveTaskWindow = vi.fn();
     const sessionState = {

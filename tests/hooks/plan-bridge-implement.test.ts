@@ -103,7 +103,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(result.planPath).toBeNull();
   });
 
-  it("consumes arm state on task pre-tool-use", async () => {
+  it("keeps plan-scoped arm state on task pre-tool-use", async () => {
     const bridge = createBridge({ "plan.md": planContent });
     await bridge.handleImplementationArm("session-1", {
       source: "command",
@@ -126,7 +126,7 @@ describe("PlanBridge.handleImplementationArm", () => {
       throw new Error("expected inject response");
     }
     expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
-    expect(bridge.isImplementationArmed("session-1")).toBe(false);
+    expect(bridge.isImplementationArmed("session-1")).toBe(true);
   });
 
   it("injects an unauthorized directive when the active plan is not armed", async () => {
@@ -169,7 +169,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(setLoopPlan).not.toHaveBeenCalled();
   });
 
-  it("requires a fresh arm after the first task consumes it", async () => {
+  it("keeps delegating under the same approved plan", async () => {
     const bridge = createBridge({ "plan.md": planContent });
     await bridge.handleImplementationArm("session-single-use", {
       source: "command",
@@ -195,9 +195,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(first.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
     expect(second.action).toBe("inject");
     if (second.action !== "inject") throw new Error("expected second inject response");
-    expect(second.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
-    expect(second.injectedContext).not.toContain("Task Delegation Context");
-    expect(second.modifiedPayload).toBeUndefined();
+    expect(second.modifiedPayload).toMatchObject({ args: { task_id: "task-1" } });
   });
 
   it("invalidates an arm when the active plan changes", async () => {
@@ -288,7 +286,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(bridge.isImplementationArmed("session-same-plan")).toBe(false);
   });
 
-  it("requires a fresh arm after a consumed task and same-plan workflow restart", async () => {
+  it("retains a durable plan authorization after a same-plan workflow restart", async () => {
     const bridge = createBridge({ "plan.md": planContent });
     await bridge.handleWorkflowStart("session-restart", {
       source: "command",
@@ -323,9 +321,7 @@ describe("PlanBridge.handleImplementationArm", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected inject response");
-    expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION UNAUTHORIZED]");
-    expect(response.injectedContext).not.toContain("Task Delegation Context");
-    expect(response.modifiedPayload).toBeUndefined();
+    expect(response.modifiedPayload).toMatchObject({ args: { task_id: "task-1" } });
   });
 
   it("clears a session arm during cleanup", async () => {
