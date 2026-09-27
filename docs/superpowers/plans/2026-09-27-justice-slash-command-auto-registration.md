@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- `src/core/**` は `@opencode-ai/*` を import しない（FF-001）。本実装は `src/runtime/` と `src/opencode-plugin.ts` で行う。
+- `src/core/**` は `@opencode-ai/*` を import しない（FF-001）。既存の ESLint architecture rule は `@opencode-ai/plugin` import を `src/opencode-plugin.ts` と `src/runtime/opencode-adapter.ts` のみ許可する。新規の `src/runtime/command-registration.ts` は `@opencode-ai/*` から独立させ、narrow local structural interface を受け取る。
+- OpenCode SDK ownership は `src/opencode-plugin.ts`（OpenCode Plugin API boundary）および既存の `src/runtime/opencode-adapter.ts`（OpenCode runtime adapter boundary）に限定する。`eslint.config.mjs` の allowlist は変更しない。
 - すべてのフック境界は fail-open とし、OpenCode セッションをクラッシュさせない。
 - 公開 API は `OpenCodeAdapter.getTools()` の `justice_review` のみ。本変更はコマンド登録の自動化であり、新しいツールは追加しない。
 - テストでは `as any` / `@ts-ignore` を使用しない。private フィールドへのアクセスは `(obj as unknown as { field: T }).field` を使用する。
@@ -26,7 +27,7 @@
 
 | ファイル | 責務 |
 |---|---|
-| `src/runtime/command-registration.ts`（新規） | Justice コマンド定義と `Config.command` へのマージ処理を提供する純粋関数群 |
+| `src/runtime/command-registration.ts`（新規） | SDK 非依存の Justice コマンド定義と structural port を使った command マージ処理を提供する |
 | `src/opencode-plugin.ts` | 返す hooks に `config` を追加し、初期化済み `adapter` 経由で登録関数を呼び出す |
 | `tests/runtime/command-registration.test.ts`（新規） | `registerJusticeCommands` の純粋関数に対するユニットテスト |
 | `tests/integration/opencode-plugin.test.ts` | `OpenCodePlugin` 返却 hooks に `config` が含まれ、正しく動作することを検証する統合テスト |
@@ -42,8 +43,10 @@
 - Test: `tests/runtime/command-registration.test.ts`
 
 **Interfaces:**
-- Consumes: `@opencode-ai/plugin@1.14.21` の `Config` 型（lockfile compile-time baseline）
-- Produces: entry-level frozen `JUSTICE_COMMAND_DEFINITIONS`, `CommandRegistrationLogger` (`Promise<void>`), `registerJusticeCommands(config, log): Promise<void>`
+- Consumes: `CommandRegistrationTarget`, `CommandRegistrationLogger`
+- Produces: entry-level frozen `JUSTICE_COMMAND_DEFINITIONS`, `CommandRegistrationEntry`,
+  `CommandRegistrationTarget`, `CommandRegistrationLogger`,
+  `registerJusticeCommands(config, log): Promise<void>`
 
 ### Step 1: Write the failing test
 
@@ -51,15 +54,15 @@
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
-import type { Config } from "@opencode-ai/plugin";
 import {
   JUSTICE_COMMAND_DEFINITIONS,
   registerJusticeCommands,
+  type CommandRegistrationTarget,
 } from "../../src/runtime/command-registration";
 
 describe("registerJusticeCommands", () => {
   it("registers justice-start and justice-implement on an empty config.command", async () => {
-    const config: Config = {};
+    const config: CommandRegistrationTarget = {};
     const log = vi.fn(async () => {});
 
     await registerJusticeCommands(config, log);
@@ -80,7 +83,7 @@ describe("registerJusticeCommands", () => {
   });
 
   it("does not overwrite existing user-defined commands and logs a warning", async () => {
-    const config: Config = {
+    const config: CommandRegistrationTarget = {
       command: {
         "justice-start": {
           template: "custom template",
@@ -112,7 +115,7 @@ describe("registerJusticeCommands", () => {
   });
 
   it("initializes config.command when undefined", async () => {
-    const config: Config = { command: undefined };
+    const config: CommandRegistrationTarget = { command: undefined };
     const log = vi.fn(async () => {});
 
     await registerJusticeCommands(config, log);
@@ -131,7 +134,7 @@ describe("registerJusticeCommands", () => {
       "$ARGUMENTS",
     );
 
-    const config: Config = {};
+    const config: CommandRegistrationTarget = {};
     await registerJusticeCommands(config, async () => {});
     const registered = config.command?.["justice-start"];
     expect(registered).not.toBe(JUSTICE_COMMAND_DEFINITIONS["justice-start"]);
@@ -142,14 +145,18 @@ describe("registerJusticeCommands", () => {
 
   it("preserves unrelated existing commands", async () => {
     const unrelated = { template: "unrelated" };
-    const config: Config = { command: { other: unrelated } };
+    const config: CommandRegistrationTarget = { command: { other: unrelated } };
     await registerJusticeCommands(config, async () => {});
     expect(config.command?.other).toBe(unrelated);
   });
 
   it("awaits collision logging and propagates logger rejection", async () => {
-    const config: Config = { command: { "justice-start": { template: "custom" } } };
-    const log = vi.fn(async () => { throw new Error("logger failed"); });
+    const config: CommandRegistrationTarget = {
+      command: { "justice-start": { template: "custom" } },
+    };
+    const log = vi.fn(async () => {
+      throw new Error("logger failed");
+    });
     await expect(registerJusticeCommands(config, log)).rejects.toThrow("logger failed");
     expect(log).toHaveBeenCalledTimes(1);
   });
@@ -170,16 +177,24 @@ Expected: FAIL with module not found or function not defined. The mutation-isola
 `src/runtime/command-registration.ts`:
 
 ```ts
-import type { Config } from "@opencode-ai/plugin";
-
 export interface JusticeCommandDefinition {
   readonly template: string;
   readonly description: string;
 }
 
-export const JUSTICE_COMMAND_DEFINITIONS: Readonly<
-  Record<string, JusticeCommandDefinition>
-> = Object.freeze({
+export interface CommandRegistrationEntry {
+  template: string;
+  description?: string;
+  agent?: string;
+  model?: string;
+  subtask?: boolean;
+}
+
+export interface CommandRegistrationTarget {
+  command?: Record<string, CommandRegistrationEntry>;
+}
+
+const justiceCommandDefinitions = {
   "justice-start": Object.freeze({
     template: "$ARGUMENTS",
     description: "Start a Justice-managed development workflow",
@@ -188,7 +203,10 @@ export const JUSTICE_COMMAND_DEFINITIONS: Readonly<
     template: "$ARGUMENTS",
     description: "Arm the next Justice-managed implementation delegation",
   }),
-});
+} satisfies Record<string, JusticeCommandDefinition>;
+
+export const JUSTICE_COMMAND_DEFINITIONS: Readonly<typeof justiceCommandDefinitions> =
+  Object.freeze(justiceCommandDefinitions);
 
 export type CommandRegistrationLogger = (
   level: "info" | "warn" | "error",
@@ -197,7 +215,7 @@ export type CommandRegistrationLogger = (
 ) => Promise<void>;
 
 export async function registerJusticeCommands(
-  config: Config,
+  config: CommandRegistrationTarget,
   log: CommandRegistrationLogger,
 ): Promise<void> {
   const commands = config.command ?? {};
@@ -225,7 +243,16 @@ bun run test tests/runtime/command-registration.test.ts
 
 Expected: PASS
 
-### Step 5: Commit
+### Step 5: Task 1 の lint 境界を確認
+
+Run:
+```bash
+bun run lint
+```
+
+Expected: PASS — `src/runtime/command-registration.ts` は `@opencode-ai/*` を import せず、既存 ESLint architecture rule に違反しない。
+
+### Step 6: Commit
 
 ```bash
 GIT_MASTER=1 git add src/runtime/command-registration.ts tests/runtime/command-registration.test.ts
@@ -240,10 +267,10 @@ GIT_MASTER=1 git commit -m "feat: Justice コマンドの自動登録ロジッ�
 - Modify: `src/opencode-plugin.ts`
 
 **Interfaces:**
-- Consumes: `registerJusticeCommands` from `src/runtime/command-registration.ts`, `OpenCodeAdapter.log`
+- Consumes: `registerJusticeCommands` from `src/runtime/command-registration.ts`, `OpenCodeAdapter.log`; OpenCode SDK `Config` is received at the typed `config` hook boundary and passed to `CommandRegistrationTarget` by structural assignability
 - Produces: `config` hook on the returned `Hooks` object
 
-`config` hook は確定済み OpenCode v1 host contract に基づいて registration API を await する。登録だけを担当し、workflow parsing / PlanBridge / command execution は行わない。既存の execution hooks は変更しない。
+`config` hook は確定済み OpenCode v1 host contract に基づいて registration API を await する。OpenCode SDK `Config` を受け取り、cast せず structural assignability でローカル `CommandRegistrationTarget` として渡す。登録だけを担当し、workflow parsing / PlanBridge / command execution は行わない。既存の execution hooks は変更しない。
 
 ### Step 1: Write the failing test
 
@@ -360,7 +387,7 @@ import { registerJusticeCommands } from "./runtime/command-registration";
 注意:
 - `registerJusticeCommands` の import はファイル先頭の既存 import 群に追加する。
 - `config` フックは `tool` の直後など、読みやすい位置に配置する。
-- `config` パラメータの型は `@opencode-ai/plugin` の `Config` 型とする。
+- `config` パラメータは OpenCode Plugin API が提供する型付き hook parameter とし、SDK `Config` を `CommandRegistrationTarget` に cast せず渡す。
 
 ### Step 4: Run test to verify it passes
 

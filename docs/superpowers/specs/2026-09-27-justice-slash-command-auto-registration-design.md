@@ -23,14 +23,24 @@ Justice は OpenCode v1 プラグインとして動作するが、`/justice-star
 
 #### `src/runtime/command-registration.ts`（新規）
 
-OpenCode `Config.command` 形式への変換と登録ロジックを集約する。
+OpenCode `Config.command` 形式への変換と登録ロジックを集約する。この component は OpenCode SDK に依存せず、必要な command shape のみをローカルの structural interface として定義する。
 
 ```ts
-import type { Config } from "@opencode-ai/plugin";
-
 export interface JusticeCommandDefinition {
   readonly template: string;
   readonly description: string;
+}
+
+export interface CommandRegistrationEntry {
+  template: string;
+  description?: string;
+  agent?: string;
+  model?: string;
+  subtask?: boolean;
+}
+
+export interface CommandRegistrationTarget {
+  command?: Record<string, CommandRegistrationEntry>;
 }
 
 const justiceCommandDefinitions = {
@@ -54,7 +64,7 @@ export type CommandRegistrationLogger = (
 ) => Promise<void>;
 
 export async function registerJusticeCommands(
-  config: Config,
+  config: CommandRegistrationTarget,
   log: CommandRegistrationLogger,
 ): Promise<void> {
   const commands = config.command ?? {};
@@ -106,7 +116,9 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
 
 ### 型安全
 
-- OpenCode SDK の `Config` 型を参照する。
+- `src/opencode-plugin.ts` は OpenCode Plugin API boundary、`src/runtime/opencode-adapter.ts` は既存の OpenCode runtime adapter boundary とする。
+- `src/runtime/command-registration.ts` は SDK-independent な登録ロジックとし、`@opencode-ai/*` を import しない。必要な型は `CommandRegistrationEntry` / `CommandRegistrationTarget` として狭くローカル定義する。
+- OpenCode SDK の `Config` 型との適合性は `src/opencode-plugin.ts` の typed `config` hook boundary で、通常の TypeScript structural assignability により保証する。不要な cast は加えない。
 - `JUSTICE_COMMAND_DEFINITIONS` の Record と各 command definition entry を `Object.freeze` し、型と runtime の両方で不変にする。
 - `Config.command` に登録する command object は `{ ...definition }` で複製する。canonical definition と登録先は mutable object reference を共有しない。
 - 定義の現在のフィールドは primitive 値のみとする。将来 nested mutable fields を追加する場合はコピー・freeze 方針も拡張する。
