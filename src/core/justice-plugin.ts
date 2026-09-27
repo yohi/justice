@@ -729,16 +729,19 @@ export class JusticePlugin {
         const delegatedTaskId = resolveTaskIdFromModifiedPayload(
           delegated.action === "inject" ? delegated.modifiedPayload : undefined,
         );
-        const observationEvent: PreToolUseEvent =
-          event.payload.toolName === "task"
-            ? {
-                ...event,
-                payload: {
-                  ...event.payload,
-                  toolInput: delegatedTaskId === undefined ? {} : { task_id: delegatedTaskId },
-                },
-              }
-            : event;
+        let observationEvent: PreToolUseEvent = event;
+        if (event.payload.toolName === "task") {
+          const toolInput = Object.fromEntries(
+            Object.entries(event.payload.toolInput).filter(
+              ([key]) => !["task_id", "taskId", "authorizationId", "attemptId"].includes(key),
+            ),
+          );
+          if (delegatedTaskId !== undefined) toolInput.task_id = delegatedTaskId;
+          observationEvent = {
+            ...event,
+            payload: { ...event.payload, toolInput },
+          };
+        }
         const observation =
           reviewCategory === undefined
             ? await this.observationHandler.handlePreToolUse(observationEvent).catch((err: unknown) => {
