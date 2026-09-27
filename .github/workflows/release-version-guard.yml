@@ -1,0 +1,40 @@
+name: release-version-guard
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - package.json
+      - .release-please-manifest.json
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    if: ${{ startsWith(github.head_ref, 'release-please--') }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Resolve latest release tag
+        id: latest
+        shell: bash
+        run: |
+          latest_tag="$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          if [[ -z "$latest_tag" ]]; then
+            echo "No vX.Y.Z release tag is available for comparison." >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "${latest_tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Read candidate version
+        id: candidate
+        run: node -p '"version=" + JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version' >> "$GITHUB_OUTPUT"
+      - name: Reject version downgrade
+        env:
+          CANDIDATE_VERSION: ${{ steps.candidate.outputs.version }}
+          LATEST_VERSION: ${{ steps.latest.outputs.version }}
+        run: node scripts/release-version-guard.mjs --candidate "$CANDIDATE_VERSION" --latest "$LATEST_VERSION"
