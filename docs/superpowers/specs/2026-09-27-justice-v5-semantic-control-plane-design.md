@@ -5,6 +5,7 @@
 **Authorization:** NOT SELF-AUTHORIZING  
 **Target:** Justice v5.x  
 **Baseline:** Justice master @ 080bcdb25b192962789ff5d67139e56487381de4  
+**Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`  
 **Upstream baselines:** Oh My OpenAgent v5.0.1 (OpenCode edition), Superpowers v6.4.2
 
 ---
@@ -504,6 +505,26 @@ Clause sources can include:
 - MUST / MUST NOT constraints;
 - required verification outcomes.
 
+Each normative clause has a stable identity within its source artifact, conceptually:
+
+```text
+NormativeClause
+├─ clauseId
+├─ sourceArtifact
+├─ sourceRevision
+├─ sourceAnchor
+├─ normativeText
+├─ obligation
+│  ├─ required
+│  └─ advisory
+└─ scope
+   ├─ global
+   ├─ plan
+   └─ task
+```
+
+Stable clause identity is required so that a reviewer cannot satisfy a different or stale requirement by emitting a generic success statement. Exact persistence and hash representation are implementation details.
+
 Each normative clause must end in one of:
 
 ```text
@@ -526,9 +547,11 @@ Justice may additionally classify non-normative observations, but they cannot su
 
 ## 12. Early drift prevention
 
-Drift is checked at task boundaries, not only at final completion.
+Drift is checked at the earliest evidence boundary supported by the selected Superpowers execution method, not only at final completion.
 
-For each task:
+### 12.1 Subagent-driven-development
+
+For SDD, the existing Superpowers task-review lifecycle provides semantic evidence at every task boundary:
 
 ```text
 Approved task contract
@@ -553,7 +576,20 @@ The Task Conformance Gate checks at least:
 
 A substantive mismatch blocks task acceptance immediately.
 
-This prevents late discovery of drift accumulated over multiple tasks.
+### 12.2 Executing-plans
+
+`executing-plans` does not require a fresh semantic reviewer for every task. Justice therefore MUST NOT invent one.
+
+For inline execution:
+
+- deterministic task-level conformance checks run whenever evidence is available;
+- task acceptance remains fail-closed for machine-checkable required clauses;
+- semantic clauses that cannot yet be proven remain `NOT_PROVEN`, not silently satisfied;
+- the mandatory final whole-branch review receives the accumulated Conformance Contract and must provide semantic proof for any required clauses still unproven.
+
+Thus inline execution may defer semantic proof to the current Superpowers final-review boundary, but it may never bypass the Final Conformance Gate.
+
+This prevents late drift where possible without duplicating Superpowers orchestration.
 
 ---
 
