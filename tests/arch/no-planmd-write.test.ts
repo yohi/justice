@@ -29,7 +29,7 @@ function buildPostToolUseEvent(
 }
 
 describe("FF-005", () => {
-  it("writes the registered plan.md through the allowlisted TaskFeedbackHandler path", async () => {
+  it("does not write the registered plan.md on timeout escalation", async () => {
     const planPath = "plan.md";
     const reader = createMockFileReader({ [planPath]: buildPlan("Task 1") });
     const writer = createMockFileWriter();
@@ -37,8 +37,6 @@ describe("FF-005", () => {
 
     handler.setActivePlan("session-1", planPath, "task-1");
 
-    // FF-005 + Task 3.7: success no longer writes plan.md; the remaining
-    // allowlisted write is the escalation error note on the registered path.
     await handler.handlePostToolUse(
       buildPostToolUseEvent("session-1", {
         toolResult: "Task timed out after 300s.",
@@ -46,10 +44,10 @@ describe("FF-005", () => {
       }),
     );
 
-    expect(writer.writeFile).toHaveBeenCalledWith(planPath, expect.any(String));
+    expect(writer.writeFile).not.toHaveBeenCalled();
   });
 
-  it("does not write an unregistered plan path", async () => {
+  it("does not write any plan path when escalation has another plan available", async () => {
     const planPath = "plan.md";
     const otherPath = "other-plan.md";
     const reader = createMockFileReader({
@@ -68,8 +66,6 @@ describe("FF-005", () => {
       }),
     );
 
-    expect(writer.writeFile).toHaveBeenCalledTimes(1);
-    expect(writer.writeFile).toHaveBeenCalledWith(planPath, expect.any(String));
-    expect(writer.writeFile).not.toHaveBeenCalledWith(otherPath, expect.any(String));
+    expect(writer.writeFile).not.toHaveBeenCalled();
   });
 });

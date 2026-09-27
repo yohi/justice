@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
+import { projectReviewDispatchSlots } from "../../src/core/review-dispatch-state";
 import type { HookResponse } from "../../src/core/types";
 import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
 import { createMockFileSystem, type MockFileSystem } from "../helpers/mock-file-system";
@@ -55,6 +56,26 @@ describe("plan-scoped implementation handoff", () => {
     await expect(transitions(plugin)).resolves.toEqual(
       expect.arrayContaining([expect.objectContaining({ from: "evidence_pending", to: "review_pending" })]),
     );
+  });
+
+  it("terminalizes a pending task review when the parent explicitly cancels", async () => {
+    const { plugin } = fixture();
+    await approve(plugin);
+    await invoke(plugin, "call-1");
+    await plugin.handleEvent({
+      type: "PostToolUse", sessionId: "s-1", callId: "call-1",
+      payload: { toolName: "task", toolInput: { task_id: "task-1" }, toolResult: "done", error: false },
+    });
+    const log = plugin.getObservationHandler().getLogStore();
+    expect(projectReviewDispatchSlots(await log.readAll())).toEqual([
+      expect.objectContaining({ state: "pending" }),
+    ]);
+
+    await plugin.getPlanBridge().handleImplementationArm("s-1", { source: "command", action: "cancel" });
+
+    expect(projectReviewDispatchSlots(await log.readAll())).toEqual([
+      expect.objectContaining({ state: "terminal", terminalReason: "cancelled" }),
+    ]);
   });
 
   it("does not start an attempt for an unapproved task even when task_id is supplied", async () => {
@@ -117,6 +138,47 @@ describe("plan-scoped implementation handoff", () => {
     await invoke(plugin, "call-1");
     expect(plugin.getSessionStateProvider().getTaskCallBinding("call-1")).toBeUndefined();
     expect((await transitions(plugin)).map((record) => record.to)).toEqual(["authorized"]);
+  });
+
+  it("does not treat an unclaimed review result as implementation feedback", async () => {
+    const { files, plugin } = fixture();
+    await approve(plugin);
+    await invoke(plugin, "implementation-call");
+    const pre = await plugin.handleEvent({
+      type: "PreToolUse",
+      sessionId: "s-1",
+      callId: "unclaimed-review",
+      payload: { toolName: "task", toolInput: { category: "sp-review", prompt: "review" } },
+    });
+    expect(pre).toMatchObject({ action: "inject" });
+
+    const post = await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s-1",
+      callId: "unclaimed-review",
+      payload: { toolName: "task", toolInput: { category: "sp-review" }, toolResult: "test_failure", error: true },
+    });
+
+    expect(post).toEqual({ action: "proceed" });
+    expect(await files.readFile("plan.md")).toBe(plan);
+  });
+
+  it("keeps a rejected review separate when PostToolUse omits the category", async () => {
+    const { files, plugin } = fixture();
+    await approve(plugin);
+    await invoke(plugin, "implementation-call");
+    await plugin.handleEvent({
+      type: "PreToolUse", sessionId: "s-1", callId: "rejected-review",
+      payload: { toolName: "task", toolInput: { category: "sp-review", prompt: "review" } },
+    });
+
+    const post = await plugin.handleEvent({
+      type: "PostToolUse", sessionId: "s-1", callId: "rejected-review",
+      payload: { toolName: "task", toolResult: "test_failure", error: true },
+    });
+
+    expect(post).toEqual({ action: "proceed" });
+    expect(await files.readFile("plan.md")).toBe(plan);
   });
 
 });

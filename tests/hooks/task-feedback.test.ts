@@ -48,7 +48,7 @@ describe("TaskFeedbackHandler", () => {
       }
     });
 
-    it("should append error note on escalation (test_failure)", async () => {
+    it("does not rewrite the approved plan on escalation", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });
       const writer = createMockFileWriter();
       const handler = new TaskFeedbackHandler(reader, writer);
@@ -68,8 +68,7 @@ describe("TaskFeedbackHandler", () => {
 
       const response = await handler.handlePostToolUse(event);
       expect(response.action).toBe("inject");
-      // Verify error note was appended
-      expect(writer.writtenFiles["plan.md"]).toContain("⚠️ **Error**");
+      expect(writer.writeFile).not.toHaveBeenCalled();
       // Verify escalation message is in injected context
       if (response.action === "inject") {
         expect(response.injectedContext).toContain("systematic-debugging");

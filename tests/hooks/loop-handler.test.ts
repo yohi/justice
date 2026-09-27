@@ -56,7 +56,7 @@ describe("LoopDetectionHandler", () => {
       expect(response.action).toBe("proceed");
     });
 
-    it("should inject split suggestion and update plan on loop-detector", async () => {
+    it("injects a split suggestion without rewriting the approved plan on loop detection", async () => {
       const reader = createMockFileReader({ "plan.md": samplePlan });
       const writer = createMockFileWriter();
       const splitter = new TaskSplitter();
@@ -83,10 +83,7 @@ describe("LoopDetectionHandler", () => {
         expect(response.injectedContext).toContain("Task task-1.1: Step: Step A");
       }
 
-      // Should append error note
-      expect(writer.writtenFiles["plan.md"]).toContain(
-        "⚠️ **Error**: loop_detected: Applied identical fix 3 times",
-      );
+      expect(writer.writeFile).not.toHaveBeenCalled();
     });
 
     it("uses the latest currentAgent after setActivePlan is called again for the same session", async () => {

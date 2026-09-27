@@ -99,7 +99,7 @@ export class LoopDetectionHandler {
 
   constructor(
     private readonly fileReader: FileReader,
-    private readonly fileWriter: FileWriter,
+    _fileWriter: FileWriter,
     private readonly splitter: TaskSplitter,
     classifier: CategoryClassifier = new CategoryClassifier(),
     retryCalculator: RetryPolicyCalculator = new RetryPolicyCalculator(),
@@ -327,15 +327,6 @@ export class LoopDetectionHandler {
           wisdom: `loop_detected: ${reason}`,
         });
 
-        // Append error note to plan.md
-        const updatedPlan = this.parser.appendErrorNote(
-          planContent,
-          session.activeTaskId,
-          `loop_detected: ${reason}`,
-        );
-        await this.fileWriter.writeFile(session.planPath, updatedPlan);
-
-        // Emit reflection event only after successful plan update
         try {
           await this.observationHandler?.emitReflectionEvent({
             trigger: "task_error",

@@ -92,17 +92,17 @@ describe("JusticePlugin reflection event integration", () => {
     });
   });
 
-  it("does not emit an error reflection when appending the error note fails", async () => {
+  it("persists error reflection without writing the approved plan", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
-    files.set("plan.md", ["## Task 1: Setup", "- [ ] Init", ""].join("\n"));
+    const plan = ["## Task 1: Setup", "- [ ] Init", ""].join("\n");
+    files.set("plan.md", plan);
     const failingWriter = rejectPlanWrites(writer);
     const plugin = new JusticePlugin(reader, failingWriter, {
       writerId: "w-error-write",
       workspaceRoot: "/workspace",
     });
     plugin.getTaskFeedback().setActivePlan("session-error", "plan.md", "task-1");
-    const reflectionSpy = vi.spyOn(plugin.getObservationHandler(), "emitReflectionEvent");
 
     // When
     await plugin.handleEvent({
@@ -118,7 +118,16 @@ describe("JusticePlugin reflection event integration", () => {
     });
 
     // Then
-    expect(reflectionSpy).not.toHaveBeenCalled();
+    const records = await plugin.getObservationHandler().getLogStore().readAll();
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({
+      kind: "reflection",
+      reflection: expect.objectContaining({
+        trigger: "task_error",
+        intent: "append_error_note",
+        planRef: { path: "plan.md", taskId: "task-1" },
+      }),
+    })]));
+    expect(files.get("plan.md")).toBe(plan);
   });
 
   it("emits a success reflection without writing plan.md even when plan writes fail", async () => {
@@ -228,9 +237,10 @@ describe("JusticePlugin reflection event integration", () => {
         note: "loop_detected: Loop detected: repeated command pattern",
       },
     });
+    expect(files.get("plan.md")).toBe(plan);
   });
 
-  it("emits a loop reflection after successful plan update", async () => {
+  it("emits a loop reflection without updating the plan", async () => {
     // Given
     const { files, reader, writer } = createMemFs();
     files.set("plan.md", ["## Task 2: Loop", "- [ ] Fix loop", ""].join("\n"));

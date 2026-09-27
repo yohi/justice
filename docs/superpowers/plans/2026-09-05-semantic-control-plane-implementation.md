@@ -388,6 +388,8 @@ export function computePlanFingerprint(
 
 `createErrorAnnotationObservation` records the EOL-normalized raw plan digest, safe `planPath`, 1-based line number, occurrence among equal normalized lines, and normalized line digest; it never persists the annotation text. `migrateJusticeGeneratedErrorAnnotations` accepts only `provenance: "observed"` records whose plan path and raw snapshot digest match the current input and whose line number, occurrence, and line digest identify one exact line in that snapshot. Process multiple targets against the original line identities, delete only those exact lines, and emit a migration warning for every unmatched, cross-plan, stale-digest, manual, or unknown-provenance annotation. `PendingObservationRecord` and `PersistedLogRecord` must include the `error_annotation` variant, and strict validation/replay must reject unsafe paths, non-positive line identities, invalid digests, or malformed provenance.
 
+The `error_annotation` variant identifies legacy lines that actually exist in the plan for one-time migration. For new task failures and loop-detector events, do not write an annotation to the approved plan or synthesize an annotation line identity. Persist the existing `task_error` reflection with `intent: "append_error_note"` and its note instead; continue to provide split/escalation guidance without mutating the approved plan.
+
 - [x] **Step 4: Confirm GREEN**
 
 Run: `devcontainer exec --workspace-folder . bun run vitest run tests/core/plan-fingerprint.test.ts tests/core/plan-parser.test.ts tests/core/v2/observation-model.test.ts tests/runtime/validation.test.ts`
