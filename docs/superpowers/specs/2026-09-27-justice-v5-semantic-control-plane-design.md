@@ -907,6 +907,8 @@ It does not alter model/provider/subagent/category choice and does not create a 
 
 A host/version where the review call cannot be safely recognized and enriched is reported by doctor as review-interop unsupported; semantic review evidence remains `NOT_PROVEN` rather than falling back to a Justice-owned review.
 
+For the v5 baseline support claim, E2E compatibility verification must prove that Superpowers v6.4.2 review dispatches manifest through this observable/mutable OpenCode task-call surface. Failure of that proof blocks the supported-stack claim; it does not trigger an alternate Justice review architecture.
+
 ### 14.3 Structured result — J5D-REVIEW-03
 
 The same reviewer final result must contain a machine-readable Justice envelope in addition to the normal Superpowers human-readable report.
@@ -1361,6 +1363,28 @@ v5 recovery reconstructs at least:
 ### 26.2 v4 authority policy
 
 Migration is conservative and non-destructive.
+
+The v5 migration reader recognizes these current v4 contract families only as prior-state inputs:
+
+```text
+authorization:
+  fingerprintSchema = justice-plan-v1
+
+observation/decision log:
+  PersistedEnvelope.schemaVersion = 1
+  including review_dispatch_transition,
+            task_lifecycle_transition,
+            plan_finalization_transition
+
+review snapshot:
+  ReviewSnapshotArtifact.schemaVersion = 1
+
+human review resolution:
+  authority = human_approved
+  (legacy artifact has no v5 artifact-chain/clause binding)
+```
+
+A recognized v4 record is still subject to the authority rules below. Recognition never means automatic v5 trust.
 
 **v4 plan authorization**
 
