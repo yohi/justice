@@ -895,6 +895,15 @@ Justice/Superpowers state conflict must be surfaced, not silently overwritten.
 
 Every v5 authoritative persistent record must carry or be governed by an explicit v5-compatible schema version. The exact file split is an implementation detail.
 
+The migration reader explicitly recognizes the current v4 families as **prior** contracts, including:
+
+- plan authorization with `fingerprintSchema: justice-plan-v1`;
+- persisted Observation/Decision envelopes with `schemaVersion: 1`, including v4 review-dispatch/task-lifecycle/finalization records;
+- `ReviewSnapshotArtifact` with `schemaVersion: 1`;
+- legacy `human_approved` review-resolution artifacts, which lack v5 artifact-chain/clause identity.
+
+Recognition means “safe to classify/migrate or retain historically”, not “authorized for v5 acceptance”.
+
 ### JUS5-PERSIST-02 — v4 authorization
 
 A v4 plan-only authorization must not be automatically promoted to a v5 Requirements→Design→Plan artifact-chain authorization. Human reconciliation/re-approval is required before it can authorize v5 acceptance.
