@@ -48,6 +48,90 @@ describe("OpenCodePlugin (integration)", () => {
     );
   });
 
+  it("exposes a config hook", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+    expect(typeof handlers.config).toBe("function");
+  });
+
+  it("registers justice commands via the config hook", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+    const config: { command: Record<string, unknown> } = { command: {} };
+
+    await handlers.config?.(config as never);
+
+    expect(config.command["justice-start"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Start a Justice-managed development workflow",
+    });
+    expect(config.command["justice-implement"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Arm the next Justice-managed implementation delegation",
+    });
+  });
+
+  it("does not overwrite existing commands via the config hook", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+    const config: { command: Record<string, unknown> } = {
+      command: {
+        "justice-start": {
+          template: "custom",
+          description: "existing",
+        },
+      },
+    };
+
+    await handlers.config?.(config as never);
+
+    expect(config.command["justice-start"]).toEqual({
+      template: "custom",
+      description: "existing",
+    });
+    expect(config.command["justice-implement"]).toBeDefined();
+  });
+
+  it("fails open when the config hook throws", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const config = {
+      command: new Proxy<Record<string, unknown>>({}, {
+        set() { throw new Error("registration failed"); },
+      }),
+    };
+
+    await expect(
+      handlers.config?.(config as never),
+    ).resolves.toBeUndefined();
+
+    const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    expect(logFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining(
+          "Failed to auto-register slash commands",
+        ),
+      }),
+    );
+  });
+
+  it("fails open when formatting a registration error would throw", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const hostileError = { toString: () => { throw new Error("formatting failed"); } };
+    const config = {
+      command: new Proxy<Record<string, unknown>>({}, {
+        set() { throw hostileError; },
+      }),
+    };
+
+    await expect(handlers.config?.(config as never)).resolves.toBeUndefined();
+
+    const logFn = init.client.app.log as unknown as ReturnType<typeof vi.fn>;
+    expect(logFn).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: expect.stringContaining("Failed to auto-register slash commands"),
+    }));
+  });
+
   it("invokes lazy init only once across multiple hook entries", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);

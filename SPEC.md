@@ -256,9 +256,11 @@ Event:loop-*     → LoopDetectionHandler
 Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
                     → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
 
-command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (`justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
+config                  → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-implement` to `Config.command`)
+command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (execution only; `justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
 ```
 
+> **Registration vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start` and `justice-implement` definitions when absent, leaving any existing definitions untouched. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow bootstrap or implementation-arm logic.
 
 ### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 
@@ -388,6 +390,8 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 
 `/justice-start` はワークフロー・ブートストラップを開始し、`/justice-implement` は承認済み Plan をアームする OpenCode コマンドフックである。
 
+> **Command registration.** Command registration is handled by the OpenCode v1 `config` hook, not by `command.execute.before`. The `config` hook calls `registerJusticeCommands()` in `src/runtime/command-registration.ts` to add the canonical `justice-start` and `justice-implement` definitions to the host's `Config.command` object. If a command with the same name already exists, the existing definition is preserved unchanged and a warning is logged. `command.execute.before` is responsible solely for executing the commands after they have been registered.
+
 | プロパティ | 設定値 |
 |----------|-------|
 | OpenCode フック | `command.execute.before`（`JusticePlugin.handleEvent()` を経由しない直接ディスパッチ） |
@@ -417,6 +421,8 @@ command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementat
 **実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の PR・レビュー機能と `task()` 呼び出しはエージェントが既存の権限で実行する。Justice は PR を作成せず、レビューを承認せず、PR をマージせず、PR 作成・承認・マージ状態を推測しない。人間が承認・マージ判断を保持する — Justice はここでも「神経系」であり「手足」ではない。
 
 **Gate との関係:** `workflow_started`/`design_requested`/`plan_requested`/`plan_activated` レコードは `evidence` フィールドを一切持たない audit-only レコードであり（§15.3）、`state-projection.ts` が `ProjectedState.tasks[].evidence` への投影対象から明示的に除外する。したがって Gate の PASS 判定にこれらのレコードが算入される経路は構造的に存在しない（FF-008 が自明に成立）。
+
+> **Collision policy, fail-open boundary, and reference isolation.** Registered entries are shallow-cloned from the frozen canonical `JUSTICE_COMMAND_DEFINITIONS`, so the mutable `Config.command` object never shares object references with the canonical definitions. Existing user-defined commands are never overwritten; their object references are preserved as-is. The `config` hook is fail-open: any exception during registration or logging is caught and logged as a warning, and the plugin continues to load so that an OpenCode session is not blocked by a registration failure.
 
 ---
 
@@ -1242,19 +1248,23 @@ bun add justice-plugin
 
 | OpenCode フック | 変換後の Justice イベント | 補足 |
 |:---|:---|:---|
+| `config` | (registration only) | `registerJusticeCommands()` adds `justice-start` and `justice-implement` to `Config.command`, preserving existing user definitions. |
 | `tool.execute.before` | `PreToolUseEvent` | `tool === "task"` の場合のみ。プラン内容を prompt に注入。 |
 | `tool.execute.after` | `PostToolUseEvent` | `tool === "task"` の場合のみ。実行結果とエラー状態を通知。 |
 | `experimental.session.compacting` | `EventEvent` (compaction) | コンパクション時にプランのスナップショットを保護。 |
 | `event` (message.updated) | `MessageEvent` | ユーザーメッセージから委譲の意図を検出。 |
 | `event` (session.error) | `EventEvent` (loop-detector) | `LOOP_ERROR_PATTERNS` に一致するエラーのみ転送。 |
-| `command.execute.before` | (変換なし・直接ディスパッチ) | `justice-start` と `justice-implement` を処理（§4.1a）。それぞれ `PlanBridge.handleWorkflowStart()` / `PlanBridge.handleImplementationArm()` を直接呼び出し `output.parts` へガイダンスを追記。他コマンドは完全ノーオペ。 |
+| `command.execute.before` | (変換なし・直接ディスパッチ) | `justice-start` と `justice-implement` を実行（§4.1a）。それぞれ `PlanBridge.handleWorkflowStart()` / `PlanBridge.handleImplementationArm()` を直接呼び出し `output.parts` へガイダンスを追記。他コマンドは完全ノーオペ。 |
 
 ### 追加ファイル
 - `src/runtime/opencode-adapter.ts` — 変換ブリッジ本体
+- `src/runtime/command-registration.ts` — 自動コマンド登録 (`justice-start` / `justice-implement`)
 - `src/opencode-plugin.ts` — エントリポイント
 - `src/core/loop-error-patterns.ts` — ループ検知用パターン定義
 
 既存の OmO カスタムフック経路 (`dist/hooks/*.js`) は後方互換のため維持されます。
+
+> **Host contract.** OpenCode `v1.18.29` is the current runtime support baseline. Source inspections of OpenCode `v1.18.29` and `v1.18.32` confirm the processing order: Config load → Plugin initialization → Command service reads `cfg.command` after the Plugin `config` hook mutates it. `@opencode-ai/plugin@1.14.21` is the compile-time type baseline resolved via the lockfile and is distinct from the runtime support version. The implementation treats this host contract as fixed; it does not re-evaluate hook adoption or timing.
 
 ---
 
