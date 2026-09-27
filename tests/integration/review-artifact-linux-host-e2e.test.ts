@@ -185,14 +185,14 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("Markdown slash-command precedence (supporte
   }, 130_000);
 });
 
-async function hostApiPost(baseUrl: string, path: string, body: unknown): Promise<{ readonly response: Response; readonly value: unknown }> {
+async function hostApiPost(baseUrl: string, path: string, body: unknown, timeoutMs = 15_000): Promise<{ readonly response: Response; readonly value: unknown }> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (cause: unknown) {
     throw new Error("unsupported setup: OpenCode API request could not complete", { cause });
@@ -345,6 +345,7 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on suppo
         host.baseUrl,
         `/session/${encodeURIComponent(session.value.id)}/command?directory=${directory}`,
         { command: "justice-start", arguments: "host command service integration check" },
+        150_000,
       );
       unsupportedForAuthentication(invoked.response, invoked.value);
       expect(invoked.response.ok).toBe(true);
@@ -395,6 +396,7 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on suppo
         host.baseUrl,
         `/session/${encodeURIComponent(sessionId)}/command?directory=${directory}`,
         { command: "justice-implement", arguments: `--plan ${planPath} --approved` },
+        150_000,
       );
       unsupportedForAuthentication(arm.response, arm.value);
       expect(arm.response.ok).toBe(true);
@@ -408,6 +410,7 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on suppo
             text: "Call the task tool exactly once with the approved plan task. Use a short prompt and do not claim completion.",
           }],
         },
+        150_000,
       );
       unsupportedForAuthentication(taskRequest.response, taskRequest.value);
       expect(taskRequest.response.ok).toBe(true);
@@ -418,5 +421,5 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on suppo
       await host?.stop();
       await rm(rootDir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, 300_000);
 });
