@@ -1778,9 +1778,9 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 | FR-601 Plan-scoped Authorization | 実装済み | 計画に紐づく承認を永続化し、複数の実装委譲で再利用する。現行 fingerprint を委譲時に照合する（§4.1b） |
 | FR-602 Authorization Binding | 実装済み | 承認を session、plan path、plan fingerprint に紐づけ、`.justice/authorizations.json` に保存する |
 | FR-603 Plan Mutation | 部分実装 | `task()` の PreToolUse 時に計画を再読込し、fingerprint mismatch を検出すると承認を無効化する。ファイル変更時の即時監視は行わない |
-| FR-604 Continuous Execution | 保留 | 同一承認 plan でも各 `task()` の前に再度 arm が必要。連続委譲の自動認可は将来拡張 |
+| FR-604 Continuous Execution | 実装済み | 同一の承認済み plan に対する後続の `task()` 委譲では、現在の fingerprint を照合したうえで永続化済みの認可を再利用する。再アームは不要 |
 
-FR-601 と FR-604 の継続実行契約、および FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および `implementation_unauthorized` の挙動を整合させる。
+FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および `implementation_unauthorized` の挙動を整合させる。
 
 upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。
 
