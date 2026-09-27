@@ -33,41 +33,42 @@ export interface JusticeCommandDefinition {
   readonly description: string;
 }
 
-export const JUSTICE_COMMAND_DEFINITIONS: Readonly<
-  Record<string, JusticeCommandDefinition>
-> = Object.freeze({
-  "justice-start": {
+const justiceCommandDefinitions = {
+  "justice-start": Object.freeze({
     template: "$ARGUMENTS",
     description: "Start a Justice-managed development workflow",
-  },
-  "justice-implement": {
+  }),
+  "justice-implement": Object.freeze({
     template: "$ARGUMENTS",
     description: "Arm the next Justice-managed implementation delegation",
-  },
-});
+  }),
+} satisfies Record<string, JusticeCommandDefinition>;
+
+export const JUSTICE_COMMAND_DEFINITIONS: Readonly<typeof justiceCommandDefinitions> =
+  Object.freeze(justiceCommandDefinitions);
 
 export type CommandRegistrationLogger = (
   level: "info" | "warn" | "error",
   message: string,
   ...args: unknown[]
-) => void | Promise<void>;
+) => Promise<void>;
 
-export function registerJusticeCommands(
+export async function registerJusticeCommands(
   config: Config,
   log: CommandRegistrationLogger,
-): void {
+): Promise<void> {
   const commands = config.command ?? {};
   config.command = commands;
 
   for (const [name, definition] of Object.entries(JUSTICE_COMMAND_DEFINITIONS)) {
     if (Object.prototype.hasOwnProperty.call(commands, name)) {
-      log(
+      await log(
         "warn",
         `[Justice] Command "${name}" is already defined; skipping automatic registration.`,
       );
       continue;
     }
-    commands[name] = definition;
+    commands[name] = { ...definition };
   }
 }
 ```
@@ -86,7 +87,7 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
     tool: adapter.getTools(),
     config: async (config): Promise<void> => {
       try {
-        registerJusticeCommands(config, (level, message, ...args) =>
+        await registerJusticeCommands(config, async (level, message, ...args) =>
           adapter.log(level, message, ...args),
         );
       } catch (error) {
@@ -106,7 +107,23 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
 ### 型安全
 
 - OpenCode SDK の `Config` 型を参照する。
-- `JUSTICE_COMMAND_DEFINITIONS` は `Object.freeze` で不変にし、`Readonly<Record<string, JusticeCommandDefinition>>` とする。
+- `JUSTICE_COMMAND_DEFINITIONS` の Record と各 command definition entry を `Object.freeze` し、型と runtime の両方で不変にする。
+- `Config.command` に登録する command object は `{ ...definition }` で複製する。canonical definition と登録先は mutable object reference を共有しない。
+- 定義の現在のフィールドは primitive 値のみとする。将来 nested mutable fields を追加する場合はコピー・freeze 方針も拡張する。
+
+### OpenCode v1 host contract / authoritative evidence
+
+自動登録は OpenCode v1 Plugin API の正式な `config` hook を使用する。成立条件は次のとおり。
+
+1. Config のロード後に Plugin が初期化され、Plugin は Config を変更できる。
+2. `config` hook で変更された Config を OpenCode Command service が受け取り、`cfg.command` から command list を構築する。
+3. したがって、hook から `config.command` へ登録した command は OpenCode の command 構築に反映される。
+
+**検証済み host evidence:** OpenCode v1.18.29 (`packages/plugin/src/index.ts` の `Hooks.config`、`packages/opencode/src/project/bootstrap.ts` の Config load → `plugin.init()` 順序、`packages/opencode/src/command/index.ts` の `cfg.command` 読み出し)、v1.18.32 の同等実装、および現在の runtime support baseline である v1.18.29。
+
+`@opencode-ai/plugin@1.14.21` は lockfile で解決される compile-time 型 baseline であり、OpenCode host の runtime support version とは別の値である。runtime support は現行方針に基づき OpenCode v1.18.29 とする。これは v1.18.x 全ての検証を意味しない。
+
+この hook は command 定義の登録だけを担当する。`command.execute.before` は登録済み command の実行時 workflow handling を担当し、workflow parsing / PlanBridge の責務は従来どおり adapter 側に置く。
 
 ### 名前衝突の扱い
 
@@ -115,7 +132,7 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
 
 ### Fail-Open
 
-- `config` フック内での例外は catch し、警告ログを出力後に無視する。
+- `registerJusticeCommands` と collision logger は非同期契約とし、登録処理は logger を await する。config hook は登録処理全体を try/catch し、例外や logger rejection を catch して警告ログを出力後に抑制する。
 - OpenCode のプラグインロードや起動を妨害しない。
 
 ## テスト
@@ -123,21 +140,33 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
 ### `tests/runtime/command-registration.test.ts`（新規）
 
 - 空の `config.command` に対して 2 コマンドが追加される。
-- 既存エントリがある場合に上書きされず、警告ログが呼ばれる。
+- 既存 entry を同一参照のまま保持し、警告 logger が await される。無関係な既存 command も維持する。
 - `config.command` が `undefined` の場合に初期化される。
+- 登録された command object が canonical definition と参照を共有しない。
+- 登録先 object を mutation しても canonical definition が変化しない。
+- canonical definition の各 entry が runtime でも freeze されている。
+- async logger が reject した場合、registration API は reject し config hook の境界へ伝播する。
 
 ### `tests/integration/opencode-plugin.test.ts`
 
 - 返却される hooks に `config` が含まれることを検証。
 - `config` フックを呼び出すと `justice-start` / `justice-implement` が追加されることを検証。
 - 既存コマンドがある場合に上書きされないことを検証。
+- registration mutation が throw しても hook が resolve し、fail-open warning を記録することを検証。
 
 ## ドキュメント更新
 
 ### `README.md`
 
-- `/justice-start` および `/justice-implement` の「有効化（OpenCode側の設定）」セクションを削除する。
-- 代わりに、これらのコマンドがプラグインの `config` フックにより自動登録される旨を簡潔に記載する。
+- `/justice-start` と `/justice-implement` の各 `### 有効化（OpenCode側の設定）` から手動登録が必須とする記述・手順のみを自動登録契約に置き換える。
+- `/justice-start` の `$ARGUMENTS` / template の説明は、自動登録後も利用者に必要な契約（template は LLM prompt 用、Justice parsing は別経路）を残す。置換後は両コマンドの自動登録と名前衝突時の既存定義優先を説明する。
+
+### `SPEC.md`
+
+- §4.0 / §4.1a の近傍に、`config` hook は command 登録、`command.execute.before` は登録済み command の実行処理という責務分離を記載する。
+- 衝突時の利用者定義優先、登録処理の fail-open boundary、canonical definition と Config の mutable object reference 非共有を明記する。
+- OpenCode v1 host contract と v1.18.29 runtime support baseline / `@opencode-ai/plugin@1.14.21` compile-time baseline を本設計と同期する。
+- runtime component/file map に `src/runtime/command-registration.ts` を追加する。
 
 ## 影響範囲
 
@@ -146,15 +175,17 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
 - `tests/integration/opencode-plugin.test.ts`: テスト追加。
 - `tests/runtime/command-registration.test.ts`: 新規作成。
 - `README.md`: 手動登録手順を削除。
+- `SPEC.md`: 登録 hook と実行 hook の責務、host contract、runtime component map を更新。
 
 ## リスクと緩和
 
 | リスク | 緩和策 |
 |---|---|
-| OpenCode の `config` フックと Command 一覧構築の順序によっては自動登録が反映されない | issue #267 でも未検証事項として明記。今回の実装では順序を制御できないため、テストで `config` フック呼び出し時の `config.command` 書き換えを検証する。 |
+| OpenCode upstream drift により将来 `config` hook と Command 構築の契約が変化する | 検証済み v1.18.29 host contract を基準とし、compatibility audit で upstream source と runtime behavior を再確認する。契約変更時は自動登録の実装前提を再評価する。 |
 | 利用者のカスタムコマンドが上書きされる | 衝突時は上書きせず、警告ログを出力する。 |
 | `config` フックの失敗でプラグインがロードできなくなる | fail-open: 例外を catch して警告ログを出力し、無視する。 |
 
-## 未検証事項
+## 検証済み事項と残る不確実性
 
-- Plugin `config` フックと OpenCode の Command 一覧構築の実行順序は、OpenCode 内部の実装依存であり、本変更では検証しない。 issue #267 と同様に、これは実装上の前提・注意点として明記する。
+- `config` hook の存在・初期化順・Command service が変更後の `cfg.command` を参照する契約は、上記 OpenCode v1.18.29 / v1.18.32 source evidence で確認済み。
+- 将来の OpenCode upstream version における契約維持は未保証であり、upstream drift が残るリスクである。これは現在の登録方式の未検証を意味しない。

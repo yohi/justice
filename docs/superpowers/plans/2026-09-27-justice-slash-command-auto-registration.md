@@ -4,9 +4,11 @@
 
 **Goal:** OpenCode v1 Plugin API の `config` フックを使い、`/justice-start` と `/justice-implement` を Justice プラグイン有効化時に自動登録する。
 
-**Architecture:** コマンド定義と OpenCode `Config.command` へのマージロジックを `src/runtime/command-registration.ts` に集約し、`src/opencode-plugin.ts` の `config` フックから呼び出す。衝突時は利用者定義を尊重し、fail-open で例外を抑制する。
+**Architecture:** コマンド定義と OpenCode `Config.command` へのマージロジックを `src/runtime/command-registration.ts` に集約し、`src/opencode-plugin.ts` の `config` フックから await して呼び出す。衝突時は利用者定義を尊重し、config hook の fail-open boundary で登録・logger の例外を抑制する。canonical definitions は entry も freeze し、登録時に shallow clone して Config と mutable object reference を共有しない。
 
 **Tech Stack:** TypeScript, Bun, Vitest, `@opencode-ai/plugin`, `@opencode-ai/sdk`
+
+**OpenCode host contract:** OpenCode v1.18.29 を現在の runtime support baseline とする。OpenCode v1.18.29 および v1.18.32 の upstream source inspection では、Config load → Plugin initialization → Command service の順に処理され、Plugin `config` hook の mutation 後に Command service が `cfg.command` を読む。`@opencode-ai/plugin@1.14.21` は lockfile で解決される compile-time 型 baseline であり、runtime support version とは区別する。v1.18.x 全体を検証済みとは扱わない。実装者は hook の採否・タイミングを再判断しない。
 
 ## Global Constraints
 
@@ -15,6 +17,8 @@
 - 公開 API は `OpenCodeAdapter.getTools()` の `justice_review` のみ。本変更はコマンド登録の自動化であり、新しいツールは追加しない。
 - テストでは `as any` / `@ts-ignore` を使用しない。private フィールドへのアクセスは `(obj as unknown as { field: T }).field` を使用する。
 - 開発コマンドは `.devcontainer/` 内で Bun で実行する：`bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`。
+- OpenCode の確定済み host contract を前提として実装し、方式選定や runtime spike に戻らない。将来の upstream drift は既存 compatibility audit の対象とする。
+- `JUSTICE_COMMAND_DEFINITIONS` と `Config.command` の登録 object は mutable reference を共有しない。既存利用者 command は上書きせず、参照をそのまま保つ。
 
 ---
 
@@ -27,6 +31,7 @@
 | `tests/runtime/command-registration.test.ts`（新規） | `registerJusticeCommands` の純粋関数に対するユニットテスト |
 | `tests/integration/opencode-plugin.test.ts` | `OpenCodePlugin` 返却 hooks に `config` が含まれ、正しく動作することを検証する統合テスト |
 | `README.md` | 手動登録手順を削除し、自動登録が行われる旨を記載 |
+| `SPEC.md` | §4 hook routing / §4.1a / §8 OpenCode mapping と component map に登録責務を追記 |
 
 ---
 
@@ -37,8 +42,8 @@
 - Test: `tests/runtime/command-registration.test.ts`
 
 **Interfaces:**
-- Consumes: `@opencode-ai/plugin` の `Config` 型
-- Produces: `JUSTICE_COMMAND_DEFINITIONS`, `CommandRegistrationLogger`, `registerJusticeCommands(config, log)`
+- Consumes: `@opencode-ai/plugin@1.14.21` の `Config` 型（lockfile compile-time baseline）
+- Produces: entry-level frozen `JUSTICE_COMMAND_DEFINITIONS`, `CommandRegistrationLogger` (`Promise<void>`), `registerJusticeCommands(config, log): Promise<void>`
 
 ### Step 1: Write the failing test
 
@@ -53,11 +58,11 @@ import {
 } from "../../src/runtime/command-registration";
 
 describe("registerJusticeCommands", () => {
-  it("registers justice-start and justice-implement on an empty config.command", () => {
+  it("registers justice-start and justice-implement on an empty config.command", async () => {
     const config: Config = {};
-    const log = vi.fn();
+    const log = vi.fn(async () => {});
 
-    registerJusticeCommands(config, log);
+    await registerJusticeCommands(config, log);
 
     expect(config.command).toBeDefined();
     expect(Object.keys(config.command ?? {})).toEqual(
@@ -74,7 +79,7 @@ describe("registerJusticeCommands", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
-  it("does not overwrite existing user-defined commands and logs a warning", () => {
+  it("does not overwrite existing user-defined commands and logs a warning", async () => {
     const config: Config = {
       command: {
         "justice-start": {
@@ -83,14 +88,16 @@ describe("registerJusticeCommands", () => {
         },
       },
     };
-    const log = vi.fn();
+    const existing = config.command?.["justice-start"];
+    const log = vi.fn(async () => {});
 
-    registerJusticeCommands(config, log);
+    await registerJusticeCommands(config, log);
 
     expect(config.command?.["justice-start"]).toEqual({
       template: "custom template",
       description: "Custom start command",
     });
+    expect(config.command?.["justice-start"]).toBe(existing);
     expect(config.command?.["justice-implement"]).toEqual({
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
@@ -104,18 +111,18 @@ describe("registerJusticeCommands", () => {
     expect(log).toHaveBeenCalledTimes(1);
   });
 
-  it("initializes config.command when undefined", () => {
+  it("initializes config.command when undefined", async () => {
     const config: Config = { command: undefined };
-    const log = vi.fn();
+    const log = vi.fn(async () => {});
 
-    registerJusticeCommands(config, log);
+    await registerJusticeCommands(config, log);
 
     expect(config.command).toBeDefined();
     expect(config.command?.["justice-start"]).toBeDefined();
     expect(config.command?.["justice-implement"]).toBeDefined();
   });
 
-  it("exposes immutable command definitions", () => {
+  it("isolates registered commands from canonical definitions", async () => {
     expect(Object.keys(JUSTICE_COMMAND_DEFINITIONS)).toEqual([
       "justice-start",
       "justice-implement",
@@ -123,6 +130,28 @@ describe("registerJusticeCommands", () => {
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe(
       "$ARGUMENTS",
     );
+
+    const config: Config = {};
+    await registerJusticeCommands(config, async () => {});
+    const registered = config.command?.["justice-start"];
+    expect(registered).not.toBe(JUSTICE_COMMAND_DEFINITIONS["justice-start"]);
+    registered!.template = "changed";
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe("$ARGUMENTS");
+    expect(Object.isFrozen(JUSTICE_COMMAND_DEFINITIONS["justice-start"])).toBe(true);
+  });
+
+  it("preserves unrelated existing commands", async () => {
+    const unrelated = { template: "unrelated" };
+    const config: Config = { command: { other: unrelated } };
+    await registerJusticeCommands(config, async () => {});
+    expect(config.command?.other).toBe(unrelated);
+  });
+
+  it("awaits collision logging and propagates logger rejection", async () => {
+    const config: Config = { command: { "justice-start": { template: "custom" } } };
+    const log = vi.fn(async () => { throw new Error("logger failed"); });
+    await expect(registerJusticeCommands(config, log)).rejects.toThrow("logger failed");
+    expect(log).toHaveBeenCalledTimes(1);
   });
 });
 ```
@@ -134,7 +163,7 @@ Run:
 bun run test tests/runtime/command-registration.test.ts
 ```
 
-Expected: FAIL with module not found or function not defined.
+Expected: FAIL with module not found or function not defined. The mutation-isolation assertion must also fail against a shallow outer-only freeze/shared-reference implementation.
 
 ### Step 3: Write minimal implementation
 
@@ -151,38 +180,38 @@ export interface JusticeCommandDefinition {
 export const JUSTICE_COMMAND_DEFINITIONS: Readonly<
   Record<string, JusticeCommandDefinition>
 > = Object.freeze({
-  "justice-start": {
+  "justice-start": Object.freeze({
     template: "$ARGUMENTS",
     description: "Start a Justice-managed development workflow",
-  },
-  "justice-implement": {
+  }),
+  "justice-implement": Object.freeze({
     template: "$ARGUMENTS",
     description: "Arm the next Justice-managed implementation delegation",
-  },
+  }),
 });
 
 export type CommandRegistrationLogger = (
   level: "info" | "warn" | "error",
   message: string,
   ...args: unknown[]
-) => void | Promise<void>;
+) => Promise<void>;
 
-export function registerJusticeCommands(
+export async function registerJusticeCommands(
   config: Config,
   log: CommandRegistrationLogger,
-): void {
+): Promise<void> {
   const commands = config.command ?? {};
   config.command = commands;
 
   for (const [name, definition] of Object.entries(JUSTICE_COMMAND_DEFINITIONS)) {
     if (Object.prototype.hasOwnProperty.call(commands, name)) {
-      log(
+      await log(
         "warn",
         `[Justice] Command "${name}" is already defined; skipping automatic registration.`,
       );
       continue;
     }
-    commands[name] = definition;
+    commands[name] = { ...definition };
   }
 }
 ```
@@ -213,6 +242,8 @@ GIT_MASTER=1 git commit -m "feat: Justice コマンドの自動登録ロジッ�
 **Interfaces:**
 - Consumes: `registerJusticeCommands` from `src/runtime/command-registration.ts`, `OpenCodeAdapter.log`
 - Produces: `config` hook on the returned `Hooks` object
+
+`config` hook は確定済み OpenCode v1 host contract に基づいて registration API を await する。登録だけを担当し、workflow parsing / PlanBridge / command execution は行わない。既存の execution hooks は変更しない。
 
 ### Step 1: Write the failing test
 
@@ -264,9 +295,10 @@ GIT_MASTER=1 git commit -m "feat: Justice コマンドの自動登録ロジッ�
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
 
-    // Force an unexpected mutation path by passing a frozen object; the
-    // adapter should still log a warning and return without throwing.
-    const config = Object.freeze({ command: {} });
+    // Force the command assignment itself to throw; the hook must log and resolve.
+    const config = new Proxy({ command: {} }, {
+      set() { throw new Error("registration failed"); },
+    });
 
     await expect(
       handlers.config?.(config as never),
@@ -306,7 +338,7 @@ import { registerJusticeCommands } from "./runtime/command-registration";
     tool: adapter.getTools(),
     config: async (config): Promise<void> => {
       try {
-        registerJusticeCommands(config, (level, message, ...args) =>
+        await registerJusticeCommands(config, async (level, message, ...args) =>
           adapter.log(level, message, ...args),
         );
       } catch (error) {
@@ -348,35 +380,43 @@ GIT_MASTER=1 git commit -m "feat: OpenCode プラグインに config フック�
 
 ---
 
-## Task 3: README の手動登録手順を削除
+## Task 3: README と SPEC の command registration 契約を更新
 
 **Files:**
 - Modify: `README.md`
+- Modify: `SPEC.md`
 
 **Interfaces:**
 - Consumes: なし
 - Produces: 更新された README ドキュメント
 
-### Step 1: Identify manual registration sections
+### Step 1: README の既存 heading を更新
 
-`README.md` 内で `/justice-start` および `/justice-implement` の有効化手順を探す。通常、以下のような内容が含まれる:
+対象は次の exact heading に限定する。
 
-- `.opencode/commands/justice-start.md` および `.opencode/commands/justice-implement.md` の作成例
-- `opencode.jsonc` の `command` オブジェクトへの手動追加例
+- `/justice-start` 配下の `### 有効化（OpenCode側の設定）`
+- `/justice-implement` 配下の `### 有効化（OpenCode側の設定）`
 
-### Step 2: Replace with auto-registration note
+### Step 2: README の契約文を置換
 
-該当セクションを以下のような記述に置き換える:
+両 subsection の手動登録必須という説明と登録手順を、自動登録・collision時の既存定義優先へ置換する。`$ARGUMENTS` は利用者がコマンド後に入力した引数を受け渡し、template は LLM prompt を決める一方 Justice の引数 parsing とは別経路である説明を `/justice-start` subsection 内に残す。共通の自動登録説明は `/justice-start` subsection に置き、`/justice-implement` subsection は共通説明を参照する簡潔な文とする。既存 heading を削除せず、新しい `## スラッシュコマンド` heading は追加しない。
 
 ```markdown
-## スラッシュコマンド
-
-`/justice-start` と `/justice-implement` は、Justice プラグインが OpenCode の `config` フックを通じて自動的に登録します。個別に `.opencode/commands/*.md` や `opencode.jsonc` の `command` オブジェクトを作成する必要はありません。
-
-既に同一名のコマンドを定義している場合、Justice はその定義を尊重し、上書きしません。
+`/justice-start` と `/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。引数 template の説明はこの subsection に保持します。
 ```
 
-### Step 3: Run lint / typecheck
+### Step 3: SPEC §4 / §8 を更新
+
+`SPEC.md` の以下を変更する。
+
+- §4.0 routing overview に `config` 登録処理を加え、`command.execute.before` は実行処理であると英語で明記。
+- §4.1a に `config` が `/justice-start` と `/justice-implement` を登録し、既存定義を保持することを追記。登録と workflow execution の責務を英語で分離。
+- §8 OpenCode hook mapping に `config`（registration only）を追加し、`command.execute.before`（execution only）と対比。
+- §8 runtime component/file map に `src/runtime/command-registration.ts` を追加。
+- Host contract として OpenCode v1.18.29 runtime support baseline、v1.18.29/v1.18.32 source evidence、`@opencode-ai/plugin@1.14.21` compile-time baseline を設計書と同じ区別で英語記載。
+- Collision policy、fail-open boundary、canonical definition と Config の mutable object reference 非共有を英語で記載する（`SPEC.md` は canonical technical specification として英語を維持）。
+
+### Step 4: Run lint / typecheck
 
 Run:
 ```bash
@@ -386,11 +426,11 @@ bun run typecheck
 
 Expected: PASS
 
-### Step 4: Commit
+### Step 5: Commit
 
 ```bash
-GIT_MASTER=1 git add README.md
-GIT_MASTER=1 git commit -m "docs: README から手動コマンド登録手順を削除"
+GIT_MASTER=1 git add README.md SPEC.md
+GIT_MASTER=1 git commit -m "docs: コマンド自動登録の仕様を同期"
 ```
 
 ---
@@ -432,7 +472,15 @@ bun run build
 
 Expected: Build succeeds.
 
-### Step 5: Push the branch
+### Step 5: Verify the built distribution
+
+```bash
+bun run test:dist
+```
+
+Expected: `PASS — built dist package can be loaded through the package self-reference contract.`
+
+### Step 6: Push the branch
 
 ```bash
 GIT_MASTER=1 git push
@@ -445,5 +493,8 @@ GIT_MASTER=1 git push
 - [ ] `src/runtime/command-registration.ts` が作成され、テストでカバーされている
 - [ ] `src/opencode-plugin.ts` が `config` フックを返し、fail-open になっている
 - [ ] `tests/integration/opencode-plugin.test.ts` に `config` フックの統合テストが追加されている
-- [ ] `README.md` から手動登録手順が削除されている
-- [ ] `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build` がすべて通過する
+- [ ] `README.md` の指定された2つの有効化 subsection が自動登録契約に更新され、必要な `$ARGUMENTS` / template 説明が維持されている
+- [ ] `SPEC.md` に registration/execution の責務分離、host contract、collision/fail-open/alias isolation、file map が反映されている
+- [ ] canonical definitions と登録 Config が mutable object reference を共有しないことを mutation isolation test で確認する
+- [ ] logger contract と registration API が Promise based で同期し、config hook が await して fail-open boundary で rejection を扱う
+- [ ] `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`, `bun run test:dist` がすべて通過する
