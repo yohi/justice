@@ -162,6 +162,47 @@ Tests / Verification
 
 A lower-level artifact may implement or prove a higher-level contract, but it may not silently redefine that contract.
 
+### 3.7 Normative Design Contract Registry
+
+For Conformance Contract projection, the canonical normative Design surface is exactly:
+
+1. the `INV-01` through `INV-06` invariants above; and
+2. the `J5D-*` contracts in this registry.
+
+Other prose in this Design explains or elaborates these contracts. It is not independently enumerated by searching for words such as `MUST`.
+
+| ID | Normative design obligation |
+|---|---|
+| J5D-OWN-01 | Superpowers owns workflow/review progression; Justice must not duplicate it. |
+| J5D-OWN-02 | OmO owns runtime/model/provider/fallback routing. |
+| J5D-GATE-01 | Justice owns fail-closed authorization/evidence/conformance acceptance. |
+| J5D-TASK-01 | Superpowers task semantics must be preserved without lossy prompt reconstruction. |
+| J5D-CHAIN-01 | Human authorization binds an exact Requirements→Design→Plan artifact chain. |
+| J5D-CHAIN-02 | Requirements or Design substantive changes invalidate downstream authority. |
+| J5D-RULING-01 | Superpowers Rulings may guide execution but cannot rewrite approved Justice authority. |
+| J5D-CORR-01 | OmO `task_id` is continuation-session state and never Justice TaskIdentity. |
+| J5D-CORR-02 | Runtime execution is correlated by durable `parentSessionId + parentCallId` sidecar binding, extended with observed child session. |
+| J5D-ROUTE-01 | Justice obeys the category/subagent_type XOR contract without seizing explicit caller routing. |
+| J5D-PROJ-01 | Requirements/Design/Plan normative sources are deterministically enumerable. |
+| J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
+| J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
+| J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
+| J5D-REVIEW-02 | The existing review call is enriched with a read-only Conformance Contract through the supported pre-tool hook. |
+| J5D-REVIEW-03 | Trusted review evidence uses a versioned structured result bound to the same call/task/revision. |
+| J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, or untrusted review results fail closed. |
+| J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
+| J5D-STORAGE-01 | Directly observed structured review results are canonical; insecure file fallback never becomes trusted evidence. |
+| J5D-CONFIG-01 | Doctor/config verification uses OmO effective configuration precedence, not a single config file. |
+| J5D-PERSIST-01 | v4 durable authority is not auto-promoted to v5 authority; incompatible state fails acceptance closed. |
+| J5D-REC-01 | Recovery reconstructs semantic correlation from durable v5 bindings and surfaces state conflicts. |
+| J5D-CAT-01 | Justice emits current OmO categories and never canonical legacy `deep`. |
+| J5D-DEP-01 | DependencyAnalyzer is not a scheduling authority. |
+| J5D-RUNTIME-01 | OmO owns retry/fallback; Justice classifies terminal outcome only. |
+| J5D-DOCTOR-01 | Doctor separates source/configured/applied/observed state and reports unsupported evidence capabilities. |
+| J5D-COMPLETE-01 | PlanComplete requires zero unresolved/unauthorized semantic drift, zero missing required evidence, and zero blocking quality findings. |
+
+A registry ID is stable within a Design source revision. Changing the obligation text changes the Design fingerprint and invalidates evidence bound to the prior revision.
+
 ---
 
 ## 4. Responsibility model
@@ -208,56 +249,43 @@ Justice is observer-first, but not passive: it is authoritative at authorization
 
 ## 5. Plan and artifact authority
 
-### 5.1 Approved artifact chain
+### 5.1 Approved artifact chain — J5D-CHAIN-01
 
-Justice treats the current authoritative chain as:
-
-```text
-Requirements revision
-        ↓
-Design revision
-        ↓
-Implementation Plan revision
-        ↓
-Task execution against approved plan revision
-```
-
-Each substantive artifact revision has identity and lineage.
-
-Conceptually:
+Justice treats the authoritative unit of human implementation approval as one exact **ApprovedArtifactChain**:
 
 ```text
-ArtifactRevision
-├─ artifactType
-├─ artifactIdentity
-├─ fingerprint
-├─ previousFingerprint
-├─ changeClass
-├─ sourceRevision
-├─ approvalState
-└─ observedAt
+ApprovedArtifactChain
+├─ chainId
+├─ requirements
+│  ├─ identity/path
+│  ├─ fingerprint
+│  └─ sourceRevision
+├─ design
+│  ├─ identity/path
+│  ├─ fingerprint
+│  └─ sourceRevision
+├─ plan
+│  ├─ identity/path
+│  ├─ fingerprint
+│  ├─ canonicalSnapshot
+│  └─ sourceRevision
+├─ fingerprintSchema
+├─ projectionSchema
+├─ approvedAt
+└─ status
 ```
 
-The exact storage schema is an implementation-plan decision, but the lineage semantics are mandatory.
+The content fingerprints are mandatory identity. `sourceRevision` is the repository revision when available; when work is not yet committed, the content fingerprint remains the exact revision authority.
 
-### 5.2 Plan authorization
+The exact storage file layout is an implementation detail. The semantic binding above is not.
 
-Plan authorization remains plan-scoped, not task-scoped.
+Human implementation authorization binds this entire chain. A Plan fingerprint by itself is insufficient v5 authority.
 
-Authorization must durably correlate at least:
-
-- authorization identity;
-- session identity where applicable;
-- plan path;
-- plan fingerprint;
-- canonical snapshot;
-- fingerprint schema version;
-- approval timestamp;
-- authorization status.
+### 5.2 Authorization and invalidation — J5D-CHAIN-02
 
 Checkbox progress changes do not invalidate authorization.
 
-Substantive plan changes do invalidate authorization, including changes to:
+Substantive Plan changes invalidate the chain, including changes to:
 
 - task title or scope;
 - Files;
@@ -270,25 +298,57 @@ Substantive plan changes do invalidate authorization, including changes to:
 - Global Constraints;
 - normative task body.
 
-After invalidation, execution may remain fail-open where technically unavoidable, but no new affected task acceptance may occur until reconciliation and human re-approval.
-
-### 5.3 Design changes invalidate downstream authority
-
-If a substantive Design/Spec change occurs after a Plan was approved:
+Substantive upstream changes propagate downward:
 
 ```text
-Design revision changed
+Requirements substantive change
     ↓
-existing Plan becomes stale
+bound Design stale
     ↓
-Plan reconciliation required
+bound Plan stale
     ↓
-human approval required
+affected Justice acceptance blocked
     ↓
-new Plan authorization
+Design reconciliation
+    ↓
+Plan reconciliation
+    ↓
+human approval
+    ↓
+new ApprovedArtifactChain
 ```
 
-Justice MUST NOT allow a previously approved plan fingerprint to authorize implementation against a semantically changed design.
+and:
+
+```text
+Design substantive change
+    ↓
+bound Plan stale
+    ↓
+affected Justice acceptance blocked
+    ↓
+Plan reconciliation
+    ↓
+human approval
+    ↓
+new ApprovedArtifactChain
+```
+
+Execution may remain fail-open where Superpowers permits, but no affected acceptance may use the stale chain.
+
+### 5.3 Superpowers Rulings — J5D-RULING-01
+
+Superpowers v6.4.2 may record `Ruling:` entries and continue workflow execution through ambiguity or a plan defect.
+
+Justice separates workflow continuation from semantic authority:
+
+- a non-substantive Ruling that selects among choices already permitted by the approved chain may be recorded as execution context and does not invalidate authority;
+- a Ruling that changes a normative Requirements/Design/Plan obligation may permit Superpowers execution to continue, but the current Justice chain becomes stale for the affected scope;
+- the Ruling itself does not rewrite or approve Requirements, Design, or Plan;
+- substantive Rulings require artifact reconciliation and the same human re-approval as any other substantive change;
+- a Ruling alone never turns `VIOLATED` or `NOT_PROVEN` into `SATISFIED`.
+
+This preserves Superpowers continuous execution without weakening Justice acceptance.
 
 ---
 
@@ -336,7 +396,7 @@ Justice MUST NOT delete or summarize away normative task content.
 
 ---
 
-## 7. Task identity and correlation
+## 7. Task identity and execution correlation
 
 Justice must correlate four independently evolving records:
 
@@ -345,12 +405,15 @@ Justice must correlate four independently evolving records:
 - OmO/OpenCode execution;
 - review/evidence artifacts.
 
+### 7.1 Semantic TaskIdentity
+
 Task identity MUST NOT depend only on a mutable array index.
 
-The identity model must combine stable plan scope with task semantics, conceptually:
+The identity model combines stable plan scope with task semantics, conceptually:
 
 ```text
 TaskIdentity
+├─ artifactChainId
 ├─ plan identity
 ├─ task ordinal within approved revision
 ├─ normalized task heading
@@ -364,6 +427,77 @@ The exact hash format is implementation detail. The required property is that Ju
 - task from another plan;
 - review for another task;
 - stale review for an older implementation revision.
+
+### 7.2 OmO task_id ownership — J5D-CORR-01
+
+OmO v5 OpenCode `task_id` is a continuation-session identifier (`ses_...`).
+
+Justice semantic `TaskIdentity` is never encoded into that field.
+
+A legitimate incoming OmO `task_id` is preserved unchanged. Justice may record it as `omoContinuationSessionId`, but it is runtime metadata rather than semantic proof.
+
+### 7.3 Canonical sidecar binding — J5D-CORR-02
+
+The canonical execution-call key is:
+
+```text
+ExecutionCallKey = parentSessionId + parentCallId
+```
+
+Both values are observed by the OpenCode `tool.execute.before` hook already used by the adapter.
+
+Justice persists a sidecar binding before relying on execution evidence:
+
+```text
+ExecutionCorrelation
+├─ authorizationId
+├─ artifactChainId
+├─ planIdentity
+├─ taskIdentity
+├─ executionMethod
+├─ parentSessionId
+├─ parentCallId
+├─ childSessionId?
+├─ omoContinuationSessionId?
+├─ dispatchRevision
+└─ status
+```
+
+The in-memory relation maps used by an adapter are caches only; durable `.justice/` state is the recovery authority.
+
+Lifecycle:
+
+```text
+tool.execute.before(task)
+  → persist PENDING correlation for (parentSessionId, parentCallId)
+
+task post-tool metadata and/or observed session.created/session.updated
+  → attach childSessionId when parent/child evidence agrees
+
+post-tool / review / verification
+  → resolve semantic evidence through that correlation
+
+recovery
+  → reconstruct from durable bindings
+```
+
+If child metadata and session-event parentage disagree, the relation is untrusted.
+
+For a continuation, an incoming `ses_...` can reattach to semantic identity only if it matches a previously trusted child-session relation. Otherwise it remains unverified runtime metadata.
+
+Correlation persistence failure does not have to abort OmO execution, but the affected execution cannot become trusted acceptance evidence.
+
+### 7.4 category / subagent_type — J5D-ROUTE-01
+
+Justice follows the OmO public XOR contract; it never intentionally emits both `category` and `subagent_type`.
+
+- caller chose `subagent_type`: preserve it and do not replace/add category;
+- caller chose `category`: preserve/validate it and do not add subagent_type;
+- neither on a new worker call: Justice may add its semantic category only when the authorized workflow/classifier decision is authoritative;
+- both supplied by caller: do not choose between them; record a routing-contract violation and do not trust the call for acceptance;
+- continuation call: do not inject a new semantic target merely to satisfy the new-task contract.
+
+OmO v5.0.1 currently normalizes some invalid both-target inputs defensively. Justice does not rely on that implementation detail as its contract.
 
 ---
 
@@ -543,6 +677,81 @@ This is deliberate: reviewer omission must not be interpreted as success.
 
 Justice may additionally classify non-normative observations, but they cannot substitute for required-clause proof.
 
+### 11.1 Canonical normative-source projection — J5D-PROJ-01
+
+The projection surface is deterministic.
+
+**Requirements**
+
+- Every `JUS5-*` block is a canonical requirement source.
+- The prose obligation in the block is suffix `/0`.
+- Ordered independent bullet/list obligations are suffixes `/1`, `/2`, ... within that Requirements source revision.
+- Because source revision/fingerprint participates in evidence identity, inserting/reordering obligations invalidates old clause evidence rather than aliasing it.
+
+**Design**
+
+- Canonical Design clauses are `INV-01..INV-06` and the `J5D-*` registry IDs in §3.7.
+- Free prose is explanatory unless incorporated by a registry contract.
+- A simple search for `MUST` is never the enumeration authority.
+
+**Plan**
+
+The Superpowers v6 plan projector enumerates normative structural units from at least:
+
+```text
+Goal
+Architecture
+Tech Stack constraints
+Global Constraints
+Task Files
+Task Interfaces
+  Consumes
+  Produces
+exact signatures
+exact values
+test assertions
+expected verification results
+```
+
+The Plan `Spec` field binds the Design artifact in the ApprovedArtifactChain instead of duplicating the Design as another clause.
+
+Each structural paragraph/list item is one canonical Plan clause. If one structural unit contains several obligations, the whole unit is SATISFIED only when all of them are proven; Justice does not silently split ambiguous prose by LLM guesswork.
+
+### 11.2 Projection completeness — J5D-PROJ-02
+
+Every generated Conformance Contract carries:
+
+```text
+projectionStatus =
+  COMPLETE
+  | INCOMPLETE
+  | INVALID
+```
+
+Only `COMPLETE` is acceptance-eligible.
+
+Projection becomes fail-closed when any of the following occurs:
+
+- duplicate canonical clause IDs;
+- required source artifact missing;
+- ambiguous or missing source anchor;
+- unsupported/ambiguous Plan structure;
+- parser/projector failure;
+- ApprovedArtifactChain fingerprint/revision mismatch;
+- any normative structural unit cannot map to exactly one canonical clause.
+
+`INCOMPLETE` and `INVALID` contracts may be inspected but cannot produce TaskAccepted or PlanComplete.
+
+### 11.3 Projection versioning — J5D-PROJ-03
+
+The projection schema/version is part of:
+
+- ApprovedArtifactChain;
+- Conformance Contract;
+- clause evidence.
+
+Evidence from an incompatible projection schema is stale and cannot satisfy current clauses.
+
 ---
 
 ## 12. Early drift prevention
@@ -655,7 +864,7 @@ These produce a blocking finding and are not automatically resolved by doc synch
 
 ## 14. Review ownership and evidence
 
-### 14.1 Superpowers owns review orchestration
+### 14.1 Superpowers owns review orchestration — J5D-REVIEW-01
 
 For subagent-driven-development, Superpowers owns:
 
@@ -667,83 +876,140 @@ implementation
 → final whole-branch review
 ```
 
-Justice v5 MUST NOT dispatch duplicate task/final reviewers merely because an implementation event completed.
+Justice does not dispatch an additional reviewer.
 
-### 14.2 Justice owns review proof
+A **versioned Superpowers ReviewDispatchProfile** recognizes an already-dispatched review. For the v6.4.2 profile, classification combines multiple signals rather than a single keyword:
 
-Justice correlates at least:
+- active execution method and workflow phase;
+- task-tool `parentSessionId + parentCallId`;
+- the current Superpowers review-template structure;
+- concrete task/review-package inputs such as brief/report and reviewed base/head/diff references;
+- active artifact-chain/task identity.
+
+Task review, scoped re-review, and final review have distinct profiles.
+
+If the signals are ambiguous, the execution may continue but the review is untrusted for Justice acceptance.
+
+### 14.2 Conformance Contract delivery — J5D-REVIEW-02
+
+When a supported review requires semantic conformance evidence, Justice enriches **that same existing review call** through the OpenCode `tool.execute.before` mutable task arguments already used by the OpenCode adapter.
+
+Justice appends a read-only Justice review appendix containing:
+
+- review-correlation ID;
+- artifact-chain ID;
+- task identity where applicable;
+- reviewed base/head or candidate revision;
+- a workspace-relative reference to the immutable Conformance Contract;
+- the required structured-result schema.
+
+It does not alter model/provider/subagent/category choice and does not create a second dispatch.
+
+A host/version where the review call cannot be safely recognized and enriched is reported by doctor as review-interop unsupported; semantic review evidence remains `NOT_PROVEN` rather than falling back to a Justice-owned review.
+
+### 14.3 Structured result — J5D-REVIEW-03
+
+The same reviewer final result must contain a machine-readable Justice envelope in addition to the normal Superpowers human-readable report.
+
+Canonical shape:
 
 ```text
-ReviewEvidence
-├─ plan identity
-├─ task identity
-├─ execution method
-├─ review kind
-├─ implementation revision/range
-├─ reviewer execution
-├─ review artifact
-├─ review round
-├─ provenance
-└─ outcome
+JusticeReviewResult
+├─ schemaVersion
+├─ reviewCorrelationId
+├─ reviewKind
+├─ artifactChainId
+├─ taskIdentity?
+├─ reviewedRange
+│  ├─ base
+│  └─ head
+├─ quality
+│  ├─ verdict: approved | needs_fixes
+│  └─ findings[]
+│     ├─ findingId
+│     ├─ severity: critical | important | minor
+│     ├─ disposition
+│     └─ evidenceRefs[]
+└─ clauses[]
+   ├─ clauseId
+   ├─ status: SATISFIED | VIOLATED | NOT_PROVEN
+   └─ evidenceRefs[]
 ```
 
-Review kinds include:
+The exact serialization syntax is an implementation detail, but it must be unambiguously delimited and strictly parsed.
 
-- task-review;
-- scoped-re-review;
-- final-review.
+Initial task review and final review are **full** results for the Conformance Contract supplied to that review.
 
-### 14.3 Current reviewer semantics
+A scoped re-review may be a delta for prior findings/affected clauses. Justice may carry forward earlier SATISFIED clause evidence only when the fix diff is proven not to intersect that clause's recorded evidence scope. If non-intersection cannot be proven, the clause returns to `NOT_PROVEN` until a trusted later full review.
 
-Justice understands the current Superpowers task-review semantics sufficiently to distinguish:
+### 14.4 Invalid/stale result — J5D-REVIEW-04
 
-- Spec Compliance;
-- Critical / Important / Minor findings;
-- Task quality: Approved / Needs fixes.
+A structured review result is rejected when:
 
-Scoped re-review must preserve the distinction between:
+- missing or malformed;
+- correlation ID does not match the observed call;
+- artifact-chain/task identity is wrong;
+- reviewed base/head does not cover the candidate revision;
+- result provenance is not the observed reviewer call;
+- required clause IDs are absent.
 
-- ADDRESSED;
-- NOT ADDRESSED;
-- new breakage;
-- out-of-scope observation.
+Missing required clause results are projected as `NOT_PROVEN`.
 
-A round cap or parked finding MUST NOT be rewritten as “clean”.
+### 14.5 Quality severity and parked findings — J5D-QUALITY-01
+
+Justice v5 canonical severity follows current Superpowers terminology:
+
+```text
+critical | important | minor
+```
+
+Legacy Justice `major` is migration-only and normalizes to `important`.
+
+Gate semantics are fixed:
+
+- open Critical or Important → Justice blocking;
+- Minor → non-blocking for task progression, but durable and mandatory input to final review;
+- `Ruling:` or `parked` → workflow disposition only, not Justice resolution;
+- parked Critical/Important remains blocking until a later trusted review explicitly clears/resolves it or an explicit human review-resolution artifact adjudicates the quality finding;
+- if the finding corresponds to a normative clause, quality adjudication cannot turn `VIOLATED`/`NOT_PROVEN` into `SATISFIED`; the artifact chain/code must be reconciled and re-proven;
+- final review must explicitly disposition all carried Minor/parked findings; any finding still Critical/Important blocks `PlanComplete`.
+
+This allows Superpowers to continue after its round cap while Justice remains fail-closed.
 
 ---
 
 ## 15. Conformance evidence generation without Justice-owned orchestration
 
-Semantic conformance cannot be guaranteed by string comparison alone. Justice therefore separates:
-
-1. **deterministic evidence**, and
-2. **semantic reviewer evidence**.
+Semantic conformance cannot be guaranteed by string comparison alone. Justice separates deterministic and semantic evidence.
 
 Deterministic evidence includes:
 
 - artifact fingerprints;
+- projection completeness/version;
+- execution-call and child-session correlation;
 - revision/range identity;
 - exact signatures/values where machine-checkable;
 - test execution and exit result;
-- file presence/absence;
-- task/review correlation.
+- file presence/absence.
 
-Semantic evidence is produced within the existing Superpowers-owned review lifecycle.
+Semantic evidence is produced only inside the existing Superpowers-owned review lifecycle using §14's interop contract.
 
-Justice may enrich the reviewer task with a read-only Conformance Contract and require a structured clause-by-clause result. This does not make Justice the review orchestrator:
+### 15.1 Canonical evidence transport
 
-- Superpowers still decides when review runs;
-- OmO still executes the reviewer;
-- Justice supplies the acceptance contract and consumes evidence.
+The Conformance Contract is durable Justice sidecar state. The reviewer receives only a read-only reference plus correlation metadata.
 
-The required semantic-review output must allow Justice to correlate each normative clause to:
+The structured reviewer result is captured from the **same observed reviewer call** and persisted into Justice evidence state. This call-bound output is the canonical semantic-review transport; a reviewer-authored file is not required for trust.
 
-- SATISFIED;
-- VIOLATED;
-- NOT_PROVEN;
-- supporting evidence/reference.
+### 15.2 Evidence storage — J5D-STORAGE-01
 
-Justice MUST treat incomplete structured output as NOT_PROVEN for the missing required clauses.
+Current Justice has a Linux x64/glibc `openat2`/`renameat2` reserved-review-artifact mechanism. v5 treats it as an optional secure capability for file-based artifact handoff/import, not as a prerequisite for directly observed call-bound structured output.
+
+Rules:
+
+- directly observed, strictly parsed, correctly correlated structured output may be trusted and persisted atomically on supported Justice state storage;
+- an ordinary file may be retained as untrusted/historical input but is never promoted to trusted evidence merely because native reservation is unavailable;
+- if a required evidence path depends on secure file reservation and that capability is unavailable, there is no insecure authoritative fallback — the evidence is `NOT_PROVEN`;
+- doctor reports secure-artifact and review-interop capabilities separately.
 
 ---
 
@@ -979,18 +1245,61 @@ If Justice retains error patterns, they must be synchronized to the OmO v5 model
 
 ---
 
-## 24. Configuration contract
+## 24. Configuration contract — J5D-CONFIG-01
 
-For OmO v5, `omo.jsonc` is the current configuration source of truth.
+Justice treats **OmO v5 effective configuration resolution** as configured-state authority, not an arbitrary single file.
 
-Justice documentation and remediation MUST NOT present:
+### 24.1 File-layer precedence
 
-- `oh-my-opencode.jsonc`;
-- `oh-my-openagent.jsonc`
+When Justice cannot consume a compatible OmO effective-config API and must inspect the filesystem, it follows the OmO v5 loader order:
 
-as current primary configuration files.
+```text
+lowest
+  ~/.omo/omo.jsonc
+    else ~/.omo/omo.json
 
-Legacy files may be detected and reported as migration inputs.
+  farthest ancestor/.omo/omo.jsonc
+    else .json
+  ...
+  nearest project/.omo/omo.jsonc
+    else .json
+highest
+```
+
+The home directory is the user layer and is not re-read as a project layer.
+
+Invalid/unreadable layers and loader diagnostics must be represented consistently with OmO's effective loader semantics rather than silently treated as valid configuration.
+
+### 24.2 Effective-view resolution
+
+After file-layer merge, the OpenCode configured view resolves:
+
+```text
+shared base
+→ [opencode]
+→ selected profile base
+→ selected profile [opencode]
+```
+
+Profile selection follows the OmO v5 profile resolver (explicit profile where provided, then supported environment/profile sources such as `OMO_PROFILE`, legacy `OCX_PROFILE`, and OpenCode profile directory inference).
+
+### 24.3 Doctor representation
+
+Doctor distinguishes:
+
+```text
+source layers + diagnostics
+        ↓
+effective configured value
+        ↓
+runtime applied value (if authoritatively available)
+        ↓
+observed execution value
+```
+
+It never infers applied/observed state merely from a source file.
+
+Legacy `oh-my-opencode.jsonc` / `oh-my-openagent.jsonc` files are migration inputs only and never current configured-state authority.
 
 ---
 
@@ -1034,19 +1343,57 @@ A nominally expected version missing a required capability is unsupported.
 
 ---
 
-## 26. Recovery and compaction
+## 26. Recovery, persistence versioning, and v4 migration
 
-After compaction/restart/continuation, Justice must recover at least:
+### 26.1 v5 authoritative state — J5D-PERSIST-01
 
-- active plan authorization;
-- artifact lineage;
-- plan/task identity;
-- review correlation;
+Every authoritative v5 persisted record is governed by an explicit v5-compatible schema version. The exact split into files is implementation detail; authority semantics are not.
+
+v5 recovery reconstructs at least:
+
+- ApprovedArtifactChain;
+- plan authorization;
+- ExecutionCorrelation bindings;
+- projection schema/status;
+- review/evidence correlation;
 - acceptance state.
 
-Justice must also consult Superpowers workflow state sufficiently to avoid re-accepting or mis-correlating stale work.
+### 26.2 v4 authority policy
 
-Conflicts between Justice state and Superpowers ledger must be surfaced; neither side is silently overwritten.
+Migration is conservative and non-destructive.
+
+**v4 plan authorization**
+
+A v4 binding such as `justice-plan-v1` proves only the old plan-level contract. It is not automatically promoted to a v5 artifact-chain authorization. It remains historical until the current Requirements, Design, and Plan are reconciled and explicitly re-approved.
+
+**v4 review dispatch/scheduling state**
+
+Old Justice-owned review scheduling/dispatch records are historical only. v5 never resumes review orchestration from them and they cannot satisfy v5 review gates.
+
+**v4 observations/evidence**
+
+Raw observations may be retained/imported as historical or untrusted inputs. Evidence without v5 artifact-chain ID, execution correlation, projection schema, and canonical clause IDs cannot satisfy v5 acceptance.
+
+### 26.3 Unknown/newer/incompatible state
+
+For an unknown, newer, malformed, or failed migration:
+
+- preserve the original state rather than rewriting/downgrading it;
+- emit a doctor/recovery diagnostic;
+- do not fabricate Requirements/Design lineage;
+- mark the affected authoritative domain unavailable;
+- keep runtime execution fail-open where safe;
+- keep affected Justice acceptance fail-closed.
+
+Migration never creates trusted v5 evidence solely from absence of a detected conflict.
+
+### 26.4 Recovery conflict — J5D-REC-01
+
+Justice also reads enough Superpowers workflow state to prevent stale re-correlation and duplicate acceptance.
+
+When Superpowers ledger and Justice semantic state disagree, neither silently overwrites the other. Justice reports both claims and blocks any acceptance that depends on the unresolved conflict.
+
+Ephemeral adapter relation maps are never recovery authority; durable v5 ExecutionCorrelation is.
 
 ---
 
@@ -1177,6 +1524,20 @@ The v5 implementation plan must include E2E coverage for at least the following 
 24. compaction retains plan/task/review correlation.
 25. completed work is not re-correlated to another plan after recovery.
 26. Justice/Superpowers state conflict is surfaced rather than silently resolved.
+27. OmO `task_id=ses_...` is preserved and never replaced with Justice TaskIdentity.
+28. a task call is recoverably correlated by durable parent-session/parent-call sidecar binding.
+29. both-target `category + subagent_type` input is not silently resolved by Justice.
+30. missing/ambiguous execution correlation leaves evidence NOT_PROVEN.
+31. Requirements change stales Design + Plan chain authority.
+32. a substantive Superpowers Ruling can continue execution but cannot authorize acceptance.
+33. clause projection with duplicate/missing/ambiguous source becomes INCOMPLETE/INVALID and blocks.
+34. the v6.4.2 task reviewer receives the Conformance Contract through the same observed review dispatch.
+35. missing/malformed structured review result blocks acceptance.
+36. parked Important/Critical remains blocking until trusted later disposition/human quality adjudication.
+37. OmO effective config resolution honors user/project plus harness/profile precedence.
+38. v4 plan-only authorization is not promoted automatically to v5 artifact-chain authority.
+39. v4 review-dispatch state cannot resume or satisfy v5 review gates.
+40. unknown/newer persistent schema is preserved and acceptance fails closed.
 
 ---
 
@@ -1200,6 +1561,14 @@ The implementation satisfies this design only if all of the following are true:
 14. unauthorized semantic drift is zero at `PlanComplete`.
 15. missing required evidence is zero at `PlanComplete`.
 16. blocking quality findings are zero at `PlanComplete`.
+17. OmO continuation `task_id` ownership never conflicts with Justice semantic identity.
+18. execution/review evidence is bound through durable call/session correlation rather than wire-payload overloading.
+19. ApprovedArtifactChain binds exact Requirements + Design + Plan revisions.
+20. normative projection is COMPLETE under a versioned schema before acceptance.
+21. Superpowers review interop obtains structured clause evidence without Justice-owned review dispatch.
+22. parked/Ruling semantics cannot silently remove blocking quality/conformance state.
+23. doctor reports effective OmO configuration rather than a single-file approximation.
+24. v4 persistent authority cannot be mistaken for v5 authority after upgrade.
 
 ---
 
