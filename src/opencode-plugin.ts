@@ -6,6 +6,7 @@ import {
   type OpenCodePluginInit,
 } from "./runtime/opencode-adapter";
 import { debugLog } from "./runtime/debug";
+import { registerJusticeCommands } from "./runtime/command-registration";
 import type { HookResponse, ReviewArtifactWriteSkipReason } from "./core/types";
 
 class ReviewArtifactWriteCancelled extends Error {
@@ -50,6 +51,20 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
   debugLog("Plugin factory invoked, adapter created.");
   return {
     tool: adapter.getTools(),
+    config: async (config): Promise<void> => {
+      try {
+        await registerJusticeCommands(config, async (level, message, ...args) =>
+          adapter.log(level, message, ...args),
+        );
+      } catch (error) {
+        await adapter.log(
+          "warn",
+          `[Justice] Failed to auto-register slash commands: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    },
     event: async (input): Promise<void> => {
       await adapter.onEvent(
         input as {

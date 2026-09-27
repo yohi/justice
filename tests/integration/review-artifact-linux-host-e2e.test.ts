@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -191,4 +191,50 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (
     },
     150_000,
   );
+});
+
+describe.skipIf(!RUN_LIVE_HOST_E2E)("Justice slash command registration on supported host", () => {
+  it.each([
+    ["justice-start", "/justice-start host registration check"],
+    ["justice-implement", "/justice-implement --plan docs/host-plan.md --approved"],
+  ] as const)("loads and invokes %s without a configured command definition", async (_name, command) => {
+    await supportedHostVersion();
+    const rootDir = await mkdtemp(`${tmpdir()}/justice-command-host-e2e-`);
+    try {
+      const planPath = "docs/host-plan.md";
+      await mkdir(resolve(rootDir, "docs"), { recursive: true });
+      await writeFile(resolve(rootDir, planPath), "## Task 1: host task\n- [ ] verify\n", "utf8");
+
+      let stdout: string;
+      try {
+        ({ stdout } = await exec("opencode", [
+          "run", "--format", "json", "--dir", rootDir, command,
+        ], {
+          cwd: rootDir,
+          timeout: 120_000,
+          maxBuffer: 8 * 1024 * 1024,
+          env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
+        }));
+      } catch (cause: unknown) {
+        throw new Error(`unsupported setup: host could not execute ${_name}`, { cause });
+      }
+
+      const logs = new ObservationLogStore(new NodeFileSystem(rootDir), new NodeFileSystem(rootDir), "w-command-e2e");
+      const records = await logs.readAll();
+      if (_name === "justice-start") {
+        if (!records.some((record) => record.recordType === "observation" && record.kind === "workflow_started")) {
+          throw new Error("unsupported setup: justice-start did not produce a workflow_started observation");
+        }
+      } else {
+        const calls = hostTools(stdout);
+        const task = calls.find((tool) => tool.tool === "task");
+        if (task === undefined) {
+          throw new Error("unsupported setup: justice-implement did not reach a real task() invocation");
+        }
+        expect(task.input.prompt).toEqual(expect.stringContaining("[JUSTICE: IMPLEMENTATION]"));
+      }
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }, 150_000);
 });
