@@ -704,7 +704,7 @@ For each host case, the harness:
 
 ```bash
 opencode run --auto --format json --model "$JUSTICE_HOST_TEST_MODEL" \
-  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke.md
+  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke-plan.md
 ```
 
 4. continues the same isolated workspace session with `opencode run --continue ...` and a fixed prompt that requests exactly one `task()` delegation.
