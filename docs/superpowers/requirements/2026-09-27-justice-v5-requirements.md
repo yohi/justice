@@ -250,12 +250,19 @@ Justice custom categories remain supported:
 
 Category-to-model/provider mapping remains OmO configuration responsibility.
 
+Justice distinguishes two category namespaces:
+
+- `SpCategory`: the closed Justice-generated semantic category union (`sp-*`);
+- caller-owned OmO category names: an open non-empty string namespace that may include OmO built-ins or user-defined categories from effective `omo.jsonc`.
+
+The static current built-in category list is compatibility/diagnostic vocabulary only. It is not the complete authority for caller-owned OmO category names.
+
 ### JUS5-CAT-05 — provenance-aware Superpowers routing translation
 
 Justice must distinguish caller provenance before applying the OmO XOR contract.
 
 - a non-Superpowers caller's explicit `subagent_type` remains caller-owned and is preserved;
-- an explicit caller `category` remains caller-owned and is preserved/validated;
+- an explicit caller `category` is accepted as a caller-owned non-empty OmO category name and preserved byte-for-byte; Justice must not reject or translate it merely because it is outside Justice's static built-in category vocabulary;
 - a **recognized Superpowers new-worker dispatch** using the OpenCode V1 generic compatibility marker `subagent_type="general"` is not treated as a semantic subagent choice; Justice removes that marker and emits exactly one authoritative Justice semantic category;
 - a recognized Superpowers explicit specialized non-generic `subagent_type` (for example `explore`) remains an explicit specialized route and is preserved without Justice category replacement;
 - an OmO continuation `task_id=ses_...` remains continuation-owned and must not receive a newly selected worker category;
@@ -346,44 +353,89 @@ Desired, configured, applied, and observed controller state must remain distinct
 
 ### JUS5-ACT-01 — Superpowers methodology activation bridge
 
-Justice must bridge authorized implementation intent into activation of exactly one supported Superpowers execution method:
+Justice must bridge an authoritative implementation-method selection into activation of exactly one supported Superpowers execution method:
 
 - `subagent-driven-development`;
 - `executing-plans`.
 
-Justice owns the activation bridge, not the internal methodology. Once the selected Superpowers skill is active, Superpowers remains authoritative for task/review/fix/final progression.
+Justice owns the activation bridge, not methodology selection or internal workflow progression. Once the selected Superpowers skill is active for the current controller session, Superpowers remains authoritative for task/review/fix/final progression.
 
-### JUS5-ACT-02 — execution-method selection authority
+### JUS5-ACT-02 — method selection is distinct from activation
 
-Justice must not invent an independent execution-method policy.
+Justice must represent these as separate states:
 
-The authoritative method source order is:
+```text
+MethodSelection
+= which supported Superpowers methodology is selected
 
-1. an explicit user/command selection for the current implementation start;
-2. a trusted recovered active execution method for the same authorized artifact chain/session;
-3. an observed Superpowers execution-method selection for the current implementation start.
+ActivationEvidence
+= proof that the selected methodology was successfully activated
+  in the current controller session
+```
 
-If none exists, Justice returns `method_selection_required` / unavailable activation. It must not silently default to direct OmO task execution or fabricate SDD/inline selection.
+The authoritative selection source order is:
 
-An explicit inline selection maps to `executing-plans`; an explicit SDD selection maps to `subagent-driven-development`. Capability incompatibility may make that requested activation unavailable, but Justice must not silently substitute the other method.
+1. explicit user/command selection for the current implementation start;
+2. trusted recovered **method selection** from the same active authorization;
+3. otherwise `method_selection_required`.
 
-### JUS5-ACT-03 — activation evidence and continuation
+There is no pre-activation `observedSuperpowersMethod` source. A native `skill` invocation is activation evidence, not a separate method-selection event.
 
-For the OpenCode harness, activation is delivered through the controller workflow directive/native skill surface and must be observable as the selected Superpowers skill before an implementation worker call can contribute trusted evidence.
+An explicit inline selection maps to `executing-plans`; an explicit SDD selection maps to `subagent-driven-development`. Justice must not infer a default from task shape or capability.
 
-Recovery reuses a trusted persisted/observed execution method bound to the same active authorization; it does not reselect a method from heuristics.
+### JUS5-ACT-03 — current-session activation evidence and recovery
 
-Justice must not interpret an OmO child-session continuation as Superpowers methodology activation.
+For the OpenCode harness, the authoritative activation event is a successful native `skill` tool execution whose:
 
-### JUS5-ACT-04 — activation failure
+- `args.name` exactly equals the selected `SuperpowersExecutionMethod`;
+- parent/controller `sessionID` equals the current controller session;
+- active `authorizationId` equals the authorization being implemented.
 
-If a selected Superpowers execution method is unavailable, cannot be activated, or cannot be observed as active when required:
+Trusted activation evidence must bind at least:
+
+```text
+authorizationId
+sessionId
+method
+skillCallId
+observedAt
+```
+
+An exact same-session persisted activation record may be reused after restart only when `authorizationId + sessionId + method` all match.
+
+Cross-session recovery may recover **method selection** from trusted prior Justice execution state for the same authorization, but it never proves current-session activation:
+
+```text
+prior session selected/used method
+→ recovered method selection
+→ current session needs_activation
+→ fresh successful skill(name=selected method)
+→ current-session ActivationEvidence
+```
+
+OmO child-session continuation is never Superpowers methodology activation.
+
+### JUS5-ACT-04 — activation decisions, conflicts, and failure
+
+After method selection:
+
+- matching current-session ActivationEvidence → `already_active`; Justice must not request duplicate skill invocation;
+- no matching current-session evidence + required host capability available → `needs_activation`; invoke exactly the selected skill;
+- required capability unavailable → `unavailable`;
+- no selection → `method_selection_required`.
+
+Conflict policy is exact:
+
+- an explicit current selection is authoritative over stale recovered selection; if existing current-session activation evidence is for another method, it is not reused and the explicit method requires fresh activation;
+- without an explicit current selection, a recovered selection that conflicts with current-session activation evidence is `conflict` / untrusted and must not be silently precedence-resolved;
+- activation evidence with mismatched authorization or session identity is untrusted and cannot prove activation.
+
+If activation is unavailable, conflicting, or not proven:
 
 - Justice must not silently bypass Superpowers by treating direct OmO implementation as authorized methodology execution;
 - runtime may remain fail-open only where the existing runtime policy permits;
 - affected implementation/review evidence remains `NOT_PROVEN`;
-- TaskAccepted / PlanComplete remain blocked until supported activation evidence exists.
-
+- TaskAccepted / PlanComplete remain blocked until valid current-session activation evidence exists.
 ---
 
 ## 9. Plan and task semantics
@@ -626,7 +678,7 @@ Justice follows the OmO public XOR contract and must not create a payload contai
 The boundary is provenance-aware:
 
 - **non-Superpowers explicit `subagent_type`**: preserve it; do not add/replace it with a Justice category;
-- **explicit `category`**: preserve/validate it; do not add `subagent_type`;
+- **explicit `category`**: if it is a non-empty string, preserve it byte-for-byte as a caller-owned OmO category name; do not require membership in Justice's static built-in union and do not add `subagent_type`;
 - **recognized Superpowers new-worker `subagent_type="general"`**: treat `general` as the OpenCode compatibility marker, remove `subagent_type`, and emit the authoritative Justice semantic category from JUS5-CAT-06..09;
 - **recognized Superpowers explicit specialized non-generic `subagent_type`**: preserve the specialized route and do not add a Justice category;
 - **neither target on a recognized new worker**: Justice may emit the same authoritative semantic category;
