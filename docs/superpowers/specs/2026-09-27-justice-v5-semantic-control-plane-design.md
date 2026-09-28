@@ -925,12 +925,15 @@ Evidence chain:
    - task args are mutable through the before-hook output;
    - `tool.execute.after` returns on the same call and exposes child-session metadata;
    - parent/child session correlation is observable through hook metadata and session events.
-2. The three OpenCode files that implement this exact path are byte-identical between **v1.18.29** and **v1.18.31**:
+2. The OpenCode runtime/plugin files that implement this path are byte-identical between **v1.18.29** and **v1.18.31**:
    - `packages/opencode/src/session/tools.ts` — blob `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`;
+   - `packages/opencode/src/session/prompt.ts` — blob `0f85d44f209ba792065aeb951f0bd2e12b59fae8`;
    - `packages/opencode/src/tool/task.ts` — blob `d8ca640cfba9a52d97e5180fda0ffa719910592b`;
    - `packages/plugin/src/index.ts` — blob `edfa0139dfcaf0e877ab906fabe8e0527afc3915`.
-3. Source-contract verification on v1.18.31 confirms the before-hook receives the same mutable `args` object subsequently passed to `item.execute(args, ctx)`, the task implementation consumes `params.prompt` via `ops.resolvePromptParts(params.prompt)`, and the after-hook is emitted for the same parent `sessionID + callID`.
-4. Superpowers v6.4.2 defines task review, scoped re-review, and final whole-branch review as `Subagent (general-purpose)` dispatches, and its OpenCode V1 mapping resolves that form to the native `task` tool with `subagent_type: "general"`.
+   The v1.18.31 release tag resolves to commit `014614d35b397775e5d397a490fc72368c894ec2`.
+3. Source-contract verification on v1.18.31 confirms the before-hook receives the mutable `args` object, the native task path consumes the resulting `params.prompt` through `ops.resolvePromptParts(params.prompt)`, and the after-hook is emitted for the same parent `sessionID + callID` with TaskTool child-session metadata.
+4. Superpowers v6.4.2 defines task review, scoped re-review, and final whole-branch review as `Subagent (general-purpose)` dispatches, and its OpenCode V1 mapping resolves every one of those reviewer dispatches to the same native `task` tool with `subagent_type: "general"`. The review kind changes prompt content and review-package inputs; it does not select a reviewer-specific host execution path.
+5. This is a compositional compatibility proof: the hook/task path was empirically observed on 1.18.29, that exact path is source-identical on 1.18.31, and all three Superpowers v6.4.2 reviewer kinds map to that one path. The implementation plan therefore treats three-kind runtime replay as **regression evidence**, not as the first architecture-feasibility decision.
 
 Therefore the supported v5 baseline is fixed as:
 
