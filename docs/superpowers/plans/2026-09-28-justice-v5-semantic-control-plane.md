@@ -856,7 +856,7 @@ type ResolveOmoEffectiveConfigInput = {
 
 ### Task 1: Lock the Race-Free Review-Interop Contract as a Runtime Regression Gate
 
-**Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, J5D-REVIEW-01..04.
+**Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, JUS5-CAT-05, JUS5-CORR-06, J5D-REVIEW-01..04, J5D-ROUTE-01.
 
 **Files:**
 - Create: `tests/integration/justice-v5-review-interop-host.test.ts`
@@ -897,7 +897,7 @@ In `tests/integration/justice-v5-review-interop-host.test.ts`:
 - `session_get_fields_response_uses_data_as_authoritative_session`
 - `session_get_error_response_blocks_injection`
 - `session_get_transport_failure_blocks_injection`
-- `review_interop_preserves_original_prompt_and_subagent_type_general`
+- `review_interop_supports_same_call_general_to_category_translation_without_duplicate_dispatch`
 - `synthetic_review_part_uses_actual_child_message_identity`
 - `review_result_is_attributed_to_same_parent_call_and_child_session`
 
@@ -909,7 +909,9 @@ Assertions:
 - fields-response success reads `lookup.data`; SDK/HTTP error response, `data` absence, transport exception, parent mismatch, or zero/multiple pending matches produces no appendix and untrusted evidence;
 - synthetic Part has `prt_justice_review_<uuid>`, actual child `sessionID`, actual child user-message `messageID`, `type: "text"`, and `synthetic: true`;
 - original reviewer content remains present;
-- caller routing remains `subagent_type: "general"`; model/provider/category are not rewritten;
+- the fixture proves in-place parent-args translation can remove `subagent_type="general"`, add exactly one category, and reach the same executor call without creating another dispatch;
+- the translated payload never contains both category and subagent_type;
+- model/provider/variant are not rewritten;
 - parent after-hook/result and child session are attributable to the same review correlation;
 - no duplicate Justice reviewer is created.
 
@@ -927,7 +929,7 @@ The regression file asserts `opencode --version == 1.18.31` for this baseline re
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected: all twelve cases PASS.
+Expected: all twelve cases PASS, including same-call generic-placeholder translation capability.
 
 Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not make async session-event completion a delivery prerequisite.
 
