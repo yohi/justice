@@ -303,11 +303,19 @@ type PendingReviewCorrelation = {
 
 type ReviewChildBindingResult =
   | { readonly kind: "bound" | "idempotent"; readonly correlation: PendingReviewCorrelation }
-  | { readonly kind: "lookup_failed"; readonly reason: string }
+  | {
+      readonly kind: "lookup_failed";
+      readonly reason: "sdk_error_response" | "missing_data" | "transport_error";
+      readonly details?: string;
+    }
   | { readonly kind: "parent_missing"; readonly childSessionId: string }
   | { readonly kind: "not_found"; readonly reason: string }
   | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] }
-  | { readonly kind: "conflict"; readonly reason: string };
+  | {
+      readonly kind: "conflict";
+      readonly reason: "child_id_mismatch" | "incompatible_existing_binding";
+      readonly details?: string;
+    };
 
 type ParseReviewResult =
   | { readonly kind: "valid"; readonly result: JusticeReviewResult }
@@ -319,20 +327,42 @@ type ParseReviewResult =
 ### Task 9 owns final-review evidence closure
 
 ```ts
+type FinalFixDiffEvidence = {
+  readonly base: string;
+  readonly head: string;
+  readonly changedPaths: readonly string[];
+};
+
+type RevisionDiffResult =
+  | { readonly kind: "resolved"; readonly evidence: FinalFixDiffEvidence }
+  | {
+      readonly kind: "failed";
+      readonly reason:
+        | "git_failed"
+        | "non_ancestor_range"
+        | "malformed_output"
+        | "unsupported_status"
+        | "unsafe_path";
+      readonly details: readonly string[];
+    };
+
+interface RevisionDiffProvider {
+  resolve(base: string, head: string): Promise<RevisionDiffResult>;
+}
+
 type FinalReviewEvidenceClosure = {
   readonly schemaVersion: "justice-final-review-closure-v1";
   readonly artifactChainId: string;
   readonly candidateHead: string;
   readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
   readonly finalFixWave?: {
-    readonly base: string;
-    readonly head: string;
+    readonly diffEvidence: FinalFixDiffEvidence;
     readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
   };
   readonly carriedClauseIds: readonly string[];
   readonly reProvenClauseIds: readonly string[];
   readonly clauseResults: readonly ClauseResult[];
-  readonly unresolvedFindingIds: readonly string[];
+  readonly findings: readonly ReviewFindingV5[];
   readonly diagnostics: readonly string[];
 };
 
@@ -342,11 +372,12 @@ type BuildFinalReviewEvidenceClosureResult =
       readonly kind: "blocked";
       readonly closure: FinalReviewEvidenceClosure;
       readonly notProvenClauseIds: readonly string[];
+      readonly blockingFindingIds: readonly string[];
       readonly reasons: readonly [string, ...string[]];
     };
 ```
 
-A closure may extend Candidate A to Candidate B only through the single Superpowers final fix wave + exactly one scoped re-review. It never causes Justice to dispatch a second full reviewer.
+A closure may extend Candidate A to Candidate B only through the single Superpowers final fix wave + exactly one scoped re-review. The core never accepts caller-supplied arbitrary changed-file lists; exact range evidence comes from `RevisionDiffProvider`. Justice never dispatches a second full reviewer.
 
 ### Major task-local input/output contracts
 
@@ -493,6 +524,10 @@ type ResolveReviewChildInput = {
   readonly pendingReviews: readonly PendingReviewCorrelation[];
 };
 
+type SessionGetFieldsResult = Awaited<
+  ReturnType<JusticePluginClient["session"]["get"]>
+>;
+
 type BuildReviewAppendixPartInput = {
   readonly input: ChatMessageInput;
   readonly output: ChatMessageOutput;
@@ -519,9 +554,8 @@ type PlanConformanceInput = {
   readonly artifactChain: ApprovedArtifactChain;
   readonly contract: ConformanceContract;
   readonly taskVerdicts: readonly ConformanceGateVerdict[];
-  readonly finalClauseResults: readonly ClauseResult[];
+  readonly finalReviewClosure: FinalReviewEvidenceClosure;
   readonly qualityFindings: readonly ReviewFindingV5[];
-  readonly reviewedRange?: { readonly base: string; readonly head: string };
   readonly candidateHead: string;
 };
 ```
@@ -565,8 +599,9 @@ type ResolveOmoEffectiveConfigInput = {
 - Consumes the fixed Design §14.2 contract:
   - parent `tool.execute.before` creates pending review correlation;
   - child `chat.message` is awaited;
-  - the fixture plugin calls `client.session.get({ path: { id: input.sessionID } })` inside `chat.message`;
-  - authoritative `Session.parentID` selects exactly one pending parent review;
+  - the fixture plugin calls `client.session.get({ path: { id: input.sessionID } })` inside `chat.message` using default fields-response semantics;
+  - only `lookup.data` is treated as the authoritative Session; `lookup.error`, missing `data`, or thrown transport errors block injection;
+  - authoritative `lookup.data.parentID` selects exactly one pending parent review;
   - `session.created/session.updated` may be arbitrarily delayed and are not required for injection;
   - one fully formed synthetic text Part is appended in place;
   - parent `tool.execute.after` corroborates the same review relation.
@@ -590,6 +625,9 @@ In `tests/integration/justice-v5-review-interop-host.test.ts`:
 - `child_chat_message_can_bind_via_authoritative_session_lookup_without_waiting_for_event_hook`
 - `delayed_session_created_plugin_event_does_not_lose_review_appendix`
 - `session_lookup_parent_mismatch_blocks_injection`
+- `session_get_fields_response_uses_data_as_authoritative_session`
+- `session_get_error_response_blocks_injection`
+- `session_get_transport_failure_blocks_injection`
 - `review_interop_preserves_original_prompt_and_subagent_type_general`
 - `synthetic_review_part_uses_actual_child_message_identity`
 - `review_result_is_attributed_to_same_parent_call_and_child_session`
@@ -599,7 +637,7 @@ Assertions:
 - parent `sessionID + callID` are observed;
 - the `chat.message` hook can bind from awaited `session.get` even when no Justice event callback has completed;
 - delayed `session.created` handling does not change whether the appendix reaches the reviewer;
-- lookup failure/parent mismatch/zero-or-multiple pending matches produces no appendix and untrusted evidence;
+- fields-response success reads `lookup.data`; SDK/HTTP error response, `data` absence, transport exception, parent mismatch, or zero/multiple pending matches produces no appendix and untrusted evidence;
 - synthetic Part has `prt_justice_review_<uuid>`, actual child `sessionID`, actual child user-message `messageID`, `type: "text"`, and `synthetic: true`;
 - original reviewer content remains present;
 - caller routing remains `subagent_type: "general"`; model/provider/category are not rewritten;
@@ -620,7 +658,7 @@ The regression file asserts `opencode --version == 1.18.31` for this baseline re
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected: all nine cases PASS.
+Expected: all twelve cases PASS.
 
 Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not make async session-event completion a delivery prerequisite.
 
@@ -1129,7 +1167,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 ---
 
-### Task 7: Implement Versioned Superpowers Review Interop, Authoritative Child Lookup, and Strict JusticeReviewResult Parsing
+### Task 7: Implement Versioned Superpowers Review Interop, Exact SDK Child Lookup, and Strict JusticeReviewResult Parsing
 
 **Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, J5D-REVIEW-01..04.
 
@@ -1144,12 +1182,12 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 **Interfaces:**
 - Consumes `TaskIdentity` / `ReviewFindingV5` from Task 2 and `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
-- Changes `OpenCodePluginInit.client` from an app-only hand-written shape to the exact SDK-derived structural capability:
+- Changes `OpenCodePluginInit.client` from an app-only hand-written shape to:
   ```ts
   type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
   ```
-- `chat.message` input/output types are derived directly from `Hooks["chat.message"]`, not re-declared.
-- Owns `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `ReviewChildBindingResult`, and `ParseReviewResult`.
+- `chat.message` input/output types are derived directly from `Hooks["chat.message"]`.
+- Owns registry-defined `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `ReviewChildBindingResult`, `ParseReviewResult`, and `SessionGetFieldsResult`.
 - Produces:
   ```ts
   type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
@@ -1174,7 +1212,10 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
     readonly contractId: string;
     readonly contractDigest: string;
     readonly reviewedRange: { readonly base: string; readonly head: string };
-    readonly quality: { readonly verdict: "approved" | "needs_fixes"; readonly findings: readonly ReviewFindingV5[] };
+    readonly quality: {
+      readonly verdict: "approved" | "needs_fixes";
+      readonly findings: readonly ReviewFindingV5[];
+    };
     readonly clauses: readonly ClauseResult[];
   };
   ```
@@ -1184,6 +1225,41 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
   - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
   - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
+- `resolveReviewChildFromSession` algorithm is binding:
+  ```ts
+  try {
+    const lookup = await input.client.session.get({
+      path: { id: input.childSessionId },
+    });
+
+    if (lookup.data === undefined) {
+      return {
+        kind: "lookup_failed",
+        reason: lookup.error === undefined
+          ? "missing_data"
+          : "sdk_error_response",
+      };
+    }
+
+    const childSession = lookup.data;
+    if (childSession.id !== input.childSessionId) {
+      return { kind: "conflict", reason: "child_id_mismatch" };
+    }
+    if (childSession.parentID === undefined) {
+      return { kind: "parent_missing", childSessionId: input.childSessionId };
+    }
+
+    // match exactly one compatible pending review by parentSessionId
+  } catch (error) {
+    return {
+      kind: "lookup_failed",
+      reason: "transport_error",
+      details: String(error),
+    };
+  }
+  ```
+- The fields-response wrapper itself is never treated as a Session.
+- zero compatible matches → `not_found`; multiple compatible matches → `ambiguous`; incompatible existing binding → `conflict`.
 - `buildJusticeReviewAppendixPart` MUST return exactly:
   ```ts
   {
@@ -1197,6 +1273,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   ```
   and only when `input.sessionID === output.message.sessionID`.
 - Serialization: exactly one final fenced `justice-review-result-v1` JSON block.
+- Reviewer-produced findings use `open | resolved | parked`; `human_adjudicated` can only be applied later by the trusted human resolution path.
 
 - [ ] **Step 1: Write RED recognition/adapter tests**
 
@@ -1205,6 +1282,9 @@ In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `child_chat_message_resolves_parent_with_awaited_session_get_before_injection`
 - `delayed_session_event_does_not_block_or_enable_review_injection`
 - `session_lookup_parent_mismatch_blocks_review_injection`
+- `session_get_fields_response_uses_data_as_authoritative_session`
+- `session_get_error_response_blocks_injection`
+- `session_get_transport_failure_blocks_injection`
 - `injects_conformance_contract_into_authoritatively_bound_child_chat_message`
 - `synthetic_review_part_uses_output_message_session_and_message_ids`
 
@@ -1215,8 +1295,9 @@ Also recognize all three v6.4.2 review profiles using multiple markers and concr
 In `tests/core/review-result.test.ts`:
 - `missing_required_clause_result_becomes_not_proven`
 - `missing_or_malformed_review_result_is_rejected`
+- `reviewer_cannot_assert_human_adjudicated_disposition`
 
-Also cover multiple blocks, wrong correlation/chain/task, wrong range, wrong contract digest, evidence scope validation, and scoped re-review deltas.
+Also cover multiple blocks, wrong correlation/chain/task, wrong range, wrong contract digest, evidence-scope validation, and scoped re-review deltas.
 
 - [ ] **Step 3: Run RED tests**
 
@@ -1226,18 +1307,18 @@ Expected: FAIL.
 
 - [ ] **Step 4: Implement the fixed review transport**
 
-At parent `tool.execute.before`, recognize the review and add exactly one `PendingReviewCorrelation` to the adapter's current pending-review index keyed by `parentSessionId + parentCallId`. This short-lived index is not recovery authority; losing it before child injection yields no injection / `NOT_PROVEN`.
+At parent `tool.execute.before`, recognize the review and add exactly one `PendingReviewCorrelation` to the current pending-review index keyed by `parentSessionId + parentCallId`.
 
 At child `chat.message`:
 1. use `input.sessionID`;
-2. await `client.session.get({ path: { id: input.sessionID } })`;
-3. require matching returned child ID and `parentID`;
-4. match exactly one pending review for that parent;
-5. build/append the exact synthetic text Part to the existing `output.parts` array.
+2. await the SDK fields response from `client.session.get({ path: { id: input.sessionID } })`;
+3. catch transport/runtime exceptions as `lookup_failed("transport_error")`;
+4. inspect `lookup.data`; error response or absent data is `lookup_failed`;
+5. validate `lookup.data.id` and `lookup.data.parentID`;
+6. match exactly one pending review for that parent;
+7. build/append the exact synthetic text Part to the existing `output.parts` array.
 
-`session.created/session.updated` only corroborate/cache this relation. They are never an injection prerequisite.
-
-At parent `tool.execute.after`, corroborate child metadata and invalidate mismatches.
+`session.created/session.updated` only corroborate/cache this relation. At parent `tool.execute.after`, corroborate child metadata and invalidate mismatches.
 
 Do not create `sp-review` / `sp-final-review` calls and do not modify model/provider/subagent/category routing.
 
@@ -1248,7 +1329,8 @@ Expected: PASS and exactly one reviewer call per Superpowers dispatch.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts   tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
+git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts \
+  tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
 git commit -m "feat: consume Superpowers reviews as Justice evidence"
 ```
 
@@ -1317,12 +1399,13 @@ git commit -m "feat: persist v5 review and quality evidence"
 
 ---
 
-### Task 9: Make Conformance, Quality, and Final Review Evidence Closure First-Class Acceptance Gates
+### Task 9: Make Conformance, Quality, and Provenance-Bound Final Review Evidence First-Class Acceptance Gates
 
 **Requirements / Design:** JUS5-GATE-01..02, JUS5-CONFORM-01..09, JUS5-ACC-01..04, JUS5-COMPLETE-01, JUS5-REV-08..09, J5D-GATE-01, J5D-COMPLETE-01, J5D-REVIEW-03..04.
 
 **Files:**
 - Create: `src/core/conformance-gate.ts`
+- Create: `src/runtime/revision-diff-provider.ts`
 - Modify: `src/core/acceptance-decision.ts`
 - Modify: `src/core/v2/gate-context.ts`
 - Modify: `src/core/v2/decision-model.ts`
@@ -1330,10 +1413,11 @@ git commit -m "feat: persist v5 review and quality evidence"
 - Test: `tests/core/conformance-gate.test.ts`
 - Test: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/core/plan-completion-v5.test.ts`
+- Test: `tests/runtime/revision-diff-provider.test.ts`
 
 **Interfaces:**
-- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ClauseEvidenceScope`, `ExecutionCorrelation`, trusted `JusticeReviewResult` evidence, and canonical `ReviewFindingV5`.
-- Owns registry-defined `FinalReviewEvidenceClosure` and `BuildFinalReviewEvidenceClosureResult`.
+- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ClauseEvidenceScope`, `ExecutionCorrelation`, trusted `JusticeReviewResult`, and canonical `ReviewFindingV5`.
+- Owns registry-defined `FinalFixDiffEvidence`, `RevisionDiffResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, and `BuildFinalReviewEvidenceClosureResult`.
 - Produces:
   ```ts
   type ConformanceGateVerdict =
@@ -1345,30 +1429,67 @@ git commit -m "feat: persist v5 review and quality evidence"
         readonly diagnostics: readonly string[];
       };
 
-  function buildFinalReviewEvidenceClosure(input: {
-    readonly artifactChainId: string;
-    readonly candidateHead: string;
-    readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
-    readonly finalFixWave?: {
-      readonly changedFiles: readonly string[];
-      readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
-    };
-  }): BuildFinalReviewEvidenceClosureResult;
+  async function buildFinalReviewEvidenceClosure(
+    input: {
+      readonly artifactChainId: string;
+      readonly candidateHead: string;
+      readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
+      readonly finalFixWave?: {
+        readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
+      };
+    },
+    deps: {
+      readonly revisionDiffProvider: RevisionDiffProvider;
+    },
+  ): Promise<BuildFinalReviewEvidenceClosureResult>;
 
   function evaluateTaskConformance(input: TaskConformanceInput): ConformanceGateVerdict;
   function evaluatePlanConformance(input: PlanConformanceInput): ConformanceGateVerdict;
   ```
-- `PlanConformanceInput` consumes `finalReviewClosure: FinalReviewEvidenceClosure`, not a single optional `reviewedRange`.
-- Carry-forward algorithm is exact:
-  - no fix wave: full final review head must equal `candidateHead`;
-  - fix wave: full review head == scoped re-review base, scoped re-review head == `candidateHead`;
-  - `global` evidence scope intersects every non-empty fix;
-  - `files(paths)` may carry only when `changedFiles ∩ paths == ∅`;
-  - missing/undecidable scope or intersecting clause without explicit scoped re-proof → `NOT_PROVEN`;
-  - blocking findings in either full or scoped evidence remain blocking.
+- Canonical `PlanConformanceInput` is the registry definition:
+  ```ts
+  type PlanConformanceInput = {
+    readonly artifactChain: ApprovedArtifactChain;
+    readonly contract: ConformanceContract;
+    readonly taskVerdicts: readonly ConformanceGateVerdict[];
+    readonly finalReviewClosure: FinalReviewEvidenceClosure;
+    readonly qualityFindings: readonly ReviewFindingV5[];
+    readonly candidateHead: string;
+  };
+  ```
+  `finalReviewClosure.clauseResults` is the sole final clause-result authority. There is no parallel `finalClauseResults` or optional single-review `reviewedRange` authority.
+- Runtime `RevisionDiffProvider` is the only changed-path authority for final carry-forward:
+  1. verify `base` is an ancestor of `head`;
+  2. obtain exact name-status evidence equivalent to:
+     ```text
+     git diff --name-status -z --find-renames --find-copies BASE..HEAD
+     ```
+  3. normalize repository-relative paths;
+  4. A/M/D/T/U/B → include the single touched path;
+  5. R*/C* → include **both old and new paths**;
+  6. unknown status, malformed output, unsafe absolute/traversal path, command failure, or non-ancestor range → `RevisionDiffResult.kind = "failed"`.
+- Caller-supplied arbitrary `changedFiles` is forbidden.
+- Closure range rules:
+  - no fix wave: full final review head == `candidateHead`;
+  - fix wave: `diffEvidence.base == fullFinalReview.reviewedRange.head`;
+  - `scopedReReview.reviewedRange.base == diffEvidence.base`;
+  - `diffEvidence.head == scopedReReview.reviewedRange.head == candidateHead`.
+- Carry-forward rules:
+  - resolved diff required for carry-forward;
+  - `global` scope intersects every non-empty fix;
+  - `files(paths)` may carry only when `diffEvidence.changedPaths ∩ paths == ∅`;
+  - diff failure, missing/undecidable scope, or intersecting clause without explicit scoped re-proof → `NOT_PROVEN`.
+- Finding merge is deterministic by `findingId`:
+  - full open/parked + exactly one scoped `resolved` → resolved;
+  - full open/parked + scoped `open`/`parked`/NOT ADDRESSED semantics → unresolved;
+  - full open/parked + no matching scoped disposition → unresolved;
+  - duplicate/conflicting scoped matches → closure blocked;
+  - new scoped Critical/Important open/parked → unresolved blocker;
+  - matching original severity remains authoritative; scoped review cannot silently downgrade it.
+- reviewer output never creates `human_adjudicated`; trusted human resolution may update quality disposition separately but cannot change clause status.
 - Justice never requests another full final review to close missing coverage.
 
-- [ ] **Step 1: Write RED gate tests**
+- [ ] **Step 1: Write RED gate/provenance tests**
 
 In `tests/core/conformance-gate.test.ts`:
 - `worker_success_alone_does_not_accept_task`
@@ -1383,34 +1504,65 @@ In `tests/core/conformance-gate.test.ts`:
 - `substantive_ruling_does_not_authorize_acceptance`
 - `parked_critical_or_important_quality_finding_blocks_acceptance`
 
+In `tests/runtime/revision-diff-provider.test.ts`:
+- `changed_file_set_is_derived_from_exact_final_fix_range`
+- `rename_marks_old_and_new_paths_as_intersecting`
+- `copy_marks_old_and_new_paths_as_intersecting`
+- `diff_resolution_rejects_non_ancestor_range`
+- `diff_resolution_rejects_unsafe_or_malformed_paths`
+
 In `tests/core/plan-completion-v5.test.ts`:
 - `old_full_final_review_alone_cannot_complete_new_candidate_head`
 - `final_review_evidence_closure_extends_to_fix_head_only_with_scoped_delta_coverage`
 - `global_or_undecidable_clause_scope_requires_scoped_reproof_after_fix`
 - `intersecting_file_scope_without_scoped_reproof_becomes_not_proven`
 - `unaffected_file_scope_can_carry_forward_across_final_fix_wave`
+- `omitted_changed_path_cannot_cause_clause_carry_forward`
+- `diff_resolution_failure_makes_prior_unreproved_coverage_not_proven`
+- `scoped_final_rereview_resolved_finding_clears_original_blocker`
+- `scoped_final_rereview_not_addressed_finding_remains_blocking`
+- `missing_scoped_disposition_does_not_silently_clear_original_blocker`
+- `new_blocking_finding_from_scoped_rereview_blocks_completion`
 - `final_review_can_prove_inline_semantic_clauses`
 - `zero_drift_zero_missing_evidence_zero_blocking_quality_allows_completion`
 
 - [ ] **Step 2: Run RED tests**
 
-Run: `bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts`
+Run:
+```bash
+bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+bun run vitest run tests/runtime/revision-diff-provider.test.ts
+```
 
-Expected: FAIL because current acceptance has no v5 conformance/final evidence closure.
+Expected: FAIL because current acceptance has no v5 final evidence closure or trusted diff provider.
 
-- [ ] **Step 3: Implement conformance gate and final evidence closure**
+- [ ] **Step 3: Implement the runtime diff provider**
 
-Keep runtime fail-open where safe; acceptance remains fail-closed. Implement only evidence composition—never reviewer scheduling.
+The provider must produce only exact-range `RevisionDiffResult`; it must not decide clause semantics. Keep Git/process execution out of the pure conformance core.
 
-- [ ] **Step 4: Run GREEN focused suite + typecheck**
+- [ ] **Step 4: Implement conformance gate, final closure, and finding merge**
+
+Use only `RevisionDiffResult.kind === "resolved"` for clause carry-forward. Merge findings exactly as specified above. Runtime remains fail-open where safe; acceptance remains fail-closed.
+
+- [ ] **Step 5: Run GREEN focused suite + typecheck**
+
+Run:
+```bash
+bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+bun run vitest run tests/runtime/revision-diff-provider.test.ts
+bun run typecheck
+```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts   src/core/v2/decision-model.ts src/core/v2/state-projection.ts   tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts
-git commit -m "feat: gate acceptance on v5 conformance"
+git add src/core/conformance-gate.ts src/runtime/revision-diff-provider.ts \
+  src/core/acceptance-decision.ts src/core/v2/gate-context.ts src/core/v2/decision-model.ts src/core/v2/state-projection.ts \
+  tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts \
+  tests/runtime/revision-diff-provider.test.ts
+git commit -m "feat: gate acceptance on provenance-bound final evidence"
 ```
 
 ---
@@ -1853,10 +2005,13 @@ This phase belongs to the Superpowers controller, not the Task 14 implementer. I
    - generate the Superpowers scoped review package for exactly `FIX_BASE..FINAL_CANDIDATE_HEAD`;
    - dispatch **exactly one scoped re-review of that fix wave**.
 6. Justice ingests the original full final-review result plus, when present, the one scoped final re-review and recomputes `FinalReviewEvidenceClosure` for `FINAL_CANDIDATE_HEAD`:
-   - clauses whose Candidate-A evidence scope is deterministically non-intersecting with the fix changed-file set may carry forward;
-   - affected or undecidable clauses require explicit scoped re-proof;
-   - missing scoped proof becomes `NOT_PROVEN`;
-   - open Critical/Important findings remain blocking;
+   - obtain trusted `FinalFixDiffEvidence` for exactly `FIX_BASE..FINAL_CANDIDATE_HEAD` through `RevisionDiffProvider`;
+   - rename/copy contributes both old and new paths to the touched set;
+   - diff resolution failure means prior Candidate-A clauses cannot be assumed unaffected;
+   - Candidate-A clauses carry only when their evidence scope is deterministically non-intersecting with trusted changed paths;
+   - affected/undecidable clauses require explicit scoped re-proof; otherwise `NOT_PROVEN`;
+   - merge full→scoped finding disposition by `findingId`: explicit scoped `resolved` clears the matching original blocker; open/parked/NOT ADDRESSED or omission keeps it unresolved;
+   - new scoped Critical/Important findings become blockers;
    - A's full review alone never proves B.
 7. Follow Superpowers residual adjudication rules after the one scoped re-review. **There is no second Justice-requested full review and no second Justice-requested fix wave.** If residual/load-bearing findings or missing clause coverage remain, Justice leaves `PlanComplete` BLOCKED and surfaces them to branch finishing/human review.
 8. Invoke `justice_review` in read/inspection mode as the Final Conformance Gate and require:
@@ -1988,7 +2143,7 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
 | Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, authoritative child binding, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
 | Task 8 | Tasks 9, 13 | `ReviewFindingV5` disposition semantics and trusted persisted review evidence |
-| Task 9 | Tasks 13–14 | `FinalReviewEvidenceClosure`, `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
+| Task 9 | Tasks 13–14 | `RevisionDiffProvider`, `FinalFixDiffEvidence`, `FinalReviewEvidenceClosure`, deterministic finding merge, `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
@@ -2006,7 +2161,7 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 2. **40 scenarios**
    - every Design §29 scenario has an owning task/test in the traceability table.
 3. **Type/signature consistency**
-   - `ApprovedArtifactChain`, `TaskIdentity`, `ExecutionCorrelation`, `ConformanceContract`, `JusticeReviewResult`, and severity vocabulary are spelled identically at every producer/consumer boundary.
+   - `ApprovedArtifactChain`, `TaskIdentity`, `ExecutionCorrelation`, `ConformanceContract`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
 4. **Ownership**
    - no task adds Justice-owned task/review/fix scheduling;
    - no task adds model/provider/retry/fallback ownership.
