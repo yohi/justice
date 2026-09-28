@@ -581,11 +581,19 @@ Ambiguous classification is untrusted and fail-closed for acceptance.
 
 ### JUS5-REV-07 — Conformance Contract delivery
 
-For a supported Superpowers review that is required to produce semantic conformance evidence, Justice must use the existing OpenCode `tool.execute.before` task-call extension point to enrich that same reviewer prompt with a read-only Justice Conformance Contract reference and structured-result instructions.
+Justice must not depend on `tool.execute.before` argument mutation to alter a Superpowers reviewer prompt.
+
+For the supported OpenCode 1.18.31 baseline, review interop uses a two-stage contract:
+
+1. `tool.execute.before` is **observation-only** for the parent `task` call. Justice recognizes the Superpowers review dispatch and records its `parentSessionId + parentCallId`, routing target, artifact-chain/task/revision scope, and pending review correlation without modifying caller routing or relying on changed args reaching TaskTool.
+2. The child reviewer session is correlated to that pending call. On the child session's first `chat.message` hook, Justice appends the read-only Conformance Contract reference and structured-result instructions by mutating the existing `output.parts` array **in place**. The original reviewer prompt and caller-selected subagent/category/model/provider remain unchanged.
+3. `tool.execute.after` on the original parent call provides the same-call result/child metadata used to close the review correlation and validate the returned structured result.
 
 Justice must not create another reviewer dispatch.
 
-If a future supported host cannot provide an equivalent safe extension point, semantic conformance review on that host is unsupported until a focused compatibility spike proves one.
+If the parent-call → child-session relation is ambiguous when the child `chat.message` arrives, Justice must not inject review context; the review remains untrusted / `NOT_PROVEN`.
+
+A future supported host must provide an equivalent observable parent-call relation plus a prompt/message extension point whose mutation is actually consumed by the child reviewer. Otherwise semantic conformance review on that host is unsupported until compatibility evidence establishes a replacement contract.
 
 ### JUS5-REV-08 — Structured review result
 
