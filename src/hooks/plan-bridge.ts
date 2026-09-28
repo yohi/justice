@@ -68,6 +68,35 @@ export function normalizeTaskToolInputWithCategory(
   return normalized;
 }
 
+function resolveSuperpowersSddCategory(
+  toolInput: Readonly<Record<string, unknown>>,
+  fallbackCategory: SpCategory | TaskCategory,
+): SpCategory | TaskCategory {
+  if (toolInput.subagent_type !== "general") return fallbackCategory;
+
+  const description =
+    typeof toolInput.description === "string" ? toolInput.description.trim().toLowerCase() : "";
+  const prompt = typeof toolInput.prompt === "string" ? toolInput.prompt.trimStart() : "";
+
+  const isTaskReview =
+    description.startsWith("review task ") ||
+    description.startsWith("re-review task ") ||
+    prompt.startsWith("You are reviewing one task's implementation") ||
+    prompt.startsWith("You are re-reviewing one task's fix round");
+
+  if (isTaskReview) return "sp-review";
+
+  const isFinalReview =
+    (!description.startsWith("implement ") &&
+      (description.startsWith("final review") ||
+        description.startsWith("final code review") ||
+        description.startsWith("review final"))) ||
+    (prompt.startsWith("You are a Senior Code Reviewer") &&
+      prompt.includes("## Git Range to Review"));
+
+  return isFinalReview ? "sp-final-review" : fallbackCategory;
+}
+
 /** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
 export type WorkflowNextSkill = "brainstorming" | "writing-plans";
 
@@ -1075,11 +1104,27 @@ export class PlanBridge {
       );
     }
 
-    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
+    const semanticCategory = resolveSuperpowersSddCategory(
+      event.payload.toolInput,
+      delegation.category,
+    );
+    const effectiveDelegation =
+      semanticCategory === delegation.category
+        ? delegation
+        : {
+            ...delegation,
+            category: semanticCategory,
+            runInBackground:
+              semanticCategory === "sp-review" || semanticCategory === "sp-final-review"
+                ? false
+                : delegation.runInBackground,
+          };
+
+    this.rememberCompletionInput(event.sessionId, event.callId, effectiveDelegation);
 
     const normalizedArgs = normalizeTaskToolInputWithCategory(
       event.payload.toolInput,
-      delegation.category,
+      effectiveDelegation.category,
     );
     const callerSubagentType = event.payload.toolInput.subagent_type;
     const callerOwnedRouting =
@@ -1103,7 +1148,7 @@ export class PlanBridge {
     return {
       action: "inject",
       injectedContext: `${this.buildInjectedContext(planContent, activePlanPath, {
-        ...delegation,
+        ...effectiveDelegation,
         prompt: authoritativePrompt,
       })}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
