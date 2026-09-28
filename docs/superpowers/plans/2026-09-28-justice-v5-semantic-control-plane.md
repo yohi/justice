@@ -2058,6 +2058,7 @@ Justice does not infer SDD vs inline from task complexity. Superpowers/user meth
 - [ ] **Step 1: Write RED activation/ownership tests**
 
 In `tests/core/workflow-activation-v5.test.ts`:
+- `authorized_implementation_activates_selected_superpowers_execution_method`
 - `authorized_implementation_activates_superpowers_sdd`
 - `explicit_inline_execution_activates_superpowers_executing_plans`
 - `explicit_method_precedes_recovered_and_observed_method`
@@ -2085,6 +2086,7 @@ In `tests/unit/core/execution-role-classifier.test.ts`:
 - `whole_branch_review_classifies_final_review`
 - `architecture_precedes_generic_integration_signals`
 - `classifier_uses_full_plan_semantics_not_keyword_only`
+- `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime`
 - `ambiguous_semantic_classification_does_not_select_concrete_model`
 
 In `tests/runtime/opencode-adapter-semantic-routing.test.ts`:
@@ -2178,7 +2180,7 @@ git commit -m "feat: bridge Superpowers methodology to OmO semantic routing"
     | { readonly kind: "unsupported"; readonly reason: string; readonly diagnostics: readonly string[] };
   ```
 - `resolveOmoEffectiveConfig(input: ResolveOmoEffectiveConfigInput): Promise<OmoEffectiveConfigResult>`.
-- Doctor capability result reports OpenCode version metadata, required hook/call capabilities, review-interop support, child-session relation observability, secure review-artifact capability, and configured/applied/observed controller status separately.
+- Doctor capability result reports OpenCode version metadata, required hook/call capabilities, native Superpowers `skill` invocation observability, review-interop support, child-session relation observability, secure review-artifact capability, and configured/applied/observed controller status separately.
 - Remove exact `SUPPORTED_OPENCODE_VERSION === "1.18.29"` authority. Version is metadata; capabilities are authority.
 
 - [ ] **Step 1: Write RED effective-config tests**
@@ -2198,6 +2200,7 @@ In `tests/runtime/doctor-v5.test.ts`:
 - `missing_required_host_capability_is_reported_unsupported`
 - `doctor_separates_source_configured_applied_and_observed_values`
 - `secure_artifact_and_review_interop_capabilities_are_independent`
+- `doctor_reports_superpowers_skill_activation_capability_separately`
 
 - [ ] **Step 3: Run RED tests**
 
