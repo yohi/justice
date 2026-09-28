@@ -248,6 +248,18 @@ type PriorStateClassification =
     }
   | { readonly kind: "unknown_or_newer"; readonly schema?: string }
   | { readonly kind: "malformed"; readonly reason: string };
+
+type BuildApprovedArtifactChainInput = {
+  readonly requirements: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
+  readonly design: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
+  readonly plan: {
+    readonly path: string;
+    readonly source: string;
+    readonly sourceRevision?: string;
+    readonly canonicalSnapshot: CanonicalPlanSnapshot;
+    readonly planFingerprint: PlanFingerprint;
+  };
+};
 ```
 
 **Task 4**
@@ -290,18 +302,6 @@ type ConformanceContractPersistenceResult =
 **Task 5**
 
 ```ts
-type BuildApprovedArtifactChainInput = {
-  readonly requirements: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
-  readonly design: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
-  readonly plan: {
-    readonly path: string;
-    readonly source: string;
-    readonly sourceRevision?: string;
-    readonly canonicalSnapshot: CanonicalPlanSnapshot;
-    readonly planFingerprint: PlanFingerprint;
-  };
-};
-
 type BindPendingInput = {
   readonly authorizationId: string;
   readonly artifactChainId: string;
