@@ -68,6 +68,10 @@ describe("OpenCodePlugin (integration)", () => {
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
     });
+    expect(config.command["justice-review-gate"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Run the Justice Design / Implementation Plan review gate",
+    });
   });
 
   it("does not overwrite existing commands via the config hook", async () => {
@@ -343,6 +347,29 @@ describe("OpenCodePlugin (integration)", () => {
     expect((output.parts[0] as { text: string }).text).not.toContain("--unknown raw prompt");
   });
 
+  it("routes /justice-review-gate and injects deterministic Gate guidance", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = { parts: [] as unknown[] };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.(
+      {
+        command: "/justice-review-gate",
+        sessionID: "s-review-gate",
+        arguments:
+          "--design @docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md --plan @docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    const text = (output.parts[0] as { text: string }).text;
+    expect(text).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(text).toContain("Review Gate was not dispatched");
+    expect(text).not.toContain("[JUSTICE: COMMAND REJECTED]");
+  });
   it("leaves command.execute.before output untouched for a non-Justice command", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);

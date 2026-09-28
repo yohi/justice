@@ -102,6 +102,64 @@ describe("ObservationHandler review observations", () => {
     expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
   });
 
+  it("ignores a complete snapshot whose review scope differs from the active Review Gate", async () => {
+    // Given
+    const { handler } = createHandler();
+    handler.setReviewGateScope("session-gate-scope", "design-and-plan");
+
+    // When
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-gate-scope",
+      callId: "call-unrelated-review",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "Review complete with no findings",
+        error: false,
+        reviewSnapshotArtifact: {
+          authority: "review_tool",
+          schemaVersion: 1,
+          complete: true,
+          reviewScope: "unrelated-review",
+        },
+      },
+    });
+
+    // Then
+    expect(response.action).toBe("proceed");
+  });
+
+  it("injects review clear when the complete snapshot matches the active Review Gate scope", async () => {
+    // Given
+    const { handler } = createHandler();
+    handler.setReviewGateScope("session-matched-scope", "design-and-plan");
+
+    // When
+    const response = await handler.handlePostToolUse({
+      type: "PostToolUse",
+      sessionId: "session-matched-scope",
+      callId: "call-matched-review",
+      payload: {
+        toolName: "code_review",
+        toolInput: {},
+        toolResult: "Review complete with no findings",
+        error: false,
+        reviewSnapshotArtifact: {
+          authority: "review_tool",
+          schemaVersion: 1,
+          complete: true,
+          reviewScope: "design-and-plan",
+        },
+      },
+    });
+
+    // Then
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review clear injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
+  });
+
   it("deduplicates review deliveries by call, result, and snapshot while allowing corrections", async () => {
     // Given
     const { handler } = createHandler();

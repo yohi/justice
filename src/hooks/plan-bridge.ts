@@ -25,6 +25,7 @@ import type { LoopDetectionHandler } from "./loop-handler";
 import type { ObservationHandler } from "./observation-handler";
 import type { TelemetryStore } from "../core/telemetry-store";
 import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
+import type { ReviewGateRequest } from "../core/review-gate-command";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
@@ -123,6 +124,14 @@ export interface WorkflowStartResult {
   readonly goal: string;
   readonly nextSkill: WorkflowNextSkill | null;
   readonly activePlanPath: string | null;
+  readonly guidance: string;
+}
+
+export interface ReviewGateStartResult {
+  readonly dispatched: boolean;
+  readonly designPath: string;
+  readonly planPath: string | null;
+  readonly directiveStage: "plan_review_required";
   readonly guidance: string;
 }
 
@@ -416,6 +425,7 @@ export class PlanBridge {
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
   }
 
@@ -446,6 +456,7 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
@@ -480,6 +491,80 @@ export class PlanBridge {
     };
   }
 
+  async handleReviewGateStart(
+    sessionId: string,
+    request: ReviewGateRequest,
+  ): Promise<ReviewGateStartResult> {
+    this.implementationArmedSessions.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
+
+    const designReadable = await this.isArtifactReadable(request.designPath);
+    const planPath = this.resolveActivatablePlanPath(request.planPath);
+    const planReadable = planPath !== null && (await this.isArtifactReadable(planPath));
+
+    if (!designReadable || !planReadable || planPath === null) {
+      this.setActivePlan(sessionId, null);
+      this.clearSessionCompletionInputs(sessionId);
+      const missing = [
+        ...(designReadable ? [] : ["Design"]),
+        ...(planReadable ? [] : ["Implementation Plan"]),
+      ];
+      return {
+        dispatched: false,
+        designPath: request.designPath,
+        planPath,
+        directiveStage: "plan_review_required",
+        guidance: [
+          "---",
+          "[JUSTICE: REVIEW GATE BLOCKED]",
+          "",
+          `**Design**: ${request.designPath}`,
+          `**Plan**: ${request.planPath}`,
+          `**Unreadable / invalid artifacts**: ${missing.join(", ")}`,
+          "",
+          "Review Gate was not dispatched. Fix the artifact paths/readability and rerun /justice-review-gate.",
+          "Do not start implementation and do not infer READY, approval, or merge from this result.",
+          "---",
+        ].join("\n"),
+      };
+    }
+
+    this.setActivePlan(sessionId, planPath);
+    const reviewScope = JSON.stringify([request.designPath, planPath]);
+    this.observationHandler?.setReviewGateScope(sessionId, reviewScope);
+    const directive = resolveWorkflowDirective({
+      stage: "plan_review_required",
+      designPath: request.designPath,
+      planPath,
+    });
+
+    return {
+      dispatched: true,
+      designPath: request.designPath,
+      planPath,
+      directiveStage: "plan_review_required",
+      guidance: [
+        "---",
+        "[JUSTICE: REVIEW GATE REQUESTED]",
+        "",
+        `**Design**: ${request.designPath}`,
+        `**Implementation Plan**: ${planPath}`,
+        `**Review scope**: \`${reviewScope}\``,
+        "",
+        directive.guidance,
+        "",
+        "**Review Gate contract**:",
+        "- Invoke Superpowers `requesting-code-review` now.",
+        "- Review the Design and Implementation Plan together as one plan-level/final review.",
+        "- Do not modify source code, test code, CI/config, or start implementation while running this Gate.",
+        "- The review executor must produce a complete review snapshot through the existing `code_review` path.",
+        "- Open findings transition to `review_remediation`; a complete zero-finding snapshot transitions to `review_clear`.",
+        "- This command requests review only. It does not itself mean READY, human approval, or merge completion.",
+        "- `/justice-implement --approved` remains the explicit implementation authorization boundary.",
+        "---",
+      ].join("\n"),
+    };
+  }
   private resolveBootstrapDirectiveStage(phase: WorkflowBootstrapPhase): WorkflowDirectiveStage {
     switch (phase) {
       case "design_required":

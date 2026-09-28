@@ -63,13 +63,16 @@ function createWorkflowStartRequest(
 function createObservationHandler(): ObservationHandler & {
   emitWorkflowStartedEvent: ReturnType<typeof vi.fn>;
   emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
+  setReviewGateScope: ReturnType<typeof vi.fn>;
 } {
   return {
     emitWorkflowStartedEvent: vi.fn(async () => ({ action: "proceed" })),
     emitWorkflowPhaseEvent: vi.fn(async () => ({ action: "proceed" })),
+    setReviewGateScope: vi.fn(),
   } as unknown as ObservationHandler & {
     emitWorkflowStartedEvent: ReturnType<typeof vi.fn>;
     emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
+    setReviewGateScope: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -1207,6 +1210,58 @@ describe("PlanBridge", () => {
       expect(bridge.getActivePlan("s-wf-plan-required")).toBeNull();
     });
 
+    it("dispatches the Design / Implementation Plan review gate when both artifacts are readable", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      });
+      const observationHandler = createObservationHandler();
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setObservationHandler(observationHandler);
+
+      const result = await bridge.handleReviewGateStart("s-review-gate", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+
+      expect(result.dispatched).toBe(true);
+      expect(result.directiveStage).toBe("plan_review_required");
+      expect(result.planPath).toBe("docs/plans/implementation-plan.md");
+      expect(bridge.getActivePlan("s-review-gate")).toBe("docs/plans/implementation-plan.md");
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE REQUESTED]");
+      expect(result.guidance).toContain("requesting-code-review");
+      expect(result.guidance).toContain("one plan-level/final review");
+      expect(result.guidance).toContain("Do not modify source code, test code, CI/config");
+      expect(result.guidance).toContain("does not itself mean READY");
+      expect(result.guidance).toContain("/justice-implement --approved");
+      expect(result.guidance).toContain(
+        `**Review scope**: \`${JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"])}\``,
+      );
+      expect(observationHandler.setReviewGateScope).toHaveBeenCalledWith(
+        "s-review-gate",
+        JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"]),
+      );
+    });
+
+    it("blocks the review gate when either artifact is unreadable", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      const result = await bridge.handleReviewGateStart("s-review-gate-blocked", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/missing-plan.md",
+      });
+
+      expect(result.dispatched).toBe(false);
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+      expect(result.guidance).toContain("Implementation Plan");
+      expect(bridge.getActivePlan("s-review-gate-blocked")).toBeNull();
+      expect(result.guidance).not.toContain("[JUSTICE: REVIEW GATE REQUESTED]");
+    });
     it("uses unauthorized implementation directive when plan_required bootstrap has an active plan", async () => {
       const reader = createMockFileReader({
         "docs/plans/sample-plan.md": samplePlanContent,

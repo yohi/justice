@@ -12,6 +12,10 @@ import {
   parseWorkflowStartCommandArguments,
 } from "../core/trigger-detector";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
+import {
+  isJusticeReviewGateCommand,
+  parseJusticeReviewGateCommandArguments,
+} from "../core/review-gate-command";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
   normalizeTaskToolInputForJusticeInPlace,
@@ -979,11 +983,13 @@ export class OpenCodeAdapter {
    *
    * Fail-open is structural here, not a style choice: the SDK handler resolves to
    * `Promise<void>` and `output` exposes only `parts`, so there is no channel by which a
-   * plugin could deny or abort a command. Every failure therefore degrades to PROCEED with
-   * `output.parts` left untouched.
+   * plugin could deny or abort a command. Runtime failures therefore degrade to PROCEED.
+   * Recognized commands with malformed arguments replace host-expanded template parts with
+   * a synthetic `[JUSTICE: COMMAND REJECTED]` directive so raw arguments cannot masquerade
+   * as an ordinary user prompt.
    *
    * `input.command` is accepted with or without its leading slash — the SDK does not
-   * document which spelling it delivers, and `isJusticeStartCommand` tolerates both.
+   * document which spelling it delivers, and all Justice command matchers tolerate both.
    */
   async onCommandExecuteBefore(
     input: CommandExecuteBeforeInput,
@@ -994,6 +1000,11 @@ export class OpenCodeAdapter {
     try {
       if (isJusticeStartCommand(input.command)) {
         await this.#handleWorkflowStart(input, output);
+        return;
+      }
+
+      if (isJusticeReviewGateCommand(input.command)) {
+        await this.#handleReviewGate(input, output);
         return;
       }
 
@@ -1048,6 +1059,39 @@ export class OpenCodeAdapter {
     output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
   }
 
+  async #handleReviewGate(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    const request = parseJusticeReviewGateCommandArguments(input.arguments);
+    if (request === null) {
+      await this.log("warn", "[Justice] /justice-review-gate arguments rejected by parser");
+      output.parts.length = 0;
+      output.parts.splice(
+        0,
+        output.parts.length,
+        this.#buildWorkflowDirectivePart(
+          input.sessionID,
+          [
+            "[JUSTICE: COMMAND REJECTED]",
+            "`/justice-review-gate` was invoked, but Justice rejected its arguments.",
+            "The original command template parts were removed; do not treat the raw command arguments as an ordinary user request.",
+            "Expected: /justice-review-gate --design <path> --plan <path>.",
+            "Both Design and Implementation Plan are required.",
+          ].join("\n"),
+        ),
+      );
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+
+    const result = await justice.getPlanBridge().handleReviewGateStart(input.sessionID, request);
+    if (result.guidance.length === 0) return;
+    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+  }
   async #handleImplementationArm(
     input: CommandExecuteBeforeInput,
     output: CommandExecuteBeforeOutput,

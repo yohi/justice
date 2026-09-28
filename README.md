@@ -211,9 +211,14 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
          │                                │                         設計・計画を作成
          │                                │<──────── (再実行) ─────────────┤
          │                                │                               │
-         │                          準備完了 ────────────────────────────>│
-         │                                │                         PR作成 + AIレビュー依頼
+         │                          準備完了 / plan_review_required     │
          │                                │                               │
+ (1b) /justice-review-gate ─────────────>│                               │
+         │                          Design + Plan 可読性確認               │
+         │                                │─────────────────────────────>│
+         │                                │                 requesting-code-review
+         │                                │<──────── code_review snapshot ┤
+         │                          remediation / clear                    │
          │                                │                               │
   (2) PR を確認・承認・マージ <──────────────────────────────────────────────┤
          ⚠️ Justice はこの承認・マージを検証できない                          │
@@ -242,7 +247,8 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 | # | フェーズ | 主体 | 詳細 |
 |---|---------|------|------|
 | (1) | 設計・計画の準備 | 人間 + エージェント | 「`/justice-start` コマンド」セクション参照 |
-| (2) | 設計・計画の承認 | **人間のみ** | Justice は PR 作成・承認・マージを検証できない |
+| (1b) | Design / Implementation Plan Review Gate | 人間 + エージェント + Justice | `/justice-review-gate --design <path> --plan <path>` で明示開始。既存 `code_review` snapshot が remediation / clear を決める |
+| (2) | 設計・計画の承認 | **人間のみ** | Gate clear 後も Justice は PR 作成・承認・マージを検証できない |
 | (3) | 実装委譲とフィードバック | エージェント + Justice | 「`/justice-implement` コマンド」セクション参照 |
 | (4) | 実装の承認 | **人間のみ** | 「Quality Control Plane (v2.0)」セクションの `justice_review` ツール参照 |
 
@@ -255,7 +261,7 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 ### 有効化（OpenCode側の設定）
 
-`/justice-start` と `/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
+`/justice-start`、`/justice-review-gate`、`/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
 
 この衝突優先の保証は、`config.command` に含まれる利用者定義を対象とします。`.opencode/commands/*.md` で定義したコマンドは OpenCode が別経路で読み込む可能性があり、`config` hook からその定義を確認できません。Markdown 定義との優先順位はサポート対象ホストでの opt-in E2E による確認が必要です。
 
@@ -380,6 +386,32 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 ワークフロー開始後、作業が進むにつれて `justice_review` ツールでレビュー要約を確認できます。詳細は「Quality Control Plane (v2.0)」セクションの「`justice_review` ツール」を参照してください。
 
 典型的なフローの全体像は「開発フロー」セクションの図を参照してください。`justice_review` 自体は実装委譲サイクルの間や実装 PR 作成後など、任意のタイミングで呼び出せます。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにしてください。
+
+## `/justice-review-gate` コマンド
+
+Design と Implementation Plan を **明示的に Review Gate へ投入する入口**です。`/justice-start` が `plan_review_required` に到達した後の自然言語 guidance に依存せず、どの2成果物を一組としてレビューするかをコマンド境界で固定します。
+
+```bash
+/justice-review-gate --design <designPath> --plan <planPath>
+```
+
+OpenCode の file-reference 記法も利用できます。
+
+```bash
+/justice-review-gate \
+  --design @docs/superpowers/specs/feature-design.md \
+  --plan @docs/superpowers/plans/feature-plan.md
+```
+
+- `--design` と `--plan` はともに必須。
+- 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入し、Superpowers `requesting-code-review` を要求する。
+- Design と Plan は別々ではなく **1つの plan-level/final review** としてレビューする。
+- Gate 中は source / test / CI/config を変更せず、実装を開始しない。
+- 実際の review evidence は既存 `code_review` complete snapshot 経路に入り、findings があれば `review_remediation`、完全な指摘ゼロなら `review_clear` に遷移する。
+- `justice_review` は既存 review state の参照・resolve 用であり、Review Gate の開始コマンドではない。
+- `review_clear` は READY のためのレビュー条件を満たしたことを示すだけで、人間の承認・マージを意味しない。実装開始には引き続き `/justice-implement --approved` が必要。
+
+成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。
 
 ## `/justice-implement` コマンド
 

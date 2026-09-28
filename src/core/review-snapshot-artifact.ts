@@ -13,5 +13,11 @@ export function parseReviewSnapshotArtifact(value: unknown): ReviewSnapshotArtif
   if (value.authority !== "review_tool" || value.schemaVersion !== 1 || value.complete !== true) {
     return undefined;
   }
-  return { authority: "review_tool", schemaVersion: 1, complete: true };
+  if (value.reviewScope !== undefined && typeof value.reviewScope !== "string") return undefined;
+  return {
+    authority: "review_tool",
+    schemaVersion: 1,
+    complete: true,
+    ...(typeof value.reviewScope === "string" ? { reviewScope: value.reviewScope } : {}),
+  };
 }

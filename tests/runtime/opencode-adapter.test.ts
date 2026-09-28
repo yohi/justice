@@ -866,6 +866,70 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts).toHaveLength(1);
   });
 
+  it("dispatches /justice-review-gate with normalized Design and Plan paths", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleReviewGateStart = vi
+      .spyOn(justice.getPlanBridge(), "handleReviewGateStart")
+      .mockResolvedValue({
+        dispatched: true,
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+        directiveStage: "plan_review_required",
+        guidance: "[JUSTICE: REVIEW GATE REQUESTED]",
+      });
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "/justice-review-gate",
+        arguments:
+          "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md",
+        sessionID: "session-review-gate",
+      },
+      output,
+    );
+
+    expect(handleReviewGateStart).toHaveBeenCalledWith("session-review-gate", {
+      source: "command",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+    });
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({
+      type: "text",
+      sessionID: "session-review-gate",
+      text: "[JUSTICE: REVIEW GATE REQUESTED]",
+      synthetic: true,
+    });
+  });
+
+  it("reports malformed /justice-review-gate arguments explicitly", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const output: CommandExecuteBeforeOutput = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "session-review-gate-bad",
+          text: "--design @docs/design.md",
+        } as unknown as CommandExecuteBeforeOutput["parts"][number],
+      ],
+    };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-review-gate",
+        arguments: "--design @docs/design.md",
+        sessionID: "session-review-gate-bad",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
+    expect((output.parts[0] as { text: string }).text).not.toBe("--design @docs/design.md");
+  });
   it("injects implementation arm guidance for /justice-implement", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -981,6 +1045,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
   it.each([
     ["justice-start", "--unknown-flag goal"],
     ["justice-implement", "--unknown-flag"],
+    ["justice-review-gate", "--design docs/design.md"],
   ])("removes existing template parts when %s arguments are rejected", async (command, args) => {
     const adapter = new OpenCodeAdapter(fakeInit());
     const templateArgumentPart = {
