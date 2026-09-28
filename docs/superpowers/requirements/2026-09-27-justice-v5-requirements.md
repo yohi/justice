@@ -1,9 +1,9 @@
 # Justice v5 Requirements
 
-**Date:** 2026-09-27  
-**Status:** Requirements baseline for v5 design  
-**Authorization:** NOT SELF-AUTHORIZING  
-**Target:** Justice v5.x  
+**Date:** 2026-09-27
+**Status:** Requirements baseline for v5 design
+**Authorization:** NOT SELF-AUTHORIZING
+**Target:** Justice v5.x
 **Upstream baselines:** Oh My OpenAgent v5.0.1 (OpenCode edition), Superpowers v6.4.2
 
 ---
