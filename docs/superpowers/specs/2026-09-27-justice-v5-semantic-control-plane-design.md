@@ -181,7 +181,7 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 |---|---|
 | J5D-OWN-01 | Superpowers owns execution-method selection and workflow/review progression; Justice may activate the selected supported methodology but must not duplicate progression. |
 | J5D-OWN-02 | OmO owns concrete agent/runtime/model/provider/reasoning/retry/fallback routing. |
-| J5D-ACT-01 | Justice bridges authoritative implementation-method intent to Superpowers skill activation; missing/failed activation cannot silently fall through to trusted direct OmO implementation. |
+| J5D-ACT-01 | Justice keeps methodology MethodSelection separate from current-session ActivationEvidence: cross-session recovery may restore selection but never activation, matching same-session activation suppresses duplicate invocation, and conflicts fail closed. |
 | J5D-GATE-01 | Justice owns fail-closed authorization/evidence/conformance acceptance. |
 | J5D-TASK-01 | Superpowers task semantics must be preserved without lossy prompt reconstruction. |
 | J5D-CHAIN-01 | Human authorization binds an exact Requirements→Design→Plan artifact chain. |
@@ -525,7 +525,7 @@ Routing decisions are provenance-aware.
 
 - explicit `subagent_type` from a non-Superpowers caller is preserved;
 - recognized Superpowers explicit specialized non-generic `subagent_type` (for example `explore`) is also preserved and is not category-translated;
-- explicit `category` is preserved/validated;
+- explicit `category` is accepted as a caller-owned non-empty OmO category name and preserved byte-for-byte; Justice does not require membership in its static built-in category vocabulary;
 - external both-target input is a routing-contract violation;
 - Justice does not invent precedence between explicit external targets.
 
@@ -1828,42 +1828,80 @@ This preserves the v4 Configuration Assurance goal without binding v5 to an unve
 
 ### 20.1 Supported execution-method activation — J5D-ACT-01
 
-Justice does not own execution-method selection semantics.
+Justice does not own methodology-selection semantics. It models selection and activation separately.
 
-The authoritative source order for one implementation start is:
+#### Method selection
 
 ```text
-explicit user/command method
-→ trusted recovered active method for the same authorization/session
-→ observed Superpowers method-selection decision
+explicit user/command selection for this implementation start
+→ trusted recovered method selection from the same active authorization
 → otherwise method_selection_required
 ```
 
-Justice never silently defaults to direct OmO execution.
+There is no pre-activation `observedSuperpowersMethod` source. A native `skill` invocation is not a selection event; it is activation evidence.
 
-Exact method values are:
+Cross-session Justice state may recover which method was selected/used previously for the same authorization, but only as `recovered_selection`.
 
-```text
-subagent-driven-development
-executing-plans
-```
+#### Activation evidence
 
-An explicit inline request means `executing-plans`; an explicit SDD request means `subagent-driven-development`. If the selected method is unsupported by current host capability, activation is `unavailable`; Justice does not silently substitute the other method.
-
-OpenCode activation is delivered through the controller's native Superpowers skill surface. Justice emits/requires the selected skill in its workflow directive and observes the selected skill invocation before subsequent implementation execution can become trusted methodology evidence.
-
-Recovery may restore only a trusted method bound to the same active artifact-chain authorization. OmO child continuation is not methodology activation.
-
-Activation failure follows the existing runtime-fail-open / acceptance-fail-closed split:
+The OpenCode activation event is a successful native `skill` tool execution with:
 
 ```text
-selected method not activated/observable
-→ no trusted methodology evidence
-→ NOT_PROVEN
-→ TaskAccepted / PlanComplete blocked
+args.name == selected method
+sessionID == current controller session
+authorizationId == current active authorization
 ```
 
-Justice never responds to activation failure by dispatching implementation tasks itself.
+Trusted evidence binds:
+
+```text
+authorizationId
+sessionId
+method
+skillCallId
+observedAt
+```
+
+An exact persisted same-session activation record may be reused after restart only when all identity fields required by the contract still match. A record from another session never proves current activation.
+
+#### Decision state
+
+```text
+no selected method
+→ method_selection_required
+
+selected method + matching current-session activation evidence
+→ already_active
+→ do NOT invoke the skill again
+
+selected method + no matching current-session activation evidence
+→ needs_activation
+→ invoke exactly skill(name=selected method)
+
+selected method + missing host capability
+→ unavailable
+```
+
+Conflict handling is deterministic:
+
+- explicit current selection overrides stale recovered selection, but if another method was activated earlier in the current session that evidence is not reused; the explicitly selected method requires fresh activation;
+- when selection comes only from recovery and a different current-session method is observed active, return `conflict` / untrusted instead of silently preferring either;
+- activation evidence with mismatched authorization/session identity is untrusted.
+
+Therefore:
+
+```text
+cross-session recovered method
+→ selection restored
+→ needs_activation
+→ fresh current-session skill invocation
+
+same-session exact activation evidence
+→ already_active
+```
+
+Justice never treats OmO child continuation as methodology activation and never responds to activation failure by dispatching implementation work itself.
+
 ## 21. Worker semantic classification and category routing — J5D-ROUTE-02 / J5D-CAT-02
 
 Justice classifies semantic execution intent; it does not select a concrete model/provider.
@@ -1937,7 +1975,9 @@ Keywords may contribute evidence but cannot alone upgrade a task into `integrati
 
 If required context is missing/conflicting such that the classifier cannot authoritatively choose one class, the result is `ambiguous`; Justice does not fabricate an `sp-*` category and the execution cannot satisfy trusted semantic-routing evidence.
 
-### 21.4 Category mapping
+### 21.4 Category mapping and namespace ownership
+
+Justice-generated semantic categories are a closed union:
 
 ```text
 mechanical      → sp-mechanical
@@ -1949,7 +1989,9 @@ review          → sp-review
 final-review    → sp-final-review
 ```
 
-Current OmO v5 built-in categories remain recognized for explicit caller routing:
+Caller-owned OmO category names are different: the wire namespace is open and may contain any non-empty configured category key.
+
+Current OmO v5 built-in names remain useful compatibility/diagnostic vocabulary:
 
 - visual-engineering;
 - ultrabrain;
@@ -1961,7 +2003,23 @@ Current OmO v5 built-in categories remain recognized for explicit caller routing
 - unspecified-high;
 - writing.
 
-Justice MUST NOT emit legacy `deep` as a canonical OmO built-in result; legacy input may normalize `deep → deep-low`.
+But that list is **not** the universe of legal caller-owned categories. OmO effective configuration may define names such as `company-backend`, and Justice preserves such explicit caller categories without translating or rejecting them merely because they are unknown to Justice.
+
+Justice MUST NOT emit legacy `deep` as a canonical OmO built-in result; legacy input may normalize `deep → deep-low` only where legacy normalization is explicitly applicable.
+
+Validation ownership is split:
+
+```text
+Justice pure translator
+→ require a non-empty category string for explicit caller category
+→ preserve exact string
+
+OmO effective config/runtime
+→ determine whether that category is configured/resolvable
+→ resolve actual runtime/model/provider
+```
+
+Justice never promotes its built-in vocabulary into OmO namespace authority.
 
 ### 21.5 Model/provider boundary
 
@@ -2349,6 +2407,7 @@ The v5 implementation plan must include E2E coverage for at least the following 
 44. a non-Superpowers explicit `subagent_type` remains caller-owned and is not translated.
 45. Justice semantic classification uses task/review semantics and complexity without selecting a concrete model/provider.
 46. OmO remains the only concrete model/provider/runtime resolver for translated Superpowers work.
+47. a caller-owned OmO custom category outside Justice's static built-in vocabulary is preserved without translation and remains OmO-resolved.
 
 ---
 
