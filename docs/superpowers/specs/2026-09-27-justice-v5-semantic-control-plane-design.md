@@ -1863,6 +1863,9 @@ observedAt
 ```
 
 An exact persisted same-session activation record may be reused after restart only when all identity fields required by the contract still match. A record from another session never proves current activation.
+Justice stores one current selection per authorization and one current activation per `authorizationId + sessionId`. Explicit reselection atomically replaces the selection record; a later successful skill activation atomically replaces that session's activation record.
+
+A selection/activation store read, schema, or write failure is fail-closed for methodology evidence: it cannot yield `already_active` or trusted recovered selection. Runtime may remain fail-open only under the existing global policy, while acceptance remains `NOT_PROVEN`.
 
 #### Decision state
 
