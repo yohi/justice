@@ -701,7 +701,10 @@ export class OpenCodeAdapter {
       }
 
       for (const [key, value] of Object.entries(modified.args)) {
-        if (key === "prompt") continue;
+        if (
+          key === "prompt" ||
+          (isTask && (key === "task_id" || key === "taskId" || key === "justice_task_id"))
+        ) continue;
         // eslint-disable-next-line security/detect-object-injection
         output.args[key] = value;
       }

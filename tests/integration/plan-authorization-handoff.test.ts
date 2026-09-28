@@ -45,7 +45,7 @@ describe("plan-scoped implementation handoff", () => {
     await approve(plugin);
 
     const pre = await invoke(plugin, "call-1");
-    expect(pre).toMatchObject({ action: "inject", modifiedPayload: { args: { task_id: "task-1" } } });
+    expect(pre).toMatchObject({ action: "inject", modifiedPayload: { args: { justice_task_id: "task-1" } } });
     await plugin.handleEvent({
       type: "PostToolUse",
       sessionId: "s-1",

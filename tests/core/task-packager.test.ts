@@ -142,6 +142,12 @@ describe("TaskPackager", () => {
     );
   });
 
+  it("resolves Justice correlation from a modified payload without a wire task id", () => {
+    expect(resolveTaskIdFromModifiedPayload({ args: { justice_task_id: "task-1" } })).toBe(
+      "task-1",
+    );
+  });
+
   it("omits loadSkills when no caller or required skills are provided", () => {
     expect(enrichTaskToolInput({ prompt: "run" }, "task-generated")).toEqual({
       prompt: "run",

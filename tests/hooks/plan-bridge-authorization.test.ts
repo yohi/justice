@@ -698,7 +698,7 @@ describe("PlanBridge authorization restoration", () => {
 
     expect(response).toMatchObject({
       action: "inject",
-      modifiedPayload: { args: { task_id: "task-1" } },
+      modifiedPayload: { args: { justice_task_id: "task-1" } },
     });
   });
 

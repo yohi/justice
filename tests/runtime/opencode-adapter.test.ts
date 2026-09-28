@@ -300,6 +300,38 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args.task_id).toBe("ses_abc");
   });
 
+  it("preserves caller ses continuation when an inject payload contains a logical task id", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "approved plan",
+      modifiedPayload: { args: { task_id: "task-1" } },
+    });
+    const output = { args: { prompt: "continue", task_id: "ses_abc" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "inject-ses" }, output);
+
+    expect(output.args.task_id).toBe("ses_abc");
+  });
+
+  it("removes caller logical task id after an inject payload returns the same id", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "approved plan",
+      modifiedPayload: { args: { task_id: "task-1" } },
+    });
+    const output = { args: { prompt: "continue", task_id: "task-1" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "inject-task" }, output);
+
+    expect(output.args).not.toHaveProperty("task_id");
+  });
+
   it("keeps unknown task id visible to Justice then removes it from final task args", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

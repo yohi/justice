@@ -37,7 +37,7 @@ export function resolveTaskIdFromModifiedPayload(payload: unknown): string | und
     return undefined;
   }
   const args = payload.args as Record<string, unknown>;
-  const taskId = args.task_id ?? args.taskId;
+  const taskId = args.justice_task_id ?? args.task_id ?? args.taskId;
   return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
 }
 

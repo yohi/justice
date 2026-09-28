@@ -39,6 +39,7 @@ import { LearningExtractor } from "../core/learning-extractor";
 import {
   mergeTaskLoadSkills,
   normalizeTaskToolInput,
+  resolveOmoContinuationTaskId,
   resolveTaskIdFromToolInput,
   resolveSkillsFromToolInput,
 } from "../core/task-packager";
@@ -1086,8 +1087,10 @@ export class PlanBridge {
       delete normalizedArgs.category;
     }
     normalizedArgs.prompt = authoritativePrompt;
-    normalizedArgs.task_id =
-      resolveTaskIdFromToolInput(event.payload.toolInput) ?? delegation.taskId;
+    delete normalizedArgs.task_id;
+    const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
+    if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
+    normalizedArgs.justice_task_id = delegation.taskId;
     delete normalizedArgs.skills;
     delete normalizedArgs.loadSkills;
     delete normalizedArgs.load_skills;

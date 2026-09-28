@@ -195,7 +195,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(first.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
     expect(second.action).toBe("inject");
     if (second.action !== "inject") throw new Error("expected second inject response");
-    expect(second.modifiedPayload).toMatchObject({ args: { task_id: "task-1" } });
+    expect(second.modifiedPayload).toMatchObject({ args: { justice_task_id: "task-1" } });
   });
 
   it("invalidates an arm when the active plan changes", async () => {
@@ -321,7 +321,7 @@ describe("PlanBridge.handleImplementationArm", () => {
 
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected inject response");
-    expect(response.modifiedPayload).toMatchObject({ args: { task_id: "task-1" } });
+    expect(response.modifiedPayload).toMatchObject({ args: { justice_task_id: "task-1" } });
   });
 
   it("clears a session arm during cleanup", async () => {

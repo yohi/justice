@@ -371,11 +371,14 @@ describe("ObservationHandler tool observation", () => {
     }
     expect(modified.args).toMatchObject({
       prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
-      task_id: "task-1",
+      justice_task_id: "task-1",
     });
     expect(modified.args.prompt).toContain("### Task 1: Observe tools");
     expect(modified.args.prompt.indexOf("**CALLER CONTEXT**"))
       .toBeLessThan(modified.args.prompt.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
+
+    const observationTaskInput = { ...modified.args, task_id: modified.args.justice_task_id };
+    delete observationTaskInput.justice_task_id;
 
     const { reader, writer } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-handler");
@@ -403,7 +406,7 @@ describe("ObservationHandler tool observation", () => {
       type: "PreToolUse",
       sessionId: "session-1",
       callId: "call-task",
-      payload: { toolName: "task", toolInput: modified.args },
+      payload: { toolName: "task", toolInput: observationTaskInput },
     });
     const response = await handler.handlePostToolUse({
       type: "PostToolUse",
@@ -411,7 +414,7 @@ describe("ObservationHandler tool observation", () => {
       callId: "call-task",
       payload: {
         toolName: "task",
-        toolInput: modified.args,
+        toolInput: observationTaskInput,
         toolResult: "task complete",
         error: false,
       },

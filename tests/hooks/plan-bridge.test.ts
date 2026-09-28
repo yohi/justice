@@ -394,7 +394,7 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toEqual({
         args: {
           prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
-          task_id: "task-1",
+          justice_task_id: "task-1",
           load_skills: [
             "domain-skill",
             "test-driven-development",
@@ -541,7 +541,7 @@ describe("PlanBridge", () => {
       expect(response.modifiedPayload).toEqual({
         args: {
           prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
-          task_id: "task-1",
+          justice_task_id: "task-1",
           load_skills: ["test-driven-development", "verification-before-completion"],
           category: "sp-implementation",
         },
