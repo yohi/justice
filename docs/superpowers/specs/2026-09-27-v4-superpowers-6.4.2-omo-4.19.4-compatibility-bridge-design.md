@@ -686,13 +686,21 @@ The generated OpenCode V1 `opencode.json` pins exactly:
     "oh-my-openagent@4.19.4",
     "superpowers@git+https://github.com/obra/superpowers.git#v6.4.2"
   ],
-  "model": "<JUSTICE_HOST_TEST_MODEL>"
+  "model": "<JUSTICE_HOST_TEST_MODEL>",
+  "permission": {
+    "external_directory": {
+      "*": "deny",
+      "<JUSTICE_REPO>/dist/**": "allow"
+    }
+  }
 }
 ```
 
+The only external-directory exception is the local Justice plugin's `dist/` files, which OpenCode needs to load the plugin. All other paths outside the smoke workspace are denied. The harness reads back and verifies this policy in each generated config before starting OpenCode. This policy applies to activation and continuation runs in both independent workspaces. If the pinned OpenCode version cannot enforce the restriction while loading the plugin, every real-host invocation must instead run inside an OS sandbox limited to the current workspace and necessary Justice plugin files. If neither boundary can be enforced, the real-host smoke is setup blocked and must not run.
+
 The project-local `.omo/omo.jsonc` binds the smoke `sp-implementation` category to the same `JUSTICE_HOST_TEST_MODEL`; no global OmO config is required.
 
-The harness must verify `opencode --version` is exactly `1.18.29` before any capability claim. Failure to resolve a pinned plugin, model, provider, or credential is setup/upstream blocked, not a Justice capability failure.
+The harness must verify `opencode --version` is exactly `1.18.29` before any capability claim. Failure to resolve a pinned plugin, model, provider, or credential is setup/upstream blocked, not a Justice capability failure. It must also verify the generated `external_directory` deny policy before any `--auto` invocation, or verify the bounded OS sandbox fallback; unrestricted real-host `--auto` runs are forbidden.
 
 ### Fixed Activation and Execution Method
 

@@ -498,9 +498,17 @@ Each workspace gets this exact OpenCode V1 plugin contract, with the repository 
     "oh-my-openagent@4.19.4",
     "superpowers@git+https://github.com/obra/superpowers.git#v6.4.2"
   ],
-  "model": "<JUSTICE_HOST_TEST_MODEL>"
+  "model": "<JUSTICE_HOST_TEST_MODEL>",
+  "permission": {
+    "external_directory": {
+      "*": "deny",
+      "<JUSTICE_REPO>/dist/**": "allow"
+    }
+  }
 }
 ```
+
+The external-directory allowlist is limited to the local Justice plugin's `dist/` files because OpenCode must load that plugin from the repository. No other path outside the smoke workspace may be allowed. Apply this policy to both workspaces and verify it by reading back each generated `opencode.json` before any OpenCode invocation. If this OpenCode version cannot enforce the policy while loading the plugin, run every real-host invocation inside an OS sandbox whose filesystem access is limited to the current smoke workspace and the necessary Justice plugin files. If neither restriction can be enforced, classify the real-host smoke as setup blocked and do not run it.
 
 Each workspace also gets project-local `.omo/omo.jsonc`:
 
@@ -520,6 +528,7 @@ Each workspace also gets project-local `.omo/omo.jsonc`:
 ```
 
 The verifier must read both generated files back and assert the exact three plugin specifiers and exact model string before starting OpenCode. Package/plugin resolution failure is setup/upstream blocked.
+It must also assert the exact `external_directory` policy (`*` denied and only `<JUSTICE_REPO>/dist/**` allowed). The activation and continuation invocations in both the `fresh/` and `caller-owned/` workspaces must use that verified policy or the bounded OS sandbox fallback; do not run any `--auto` invocation without one of these restrictions.
 
 - [ ] **Step 3: Write the two fixed approved smoke plans and sentinels**
 
