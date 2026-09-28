@@ -129,7 +129,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
-    const spy = vi.spyOn(justice, "handleEvent");
+    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
 
     await adapter.onEvent({
       event: {
@@ -155,7 +155,7 @@ describe("OpenCodeAdapter.onEvent", () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
-    const spy = vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const spy = vi.spyOn(justice, "handleEvent");
 
     await adapter.onEvent({
       event: {
@@ -262,6 +262,63 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps logical task id visible to Justice then removes it from final task args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    let justiceInput: unknown;
+    vi.spyOn(justice, "handleEvent").mockImplementation(async (event) => {
+      justiceInput = structuredClone(event);
+      return { action: "proceed" };
+    });
+    const output = { args: { prompt: "run", task_id: "task-1" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "logical" }, output);
+
+    expect(justiceInput).toMatchObject({
+      payload: { toolInput: { task_id: "task-1" } },
+    });
+    expect(output.args).not.toHaveProperty("task_id");
+  });
+
+  it("keeps ses continuation visible to Justice and final OmO args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    let justiceInput: unknown;
+    vi.spyOn(justice, "handleEvent").mockImplementation(async (event) => {
+      justiceInput = structuredClone(event);
+      return { action: "proceed" };
+    });
+    const output = { args: { prompt: "run", task_id: "ses_abc" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "continuation" }, output);
+
+    expect(justiceInput).toMatchObject({
+      payload: { toolInput: { task_id: "ses_abc" } },
+    });
+    expect(output.args.task_id).toBe("ses_abc");
+  });
+
+  it("keeps unknown task id visible to Justice then removes it from final task args", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    let justiceInput: unknown;
+    vi.spyOn(justice, "handleEvent").mockImplementation(async (event) => {
+      justiceInput = structuredClone(event);
+      return { action: "proceed" };
+    });
+    const output = { args: { prompt: "run", task_id: "opaque-id" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "unknown" }, output);
+
+    expect(justiceInput).toMatchObject({
+      payload: { toolInput: { task_id: "opaque-id" } },
+    });
+    expect(output.args).not.toHaveProperty("task_id");
+  });
+
   it("converts task tool invocations into PreToolUseEvent", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -352,7 +409,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
 
     expect(output.args.category).toBe("sp-implementation");
-    expect(output.args.task_id).toBe("task-1");
+    expect(output.args).not.toHaveProperty("task_id");
     for (const field of [
       "subagent_type",
       "agent",
@@ -396,7 +453,6 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args).toEqual({
       prompt: "original",
       category: "sp-implementation",
-      task_id: "task-1",
       load_skills: ["programming"],
       run_in_background: true,
     });
@@ -426,7 +482,6 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args).toBe(originalArgs);
     expect(output.args).toEqual({
       prompt: "original",
-      task_id: "task-2",
       load_skills: ["programming"],
       run_in_background: false,
     });

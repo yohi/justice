@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   enrichTaskToolInput,
   mergeTaskLoadSkills,
+  normalizeTaskToolInputForJusticeInPlace,
+  normalizeTaskToolInputForOmoWireInPlace,
+  resolveOmoContinuationTaskId,
   resolveSkillsFromToolInput,
   resolveTaskIdFromModifiedPayload,
   TaskPackager,
@@ -10,6 +13,39 @@ import type { DelegationRequest } from "../../src/core/types";
 
 describe("TaskPackager", () => {
   const packager = new TaskPackager();
+
+  it("preserves logical and unknown task ids for Justice input normalization", () => {
+    for (const taskId of ["task-3", "opaque-id", "ses_abc"]) {
+      const input: Record<string, unknown> = { task_id: taskId };
+      normalizeTaskToolInputForJusticeInPlace(input);
+      expect(input.task_id).toBe(taskId);
+    }
+  });
+
+  it("preserves routing fields for Justice input normalization", () => {
+    const input: Record<string, unknown> = { subagent_type: "deep", category: "sp-review" };
+    normalizeTaskToolInputForJusticeInPlace(input);
+    expect(input).toMatchObject({ subagent_type: "deep", category: "sp-review" });
+  });
+
+  it("keeps only ses continuation on OmO wire normalization", () => {
+    expect(resolveOmoContinuationTaskId({ task_id: "ses_abc" })).toBe("ses_abc");
+    expect(resolveOmoContinuationTaskId({ taskId: "ses_abc" })).toBe("ses_abc");
+    expect(resolveOmoContinuationTaskId({ task_id: "task-3" })).toBeUndefined();
+    expect(resolveOmoContinuationTaskId({ task_id: "opaque-id" })).toBeUndefined();
+    const input: Record<string, unknown> = { taskId: "ses_abc" };
+    normalizeTaskToolInputForOmoWireInPlace(input);
+    expect(input).toHaveProperty("task_id", "ses_abc");
+    expect(input).not.toHaveProperty("taskId");
+  });
+
+  it("removes logical and unknown task ids on OmO wire normalization", () => {
+    for (const taskId of ["task-3", "opaque-id"]) {
+      const input: Record<string, unknown> = { task_id: taskId };
+      normalizeTaskToolInputForOmoWireInPlace(input);
+      expect(input).not.toHaveProperty("task_id");
+    }
+  });
 
   it("packages a category-only worker payload", () => {
     const request: DelegationRequest = packager.package("sp-implementation", {
