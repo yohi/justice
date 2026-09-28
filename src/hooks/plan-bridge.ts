@@ -1081,7 +1081,9 @@ export class PlanBridge {
       event.payload.toolInput,
       delegation.category,
     );
-    const callerOwnedRouting = typeof event.payload.toolInput.subagent_type === "string";
+    const callerSubagentType = event.payload.toolInput.subagent_type;
+    const callerOwnedRouting =
+      typeof callerSubagentType === "string" && callerSubagentType !== "general";
     if (callerOwnedRouting) {
       normalizedArgs.subagent_type = event.payload.toolInput.subagent_type;
       delete normalizedArgs.category;
