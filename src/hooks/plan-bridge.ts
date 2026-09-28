@@ -1047,6 +1047,28 @@ export class PlanBridge {
       event.payload.toolInput,
     );
 
+    const semanticReviewCategory = resolveSuperpowersSddCategory(
+      event.payload.toolInput,
+      "sp-implementation",
+    );
+    if (
+      semanticReviewCategory === "sp-review" ||
+      semanticReviewCategory === "sp-final-review"
+    ) {
+      const normalizedArgs = normalizeTaskToolInputWithCategory(
+        event.payload.toolInput,
+        semanticReviewCategory,
+      );
+      delete normalizedArgs.task_id;
+      const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
+      if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
+      return {
+        action: "inject",
+        injectedContext: "",
+        modifiedPayload: { args: normalizedArgs },
+      };
+    }
+
     // Fail-open ONLY on I/O error
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
@@ -1064,22 +1086,7 @@ export class PlanBridge {
     const initialDelegation = initialResult?.request;
 
     if (!initialDelegation) {
-      const reviewCategory = resolveSuperpowersSddCategory(
-        event.payload.toolInput,
-        "sp-implementation",
-      );
-      if (reviewCategory === "sp-final-review") {
-        const normalizedArgs = normalizeTaskToolInputWithCategory(
-          event.payload.toolInput,
-          reviewCategory,
-        );
-        return {
-          action: "inject",
-          injectedContext: "",
-          modifiedPayload: { args: normalizedArgs },
-        };
-      }
-      // Plan is now done
+      // Plan is now done. Semantic final review is handled before implementation task selection.
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
