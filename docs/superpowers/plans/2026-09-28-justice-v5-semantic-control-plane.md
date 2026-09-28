@@ -2386,8 +2386,9 @@ git commit -m "feat: expose Justice v5 recovery and gate state"
   - Superpowers v6.4.2;
   - capability-first OpenCode support;
   - effective `omo.jsonc` configuration;
-  - Superpowers owns orchestration;
-  - Justice owns semantic evidence/conformance/acceptance.
+  - Superpowers owns WHAT: method selection + workflow/review progression;
+  - Justice owns activation bridge + SEMANTIC HOW: classification/category translation/correlation/evidence/acceptance;
+  - OmO owns CONCRETE HOW: agent/runtime/model/provider/reasoning/retry/fallback.
 
 - [ ] **Step 1: Write the missing cross-component E2E cases**
 
@@ -2397,6 +2398,7 @@ In `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` imp
 - `executing_plans_requires_final_review_and_final_conformance`
 - `implementation_discovered_design_change_requires_reconciliation_before_resume`
 - `complete_evidence_allows_plan_complete`
+- `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo`
 
 Do not duplicate focused tests whose exact evidence is already named in the traceability table.
 
@@ -2416,7 +2418,10 @@ Required corrections:
 - Superpowers upstream: `obra/superpowers`.
 - OmO upstream: `code-yeongyu/oh-my-openagent`.
 - current OmO config: effective `omo.jsonc` system.
-- remove Justice-owned review scheduling language.
+- remove Justice-owned review/task scheduling language.
+- document the selected-method Superpowers activation bridge without implying Justice owns method-selection semantics.
+- document recognized Superpowers `general` → Justice semantic category translation and the preservation of specialized/external routing.
+- document OmO as the sole concrete model/provider/runtime resolver for translated work.
 - explain `justice_review` as evidence/gate inspection.
 - record audited baselines and exact tags/SHAs in compatibility audit.
 - explain v4 persistent-state authority migration.
