@@ -259,6 +259,8 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 この衝突優先の保証は、`config.command` に含まれる利用者定義を対象とします。`.opencode/commands/*.md` で定義したコマンドは OpenCode が別経路で読み込む可能性があり、`config` hook からその定義を確認できません。Markdown 定義との優先順位はサポート対象ホストでの opt-in E2E による確認が必要です。
 
+OpenCode の command registry は LLM の tool list とは別系統です。Justice は `experimental.chat.system.transform` で、解決済み `config.command` に存在する安全な `justice-*` コマンド名だけを LLM の system context に公開します。これは存在認識のためだけであり、slash command を LLM-callable tool に変換しません。特に `/justice-implement --approved` の承認は引き続き利用者による明示操作が必要です。
+
 > [!NOTE]
 > 自動登録される template は `$ARGUMENTS` です。`$ARGUMENTS` は、コマンド名の後に入力した文字列全体がそのまま渡されるプレースホルダーです（`/justice-start ship the feature --plan plan.md` なら `ship the feature --plan plan.md`）。
 > Justice のフックは同じ引数文字列を独自にパースするため、**template の内容自体は Justice の動作に影響しません**。template が決めるのは「LLM に送られるプロンプト」だけで、Justice のガイダンス注入は `output.parts` への追記という別経路で行われます。そのため、最も単純で安全な template は `"$ARGUMENTS"`（入力をそのままプロンプトにする）です。

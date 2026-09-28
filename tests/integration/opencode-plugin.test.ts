@@ -39,6 +39,7 @@ describe("OpenCodePlugin (integration)", () => {
         "event",
         "chat.message",
         "chat.params",
+        "experimental.chat.system.transform",
         "tool.execute.before",
         "command.execute.before",
         "tool.execute.after",
@@ -130,6 +131,45 @@ describe("OpenCodePlugin (integration)", () => {
       level: "warn",
       message: expect.stringContaining("Failed to auto-register slash commands"),
     }));
+  });
+
+  it("exposes resolved Justice slash-command names to the LLM system context", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+    const config: { command: Record<string, unknown> } = {
+      command: {
+        "justice-implement-writing-plans": {
+          template: "$ARGUMENTS",
+          description: "DO NOT EXPOSE THIS DESCRIPTION",
+        },
+        other: { template: "$ARGUMENTS" },
+      },
+    };
+
+    await handlers.config?.(config as never);
+
+    const output = { system: ["base-system"] };
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "experimental.chat.system.transform"
+    ]?.({ sessionID: "s", model: {} }, output);
+
+    expect(output.system).toHaveLength(2);
+    expect(output.system[1]).toContain("- /justice-start");
+    expect(output.system[1]).toContain("- /justice-implement");
+    expect(output.system[1]).toContain("- /justice-implement-writing-plans");
+    expect(output.system[1]).not.toContain("other");
+    expect(output.system[1]).not.toContain("DO NOT EXPOSE THIS DESCRIPTION");
+    expect(output.system[1]).toContain("not model-callable tools");
+  });
+
+  it("leaves the LLM system context untouched before config resolution", async () => {
+    const handlers = await OpenCodePlugin(fakeInit() as never);
+    const output = { system: ["base-system"] };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "experimental.chat.system.transform"
+    ]?.({ sessionID: "s", model: {} }, output);
+
+    expect(output.system).toEqual(["base-system"]);
   });
 
   it("invokes lazy init only once across multiple hook entries", async () => {
