@@ -2532,17 +2532,22 @@ Any tracked change outside the single Superpowers final fix wave invalidates the
 |---|---|
 | JUS5-COMP-01, JUS5-COMP-02, JUS5-COMP-03, JUS5-COMP-04 | Tasks 1, 11 |
 | JUS5-HARNESS-01, JUS5-HARNESS-02 | Tasks 1, 6, 11 |
-| JUS5-OWN-01, JUS5-OWN-02, JUS5-OWN-03 | Tasks 6, 10, 12 |
+| JUS5-OWN-01, JUS5-OWN-02, JUS5-OWN-03 | Tasks 2, 6, 7, 10, 12 |
 | JUS5-GATE-01, JUS5-GATE-02 | Task 9 |
 | JUS5-CONFIG-01, JUS5-CONFIG-02, JUS5-CONFIG-03, JUS5-CONFIG-04, JUS5-CONFIG-05 | Task 11 |
 | JUS5-CAT-01, JUS5-CAT-02, JUS5-CAT-03, JUS5-CAT-04 | Tasks 2, 12 |
-| JUS5-CTRL-01, JUS5-CTRL-02, JUS5-CTRL-03 | Tasks 11, 12 |
+| JUS5-CAT-05 | Tasks 1, 2, 7, 10 |
+| JUS5-CAT-06, JUS5-CAT-07, JUS5-CAT-08 | Task 10 |
+| JUS5-CAT-09 | Tasks 2, 7, 10, 14 |
+| JUS5-CTRL-01, JUS5-CTRL-02, JUS5-CTRL-03 | Tasks 10, 11, 12 |
+| JUS5-ACT-01, JUS5-ACT-02, JUS5-ACT-03, JUS5-ACT-04 | Task 10 |
 | JUS5-PLAN-01, JUS5-PLAN-02, JUS5-PLAN-03, JUS5-PLAN-04, JUS5-PLAN-05 | Tasks 4, 10 |
 | JUS5-AUTH-01, JUS5-AUTH-02, JUS5-AUTH-03, JUS5-AUTH-04, JUS5-AUTH-05, JUS5-AUTH-06, JUS5-AUTH-07, JUS5-AUTH-08, JUS5-AUTH-09 | Tasks 3, 9 |
 | JUS5-SDD-01, JUS5-SDD-02, JUS5-SDD-03, JUS5-SDD-04 | Tasks 6, 7, 10 |
 | JUS5-INLINE-01, JUS5-INLINE-02 | Tasks 9, 10 |
 | JUS5-TASK-01, JUS5-TASK-02, JUS5-TASK-03, JUS5-TASK-04 | Tasks 2, 5, 10 |
-| JUS5-CORR-01, JUS5-CORR-02, JUS5-CORR-03, JUS5-CORR-04, JUS5-CORR-05, JUS5-CORR-06 | Tasks 2, 5, 6 |
+| JUS5-CORR-01, JUS5-CORR-02, JUS5-CORR-03, JUS5-CORR-04, JUS5-CORR-05 | Tasks 2, 5, 6 |
+| JUS5-CORR-06 | Tasks 1, 2, 6, 7, 10 |
 | JUS5-STATE-01, JUS5-STATE-02, JUS5-STATE-03, JUS5-STATE-04 | Tasks 3, 5, 8, 13 |
 | JUS5-REV-01, JUS5-REV-02, JUS5-REV-03, JUS5-REV-04, JUS5-REV-05, JUS5-REV-06, JUS5-REV-07, JUS5-REV-08, JUS5-REV-09, JUS5-REV-10, JUS5-REV-11 | Tasks 1, 7, 8 |
 | JUS5-CONFORM-01, JUS5-CONFORM-02, JUS5-CONFORM-03, JUS5-CONFORM-04, JUS5-CONFORM-05, JUS5-CONFORM-06, JUS5-CONFORM-07, JUS5-CONFORM-08, JUS5-CONFORM-09 | Tasks 4, 9 |
@@ -2561,20 +2566,23 @@ Any tracked change outside the single Superpowers final fix wave invalidates the
 
 | Design contract | Owning task(s) |
 |---|---|
-| INV-01, J5D-OWN-01 | Tasks 6, 10 |
-| INV-02, J5D-OWN-02, J5D-RUNTIME-01 | Tasks 2, 12 |
+| INV-01, J5D-OWN-01, J5D-ACT-01 | Task 10 |
+| INV-02, J5D-OWN-02, J5D-RUNTIME-01 | Tasks 2, 7, 10, 12 |
 | INV-03, J5D-GATE-01 | Task 9 |
 | INV-04 | Tasks 5–9, 13 |
 | INV-05, INV-06, J5D-COMPLETE-01 | Tasks 3, 4, 9, 14 |
 | J5D-TASK-01 | Tasks 5, 10 |
 | J5D-CHAIN-01, J5D-CHAIN-02, J5D-RULING-01 | Tasks 3, 9 |
-| J5D-CORR-01, J5D-CORR-02, J5D-ROUTE-01 | Tasks 2, 5, 6 |
+| J5D-CORR-01, J5D-CORR-02 | Tasks 2, 5, 6 |
+| J5D-ROUTE-01 | Tasks 1, 2, 7, 10 |
+| J5D-ROUTE-02 | Tasks 2, 7, 10 |
 | J5D-PROJ-01, J5D-PROJ-02, J5D-PROJ-03 | Task 4 |
 | J5D-REVIEW-01, J5D-REVIEW-02, J5D-REVIEW-03, J5D-REVIEW-04 | Tasks 1, 7 |
 | J5D-QUALITY-01, J5D-STORAGE-01 | Task 8 |
 | J5D-CONFIG-01, J5D-DOCTOR-01 | Task 11 |
 | J5D-PERSIST-01, J5D-REC-01 | Task 13 |
 | J5D-CAT-01 | Tasks 2, 12 |
+| J5D-CAT-02 | Tasks 2, 10, 14 |
 | J5D-DEP-01 | Task 10 |
 
 
@@ -2604,7 +2612,7 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 18 | all clauses SATISFIED, no blocking quality → completion permitted | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `complete_evidence_allows_plan_complete` | E2E |
 | 19 | Justice does not emit canonical `deep` | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `does_not_emit_legacy_deep` | unit |
 | 20 | custom `sp-*` coexist with OmO v5 routing | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `custom_sp_categories_coexist_with_omo_v5_categories` | unit |
-| 21 | Justice does not directly select model/provider | 2 | `tests/core/v5-task-routing-contract.test.ts` | `justice_does_not_select_model_or_provider` | unit |
+| 21 | Justice does not directly select model/provider | 2 | `tests/core/v5-task-routing-contract.test.ts` | `justice_does_not_select_concrete_model_or_provider` | unit |
 | 22 | compatible OpenCode patch not rejected solely by version | 11 | `tests/runtime/doctor-v5.test.ts` | `compatible_patch_with_required_capabilities_is_supported` | integration |
 | 23 | missing required host capability reported accurately | 11 | `tests/runtime/doctor-v5.test.ts` | `missing_required_host_capability_is_reported_unsupported` | integration |
 | 24 | compaction/restart retains plan/task/review correlation | 13 | `tests/core/v5-recovery.test.ts` | `recovers_plan_task_review_correlation_after_restart` | integration |
@@ -2624,6 +2632,12 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 38 | v4 plan-only authorization not auto-promoted | 3 | `tests/core/v5-persistence.test.ts` | `v4_plan_authorization_is_not_promoted_to_v5_authority` | unit |
 | 39 | v4 review-dispatch state cannot resume/satisfy v5 gate | 13 | `tests/core/v5-recovery.test.ts` | `v4_review_dispatch_state_does_not_resume_or_satisfy_v5_review_gate` | integration |
 | 40 | unknown/newer persistence preserved and acceptance fail-closed | 13 | `tests/core/v5-recovery.test.ts` | `unknown_newer_schema_is_preserved_and_acceptance_fails_closed` | integration |
+| 41 | authorized implementation intent activates the selected Superpowers execution method | 10 | `tests/core/workflow-activation-v5.test.ts` | `authorized_implementation_activates_selected_superpowers_execution_method` | integration |
+| 42 | Justice activation does not own Superpowers task/review progression | 10 | `tests/core/superpowers-ownership-v5.test.ts` | `justice_activation_does_not_own_superpowers_task_progression` | unit |
+| 43 | recognized Superpowers generic worker translates to one Justice semantic category | 10 | `tests/runtime/opencode-adapter-semantic-routing.test.ts` | `recognized_superpowers_general_worker_translates_to_justice_category` | integration |
+| 44 | non-Superpowers explicit subagent_type remains caller-owned | 2 | `tests/core/v5-task-routing-contract.test.ts` | `preserves_non_superpowers_explicit_subagent_type_without_category_injection` | unit |
+| 45 | semantic classification uses task semantics/complexity without selecting concrete runtime | 10 | `tests/unit/core/execution-role-classifier.test.ts` | `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime` | unit |
+| 46 | OmO remains concrete model/provider/runtime resolver for translated Superpowers work | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo` | E2E |
 
 ---
 
@@ -2633,14 +2647,15 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
-| Task 2 | Tasks 5–12 | `TaskIdentity`, `ReviewFindingV5`, `TaskCategory`, `TaskRoutingTarget` |
+| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `TaskRoutingTarget`, `SuperpowersRoutingTranslationResult`, pure `translateTaskRouting` |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
-| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
-| Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
+| Task 4 | Tasks 7–10, 13–14 | `ParsedSuperpowersTask`, `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
+| Task 5 | Tasks 6–10, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey`; Task 10 may add trusted same-authorization recovery lookup without changing correlation identity |
 | Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
-| Task 7 | Tasks 8–9, 13 | current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds` transport, authoritative child binding, `JusticeReviewResult`, marker↔machine ID and new-breakage collision validation |
+| Task 7 | Tasks 8–10, 13 | recognized review provenance/kind, `sp-review`/`sp-final-review` parent-call translation, current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds`, authoritative child binding, `JusticeReviewResult` |
 | Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
+| Task 10 | Task 14 | `WorkflowActivationDecision`, observed selected-method evidence, `SemanticClassificationResult`, implementation semantic-category translation, Superpowers ownership invariants |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
@@ -2655,13 +2670,16 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 1. **Requirements → Design → Plan coverage**
    - every JUS5 requirement family maps to at least one task above;
    - every J5D registry contract maps to at least one task above.
-2. **40 scenarios**
+2. **46 scenarios**
    - every Design §29 scenario has an owning task/test in the traceability table.
 3. **Type/signature consistency**
-   - `ApprovedArtifactChain`, `TaskIdentity`, `FindingId`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
+   - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
 4. **Ownership**
+   - Superpowers remains the owner of execution-method selection and all task/review/fix/final progression;
+   - Justice owns only selected-method activation plus semantic classification/category translation/correlation/evidence/acceptance;
    - no task adds Justice-owned task/review/fix scheduling;
-   - no task adds model/provider/retry/fallback ownership.
+   - no task adds concrete model/provider/reasoning/retry/fallback ownership;
+   - recognized Superpowers generic `general` is translated without breaking category/subagent_type XOR; explicit specialized/external routing and `ses_...` continuation remain preserved.
 5. **TDD**
    - production behavior changes have RED then GREEN steps;
    - Task 1 is a regression gate for the pre-established baseline; failure is upstream compatibility drift, not architecture discovery.
