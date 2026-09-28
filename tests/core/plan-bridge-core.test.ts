@@ -16,6 +16,7 @@ function makeTask(overrides: Partial<PlanTask> = {}): PlanTask {
   return {
     id: "t1",
     title: "implement login",
+    rawBody: "## Task 1: implement login",
     steps: [],
     status: "pending",
     ...overrides,

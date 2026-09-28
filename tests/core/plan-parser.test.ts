@@ -75,6 +75,59 @@ describe("PlanParser", () => {
       const tasks = parser.parse("# Just a title\n\nSome text without tasks.");
       expect(tasks).toHaveLength(0);
     });
+
+    it("preserves the complete raw task body", () => {
+      const content = "## Task 1: First\r\n- [x] done\r\n\r\n### Task 2: Second\r\n- [ ] pending\r\n";
+      const tasks = parser.parse(content);
+
+      expect(tasks[0].rawBody).toBe("## Task 1: First\r\n- [x] done\r\n\r\n");
+      expect(tasks[1].rawBody).toBe("### Task 2: Second\r\n- [ ] pending\r\n");
+      expect(tasks[0].steps).toMatchObject([{ checked: true, lineNumber: 2 }]);
+      expect(tasks[0].status).toBe("completed");
+      expect(tasks[1].steps).toMatchObject([{ checked: false, lineNumber: 5 }]);
+      expect(tasks[1].status).toBe("pending");
+    });
+
+    it("preserves Interfaces tests signatures verification and expected output", () => {
+      const content = [
+        "### Task 1: Implement bridge",
+        "**Interfaces:**",
+        "- Produces: `PlanTask.rawBody: string`",
+        "- Consumes: exact task section",
+        "**Tests:** assert preserved data",
+        "`parse(content: string): PlanTask[]`",
+        "**Verification:**",
+        "Run: `bun run typecheck`",
+        "Expected: zero errors",
+      ].join("\n");
+
+      const [task] = parser.parse(content);
+
+      expect(task.rawBody).toBe(content);
+    });
+
+    it("ignores task headings inside fenced code blocks", () => {
+      const content = [
+        "## Task 1: Real task",
+        "```markdown",
+        "### Task 999: example",
+        "~~~",
+        "## Task 2: Also example",
+        "~~~",
+        "```",
+        "- [ ] actual step",
+        "## Task 2: Next real task",
+        "- [ ] next step",
+      ].join("\n");
+      const tasks = parser.parse(content);
+
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].rawBody).toBe(content.slice(0, content.indexOf("## Task 2: Next real task")));
+      expect(tasks[0].steps).toMatchObject([{ description: "actual step", lineNumber: 8 }]);
+      expect(tasks[0].status).toBe("pending");
+      expect(tasks[1].id).toBe("task-2");
+      expect(tasks[1].steps[0].lineNumber).toBe(10);
+    });
   });
 
   it("derives task-1 from both ordinary and leading-zero task headings", () => {
