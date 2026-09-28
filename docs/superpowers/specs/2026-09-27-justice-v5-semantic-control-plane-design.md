@@ -919,7 +919,7 @@ OpenCode task(subagent_type="general")
         ↓
 tool.execute.before(parent sessionID, callID)
         ↓
-Justice recognizes review and persists PendingReviewCorrelation
+Justice recognizes review and records PendingReviewCorrelation in the current review-interoperability state
         ↓
 TaskTool creates child session
         ↓
