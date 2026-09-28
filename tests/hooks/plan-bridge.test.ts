@@ -291,6 +291,8 @@ describe("PlanBridge", () => {
       expect(response.injectedContext).toContain("## Task 1: Deep existing task");
       expect(response.injectedContext).toContain("**PREVIOUS LEARNINGS**");
       expect(response.injectedContext).toContain("Keep the existing parser contract unchanged.");
+      expect(response.injectedContext.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"))
+        .toBeLessThan(response.injectedContext.indexOf("**PREVIOUS LEARNINGS**"));
     });
   });
 
@@ -404,6 +406,7 @@ describe("PlanBridge", () => {
       const modifiedArgs = response.modifiedPayload?.args;
       expect(modifiedArgs?.prompt).toContain("- [ ] Setup project structure");
       expect(modifiedArgs?.prompt).toContain("**JUSTICE EXECUTION CONSTRAINTS**");
+      expect(modifiedArgs?.prompt.match(/do something/g)).toHaveLength(1);
       expect(modifiedArgs?.prompt?.indexOf("**TASK CONTRACT FROM APPROVED PLAN**"))
         .toBeLessThan(modifiedArgs?.prompt?.indexOf("**CALLER CONTEXT**"));
       expect(modifiedArgs?.prompt?.indexOf("**CALLER CONTEXT**"))

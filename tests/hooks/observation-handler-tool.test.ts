@@ -369,7 +369,13 @@ describe("ObservationHandler tool observation", () => {
     if (!isRecord(modified) || !isRecord(modified.args)) {
       throw new Error("expected enriched task args");
     }
-    expect(modified.args).toMatchObject({ prompt: "run task", task_id: "task-1" });
+    expect(modified.args).toMatchObject({
+      prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
+      task_id: "task-1",
+    });
+    expect(modified.args.prompt).toContain("### Task 1: Observe tools");
+    expect(modified.args.prompt.indexOf("**CALLER CONTEXT**"))
+      .toBeLessThan(modified.args.prompt.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
 
     const { reader, writer } = createMemFs();
     const logStore = new ObservationLogStore(writer, reader, "w-handler");
