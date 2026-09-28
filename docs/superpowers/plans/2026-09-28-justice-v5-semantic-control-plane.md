@@ -2082,7 +2082,6 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Modify: `src/core/plan-bridge-core.ts`
-- Modify: `src/core/execution-correlation.ts` only to expose trusted same-authorization recovery lookup
 - Modify: `src/core/dependency-analyzer.ts`
 - Modify: `src/core/plan-completion-detector.ts`
 - Modify: `src/core/execution-role-classifier.ts`
@@ -2092,7 +2091,6 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-dispatch-state-behavior.test.ts`
 - Test: `tests/core/plan-bridge-core.test.ts`
-- Test: `tests/core/execution-correlation.test.ts`
 - Test: `tests/core/dependency-analyzer.test.ts`
 - Test: `tests/unit/core/execution-role-classifier.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
@@ -2105,30 +2103,45 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Create: `tests/core/plan-completion-detector-v5.test.ts`
 
 **Interfaces — activation bridge:**
-- Implement registry-defined `resolveWorkflowActivation(input): WorkflowActivationDecision` in `workflow-activation.ts`.
-- Extend `ImplementationArmRequest.action="approve"` with optional `executionMethod?: SuperpowersExecutionMethod` representing **explicit** command/user selection.
-- Extend `ImplementationArmResult` with `activation: WorkflowActivationDecision`.
+- Implement registry-defined `resolveWorkflowMethodSelection(input): WorkflowMethodSelection` and `resolveWorkflowActivation(input): WorkflowActivationDecision` in `workflow-activation.ts`.
+- `workflow-activation.ts` owns `.justice/v5/workflow-activation-state.json` through existing AtomicPersistence and implements the registry-defined `WorkflowActivationStateStore`.
+- Extend `ImplementationArmRequest.action="approve"` with optional `executionMethod?: SuperpowersExecutionMethod` representing explicit user/command selection.
+- On explicit selection, persist `WorkflowMethodSelectionEvidence` with current `authorizationId`, current controller `sessionId`, selected method, and selection time.
+- `findLatestSelection(authorizationId)` may return a selection from another session. That recovery avoids re-asking which method was selected, but never proves current-session activation.
+- `findCurrentActivation(authorizationId, sessionId)` is the only persistence lookup that can satisfy `already_active` after restart.
+- Extend `ImplementationArmResult` with `selection: WorkflowMethodSelection` and `activation: WorkflowActivationDecision`.
 - Extend `CanonicalWorkflowSkill` with `subagent-driven-development | executing-plans`.
-- Extend `WorkflowDirectiveInput` with `executionMethod?: SuperpowersExecutionMethod`.
-- For implementation/implementation-arm directives:
-  - selected method present → `requiredSkills=[selected method]`, `nextAction="invoke_skill"`;
-  - no authoritative method → `implementation_method_required`; no task-delegation directive;
-  - activation unavailable → guidance reports unavailable; no direct OmO fallback.
-- OpenCode activation observation is exact: successful controller `skill` tool execution with `args.name === selected method` for the same parent session/active authorization marks selected methodology observed.
-- A subsequent implementation task call may be trusted as selected-method execution only after that activation observation or trusted recovery.
-- Recovery source is the latest trusted `ExecutionCorrelation.executionMethod` for the same active `authorizationId`; add `ExecutionCorrelationStore.findLatestTrustedByAuthorization(authorizationId)` if needed. No match means method selection is required again.
-- OmO `task_id=ses_...` never counts as methodology activation.
+- Extend `WorkflowDirectiveInput` with `activation?: WorkflowActivationDecision`.
+- Extend `WorkflowNextAction` with `continue_superpowers | await_method_selection | report_activation_blocked`.
+- Implementation/implementation-arm directive mapping is exact:
+  - `needs_activation` → `requiredSkills=[selected method]`, `nextAction="invoke_skill"`;
+  - `already_active` → `requiredSkills=[]`, `nextAction="continue_superpowers"`; do not invoke the skill again;
+  - `method_selection_required` → `requiredSkills=[]`, `nextAction="await_method_selection"`;
+  - `unavailable | conflict` → `requiredSkills=[]`, `nextAction="report_activation_blocked"`;
+  - implementation stages no longer use `delegate_task` as a Justice-owned progression action.
+- OpenCode activation observation is exact: successful controller `tool.execute.after` for tool `skill`, with `args.name === selected method`; use hook `sessionID` + `callID` plus active `authorizationId` to persist `WorkflowActivationEvidence`.
+- A worker call is trusted as selected-method execution only when `resolveWorkflowActivation` returns `already_active` for that same authorization/session/method.
+- Same-session persisted activation may satisfy `already_active` after restart; cross-session activation evidence is never reused.
+- Cross-session selection recovery flow is always: recovered selection → `needs_activation` → fresh current-session skill invocation → activation evidence.
+- Conflict policy:
+  - explicit current selection wins over stale recovered selection, but requires fresh activation if current activation is another method;
+  - recovered-only selection conflicting with current-session activation → `conflict` / untrusted;
+  - mismatched activation authorization/session → `conflict(activation_identity_mismatch)`.
+- OmO `task_id=ses_...` never counts as methodology selection or activation.
 
-**Activation source precedence:**
+**Selection / activation source model:**
 ```text
-explicit current implementation-start method
-> trusted same-authorization recovered method
-> observed Superpowers method selection
+MethodSelection:
+explicit current selection
+> latest trusted persisted selection for same authorization
 > method_selection_required
+
+ActivationEvidence:
+successful current-session skill(name=selected method)
+or exact persisted same authorization + same session + same method evidence
 ```
 
-Justice does not infer SDD vs inline from task complexity. Superpowers/user methodology intent remains authoritative. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If native skill invocation is unavailable for either method, return `unavailable`.
-
+Justice does not infer SDD vs inline from task complexity. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If native skill invocation is unavailable, return `unavailable`.
 **Interfaces — semantic classifier:**
 - Implement registry-defined `classifySemanticExecution(input): SemanticClassificationResult`.
 - Implementation input is the full Task 4 `ParsedSuperpowersTask` plus advisory cross-task dependency IDs; review input uses explicit `ReviewKindV5` semantics.
@@ -2166,8 +2179,14 @@ In `tests/core/workflow-activation-v5.test.ts`:
 - `authorized_implementation_activates_selected_superpowers_execution_method`
 - `authorized_implementation_activates_superpowers_sdd`
 - `explicit_inline_execution_activates_superpowers_executing_plans`
-- `explicit_method_precedes_recovered_and_observed_method`
-- `same_authorization_recovery_restores_execution_method_without_reselection`
+- `explicit_method_precedes_recovered_selection`
+- `same_authorization_recovery_restores_method_selection_without_reselection`
+- `observed_skill_activation_does_not_request_duplicate_skill_invocation`
+- `cross_session_recovered_method_requires_fresh_skill_activation`
+- `same_session_activation_evidence_can_be_reused_only_when_identity_matches`
+- `recovered_method_does_not_by_itself_prove_current_session_activation`
+- `conflicting_recovered_and_current_activation_is_fail_closed`
+- `explicit_selection_overrides_stale_recovery_but_requires_matching_activation`
 - `missing_authoritative_method_requires_method_selection`
 - `selected_method_capability_failure_does_not_silently_switch_method`
 - `superpowers_activation_failure_cannot_be_trusted_as_authorized_implementation`
@@ -2210,7 +2229,7 @@ Remove v4 active review/task progression behavior while retaining migration read
 
 - [ ] **Step 4: Implement activation bridge and activation observation**
 
-Wire `workflow-activation.ts`, `workflow-directives.ts`, `PlanBridge`, `justice-plugin.ts`, and OpenCode `tool.execute.before/after` observation for the native `skill` tool (`args.name`). Do not dispatch tasks from the bridge.
+Implement the AtomicPersistence-backed selection/activation store, then wire `workflow-activation.ts`, `workflow-directives.ts`, `PlanBridge`, `justice-plugin.ts`, and OpenCode `tool.execute.after` observation for the native `skill` tool (`args.name`). Persist successful current-session activation by authorization/session/method/call identity. Do not dispatch tasks from the bridge.
 
 - [ ] **Step 5: Implement semantic classifier and implementation translation**
 
@@ -2232,12 +2251,12 @@ Expected: PASS.
 git add \
   src/core/workflow-activation.ts src/core/workflow-directives.ts src/core/types.ts \
   src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts \
-  src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts src/core/execution-correlation.ts \
+  src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts \
   src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts \
   src/core/execution-role-classifier.ts src/core/category-classifier.ts \
   tests/core/workflow-activation-v5.test.ts tests/runtime/opencode-adapter-semantic-routing.test.ts \
   tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts \
-  tests/core/plan-bridge-core.test.ts tests/core/execution-correlation.test.ts tests/core/dependency-analyzer.test.ts \
+  tests/core/plan-bridge-core.test.ts tests/core/dependency-analyzer.test.ts \
   tests/unit/core/execution-role-classifier.test.ts tests/hooks/plan-bridge-authorization.test.ts \
   tests/hooks/plan-bridge-implement.test.ts tests/hooks/plan-bridge-posttooluse.test.ts \
   tests/hooks/plan-bridge.test.ts tests/integration/plan-bridge-fallback.test.ts \
