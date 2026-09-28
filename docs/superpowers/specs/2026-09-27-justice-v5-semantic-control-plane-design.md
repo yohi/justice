@@ -187,9 +187,9 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
-| J5D-REVIEW-02 | Justice observes the existing parent review call, correlates its child reviewer session, and injects the read-only Conformance Contract into that child session through the consumed `chat.message` parts surface; `tool.execute.before` is observation-only. |
-| J5D-REVIEW-03 | Trusted review evidence uses a versioned structured result bound to the same call/task/revision. |
-| J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, or untrusted review results fail closed. |
+| J5D-REVIEW-02 | Justice observes the existing parent review call; during the awaited child `chat.message` hook it resolves the child Session authoritatively with `client.session.get`, matches `parentID` to exactly one pending review, then injects one fully formed synthetic text Part. Session events are corroboration only. |
+| J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; final completion may compose one full final-review result with the single Superpowers final fix-wave scoped re-review into a candidate-head evidence closure. |
+| J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, or incompletely covered final-review evidence fails closed; older full-review evidence alone never authorizes a later candidate. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
 | J5D-STORAGE-01 | Directly observed structured review results are canonical; insecure file fallback never becomes trusted evidence. |
 | J5D-CONFIG-01 | Doctor/config verification uses OmO effective configuration precedence, not a single config file. |
@@ -899,33 +899,18 @@ If the signals are ambiguous, the execution may continue but the review is untru
 
 ### 14.2 Conformance Contract delivery — J5D-REVIEW-02
 
-Justice does **not** use `tool.execute.before` argument mutation as the delivery mechanism.
+Justice does not depend on asynchronous plugin `event` handler completion to bind a reviewer child before prompt delivery.
 
-For OpenCode v1.18.31 the exact TaskTool source establishes this constraint:
+OpenCode v1.18.31 establishes two different execution semantics:
 
-```text
-const taskArgs = { prompt, description, subagent_type, command }
+- `event` forwarding invokes plugin handlers without awaiting their returned Promise;
+- `chat.message` runs through `Plugin.trigger()`, which awaits each hook.
 
-plugin.trigger(
-  "tool.execute.before",
-  { tool: "task", sessionID, callID },
-  { args: taskArgs },
-)
-
-taskTool.execute(taskArgs, ...)
-```
-
-The hook receives the same mutable object for observation, but the runtime continues by executing the original `taskArgs` binding. Replacing or mutating the hook wrapper is therefore not a supported Justice guarantee for prompt delivery. The v1.18.31 source is byte-identical to v1.18.29 for:
-
-- `packages/opencode/src/session/prompt.ts` — blob `0f85d44f209ba792065aeb951f0bd2e12b59fae8`;
-- `packages/opencode/src/tool/task.ts` — blob `d8ca640cfba9a52d97e5180fda0ffa719910592b`;
-- `packages/plugin/src/index.ts` — blob `edfa0139dfcaf0e877ab906fabe8e0527afc3915`.
-
-The previously recorded real-runtime spike on OpenCode 1.18.29 remains valid evidence for parent `sessionID + callID`, child-session metadata, and parent/child event correlation. It is **not** evidence that a before-hook prompt mutation reaches the child.
+Therefore a published `session.created` event is useful evidence, but its Justice handler is **not** an ordering barrier before the child's first `chat.message`.
 
 #### Supported baseline delivery contract
 
-The v5 baseline review path is:
+The v5 review path is:
 
 ```text
 Superpowers v6.4.2 dispatches existing reviewer
@@ -933,84 +918,129 @@ Superpowers v6.4.2 dispatches existing reviewer
 OpenCode task(subagent_type="general")
         ↓
 tool.execute.before(parent sessionID, callID)
-        ↓ observation only
-Justice records PendingReviewCorrelation
+        ↓
+Justice recognizes review and persists PendingReviewCorrelation
         ↓
 TaskTool creates child session
         ↓
-session.created / session.updated exposes child.parentID
+TaskTool starts child prompt
         ↓
-Justice binds exactly one pending review call to child session
+chat.message(child sessionID, output.message, output.parts)
+        ↓ awaited Justice hook
+Justice awaits client.session.get({ path: { id: childSessionId } })
         ↓
-TaskTool calls ops.prompt(child session, params.prompt)
+authoritative child Session.parentID
         ↓
-createUserMessage(child)
+match exactly one pending review under that parent
         ↓
-chat.message(child session, output.parts)
+bind child ↔ parent review call
         ↓
-Justice appends review appendix by mutating output.parts IN PLACE
+append one synthetic Justice text Part to output.parts IN PLACE
         ↓
-OpenCode persists those same resolvedParts and runs reviewer
+reviewer executes with original prompt + appendix
+        ↓
+session.created/session.updated events
+        ↓ corroboration/cache/diagnostic only; timing irrelevant
         ↓
 tool.execute.after(parent sessionID, same callID)
         ↓
-same-call result / child metadata correlated as review evidence
+corroborate result/child metadata and close review correlation
 ```
 
-OpenCode v1.18.31 source establishes that `chat.message` is invoked after `resolvedParts` are created and before those same parts are normalized/saved:
+The authoritative binding operation happens inside the awaited `chat.message` hook itself. It does not wait for Justice's async `session.created/session.updated` event handler to finish.
+
+The plugin client capability required by this design is the OpenCode v1.18.31 SDK operation:
+
+```ts
+client.session.get({
+  path: {
+    id: childSessionId
+  }
+})
+```
+
+whose successful response contains a Session with:
+
+```ts
+{
+  id: string;
+  parentID?: string;
+  ...
+}
+```
+
+Binding succeeds only when all conditions hold:
+
+1. session lookup succeeds;
+2. returned `Session.id === input.sessionID`;
+3. `Session.parentID` exists;
+4. exactly one pending recognized review has `parentSessionId === Session.parentID`;
+5. that pending review has not already been bound incompatibly.
+
+If any condition fails, Justice performs **no appendix injection**, records the reason, and leaves the semantic review evidence `NOT_PROVEN`.
+
+A later `session.created/session.updated` event may populate caches or corroborate the already-authoritative relation, but it can never retroactively make a missed injection trusted.
+
+Parent `tool.execute.after` must also corroborate the bound child metadata. A mismatch invalidates the review evidence.
+
+#### Before-hook mutation statement
+
+OpenCode passes the same `args/taskArgs` object through `tool.execute.before` and then into tool execution. Therefore an in-place property mutation such as `output.args.prompt = ...` may be observed by the executor; replacing only the wrapper/object reference is a different operation.
+
+Justice v5 nevertheless **chooses not to use before-hook prompt mutation** for review delivery. The supported architecture centralizes review-specific content injection on the child `chat.message` surface after authoritative child→parent resolution. This is a design choice, not a claim that before-hook in-place mutation is impossible.
+
+#### Exact appended Part contract
+
+Justice uses option B: append one fully formed synthetic text Part.
+
+The Part is constructed exactly as:
 
 ```text
-const resolvedParts = ...
-plugin.trigger("chat.message", ..., { message: info, parts: resolvedParts })
-const parts = ... resolvedParts ...
-sessions.updateMessage(info)
-for (const part of parts) sessions.updatePart(part)
+id        = "prt_justice_review_" + randomUUID()
+sessionID = output.message.sessionID
+messageID = output.message.id
+type      = "text"
+text      = rendered Justice review appendix
+synthetic = true
 ```
 
-Justice therefore appends a new synthetic/text review appendix **to the existing `output.parts` array in place**. It does not replace the wrapper object, does not replace caller routing fields, and does not alter the original Superpowers reviewer prompt.
+Additional rules:
 
-The appended review appendix contains:
+- `input.sessionID` must equal `output.message.sessionID`;
+- `output.message.id` is the authoritative message ID;
+- the original reviewer parts are not rewritten or removed;
+- Justice only appends the new Part to the existing `output.parts` array in place;
+- missing/inconsistent message or session identities cause no injection / `NOT_PROVEN`;
+- Justice never alters `subagent_type`, category, model, provider, variant, or OmO continuation state.
+
+This mirrors the existing Justice synthetic text-Part ownership precedent while binding the new Part to the actual child user message rather than inventing a separate message identity.
+
+The appendix contains:
 
 - review-correlation ID;
 - artifact-chain ID;
 - task identity where applicable;
 - reviewed base/head or candidate revision;
-- a workspace-relative immutable Conformance Contract reference and digest;
-- the required structured-result schema.
-
-#### Parent-call → child-session binding before chat.message
-
-The child prompt arrives before the parent `tool.execute.after` event, so Justice cannot wait for after-hook metadata to inject review context.
-
-Binding therefore uses:
-
-1. a pending recognized-review record created at parent `tool.execute.before`, keyed by `parentSessionId + parentCallId`;
-2. the child `session.created/session.updated` event carrying `childSessionId + parentID`;
-3. the Superpowers invariant that review dispatch is sequential, not concurrent;
-4. exact uniqueness: there must be **exactly one** pending recognized review for that parent session when the child session is created.
-
-If zero or multiple pending recognized reviews exist, or the observed child parent does not match, Justice marks review correlation ambiguous, performs **no child prompt injection**, and leaves semantic review evidence `NOT_PROVEN`.
-
-After `tool.execute.after`, structured child metadata is used to corroborate the already-established relation. A mismatch invalidates the review evidence.
-
-This preserves the canonical execution key `parentSessionId + parentCallId` without overloading OmO `task_id`.
+- immutable Conformance Contract path + digest;
+- structured-result instructions.
 
 #### Compatibility evidence and Task 1 status
 
-The architecture choice is fixed before implementation:
+The architecture is fixed before implementation:
 
-- before-hook mutation is explicitly **not** the prompt-delivery mechanism;
-- child `chat.message` in-place part mutation is the supported delivery mechanism;
-- the source path and ordering above are established on the exact OpenCode v1.18.31 baseline;
-- the existing 1.18.29 runtime spike establishes the unchanged parent/child correlation surfaces.
+- async session-event completion is not a prompt-delivery prerequisite;
+- authoritative `client.session.get` occurs inside awaited `chat.message`;
+- session events are corroboration/cache only;
+- the appended Part construction is fixed above;
+- Task 1 is a runtime regression gate for this contract, not an architecture-selection spike.
 
-The Implementation Plan's first compatibility task is therefore a **regression/replay gate for this already-selected contract**, not a task allowed to choose a different architecture. If the regression gate fails on the supported runtime, implementation stops and the support claim returns to Design review as upstream/runtime drift.
+If that regression gate fails on the supported stack, implementation stops and the support claim returns to Design review.
 
-### 14.3 Structured result — J5D-REVIEW-03
+### 14.3 Structured result and final evidence composition — J5D-REVIEW-03
 
 The same reviewer final result must contain a machine-readable Justice envelope in addition to the normal Superpowers human-readable report.
 
-Canonical shape:
+Canonical result shape:
 
 ```text
 JusticeReviewResult
@@ -1032,27 +1062,97 @@ JusticeReviewResult
 └─ clauses[]
    ├─ clauseId
    ├─ status: SATISFIED | VIOLATED | NOT_PROVEN
-   └─ evidenceRefs[]
+   ├─ evidenceRefs[]
+   └─ evidenceScope
 ```
 
-The exact serialization syntax is an implementation detail, but it must be unambiguously delimited and strictly parsed.
+A SATISFIED clause records a deterministic evidence scope:
 
-Initial task review and final review are **full** results for the Conformance Contract supplied to that review.
+```text
+ClauseEvidenceScope =
+  global
+  | files(normalized repository-relative paths[])
+```
 
-A scoped re-review may be a delta for prior findings/affected clauses. Justice may carry forward earlier SATISFIED clause evidence only when the fix diff is proven not to intersect that clause's recorded evidence scope. If non-intersection cannot be proven, the clause returns to `NOT_PROVEN` until a trusted later full review.
+Carry-forward is deliberately conservative:
+
+- `global` intersects every non-empty fix diff;
+- `files(paths)` is non-intersecting only when the normalized changed-file set has an empty intersection with `paths`;
+- missing, empty, malformed, or otherwise undecidable scope is not carry-forward eligible and becomes `NOT_PROVEN`.
+
+Initial task reviews and the first final whole-branch review are full results for the Conformance Contract supplied to those reviews.
+
+A scoped re-review is a delta for the fix range and may re-prove affected findings/clauses.
+
+#### Superpowers final-review progression
+
+Justice follows the current Superpowers v6.4.2 final progression exactly:
+
+```text
+Candidate A
+    ↓
+ONE full final whole-branch review
+    ↓ findings, if any
+ONE Superpowers final fix wave
+A → B
+    ↓
+exactly ONE scoped re-review of A..B
+    ↓
+residual adjudication / finishing-a-development-branch
+```
+
+Justice does not request or dispatch a second full final review.
+
+For final completion, Justice derives:
+
+```text
+FinalReviewEvidenceClosure
+├─ schemaVersion
+├─ artifactChainId
+├─ candidateHead
+├─ fullFinalReview          # Candidate A
+├─ finalFixWave?            # A..B
+│  ├─ base
+│  ├─ head
+│  └─ scopedReReview
+├─ carriedClauseIds
+├─ reProvenClauseIds
+├─ clauseResults
+├─ unresolvedFindingIds
+└─ diagnostics
+```
+
+Closure rules:
+
+1. If there is no final fix wave, `candidateHead` must equal the full final review's head.
+2. If there is one fix wave, its base must equal the full final review's head and its head must equal the completion candidate.
+3. A clause SATISFIED by Candidate A may carry to B only when its recorded evidence scope is deterministically non-intersecting with the A..B changed-file set.
+4. Every intersecting/undecidable clause must be explicitly re-proven by the scoped re-review; otherwise it becomes `NOT_PROVEN`.
+5. The scoped re-review must be trusted and bound to exactly A..B.
+6. Open blocking findings remain blocking even if unrelated clauses carry forward.
+7. Residual Superpowers adjudication/parking does not convert a blocking Justice finding or `NOT_PROVEN` clause into success.
+
+Thus the closure may cover Candidate B compositionally without pretending that Candidate A's full review alone reviewed B.
 
 ### 14.4 Invalid/stale result — J5D-REVIEW-04
 
-A structured review result is rejected when:
+An individual structured review result is rejected when:
 
 - missing or malformed;
 - correlation ID does not match the observed call;
 - artifact-chain/task identity is wrong;
-- reviewed base/head does not cover the candidate revision;
+- its declared review range does not match the observed review dispatch;
 - result provenance is not the observed reviewer call;
 - required clause IDs are absent.
 
 Missing required clause results are projected as `NOT_PROVEN`.
+
+For final completion:
+
+- a full final review for Candidate A alone is stale for later Candidate B;
+- Candidate B may be covered only by a valid §14.3 `FinalReviewEvidenceClosure`;
+- a closure with a non-contiguous fix range, wrong candidate head, untrusted scoped re-review, uncovered affected clause, undecidable carry-forward scope, or unresolved blocking finding is invalid;
+- invalid or incomplete closure coverage yields `NOT_PROVEN` / completion blocked.
 
 ### 14.5 Quality severity and parked findings — J5D-QUALITY-01
 
@@ -1156,7 +1256,7 @@ Plan         ↔ Code
 Design       ↔ Code
 Plan         ↔ Tests
 Requirements ↔ Verification
-reviewed revision ↔ completion candidate revision
+trusted final-review evidence closure ↔ completion candidate revision
 ```
 
 The final gate covers cross-task properties that task-local review may miss:
@@ -1167,14 +1267,16 @@ The final gate covers cross-task properties that task-local review may miss:
 - no undocumented normative behavior was introduced;
 - test assertions still prove required contracts;
 - deferred findings remain visible;
-- final review actually covers the candidate tree;
-- no post-review code change invalidated the evidence.
+- the trusted final-review evidence closure covers the candidate tree;
+- no post-review mutation is accepted unless it is the single Superpowers final fix wave and is fully covered by the trusted scoped re-review delta;
+- no uncovered post-review code change can inherit stale evidence.
 
 Completion requires:
 
 ```text
 all required tasks accepted
-AND final review requirement satisfied
+AND Superpowers final-review lifecycle satisfied
+AND trusted FinalReviewEvidenceClosure covers the completion candidate
 AND all required conformance clauses SATISFIED
 AND unresolved semantic drift == 0
 AND unauthorized semantic drift == 0
