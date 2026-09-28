@@ -53,6 +53,33 @@ describe("parseReviewSnapshotArtifact", () => {
     });
   });
 
+  it("preserves a review scope from valid snapshot metadata", () => {
+    expect(
+      parseReviewSnapshotArtifact({
+        authority: "review_tool",
+        schemaVersion: 1,
+        complete: true,
+        reviewScope: "design-and-plan",
+      }),
+    ).toEqual({
+      authority: "review_tool",
+      schemaVersion: 1,
+      complete: true,
+      reviewScope: "design-and-plan",
+    });
+  });
+
+  it("rejects a non-string review scope", () => {
+    expect(
+      parseReviewSnapshotArtifact({
+        authority: "review_tool",
+        schemaVersion: 1,
+        complete: true,
+        reviewScope: 1,
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for empty object", () => {
     expect(parseReviewSnapshotArtifact({})).toBeUndefined();
   });

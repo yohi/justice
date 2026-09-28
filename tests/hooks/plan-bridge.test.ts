@@ -63,13 +63,16 @@ function createWorkflowStartRequest(
 function createObservationHandler(): ObservationHandler & {
   emitWorkflowStartedEvent: ReturnType<typeof vi.fn>;
   emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
+  setReviewGateScope: ReturnType<typeof vi.fn>;
 } {
   return {
     emitWorkflowStartedEvent: vi.fn(async () => ({ action: "proceed" })),
     emitWorkflowPhaseEvent: vi.fn(async () => ({ action: "proceed" })),
+    setReviewGateScope: vi.fn(),
   } as unknown as ObservationHandler & {
     emitWorkflowStartedEvent: ReturnType<typeof vi.fn>;
     emitWorkflowPhaseEvent: ReturnType<typeof vi.fn>;
+    setReviewGateScope: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -1212,7 +1215,9 @@ describe("PlanBridge", () => {
         "docs/specs/design.md": "# Design",
         "docs/plans/implementation-plan.md": samplePlanContent,
       });
+      const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setObservationHandler(observationHandler);
 
       const result = await bridge.handleReviewGateStart("s-review-gate", {
         source: "command",
@@ -1230,6 +1235,13 @@ describe("PlanBridge", () => {
       expect(result.guidance).toContain("Do not modify source code, test code, CI/config");
       expect(result.guidance).toContain("does not itself mean READY");
       expect(result.guidance).toContain("/justice-implement --approved");
+      expect(result.guidance).toContain(
+        `**Review scope**: \`${JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"])}\``,
+      );
+      expect(observationHandler.setReviewGateScope).toHaveBeenCalledWith(
+        "s-review-gate",
+        JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"]),
+      );
     });
 
     it("blocks the review gate when either artifact is unreadable", async () => {

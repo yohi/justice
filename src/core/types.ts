@@ -586,6 +586,7 @@ export interface ReviewSnapshotArtifact {
   readonly authority: "review_tool";
   readonly schemaVersion: 1;
   readonly complete: true;
+  readonly reviewScope?: string;
 }
 
 /** ファイル書き込みアクセスの抽象化 */

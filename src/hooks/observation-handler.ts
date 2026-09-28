@@ -167,6 +167,7 @@ export class ObservationHandler {
   private readonly reviewRejectionDetector = new ReviewRejectionDetector();
   private readonly persistedMessageHashes = new Map<string, Map<string, string>>();
   private readonly reviewDeliveriesBySession = new Map<string, Set<string>>();
+  private readonly reviewGateScopes = new Map<string, string>();
   private projectionRefresh: Promise<void> = Promise.resolve();
   private reviewPendingCommittedHandler?: ReviewPendingCommittedHandler;
   private readonly gateEvaluator;
@@ -305,6 +306,14 @@ export class ObservationHandler {
 
   setReviewPendingCommittedHandler(handler: ReviewPendingCommittedHandler): void {
     this.reviewPendingCommittedHandler = handler;
+  }
+
+  setReviewGateScope(sessionId: string, reviewScope: string | null): void {
+    if (reviewScope === null) {
+      this.reviewGateScopes.delete(sessionId);
+      return;
+    }
+    this.reviewGateScopes.set(sessionId, reviewScope);
   }
 
   async advanceFinalizationAfterAllTasksAccepted(
@@ -616,6 +625,7 @@ export class ObservationHandler {
   destroySession(sessionId: string): void {
     this.persistedMessageHashes.delete(sessionId);
     this.reviewDeliveriesBySession.delete(sessionId);
+    this.reviewGateScopes.delete(sessionId);
     this.messageRoleBuffer.removeSession(sessionId);
     // Propagate cleanup to the log store so this session's per-shard write-queue
     // caches are released, bounding memory across sessions. Optional chaining keeps
@@ -773,16 +783,24 @@ export class ObservationHandler {
       }
       let reviewOutcome: ReviewObservationOutcome = { kind: "not_review" };
       if (isReviewObservationTool(event.payload.toolName)) {
-        reviewOutcome = await this.appendReviewObservationsIfDetected(
-          shardId,
-          taskId,
-          event.sessionId,
-          callId,
-          event.payload.toolName,
-          event.payload.toolResult,
-          event.payload.metadata,
-          event.payload.reviewSnapshotArtifact?.complete === true,
-        );
+        const gateScope = this.reviewGateScopes.get(event.sessionId);
+        const snapshotScope = event.payload.reviewSnapshotArtifact?.reviewScope;
+        const unrelatedGateSnapshot =
+          gateScope !== undefined &&
+          event.payload.reviewSnapshotArtifact?.complete === true &&
+          gateScope !== snapshotScope;
+        if (!unrelatedGateSnapshot) {
+          reviewOutcome = await this.appendReviewObservationsIfDetected(
+            shardId,
+            taskId,
+            event.sessionId,
+            callId,
+            event.payload.toolName,
+            event.payload.toolResult,
+            event.payload.metadata,
+            event.payload.reviewSnapshotArtifact?.complete === true,
+          );
+        }
       }
       let response: HookResponse;
       switch (reviewOutcome.kind) {

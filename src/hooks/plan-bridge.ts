@@ -425,6 +425,7 @@ export class PlanBridge {
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
   }
 
@@ -455,6 +456,7 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
@@ -494,6 +496,7 @@ export class PlanBridge {
     request: ReviewGateRequest,
   ): Promise<ReviewGateStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
 
     const designReadable = await this.isArtifactReadable(request.designPath);
     const planPath = this.resolveActivatablePlanPath(request.planPath);
@@ -527,6 +530,8 @@ export class PlanBridge {
     }
 
     this.setActivePlan(sessionId, planPath);
+    const reviewScope = JSON.stringify([request.designPath, planPath]);
+    this.observationHandler?.setReviewGateScope(sessionId, reviewScope);
     const directive = resolveWorkflowDirective({
       stage: "plan_review_required",
       designPath: request.designPath,
@@ -544,6 +549,7 @@ export class PlanBridge {
         "",
         `**Design**: ${request.designPath}`,
         `**Implementation Plan**: ${planPath}`,
+        `**Review scope**: \`${reviewScope}\``,
         "",
         directive.guidance,
         "",
