@@ -725,12 +725,12 @@ export class OpenCodeAdapter {
   ): void {
     if (!isTask) return;
     const subagentType = args.subagent_type;
+    const category = args.category ?? subagentType;
     normalizeTaskToolInputForOmoWireInPlace(args);
     if (typeof subagentType === "string") {
       args.subagent_type = subagentType;
       delete args.category;
     }
-    const category = args.category;
     if (category === "sp-review" || category === "sp-final-review") {
       args.run_in_background = false;
     }

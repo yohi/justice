@@ -2,7 +2,7 @@ import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
 const CHECKBOX_ANY_REGEX = /^(\s*-\s+\[)([ xX])(\]\s+.+)$/;
-const FENCE_OPEN_REGEX = /^\s*(`{3,}|~{3,})/;
+const FENCE_OPEN_REGEX = /^ {0,3}(`{3,}|~{3,})/;
 
 export class PlanParser {
   /**

@@ -128,6 +128,14 @@ describe("PlanParser", () => {
       expect(tasks[1].id).toBe("task-2");
       expect(tasks[1].steps[0].lineNumber).toBe(10);
     });
+
+    it("does not treat a four-space-indented code fence as an opening fence", () => {
+      const tasks = parser.parse(
+        ["## Task 1: Real task", "    ```markdown", "### Task 2: Next real task"].join("\n"),
+      );
+
+      expect(tasks.map((task) => task.id)).toEqual(["task-1", "task-2"]);
+    });
   });
 
   it("derives task-1 from both ordinary and leading-zero task headings", () => {
