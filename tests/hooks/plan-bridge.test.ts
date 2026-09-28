@@ -1241,8 +1241,8 @@ describe("PlanBridge", () => {
       expect(result.guidance).toContain("[JUSTICE: REVIEW GATE REQUESTED]");
       expect(result.guidance).not.toContain("requesting-code-review");
       expect(result.guidance).toContain("do NOT invoke another review Skill first");
-      expect(result.guidance).toContain("one plan-level/final review");
-      expect(result.guidance).toContain("Do not modify source code, test code, CI/config");
+      expect(result.guidance).toContain("one foreground `task()` reviewer");
+      expect(result.guidance).toContain("Do not modify files");
       expect(result.guidance).toContain("does not itself mean READY");
       expect(result.guidance).toContain("/justice-implement --approved");
       expect(result.guidance).toContain(
@@ -1273,7 +1273,7 @@ describe("PlanBridge", () => {
       expect(gateId).toBeDefined();
       expect(reviewerPrompt).toBeDefined();
       expect(started.guidance).toContain("exactly one foreground `task()` reviewer");
-      expect(started.guidance).toContain('category="sp-final-review"');
+      expect(started.guidance).toContain("runtime category to `sp-final-review`");
       expect(started.guidance).toContain("Do NOT invoke another Skill named `code-review`");
       expect(started.guidance).toContain("Do NOT use CodeRabbit CLI");
       expect(started.guidance).toContain("Do NOT call `justice_review`");
@@ -1419,10 +1419,6 @@ describe("PlanBridge", () => {
       });
       const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
       const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      const reviewScope = JSON.stringify([
-        "docs/specs/design.md",
-        "docs/plans/implementation-plan.md",
-      ]);
       expect(gateId).toBeDefined();
       expect(prompt).toBeDefined();
 
@@ -1458,6 +1454,67 @@ describe("PlanBridge", () => {
       expect(response).toMatchObject({
         action: "inject",
         injectedContext: expect.stringContaining("changed during review"),
+      });
+      expect(observationHandler.handlePlanReviewGateResult).not.toHaveBeenCalled();
+    });
+    it("blocks and clears a plan review when artifact revalidation throws", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      });
+      const observationHandler = createObservationHandler();
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      bridge.setObservationHandler(observationHandler);
+
+      const started = await bridge.handleReviewGateStart("s-review-read-error", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+      const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
+      const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
+      expect(gateId).toBeDefined();
+      expect(prompt).toBeDefined();
+
+      await bridge.handlePlanReviewGatePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-review-read-error",
+        callId: "call-review-read-error",
+        payload: { toolName: "task", toolInput: { prompt } },
+      });
+      vi.spyOn(reader, "readFile").mockRejectedValueOnce(new Error("disk read failed"));
+
+      const response = await bridge.handlePlanReviewGatePostToolUse({
+        type: "PostToolUse",
+        sessionId: "s-review-read-error",
+        callId: "call-review-read-error",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt },
+          toolResult: JSON.stringify({
+            schemaVersion: 1,
+            gateId,
+            reviewScope: ["docs/specs/design.md", "docs/plans/implementation-plan.md"],
+            complete: true,
+            findings: [],
+          }),
+          error: false,
+        },
+      });
+
+      expect(response).toMatchObject({
+        action: "inject",
+        injectedContext: expect.stringContaining("REVIEW GATE BLOCKED"),
+      });
+      const subsequentClaim = await bridge.handlePlanReviewGatePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-review-read-error",
+        callId: "call-review-read-error-retry",
+        payload: { toolName: "task", toolInput: { prompt } },
+      });
+      expect(subsequentClaim).toMatchObject({
+        action: "inject",
+        injectedContext: expect.stringContaining("no matching user-invoked pending Gate"),
       });
       expect(observationHandler.handlePlanReviewGateResult).not.toHaveBeenCalled();
     });

@@ -746,8 +746,19 @@ export class PlanBridge {
       };
     }
 
-    const designContent = await this.readPlanFile(pending.designPath);
-    const planContent = await this.readPlanFile(pending.planPath);
+    let designContent: string | null;
+    let planContent: string | null;
+    try {
+      designContent = await this.readPlanFile(pending.designPath);
+      planContent = await this.readPlanFile(pending.planPath);
+    } catch {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] Design/Plan could not be revalidated; rerun /justice-review-gate",
+      };
+    }
     const currentDesignDigest =
       designContent === null ? null : createHash("sha256").update(designContent).digest("hex");
     const currentPlanDigest =
