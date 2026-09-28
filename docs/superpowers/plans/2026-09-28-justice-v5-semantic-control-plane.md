@@ -1538,7 +1538,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - Exact signatures:
   - `extractScopedFindingMarkerIds(prompt: string): ScopedFindingMarkerExtraction`
   - `recognizeSuperpowersReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`
-  - `preparePendingReviewCorrelation(dispatch, deps: { findingContextProvider: ReviewFindingContextProvider }): Promise<PreparePendingReviewResult>`
+  - `preparePendingReviewCorrelation(review: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>["review"], deps: { findingContextProvider: ReviewFindingContextProvider }): Promise<PreparePendingReviewResult>`
   - `resolveReviewChildFromSession(input: ResolveReviewChildInput): Promise<ReviewChildBindingResult>`
   - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
   - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
@@ -1557,8 +1557,8 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - task/first-final review → no context lookup; `expectedFindings` absent;
 - scoped re-review → query `ReviewFindingContextProvider` with:
   - exact artifact chain/scope/task identity;
-  - `precedingReviewedHead = dispatch.reviewedRange.base`;
-  - exact `requestedFindingIds` extracted from the current scoped dispatch;
+  - `precedingReviewedHead = review.reviewedRange.base`;
+  - exact `requestedFindingIds = review.requestedFindingIds` extracted from the current scoped dispatch;
 - `resolved(expectedFindings=[])` is valid and produces `kind: "ready"`;
 - missing/ambiguous/untrusted context → no trusted pending correlation / no structured appendix / `NOT_PROVEN`.
 - Task 7 ships a fail-closed unavailable provider until Task 8 wires the production store-backed provider. Tests inject deterministic fakes.
@@ -1840,11 +1840,13 @@ git commit -m "feat: resolve scoped metadata for Superpowers open findings"
   → no FinalReviewEvidenceClosure
   ```
 - Only `RevisionDiffResult.resolved` may construct `ResolvedFinalFixWaveEvidence` and authorize clause carry-forward.
-- Finding merge assumes Task 7 has validated exact expected finding identities:
-  - same-ID resolved → clears original blocker;
-  - same-ID open/parked → remains unresolved;
-  - missing expected finding cannot arrive as trusted scoped evidence; if encountered defensively, remains unresolved and blocks;
-  - new Critical/Important open/parked → blocker;
+- Finding merge assumes Task 7/8 validated the exact current Superpowers target set:
+  - merge scoped dispositions only for `expectedFindings` from the current dispatch;
+  - same-ID resolved → clears that targeted blocker;
+  - same-ID open → remains unresolved;
+  - missing expected finding cannot arrive as trusted scoped evidence; defensively it blocks;
+  - non-target preceding findings retain their prior disposition (for example deferred Minor or already-resolved findings) and are not reintroduced into the round;
+  - new Critical/Important open finding → blocker; new Minor remains deferred-visible;
   - human adjudication remains separate.
 - Justice never requests another full final review to close missing coverage.
 
