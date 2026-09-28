@@ -2856,8 +2856,9 @@ The executor must record these rows in the Superpowers ledger before Task 1.
 Implementation checkout precondition:
 
 ```text
-git rev-parse HEAD == 080bcdb25b192962789ff5d67139e56487381de4
-branch lineage base == master
+git merge-base HEAD master == 080bcdb25b192962789ff5d67139e56487381de4
+production source/test/CI baseline before execution == master @ 080bcdb25b192962789ff5d67139e56487381de4
+pre-execution branch differences are the approved Requirements / Design / Plan documents only
 v4.2.0 merge/cherry-pick prerequisite == false
 ```
 
