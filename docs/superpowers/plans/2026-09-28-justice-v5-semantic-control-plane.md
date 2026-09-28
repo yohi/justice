@@ -17,7 +17,7 @@
 - Superpowers owns execution-method selection, task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
 - Justice owns activation of the authoritatively selected supported Superpowers execution method and semantic Superpowers→OmO category translation; activation does not grant progression ownership.
 - OmO owns concrete agent/runtime/category resolution, model/provider/reasoning selection, retry, fallback, and continuation `task_id=ses_...`. Justice MUST NOT seize those responsibilities.
-- Recognized Superpowers `subagent_type="general"` on a new worker is a compatibility placeholder and MUST be translated to exactly one authoritative Justice category; non-Superpowers explicit subagent routing and OmO continuations remain preserved.
+- Recognized Superpowers `subagent_type="general"` on a new worker is a compatibility marker and MUST be translated to exactly one authoritative Justice category; non-Superpowers explicit subagent routing and OmO continuations remain preserved.
 - Justice MUST NOT select a concrete model/provider. Ambiguous semantic classification is untrusted/`NOT_PROVEN`, not a reason to fabricate a category or model.
 - Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
 - Runtime execution may fail open where safe; Authorization / Accepted / Verified / Complete MUST fail closed when required proof is missing.
@@ -155,7 +155,7 @@ synthetic = true
 
 OpenCode executes the same `args/taskArgs` object after `tool.execute.before`, so an in-place property mutation can be observable by the executor. Justice v5 **does not use that path by design** for review delivery; it uses the awaited child `chat.message` + authoritative session lookup contract above. Do not describe before-hook in-place mutation as source-impossible.
 
-Superpowers v6.4.2 task review, scoped re-review, final whole-branch review, and ordinary SDD implementer templates use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. For recognized new-worker calls Justice treats this exact `general` value as the harness placeholder to be semantically translated, not as an explicit specialized subagent choice.
+Superpowers v6.4.2 task review, scoped re-review, final whole-branch review, and ordinary SDD implementer templates use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. For recognized new-worker calls Justice treats this exact `general` value as the harness marker to be semantically translated, not as an explicit specialized subagent choice.
 
 Task 1 is a runtime regression/replay gate for this already-selected architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
 
@@ -929,7 +929,7 @@ The regression file asserts `opencode --version == 1.18.31` for this baseline re
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected: all twelve cases PASS, including same-call generic-placeholder translation capability.
+Expected: all twelve cases PASS, including same-call generic-marker translation capability.
 
 Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not make async session-event completion a delivery prerequisite.
 
@@ -1658,7 +1658,7 @@ Expected: FAIL.
 
 Implement:
 1. recognize task/scoped/final Superpowers review provenance;
-2. translate the recognized parent `subagent_type="general"` placeholder to `sp-review` / `sp-final-review` through Task 2's pure translator;
+2. translate the recognized parent `subagent_type="general"` marker to `sp-review` / `sp-final-review` through Task 2's pure translator;
 3. exact scoped section extraction;
 4. marker parsing/validation;
 5. current-dispatch `requestedFindingIds`;
