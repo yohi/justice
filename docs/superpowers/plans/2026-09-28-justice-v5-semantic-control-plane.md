@@ -113,7 +113,7 @@ type ReviewFindingV5 = {
 };
 ```
 
-`TaskIdentity` equality uses all six fields. `semanticDigest` is computed from the canonical full task section with progress-only checkbox state normalized away. Checkbox-only progress therefore preserves identity; a substantive task-body change changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
+`TaskIdentity` equality uses all six fields. `normalizedHeading` is exactly the existing `CanonicalTaskSnapshot.title` (the Task heading text after the existing trim). `semanticDigest` is exactly the matching existing `CanonicalTaskSnapshot.digest` (`sha256:<lowercase hex>`) produced by `buildCanonicalSnapshot`; Justice v5 does not invent a second task canonicalization algorithm. The existing canonical snapshot normalizes CRLF→LF and checkbox progress `[x]/[X] → [ ]` inside the uniquely matched approved task section while preserving substantive task text. Checkbox-only progress therefore preserves identity; any substantive task-body change that changes the canonical task body changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
 
 ### Task 4 owns projection and clause-result vocabulary
 
@@ -734,8 +734,10 @@ git commit -m "feat: bind authorization to approved artifact chains"
   };
   ```
 - Conformance Contract persistence is immutable at `.justice/v5/conformance-contracts/<contractId>.json`.
-  - `contractId` is the lowercase SHA-256 hex of the contract's canonical JSON body (without the `sha256:` prefix).
-  - `digest` is the corresponding `sha256:<hex>` value.
+  - The hash payload contains exactly `schemaVersion`, `artifactChainId`, `projectionStatus`, `clauses`, and `diagnostics`; it excludes the derived `contractId` and `digest` fields.
+  - Canonical JSON recursively sorts object keys lexicographically, preserves array order, and serializes JSON primitives with normal `JSON.stringify` semantics; `undefined`, non-finite numbers, functions, symbols, and other non-JSON values are rejected before hashing.
+  - `digest = hashString(canonicalJson(hashPayload))`, yielding `sha256:<lowercase hex>` through the existing `src/core/v2/hash.ts` helper.
+  - `contractId` is exactly the lowercase hex portion of that `digest` with the `sha256:` prefix removed.
   - saving the same ID+digest is idempotent; same ID with different content is a conflict and fail-closed.
   - reviewers receive the repository-relative path returned by this store.
 - Exact producer signatures:
