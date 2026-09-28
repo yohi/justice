@@ -1962,21 +1962,30 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 
 ---
 
-### Task 10: Remove Justice Review/Task Scheduling Authority and Preserve Superpowers Task Semantics
+### Task 10: Activate Selected Superpowers Method, Classify Semantic Work, and Remove Justice Scheduling Authority
 
-**Requirements / Design:** JUS5-SDD-01..04, JUS5-DEP-01..03, JUS5-TASK-01..04, JUS5-PLAN-01..05, J5D-OWN-01, J5D-TASK-01, J5D-DEP-01.
+**Requirements / Design:** JUS5-ACT-01..04, JUS5-SDD-01..04, JUS5-DEP-01..03, JUS5-TASK-01..04, JUS5-PLAN-01..05, JUS5-CAT-06..09, J5D-OWN-01, J5D-ACT-01, J5D-TASK-01, J5D-ROUTE-02, J5D-CAT-02, J5D-DEP-01.
 
 **Files:**
+- Create: `src/core/workflow-activation.ts`
+- Modify: `src/core/workflow-directives.ts`
+- Modify: `src/core/types.ts`
 - Modify: `src/core/review-dispatch-state.ts`
 - Modify: `src/core/justice-plugin.ts`
+- Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Modify: `src/core/plan-bridge-core.ts`
+- Modify: `src/core/execution-correlation.ts` only to expose trusted same-authorization recovery lookup
 - Modify: `src/core/dependency-analyzer.ts`
 - Modify: `src/core/plan-completion-detector.ts`
 - Modify: `src/core/execution-role-classifier.ts`
+- Modify: `src/core/category-classifier.ts`
+- Test: `tests/core/workflow-activation-v5.test.ts`
+- Test: `tests/runtime/opencode-adapter-semantic-routing.test.ts`
 - Test: `tests/core/review-dispatch-state.test.ts`
 - Test: `tests/core/review-dispatch-state-behavior.test.ts`
 - Test: `tests/core/plan-bridge-core.test.ts`
+- Test: `tests/core/execution-correlation.test.ts`
 - Test: `tests/core/dependency-analyzer.test.ts`
 - Test: `tests/unit/core/execution-role-classifier.test.ts`
 - Test: `tests/hooks/plan-bridge-authorization.test.ts`
@@ -1988,61 +1997,147 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Create: `tests/core/superpowers-ownership-v5.test.ts`
 - Create: `tests/core/plan-completion-detector-v5.test.ts`
 
-**Interfaces:**
+**Interfaces — activation bridge:**
+- Implement registry-defined `resolveWorkflowActivation(input): WorkflowActivationDecision` in `workflow-activation.ts`.
+- Extend `ImplementationArmRequest.action="approve"` with optional `executionMethod?: SuperpowersExecutionMethod` representing **explicit** command/user selection.
+- Extend `ImplementationArmResult` with `activation: WorkflowActivationDecision`.
+- Extend `CanonicalWorkflowSkill` with `subagent-driven-development | executing-plans`.
+- Extend `WorkflowDirectiveInput` with `executionMethod?: SuperpowersExecutionMethod`.
+- For implementation/implementation-arm directives:
+  - selected method present → `requiredSkills=[selected method]`, `nextAction="invoke_skill"`;
+  - no authoritative method → `implementation_method_required`; no task-delegation directive;
+  - activation unavailable → guidance reports unavailable; no direct OmO fallback.
+- OpenCode activation observation is exact: successful controller `skill` tool execution with `args.name === selected method` for the same parent session/active authorization marks selected methodology observed.
+- A subsequent implementation task call may be trusted as selected-method execution only after that activation observation or trusted recovery.
+- Recovery source is the latest trusted `ExecutionCorrelation.executionMethod` for the same active `authorizationId`; add `ExecutionCorrelationStore.findLatestTrustedByAuthorization(authorizationId)` if needed. No match means method selection is required again.
+- OmO `task_id=ses_...` never counts as methodology activation.
+
+**Activation source precedence:**
+```text
+explicit current implementation-start method
+> trusted same-authorization recovered method
+> observed Superpowers method selection
+> method_selection_required
+```
+
+Justice does not infer SDD vs inline from task complexity. Superpowers/user methodology intent remains authoritative. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If native skill invocation is unavailable for either method, return `unavailable`.
+
+**Interfaces — semantic classifier:**
+- Implement registry-defined `classifySemanticExecution(input): SemanticClassificationResult`.
+- Implementation input is the full Task 4 `ParsedSuperpowersTask` plus advisory cross-task dependency IDs; review input uses explicit `ReviewKindV5` semantics.
+- Exact precedence: `final-review > review > architecture > deep > integration > mechanical > implementation`.
+- Review rules:
+  - `final-review` review kind → `final-review`;
+  - task/scoped review kind → `review`.
+- Implementation rules are deterministic and structurally guarded:
+  - `architecture`: an explicit architecture/boundary/ownership/protocol/security/persistent-state decision obligation **and** a structured boundary surface (`interfaces/consumes/produces/signatures` non-empty or multiple affected components);
+  - `deep`: explicit investigation/root-cause/research/unknown-behavior obligation, unless architecture already matched;
+  - `integration`: at least two integration-surface signals among: 3+ files, non-empty Consumes/Produces, cross-task dependencies, explicit migration/state/concurrency/async/data-flow coordination;
+  - `mechanical`: at most 2 files, no Consumes/Produces, no cross-task dependencies, no architecture/deep/integration signal, and an exact bounded deterministic edit obligation such as rename/constant/field/config/boilerplate/test-only;
+  - otherwise `implementation`.
+- A bare token such as `api`, `module`, or `architecture` without the required structured/semantic guard cannot upgrade the class.
+- Missing parsed task semantics or mutually inconsistent authoritative metadata returns `ambiguous`; do not fabricate a category.
+- Classifier output contains semantic class/category only; it never contains model/provider/reasoning/fallback.
+
+**Interfaces — implementation routing:**
+- For an authorized SDD implementation task, `resolveSuperpowersImplementationTask` first proves TaskIdentity/provenance from the Superpowers task brief.
+- Task 10 then classifies that exact approved task and calls Task 2 `translateTaskRouting` on the existing parent task args.
+- Recognized new-worker `subagent_type="general"` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category and removes `subagent_type`.
+- Recognized specialized non-generic subagent routing is preserved.
+- Ambiguous classification may run fail-open on original generic routing where safe, but correlation/acceptance is untrusted/`NOT_PROVEN`.
+- Justice never directly dispatches the implementer; it only translates the already-existing Superpowers dispatch.
+
+**Interfaces — orchestration removal:**
 - `review-dispatch-state.ts` remains only for recognizing/migrating historical v4 review-dispatch records; it no longer emits current reviewer directives.
-- `DependencyAnalyzer` exposes advisory diagnostics only:
-  `analyzeDependencies(tasks) -> DependencyDiagnostic[]`; active execution-order/parallel-dispatch callers are removed.
-- `PlanBridge` no longer reconstructs worker prompts from title + checkbox steps for v5 Superpowers execution.
-- `PlanCompletionDetector` recognizes current artifact paths/contracts:
-  - Plan completion artifact: `docs/superpowers/plans/YYYY-MM-DD-*.md`
-  - Design artifact: `docs/superpowers/specs/YYYY-MM-DD-*-design.md`
-  and removes obsolete reviewer-persona markers as authority.
-- `ExecutionRoleClassifier` consumes full task semantic text/parsed task structure, not only checkbox descriptions.
+- `DependencyAnalyzer` exposes advisory diagnostics only: `analyzeDependencies(tasks) -> DependencyDiagnostic[]`; it cannot order/dispatch work.
+- `PlanBridge` preserves original Superpowers task semantics and does not reconstruct worker prompts or dispatch workers/reviewers.
+- `PlanCompletionDetector` recognizes current artifact paths/contracts and removes obsolete reviewer-persona markers as authority.
 
-- [ ] **Step 1: Write RED ownership tests**
+- [ ] **Step 1: Write RED activation/ownership tests**
 
-Assert:
-- implementation completion never causes Justice to dispatch `sp-review`.
-- all tasks accepted never causes Justice to dispatch `sp-final-review`.
-- dependency analyzer cannot reorder/dispatch implementation tasks.
-- PlanBridge preserves the original Superpowers task brief instead of rebuilding a lossy prompt.
-- Files/Interfaces/signatures affect role classification.
-- current Plan artifact path is recognized; a Design path alone does not count as writing-plans completion.
-- obsolete `code-quality-reviewer/spec-reviewer` markers do not determine v5 workflow state.
+In `tests/core/workflow-activation-v5.test.ts`:
+- `authorized_implementation_activates_superpowers_sdd`
+- `explicit_inline_execution_activates_superpowers_executing_plans`
+- `explicit_method_precedes_recovered_and_observed_method`
+- `same_authorization_recovery_restores_execution_method_without_reselection`
+- `missing_authoritative_method_requires_method_selection`
+- `selected_method_capability_failure_does_not_silently_switch_method`
+- `superpowers_activation_failure_cannot_be_trusted_as_authorized_implementation`
 
-- [ ] **Step 2: Run RED tests**
+In `tests/core/superpowers-ownership-v5.test.ts`:
+- `justice_activation_does_not_own_superpowers_task_progression`
+- `justice_does_not_directly_dispatch_implementation_tasks_instead_of_superpowers`
+- `implementation_completion_never_dispatches_sp_review`
+- `all_tasks_accepted_never_dispatches_sp_final_review`
+- `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
 
-Expected: FAIL on existing v4 review-dispatch and prompt reconstruction behavior.
+- [ ] **Step 2: Write RED semantic-classification/routing tests**
 
-- [ ] **Step 3: Remove active scheduling authority while retaining historical parsing/migration support**
+In `tests/unit/core/execution-role-classifier.test.ts`:
+- `single_file_deterministic_change_classifies_mechanical`
+- `ordinary_feature_classifies_implementation`
+- `cross_module_state_coordination_classifies_integration`
+- `investigative_high_reasoning_task_classifies_deep`
+- `component_boundary_decision_classifies_architecture`
+- `task_review_classifies_review`
+- `whole_branch_review_classifies_final_review`
+- `architecture_precedes_generic_integration_signals`
+- `classifier_uses_full_plan_semantics_not_keyword_only`
+- `ambiguous_semantic_classification_does_not_select_concrete_model`
 
-Do not delete data types needed to read v4 state.
+In `tests/runtime/opencode-adapter-semantic-routing.test.ts`:
+- `recognized_superpowers_general_worker_translates_to_justice_category`
+- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+- `external_explicit_subagent_type_is_preserved`
+- `superpowers_specialized_subagent_type_is_preserved`
+- `omo_continuation_does_not_receive_new_worker_category`
+- `missing_superpowers_skill_activation_makes_worker_routing_untrusted`
+- `justice_category_is_the_only_semantic_routing_signal_to_omo`
+- `justice_does_not_select_concrete_model_or_provider`
 
-- [ ] **Step 4: Run GREEN tests + full core suite**
+- [ ] **Step 3: Remove active Justice scheduling authority**
+
+Remove v4 active review/task progression behavior while retaining migration readers. Do not delete types needed to read prior state.
+
+- [ ] **Step 4: Implement activation bridge and activation observation**
+
+Wire `workflow-activation.ts`, `workflow-directives.ts`, `PlanBridge`, `justice-plugin.ts`, and OpenCode `tool.execute.before/after` observation for the native `skill` tool (`args.name`). Do not dispatch tasks from the bridge.
+
+- [ ] **Step 5: Implement semantic classifier and implementation translation**
+
+Replace keyword-first `ExecutionRoleClassifier` authority with the exact structured rules above. Route only already-recognized Superpowers new-worker calls through Task 2's translator. Preserve explicit external/specialized routing and continuation.
+
+- [ ] **Step 6: Run GREEN focused tests + full suite**
 
 Run:
-- focused tests
+- `bun run vitest run tests/core/workflow-activation-v5.test.ts tests/core/superpowers-ownership-v5.test.ts tests/unit/core/execution-role-classifier.test.ts tests/runtime/opencode-adapter-semantic-routing.test.ts`
+- existing PlanBridge/dependency/review-dispatch regressions listed in Files
+- `bun run typecheck`
 - `bun run test`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add \
-  src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts \
-  src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts src/core/execution-role-classifier.ts \
+  src/core/workflow-activation.ts src/core/workflow-directives.ts src/core/types.ts \
+  src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts \
+  src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts src/core/execution-correlation.ts \
+  src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts \
+  src/core/execution-role-classifier.ts src/core/category-classifier.ts \
+  tests/core/workflow-activation-v5.test.ts tests/runtime/opencode-adapter-semantic-routing.test.ts \
   tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts \
-  tests/core/plan-bridge-core.test.ts tests/core/dependency-analyzer.test.ts tests/unit/core/execution-role-classifier.test.ts \
-  tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge-implement.test.ts \
-  tests/hooks/plan-bridge-posttooluse.test.ts tests/hooks/plan-bridge.test.ts \
-  tests/integration/plan-bridge-fallback.test.ts tests/integration/plan-bridge-flow.test.ts \
-  tests/core/superpowers-ownership-v5.test.ts tests/core/plan-completion-detector-v5.test.ts
-git commit -m "refactor: return workflow orchestration to Superpowers"
+  tests/core/plan-bridge-core.test.ts tests/core/execution-correlation.test.ts tests/core/dependency-analyzer.test.ts \
+  tests/unit/core/execution-role-classifier.test.ts tests/hooks/plan-bridge-authorization.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts tests/hooks/plan-bridge-posttooluse.test.ts \
+  tests/hooks/plan-bridge.test.ts tests/integration/plan-bridge-fallback.test.ts \
+  tests/integration/plan-bridge-flow.test.ts tests/core/superpowers-ownership-v5.test.ts \
+  tests/core/plan-completion-detector-v5.test.ts
+git commit -m "feat: bridge Superpowers methodology to OmO semantic routing"
 ```
 
 ---
-
 ### Task 11: Implement OmO v5 Effective Configuration and Capability-First Doctor
 
 **Requirements / Design:** JUS5-COMP-01..04, JUS5-CONFIG-01..05, JUS5-DOC-01..04, J5D-CONFIG-01, J5D-DOCTOR-01.
