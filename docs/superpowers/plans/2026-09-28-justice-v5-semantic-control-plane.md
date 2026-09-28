@@ -35,7 +35,7 @@
   - `blocking quality findings == 0`
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
-- If Task 1's real-host review-interop gate fails, STOP. Do not invent a Justice-owned review fallback; return to the Design gate.
+- Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
 
 ## Review Focus
 
@@ -66,60 +66,204 @@ New focused modules:
 
 Existing files retain their existing responsibility unless a task below explicitly changes it.
 
+## Verified Review-Interop Baseline
+
+The architecture-critical extension point is established before implementation:
+
+- Justice's existing runtime spike proved the task before/after + child-session correlation path on OpenCode 1.18.29.
+- The relevant OpenCode runtime/plugin blobs are byte-identical in v1.18.29 and v1.18.31:
+  - `packages/opencode/src/session/tools.ts`: `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`
+  - `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
+  - `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
+- v1.18.31 source verification confirms:
+  - `tool.execute.before` receives `sessionID`, `callID`, and mutable `args`;
+  - the same `args` object is passed to the native tool executor;
+  - TaskTool consumes the mutated `params.prompt`;
+  - `tool.execute.after` is tied to the same parent call and TaskTool publishes child-session metadata.
+- Superpowers v6.4.2 task review, scoped re-review, and final review all use `Subagent (general-purpose)`; its OpenCode V1 mapping resolves this to native `task` with `subagent_type: "general"`.
+
+Task 1 therefore locks this known contract as regression evidence. It does not decide whether the architecture is viable.
+
+## Canonical Cross-Task Interface Registry
+
+These definitions are binding for every producer/consumer task. A later task may not redefine them.
+
+### Task 2 owns shared semantic identity and quality vocabulary
+
+```ts
+type TaskIdentity = {
+  readonly schemaVersion: "justice-task-v1";
+  readonly artifactChainId: string;
+  readonly planFingerprint: PlanFingerprint;
+  readonly taskOrdinal: number; // 1-based ordinal in the approved Plan revision
+  readonly normalizedHeading: string;
+  readonly semanticDigest: string;
+};
+
+type ReviewFindingV5 = {
+  readonly findingId: string;
+  readonly severity: "critical" | "important" | "minor";
+  readonly summary: string;
+  readonly location?: string;
+  readonly disposition: "open" | "resolved" | "parked" | "human_adjudicated";
+  readonly evidenceRefs: readonly string[];
+};
+```
+
+`TaskIdentity` equality uses all six fields. `semanticDigest` is computed from the canonical full task section with progress-only checkbox state normalized away. Checkbox-only progress therefore preserves identity; a substantive task-body change changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
+
+### Task 4 owns projection and clause-result vocabulary
+
+```ts
+type ProjectionDiagnosticCode =
+  | "DUPLICATE_CLAUSE_ID"
+  | "MISSING_REQUIRED_SOURCE"
+  | "AMBIGUOUS_SOURCE_ANCHOR"
+  | "UNSUPPORTED_PLAN_STRUCTURE"
+  | "PARSER_FAILURE"
+  | "SOURCE_REVISION_MISMATCH"
+  | "UNMAPPABLE_NORMATIVE_UNIT";
+
+type ProjectionDiagnostic = {
+  readonly code: ProjectionDiagnosticCode;
+  readonly sourceArtifact?: "requirements" | "design" | "plan";
+  readonly sourceAnchor?: string;
+  readonly message: string;
+};
+
+type ProjectionResult<T> =
+  | { readonly status: "COMPLETE"; readonly value: T; readonly diagnostics: readonly ProjectionDiagnostic[] }
+  | { readonly status: "INCOMPLETE" | "INVALID"; readonly value?: T; readonly diagnostics: readonly [ProjectionDiagnostic, ...ProjectionDiagnostic[]] };
+
+type ClauseResult =
+  | { readonly clauseId: string; readonly status: "SATISFIED"; readonly evidenceRefs: readonly [string, ...string[]] }
+  | { readonly clauseId: string; readonly status: "VIOLATED"; readonly reason: string; readonly evidenceRefs: readonly string[] }
+  | { readonly clauseId: string; readonly status: "NOT_PROVEN"; readonly reason: string; readonly evidenceRefs: readonly string[] };
+```
+
+Only `ProjectionResult.status === "COMPLETE"` is acceptance-eligible.
+
+### Task 5 owns dispatch resolution and correlation mutation results
+
+```ts
+type TaskIdentityResolution =
+  | { readonly kind: "resolved"; readonly taskIdentity: TaskIdentity; readonly briefPath: string; readonly briefDigest: string }
+  | {
+      readonly kind: "untrusted";
+      readonly reason:
+        | "missing_brief_reference"
+        | "multiple_brief_references"
+        | "brief_unreadable"
+        | "brief_from_other_plan"
+        | "brief_digest_mismatch"
+        | "ambiguous_task_match";
+      readonly details: readonly string[];
+    };
+
+type CorrelationMutationResult =
+  | { readonly kind: "updated" | "idempotent"; readonly correlation: ExecutionCorrelation }
+  | { readonly kind: "not_found"; readonly reason: string }
+  | { readonly kind: "untrusted"; readonly reason: string; readonly correlation?: ExecutionCorrelation }
+  | { readonly kind: "persistence_failed"; readonly reason: string };
+```
+
+Only `resolved`, `updated`, and `idempotent` can contribute trusted evidence. All other results are runtime-fail-open where safe but acceptance-fail-closed.
+
+### Task 7 owns review recognition and parsing results
+
+```ts
+type RecognizedReviewDispatch =
+  | {
+      readonly kind: "recognized";
+      readonly profile: "superpowers-6.4.2";
+      readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
+      readonly parentSessionId: string;
+      readonly parentCallId: string;
+      readonly artifactChainId: string;
+      readonly taskIdentity?: TaskIdentity;
+      readonly reviewedRange: { readonly base: string; readonly head: string };
+      readonly contractId: string;
+      readonly contractDigest: string;
+    }
+  | { readonly kind: "not_review" }
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+
+type ReviewResultInvalidReason =
+  | "missing_result"
+  | "multiple_results"
+  | "malformed_json"
+  | "schema_mismatch"
+  | "correlation_mismatch"
+  | "scope_mismatch"
+  | "stale_revision"
+  | "contract_mismatch"
+  | "missing_required_clause";
+
+type ParseReviewResult =
+  | { readonly kind: "valid"; readonly result: JusticeReviewResult }
+  | { readonly kind: "invalid"; readonly reason: ReviewResultInvalidReason; readonly details: readonly string[] };
+```
+
+`RecognizedReviewDispatch.kind === "ambiguous"` and every invalid parse result are untrusted and acceptance-fail-closed.
+
+### Existing task-local definitions remain canonical at their producer
+
+- Task 3: `ApprovedArtifactChain` / `ApprovedPlanBinding.artifactChain`
+- Task 4: `ConformanceContract`
+- Task 5: `ExecutionCorrelation` / `ExecutionCorrelationKey`
+- Task 7: `JusticeReviewResult`
+- Task 9: `ConformanceGateVerdict`
+- Task 11: `OmoEffectiveConfigResult`
+- Task 13: `JusticeReviewV5View`
+
 ---
 
-### Task 1: Prove the OpenCode 1.18.31 / Superpowers v6.4.2 Review-Interop Extension Point
+### Task 1: Lock the Verified Review-Interop Baseline as a Regression Gate
 
 **Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, J5D-REVIEW-01..04.
 
 **Files:**
 - Create: `tests/integration/justice-v5-review-interop-host.test.ts`
 - Create: `tests/fixtures/superpowers-v6.4.2-review-prompts.ts`
-- Modify only if required for an existing host-test harness: existing integration-test helper files under `tests/integration/`
 - Production source: **none**
 
 **Interfaces:**
-- Consumes: OpenCode `tool.execute.before` / `tool.execute.after` contract carrying `sessionID`, `callID`, mutable task args, task result/metadata.
-- Consumes: Superpowers v6.4.2 task-review, re-review, and final-review prompt shapes.
-- Produces: a passing compatibility gate proving the baseline review calls are observable and mutable through the same `task` tool call.
+- Consumes the verified baseline documented above and in Design §14.2.
+- Produces regression evidence for the already-established OpenCode task-hook contract.
+- Does not select or discover an alternative architecture.
 
-- [ ] **Step 1: Add RED host/integration cases for the three review kinds**
+- [ ] **Step 1: Add regression fixtures for all three Superpowers v6.4.2 review kinds**
 
-Add tests named:
+The fixture must preserve the actual distinguishing inputs for:
+- task review: brief/report/base/head/diff;
+- scoped re-review: findings/fix-base/head/diff;
+- final review: plan-or-requirements/base/head;
+- OpenCode V1 routing: `subagent_type: "general"`.
+
+- [ ] **Step 2: Add the baseline regression tests**
+
+Exact tests in `tests/integration/justice-v5-review-interop-host.test.ts`:
 
 - `observes_and_mutates_superpowers_task_review_call`
 - `observes_and_mutates_superpowers_scoped_re_review_call`
 - `observes_and_mutates_superpowers_final_review_call`
 - `preserves_subagent_type_general_when_appending_prompt_context`
 
-Assertions:
-- one existing reviewer dispatch produces one observed `task` call;
-- `sessionID` and `callID` are present;
-- appending prompt text through `tool.execute.before` is visible to the reviewer;
-- no second reviewer call is created;
-- `subagent_type: "general"` remains unchanged.
+Each test asserts one existing reviewer dispatch, stable `sessionID + callID`, mutable prompt delivery to the same task execution, unchanged routing fields, and same-call result attribution.
 
-- [ ] **Step 2: Run the focused integration gate and verify RED/SETUP behavior**
+- [ ] **Step 3: Run the regression gate**
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected before fixtures/harness support is complete: either FAIL on the missing asserted observation or an explicit `SETUP / UPSTREAM BLOCKED` classification. A silent skip is not acceptable evidence.
+Expected on the supported baseline: PASS.
 
-- [ ] **Step 3: Complete only the test harness/fixture wiring needed to exercise the real host contract**
+A failure means **upstream compatibility drift**. STOP the supported-stack implementation and report the drift; do not choose a new architecture or introduce Justice-owned review scheduling inside this Plan.
 
-Do not add Justice review orchestration. The fixture must represent the actual Superpowers v6.4.2 review prompt structures and OpenCode task call.
-
-- [ ] **Step 4: Re-run the gate**
-
-Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
-
-Expected: PASS for all four assertions against the supported baseline. If the host contract cannot be proven, STOP this plan and return to Design review.
-
-- [ ] **Step 5: Commit the compatibility evidence**
+- [ ] **Step 4: Commit the regression evidence**
 
 ```bash
 git add tests/integration/justice-v5-review-interop-host.test.ts tests/fixtures/superpowers-v6.4.2-review-prompts.ts
-git commit -m "test: prove Justice v5 review interop surface"
+git commit -m "test: lock Justice v5 review interop baseline"
 ```
 
 ---
