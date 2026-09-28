@@ -917,10 +917,16 @@ The context query remains:
 ```text
 ReviewFindingContextQuery
 ├─ artifactChainId
-├─ scope
+├─ scope: "task" | "final"
 ├─ precedingReviewedHead
+├─ taskIdentity (required when scope = "task")
 └─ requestedFindingIds[]
 ```
+
+For `scope = "task"`, `taskIdentity` is required. Together with
+`artifactChainId` and `precedingReviewedHead`, it identifies the task lineage
+being queried. For `scope = "final"`, `taskIdentity` is not required; the
+final-review lifecycle is selected within the artifact chain.
 
 Lineage boundaries are fixed.
 
