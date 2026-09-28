@@ -708,9 +708,27 @@ Consequences:
 
 An empty requested set is **not** a finding-context failure. Justice must still inject the structured Conformance Contract appendix so clause re-proof can occur.
 
-#### Trusted metadata lookup for requested IDs
+#### Trusted metadata and lineage reservation lookup
 
-Justice uses persisted trusted preceding-review evidence only to resolve metadata for the IDs selected by the current dispatch.
+Justice uses persisted trusted review evidence for two separate purposes:
+
+1. resolve immutable metadata for the IDs selected by the **current Superpowers scoped dispatch**;
+2. reserve every finding ID already used in the same trusted review lineage so a new breakage cannot reuse a historical identity.
+
+These concepts are distinct:
+
+```text
+expectedFindings
+= current scoped dispatch verdict targets only
+
+reservedFindingIds
+= all finding IDs already used by trusted evidence
+  in the same review lineage
+```
+
+The current target set remains controlled only by `requestedFindingIds`; historical reservations must never cause a non-target finding to re-enter `expectedFindings`.
+
+The context query remains:
 
 ```text
 ReviewFindingContextQuery
@@ -720,13 +738,63 @@ ReviewFindingContextQuery
 └─ requestedFindingIds[]
 ```
 
-The preceding trusted review is resolved by artifact chain, exact task/final scope, and `reviewedRange.head === precedingReviewedHead`.
+Lineage boundaries are fixed.
 
-Then:
+Task scope:
 
-- `requestedFindingIds = []` → `resolved(expectedFindings = [])`;
-- each requested ID must exist exactly once in that trusted preceding review;
-- the stored finding must still be compatible with being carried by the current Superpowers open list: an explicitly `resolved`, deferred Minor, or `human_adjudicated` stored finding requested as an open target is `untrusted`;
+```text
+artifactChainId
++
+exact TaskIdentity
+```
+
+The trusted task lineage contains the initial trusted task-review result plus all trusted scoped re-review results for that same task identity and artifact chain up to the current scoped review.
+
+Final scope:
+
+```text
+artifactChainId
++
+current final-review lifecycle
+```
+
+The trusted final lineage contains the trusted full final-review result and, where applicable, its trusted scoped final re-review. Finding IDs from unrelated tasks or another artifact chain are not globally reserved.
+
+For every trusted result in the selected lineage, Justice builds a historical finding-ID registry. Repeated occurrences of the same ID are valid only when the immutable identity fields are identical:
+
+```text
+findingId
+severity
+summary
+location
+```
+
+Disposition and evidence references may change across rounds.
+
+If one historical ID maps to conflicting immutable identity fields, context resolution is:
+
+```text
+untrusted("historical_finding_id_collision")
+```
+
+Justice must not normalize or guess which historical finding owns that ID.
+
+The resolved context contains:
+
+```text
+ReviewFindingContextResult.resolved
+├─ sourceReviewCorrelationId
+├─ expectedFindings[]
+└─ reservedFindingIds[]
+```
+
+`reservedFindingIds` contains each valid historical lineage ID exactly once.
+
+Then current-target metadata resolution applies:
+
+- `requestedFindingIds = []` → `resolved(expectedFindings = [], reservedFindingIds = <lineage IDs>)`;
+- each requested ID must exist exactly once in the trusted immediate preceding review;
+- the stored finding must still be compatible with being carried by the current Superpowers open list;
 - unknown requested ID → `untrusted`;
 - duplicate requested ID → `untrusted`;
 - duplicate/ambiguous preceding-review candidate → `ambiguous`;
@@ -734,9 +802,9 @@ Then:
 
 Justice never uses summary/location/order/severity-only similarity as identity authority.
 
-For task/first-final reviews, `expectedFindings` is absent.
+For task/first-final reviews, `expectedFindings` and `reservedFindingIds` are absent because they are not scoped re-reviews.
 
-For scoped re-review, `expectedFindings` is **present and may be empty**. A resolved empty list represents a legitimate clause/spec-only scoped re-review.
+For scoped re-review, both are present. `expectedFindings` may be empty; `reservedFindingIds` may also be empty only when the trusted lineage has never produced a quality finding.
 
 #### Scoped reviewer/result contract
 
@@ -747,7 +815,7 @@ The scoped-review appendix must require:
 - Superpowers `ADDRESSED` semantics → `disposition: resolved`;
 - Superpowers `NOT ADDRESSED` semantics → `disposition: open`;
 - new breakage to use a fresh `jf_<16 lowercase hex>` ID and the matching marker in its human-readable line;
-- new breakage must not reuse any expected/original ID;
+- new breakage must not reuse any current expected ID or any `reservedFindingIds` ID from the trusted review lineage;
 - reviewer output must never create `human_adjudicated`.
 
 When `expectedFindings = []`, no quality finding verdict is required, but the machine result must still contain the required clause results for Conformance Contract re-proof.
@@ -757,7 +825,7 @@ Validation remains fail-closed:
 - missing expected finding → invalid;
 - duplicate expected finding ID → invalid;
 - mismatched severity/summary/location or marker for an expected ID → invalid;
-- new breakage ID collision → invalid;
+- new breakage ID collision with the current expected set or lineage-reserved set → invalid;
 - orphan/malformed marker → invalid.
 
 #### Final evidence closure
@@ -831,7 +899,8 @@ The following must not satisfy review/conformance gates:
 - unknown requested finding ID;
 - requested finding whose trusted stored disposition/severity is incompatible with current open-loop targeting;
 - missing, duplicate, conflicting, or metadata-mismatched expected finding;
-- new breakage reusing an expected/original finding ID;
+- new breakage reusing a current expected finding ID or any lineage-reserved historical finding ID;
+- historical finding-ID collision within the trusted task/final lineage;
 - final evidence whose candidate head, fix range, diff provenance, carried-clause scope, scoped-delta coverage, or finding-disposition merge cannot be proven.
 
 A legitimate `requestedFindingIds = []` / `expectedFindings = []` scoped re-review is not invalid and must still receive the Conformance Contract.
