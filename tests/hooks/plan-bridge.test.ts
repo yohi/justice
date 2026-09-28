@@ -124,12 +124,12 @@ describe("normalizeTaskToolInputWithCategory", () => {
     expect(result.category).toBe("sp-mechanical");
   });
 
-  it("preserves a caller-provided category over the classified category", () => {
+  it("replaces a caller-provided category with the effective category", () => {
     const input = { prompt: "x", category: "sp-mechanical" };
 
     const result = normalizeTaskToolInputWithCategory(input, "sp-implementation");
 
-    expect(result.category).toBe("sp-mechanical");
+    expect(result.category).toBe("sp-implementation");
   });
 });
 

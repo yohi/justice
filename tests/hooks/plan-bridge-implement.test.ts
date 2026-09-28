@@ -193,7 +193,7 @@ describe("PlanBridge.handleImplementationArm", () => {
   });
 
   it("routes the Superpowers whole-branch code reviewer through sp-final-review", async () => {
-    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const simplePlan = ["## Task 1: Implement behavior", "- [x] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-final-review", {
       source: "command",
@@ -208,6 +208,7 @@ describe("PlanBridge.handleImplementationArm", () => {
       payload: {
         toolName: "task",
         toolInput: {
+          category: "sp-implementation",
           prompt: [
             "You are a Senior Code Reviewer with expertise in software architecture.",
             "## Git Range to Review",
@@ -227,6 +228,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).not.toMatchObject({
       args: { subagent_type: expect.anything() },
     });
+    expect(bridge.getActivePlan("session-final-review")).toBe("plan.md");
   });
 
   it("preserves explicit specialized routing for an authorized task", async () => {

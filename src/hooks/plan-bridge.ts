@@ -58,11 +58,8 @@ export function normalizeTaskToolInputWithCategory(
   category: SpCategory | TaskCategory,
 ): Record<string, unknown> {
   const normalized = normalizeTaskToolInput(toolInput);
-  if (normalized.category === undefined) {
-    normalized.category = category;
-  }
-  const effectiveCategory = normalized.category;
-  if (effectiveCategory === "sp-review" || effectiveCategory === "sp-final-review") {
+  normalized.category = category;
+  if (category === "sp-review" || category === "sp-final-review") {
     normalized.run_in_background = false;
   }
   return normalized;
@@ -1067,6 +1064,21 @@ export class PlanBridge {
     const initialDelegation = initialResult?.request;
 
     if (!initialDelegation) {
+      const reviewCategory = resolveSuperpowersSddCategory(
+        event.payload.toolInput,
+        "sp-implementation",
+      );
+      if (reviewCategory === "sp-final-review") {
+        const normalizedArgs = normalizeTaskToolInputWithCategory(
+          event.payload.toolInput,
+          reviewCategory,
+        );
+        return {
+          action: "inject",
+          injectedContext: "",
+          modifiedPayload: { args: normalizedArgs },
+        };
+      }
       // Plan is now done
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
