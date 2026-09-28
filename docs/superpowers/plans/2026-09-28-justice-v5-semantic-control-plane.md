@@ -1625,6 +1625,7 @@ In `tests/core/review-interop.test.ts`:
 - `minor_finding_excluded_from_fix_loop_is_not_added_to_expected_findings`
 - `addressed_finding_is_not_reintroduced_in_next_fix_round`
 - `next_round_expected_findings_match_only_current_superpowers_open_finding_ids`
+- `current_expected_findings_remain_only_current_superpowers_targets`
 - `new_blocking_breakage_marker_survives_into_next_scoped_round`
 - `spec_only_scoped_rereview_allows_empty_expected_findings`
 - `unknown_requested_finding_id_is_untrusted`
