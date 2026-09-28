@@ -410,18 +410,41 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args).not.toHaveProperty("loadSkills");
   });
 
-  it("removes category when caller owned subagent routing is present", async () => {
+  it.each(["sp-implementation", "sp-review", "sp-final-review"] as const)(
+    "keeps Justice %s category instead of compatibility general routing",
+    async (justiceCategory) => {
+      const adapter = new OpenCodeAdapter(fakeInit());
+      await adapter.ensureInitialized();
+      const justice = adapter.getJustice() as JusticePlugin;
+      vi.spyOn(justice, "handleEvent").mockResolvedValue({
+        action: "inject",
+        injectedContext: "context",
+        modifiedPayload: { args: { category: justiceCategory } },
+      });
+      const output: { args: Record<string, unknown> } = {
+        args: { prompt: "caller", subagent_type: "general" },
+      };
+
+      await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "route" }, output);
+
+      expect(output.args.category).toBe(justiceCategory);
+      expect(output.args).not.toHaveProperty("subagent_type");
+      if (justiceCategory === "sp-review" || justiceCategory === "sp-final-review") {
+        expect(output.args.run_in_background).toBe(false);
+      }
+    },
+  );
+
+  it("keeps ordinary general routing when Justice does not provide a category", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
-    vi.spyOn(justice, "handleEvent").mockResolvedValue({
-      action: "inject",
-      injectedContext: "context",
-      modifiedPayload: { args: { category: "sp-implementation" } },
-    });
-    const output = { args: { prompt: "caller", subagent_type: "general", category: "caller-category" } };
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const output: { args: Record<string, unknown> } = {
+      args: { prompt: "caller", subagent_type: "general" },
+    };
 
-    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "route" }, output);
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "general" }, output);
 
     expect(output.args.subagent_type).toBe("general");
     expect(output.args).not.toHaveProperty("category");
