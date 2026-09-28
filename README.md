@@ -297,7 +297,7 @@ justice-start add retry logic --plan plan.md
 - バックスラッシュ（`\`）を含むパスは拒否される。
 - パストラバーサル（`..`）を含むパスは拒否される。
 - `@path` は先頭の `@` を1文字だけ除いてから同じ安全性検証を行う。`@/etc/...`、`@../...`、`@@...` は拒否される。
-- 安全でないパスや不正文法が指定された場合、実行自体は fail-open だが、LLM には `[JUSTICE: COMMAND REJECTED]` synthetic directive を追加し、raw arguments を通常プロンプトと誤認しないようにする。
+- 安全でないパスや不正文法が指定された場合、実行自体は fail-open だが、OpenCode が `$ARGUMENTS` から事前展開した command parts を `[JUSTICE: COMMAND REJECTED]` synthetic directive 1件へ置換し、raw arguments や file-reference parts が通常プロンプトとして残らないようにする。
 
 ### Artifact 状態表
 
