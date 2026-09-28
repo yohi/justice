@@ -159,7 +159,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     });
   });
 
-  it("routes a Superpowers task reviewer through sp-review", async () => {
+  it("routes a Superpowers task reviewer through sp-review without implementation semantics", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-review", {
@@ -167,6 +167,8 @@ describe("PlanBridge.handleImplementationArm", () => {
       planPath: "plan.md",
       approved: true,
     });
+    const reviewerPrompt =
+      "You are reviewing one task's implementation: verify the task requirements.";
 
     const response = await bridge.handlePreToolUse({
       type: "PreToolUse",
@@ -175,8 +177,9 @@ describe("PlanBridge.handleImplementationArm", () => {
       payload: {
         toolName: "task",
         toolInput: {
+          category: "sp-implementation",
           description: "Review Task 1 (spec + quality)",
-          prompt: "You are reviewing one task's implementation: verify the task requirements.",
+          prompt: reviewerPrompt,
           subagent_type: "general",
         },
       },
@@ -185,11 +188,67 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
-      args: { category: "sp-review", run_in_background: false },
+      args: {
+        category: "sp-review",
+        prompt: reviewerPrompt,
+        run_in_background: false,
+      },
     });
     expect(response.modifiedPayload).not.toMatchObject({
       args: { subagent_type: expect.anything() },
     });
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "test-driven-development",
+    );
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "verification-before-completion",
+    );
+    expect(response.modifiedPayload?.args.prompt).not.toContain(
+      "**TASK CONTRACT FROM APPROVED PLAN**",
+    );
+    expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
+  });
+
+  it("routes a Superpowers task re-review through sp-review without implementation semantics", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-re-review", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+    const reviewerPrompt = "You are re-reviewing one task's fix round: verify the fixes.";
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-re-review",
+      callId: "call-re-review",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          description: "Re-review Task 1",
+          prompt: reviewerPrompt,
+          subagent_type: "general",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: {
+        category: "sp-review",
+        prompt: reviewerPrompt,
+        run_in_background: false,
+      },
+    });
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "test-driven-development",
+    );
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "verification-before-completion",
+    );
+    expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
   });
 
   it("routes the Superpowers whole-branch code reviewer through sp-final-review", async () => {
@@ -228,6 +287,17 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).not.toMatchObject({
       args: { subagent_type: expect.anything() },
     });
+    expect(response.modifiedPayload?.args.prompt).toContain(
+      "You are a Senior Code Reviewer with expertise in software architecture.",
+    );
+    expect(response.modifiedPayload?.args.prompt).toContain("## Git Range to Review");
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "test-driven-development",
+    );
+    expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
+      "verification-before-completion",
+    );
+    expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
     expect(bridge.getActivePlan("session-final-review")).toBe("plan.md");
   });
 
