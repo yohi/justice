@@ -168,8 +168,10 @@ type TaskIdentity = {
   readonly semanticDigest: string;
 };
 
+type FindingId = `jf_${string}`;
+
 type ReviewFindingV5 = {
-  readonly findingId: string;
+  readonly findingId: FindingId;
   readonly severity: "critical" | "important" | "minor";
   readonly summary: string;
   readonly location?: string;
@@ -178,7 +180,189 @@ type ReviewFindingV5 = {
 };
 ```
 
-`TaskIdentity` equality uses all six fields. `normalizedHeading` is exactly the existing `CanonicalTaskSnapshot.title` (the Task heading text after the existing trim). `semanticDigest` is exactly the matching existing `CanonicalTaskSnapshot.digest` (`sha256:<lowercase hex>`) produced by `buildCanonicalSnapshot`; Justice v5 does not invent a second task canonicalization algorithm. The existing canonical snapshot normalizes CRLF→LF and checkbox progress `[x]/[X] → [ ]` inside the uniquely matched approved task section while preserving substantive task text. Checkbox-only progress therefore preserves identity; any substantive task-body change that changes the canonical task body changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
+`FindingId` has the runtime canonical form `^jf_[0-9a-f]{16}# Justice v5 Semantic Control Plane Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Rebuild Justice as the fail-closed semantic nervous system between Superpowers v6.4.2 and OmO v5 OpenCode edition, with zero unresolved semantic drift at PlanComplete.
+
+**Architecture:** Superpowers remains the workflow/review scheduler, OmO remains the runtime/model/provider authority, and Justice owns durable authorization, semantic correlation, normative projection, evidence, conformance, quality, and acceptance. v5 introduces an exact Requirements→Design→Plan artifact chain, sidecar execution correlation keyed by OpenCode parent session/call, deterministic Conformance Contracts, and review interop that enriches the existing Superpowers reviewer call instead of dispatching another reviewer.
+
+**Tech Stack:** TypeScript 6.x, Bun, Vitest 4.x, Effect, Zod, YAML, OpenCode plugin hooks, existing AtomicPersistence and Observation Log infrastructure.
+
+**Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`
+
+**Spec:** `docs/superpowers/specs/2026-09-27-justice-v5-semantic-control-plane-design.md`
+
+## Global Constraints
+
+- Superpowers owns task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
+- OmO owns agent runtime, model/provider selection, retry, fallback, and continuation `task_id=ses_...`. Justice MUST NOT seize those responsibilities.
+- Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
+- Runtime execution may fail open where safe; Authorization / Accepted / Verified / Complete MUST fail closed when required proof is missing.
+- Human implementation approval binds one exact Requirements→Design→Plan `ApprovedArtifactChain`.
+- Required Conformance Contract clauses resolve only to `SATISFIED | VIOLATED | NOT_PROVEN`; `VIOLATED` and `NOT_PROVEN` both block acceptance.
+- Only `projectionStatus=COMPLETE` is acceptance-eligible.
+- A substantive Requirements/Design/Plan change invalidates downstream authority and requires artifact reconciliation plus required human re-approval.
+- Superpowers `Ruling:` may continue workflow execution but MUST NOT rewrite Justice semantic authority.
+- Justice never dispatches a duplicate task reviewer, scoped re-reviewer, or final reviewer.
+- Canonical v5 review severity is `critical | important | minor`; legacy `major` is migration-only and normalizes to `important`.
+- Open Critical/Important findings block Justice acceptance; parked/Ruling is not resolution.
+- OmO configured state means the effective user/project + harness/profile view, not one arbitrary `omo.jsonc`.
+- v4 durable authority is never silently promoted to v5 authority.
+- Final completion requires:
+  - `unresolved semantic drift == 0`
+  - `unauthorized semantic drift == 0`
+  - `missing required evidence == 0`
+  - `blocking quality findings == 0`
+- Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
+- Every production-code task follows RED → GREEN → focused verification → full task test → commit.
+- Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
+
+## Review Focus
+
+- **Post-review mutation:** a reviewer approves commit A, then HEAD changes to B; Task 9 must prove B cannot reuse A's review/conformance evidence.
+- **Projection omission:** a malformed or unsupported Plan section disappears from projection; Task 4 must prove projection becomes INCOMPLETE/INVALID rather than silently complete.
+- **Continuation collision:** an OmO `ses_...` continuation is unrelated to the current Justice task; Task 5/6 must prove it cannot rebind semantic identity without a trusted child relation.
+- **Config precedence:** user, ancestor project, nearest project, harness, and profile layers disagree; Task 11 must prove doctor reports the exact effective value and its sources.
+- **Upgrade recovery:** v4 state and unknown/newer state coexist with v5 files; Task 13 must prove neither can silently satisfy v5 acceptance.
+
+---
+
+## File Structure Locked by This Plan
+
+New focused modules:
+
+- `src/core/artifact-chain.ts` — v5 Requirements/Design/Plan revision identity and chain types.
+- `src/core/conformance-contract.ts` — normative clauses, projection status, contract/result types.
+- `src/core/conformance-contract-store.ts` — immutable durable Conformance Contract persistence and reviewer-readable paths.
+- `src/core/superpowers-plan-parser.ts` — deterministic parser for the v6.4.2 plan structures Justice treats as normative.
+- `src/core/conformance-projector.ts` — Requirements/Design/Plan projection and completeness validation.
+- `src/core/execution-correlation.ts` — durable parent-session/call ↔ semantic task ↔ child-session sidecar state.
+- `src/core/superpowers-dispatch-resolver.ts` — resolve implementation TaskIdentity from Superpowers task-brief artifacts.
+- `src/core/review-interop.ts` — versioned Superpowers reviewer recognition and prompt appendix construction.
+- `src/core/review-result.ts` — strict JusticeReviewResult parsing and stale/scope validation.
+- `src/core/review-evidence-store.ts` — durable v5 structured review/conformance evidence.
+- `src/core/conformance-gate.ts` — task/final conformance, final evidence closure, and quality acceptance decisions.
+- `src/runtime/revision-diff-provider.ts` — trusted exact-range Git name-status evidence for final fix-wave carry-forward.
+- `src/core/omo-effective-config.ts` — OmO v5 file-layer + harness/profile effective config resolver.
+- `src/core/v5-persistence.ts` — recognized v4 schema classification and v5 migration diagnostics.
+
+Existing files retain their existing responsibility unless a task below explicitly changes it.
+
+## Verified Review-Interop Baseline
+
+The architecture-critical review transport is fixed before implementation.
+
+### Exact OpenCode 1.18.31 ordering contract
+
+OpenCode v1.18.31 exposes:
+
+- awaited `tool.execute.before` / `tool.execute.after` hooks;
+- awaited `chat.message`;
+- asynchronous plugin `event` forwarding whose returned Promise is **not awaited**.
+
+Therefore Justice MUST NOT require its `session.created/session.updated` event handler to finish before the child reviewer's first `chat.message`.
+
+The relevant OpenCode files are byte-identical between v1.18.29 and v1.18.31:
+
+- `packages/opencode/src/session/prompt.ts`: `0f85d44f209ba792065aeb951f0bd2e12b59fae8`
+- `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
+- `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
+- v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
+
+OpenCode also exposes an authoritative awaited session lookup through the plugin client:
+
+```ts
+client.session.get({
+  path: {
+    id: childSessionId
+  }
+})
+```
+
+The successful Session contains `id` and optional `parentID`.
+
+### Selected review-delivery contract
+
+Justice uses:
+
+```text
+parent tool.execute.before
+  → observe recognized Superpowers review
+  → persist PendingReviewCorrelation(parentSessionId + parentCallId)
+
+TaskTool creates child session
+
+child chat.message(input.sessionID)
+  → await client.session.get({ path: { id: input.sessionID } })
+  → require returned Session.id == input.sessionID
+  → read authoritative Session.parentID
+  → match exactly one pending review under that parent
+  → bind child ↔ pending parent review
+  → append one fully formed synthetic Justice TextPart to output.parts IN PLACE
+
+session.created/session.updated
+  → corroboration/cache/diagnostic only
+  → never a delivery-order prerequisite
+
+parent tool.execute.after
+  → corroborate same parent call / child metadata
+  → close review correlation
+```
+
+Lookup failure, missing/mismatched parent, or zero/multiple pending matches means no injection and `NOT_PROVEN`.
+
+The appended Part is fixed:
+
+```text
+id        = "prt_justice_review_" + randomUUID()
+sessionID = output.message.sessionID
+messageID = output.message.id
+type      = "text"
+text      = rendered Justice review appendix
+synthetic = true
+```
+
+`input.sessionID` must equal `output.message.sessionID`. Justice never removes/replaces original reviewer parts and never changes subagent/category/model/provider/variant.
+
+### Before-hook mutation statement
+
+OpenCode executes the same `args/taskArgs` object after `tool.execute.before`, so an in-place property mutation can be observable by the executor. Justice v5 **does not use that path by design** for review delivery; it uses the awaited child `chat.message` + authoritative session lookup contract above. Do not describe before-hook in-place mutation as source-impossible.
+
+Superpowers v6.4.2 task review, scoped re-review, and final whole-branch review all use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`.
+
+Task 1 is a runtime regression/replay gate for this already-selected architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
+
+## Canonical Cross-Task Interface Registry
+
+These definitions are binding for every producer/consumer task. A later task may not redefine them.
+
+### Task 2 owns shared semantic identity and quality vocabulary
+
+```ts
+type TaskIdentity = {
+  readonly schemaVersion: "justice-task-v1";
+  readonly artifactChainId: string;
+  readonly planFingerprint: PlanFingerprint;
+  readonly taskOrdinal: number; // 1-based ordinal in the approved Plan revision
+  readonly normalizedHeading: string;
+  readonly semanticDigest: string;
+};
+
+type FindingId = `jf_${string}`;
+
+type ReviewFindingV5 = {
+  readonly findingId: FindingId;
+  readonly severity: "critical" | "important" | "minor";
+  readonly summary: string;
+  readonly location?: string;
+  readonly disposition: "open" | "resolved" | "parked" | "human_adjudicated";
+  readonly evidenceRefs: readonly string[];
+};
+```
+
+; the template-literal type is only the static prefix guard, and every review parser/marker extractor MUST validate the full regex. `TaskIdentity` equality uses all six fields. `normalizedHeading` is exactly the existing `CanonicalTaskSnapshot.title` (the Task heading text after the existing trim). `semanticDigest` is exactly the matching existing `CanonicalTaskSnapshot.digest` (`sha256:<lowercase hex>`) produced by `buildCanonicalSnapshot`; Justice v5 does not invent a second task canonicalization algorithm. The existing canonical snapshot normalizes CRLF→LF and checkbox progress `[x]/[X] → [ ]` inside the uniquely matched approved task section while preserving substantive task text. Checkbox-only progress therefore preserves identity; any substantive task-body change that changes the canonical task body changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
 
 ### Task 4 owns projection and clause-result vocabulary
 
@@ -258,15 +442,26 @@ type CorrelationMutationResult =
 
 Only `resolved`, `updated`, and `idempotent` can contribute trusted evidence. All other results are runtime-fail-open where safe but acceptance-fail-closed.
 
-### Task 7 owns review recognition, finding-context continuity, child-message injection, and parsing results
+### Task 7 owns review recognition, current-open-set identity transport, child-message injection, and parsing results
 
 ```ts
 type ReviewFindingTarget = {
-  readonly findingId: string;
+  readonly findingId: FindingId;
   readonly severity: "critical" | "important" | "minor";
   readonly summary: string;
   readonly location?: string;
 };
+
+type ScopedFindingMarkerExtraction =
+  | { readonly kind: "resolved"; readonly requestedFindingIds: readonly FindingId[] }
+  | {
+      readonly kind: "invalid";
+      readonly reason:
+        | "missing_findings_section"
+        | "malformed_finding_marker"
+        | "duplicate_finding_id";
+      readonly details: readonly string[];
+    };
 
 type ReviewFindingContextQuery = {
   readonly artifactChainId: string;
@@ -274,37 +469,63 @@ type ReviewFindingContextQuery = {
     | { readonly kind: "task"; readonly taskIdentity: TaskIdentity }
     | { readonly kind: "final" };
   readonly precedingReviewedHead: string;
+  readonly requestedFindingIds: readonly FindingId[];
 };
 
 type ReviewFindingContextResult =
   | {
       readonly kind: "resolved";
       readonly sourceReviewCorrelationId: string;
-      readonly expectedFindings: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
+      readonly expectedFindings: readonly ReviewFindingTarget[];
     }
   | { readonly kind: "not_found"; readonly reason: string }
   | { readonly kind: "ambiguous"; readonly reviewCorrelationIds: readonly [string, string, ...string[]] }
-  | { readonly kind: "untrusted"; readonly reason: string };
+  | {
+      readonly kind: "untrusted";
+      readonly reason:
+        | "unknown_requested_finding"
+        | "requested_set_mismatch"
+        | "requested_finding_state_mismatch"
+        | "duplicate_requested_finding";
+      readonly details: readonly string[];
+    };
 
 interface ReviewFindingContextProvider {
   resolve(query: ReviewFindingContextQuery): Promise<ReviewFindingContextResult>;
 }
 
+type RecognizedReviewCommon = {
+  readonly profile: "superpowers-6.4.2";
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly artifactChainId: string;
+  readonly taskIdentity?: TaskIdentity;
+  readonly reviewedRange: { readonly base: string; readonly head: string };
+  readonly contractId: string;
+  readonly contractDigest: string;
+};
+
 type RecognizedReviewDispatch =
   | {
       readonly kind: "recognized";
-      readonly profile: "superpowers-6.4.2";
-      readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
-      readonly parentSessionId: string;
-      readonly parentCallId: string;
-      readonly artifactChainId: string;
-      readonly taskIdentity?: TaskIdentity;
-      readonly reviewedRange: { readonly base: string; readonly head: string };
-      readonly contractId: string;
-      readonly contractDigest: string;
+      readonly review: RecognizedReviewCommon & {
+        readonly reviewKind: "task-review" | "final-review";
+      };
+    }
+  | {
+      readonly kind: "recognized";
+      readonly review: RecognizedReviewCommon & {
+        readonly reviewKind: "scoped-re-review";
+        readonly requestedFindingIds: readonly FindingId[];
+      };
     }
   | { readonly kind: "not_review" }
-  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] }
+  | {
+      readonly kind: "untrusted";
+      readonly reason: "finding_marker_invalid";
+      readonly details: readonly [string, ...string[]];
+    };
 
 type ReviewResultInvalidReason =
   | "missing_result"
@@ -317,32 +538,50 @@ type ReviewResultInvalidReason =
   | "contract_mismatch"
   | "missing_required_clause"
   | "finding_context_unavailable"
+  | "missing_finding_marker"
+  | "malformed_finding_marker"
+  | "orphan_finding_marker"
+  | "finding_marker_mismatch"
   | "missing_expected_finding"
   | "duplicate_finding_id"
   | "expected_finding_mismatch"
   | "finding_id_collision"
   | "forbidden_human_adjudication";
 
-type PendingReviewCorrelation = {
+type PendingReviewCorrelationBase = {
   readonly reviewCorrelationId: string;
   readonly parentSessionId: string;
   readonly parentCallId: string;
   readonly artifactChainId: string;
-  readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
   readonly taskIdentity?: TaskIdentity;
   readonly reviewedRange: { readonly base: string; readonly head: string };
   readonly contractId: string;
   readonly contractDigest: string;
-  readonly expectedFindings?: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
   readonly status: "pending_child" | "child_bound" | "ambiguous" | "terminal";
   readonly childSessionId?: string;
 };
+
+type PendingReviewCorrelation =
+  | (PendingReviewCorrelationBase & {
+      readonly reviewKind: "task-review" | "final-review";
+      readonly requestedFindingIds?: never;
+      readonly expectedFindings?: never;
+    })
+  | (PendingReviewCorrelationBase & {
+      readonly reviewKind: "scoped-re-review";
+      readonly requestedFindingIds: readonly FindingId[];
+      readonly expectedFindings: readonly ReviewFindingTarget[];
+    });
 
 type PreparePendingReviewResult =
   | { readonly kind: "ready"; readonly correlation: PendingReviewCorrelation }
   | {
       readonly kind: "untrusted";
-      readonly reason: "finding_context_not_found" | "finding_context_ambiguous" | "finding_context_untrusted";
+      readonly reason:
+        | "finding_marker_invalid"
+        | "finding_context_not_found"
+        | "finding_context_ambiguous"
+        | "finding_context_untrusted";
       readonly details: readonly string[];
     };
 
@@ -367,7 +606,11 @@ type ParseReviewResult =
   | { readonly kind: "invalid"; readonly reason: ReviewResultInvalidReason; readonly details: readonly string[] };
 ```
 
-For task/first-final review, `expectedFindings` MUST be absent. For scoped re-review it MUST be a non-empty set resolved by `ReviewFindingContextProvider`. A scoped call without resolved finding context is not eligible for Justice appendix injection and remains `NOT_PROVEN`.
+Marker syntax is exactly `[[justice-finding:<findingId>]]`, with runtime `findingId` regex `^jf_[0-9a-f]{16}$`.
+
+For scoped re-review, marker extraction reads only the exact `## The Findings Under Verification` section up to the next exact `## The Fix` heading. The extracted `requestedFindingIds` array may be empty. Empty is a valid spec/clause-only scoped target set; it is not a context failure.
+
+For task/first-final review, `expectedFindings` MUST be absent. For scoped re-review, `expectedFindings` MUST be present and may be empty. A scoped call with invalid marker extraction or unresolved context is not eligible for Justice structured appendix injection and remains `NOT_PROVEN`.
 
 ### Task 9 owns final-review evidence closure
 
@@ -578,9 +821,11 @@ type ChatMessageOutput = Parameters<ChatMessageHook>[1];
 type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
 
 type ReviewAppendixInput = {
-  readonly correlation: PendingReviewCorrelation & { readonly status: "child_bound"; readonly childSessionId: string };
+  readonly correlation: PendingReviewCorrelation & {
+    readonly status: "child_bound";
+    readonly childSessionId: string;
+  };
   readonly contractPath: string;
-  readonly expectedFindings?: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
 };
 
 type ResolveReviewChildInput = {
