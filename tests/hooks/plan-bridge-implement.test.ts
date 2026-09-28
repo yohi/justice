@@ -159,6 +159,38 @@ describe("PlanBridge.handleImplementationArm", () => {
     });
   });
 
+  it("preserves an explicit sp-review category without review wording", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-explicit-review", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-explicit-review",
+      callId: "call-explicit-review",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          category: "sp-review",
+          description: "Inspect the supplied result",
+          prompt: "Inspect the supplied result.",
+          subagent_type: "general",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: { category: "sp-review", run_in_background: false },
+    });
+    expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
+  });
+
   it("routes a Superpowers task reviewer through sp-review without implementation semantics", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });

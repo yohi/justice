@@ -71,6 +71,8 @@ function resolveSuperpowersSddCategory(
 ): SpCategory | TaskCategory {
   if (toolInput.subagent_type !== "general") return fallbackCategory;
 
+  const preservedCategory = toolInput.category === "sp-review" ? "sp-review" : fallbackCategory;
+
   const description =
     typeof toolInput.description === "string" ? toolInput.description.trim().toLowerCase() : "";
   const prompt = typeof toolInput.prompt === "string" ? toolInput.prompt.trimStart() : "";
@@ -91,7 +93,7 @@ function resolveSuperpowersSddCategory(
     (prompt.startsWith("You are a Senior Code Reviewer") &&
       prompt.includes("## Git Range to Review"));
 
-  return isFinalReview ? "sp-final-review" : fallbackCategory;
+  return isFinalReview ? "sp-final-review" : preservedCategory;
 }
 
 /** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
