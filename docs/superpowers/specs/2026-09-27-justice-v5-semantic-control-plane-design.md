@@ -1733,7 +1733,7 @@ The v5 implementation plan must include E2E coverage for at least the following 
 14. implementation-discovered design change requires artifact reconciliation before resume.
 15. code works and tests pass but violates approved Plan → acceptance blocked.
 16. reviewer omits a required normative clause → clause becomes NOT_PROVEN and blocks acceptance.
-17. final review approves old revision and code changes afterward → completion blocked.
+17. an older full final review alone cannot complete a post-fix candidate; the single Superpowers scoped final re-review may extend trusted coverage only when affected clauses are re-proven and unaffected clause scopes are deterministically non-intersecting.
 18. all required clauses SATISFIED and no blocking quality findings → completion permitted.
 
 ### Routing and compatibility
@@ -1781,7 +1781,7 @@ The implementation satisfies this design only if all of the following are true:
 9. semantic drift is blocked at the earliest acceptance boundary.
 10. substantive drift requires authoritative artifact reconciliation before resume.
 11. final completion independently checks cross-artifact conformance.
-12. the final reviewed revision matches the completion candidate.
+12. the trusted FinalReviewEvidenceClosure covers the exact completion candidate without changing Superpowers final-review progression.
 13. unresolved semantic drift is zero at `PlanComplete`.
 14. unauthorized semantic drift is zero at `PlanComplete`.
 15. missing required evidence is zero at `PlanComplete`.
