@@ -298,6 +298,18 @@ describe("workflow start request parsing", () => {
       });
     });
 
+    it("should accept OpenCode @path references and a path-only command", () => {
+      const result = parseWorkflowStartCommandArguments(
+        "--design @docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md --plan @docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      );
+      expect(result).toEqual({
+        source: "command",
+        goal: "Continue the referenced Justice workflow",
+        designPath: "docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md",
+        planPath: "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      });
+    });
+
     it("should parse an artifact flag placed after the goal", () => {
       const result = parseWorkflowStartCommandArguments("ship the feature --plan plan.md");
       expect(result).toEqual({
@@ -376,6 +388,12 @@ describe("workflow start request parsing", () => {
       expect(parseWorkflowStartCommandArguments("--plan docs\\plans\\plan.md goal")).toBeNull();
     });
 
+    it("should preserve safety checks after stripping an OpenCode @ reference", () => {
+      expect(parseWorkflowStartCommandArguments("--plan @/etc/passwd")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--plan @../secret.md")).toBeNull();
+      expect(parseWorkflowStartCommandArguments("--plan @@docs/plans/feature.md")).toBeNull();
+    });
+
     it("should reject unsafe paths supplied through the fallback marker", () => {
       expect(
         parseWorkflowStartFallbackMarker("Justice: start workflow --plan /abs.md goal"),
@@ -420,8 +438,13 @@ describe("workflow start request parsing", () => {
       expect(parseWorkflowStartCommandArguments(undefined)).toBeNull();
     });
 
-    it("should return null when the goal is missing", () => {
-      expect(parseWorkflowStartCommandArguments("--plan docs/plans/feature.md")).toBeNull();
+    it("should require a goal only when no command artifact is supplied", () => {
+      expect(parseWorkflowStartCommandArguments("--plan docs/plans/feature.md")).toEqual({
+        source: "command",
+        goal: "Continue the referenced Justice workflow",
+        designPath: null,
+        planPath: "docs/plans/feature.md",
+      });
       expect(
         parseWorkflowStartFallbackMarker("Justice: start workflow --plan docs/plans/feature.md"),
       ).toBeNull();

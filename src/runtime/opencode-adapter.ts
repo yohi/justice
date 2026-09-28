@@ -1015,7 +1015,19 @@ export class OpenCodeAdapter {
     // arguments are never echoed into the log.
     const request = parseWorkflowStartCommandArguments(input.arguments);
     if (request === null) {
-      await this.log("warn", "[Justice] /justice-start arguments rejected by parser; ignoring");
+      await this.log("warn", "[Justice] /justice-start arguments rejected by parser");
+      output.parts.push(
+        this.#buildWorkflowDirectivePart(
+          input.sessionID,
+          [
+            "[JUSTICE: COMMAND REJECTED]",
+            "`/justice-start` was invoked, but Justice rejected its arguments.",
+            "Do not treat the raw command arguments as an ordinary user request.",
+            "Expected: /justice-start [<goal words...>] [--design <path>] [--plan <path>].",
+            "A goal may be omitted when --design or --plan is present.",
+          ].join("\n"),
+        ),
+      );
       return;
     }
 
@@ -1039,7 +1051,18 @@ export class OpenCodeAdapter {
   ): Promise<void> {
     const request = parseJusticeImplementCommandArguments(input.arguments);
     if (request === null) {
-      await this.log("warn", "[Justice] /justice-implement arguments rejected by parser; ignoring");
+      await this.log("warn", "[Justice] /justice-implement arguments rejected by parser");
+      output.parts.push(
+        this.#buildWorkflowDirectivePart(
+          input.sessionID,
+          [
+            "[JUSTICE: COMMAND REJECTED]",
+            "`/justice-implement` was invoked, but Justice rejected its arguments.",
+            "Do not treat the raw command arguments as an ordinary user request.",
+            "Expected: /justice-implement --plan <path> --approved, or /justice-implement --cancel.",
+          ].join("\n"),
+        ),
+      );
       return;
     }
 

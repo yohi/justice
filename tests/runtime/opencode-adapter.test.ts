@@ -803,6 +803,43 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     },
   );
 
+  it("normalizes OpenCode @paths and allows a path-only /justice-start command", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleWorkflowStart = vi
+      .spyOn(justice.getPlanBridge(), "handleWorkflowStart")
+      .mockResolvedValue({
+        phase: "plan_ready",
+        directiveStage: "plan_review_required",
+        recommendedSkills: [],
+        goal: "Continue the referenced Justice workflow",
+        nextSkill: null,
+        activePlanPath: "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+        guidance: "[JUSTICE: Workflow Bootstrap] plan_ready",
+      });
+
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "/justice-start",
+        sessionID: "sess-at-path",
+        arguments:
+          "--design @docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md --plan @docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      },
+      output,
+    );
+
+    expect(handleWorkflowStart).toHaveBeenCalledWith("sess-at-path", {
+      source: "command",
+      goal: "Continue the referenced Justice workflow",
+      designPath: "docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md",
+      planPath: "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+    });
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
+  });
+
   it("does not emit workflow observations from the adapter; PlanBridge owns them", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -911,7 +948,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     initialize.mockRestore();
   });
 
-  it("ignores malformed /justice-implement arguments", async () => {
+  it("reports malformed /justice-implement arguments explicitly", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
@@ -928,7 +965,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(handleImplementationArm).not.toHaveBeenCalled();
-    expect(output.parts).toHaveLength(0);
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
   });
 
   it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {
@@ -973,7 +1011,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
   });
 
   it.each(["--plan", "--plan /etc/passwd goal", "--unknown-flag goal", ""])(
-    "fails open without throwing or mutating state for malformed arguments %j",
+    "fails open with an explicit rejection directive for malformed arguments %j",
     async (rawArguments) => {
       const adapter = new OpenCodeAdapter(fakeInit());
       await adapter.ensureInitialized();
@@ -989,7 +1027,9 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       ).resolves.toBeUndefined();
 
       expect(handleWorkflowStart).not.toHaveBeenCalled();
-      expect(output.parts).toEqual([]);
+      expect(output.parts).toHaveLength(1);
+      expect(output.parts[0]).toMatchObject({ type: "text", sessionID: "sess-bad" });
+      expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
       expect(justice.getPlanBridge().getActivePlan("sess-bad")).toBeNull();
     },
   );

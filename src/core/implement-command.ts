@@ -1,5 +1,5 @@
 import type { ImplementationArmRequest } from "./types";
-import { normalizeSafeRelativePath } from "./trigger-detector";
+import { normalizeCommandArtifactPath } from "./trigger-detector";
 
 export const JUSTICE_IMPLEMENT_COMMAND = "justice-implement";
 
@@ -19,7 +19,7 @@ function parsePlanFlag(
   if (value === undefined) return null;
   if (value.startsWith("--")) return null;
 
-  const planPath = normalizeSafeRelativePath(value);
+  const planPath = normalizeCommandArtifactPath(value);
   if (planPath === null) return null;
 
   return { planPath, nextIndex: flagIndex + 1 };
