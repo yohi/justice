@@ -1207,7 +1207,16 @@ Task lineage:
 artifactChainId + exact TaskIdentity
 ```
 
-It contains the trusted initial task review plus trusted scoped re-reviews for that same task identity/artifact chain.
+The task lineage is a **single contiguous trusted chain**.
+
+Starting from the unique immediate preceding review whose `reviewedRange.head === precedingReviewedHead`:
+
+- `task-review` is the root;
+- for a `scoped-re-review`, `reviewedRange.base` must equal exactly one earlier trusted result's `reviewedRange.head` under the same artifact chain/task identity;
+- traverse that edge backward until the single `task-review` root;
+- missing predecessor, multiple predecessor candidates, multiple roots, or a cycle is untrusted/ambiguous.
+
+Only IDs observed on that chain are reserved.
 
 Final lineage:
 
@@ -1215,7 +1224,7 @@ Final lineage:
 artifactChainId + current final-review lifecycle
 ```
 
-It contains the trusted full final review and its trusted scoped final re-review when present.
+For the supported one-fix-wave final flow, the scoped-final review's unique immediate predecessor must be the trusted `final-review` whose head equals `precedingReviewedHead`. That full-final result is the lineage root and supplies the reserved IDs. A scoped predecessor would imply a second final re-review and is unsupported/untrusted.
 
 Finding IDs from another task, another artifact chain, or another final-review lifecycle are outside this reservation domain.
 
@@ -1255,7 +1264,7 @@ ReviewFindingContextResult =
   | untrusted
 ```
 
-`reservedFindingIds` contains every valid historical lineage ID exactly once.
+`reservedFindingIds` contains every valid historical lineage ID exactly once, in first-seen order along the resolved root→preceding chain.
 
 Then current-target resolution applies:
 
