@@ -3,6 +3,32 @@ import type { PlanTask } from "./types";
 
 const DEPENDS_GLOBAL_REGEX = /\(depends:\s*(task-\d+(?:\s*,\s*task-\d+)*)\)/gi;
 
+function hasInterfacesMarker(rawBody: string): boolean {
+  let fence: { readonly character: "`" | "~"; readonly length: number } | null = null;
+
+  for (const line of rawBody.split(/\r?\n/)) {
+    const trimmedLine = line.trim();
+    const fenceMatch = trimmedLine.match(/^(`{3,}|~{3,})/);
+
+    if (fenceMatch) {
+      const fenceCharacter = fenceMatch[1]?.[0];
+      if (fenceCharacter === "`" || fenceCharacter === "~") {
+        const fenceLength = fenceMatch[1]?.length ?? 0;
+        if (fence === null) {
+          fence = { character: fenceCharacter, length: fenceLength };
+        } else if (fence.character === fenceCharacter && fenceLength >= fence.length) {
+          fence = null;
+        }
+      }
+      continue;
+    }
+
+    if (fence === null && trimmedLine === "**Interfaces:**") return true;
+  }
+
+  return false;
+}
+
 /**
  * 依存関係の解決中に発生したエラー。
  */
@@ -46,6 +72,11 @@ export class DependencyAnalyzer {
    * - Not part of a circular dependency
    */
   getParallelizable(tasks: PlanTask[]): PlanTask[] {
+    if (tasks.some((task) => hasInterfacesMarker(task.rawBody ?? ""))) {
+      const firstIncomplete = tasks.find((task) => task.status !== "completed");
+      return firstIncomplete ? [firstIncomplete] : [];
+    }
+
     const deps = this.extractDependencies(tasks);
     const completedIds = new Set(tasks.filter((t) => t.status === "completed").map((t) => t.id));
     const taskMap = new Map(tasks.map((t) => [t.id, t]));

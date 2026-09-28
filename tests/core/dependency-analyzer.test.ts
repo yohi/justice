@@ -74,6 +74,52 @@ describe("DependencyAnalyzer", () => {
   });
 
   describe("getParallelizable", () => {
+    it("runs only the first incomplete task when a real Interfaces block is present", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n**Interfaces:**\n- API` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2"]);
+    });
+
+    it("advances to the next incomplete task after the first completes", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, status: "completed" as const, rawBody: `${task.rawBody}\n**Interfaces:**\n- API` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-3"]);
+    });
+
+    it("ignores Interfaces text inside fenced code blocks", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`md\n**Interfaces:**\n\`\`\`` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("does not enter conservative mode for prose containing the word Interfaces", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\nDiscuss Interfaces here` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("preserves legacy explicit dependency parallelization without Interfaces", () => {
+      const tasks = makeTasks().filter((task) => task.id === "task-1" || task.id === "task-2" || task.id === "task-3");
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
     it("should identify independent tasks that can run in parallel", () => {
       const tasks = makeTasks();
       const parallel = analyzer.getParallelizable(tasks);
