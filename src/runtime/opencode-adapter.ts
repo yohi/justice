@@ -709,6 +709,16 @@ export class OpenCodeAdapter {
         output.args[key] = value;
       }
 
+      const justiceCategory = modified.args.category;
+      if (
+        isTask &&
+        output.args.subagent_type === "general" &&
+        typeof justiceCategory === "string" &&
+        justiceCategory.startsWith("sp-")
+      ) {
+        delete output.args.subagent_type;
+      }
+
       this.#finalizeTaskToolInput(isTask, input, output.args);
       return response;
     } catch (err) {

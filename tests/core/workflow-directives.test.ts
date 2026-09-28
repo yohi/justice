@@ -20,8 +20,8 @@ describe("resolveWorkflowDirective", () => {
     ["implementation_unauthorized", [], "await_human_approval", "external_unverified"],
     [
       "implementation_arm",
-      ["test-driven-development", "verification-before-completion"],
-      "delegate_task",
+      ["subagent-driven-development"],
+      "invoke_skill",
       "external_unverified",
     ],
     ["implementation_arm_required", [], "await_human_approval", "external_unverified"],
@@ -63,6 +63,7 @@ describe("formatWorkflowDirective", () => {
   it.each([
     ["plan_review_required", "requesting-code-review"],
     ["review_remediation", "receiving-code-review"],
+    ["implementation_arm", "subagent-driven-development"],
   ] as const)("exposes %s as a required skill marker", (stage, requiredSkill) => {
     // When
     const directive = formatWorkflowDirective({ stage });

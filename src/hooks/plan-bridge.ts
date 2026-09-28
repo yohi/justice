@@ -58,14 +58,42 @@ export function normalizeTaskToolInputWithCategory(
   category: SpCategory | TaskCategory,
 ): Record<string, unknown> {
   const normalized = normalizeTaskToolInput(toolInput);
-  if (normalized.category === undefined) {
-    normalized.category = category;
-  }
-  const effectiveCategory = normalized.category;
-  if (effectiveCategory === "sp-review" || effectiveCategory === "sp-final-review") {
+  normalized.category = category;
+  if (category === "sp-review" || category === "sp-final-review") {
     normalized.run_in_background = false;
   }
   return normalized;
+}
+
+function resolveSuperpowersSddCategory(
+  toolInput: Readonly<Record<string, unknown>>,
+  fallbackCategory: SpCategory | TaskCategory,
+): SpCategory | TaskCategory {
+  if (toolInput.subagent_type !== "general") return fallbackCategory;
+
+  const preservedCategory = toolInput.category === "sp-review" ? "sp-review" : fallbackCategory;
+
+  const description =
+    typeof toolInput.description === "string" ? toolInput.description.trim().toLowerCase() : "";
+  const prompt = typeof toolInput.prompt === "string" ? toolInput.prompt.trimStart() : "";
+
+  const isTaskReview =
+    description.startsWith("review task ") ||
+    description.startsWith("re-review task ") ||
+    prompt.startsWith("You are reviewing one task's implementation") ||
+    prompt.startsWith("You are re-reviewing one task's fix round");
+
+  if (isTaskReview) return "sp-review";
+
+  const isFinalReview =
+    (!description.startsWith("implement ") &&
+      (description.startsWith("final review") ||
+        description.startsWith("final code review") ||
+        description.startsWith("review final"))) ||
+    (prompt.startsWith("You are a Senior Code Reviewer") &&
+      prompt.includes("## Git Range to Review"));
+
+  return isFinalReview ? "sp-final-review" : preservedCategory;
 }
 
 /** Superpowers スキルのうち、ブートストラップの次手として案内するもの。 */
@@ -1021,6 +1049,28 @@ export class PlanBridge {
       event.payload.toolInput,
     );
 
+    const semanticReviewCategory = resolveSuperpowersSddCategory(
+      event.payload.toolInput,
+      "sp-implementation",
+    );
+    if (
+      semanticReviewCategory === "sp-review" ||
+      semanticReviewCategory === "sp-final-review"
+    ) {
+      const normalizedArgs = normalizeTaskToolInputWithCategory(
+        event.payload.toolInput,
+        semanticReviewCategory,
+      );
+      delete normalizedArgs.task_id;
+      const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
+      if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
+      return {
+        action: "inject",
+        injectedContext: "",
+        modifiedPayload: { args: normalizedArgs },
+      };
+    }
+
     // Fail-open ONLY on I/O error
     // toolInput からスキルを抽出 (skills または loadSkills)
     const toolInputSkills = resolveSkillsFromToolInput(event.payload.toolInput);
@@ -1038,7 +1088,7 @@ export class PlanBridge {
     const initialDelegation = initialResult?.request;
 
     if (!initialDelegation) {
-      // Plan is now done
+      // Plan is now done. Semantic final review is handled before implementation task selection.
       this.setActivePlan(event.sessionId, null);
       this.clearSessionCompletionInputs(event.sessionId);
       return PROCEED;
@@ -1075,13 +1125,31 @@ export class PlanBridge {
       );
     }
 
-    this.rememberCompletionInput(event.sessionId, event.callId, delegation);
-
-    const normalizedArgs = normalizeTaskToolInputWithCategory(
+    const semanticCategory = resolveSuperpowersSddCategory(
       event.payload.toolInput,
       delegation.category,
     );
-    const callerOwnedRouting = typeof event.payload.toolInput.subagent_type === "string";
+    const effectiveDelegation =
+      semanticCategory === delegation.category
+        ? delegation
+        : {
+            ...delegation,
+            category: semanticCategory,
+            runInBackground:
+              semanticCategory === "sp-review" || semanticCategory === "sp-final-review"
+                ? false
+                : delegation.runInBackground,
+          };
+
+    this.rememberCompletionInput(event.sessionId, event.callId, effectiveDelegation);
+
+    const normalizedArgs = normalizeTaskToolInputWithCategory(
+      event.payload.toolInput,
+      effectiveDelegation.category,
+    );
+    const callerSubagentType = event.payload.toolInput.subagent_type;
+    const callerOwnedRouting =
+      typeof callerSubagentType === "string" && callerSubagentType !== "general";
     if (callerOwnedRouting) {
       normalizedArgs.subagent_type = event.payload.toolInput.subagent_type;
       delete normalizedArgs.category;
@@ -1101,7 +1169,7 @@ export class PlanBridge {
     return {
       action: "inject",
       injectedContext: `${this.buildInjectedContext(planContent, activePlanPath, {
-        ...delegation,
+        ...effectiveDelegation,
         prompt: authoritativePrompt,
       })}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
