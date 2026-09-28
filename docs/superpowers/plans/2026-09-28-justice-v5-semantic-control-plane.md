@@ -206,6 +206,141 @@ type ParseReviewResult =
 
 `RecognizedReviewDispatch.kind === "ambiguous"` and every invalid parse result are untrusted and acceptance-fail-closed.
 
+### Major task-local input/output contracts
+
+These are implementation interfaces, not cross-task architecture choices.
+
+**Task 3**
+
+```ts
+type PriorStateClassification =
+  | {
+      readonly kind: "recognized_v4";
+      readonly family:
+        | "plan_authorization"
+        | "observation_envelope"
+        | "review_snapshot"
+        | "human_review_resolution";
+      readonly schema: string;
+    }
+  | { readonly kind: "unknown_or_newer"; readonly schema?: string }
+  | { readonly kind: "malformed"; readonly reason: string };
+```
+
+**Task 4**
+
+```ts
+type ParsedSuperpowersTask = {
+  readonly ordinal: number;
+  readonly heading: string;
+  readonly fullBody: string;
+  readonly files: readonly string[];
+  readonly consumes: readonly string[];
+  readonly produces: readonly string[];
+  readonly signatures: readonly string[];
+  readonly exactValues: readonly string[];
+  readonly testAssertions: readonly string[];
+  readonly expectedVerification: readonly string[];
+};
+
+type ParsedSuperpowersPlan = {
+  readonly goal: string;
+  readonly architecture: string;
+  readonly techStack: string;
+  readonly specPath: string;
+  readonly globalConstraints: readonly string[];
+  readonly reviewFocus: readonly string[];
+  readonly tasks: readonly ParsedSuperpowersTask[];
+};
+
+type ProjectedSources = {
+  readonly requirements: readonly NormativeClause[];
+  readonly design: readonly NormativeClause[];
+  readonly plan: readonly NormativeClause[];
+};
+```
+
+**Task 5**
+
+```ts
+type BindPendingInput = {
+  readonly authorizationId: string;
+  readonly artifactChainId: string;
+  readonly planIdentity: string;
+  readonly taskIdentity: TaskIdentity;
+  readonly executionMethod: "subagent-driven-development" | "executing-plans";
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly omoContinuationSessionId?: string;
+  readonly dispatchRevision: string;
+};
+
+type ResolveTaskIdentityInput = {
+  readonly dispatchPrompt: string;
+  readonly artifactChain: ApprovedArtifactChain;
+  readonly planSnapshot: CanonicalPlanSnapshot;
+  readonly fileReader: FileReader;
+};
+```
+
+**Task 7**
+
+```ts
+type ReviewDispatchInput = {
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly taskArgs: Readonly<Record<string, unknown>>;
+  readonly executionMethod: "subagent-driven-development" | "executing-plans";
+  readonly artifactChain: ApprovedArtifactChain;
+  readonly executionCorrelation?: ExecutionCorrelation;
+  readonly contract: ConformanceContract;
+};
+
+type ReviewAppendixInput = {
+  readonly dispatch: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>;
+  readonly contractPath: string;
+};
+```
+
+**Task 9**
+
+```ts
+type TaskConformanceInput = {
+  readonly artifactChain: ApprovedArtifactChain;
+  readonly contract: ConformanceContract;
+  readonly taskIdentity: TaskIdentity;
+  readonly executionMethod: "subagent-driven-development" | "executing-plans";
+  readonly executionCorrelation?: ExecutionCorrelation;
+  readonly clauseResults: readonly ClauseResult[];
+  readonly qualityFindings: readonly ReviewFindingV5[];
+  readonly hasTrustedRequiredReview: boolean;
+  readonly candidateRevision: string;
+};
+
+type PlanConformanceInput = {
+  readonly artifactChain: ApprovedArtifactChain;
+  readonly contract: ConformanceContract;
+  readonly taskVerdicts: readonly ConformanceGateVerdict[];
+  readonly finalClauseResults: readonly ClauseResult[];
+  readonly qualityFindings: readonly ReviewFindingV5[];
+  readonly reviewedRange?: { readonly base: string; readonly head: string };
+  readonly candidateHead: string;
+};
+```
+
+**Task 11**
+
+```ts
+type ResolveOmoEffectiveConfigInput = {
+  readonly cwd: string;
+  readonly homeDir: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly explicitProfile?: string;
+  readonly readFile: (path: string) => Promise<string>;
+  readonly fileExists: (path: string) => Promise<boolean>;
+};
+```
+
 ### Existing task-local definitions remain canonical at their producer
 
 - Task 3: `ApprovedArtifactChain` / `ApprovedPlanBinding.artifactChain`
@@ -385,14 +520,22 @@ git commit -m "refactor: separate Justice identity from OmO task routing"
 **Interfaces:**
 - Produces:
   ```ts
+  type ArtifactFingerprint = {
+    readonly algorithm: "sha256";
+    readonly value: string;
+  };
+
   type ArtifactRevisionRef = {
     readonly path: string;
-    readonly fingerprint: PlanFingerprint;
+    readonly sourceFingerprint: ArtifactFingerprint;
     readonly sourceRevision?: string;
   };
 
-  type PlanArtifactRevisionRef = ArtifactRevisionRef & {
+  type PlanArtifactRevisionRef = {
+    readonly path: string;
+    readonly planFingerprint: PlanFingerprint;
     readonly canonicalSnapshot: CanonicalPlanSnapshot;
+    readonly sourceRevision?: string;
   };
 
   type ApprovedArtifactChain = {
@@ -400,7 +543,8 @@ git commit -m "refactor: separate Justice identity from OmO task routing"
     readonly requirements: ArtifactRevisionRef;
     readonly design: ArtifactRevisionRef;
     readonly plan: PlanArtifactRevisionRef;
-    readonly fingerprintSchema: "justice-plan-v1";
+    readonly artifactFingerprintSchema: "justice-artifact-v1";
+    readonly planFingerprintSchema: "justice-plan-v1";
     readonly projectionSchema: "justice-conformance-v1";
     readonly approvedAt: string;
   };
@@ -443,7 +587,7 @@ Only these substitutions are allowed in the four consumer files in this task:
 
 ```text
 binding.planPath          → binding.artifactChain.plan.path
-binding.planFingerprint   → binding.artifactChain.plan.fingerprint
+binding.planFingerprint   → binding.artifactChain.plan.planFingerprint
 binding.canonicalSnapshot → binding.artifactChain.plan.canonicalSnapshot
 ```
 
@@ -1055,7 +1199,7 @@ git commit -m "refactor: return workflow orchestration to Superpowers"
       }
     | { readonly kind: "unsupported"; readonly reason: string; readonly diagnostics: readonly string[] };
   ```
-- `resolveOmoEffectiveConfig({ cwd, homeDir, env, readFile, fileExists }): OmoEffectiveConfigResult | Promise<OmoEffectiveConfigResult>`.
+- `resolveOmoEffectiveConfig(input: ResolveOmoEffectiveConfigInput): Promise<OmoEffectiveConfigResult>`.
 - Doctor capability result reports OpenCode version metadata, required hook/call capabilities, review-interop support, child-session relation observability, secure review-artifact capability, and configured/applied/observed controller status separately.
 - Remove exact `SUPPORTED_OPENCODE_VERSION === "1.18.29"` authority. Version is metadata; capabilities are authority.
 
@@ -1478,7 +1622,7 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Producer | Consumer | Contract to compare |
 |---|---|---|
 | Task 2 | Tasks 5–12 | `TaskIdentity`, `ReviewFindingV5`, `TaskCategory`, `TaskRoutingTarget` |
-| Task 3 | Tasks 4–14 | `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
+| Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
 | Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseResult`, `ConformanceContract` |
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
 | Task 6 | Task 7 | durable parent-call/child-session observation available to `RecognizedReviewDispatch` |
