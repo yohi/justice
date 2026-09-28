@@ -190,6 +190,11 @@ type SuperpowersExecutionMethod =
   | "subagent-driven-development"
   | "executing-plans";
 
+// Open OmO wire namespace for caller-owned explicit categories.
+// Runtime validation is exactly: typeof value === "string" && value.length > 0.
+// The string is preserved byte-for-byte; Justice does not trim or static-union-normalize it.
+type OmoCategoryName = string;
+
 type SemanticExecutionClass =
   | "mechanical"
   | "implementation"
@@ -229,7 +234,7 @@ type SuperpowersRoutingTranslationResult =
       readonly executionClass: SemanticExecutionClass;
       readonly category: SpCategory;
     }
-  | { readonly kind: "preserve_explicit_category"; readonly category: SpCategory | TaskCategory }
+  | { readonly kind: "preserve_explicit_category"; readonly category: OmoCategoryName }
   | { readonly kind: "preserve_explicit_subagent"; readonly subagentType: string }
   | { readonly kind: "continuation"; readonly taskId: string }
   | { readonly kind: "unrouted" }
@@ -762,20 +767,42 @@ type PlanConformanceInput = {
 **Task 10**
 
 ```ts
-type WorkflowActivationSource =
-  | "explicit"
-  | "recovered"
-  | "observed_superpowers";
+type WorkflowMethodSelection =
+  | {
+      readonly kind: "selected";
+      readonly method: SuperpowersExecutionMethod;
+      readonly source: "explicit" | "recovered_selection";
+      readonly originSessionId: string;
+    }
+  | {
+      readonly kind: "selection_required";
+      readonly reason: "no_authoritative_method";
+    };
+
+type WorkflowMethodSelectionEvidence = {
+  readonly schemaVersion: "justice-workflow-selection-v1";
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly source: "explicit";
+  readonly selectedAt: string;
+};
+
+type WorkflowActivationEvidence = {
+  readonly schemaVersion: "justice-workflow-activation-v1";
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly skillCallId: string;
+  readonly observedAt: string;
+  readonly source: "skill_tool_success";
+};
 
 type WorkflowActivationInput = {
   readonly sessionId: string;
   readonly authorizationId: string;
-  readonly explicitMethod?: SuperpowersExecutionMethod;
-  readonly recovered?: {
-    readonly authorizationId: string;
-    readonly method: SuperpowersExecutionMethod;
-  };
-  readonly observedSuperpowersMethod?: SuperpowersExecutionMethod;
+  readonly selection: WorkflowMethodSelection;
+  readonly currentSessionActivation?: WorkflowActivationEvidence;
   readonly capabilities: {
     readonly nativeSkillInvocation: boolean;
     readonly subagentExecution: boolean;
@@ -784,10 +811,14 @@ type WorkflowActivationInput = {
 
 type WorkflowActivationDecision =
   | {
-      readonly kind: "activate";
-      readonly method: SuperpowersExecutionMethod;
-      readonly source: WorkflowActivationSource;
+      readonly kind: "needs_activation";
+      readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
       readonly requiredSkill: SuperpowersExecutionMethod;
+    }
+  | {
+      readonly kind: "already_active";
+      readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
+      readonly evidence: WorkflowActivationEvidence;
     }
   | {
       readonly kind: "method_selection_required";
@@ -795,9 +826,22 @@ type WorkflowActivationDecision =
     }
   | {
       readonly kind: "unavailable";
-      readonly method: SuperpowersExecutionMethod;
+      readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
       readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable";
+    }
+  | {
+      readonly kind: "conflict";
+      readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
+      readonly reason: "recovered_selection_conflicts_with_current_activation" | "activation_identity_mismatch";
+      readonly evidence?: WorkflowActivationEvidence;
     };
+
+interface WorkflowActivationStateStore {
+  recordSelection(evidence: WorkflowMethodSelectionEvidence): Promise<void>;
+  recordActivation(evidence: WorkflowActivationEvidence): Promise<void>;
+  findLatestSelection(authorizationId: string): Promise<WorkflowMethodSelectionEvidence | null>;
+  findCurrentActivation(authorizationId: string, sessionId: string): Promise<WorkflowActivationEvidence | null>;
+}
 
 type SemanticExecutionInput =
   | {
@@ -810,6 +854,13 @@ type SemanticExecutionInput =
       readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
     };
 
+function resolveWorkflowMethodSelection(input: {
+  readonly sessionId: string;
+  readonly authorizationId: string;
+  readonly explicitMethod?: SuperpowersExecutionMethod;
+  readonly recoveredSelection?: WorkflowMethodSelectionEvidence;
+}): WorkflowMethodSelection;
+
 function resolveWorkflowActivation(
   input: WorkflowActivationInput,
 ): WorkflowActivationDecision;
@@ -819,16 +870,62 @@ function classifySemanticExecution(
 ): SemanticClassificationResult;
 ```
 
-Activation source precedence is exact: explicit → trusted same-authorization recovery → observed Superpowers selection → `method_selection_required`. Justice does not infer a default method from task shape. Capability failure returns `unavailable`; it never silently substitutes another method or direct OmO execution.
+Selection and activation are separate contracts.
 
-Classifier precedence is exact:
+Selection precedence is exact:
+
+```text
+explicit current selection
+> latest trusted selection for the same authorization
+> selection_required
+```
+
+`WorkflowMethodSelectionEvidence` may be recovered across sessions for the same authorization, but it restores only the selected method. It never proves current-session activation.
+
+`WorkflowActivationEvidence` is current-session proof. It is trusted only when `authorizationId + sessionId + method` match the active selection and it originated from successful `tool.execute.after` observation of the native `skill` tool with `args.name === method` and `callID === skillCallId`.
+
+Decision rules are exact:
+
+```text
+selection_required
+→ method_selection_required
+
+selected + exact matching current-session ActivationEvidence
+→ already_active
+→ no duplicate skill invocation
+
+selected + no current-session ActivationEvidence
+→ needs_activation
+
+selected + capability missing
+→ unavailable
+```
+
+Conflict rules:
+
+- explicit current selection is authoritative over recovered selection; an older current-session activation for another method is not reused, so the explicit method returns `needs_activation`;
+- if selection source is only `recovered_selection` and current-session activation evidence names another method, return `conflict`; do not silently choose either;
+- mismatched authorization/session identity on activation evidence returns `conflict(activation_identity_mismatch)`.
+
+Cross-session recovery therefore has this exact flow:
+
+```text
+recovered selection from prior session
+→ needs_activation
+→ fresh current-session skill invocation
+→ persisted current-session ActivationEvidence
+→ already_active
+```
+
+Same-session restart may reuse persisted ActivationEvidence only for the exact matching authorization/session/method.
+
+Classifier precedence remains exact:
 
 ```text
 final-review > review > architecture > deep > integration > mechanical > implementation
 ```
 
 Implementation classification consumes the full `ParsedSuperpowersTask` plus cross-task dependencies. Keywords are supporting signals only; explicit review kind and structured architecture/integration obligations are authoritative.
-
 **Task 11**
 
 ```ts
@@ -954,7 +1051,7 @@ git commit -m "test: lock Justice v5 review interop baseline"
 - Test: `tests/core/omo-category-mapper-v5.test.ts`
 
 **Interfaces:**
-- Produces registry-defined `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, and `SuperpowersRoutingTranslationResult` in `src/core/types.ts`.
+- Produces registry-defined `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, and `SuperpowersRoutingTranslationResult` in `src/core/types.ts`.
 - Produces:
   ```ts
   type TaskCategory =
@@ -969,11 +1066,13 @@ git commit -m "test: lock Justice v5 review interop baseline"
     | "writing";
 
   type TaskRoutingTarget =
-    | { readonly kind: "category"; readonly category: SpCategory | TaskCategory }
+    | { readonly kind: "category"; readonly category: OmoCategoryName }
     | { readonly kind: "subagent"; readonly subagentType: string }
     | { readonly kind: "continuation"; readonly taskId: string }
     | { readonly kind: "unrouted" }
     | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
+
+  function parseOmoCategoryName(value: unknown): OmoCategoryName | null;
 
   function inspectTaskRoutingTarget(
     input: Readonly<Record<string, unknown>>,
@@ -987,12 +1086,14 @@ git commit -m "test: lock Justice v5 review interop baseline"
   ```
 - Translation precedence is exact:
   1. legitimate `task_id=ses_...` continuation → `continuation`, no new category;
-  2. explicit category → preserve/validate category;
+  2. explicit non-empty category string → preserve byte-for-byte as `OmoCategoryName`; do not require membership in `TaskCategory` or `SpCategory`;
   3. non-Superpowers explicit subagent → preserve;
   4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
   5. recognized Superpowers new-worker `subagent_type="general"` + classified semantic intent → remove `subagent_type`, emit one mapped `sp-*` category;
   6. recognized Superpowers new worker with no target + classified semantic intent → emit one mapped `sp-*` category;
   7. invalid both-target / ambiguous provenance / ambiguous classification → `untrusted`.
+- `TaskCategory` is only the known/current built-in vocabulary for compatibility/doctor assertions; it is not the caller-owned wire namespace.
+- `parseOmoCategoryName` accepts every non-empty string and returns it unchanged; unknown-to-Justice names remain OmO-owned.
 - `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates continuation `task_id`.
 - `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO `task_id=ses_...`.
 - `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
@@ -1006,6 +1107,10 @@ Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
 - `preserves_non_superpowers_explicit_subagent_type_without_category_injection`
 - `preserves_superpowers_specialized_non_generic_subagent_type_without_category_injection`
 - `preserves_explicit_category_without_subagent_type_injection`
+- `preserves_user_defined_omo_category_without_translation`
+- `unknown_to_justice_but_caller_owned_category_is_not_rejected_by_static_union`
+- `explicit_custom_category_never_gains_subagent_type`
+- `justice_generated_semantic_category_remains_sp_category`
 - `recognized_superpowers_general_worker_translates_classified_intent_to_category`
 - `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
 - `ambiguous_superpowers_semantic_classification_is_untrusted`
