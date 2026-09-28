@@ -1,11 +1,11 @@
 # Justice v5 Semantic Control Plane Design
 
-**Date:** 2026-09-27  
-**Status:** DRAFT — awaiting human review  
-**Authorization:** NOT SELF-AUTHORIZING  
-**Target:** Justice v5.x  
-**Baseline:** Justice master @ 080bcdb25b192962789ff5d67139e56487381de4  
-**Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`  
+**Date:** 2026-09-27
+**Status:** DRAFT — awaiting human review
+**Authorization:** NOT SELF-AUTHORIZING
+**Target:** Justice v5.x
+**Baseline:** Justice master @ 080bcdb25b192962789ff5d67139e56487381de4
+**Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`
 **Upstream baselines:** Oh My OpenAgent v5.0.1 (OpenCode edition), Superpowers v6.4.2
 
 ---
