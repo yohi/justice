@@ -640,7 +640,7 @@ Justice must not create another reviewer dispatch and must not change the caller
 
 A future supported host must provide an equivalent awaited authoritative parent lookup plus a consumed prompt/message extension point. Otherwise semantic conformance review on that host is unsupported until compatibility evidence establishes a replacement contract.
 
-### JUS5-REV-08 — Structured review result, finding continuity, and final evidence closure
+### JUS5-REV-08 — Structured review result, current-dispatch finding continuity, and final evidence closure
 
 Trusted semantic review evidence must carry a versioned result containing at least:
 
@@ -652,47 +652,117 @@ Trusted semantic review evidence must carry a versioned result containing at lea
 - quality verdict/findings;
 - clause results containing `clauseId`, `SATISFIED | VIOLATED | NOT_PROVEN`, supporting evidence/reference, and a deterministic evidence scope sufficient to decide carry-forward.
 
-#### Scoped re-review finding identity continuity
+#### Finding identity transport
 
-Justice must not fuzzy-match findings across separate reviewer dispatches.
+Justice must not infer the current scoped-review target set from all findings present in a preceding review and must not fuzzy-match findings across reviewer dispatches.
 
-Before a scoped re-review is enriched, Justice must resolve the **trusted immediately preceding review** for the same artifact chain/scope whose reviewed head equals the scoped re-review base.
-
-Justice projects each preceding finding into:
+The exact human-readable transport marker is:
 
 ```text
-ReviewFindingTarget
-├─ findingId
-├─ severity
-├─ summary
-└─ location?
+[[justice-finding:<findingId>]]
 ```
+
+A Justice v5 `findingId` used by this transport must match:
+
+```text
+^jf_[0-9a-f]{16}$
+```
+
+For every quality finding produced by a task review, final review, or scoped re-review new-breakage section:
+
+- the human-readable finding line must contain exactly one marker;
+- the marker ID must equal the machine-envelope `ReviewFindingV5.findingId`;
+- finding IDs must be unique within that review result;
+- marker/machine mismatch, missing marker for a machine quality finding, duplicate marker ID, or orphan marker makes the structured review evidence invalid.
+
+This marker is deliberately embedded in the human-readable finding line because Superpowers v6.4.2 carries current open findings **verbatim** into fix dispatches and scoped re-review `Findings Under Verification`.
+
+#### Current scoped-dispatch target authority
+
+For a recognized scoped re-review, Justice extracts `requestedFindingIds` only from exact Justice markers present in that dispatch's `## The Findings Under Verification` section.
+
+The section boundary is:
+
+```text
+start: exact heading "## The Findings Under Verification"
+end:   next exact heading "## The Fix"
+```
+
+Justice must not scan unrelated prompt sections for finding markers.
+
+The extracted list:
+
+- preserves first-appearance order;
+- may be empty;
+- rejects duplicate IDs;
+- rejects malformed Justice marker syntax;
+- is the sole authority for which Justice quality findings the current scoped review is expected to verdict.
+
+Consequences:
+
+- deferred Minor findings not present in the current Superpowers open-findings list are not added to `requestedFindingIds`;
+- an `ADDRESSED` finding that Superpowers removes from the next round is not reintroduced by Justice;
+- a `NOT ADDRESSED` finding remains targetable because its verbatim line retains the same marker;
+- new Critical/Important breakage can continue into the next round with the marker generated in the scoped reviewer output;
+- a legitimate spec/clause-only scoped re-review may have `requestedFindingIds = []`.
+
+An empty requested set is **not** a finding-context failure. Justice must still inject the structured Conformance Contract appendix so clause re-proof can occur.
+
+#### Trusted metadata lookup for requested IDs
+
+Justice uses persisted trusted preceding-review evidence only to resolve metadata for the IDs selected by the current dispatch.
+
+```text
+ReviewFindingContextQuery
+├─ artifactChainId
+├─ scope
+├─ precedingReviewedHead
+└─ requestedFindingIds[]
+```
+
+The preceding trusted review is resolved by artifact chain, exact task/final scope, and `reviewedRange.head === precedingReviewedHead`.
+
+Then:
+
+- `requestedFindingIds = []` → `resolved(expectedFindings = [])`;
+- each requested ID must exist exactly once in that trusted preceding review;
+- the stored finding must still be compatible with being carried by the current Superpowers open list: an explicitly `resolved`, deferred Minor, or `human_adjudicated` stored finding requested as an open target is `untrusted`;
+- unknown requested ID → `untrusted`;
+- duplicate requested ID → `untrusted`;
+- duplicate/ambiguous preceding-review candidate → `ambiguous`;
+- missing/untrusted preceding evidence → `not_found` / `untrusted`.
+
+Justice never uses summary/location/order/severity-only similarity as identity authority.
 
 For task/first-final reviews, `expectedFindings` is absent.
 
-For scoped re-review, `expectedFindings` is mandatory and must be supplied from trusted preceding-review evidence. If the preceding review is missing, ambiguous, untrusted, or cannot be correlated to the scoped base revision, Justice must not inject a structured scoped-review appendix and semantic review evidence remains `NOT_PROVEN`.
+For scoped re-review, `expectedFindings` is **present and may be empty**. A resolved empty list represents a legitimate clause/spec-only scoped re-review.
+
+#### Scoped reviewer/result contract
 
 The scoped-review appendix must require:
 
-- each expected finding to be returned exactly once with the **same** `findingId`, severity, summary, and location;
+- every expected finding to be returned exactly once with the same `findingId`, severity, summary, and location;
+- its human-readable finding verdict line to preserve the exact marker;
 - Superpowers `ADDRESSED` semantics → `disposition: resolved`;
 - Superpowers `NOT ADDRESSED` semantics → `disposition: open`;
-- a new breakage to use a non-empty finding ID that does not collide with any expected/original finding ID;
+- new breakage to use a fresh `jf_<16 lowercase hex>` ID and the matching marker in its human-readable line;
+- new breakage must not reuse any expected/original ID;
 - reviewer output must never create `human_adjudicated`.
 
-Validation is fail-closed:
+When `expectedFindings = []`, no quality finding verdict is required, but the machine result must still contain the required clause results for Conformance Contract re-proof.
 
-- missing expected finding → scoped evidence invalid / original finding remains unresolved;
+Validation remains fail-closed:
+
+- missing expected finding → invalid;
 - duplicate expected finding ID → invalid;
-- mismatched severity/summary/location for an expected ID → invalid;
-- new breakage ID collision with an expected/original ID → invalid;
-- duplicate new finding ID → invalid.
-
-No summary/location/order similarity heuristic may substitute for exact `findingId` continuity.
+- mismatched severity/summary/location or marker for an expected ID → invalid;
+- new breakage ID collision → invalid;
+- orphan/malformed marker → invalid.
 
 #### Final evidence closure
 
-For Superpowers final-review progression, Justice supports a **compositional final evidence closure**:
+For Superpowers final-review progression, Justice supports a compositional final evidence closure:
 
 ```text
 full final-review result for Candidate A
@@ -715,15 +785,14 @@ FinalFixDiffEvidence
 └─ changedPaths
 ```
 
-Required provenance:
+Required provenance remains:
 
 - `base === fullFinalReview.reviewedRange.head`;
 - `head === scopedReReview.reviewedRange.head`;
 - `head === candidateHead`;
 - the range is a valid ancestor range;
-- `changedPaths` is derived from exact `base..head` Git name-status evidence, not caller-supplied arbitrary paths;
-- add/modify/delete/type-change paths are included;
-- rename/copy includes **both old and new paths**;
+- `changedPaths` is derived from exact `base..head` Git name-status evidence;
+- rename/copy includes both old and new paths;
 - malformed/unsupported status, unsafe path, Git failure, or non-ancestor range means diff evidence is unavailable.
 
 A `RevisionDiffResult.failed` means:
@@ -735,17 +804,17 @@ trusted FinalFixDiffEvidence does not exist
 → PlanComplete remains BLOCKED
 ```
 
-The blocked build attempt must retain exact failure provenance (candidate head, requested fix base/head, diff failure, and scoped review identity where available) without fabricating trusted diff evidence.
+The blocked build attempt retains exact failure provenance without fabricating trusted diff evidence.
 
-A `SATISFIED` clause from Candidate A may carry forward to B only when trusted resolved diff evidence proves that A..B does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If diff provenance, non-intersection, or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
+A `SATISFIED` clause from Candidate A may carry forward only when trusted resolved diff evidence proves the exact fix range does not intersect its recorded evidence scope. Otherwise it must be explicitly re-proven or becomes `NOT_PROVEN`.
 
-Final quality findings are merged deterministically by exact `findingId` after scoped-result identity validation:
+Final quality findings are merged only after the current scoped-dispatch target IDs have been validated against trusted preceding metadata:
 
-- an open/parked full-review finding with matching scoped `resolved` is no longer unresolved;
-- matching scoped `open`/parked remains unresolved;
-- omission of an original open/parked finding does **not** resolve it;
-- new scoped Critical/Important finding becomes an unresolved blocker;
-- reviewer evidence cannot silently manufacture `human_adjudicated`.
+- matching scoped `resolved` clears that original blocker;
+- matching scoped `open` remains unresolved;
+- an original finding not targeted by the current scoped dispatch is not silently reintroduced into that round;
+- new scoped Critical/Important finding becomes an unresolved blocker and receives a stable marker/ID for a later task-fix round when Superpowers carries it forward;
+- reviewer evidence cannot manufacture `human_adjudicated`.
 
 ### JUS5-REV-09 — Invalid review/final evidence
 
@@ -756,10 +825,16 @@ The following must not satisfy review/conformance gates:
 - wrong artifact chain/task/plan;
 - untrusted provenance;
 - missing required clause result;
-- missing/ambiguous/untrusted expected-findings source for a scoped re-review;
-- missing, duplicate, conflicting, or identity-mismatched expected finding;
+- malformed/duplicate current-dispatch Justice marker;
+- human marker ↔ machine finding ID mismatch;
+- missing/ambiguous/untrusted metadata lookup for non-empty `requestedFindingIds`;
+- unknown requested finding ID;
+- requested finding whose trusted stored disposition/severity is incompatible with current open-loop targeting;
+- missing, duplicate, conflicting, or metadata-mismatched expected finding;
 - new breakage reusing an expected/original finding ID;
 - final evidence whose candidate head, fix range, diff provenance, carried-clause scope, scoped-delta coverage, or finding-disposition merge cannot be proven.
+
+A legitimate `requestedFindingIds = []` / `expectedFindings = []` scoped re-review is not invalid and must still receive the Conformance Contract.
 
 Required missing/uncovered clause results become `NOT_PROVEN`.
 
