@@ -77,12 +77,15 @@ Use a narrow boundary-shim approach.
 
 Do not introduce a new Superpowers adapter subsystem or a new OmO protocol layer. The implementation should modify existing boundaries only, so the bridge can be removed or replaced cleanly in Justice v5.
 
-The four owned contracts are:
+The existing `OpenCodeAdapter` is part of this boundary shim. It is the runtime seam between caller-shaped OpenCode task arguments, Justice's `PreToolUse` contract, and the final OmO-shaped task arguments. This bridge must make that seam explicit rather than treating `task-packager.ts` / `plan-bridge.ts` as if they directly owned the final wire payload.
+
+The five owned contracts are:
 
 1. **Plan → Justice:** preserve the complete task section.
-2. **Justice → OmO:** do not overload OmO `task_id` with Justice logical task identity.
-3. **Caller → OmO:** preserve caller-owned `subagent_type`.
-4. **Plan ordering:** parallelize only when Justice can prove the dependency contract it understands.
+2. **Caller → Justice:** preserve information Justice needs for selection/validation until `PlanBridge` has consumed it.
+3. **Justice → OmO:** do not overload OmO `task_id` with Justice logical task identity.
+4. **Caller → OmO:** preserve caller-owned `subagent_type` while enforcing OmO's mutually-exclusive routing contract.
+5. **Plan ordering:** parallelize only when Justice can prove the dependency contract it understands.
 
 ---
 
@@ -178,24 +181,42 @@ Responsibilities become:
 
 No structured parser for `Interfaces`, tests, signatures, verification, or expected output is introduced in this bridge.
 
-### Worker Prompt
+### Worker Prompt and Final Prompt Ownership
 
 The approved task body becomes the primary implementation instruction.
 
-The prompt should preserve Justice execution constraints, but must not replace or summarize the task contract.
+For an authorized `task()` delegation, `PlanBridge` owns construction of the **complete final OmO worker prompt**. `OpenCodeAdapter` owns applying that prompt to `output.args.prompt` at the runtime boundary.
 
-Conceptually:
+The final prompt order is exact:
 
 ```text
 **TASK CONTRACT FROM APPROVED PLAN**
 
 <rawBody>
 
+**CALLER CONTEXT**
+
+<original caller prompt exactly once, omitted when empty>
+
 **JUSTICE EXECUTION CONSTRAINTS**
-- ...
+
+<Justice implementation constraints / required workflow directive>
+
+**PREVIOUS LEARNINGS**
+
+<advisory learnings, omitted when absent>
 ```
 
-Previous learnings may still be appended, but they are advisory and cannot replace the approved task contract.
+The caller prompt must occur exactly once. It must not be appended again after the Justice-built prompt.
+
+To preserve existing non-task behavior, `OpenCodeAdapter` uses the following ownership rule:
+
+- for an authorized `task()` response whose `modifiedPayload.args.prompt` is a string, that value is the authoritative final worker prompt; the adapter assigns it directly and does **not** prepend `injectedContext` or append the original caller prompt;
+- for responses without an authoritative modified task prompt, the adapter retains its existing injected-context merge behavior.
+
+`injectedContext` may still carry Justice diagnostic/progress context for the hook response, but it is not concatenated a second time into an authoritative task prompt.
+
+Previous learnings remain advisory and cannot replace or precede the approved task contract.
 
 ---
 
@@ -255,6 +276,52 @@ Existing Justice logic may continue to recognize `task-N` when it is used intern
 
 That recognition must be separated from wire normalization so that identifying `task-3` does not imply forwarding `task_id: "task-3"` to OmO.
 
+### Runtime Normalization Boundary
+
+`OpenCodeAdapter.onToolExecuteBefore()` is the stage boundary. The two normalization phases have different contracts and must not be collapsed into one destructive generic normalization pass.
+
+#### Phase A — Caller → Justice
+
+Before dispatching `PreToolUse` to Justice:
+
+- task-field aliases may be canonicalized;
+- a caller logical `task-N` must remain visible to `PlanBridge`;
+- a caller `ses_...` continuation must remain visible;
+- an unknown task ID must remain visible until Justice has had the opportunity to classify/validate it;
+- `subagent_type` and `category` must remain visible;
+- OmO-wire-only filtering must not run.
+
+`#rememberReviewCategory()` must not invoke Phase B as a side effect. It may inspect the caller routing fields, but it cannot erase task identity or routing information before Justice sees the input.
+
+#### Phase B — Justice → OmO Wire
+
+After Justice has returned and any `modifiedPayload.args` have been applied, every `task()` path performs final OmO wire normalization:
+
+- remove Justice logical `task-N`;
+- remove any unknown/non-`ses_...` task ID;
+- preserve a genuine `ses_...` value canonically as `task_id`;
+- enforce the routing exclusivity contract defined below;
+- apply any existing Justice wire-level removal of unsupported explicit routing/model fields.
+
+Phase B is the only phase allowed to discard a task ID because it is not a genuine OmO continuation.
+
+The deterministic runtime tests for this boundary must prove:
+
+```text
+caller task_id=task-1
+→ Justice PreToolUse input still contains task-1
+→ selected-task validation can consume task-1
+→ final OpenCode output.args contains no task_id
+
+caller task_id=ses_abc
+→ Justice PreToolUse input contains ses_abc
+→ final OpenCode output.args.task_id == ses_abc
+
+caller unknown task_id
+→ Justice sees the caller value
+→ final OpenCode output.args contains no task_id
+```
+
 ---
 
 ## 3. Preserve Caller-Owned `subagent_type`
@@ -292,7 +359,7 @@ Justice may:
 
 #### Caller-Owned Routing
 
-When the incoming `task()` includes `subagent_type`, routing is caller-owned.
+When the incoming `task()` includes a string `subagent_type`, routing is caller-owned.
 
 Justice must:
 
@@ -300,9 +367,21 @@ Justice must:
 - validate the active approved plan as today
 - inject approved plan/task context when applicable
 - preserve `subagent_type`
-- not add or replace `category` merely to force Justice routing
+- remove `category` from the final OmO wire payload, whether the category came from the caller or Justice
+- never add a Justice category while caller-owned routing is active
 - remove Justice logical `task-N` from OmO wire `task_id`
 - preserve only genuine `ses_...` continuation IDs
+
+OmO v4.19.4 treats `category` and `subagent_type` as mutually exclusive. If both are present, category routing overrides the requested subagent. Therefore the bridge precedence is intentionally unambiguous:
+
+```text
+valid string subagent_type present
+→ caller-owned routing
+→ preserve subagent_type
+→ category absent on final OmO wire
+```
+
+Without `subagent_type`, Justice-managed dispatch retains the existing task-derived `category`.
 
 Justice must not transform:
 
@@ -317,9 +396,9 @@ into a category-routed Justice task.
 
 ### Normalization Boundary
 
-The implementation should make routing ownership explicit at the point where the PreToolUse payload is normalized.
+Routing ownership is decided while Justice still sees the Phase A caller input, and routing exclusivity is enforced only during Phase B final-wire normalization.
 
-It is not sufficient merely to remove `subagent_type` from the forbidden-field list while continuing to overwrite category routing unconditionally.
+It is not sufficient merely to remove `subagent_type` from the forbidden-field list while continuing to overwrite category routing unconditionally. It is also invalid to preserve both `subagent_type` and `category` on the final OmO payload.
 
 ---
 
@@ -376,33 +455,38 @@ Correctness is preferred over parallel throughput for this temporary bridge.
 ### Fresh Justice-Managed Delegation
 
 ```text
-approved Superpowers plan
+caller task args
         │
         ▼
-PlanParser
-  - task id/title
-  - checkboxes
-  - rawBody
+OpenCodeAdapter — Phase A
+  - aliases canonicalized as needed
+  - task-N / ses_* / unknown task id still visible
+  - subagent_type / category still visible
         │
         ▼
-DependencyAnalyzer
-  - known legacy contract → existing graph
-  - unknown/rich contract → first incomplete only
+PlanBridge
+  - authorization + fingerprint validation
+  - PlanParser rawBody
+  - DependencyAnalyzer
+  - task selection / logical task validation
+  - Justice category classification
+  - authoritative final task prompt
         │
         ▼
-Justice category classification
+OpenCodeAdapter applies modified payload
         │
         ▼
-PreToolUse normalization
-  - category preserved/added
-  - Justice task-N retained internally
-  - OmO task_id omitted
+OpenCodeAdapter — Phase B
+  - task-N / unknown task id removed
+  - only ses_* may remain as task_id
+  - caller-owned subagent_type removes category
+  - Justice-managed routing keeps category
         │
         ▼
 OmO task()
         │
         ▼
-worker receives raw approved task body
+worker receives the final prompt with raw approved task body
 ```
 
 ### Genuine Continuation
@@ -419,18 +503,23 @@ OmO args.task_id = ses_abc
 ### Caller-Owned Subagent Dispatch
 
 ```text
-task(subagent_type="explore")
+task(subagent_type="explore", category=<optional caller value>)
+        │
+        ▼
+OpenCodeAdapter Phase A preserves both fields for Justice
         │
         ▼
 Justice authorization + approved context
         │
-        ├─ preserve subagent_type
-        ├─ do not force Justice category
-        ├─ remove task-N wire id
+        ▼
+OpenCodeAdapter Phase B
+        ├─ preserve subagent_type="explore"
+        ├─ remove category unconditionally
+        ├─ remove task-N / unknown wire id
         └─ preserve ses_* continuation only
         │
         ▼
-OmO/OpenCode caller-owned routing
+OmO caller-owned subagent routing
 ```
 
 ---
@@ -445,9 +534,9 @@ This bridge must not weaken current authorization/fingerprint protection.
 
 ### Unknown `task_id`
 
-Unknown non-`ses_...` task IDs are not forwarded.
+Unknown non-`ses_...` task IDs may remain visible during Phase A so Justice can classify the caller input, but they are not forwarded to OmO.
 
-They do not become Justice logical IDs and do not become OmO continuation IDs.
+They do not become Justice logical IDs and do not become OmO continuation IDs. Phase B removes them from the final wire payload.
 
 ### Dependency Ambiguity
 
@@ -470,7 +559,8 @@ The implementation is expected to remain concentrated around existing modules su
 - `src/core/task-packager.ts`
 - `src/core/dependency-analyzer.ts`
 - `src/hooks/plan-bridge.ts`
-- directly corresponding tests
+- `src/runtime/opencode-adapter.ts`
+- directly corresponding tests, including `tests/runtime/opencode-adapter.test.ts`
 
 Exact file scope belongs in the implementation plan after repository-level verification.
 
@@ -497,24 +587,40 @@ Cover at minimum:
 
 ### Task Normalization Tests
 
-Cover at minimum:
+Core helper tests cover the two phase-specific normalization contracts separately:
 
-- Justice `task-1` is recognizable internally but absent from OmO wire args
-- `ses_...` remains in wire args
-- unknown `task_id` is removed
-- `subagent_type: "general"` is preserved for caller-owned routing
-- `subagent_type: "explore"` is preserved for caller-owned routing
+- Phase A preserves Justice `task-1`, `ses_...`, unknown task IDs, `subagent_type`, and `category` for Justice inspection;
+- Phase B removes Justice `task-1` and unknown task IDs;
+- Phase B preserves `ses_...`;
+- Phase B preserves caller-owned `subagent_type: "general"` / `"explore"`;
+- Phase B removes `category` whenever a valid string `subagent_type` is present;
+- without `subagent_type`, Justice-managed `category` remains.
 
 ### PlanBridge Tests
 
 Cover at minimum:
 
-- fresh Justice-managed dispatch has Justice category and no OmO `task_id`
-- Justice-managed genuine continuation has Justice category plus `task_id: ses_...`
-- caller-owned `subagent_type` is preserved
-- caller-owned routing is not overwritten with Justice category
-- worker context contains the full approved task body
-- authorization/fingerprint gating remains in force
+- fresh Justice-managed dispatch selects/classifies the intended Justice task;
+- Justice-managed genuine continuation remains associated with the selected Justice task;
+- caller-owned `subagent_type` is recognized as caller-owned routing;
+- worker prompt construction contains the full approved task body;
+- caller context occurs exactly once in the Justice-built authoritative task prompt;
+- authorization/fingerprint gating remains in force.
+
+### OpenCodeAdapter Runtime Boundary Tests
+
+`tests/runtime/opencode-adapter.test.ts` is authoritative for the final wire-shaped task arguments and final prompt.
+
+Cover at minimum:
+
+- caller `task_id=task-1` is visible in the `PreToolUse` event delivered to Justice, but absent from final `output.args`;
+- caller `task_id=ses_abc` is visible to Justice and remains exactly `task_id: "ses_abc"` on final `output.args`;
+- caller unknown `task_id` is visible to Justice and absent from final `output.args`;
+- `subagent_type="general"` plus any category produces final args with `subagent_type="general"` and no `category`;
+- `subagent_type="explore"` plus any category produces final args with `subagent_type="explore"` and no `category`;
+- no `subagent_type` on a Justice-managed invocation leaves the Justice category on the final wire;
+- an authoritative modified task prompt becomes final `output.args.prompt` without adapter re-appending the original caller prompt;
+- the final prompt contains `rawBody`, contains caller context exactly once, and preserves the required section order.
 
 ### Dependency Tests
 
@@ -552,26 +658,82 @@ Existing tests covering the following must remain passing:
 
 Unit and integration tests are necessary but not sufficient because this bridge fixes a wire-contract mismatch across Justice, Superpowers, OmO, and OpenCode.
 
-Perform at least one real-host smoke using:
+The proof responsibilities are deliberately split:
 
-- patched Justice v4
-- Superpowers v6.4.2
-- OmO v4.19.4
-- the currently supported Justice OpenCode V1 environment
+```text
+deterministic OpenCodeAdapter tests
+→ exact final task args and final prompt shape
 
-The smoke test is intentionally narrow. It must prove:
+real-host smoke
+→ OpenCode 1.18.29 + OmO 4.19.4 actually accept that contract
+→ a delegated worker runs successfully
+→ a rawBody-only sentinel proves the approved task body reached the worker
+```
 
-1. an approved plan is active;
-2. Justice selects the intended task;
-3. OmO/OpenCode accepts the task invocation;
-4. no Justice `task-N` is misused as OmO continuation `task_id`;
-5. caller-owned `subagent_type` remains valid when exercised;
-6. the worker receives the full task contract;
-7. the delegated task can complete through the existing Justice v4 loop.
+The real-host smoke must not claim observation of an internal wire field that the host does not expose. Exact absence/presence of `task_id` / `category` on the final wire is proven by `tests/runtime/opencode-adapter.test.ts`; the host smoke proves runtime acceptance and execution.
+
+### Fixed Host Configuration
+
+The smoke uses an isolated temporary workspace and isolated `HOME` / XDG directories. It requires `JUSTICE_HOST_TEST_MODEL` to contain an already configured `provider/model`; only explicitly allowlisted provider credential environment variables may be forwarded.
+
+The generated OpenCode V1 `opencode.json` pins exactly:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "<JUSTICE_REPO>/dist/opencode-plugin.js",
+    "oh-my-openagent@4.19.4",
+    "superpowers@git+https://github.com/obra/superpowers.git#v6.4.2"
+  ],
+  "model": "<JUSTICE_HOST_TEST_MODEL>"
+}
+```
+
+The project-local `.omo/omo.jsonc` binds the smoke `sp-implementation` category to the same `JUSTICE_HOST_TEST_MODEL`; no global OmO config is required.
+
+The harness must verify `opencode --version` is exactly `1.18.29` before any capability claim. Failure to resolve a pinned plugin, model, provider, or credential is setup/upstream blocked, not a Justice capability failure.
+
+### Fixed Activation and Execution Method
+
+For each host case, the harness:
+
+1. writes the approved smoke plan into the temporary workspace;
+2. builds/loads the patched local Justice plugin from `dist/opencode-plugin.js`;
+3. invokes the actual Justice command through OpenCode's v1 command path:
+
+```bash
+opencode run --auto --format json --model "$JUSTICE_HOST_TEST_MODEL" \
+  --command justice-implement -- "--approved --plan docs/justice-v4-compat-smoke.md"
+```
+
+4. continues the same isolated workspace session with `opencode run --continue ...` and a fixed prompt that requests exactly one `task()` delegation.
+
+The fresh-delegation plan places a unique sentinel only in `rawBody` (outside the checkbox summary) and requires the delegated worker to write that exact sentinel to `.justice-host-smoke/raw-body.txt`. Exact file content is the deterministic evidence that the worker received the full approved task contract.
+
+A separate caller-owned case requests exactly one `task()` with `subagent_type="explore"`, no category, and no task ID, and requires the delegated child to return a fixed acceptance sentinel. The harness checks that the task invocation completes and the sentinel is present. Exact routing-field exclusivity remains the responsibility of the adapter integration test.
+
+### PASS / BLOCKED
+
+Real-host PASS requires:
+
+- OpenCode version exactly `1.18.29`;
+- both pinned upstream plugin specs resolve/load;
+- Justice command activation succeeds;
+- fresh delegation completes;
+- `.justice-host-smoke/raw-body.txt` contains the exact raw-body sentinel;
+- caller-owned `explore` delegation completes and returns the acceptance sentinel;
+- no plugin-load/runtime error invalidates either case.
+
+If the environment cannot supply the exact host, pinned plugins, model/provider, or credentials, classify:
+
+```text
+SETUP / UPSTREAM BLOCKED — real-host capability not evaluated
+```
 
 This work does not expand the supported OpenCode version matrix.
 
-Sanitized evidence should be retained using the repository's existing evidence conventions where applicable.
+The sanitized report records the Justice commit, exact version/specifier pins, commands and exit statuses, sentinel checks, and the deterministic adapter-test result that owns final-wire proof. It must not include absolute host paths, credentials, raw provider configuration, or chat contents.
 
 ---
 
