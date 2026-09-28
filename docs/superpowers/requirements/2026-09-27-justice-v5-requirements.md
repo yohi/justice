@@ -581,21 +581,40 @@ Ambiguous classification is untrusted and fail-closed for acceptance.
 
 ### JUS5-REV-07 — Conformance Contract delivery
 
-Justice must not depend on `tool.execute.before` argument mutation to alter a Superpowers reviewer prompt.
+Justice review interop uses the existing Superpowers reviewer dispatch and must not depend on asynchronous `session.created/session.updated` plugin-event completion before prompt delivery.
 
-For the supported OpenCode 1.18.31 baseline, review interop uses a two-stage contract:
+For the supported OpenCode 1.18.31 baseline:
 
-1. `tool.execute.before` is **observation-only** for the parent `task` call. Justice recognizes the Superpowers review dispatch and records its `parentSessionId + parentCallId`, routing target, artifact-chain/task/revision scope, and pending review correlation without modifying caller routing or relying on changed args reaching TaskTool.
-2. The child reviewer session is correlated to that pending call. On the child session's first `chat.message` hook, Justice appends the read-only Conformance Contract reference and structured-result instructions by mutating the existing `output.parts` array **in place**. The original reviewer prompt and caller-selected subagent/category/model/provider remain unchanged.
-3. `tool.execute.after` on the original parent call provides the same-call result/child metadata used to close the review correlation and validate the returned structured result.
+1. parent `tool.execute.before` observes the recognized Superpowers `task` review call and creates `PendingReviewCorrelation(parentSessionId + parentCallId)`; Justice does not alter caller routing;
+2. when the child reviewer's awaited `chat.message` hook runs, Justice takes `input.sessionID` as the child session ID and **awaits** the plugin client's authoritative session lookup:
+   ```ts
+   client.session.get({ path: { id: childSessionId } })
+   ```
+3. the returned Session must identify the same child and provide `parentID`; Justice matches that parent to exactly one pending recognized review call;
+4. only after that authoritative lookup succeeds does Justice bind the child and append the read-only Conformance Contract appendix to the existing `output.parts` array in place;
+5. `session.created/session.updated` observations are corroboration/cache/diagnostic inputs only and are never a prompt-delivery ordering prerequisite;
+6. parent `tool.execute.after` corroborates the same parent call and child metadata; a mismatch invalidates the evidence.
 
-Justice must not create another reviewer dispatch.
+Lookup failure, missing/mismatched `parentID`, or zero/multiple matching pending reviews means **no injection** and semantic review evidence remains untrusted / `NOT_PROVEN`.
 
-If the parent-call → child-session relation is ambiguous when the child `chat.message` arrives, Justice must not inject review context; the review remains untrusted / `NOT_PROVEN`.
+The v5 architecture deliberately uses the child `chat.message` path for review delivery. This is an architectural choice, not a claim that in-place mutation of the same `tool.execute.before.output.args` object is impossible.
 
-A future supported host must provide an equivalent observable parent-call relation plus a prompt/message extension point whose mutation is actually consumed by the child reviewer. Otherwise semantic conformance review on that host is unsupported until compatibility evidence establishes a replacement contract.
+The appended element is one fully formed synthetic OpenCode text Part with:
 
-### JUS5-REV-08 — Structured review result
+- `id = "prt_justice_review_" + randomUUID()`;
+- `sessionID = output.message.sessionID`, which must equal `input.sessionID`;
+- `messageID = output.message.id`;
+- `type = "text"`;
+- `text = <Justice review appendix>`;
+- `synthetic = true`.
+
+If the message/session identities are missing or inconsistent, Justice performs no injection.
+
+Justice must not create another reviewer dispatch and must not change the caller-selected subagent/category/model/provider/variant.
+
+A future supported host must provide an equivalent awaited authoritative parent lookup plus a consumed prompt/message extension point. Otherwise semantic conformance review on that host is unsupported until compatibility evidence establishes a replacement contract.
+
+### JUS5-REV-08 — Structured review result and final evidence closure
 
 Trusted semantic review evidence must carry a versioned result containing at least:
 
@@ -605,7 +624,21 @@ Trusted semantic review evidence must carry a versioned result containing at lea
 - task identity where applicable;
 - reviewed revision/range;
 - quality verdict/findings;
-- clause results containing `clauseId`, `SATISFIED | VIOLATED | NOT_PROVEN`, and supporting evidence/reference.
+- clause results containing `clauseId`, `SATISFIED | VIOLATED | NOT_PROVEN`, supporting evidence/reference, and a deterministic evidence scope sufficient to decide carry-forward.
+
+For Superpowers final-review progression, Justice must support a **compositional final evidence closure**:
+
+```text
+full final-review result for Candidate A
++
+zero or one Superpowers final fix-wave scoped re-review for A..B
+=
+trusted FinalReviewEvidenceClosure for candidate A or B
+```
+
+Justice must not request or dispatch a second full final review after the Superpowers final fix wave.
+
+A `SATISFIED` clause from Candidate A may carry forward to B only when Justice can deterministically prove that the A..B fix diff does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If non-intersection or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
 
 ### JUS5-REV-09 — Invalid review evidence
 
@@ -613,13 +646,16 @@ The following must not satisfy review/conformance gates:
 
 - missing structured result;
 - malformed result;
-- stale reviewed revision;
+- stale reviewed revision used without a valid final evidence closure;
 - wrong artifact chain;
 - wrong task/plan;
 - untrusted provenance;
-- missing required clause result.
+- missing required clause result;
+- final evidence closure whose candidate head, fix range, carried-clause scope, or scoped-delta coverage cannot be proven.
 
-Required missing clause results become `NOT_PROVEN`.
+Required missing/uncovered clause results become `NOT_PROVEN`.
+
+A full final review of Candidate A alone can never complete later Candidate B. Candidate B is eligible only when the current Superpowers final-review lifecycle yields a trusted closure covering B as defined by JUS5-REV-08.
 
 ### JUS5-REV-10 — Quality severity and parked findings
 
