@@ -583,19 +583,45 @@ Ambiguous classification is untrusted and fail-closed for acceptance.
 
 Justice review interop uses the existing Superpowers reviewer dispatch and must not depend on asynchronous `session.created/session.updated` plugin-event completion before prompt delivery.
 
-For the supported OpenCode 1.18.31 baseline:
+For the current Justice SDK lock (`@opencode-ai/sdk@1.14.21`) and the supported OpenCode 1.18.31 baseline, `client.session.get()` uses the generated default `responseStyle: "fields"` and `throwOnError: false` contract.
+
+Therefore the authoritative lookup algorithm is:
+
+```ts
+let lookup;
+try {
+  lookup = await client.session.get({
+    path: {
+      id: childSessionId,
+    },
+  });
+} catch {
+  // transport/runtime exception
+  return lookup_failed;
+}
+
+if (lookup.data === undefined) {
+  // SDK/HTTP error response or otherwise missing data
+  return lookup_failed;
+}
+
+const childSession = lookup.data;
+```
+
+Justice must never treat the fields-response wrapper itself as a Session.
+
+Binding then proceeds as follows:
 
 1. parent `tool.execute.before` observes the recognized Superpowers `task` review call and creates `PendingReviewCorrelation(parentSessionId + parentCallId)`; Justice does not alter caller routing;
-2. when the child reviewer's awaited `chat.message` hook runs, Justice takes `input.sessionID` as the child session ID and **awaits** the plugin client's authoritative session lookup:
-   ```ts
-   client.session.get({ path: { id: childSessionId } })
-   ```
-3. the returned Session must identify the same child and provide `parentID`; Justice matches that parent to exactly one pending recognized review call;
-4. only after that authoritative lookup succeeds does Justice bind the child and append the read-only Conformance Contract appendix to the existing `output.parts` array in place;
-5. `session.created/session.updated` observations are corroboration/cache/diagnostic inputs only and are never a prompt-delivery ordering prerequisite;
-6. parent `tool.execute.after` corroborates the same parent call and child metadata; a mismatch invalidates the evidence.
-
-Lookup failure, missing/mismatched `parentID`, or zero/multiple matching pending reviews means **no injection** and semantic review evidence remains untrusted / `NOT_PROVEN`.
+2. when the child reviewer's awaited `chat.message` hook runs, Justice takes `input.sessionID` as `childSessionId` and performs the awaited fields-response lookup above;
+3. thrown transport/runtime exception, `lookup.data === undefined`, or SDK/HTTP error response → `lookup_failed`, **no injection**, semantic evidence `NOT_PROVEN`;
+4. `childSession.id !== childSessionId` → conflict/untrusted, **no injection**;
+5. missing `childSession.parentID` → `parent_missing`, **no injection**;
+6. Justice matches `childSession.parentID` to exactly one pending recognized review call;
+7. zero matches → `not_found`; multiple matches → `ambiguous`; either means **no injection**;
+8. exactly one compatible match → bind the child and append the read-only Conformance Contract appendix to the existing `output.parts` array in place;
+9. `session.created/session.updated` observations are corroboration/cache/diagnostic inputs only and are never a prompt-delivery ordering prerequisite;
+10. parent `tool.execute.after` corroborates the same parent call and child metadata; a mismatch invalidates the evidence.
 
 The v5 architecture deliberately uses the child `chat.message` path for review delivery. This is an architectural choice, not a claim that in-place mutation of the same `tool.execute.before.output.args` object is impossible.
 
@@ -632,13 +658,43 @@ For Superpowers final-review progression, Justice must support a **compositional
 full final-review result for Candidate A
 +
 zero or one Superpowers final fix-wave scoped re-review for A..B
++
+trusted FinalFixDiffEvidence for exact A..B when a fix wave exists
 =
 trusted FinalReviewEvidenceClosure for candidate A or B
 ```
 
 Justice must not request or dispatch a second full final review after the Superpowers final fix wave.
 
-A `SATISFIED` clause from Candidate A may carry forward to B only when Justice can deterministically prove that the A..B fix diff does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If non-intersection or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
+When a final fix wave exists, carry-forward authority must come from Justice-controlled deterministic diff evidence for the exact final fix range:
+
+```text
+FinalFixDiffEvidence
+├─ base
+├─ head
+└─ changedPaths
+```
+
+Required provenance:
+
+- `base === fullFinalReview.reviewedRange.head`;
+- `head === scopedReReview.reviewedRange.head`;
+- `head === candidateHead`;
+- the range must be a valid ancestor range;
+- `changedPaths` must be derived from exact `base..head` Git name-status evidence, not caller-supplied arbitrary paths;
+- add/modify/delete/type-change paths are included;
+- rename/copy includes **both old and new paths**;
+- malformed/unsupported status, unsafe path, Git failure, or non-ancestor range means diff evidence is unavailable and prior Candidate-A clause evidence cannot be assumed unaffected.
+
+A `SATISFIED` clause from Candidate A may carry forward to B only when trusted diff evidence proves that the exact A..B fix range does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If diff provenance, non-intersection, or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
+
+Final quality findings are merged deterministically by `findingId`:
+
+- an open/parked full-review finding with a matching scoped `resolved` disposition is no longer unresolved;
+- matching scoped `open`, `parked`, or `NOT ADDRESSED` semantics remain unresolved;
+- omission of an original open/parked finding from the scoped re-review does **not** resolve it;
+- a new scoped Critical/Important finding becomes an unresolved blocker;
+- reviewer evidence cannot silently manufacture `human_adjudicated`; human quality adjudication remains the separate trusted human-resolution path and cannot change clause status.
 
 ### JUS5-REV-09 — Invalid review evidence
 
@@ -651,7 +707,7 @@ The following must not satisfy review/conformance gates:
 - wrong task/plan;
 - untrusted provenance;
 - missing required clause result;
-- final evidence closure whose candidate head, fix range, carried-clause scope, or scoped-delta coverage cannot be proven.
+- final evidence closure whose candidate head, fix range, diff provenance, carried-clause scope, scoped-delta coverage, or finding-disposition merge cannot be proven.
 
 Required missing/uncovered clause results become `NOT_PROVEN`.
 
