@@ -940,9 +940,9 @@ git commit -m "test: lock Justice v5 review interop baseline"
 
 ---
 
-### Task 2: Establish v5 Domain Types, Current OmO Categories, and Wire-Payload Ownership
+### Task 2: Establish v5 Semantic Routing Types and Provenance-Aware OmO Wire Translation
 
-**Requirements / Design:** JUS5-CAT-01..04, JUS5-CORR-01, JUS5-CORR-05..06, J5D-CORR-01, J5D-ROUTE-01, J5D-CAT-01.
+**Requirements / Design:** JUS5-CAT-01..05, JUS5-CAT-09, JUS5-CORR-01, JUS5-CORR-05..06, JUS5-TASK-03..04, J5D-CORR-01, J5D-ROUTE-01, J5D-CAT-01..02.
 
 **Files:**
 - Modify: `src/core/types.ts`
@@ -952,7 +952,7 @@ git commit -m "test: lock Justice v5 review interop baseline"
 - Test: `tests/core/omo-category-mapper-v5.test.ts`
 
 **Interfaces:**
-- Produces the registry-defined `TaskIdentity` and `ReviewFindingV5` in `src/core/types.ts`.
+- Produces registry-defined `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, and `SuperpowersRoutingTranslationResult` in `src/core/types.ts`.
 - Produces:
   ```ts
   type TaskCategory =
@@ -976,38 +976,58 @@ git commit -m "test: lock Justice v5 review interop baseline"
   function inspectTaskRoutingTarget(
     input: Readonly<Record<string, unknown>>,
   ): TaskRoutingTarget;
+
+  function translateTaskRouting(input: {
+    readonly target: TaskRoutingTarget;
+    readonly provenance: TaskRoutingProvenance;
+    readonly classification?: SemanticClassificationResult;
+  }): SuperpowersRoutingTranslationResult;
   ```
+- Translation precedence is exact:
+  1. legitimate `task_id=ses_...` continuation → `continuation`, no new category;
+  2. explicit category → preserve/validate category;
+  3. non-Superpowers explicit subagent → preserve;
+  4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
+  5. recognized Superpowers new-worker `subagent_type="general"` + classified semantic intent → remove `subagent_type`, emit one mapped `sp-*` category;
+  6. recognized Superpowers new worker with no target + classified semantic intent → emit one mapped `sp-*` category;
+  7. invalid both-target / ambiguous provenance / ambiguous classification → `untrusted`.
+- `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates continuation `task_id`.
 - `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO `task_id=ses_...`.
 - `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
-- Consumes: none.
 
 - [ ] **Step 1: Write RED routing/domain tests**
 
-Exact tests:
-
-In `tests/core/v5-task-routing-contract.test.ts`:
+Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
 - `preserves_omo_continuation_task_id`
 - `never_serializes_justice_task_identity_as_task_id`
 - `reports_category_subagent_type_as_invalid_both`
-- `preserves_explicit_subagent_type_without_category_injection`
+- `preserves_non_superpowers_explicit_subagent_type_without_category_injection`
+- `preserves_superpowers_specialized_non_generic_subagent_type_without_category_injection`
 - `preserves_explicit_category_without_subagent_type_injection`
+- `recognized_superpowers_general_worker_translates_classified_intent_to_category`
+- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+- `ambiguous_superpowers_semantic_classification_is_untrusted`
 - `does_not_inject_category_into_continuation`
-- `justice_does_not_select_model_or_provider`
+- `justice_category_is_the_only_semantic_routing_signal_to_omo`
+- `justice_does_not_select_concrete_model_or_provider`
 
 In `tests/core/omo-category-mapper-v5.test.ts`:
 - `does_not_emit_legacy_deep`
 - `recognizes_deep_low_deep_high_artistry`
 - `custom_sp_categories_coexist_with_omo_v5_categories`
+- `maps_semantic_execution_classes_to_exact_sp_categories`
 
 - [ ] **Step 2: Run RED tests**
 
 Run: `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
 
-Expected: FAIL on legacy `deep`, semantic `task_id` enrichment, and missing target inspection/domain types.
+Expected: FAIL on legacy `deep`, semantic `task_id` enrichment, missing provenance-aware translation, and missing semantic-class domain types.
 
-- [ ] **Step 3: Implement the exact registry types and normalization boundary**
+- [ ] **Step 3: Implement exact routing domain + pure translation primitive**
 
-Do not select model/provider/reasoning/fallback. Do not normalize an invalid both-target call into a trusted routing decision.
+Implement only the pure wire-boundary translation. Task 2 does **not** decide whether a dispatch is Superpowers-owned and does **not** classify implementation complexity; Task 7 supplies review provenance/classes and Task 10 supplies implementation activation/classification.
+
+Do not select model/provider/reasoning/fallback. Do not normalize invalid/ambiguous routing into a trusted category.
 
 - [ ] **Step 4: Run GREEN tests and typecheck**
 
@@ -1022,11 +1042,10 @@ Expected: PASS.
 ```bash
 git add src/core/types.ts src/core/task-packager.ts src/core/omo-category-mapper.ts \
   tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
-git commit -m "refactor: separate Justice identity from OmO task routing"
+git commit -m "refactor: define Justice semantic routing boundary"
 ```
 
 ---
-
 ### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
 
 **Requirements / Design:** JUS5-AUTH-01..09, JUS5-PERSIST-01..05, J5D-CHAIN-01..02, J5D-RULING-01, J5D-PERSIST-01.
