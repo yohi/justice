@@ -907,7 +907,35 @@ It does not alter model/provider/subagent/category choice and does not create a 
 
 A host/version where the review call cannot be safely recognized and enriched is reported by doctor as review-interop unsupported; semantic review evidence remains `NOT_PROVEN` rather than falling back to a Justice-owned review.
 
-For the v5 baseline support claim, E2E compatibility verification must prove that Superpowers v6.4.2 review dispatches manifest through this observable/mutable OpenCode task-call surface. Failure of that proof blocks the supported-stack claim; it does not trigger an alternate Justice review architecture.
+#### Verified v5 baseline compatibility evidence
+
+The review-interop extension point is an **established baseline contract before implementation planning**, not an architecture-discovery task.
+
+Evidence chain:
+
+1. Justice's existing `spikes/child-session-correlation/README.md` recorded a real OpenCode **1.18.29** runtime probe showing:
+   - `tool.execute.before` exposes the parent `sessionID` and `callID`;
+   - task args are mutable through the before-hook output;
+   - `tool.execute.after` returns on the same call and exposes child-session metadata;
+   - parent/child session correlation is observable through hook metadata and session events.
+2. The three OpenCode files that implement this exact path are byte-identical between **v1.18.29** and **v1.18.31**:
+   - `packages/opencode/src/session/tools.ts` — blob `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`;
+   - `packages/opencode/src/tool/task.ts` — blob `d8ca640cfba9a52d97e5180fda0ffa719910592b`;
+   - `packages/plugin/src/index.ts` — blob `edfa0139dfcaf0e877ab906fabe8e0527afc3915`.
+3. Source-contract verification on v1.18.31 confirms the before-hook receives the same mutable `args` object subsequently passed to `item.execute(args, ctx)`, the task implementation consumes `params.prompt` via `ops.resolvePromptParts(params.prompt)`, and the after-hook is emitted for the same parent `sessionID + callID`.
+4. Superpowers v6.4.2 defines task review, scoped re-review, and final whole-branch review as `Subagent (general-purpose)` dispatches, and its OpenCode V1 mapping resolves that form to the native `task` tool with `subagent_type: "general"`.
+
+Therefore the supported v5 baseline is fixed as:
+
+```text
+Superpowers v6.4.2 review dispatch
+→ OpenCode 1.18.31 task(subagent_type="general")
+→ tool.execute.before(sessionID, callID, mutable args)
+→ same mutated args consumed by TaskTool
+→ same-call tool.execute.after/result + child-session metadata
+```
+
+Implementation tests MUST preserve this as a regression contract. A future failure is treated as **upstream compatibility drift** and blocks the supported-stack claim; it does not invite a Justice-owned reviewer fallback or a new architecture decision inside the Implementation Plan.
 
 ### 14.3 Structured result — J5D-REVIEW-03
 
