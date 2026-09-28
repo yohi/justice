@@ -748,7 +748,15 @@ artifactChainId
 exact TaskIdentity
 ```
 
-The trusted task lineage contains the initial trusted task-review result plus all trusted scoped re-review results for that same task identity and artifact chain up to the current scoped review.
+The trusted task lineage is a **single contiguous review chain**, not an unordered set:
+
+1. start from the unique trusted immediate preceding result whose `reviewedRange.head === precedingReviewedHead`;
+2. if it is `task-review`, it is the lineage root;
+3. if it is `scoped-re-review`, its `reviewedRange.base` must equal the `reviewedRange.head` of exactly one earlier trusted result with the same `artifactChainId + TaskIdentity`;
+4. repeat until one trusted `task-review` root is reached;
+5. missing predecessor, multiple predecessors, multiple roots, or a cycle makes lineage resolution untrusted/ambiguous.
+
+Only findings on that contiguous chain are reserved.
 
 Final scope:
 
@@ -758,7 +766,9 @@ artifactChainId
 current final-review lifecycle
 ```
 
-The trusted final lineage contains the trusted full final-review result and, where applicable, its trusted scoped final re-review. Finding IDs from unrelated tasks or another artifact chain are not globally reserved.
+For the supported Superpowers v6.4.2 one-fix-wave final path, the current scoped-final re-review's unique immediate preceding result must be a trusted `final-review` whose `reviewedRange.head === precedingReviewedHead`. That full final review is the final-lineage root and supplies the historical reserved IDs for the scoped-final parser. A predecessor that is already `scoped-re-review` would imply an unsupported second final re-review and is untrusted.
+
+Finding IDs from unrelated tasks, another artifact chain, or another final-review lifecycle are not globally reserved.
 
 For every trusted result in the selected lineage, Justice builds a historical finding-ID registry. Repeated occurrences of the same ID are valid only when the immutable identity fields are identical:
 
@@ -798,7 +808,8 @@ Then current-target metadata resolution applies:
 - unknown requested ID → `untrusted`;
 - duplicate requested ID → `untrusted`;
 - duplicate/ambiguous preceding-review candidate → `ambiguous`;
-- missing/untrusted preceding evidence → `not_found` / `untrusted`.
+- missing/untrusted preceding evidence → `not_found` / `untrusted`;
+- broken/ambiguous task-lineage predecessor chain or unsupported final-lineage shape → `untrusted` / `ambiguous`.
 
 Justice never uses summary/location/order/severity-only similarity as identity authority.
 
