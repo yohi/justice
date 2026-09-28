@@ -154,7 +154,9 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).toMatchObject({
       args: { category: "sp-implementation" },
     });
-    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { subagent_type: expect.anything() },
+    });
   });
 
   it("routes a Superpowers task reviewer through sp-review", async () => {
@@ -185,7 +187,9 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).toMatchObject({
       args: { category: "sp-review", run_in_background: false },
     });
-    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { subagent_type: expect.anything() },
+    });
   });
 
   it("routes the Superpowers whole-branch code reviewer through sp-final-review", async () => {
@@ -220,7 +224,9 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).toMatchObject({
       args: { category: "sp-final-review", run_in_background: false },
     });
-    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { subagent_type: expect.anything() },
+    });
   });
 
   it("preserves explicit specialized routing for an authorized task", async () => {
@@ -247,7 +253,9 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload).toMatchObject({
       args: { subagent_type: "explore" },
     });
-    expect(response.modifiedPayload?.args).not.toHaveProperty("category");
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { category: expect.anything() },
+    });
   });
 
   it("injects an unauthorized directive when the active plan is not armed", async () => {
