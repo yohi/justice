@@ -71,11 +71,15 @@ Existing files retain their existing responsibility unless a task below explicit
 
 The architecture-critical review transport is fixed before implementation.
 
-### Exact OpenCode 1.18.31 source finding
+### Exact OpenCode 1.18.31 ordering contract
 
-OpenCode v1.18.31 does expose `tool.execute.before(sessionID, callID, output.args)`, but the native TaskTool path does **not** use that hook as a reliable prompt-rewrite transport. In `packages/opencode/src/session/prompt.ts`, the runtime creates `taskArgs`, triggers the hook, then invokes `taskTool.execute(taskArgs, ...)` with the original binding.
+OpenCode v1.18.31 exposes:
 
-Therefore Justice v5 explicitly does **not** rely on before-hook argument mutation to deliver Conformance Contract instructions.
+- awaited `tool.execute.before` / `tool.execute.after` hooks;
+- awaited `chat.message`;
+- asynchronous plugin `event` forwarding whose returned Promise is **not awaited**.
+
+Therefore Justice MUST NOT require its `session.created/session.updated` event handler to finish before the child reviewer's first `chat.message`.
 
 The relevant OpenCode files are byte-identical between v1.18.29 and v1.18.31:
 
@@ -84,38 +88,68 @@ The relevant OpenCode files are byte-identical between v1.18.29 and v1.18.31:
 - `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
 - v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
 
-Justice's existing real-runtime 1.18.29 spike remains valid for the unchanged parent `sessionID + callID`, child-session metadata, and session parentage surfaces.
+OpenCode also exposes an authoritative awaited session lookup through the plugin client:
+
+```ts
+client.session.get({
+  path: {
+    id: childSessionId
+  }
+})
+```
+
+The successful Session contains `id` and optional `parentID`.
 
 ### Selected review-delivery contract
 
-OpenCode v1.18.31 TaskTool creates the child session and calls `ops.prompt(... params.prompt ...)`. During child user-message creation it invokes:
-
-```text
-chat.message(childSessionId, { message, parts: resolvedParts })
-```
-
-before those same `resolvedParts` are persisted and supplied to the child reviewer.
-
-Justice therefore uses:
+Justice uses:
 
 ```text
 parent tool.execute.before
-  → observe recognized Superpowers review; create pending review correlation
+  → observe recognized Superpowers review
+  → persist PendingReviewCorrelation(parentSessionId + parentCallId)
+
+TaskTool creates child session
+
+child chat.message(input.sessionID)
+  → await client.session.get({ path: { id: input.sessionID } })
+  → require returned Session.id == input.sessionID
+  → read authoritative Session.parentID
+  → match exactly one pending review under that parent
+  → bind child ↔ pending parent review
+  → append one fully formed synthetic Justice TextPart to output.parts IN PLACE
+
 session.created/session.updated
-  → bind exactly one pending parent review call to childSessionId
-child chat.message
-  → append Justice review appendix to output.parts IN PLACE
+  → corroboration/cache/diagnostic only
+  → never a delivery-order prerequisite
+
 parent tool.execute.after
-  → corroborate same call / child metadata and capture result
+  → corroborate same parent call / child metadata
+  → close review correlation
 ```
 
-The `chat.message` hook changes only child-message content. It does not change `subagent_type`, category, model, provider, variant, or OmO continuation state.
+Lookup failure, missing/mismatched parent, or zero/multiple pending matches means no injection and `NOT_PROVEN`.
 
-If the child session cannot be uniquely bound to exactly one pending recognized review call before its first `chat.message`, Justice performs no injection and the semantic review remains untrusted / `NOT_PROVEN`.
+The appended Part is fixed:
 
-Superpowers v6.4.2 task review, scoped re-review, and final whole-branch review all use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. All three therefore use the selected parent-task → child-message path.
+```text
+id        = "prt_justice_review_" + randomUUID()
+sessionID = output.message.sessionID
+messageID = output.message.id
+type      = "text"
+text      = rendered Justice review appendix
+synthetic = true
+```
 
-Task 1 is a runtime **regression/replay gate** for this already-selected architecture. A failure is upstream/runtime compatibility drift and stops the supported-stack implementation; Task 1 is not allowed to choose an alternate review architecture.
+`input.sessionID` must equal `output.message.sessionID`. Justice never removes/replaces original reviewer parts and never changes subagent/category/model/provider/variant.
+
+### Before-hook mutation statement
+
+OpenCode executes the same `args/taskArgs` object after `tool.execute.before`, so an in-place property mutation can be observable by the executor. Justice v5 **does not use that path by design** for review delivery; it uses the awaited child `chat.message` + authoritative session lookup contract above. Do not describe before-hook in-place mutation as source-impossible.
+
+Superpowers v6.4.2 task review, scoped re-review, and final whole-branch review all use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`.
+
+Task 1 is a runtime regression/replay gate for this already-selected architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
 
 ## Canonical Cross-Task Interface Registry
 
@@ -168,13 +202,34 @@ type ProjectionResult<T> =
   | { readonly status: "COMPLETE"; readonly value: T; readonly diagnostics: readonly ProjectionDiagnostic[] }
   | { readonly status: "INCOMPLETE" | "INVALID"; readonly value?: T; readonly diagnostics: readonly [ProjectionDiagnostic, ...ProjectionDiagnostic[]] };
 
+type ClauseEvidenceScope =
+  | { readonly kind: "global" }
+  | { readonly kind: "files"; readonly paths: readonly [string, ...string[]] };
+
 type ClauseResult =
-  | { readonly clauseId: string; readonly status: "SATISFIED"; readonly evidenceRefs: readonly [string, ...string[]] }
-  | { readonly clauseId: string; readonly status: "VIOLATED"; readonly reason: string; readonly evidenceRefs: readonly string[] }
-  | { readonly clauseId: string; readonly status: "NOT_PROVEN"; readonly reason: string; readonly evidenceRefs: readonly string[] };
+  | {
+      readonly clauseId: string;
+      readonly status: "SATISFIED";
+      readonly evidenceRefs: readonly [string, ...string[]];
+      readonly evidenceScope: ClauseEvidenceScope;
+    }
+  | {
+      readonly clauseId: string;
+      readonly status: "VIOLATED";
+      readonly reason: string;
+      readonly evidenceRefs: readonly string[];
+      readonly evidenceScope?: ClauseEvidenceScope;
+    }
+  | {
+      readonly clauseId: string;
+      readonly status: "NOT_PROVEN";
+      readonly reason: string;
+      readonly evidenceRefs: readonly string[];
+      readonly evidenceScope?: ClauseEvidenceScope;
+    };
 ```
 
-Only `ProjectionResult.status === "COMPLETE"` is acceptance-eligible.
+`ClauseEvidenceScope.kind === "global"` intersects every non-empty fix diff. `files` scope is carry-forward eligible only when normalized changed-file paths have an empty intersection with `paths`; undecidable/malformed scope is `NOT_PROVEN`. Only `ProjectionResult.status === "COMPLETE"` is acceptance-eligible.
 
 ### Task 5 owns dispatch resolution and correlation mutation results
 
@@ -248,6 +303,8 @@ type PendingReviewCorrelation = {
 
 type ReviewChildBindingResult =
   | { readonly kind: "bound" | "idempotent"; readonly correlation: PendingReviewCorrelation }
+  | { readonly kind: "lookup_failed"; readonly reason: string }
+  | { readonly kind: "parent_missing"; readonly childSessionId: string }
   | { readonly kind: "not_found"; readonly reason: string }
   | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] }
   | { readonly kind: "conflict"; readonly reason: string };
@@ -258,6 +315,38 @@ type ParseReviewResult =
 ```
 
 `RecognizedReviewDispatch.kind === "ambiguous"` and every invalid parse result are untrusted and acceptance-fail-closed.
+
+### Task 9 owns final-review evidence closure
+
+```ts
+type FinalReviewEvidenceClosure = {
+  readonly schemaVersion: "justice-final-review-closure-v1";
+  readonly artifactChainId: string;
+  readonly candidateHead: string;
+  readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
+  readonly finalFixWave?: {
+    readonly base: string;
+    readonly head: string;
+    readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
+  };
+  readonly carriedClauseIds: readonly string[];
+  readonly reProvenClauseIds: readonly string[];
+  readonly clauseResults: readonly ClauseResult[];
+  readonly unresolvedFindingIds: readonly string[];
+  readonly diagnostics: readonly string[];
+};
+
+type BuildFinalReviewEvidenceClosureResult =
+  | { readonly kind: "complete"; readonly closure: FinalReviewEvidenceClosure }
+  | {
+      readonly kind: "blocked";
+      readonly closure: FinalReviewEvidenceClosure;
+      readonly notProvenClauseIds: readonly string[];
+      readonly reasons: readonly [string, ...string[]];
+    };
+```
+
+A closure may extend Candidate A to Candidate B only through the single Superpowers final fix wave + exactly one scoped re-review. It never causes Justice to dispatch a second full reviewer.
 
 ### Major task-local input/output contracts
 
@@ -387,14 +476,26 @@ type ReviewDispatchInput = {
   readonly contract: ConformanceContract;
 };
 
+type ChatMessageHook = NonNullable<Hooks["chat.message"]>;
+type ChatMessageInput = Parameters<ChatMessageHook>[0];
+type ChatMessageOutput = Parameters<ChatMessageHook>[1];
+
+type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
+
 type ReviewAppendixInput = {
   readonly correlation: PendingReviewCorrelation & { readonly status: "child_bound"; readonly childSessionId: string };
   readonly contractPath: string;
 };
 
-type ReviewChatMessageInput = {
+type ResolveReviewChildInput = {
   readonly childSessionId: string;
-  readonly parts: unknown[];
+  readonly client: JusticePluginClient;
+};
+
+type BuildReviewAppendixPartInput = {
+  readonly input: ChatMessageInput;
+  readonly output: ChatMessageOutput;
+  readonly appendix: string;
 };
 ```
 
@@ -449,7 +550,7 @@ type ResolveOmoEffectiveConfigInput = {
 
 ---
 
-### Task 1: Lock the Selected Review-Interop Contract as a Runtime Regression Gate
+### Task 1: Lock the Race-Free Review-Interop Contract as a Runtime Regression Gate
 
 **Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, J5D-REVIEW-01..04.
 
@@ -461,11 +562,14 @@ type ResolveOmoEffectiveConfigInput = {
 
 **Interfaces:**
 - Consumes the fixed Design §14.2 contract:
-  - parent `tool.execute.before` is observation-only;
-  - child session binding is established before the child `chat.message`;
-  - Conformance Contract instructions are appended to child `output.parts` in place;
-  - parent `tool.execute.after` corroborates the same review call/result.
-- Produces runtime regression evidence only. It does not select or discover another architecture.
+  - parent `tool.execute.before` creates pending review correlation;
+  - child `chat.message` is awaited;
+  - the fixture plugin calls `client.session.get({ path: { id: input.sessionID } })` inside `chat.message`;
+  - authoritative `Session.parentID` selects exactly one pending parent review;
+  - `session.created/session.updated` may be arbitrarily delayed and are not required for injection;
+  - one fully formed synthetic text Part is appended in place;
+  - parent `tool.execute.after` corroborates the same review relation.
+- Produces runtime regression evidence only. It does not select/discover another architecture.
 
 - [ ] **Step 1: Add the three exact Superpowers v6.4.2 reviewer fixtures**
 
@@ -479,20 +583,25 @@ Represent:
 
 In `tests/integration/justice-v5-review-interop-host.test.ts`:
 
-- `task_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
-- `scoped_re_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
-- `final_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
+- `task_review_uses_authoritative_child_session_lookup_and_injects_appendix`
+- `scoped_re_review_uses_authoritative_child_session_lookup_and_injects_appendix`
+- `final_review_uses_authoritative_child_session_lookup_and_injects_appendix`
+- `child_chat_message_can_bind_via_authoritative_session_lookup_without_waiting_for_event_hook`
+- `delayed_session_created_plugin_event_does_not_lose_review_appendix`
+- `session_lookup_parent_mismatch_blocks_injection`
 - `review_interop_preserves_original_prompt_and_subagent_type_general`
+- `synthetic_review_part_uses_actual_child_message_identity`
 - `review_result_is_attributed_to_same_parent_call_and_child_session`
-- `before_hook_arg_mutation_is_not_used_as_prompt_delivery`
 
-Assertions for each reviewer kind:
+Assertions:
 - exactly one existing Superpowers reviewer dispatch occurs;
 - parent `sessionID + callID` are observed;
-- exactly one child session with matching parent is bound before child `chat.message`;
-- the original reviewer content remains present;
-- the appended contract marker/reference reaches the actual reviewer through child `chat.message`;
-- caller routing remains `subagent_type: "general"`; model/provider/category are not rewritten by Justice;
+- the `chat.message` hook can bind from awaited `session.get` even when no Justice event callback has completed;
+- delayed `session.created` handling does not change whether the appendix reaches the reviewer;
+- lookup failure/parent mismatch/zero-or-multiple pending matches produces no appendix and untrusted evidence;
+- synthetic Part has `prt_justice_review_<uuid>`, actual child `sessionID`, actual child user-message `messageID`, `type: "text"`, and `synthetic: true`;
+- original reviewer content remains present;
+- caller routing remains `subagent_type: "general"`; model/provider/category are not rewritten;
 - parent after-hook/result and child session are attributable to the same review correlation;
 - no duplicate Justice reviewer is created.
 
@@ -504,15 +613,15 @@ Change the existing CI host-test install to exactly:
 bun install --global opencode-ai@1.18.31
 ```
 
-The regression file must assert `opencode --version == 1.18.31` for this baseline replay. This exact version check is local to compatibility evidence and does not replace Task 11's capability-first support policy.
+The regression file asserts `opencode --version == 1.18.31` for this baseline replay only. Task 11 remains capability-first.
 
 - [ ] **Step 4: Run the regression gate**
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected: all six cases PASS.
+Expected: all nine cases PASS.
 
-Failure means upstream/runtime compatibility drift. STOP implementation and return to the Design compatibility gate; do not add Justice-owned review scheduling and do not switch back to before-hook prompt mutation.
+Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not make async session-event completion a delivery prerequisite.
 
 - [ ] **Step 5: Commit the regression evidence**
 
@@ -1019,7 +1128,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 ---
 
-### Task 7: Implement Versioned Superpowers Review Interop, Child-Message Injection, and Strict JusticeReviewResult Parsing
+### Task 7: Implement Versioned Superpowers Review Interop, Authoritative Child Lookup, and Strict JusticeReviewResult Parsing
 
 **Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, J5D-REVIEW-01..04.
 
@@ -1033,9 +1142,13 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - Test: `tests/runtime/opencode-adapter-review-interop.test.ts`
 
 **Interfaces:**
-- Consumes `TaskIdentity` and `ReviewFindingV5` from Task 2.
-- Consumes `ClauseResult`, `ConformanceContract`, and immutable reviewer-readable contract path/digest from Task 4.
-- Owns the registry-defined `RecognizedReviewDispatch` and `ParseReviewResult`.
+- Consumes `TaskIdentity` / `ReviewFindingV5` from Task 2 and `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
+- Changes `OpenCodePluginInit.client` from an app-only hand-written shape to the exact SDK-derived structural capability:
+  ```ts
+  type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
+  ```
+- `chat.message` input/output types are derived directly from `Hooks["chat.message"]`, not re-declared.
+- Owns `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `ReviewChildBindingResult`, and `ParseReviewResult`.
 - Produces:
   ```ts
   type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
@@ -1064,28 +1177,45 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
     readonly clauses: readonly ClauseResult[];
   };
   ```
-- Serialization: exactly one final fenced `justice-review-result-v1` JSON block.
 - Exact signatures:
   - `recognizeSuperpowersReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`
+  - `resolveReviewChildFromSession(input: ResolveReviewChildInput): Promise<ReviewChildBindingResult>`
   - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
+  - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
   - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
-- Appendix carries a read-only workspace-relative Conformance Contract path + digest and never changes model/provider/subagent/category.
+- `buildJusticeReviewAppendixPart` MUST return exactly:
+  ```ts
+  {
+    id: `prt_justice_review_${randomUUID()}`,
+    sessionID: output.message.sessionID,
+    messageID: output.message.id,
+    type: "text",
+    text: appendix,
+    synthetic: true,
+  }
+  ```
+  and only when `input.sessionID === output.message.sessionID`.
+- Serialization: exactly one final fenced `justice-review-result-v1` JSON block.
 
 - [ ] **Step 1: Write RED recognition/adapter tests**
 
-Exact required tests:
+In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
-- `injects_conformance_contract_into_bound_child_chat_message`
+- `child_chat_message_resolves_parent_with_awaited_session_get_before_injection`
+- `delayed_session_event_does_not_block_or_enable_review_injection`
+- `session_lookup_parent_mismatch_blocks_review_injection`
+- `injects_conformance_contract_into_authoritatively_bound_child_chat_message`
+- `synthetic_review_part_uses_output_message_session_and_message_ids`
 
-Also recognize all three v6.4.2 review profiles using multiple markers and concrete brief/review-package/range references. A single keyword is insufficient.
+Also recognize all three v6.4.2 review profiles using multiple markers and concrete review-package/range references.
 
 - [ ] **Step 2: Write RED structured-result tests**
 
-Exact required tests:
+In `tests/core/review-result.test.ts`:
 - `missing_required_clause_result_becomes_not_proven`
 - `missing_or_malformed_review_result_is_rejected`
 
-Also cover multiple result blocks, wrong correlation/chain/task, stale base/head, wrong contract digest, and scoped re-review deltas.
+Also cover multiple blocks, wrong correlation/chain/task, wrong range, wrong contract digest, evidence scope validation, and scoped re-review deltas.
 
 - [ ] **Step 3: Run RED tests**
 
@@ -1093,19 +1223,31 @@ Run: `bun run vitest run tests/core/review-interop.test.ts tests/core/review-res
 
 Expected: FAIL.
 
-- [ ] **Step 4: Implement parent review recognition, unique child binding, child `chat.message` in-place appendix injection, and strict output parsing**
+- [ ] **Step 4: Implement the fixed review transport**
 
-`tool.execute.before` is observation-only. Append review context only after `session.created/session.updated` has uniquely bound the child reviewer. Use only the existing Superpowers reviewer dispatch. Do not create `sp-review` / `sp-final-review` calls and do not depend on before-hook arg mutation.
+At parent `tool.execute.before`, recognize and persist the pending review only.
+
+At child `chat.message`:
+1. use `input.sessionID`;
+2. await `client.session.get({ path: { id: input.sessionID } })`;
+3. require matching returned child ID and `parentID`;
+4. match exactly one pending review for that parent;
+5. build/append the exact synthetic text Part to the existing `output.parts` array.
+
+`session.created/session.updated` only corroborate/cache this relation. They are never an injection prerequisite.
+
+At parent `tool.execute.after`, corroborate child metadata and invalidate mismatches.
+
+Do not create `sp-review` / `sp-final-review` calls and do not modify model/provider/subagent/category routing.
 
 - [ ] **Step 5: Re-run Task 1 regression gate plus focused tests**
 
-Expected: PASS and exactly one reviewer call per Superpowers dispatch. Failure of Task 1's established baseline is upstream compatibility drift, not an implementation-time architecture choice.
+Expected: PASS and exactly one reviewer call per Superpowers dispatch.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts \
-  tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
+git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts   tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
 git commit -m "feat: consume Superpowers reviews as Justice evidence"
 ```
 
@@ -1174,9 +1316,9 @@ git commit -m "feat: persist v5 review and quality evidence"
 
 ---
 
-### Task 9: Make Conformance and Quality First-Class Acceptance Gates
+### Task 9: Make Conformance, Quality, and Final Review Evidence Closure First-Class Acceptance Gates
 
-**Requirements / Design:** JUS5-GATE-01..02, JUS5-CONFORM-01..09, JUS5-ACC-01..04, JUS5-COMPLETE-01, J5D-GATE-01, J5D-COMPLETE-01.
+**Requirements / Design:** JUS5-GATE-01..02, JUS5-CONFORM-01..09, JUS5-ACC-01..04, JUS5-COMPLETE-01, JUS5-REV-08..09, J5D-GATE-01, J5D-COMPLETE-01, J5D-REVIEW-03..04.
 
 **Files:**
 - Create: `src/core/conformance-gate.ts`
@@ -1189,7 +1331,8 @@ git commit -m "feat: persist v5 review and quality evidence"
 - Test: `tests/core/plan-completion-v5.test.ts`
 
 **Interfaces:**
-- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ExecutionCorrelation`, trusted review evidence, and canonical `ReviewFindingV5`.
+- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ClauseEvidenceScope`, `ExecutionCorrelation`, trusted `JusticeReviewResult` evidence, and canonical `ReviewFindingV5`.
+- Owns registry-defined `FinalReviewEvidenceClosure` and `BuildFinalReviewEvidenceClosureResult`.
 - Produces:
   ```ts
   type ConformanceGateVerdict =
@@ -1201,12 +1344,28 @@ git commit -m "feat: persist v5 review and quality evidence"
         readonly diagnostics: readonly string[];
       };
 
+  function buildFinalReviewEvidenceClosure(input: {
+    readonly artifactChainId: string;
+    readonly candidateHead: string;
+    readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
+    readonly finalFixWave?: {
+      readonly changedFiles: readonly string[];
+      readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
+    };
+  }): BuildFinalReviewEvidenceClosureResult;
+
   function evaluateTaskConformance(input: TaskConformanceInput): ConformanceGateVerdict;
   function evaluatePlanConformance(input: PlanConformanceInput): ConformanceGateVerdict;
   ```
-- Completion candidate contains exact candidate HEAD and reviewed range. Any post-review candidate mutation invalidates the review/conformance evidence.
-- SDD task acceptance requires trusted task review.
-- `executing-plans` does not require a fresh per-task reviewer; semantic clauses that are not otherwise proven remain `NOT_PROVEN` until the final review.
+- `PlanConformanceInput` consumes `finalReviewClosure: FinalReviewEvidenceClosure`, not a single optional `reviewedRange`.
+- Carry-forward algorithm is exact:
+  - no fix wave: full final review head must equal `candidateHead`;
+  - fix wave: full review head == scoped re-review base, scoped re-review head == `candidateHead`;
+  - `global` evidence scope intersects every non-empty fix;
+  - `files(paths)` may carry only when `changedFiles ∩ paths == ∅`;
+  - missing/undecidable scope or intersecting clause without explicit scoped re-proof → `NOT_PROVEN`;
+  - blocking findings in either full or scoped evidence remain blocking.
+- Justice never requests another full final review to close missing coverage.
 
 - [ ] **Step 1: Write RED gate tests**
 
@@ -1224,7 +1383,11 @@ In `tests/core/conformance-gate.test.ts`:
 - `parked_critical_or_important_quality_finding_blocks_acceptance`
 
 In `tests/core/plan-completion-v5.test.ts`:
-- `post_review_head_change_invalidates_completion_evidence`
+- `old_full_final_review_alone_cannot_complete_new_candidate_head`
+- `final_review_evidence_closure_extends_to_fix_head_only_with_scoped_delta_coverage`
+- `global_or_undecidable_clause_scope_requires_scoped_reproof_after_fix`
+- `intersecting_file_scope_without_scoped_reproof_becomes_not_proven`
+- `unaffected_file_scope_can_carry_forward_across_final_fix_wave`
 - `final_review_can_prove_inline_semantic_clauses`
 - `zero_drift_zero_missing_evidence_zero_blocking_quality_allows_completion`
 
@@ -1232,11 +1395,11 @@ In `tests/core/plan-completion-v5.test.ts`:
 
 Run: `bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts`
 
-Expected: FAIL because current acceptance has no v5 conformance contract.
+Expected: FAIL because current acceptance has no v5 conformance/final evidence closure.
 
-- [ ] **Step 3: Implement conformance gate and wire it into acceptance decisions**
+- [ ] **Step 3: Implement conformance gate and final evidence closure**
 
-Keep runtime hook behavior fail-open; only acceptance projections fail closed.
+Keep runtime fail-open where safe; acceptance remains fail-closed. Implement only evidence composition—never reviewer scheduling.
 
 - [ ] **Step 4: Run GREEN focused suite + typecheck**
 
@@ -1245,9 +1408,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts \
-  src/core/v2/decision-model.ts src/core/v2/state-projection.ts \
-  tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts
+git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts   src/core/v2/decision-model.ts src/core/v2/state-projection.ts   tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts
 git commit -m "feat: gate acceptance on v5 conformance"
 ```
 
@@ -1654,43 +1815,59 @@ Expected: clean working tree and one recorded `CANDIDATE_HEAD`. Task 14 ends her
 
 ## Controller-Owned Finalization After Task 14
 
-This phase belongs to the Superpowers controller, not the Task 14 implementer.
+This phase belongs to the Superpowers controller, not the Task 14 implementer. It MUST follow Superpowers v6.4.2 final-review progression exactly; Justice observes/composes evidence and never schedules an additional reviewer.
 
-1. Record:
+1. Record the clean committed initial final candidate:
    ```bash
    MERGE_BASE=$(git merge-base master HEAD)
-   CANDIDATE_HEAD=$(git rev-parse HEAD)
+   FINAL_BASE_HEAD=$(git rev-parse HEAD)
    test -z "$(git status --porcelain)"
    ```
-2. Run final verification against that clean committed `CANDIDATE_HEAD`:
+2. Run final verification against `FINAL_BASE_HEAD`:
    ```bash
    bun run typecheck
    bun run lint
    bun run test
    bun run test:integration
    bun run build
-   git diff --check "$MERGE_BASE..$CANDIDATE_HEAD"
-   test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
+   git diff --check "$MERGE_BASE..$FINAL_BASE_HEAD"
+   test "$(git rev-parse HEAD)" = "$FINAL_BASE_HEAD"
    test -z "$(git status --porcelain)"
    ```
-3. Dispatch the Superpowers final whole-branch reviewer for exactly `MERGE_BASE..CANDIDATE_HEAD`. The observed structured final-review result must report `reviewedRange.head == CANDIDATE_HEAD`.
-4. After Justice has ingested that same-call final-review result, invoke `justice_review` in read/inspection mode and require all of:
+3. Dispatch the single Superpowers full final whole-branch reviewer for exactly `MERGE_BASE..FINAL_BASE_HEAD`.
+4. If the full final review is clean:
+   - Justice builds a `FinalReviewEvidenceClosure` with no fix wave;
+   - `candidateHead == FINAL_BASE_HEAD`;
+   - proceed to step 8.
+5. If the full final review returns findings:
+   - follow Superpowers exactly: dispatch **ONE** final fix subagent with the complete findings list;
+   - let that fix subagent implement/test/commit the fix wave;
+   - record:
+     ```bash
+     FIX_BASE="$FINAL_BASE_HEAD"
+     FINAL_CANDIDATE_HEAD=$(git rev-parse HEAD)
+     test -z "$(git status --porcelain)"
+     ```
+   - run normal final verification against `FINAL_CANDIDATE_HEAD`;
+   - generate the Superpowers scoped review package for exactly `FIX_BASE..FINAL_CANDIDATE_HEAD`;
+   - dispatch **exactly one scoped re-review of that fix wave**.
+6. Justice ingests the original full final-review result plus, when present, the one scoped final re-review and recomputes `FinalReviewEvidenceClosure` for `FINAL_CANDIDATE_HEAD`:
+   - clauses whose Candidate-A evidence scope is deterministically non-intersecting with the fix changed-file set may carry forward;
+   - affected or undecidable clauses require explicit scoped re-proof;
+   - missing scoped proof becomes `NOT_PROVEN`;
+   - open Critical/Important findings remain blocking;
+   - A's full review alone never proves B.
+7. Follow Superpowers residual adjudication rules after the one scoped re-review. **There is no second Justice-requested full review and no second Justice-requested fix wave.** If residual/load-bearing findings or missing clause coverage remain, Justice leaves `PlanComplete` BLOCKED and surfaces them to branch finishing/human review.
+8. Invoke `justice_review` in read/inspection mode as the Final Conformance Gate and require:
    - `artifactChain.status == "AUTHORIZED"`;
    - `projection.status == "COMPLETE"`;
+   - trusted `FinalReviewEvidenceClosure.candidateHead == git rev-parse HEAD`;
+   - closure has no `NOT_PROVEN` required clause and no unresolved blocking finding;
    - `planCompletion.status == "COMPLETE"`;
-   - `planCompletion.reasons` is empty;
-   - the trusted final-review evidence is bound to `CANDIDATE_HEAD`.
-   This inspection is the controller-visible Final Conformance Gate; it does not dispatch another reviewer.
-5. After both gates pass, **do not modify or commit any tracked file** before completion/branch finishing.
-6. If the final review or Final Conformance Gate produces a finding that requires a fix:
-   - make the fix through the normal Superpowers fix flow;
-   - commit the fix;
-   - record a new `CANDIDATE_HEAD`;
-   - rerun final verification;
-   - rerun the full final whole-branch review;
-   - rerun the Final Conformance Gate from scratch against the new exact HEAD.
+   - `planCompletion.reasons` is empty.
+9. After the gates pass, do not modify or commit any tracked file before completion/branch finishing.
 
-No review or conformance evidence from an older candidate HEAD is reusable as final completion evidence.
+Any tracked change outside the single Superpowers final fix wave invalidates the existing closure. Justice does not compensate by dispatching extra reviews; coverage remains fail-closed.
 
 ---
 
@@ -1770,7 +1947,7 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 14 | implementation-discovered Design change requires reconciliation before resume | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `implementation_discovered_design_change_requires_reconciliation_before_resume` | E2E |
 | 15 | code works/tests pass but violates Plan → acceptance blocked | 9 | `tests/core/conformance-gate.test.ts` | `passing_tests_do_not_override_plan_contract_violation` | unit |
 | 16 | reviewer omits required normative clause → NOT_PROVEN | 7 | `tests/core/review-result.test.ts` | `missing_required_clause_result_becomes_not_proven` | unit |
-| 17 | final review approves old revision, code changes afterward → completion blocked | 9 | `tests/core/plan-completion-v5.test.ts` | `post_review_head_change_invalidates_completion_evidence` | unit |
+| 17 | old full final review alone is stale after a fix; trusted scoped final re-review delta extends coverage only when affected/unaffected clause scope is proven | 9 | `tests/core/plan-completion-v5.test.ts` | `final_review_evidence_closure_extends_to_fix_head_only_with_scoped_delta_coverage` | unit |
 | 18 | all clauses SATISFIED, no blocking quality → completion permitted | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `complete_evidence_allows_plan_complete` | E2E |
 | 19 | Justice does not emit canonical `deep` | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `does_not_emit_legacy_deep` | unit |
 | 20 | custom `sp-*` coexist with OmO v5 routing | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `custom_sp_categories_coexist_with_omo_v5_categories` | unit |
@@ -1787,7 +1964,7 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 31 | Requirements change stales Design + Plan chain | 3 | `tests/core/artifact-chain.test.ts` | `requirements_change_stales_design_and_plan_authority` | unit |
 | 32 | substantive Ruling can continue execution but cannot authorize acceptance | 9 | `tests/core/conformance-gate.test.ts` | `substantive_ruling_does_not_authorize_acceptance` | unit |
 | 33 | duplicate/missing/ambiguous projection becomes INCOMPLETE/INVALID | 4 | `tests/core/conformance-projector.test.ts` | `projection_failures_never_return_complete` | unit |
-| 34 | v6.4.2 task reviewer gets Conformance Contract through same dispatch | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `injects_conformance_contract_into_bound_child_chat_message` | integration |
+| 34 | v6.4.2 reviewer gets Conformance Contract through the same dispatch using authoritative child-session lookup | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `injects_conformance_contract_into_authoritatively_bound_child_chat_message` | integration |
 | 35 | missing/malformed structured review result blocks | 7 | `tests/core/review-result.test.ts` | `missing_or_malformed_review_result_is_rejected` | unit |
 | 36 | parked Important/Critical blocks until trusted disposition/human quality adjudication | 8 | `tests/core/review-quality-v5.test.ts` | `parked_critical_or_important_blocks_until_trusted_disposition` | unit |
 | 37 | effective config honors user/project + harness/profile precedence | 11 | `tests/core/omo-effective-config.test.ts` | `resolves_user_project_harness_profile_precedence` | unit |
@@ -1805,12 +1982,12 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 |---|---|---|
 | Task 2 | Tasks 5–12 | `TaskIdentity`, `ReviewFindingV5`, `TaskCategory`, `TaskRoutingTarget` |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
-| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
+| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
-| Task 6 | Task 7 | durable parent-call/child-session observation available to `RecognizedReviewDispatch` |
-| Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
+| Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
+| Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, authoritative child binding, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
 | Task 8 | Tasks 9, 13 | `ReviewFindingV5` disposition semantics and trusted persisted review evidence |
-| Task 9 | Tasks 13–14 | `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
+| Task 9 | Tasks 13–14 | `FinalReviewEvidenceClosure`, `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
@@ -1839,6 +2016,6 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
    - v4 state is recognized without becoming v5 authority;
    - unknown/newer state is preserved and blocks affected acceptance.
 7. **Final review revision**
-   - final review and Final Conformance Gate must cover the exact candidate HEAD.
+   - the trusted `FinalReviewEvidenceClosure` and Final Conformance Gate must cover the exact candidate HEAD without changing Superpowers final-review progression.
 8. **Proportion**
    - bodies/algorithms are not pre-written; the plan fixes interfaces, assertions, commands, and architecture decisions only.
