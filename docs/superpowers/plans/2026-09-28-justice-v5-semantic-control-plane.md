@@ -1457,7 +1457,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 ### Task 7: Implement Superpowers Open-Set Finding Transport, Exact SDK Child Lookup, and Strict Review Parsing
 
-**Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, J5D-REVIEW-01..04.
+**Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, JUS5-CAT-05, JUS5-CAT-09, JUS5-CORR-06, J5D-REVIEW-01..04, J5D-ROUTE-01..02, J5D-CAT-02.
 
 **Files:**
 - Create: `src/core/review-interop.ts`
@@ -1469,7 +1469,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - Test: `tests/runtime/opencode-adapter-review-interop.test.ts`
 
 **Interfaces:**
-- Consumes `FindingId`, `TaskIdentity`, and `ReviewFindingV5` from Task 2 plus `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
+- Consumes `FindingId`, `TaskIdentity`, `ReviewFindingV5`, `SemanticExecutionClass`, `TaskRoutingProvenance`, `SemanticClassificationResult`, and `translateTaskRouting` from Task 2 plus `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
 - Owns registry-defined `ReviewFindingTarget`, `ScopedFindingMarkerExtraction`, `ReviewFindingContextQuery`, `ReviewFindingContextResult`, `ReviewFindingContextProvider`, `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `PreparePendingReviewResult`, `ReviewChildBindingResult`, and `ParseReviewResult`.
 - Changes `OpenCodePluginInit.client` to:
   ```ts
@@ -1535,7 +1535,19 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
   - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
   - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
+  - `translateRecognizedReviewRouting(review: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>, taskArgs: Record<string, unknown>): SuperpowersRoutingTranslationResult`
 
+**Review semantic-routing contract:**
+- review recognition happens before parent task execution and before child-session creation;
+- recognized `task-review` / `scoped-re-review` produces semantic class `review`; recognized `final-review` produces `final-review`;
+- provenance is `{ kind: "superpowers", role: <review kind> }`;
+- when raw routing is `subagent_type="general"` with no continuation, call `translateTaskRouting` and mutate the same parent task args in place to:
+  - task/scoped: `category="sp-review"` and no `subagent_type`;
+  - final: `category="sp-final-review"` and no `subagent_type`;
+- a recognized specialized non-generic subagent route is preserved;
+- continuation remains continuation-owned and receives no new review category;
+- ambiguous/untrusted review recognition is not category-translated as trusted routing;
+- the later child `chat.message` appendix path never changes routing.
 **Current scoped target extraction:**
 - for scoped re-review only, read `taskArgs.prompt` as a string;
 - take content strictly between exact headings `## The Findings Under Verification` and the next exact `## The Fix`;
@@ -1604,6 +1616,11 @@ In `tests/core/review-interop.test.ts`:
 
 In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
+- `superpowers_task_review_maps_to_sp_review`
+- `superpowers_scoped_rereview_maps_to_sp_review`
+- `superpowers_final_review_maps_to_sp_final_review`
+- `recognized_superpowers_review_translation_preserves_category_subagent_xor`
+- `review_appendix_path_does_not_rewrite_semantic_routing`
 - `child_chat_message_resolves_parent_with_awaited_session_get_before_injection`
 - `delayed_session_event_does_not_block_or_enable_review_injection`
 - `session_lookup_parent_mismatch_blocks_review_injection`
@@ -1638,13 +1655,15 @@ Expected: FAIL.
 - [ ] **Step 3: Implement current-dispatch marker transport and review parsing**
 
 Implement:
-1. exact scoped section extraction;
-2. marker parsing/validation;
-3. current-dispatch `requestedFindingIds`;
-4. provider-backed metadata resolution;
-5. exact SDK child lookup;
-6. appendix generation for initial/final/scoped reviews;
-7. human-marker ↔ machine-envelope parity validation.
+1. recognize task/scoped/final Superpowers review provenance;
+2. translate the recognized parent `subagent_type="general"` placeholder to `sp-review` / `sp-final-review` through Task 2's pure translator;
+3. exact scoped section extraction;
+4. marker parsing/validation;
+5. current-dispatch `requestedFindingIds`;
+6. provider-backed metadata resolution;
+7. exact SDK child lookup;
+8. appendix generation for initial/final/scoped reviews without further routing mutation;
+9. human-marker ↔ machine-envelope parity validation.
 
 The review-interop module does not read persistence directly and never decides which findings Superpowers keeps open.
 
