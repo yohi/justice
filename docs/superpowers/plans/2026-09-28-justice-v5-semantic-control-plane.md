@@ -490,6 +490,7 @@ type ReviewAppendixInput = {
 type ResolveReviewChildInput = {
   readonly childSessionId: string;
   readonly client: JusticePluginClient;
+  readonly pendingReviews: readonly PendingReviewCorrelation[];
 };
 
 type BuildReviewAppendixPartInput = {
@@ -1225,7 +1226,7 @@ Expected: FAIL.
 
 - [ ] **Step 4: Implement the fixed review transport**
 
-At parent `tool.execute.before`, recognize and persist the pending review only.
+At parent `tool.execute.before`, recognize the review and add exactly one `PendingReviewCorrelation` to the adapter's current pending-review index keyed by `parentSessionId + parentCallId`. This short-lived index is not recovery authority; losing it before child injection yields no injection / `NOT_PROVEN`.
 
 At child `chat.message`:
 1. use `input.sessionID`;
