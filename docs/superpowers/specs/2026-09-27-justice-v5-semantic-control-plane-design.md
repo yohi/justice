@@ -919,65 +919,119 @@ OpenCode task(subagent_type="general")
         ↓
 tool.execute.before(parent sessionID, callID)
         ↓
-Justice recognizes review and records PendingReviewCorrelation in the current review-interoperability state
+Justice records PendingReviewCorrelation
         ↓
 TaskTool creates child session
         ↓
-TaskTool starts child prompt
-        ↓
 chat.message(child sessionID, output.message, output.parts)
         ↓ awaited Justice hook
-Justice awaits client.session.get({ path: { id: childSessionId } })
+await client.session.get({ path: { id: childSessionId } })
+        ↓
+inspect fields response lookup.data
         ↓
 authoritative child Session.parentID
         ↓
 match exactly one pending review under that parent
         ↓
-bind child ↔ parent review call
-        ↓
 append one synthetic Justice text Part to output.parts IN PLACE
         ↓
-reviewer executes with original prompt + appendix
+reviewer executes
         ↓
-session.created/session.updated events
-        ↓ corroboration/cache/diagnostic only; timing irrelevant
+session.created/session.updated
+        ↓ corroboration/cache/diagnostic only
         ↓
 tool.execute.after(parent sessionID, same callID)
         ↓
-corroborate result/child metadata and close review correlation
+corroborate result/child metadata
 ```
 
-The authoritative binding operation happens inside the awaited `chat.message` hook itself. It does not wait for Justice's async `session.created/session.updated` event handler to finish.
+#### Exact SDK fields-response contract
 
-The plugin client capability required by this design is the OpenCode v1.18.31 SDK operation:
+The current Justice lock (`@opencode-ai/sdk@1.14.21`) and the supported v1.18.31 baseline use the generated default:
 
-```ts
-client.session.get({
-  path: {
-    id: childSessionId
-  }
-})
+```text
+responseStyle = "fields"
+throwOnError  = false
 ```
 
-whose successful response contains a Session with:
+Therefore `session.get()` does **not** return a raw Session. Its relevant conceptual result is:
 
 ```ts
-{
-  id: string;
-  parentID?: string;
-  ...
+type SessionLookup =
+  | {
+      data: Session;
+      error: undefined;
+      request: Request;
+      response: Response;
+    }
+  | {
+      data: undefined;
+      error: unknown;
+      request: Request;
+      response: Response;
+    };
+```
+
+The authoritative algorithm is:
+
+```ts
+let lookup;
+try {
+  lookup = await client.session.get({
+    path: {
+      id: childSessionId,
+    },
+  });
+} catch {
+  return lookup_failed("transport_error");
 }
+
+if (lookup.data === undefined) {
+  return lookup_failed(
+    lookup.error === undefined ? "missing_data" : "sdk_error_response",
+  );
+}
+
+const childSession = lookup.data;
 ```
 
-Binding succeeds only when all conditions hold:
+Justice must never inspect `id` or `parentID` on the fields-response wrapper itself.
 
-1. session lookup succeeds;
-2. returned `Session.id === input.sessionID`;
-3. `Session.parentID` exists;
-4. exactly one pending recognized review has `parentSessionId === Session.parentID`;
-5. that pending review has not already been bound incompatibly.
+Binding succeeds only when:
 
-If any condition fails, Justice performs **no appendix injection**, records the reason, and leaves the semantic review evidence `NOT_PROVEN`.
+1. lookup does not throw;
+2. `lookup.data !== undefined`;
+3. `lookup.data.id === input.sessionID`;
+4. `lookup.data.parentID` exists;
+5. exactly one pending recognized review has that `parentSessionId`;
+6. the pending review is not already incompatibly bound.
+
+Failure semantics are fixed:
+
+```text
+transport exception
+→ lookup_failed("transport_error")
+
+lookup.data === undefined && lookup.error !== undefined
+→ lookup_failed("sdk_error_response")
+
+lookup.data === undefined && lookup.error === undefined
+→ lookup_failed("missing_data")
+
+childSession.id mismatch
+→ conflict/untrusted
+
+parentID missing
+→ parent_missing
+
+zero pending matches
+→ not_found
+
+multiple pending matches
+→ ambiguous
+```
+
+Every failure above causes **no appendix injection** and semantic review evidence remains `NOT_PROVEN`.
 
 A later `session.created/session.updated` event may populate caches or corroborate the already-authoritative relation, but it can never retroactively make a missed injection trusted.
 
@@ -985,15 +1039,13 @@ Parent `tool.execute.after` must also corroborate the bound child metadata. A mi
 
 #### Before-hook mutation statement
 
-OpenCode passes the same `args/taskArgs` object through `tool.execute.before` and then into tool execution. Therefore an in-place property mutation such as `output.args.prompt = ...` may be observed by the executor; replacing only the wrapper/object reference is a different operation.
+OpenCode passes the same `args/taskArgs` object through `tool.execute.before` and then into tool execution. Therefore an in-place property mutation such as `output.args.prompt = ...` may be observed by the executor.
 
-Justice v5 nevertheless **chooses not to use before-hook prompt mutation** for review delivery. The supported architecture centralizes review-specific content injection on the child `chat.message` surface after authoritative child→parent resolution. This is a design choice, not a claim that before-hook in-place mutation is impossible.
+Justice v5 nevertheless **chooses not to use before-hook prompt mutation** for review delivery. The supported architecture centralizes review-specific content injection on the child `chat.message` surface after authoritative child→parent resolution.
 
 #### Exact appended Part contract
 
-Justice uses option B: append one fully formed synthetic text Part.
-
-The Part is constructed exactly as:
+Justice appends one fully formed synthetic text Part:
 
 ```text
 id        = "prt_justice_review_" + randomUUID()
@@ -1006,39 +1058,20 @@ synthetic = true
 
 Additional rules:
 
-- `input.sessionID` must equal `output.message.sessionID`;
+- `input.sessionID === output.message.sessionID` is required;
 - `output.message.id` is the authoritative message ID;
-- the original reviewer parts are not rewritten or removed;
-- Justice only appends the new Part to the existing `output.parts` array in place;
+- original reviewer parts are not rewritten or removed;
+- the Part is appended to the existing `output.parts` array in place;
 - missing/inconsistent message or session identities cause no injection / `NOT_PROVEN`;
 - Justice never alters `subagent_type`, category, model, provider, variant, or OmO continuation state.
 
-This mirrors the existing Justice synthetic text-Part ownership precedent while binding the new Part to the actual child user message rather than inventing a separate message identity.
+The appendix contains review-correlation ID, artifact-chain ID, task identity where applicable, reviewed range/candidate revision, immutable Conformance Contract path/digest, and structured-result instructions.
 
-The appendix contains:
-
-- review-correlation ID;
-- artifact-chain ID;
-- task identity where applicable;
-- reviewed base/head or candidate revision;
-- immutable Conformance Contract path + digest;
-- structured-result instructions.
-
-#### Compatibility evidence and Task 1 status
-
-The architecture is fixed before implementation:
-
-- async session-event completion is not a prompt-delivery prerequisite;
-- authoritative `client.session.get` occurs inside awaited `chat.message`;
-- session events are corroboration/cache only;
-- the appended Part construction is fixed above;
-- Task 1 is a runtime regression gate for this contract, not an architecture-selection spike.
-
-If that regression gate fails on the supported stack, implementation stops and the support claim returns to Design review.
+Task 1 is a runtime regression gate for this already-selected contract, not an architecture-selection spike.
 
 ### 14.3 Structured result and final evidence composition — J5D-REVIEW-03
 
-The same reviewer final result must contain a machine-readable Justice envelope in addition to the normal Superpowers human-readable report.
+The reviewer result contains the normal human-readable report plus one machine-readable Justice envelope.
 
 Canonical result shape:
 
@@ -1053,10 +1086,10 @@ JusticeReviewResult
 │  ├─ base
 │  └─ head
 ├─ quality
-│  ├─ verdict: approved | needs_fixes
+│  ├─ verdict
 │  └─ findings[]
 │     ├─ findingId
-│     ├─ severity: critical | important | minor
+│     ├─ severity
 │     ├─ disposition
 │     └─ evidenceRefs[]
 └─ clauses[]
@@ -1066,7 +1099,7 @@ JusticeReviewResult
    └─ evidenceScope
 ```
 
-A SATISFIED clause records a deterministic evidence scope:
+A SATISFIED clause records:
 
 ```text
 ClauseEvidenceScope =
@@ -1074,65 +1107,132 @@ ClauseEvidenceScope =
   | files(normalized repository-relative paths[])
 ```
 
-Carry-forward is deliberately conservative:
+#### Final fix diff provenance
+
+When Superpowers performs its one final fix wave A..B, Justice must obtain trusted deterministic diff evidence:
+
+```text
+FinalFixDiffEvidence
+├─ base
+├─ head
+└─ changedPaths[]
+```
+
+The core conformance algorithm does not accept arbitrary caller-supplied `changedFiles`.
+
+A runtime/provider boundary supplies:
+
+```ts
+interface RevisionDiffProvider {
+  resolve(
+    base: string,
+    head: string,
+  ): Promise<RevisionDiffResult>;
+}
+
+type RevisionDiffResult =
+  | {
+      kind: "resolved";
+      evidence: FinalFixDiffEvidence;
+    }
+  | {
+      kind: "failed";
+      reason:
+        | "git_failed"
+        | "non_ancestor_range"
+        | "malformed_output"
+        | "unsupported_status"
+        | "unsafe_path";
+      details: readonly string[];
+    };
+```
+
+The baseline provider semantics are fixed:
+
+1. prove `base` is an ancestor of `head`;
+2. derive exact `base..head` changes with Git name-status semantics equivalent to:
+   ```text
+   git diff --name-status -z --find-renames --find-copies BASE..HEAD
+   ```
+3. normalize repository-relative touched paths;
+4. A/M/D/T/U/B statuses add their single path;
+5. R*/C* statuses add **both old and new paths**;
+6. unknown/malformed status, empty/absolute/traversal path, Git failure, or non-ancestor range returns `failed`.
+
+A failed diff result does not prove any Candidate-A clause unaffected. Any prior clause not explicitly re-proven by the scoped re-review becomes `NOT_PROVEN`.
+
+For a resolved diff:
 
 - `global` intersects every non-empty fix diff;
-- `files(paths)` is non-intersecting only when the normalized changed-file set has an empty intersection with `paths`;
-- missing, empty, malformed, or otherwise undecidable scope is not carry-forward eligible and becomes `NOT_PROVEN`.
-
-Initial task reviews and the first final whole-branch review are full results for the Conformance Contract supplied to those reviews.
-
-A scoped re-review is a delta for the fix range and may re-prove affected findings/clauses.
+- `files(paths)` is non-intersecting only when `changedPaths ∩ paths === ∅`;
+- missing/malformed/undecidable scope is not carry-forward eligible.
 
 #### Superpowers final-review progression
 
-Justice follows the current Superpowers v6.4.2 final progression exactly:
+Justice follows Superpowers v6.4.2 exactly:
 
 ```text
 Candidate A
     ↓
 ONE full final whole-branch review
     ↓ findings, if any
-ONE Superpowers final fix wave
-A → B
+ONE Superpowers final fix wave A → B
     ↓
 exactly ONE scoped re-review of A..B
     ↓
-residual adjudication / finishing-a-development-branch
+residual adjudication / branch finishing
 ```
 
 Justice does not request or dispatch a second full final review.
 
-For final completion, Justice derives:
+For completion Justice derives:
 
 ```text
 FinalReviewEvidenceClosure
 ├─ schemaVersion
 ├─ artifactChainId
 ├─ candidateHead
-├─ fullFinalReview          # Candidate A
-├─ finalFixWave?            # A..B
-│  ├─ base
-│  ├─ head
+├─ fullFinalReview
+├─ finalFixWave?
+│  ├─ diffEvidence
 │  └─ scopedReReview
 ├─ carriedClauseIds
 ├─ reProvenClauseIds
 ├─ clauseResults
-├─ unresolvedFindingIds
+├─ findings
 └─ diagnostics
 ```
 
-Closure rules:
+Range/provenance rules:
 
-1. If there is no final fix wave, `candidateHead` must equal the full final review's head.
-2. If there is one fix wave, its base must equal the full final review's head and its head must equal the completion candidate.
-3. A clause SATISFIED by Candidate A may carry to B only when its recorded evidence scope is deterministically non-intersecting with the A..B changed-file set.
-4. Every intersecting/undecidable clause must be explicitly re-proven by the scoped re-review; otherwise it becomes `NOT_PROVEN`.
-5. The scoped re-review must be trusted and bound to exactly A..B.
-6. Open blocking findings remain blocking even if unrelated clauses carry forward.
-7. Residual Superpowers adjudication/parking does not convert a blocking Justice finding or `NOT_PROVEN` clause into success.
+1. without a final fix wave, `candidateHead === fullFinalReview.reviewedRange.head`;
+2. with a fix wave:
+   - `diffEvidence.base === fullFinalReview.reviewedRange.head`;
+   - `diffEvidence.head === scopedReReview.reviewedRange.head`;
+   - `scopedReReview.reviewedRange.base === diffEvidence.base`;
+   - `diffEvidence.head === candidateHead`;
+3. only a `resolved` exact-range diff can authorize carry-forward;
+4. intersecting or undecidable clauses require explicit scoped re-proof; otherwise `NOT_PROVEN`.
 
-Thus the closure may cover Candidate B compositionally without pretending that Candidate A's full review alone reviewed B.
+#### Deterministic finding disposition merge
+
+Final quality state is merged by `findingId`; disappearance is never resolution.
+
+For every open/parked finding from the full review:
+
+- exactly one matching scoped finding with `disposition: resolved` → original blocker is resolved;
+- matching `open` or `parked` → remains unresolved;
+- missing matching scoped finding → remains unresolved;
+- duplicate/conflicting matching finding IDs → closure invalid/fail-closed.
+
+For findings introduced by the scoped re-review:
+
+- new Critical/Important + open/parked → unresolved blocker;
+- new Minor remains visible in closure quality state.
+
+The original finding severity remains authoritative for a matching original finding; a scoped result cannot silently downgrade severity to clear a blocker.
+
+`human_adjudicated` is not manufactured by reviewer output. It may only be applied through the separate trusted human review-resolution path and cannot change a conformance clause status.
 
 ### 14.4 Invalid/stale result — J5D-REVIEW-04
 
@@ -1141,18 +1241,25 @@ An individual structured review result is rejected when:
 - missing or malformed;
 - correlation ID does not match the observed call;
 - artifact-chain/task identity is wrong;
-- its declared review range does not match the observed review dispatch;
-- result provenance is not the observed reviewer call;
+- declared review range does not match the observed review dispatch;
+- provenance is not the observed reviewer call;
 - required clause IDs are absent.
 
-Missing required clause results are projected as `NOT_PROVEN`.
+Missing required clause results become `NOT_PROVEN`.
 
-For final completion:
+A final closure is invalid or blocked when:
 
-- a full final review for Candidate A alone is stale for later Candidate B;
-- Candidate B may be covered only by a valid §14.3 `FinalReviewEvidenceClosure`;
-- a closure with a non-contiguous fix range, wrong candidate head, untrusted scoped re-review, uncovered affected clause, undecidable carry-forward scope, or unresolved blocking finding is invalid;
-- invalid or incomplete closure coverage yields `NOT_PROVEN` / completion blocked.
+- Candidate A's full review is used alone for later Candidate B;
+- final fix range is non-contiguous or does not match the full/scoped/candidate revisions;
+- trusted diff evidence cannot be resolved;
+- changed-path parsing is unsafe/ambiguous;
+- scoped re-review is untrusted;
+- affected/undecidable clause lacks scoped re-proof;
+- an original blocking finding is omitted rather than explicitly resolved;
+- duplicate/conflicting finding dispositions exist;
+- a new blocking scoped finding remains open/parked.
+
+Invalid/incomplete coverage yields `NOT_PROVEN` and/or unresolved blocking findings; completion remains blocked.
 
 ### 14.5 Quality severity and parked findings — J5D-QUALITY-01
 
