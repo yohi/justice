@@ -876,7 +876,15 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
 
   it("rejects malformed /justice-review-gate arguments explicitly", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
-    const output: CommandExecuteBeforeOutput = { parts: [] };
+    const output: CommandExecuteBeforeOutput = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "sess-review-bad",
+          text: "--design @docs/specs/design.md",
+        } as unknown as CommandExecuteBeforeOutput["parts"][number],
+      ],
+    };
 
     await adapter.onCommandExecuteBefore(
       {
@@ -890,6 +898,9 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts).toHaveLength(1);
     expect((output.parts[0] as { text: string }).text).toContain(
       "[JUSTICE: COMMAND REJECTED]",
+    );
+    expect((output.parts[0] as { text: string }).text).not.toContain(
+      "--design @docs/specs/design.md",
     );
     expect(adapter.getJustice()).toBeNull();
   });
@@ -1007,7 +1018,15 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const handleImplementationArm = vi.spyOn(justice.getPlanBridge(), "handleImplementationArm");
-    const output: CommandExecuteBeforeOutput = { parts: [] };
+    const output: CommandExecuteBeforeOutput = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "session-1",
+          text: "--approved",
+        } as unknown as CommandExecuteBeforeOutput["parts"][number],
+      ],
+    };
 
     await adapter.onCommandExecuteBefore(
       {
@@ -1021,6 +1040,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(handleImplementationArm).not.toHaveBeenCalled();
     expect(output.parts).toHaveLength(1);
     expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
+    expect((output.parts[0] as { text: string }).text).not.toBe("--approved");
   });
 
   it("still appends the guidance part when PlanBridge handles observation failures internally", async () => {
@@ -1071,7 +1091,15 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       await adapter.ensureInitialized();
       const justice = adapter.getJustice() as JusticePlugin;
       const handleWorkflowStart = vi.spyOn(justice.getPlanBridge(), "handleWorkflowStart");
-      const output: CommandExecuteBeforeOutput = { parts: [] };
+      const output: CommandExecuteBeforeOutput = {
+        parts: [
+          {
+            type: "text",
+            sessionID: "sess-bad",
+            text: `RAW TEMPLATE: ${rawArguments}`,
+          } as unknown as CommandExecuteBeforeOutput["parts"][number],
+        ],
+      };
 
       await expect(
         adapter.onCommandExecuteBefore(
@@ -1084,6 +1112,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       expect(output.parts).toHaveLength(1);
       expect(output.parts[0]).toMatchObject({ type: "text", sessionID: "sess-bad" });
       expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
+      expect((output.parts[0] as { text: string }).text).not.toContain("RAW TEMPLATE:");
       expect(justice.getPlanBridge().getActivePlan("sess-bad")).toBeNull();
     },
   );
