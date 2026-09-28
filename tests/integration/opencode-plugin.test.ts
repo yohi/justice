@@ -292,6 +292,57 @@ describe("OpenCodePlugin (integration)", () => {
     expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
   });
 
+  it("does not drop a path-only /justice-start command that uses OpenCode @path references", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = { parts: [] as unknown[] };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.(
+      {
+        command: "/justice-start",
+        sessionID: "s-path-only",
+        arguments:
+          "--design @docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md --plan @docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
+    expect((output.parts[0] as { text: string }).text).not.toContain("[JUSTICE: COMMAND REJECTED]");
+  });
+
+  it("replaces pre-expanded raw command parts when /justice-start arguments are rejected", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "s-rejected",
+          text: "--unknown raw prompt",
+        },
+      ] as unknown[],
+    };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.(
+      {
+        command: "/justice-start",
+        sessionID: "s-rejected",
+        arguments: "--unknown raw prompt",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
+    expect((output.parts[0] as { text: string }).text).not.toContain("--unknown raw prompt");
+  });
+
   it("leaves command.execute.before output untouched for a non-Justice command", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
