@@ -319,6 +319,35 @@ describe("OpenCodePlugin (integration)", () => {
     expect((output.parts[0] as { text: string }).text).not.toContain("[JUSTICE: COMMAND REJECTED]");
   });
 
+  it("replaces pre-expanded raw command parts when Justice rejects command arguments", async () => {
+    const init = fakeInit();
+    const handlers = await OpenCodePlugin(init as never);
+    const output = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "s-rejected",
+          text: "--unknown raw prompt",
+        },
+      ] as unknown[],
+    };
+
+    await (handlers as Record<string, (i: unknown, o?: unknown) => Promise<void>>)[
+      "command.execute.before"
+    ]?.(
+      {
+        command: "/justice-start",
+        sessionID: "s-rejected",
+        arguments: "--unknown raw prompt",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: COMMAND REJECTED]");
+    expect((output.parts[0] as { text: string }).text).not.toContain("--unknown raw prompt");
+  });
+
   it("leaves command.execute.before output untouched for a non-Justice command", async () => {
     const init = fakeInit();
     const handlers = await OpenCodePlugin(init as never);
