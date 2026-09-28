@@ -523,7 +523,7 @@ The verifier must read both generated files back and assert the exact three plug
 
 - [ ] **Step 3: Write the two fixed approved smoke plans and sentinels**
 
-In the `fresh/` workspace create `docs/justice-v4-compat-smoke.md` with at least two tasks. Task 1 must contain:
+In the `fresh/` workspace create `docs/justice-v4-compat-smoke-plan.md` with at least two tasks. Task 1 must contain:
 - a real trimmed non-fenced `**Interfaces:**` line;
 - a test/assertion example;
 - an exact function signature;
@@ -547,7 +547,7 @@ Run activation:
 
 ```bash
 opencode run --auto --format json --model "$JUSTICE_HOST_TEST_MODEL" \
-  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke.md"
+  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke-plan.md
 ```
 
 Expected:
