@@ -482,6 +482,10 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    // A new workflow bootstrap supersedes any pending pre-implementation Review Gate.
+    // Keep an already-claimed call mapping until PostToolUse so its stale completion
+    // is recognized and blocked instead of leaking into the mandatory-review protocol.
+    this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
@@ -528,11 +532,41 @@ export class PlanBridge {
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
 
-    const designReadable = await this.isArtifactReadable(request.designPath);
-    const planPath = this.resolveActivatablePlanPath(request.planPath);
-    const planReadable = planPath !== null && (await this.isArtifactReadable(planPath));
+    const bootstrap = this.getWorkflowBootstrap(sessionId);
+    if (bootstrap === null) {
+      return this.reviewGateBootstrapBlocked(
+        request,
+        "No matching Justice workflow bootstrap exists for this session. Run /justice-start with the same Design and Implementation Plan first.",
+      );
+    }
+    if (bootstrap.phase !== "plan_ready") {
+      return this.reviewGateBootstrapBlocked(
+        request,
+        "The current Justice workflow is not plan_ready. Complete Design/Plan preparation and rerun /justice-start before /justice-review-gate.",
+      );
+    }
+    if (
+      bootstrap.request.designPath !== request.designPath ||
+      bootstrap.request.planPath !== request.planPath
+    ) {
+      return this.reviewGateBootstrapBlocked(
+        request,
+        "The requested Design/Plan do not match the artifacts bound by /justice-start in this session. Rerun /justice-start with the intended artifacts first.",
+      );
+    }
 
-    if (!designReadable || !planReadable || planPath === null) {
+    const planPath = this.resolveActivatablePlanPath(request.planPath);
+    if (planPath === null || this.getActivePlan(sessionId) !== planPath) {
+      return this.reviewGateBootstrapBlocked(
+        request,
+        "The active Justice Plan no longer matches the plan_ready bootstrap. Rerun /justice-start before /justice-review-gate.",
+      );
+    }
+
+    const designReadable = await this.isArtifactReadable(request.designPath);
+    const planReadable = await this.isArtifactReadable(planPath);
+
+    if (!designReadable || !planReadable) {
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);
       const missing = [
@@ -581,7 +615,6 @@ export class PlanBridge {
     this.setActivePlan(sessionId, planPath);
     const reviewScope = JSON.stringify([request.designPath, planPath]);
     const gateId = randomUUID();
-
 
     const reviewerPrompt = [
       REVIEW_GATE_EXECUTION_MARKER,
@@ -637,6 +670,27 @@ export class PlanBridge {
         "- Findings transition to `review_remediation`; a complete zero-finding result transitions to `review_clear`.",
         "- This command does not itself mean READY, human approval, or merge completion.",
         "- `/justice-implement --approved` remains the explicit implementation authorization boundary.",
+        "---",
+      ].join("\n"),
+    };
+  }
+
+  private reviewGateBootstrapBlocked(
+    request: ReviewGateRequest,
+    message: string,
+  ): ReviewGateStartResult {
+    return {
+      dispatched: false,
+      designPath: request.designPath,
+      planPath: this.resolveActivatablePlanPath(request.planPath),
+      directiveStage: "plan_review_required",
+      guidance: [
+        "---",
+        "[JUSTICE: REVIEW GATE BLOCKED]",
+        "",
+        message,
+        "",
+        "Review Gate was not dispatched. Do not infer review completion, READY, approval, merge, or implementation authorization.",
         "---",
       ].join("\n"),
     };
