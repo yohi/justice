@@ -258,24 +258,31 @@ ApprovedArtifactChain
 ├─ chainId
 ├─ requirements
 │  ├─ identity/path
-│  ├─ fingerprint
+│  ├─ sourceFingerprint
 │  └─ sourceRevision
 ├─ design
 │  ├─ identity/path
-│  ├─ fingerprint
+│  ├─ sourceFingerprint
 │  └─ sourceRevision
 ├─ plan
 │  ├─ identity/path
-│  ├─ fingerprint
+│  ├─ planFingerprint
 │  ├─ canonicalSnapshot
 │  └─ sourceRevision
-├─ fingerprintSchema
-├─ projectionSchema
+├─ artifactFingerprintSchema = justice-artifact-v1
+├─ planFingerprintSchema = justice-plan-v1
+├─ projectionSchema = justice-conformance-v1
 ├─ approvedAt
 └─ status
 ```
 
-The content fingerprints are mandatory identity. `sourceRevision` is the repository revision when available; when work is not yet committed, the content fingerprint remains the exact revision authority.
+The fingerprints are mandatory identity.
+
+- `justice-artifact-v1` hashes the complete UTF-8 Requirements/Design source after CRLF→LF normalization. It is deliberately an **exact approved-source identity**, not a semantic-equivalence hash.
+- `justice-plan-v1` keeps the existing Plan canonicalization that normalizes approved-task checkbox progress while preserving substantive Plan content.
+- `sourceRevision` is the repository revision when available; for uncommitted approval input, the corresponding content fingerprint remains the exact revision authority.
+
+Because human approval binds an exact Requirements/Design source revision, any post-approval edit to those authoritative files makes the current chain stale. “Non-semantic drift” in §13.1 applies to implementation/output differences that do not change a normative contract and to Plan progress normalization explicitly allowed by `justice-plan-v1`; it does not silently rewrite an approved Requirements/Design source revision.
 
 The exact storage file layout is an implementation detail. The semantic binding above is not.
 
@@ -808,16 +815,16 @@ Justice distinguishes:
 
 ### 13.1 Non-semantic drift
 
-Examples:
+Examples in implementation/output:
 
 - formatting;
-- checkbox state;
 - import ordering;
 - comments;
-- wording changes that do not alter normative meaning;
-- internal implementation detail outside any normative contract.
+- wording or internal implementation detail outside any normative contract.
 
-This does not invalidate authorization.
+For the Plan artifact, checkbox progress is additionally normalized by `justice-plan-v1`.
+
+These differences do not create semantic conformance drift. They do **not** permit an approved Requirements/Design source file to be edited in place without producing a new exact source fingerprint and a stale artifact chain.
 
 ### 13.2 Semantic but reconcilable drift
 
