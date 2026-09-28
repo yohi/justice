@@ -61,7 +61,8 @@ New focused modules:
 - `src/core/review-interop.ts` — versioned Superpowers reviewer recognition and prompt appendix construction.
 - `src/core/review-result.ts` — strict JusticeReviewResult parsing and stale/scope validation.
 - `src/core/review-evidence-store.ts` — durable v5 structured review/conformance evidence.
-- `src/core/conformance-gate.ts` — task/final conformance and quality acceptance decisions.
+- `src/core/conformance-gate.ts` — task/final conformance, final evidence closure, and quality acceptance decisions.
+- `src/runtime/revision-diff-provider.ts` — trusted exact-range Git name-status evidence for final fix-wave carry-forward.
 - `src/core/omo-effective-config.ts` — OmO v5 file-layer + harness/profile effective config resolver.
 - `src/core/v5-persistence.ts` — recognized v4 schema classification and v5 migration diagnostics.
 
