@@ -488,7 +488,10 @@ type ReviewFindingContextResult =
         | "requested_set_mismatch"
         | "requested_finding_state_mismatch"
         | "duplicate_requested_finding"
-        | "historical_finding_id_collision";
+        | "historical_finding_id_collision"
+        | "task_lineage_gap"
+        | "task_lineage_cycle"
+        | "invalid_final_lineage";
       readonly details: readonly string[];
     };
 
@@ -614,7 +617,7 @@ Marker syntax is exactly `[[justice-finding:<findingId>]]`, with runtime `findin
 
 For scoped re-review, marker extraction reads only the exact `## The Findings Under Verification` section up to the next exact `## The Fix` heading. The extracted `requestedFindingIds` array may be empty. Empty is a valid spec/clause-only scoped target set; it is not a context failure.
 
-For task/first-final review, `expectedFindings` and `reservedFindingIds` MUST be absent. For scoped re-review, both MUST be present; `expectedFindings` may be empty, while `reservedFindingIds` contains every ID already used in the trusted same-scope lineage. Historical ID metadata conflict or unresolved context makes the scoped call ineligible for Justice structured appendix injection and leaves evidence `NOT_PROVEN`.
+For task/first-final review, `expectedFindings` and `reservedFindingIds` MUST be absent. For scoped re-review, both MUST be present; `expectedFindings` may be empty, while `reservedFindingIds` contains every ID already used in the trusted same-scope lineage. Every expected ID MUST also appear in `reservedFindingIds`. Historical ID metadata conflict or unresolved lineage/context makes the scoped call ineligible for Justice structured appendix injection and leaves evidence `NOT_PROVEN`.
 
 ### Task 9 owns final-review evidence closure
 
@@ -1506,18 +1509,31 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   ```ts
   type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
 
-  type ReviewResultExpectation = {
-    readonly reviewCorrelationId: string;
-    readonly reviewKind: ReviewKindV5;
-    readonly artifactChainId: string;
-    readonly taskIdentity?: TaskIdentity;
-    readonly contractId: string;
-    readonly contractDigest: string;
-    readonly reviewedRange: { readonly base: string; readonly head: string };
-    readonly requiredClauseIds: readonly string[];
-    readonly expectedFindings?: readonly ReviewFindingTarget[];
-    readonly reservedFindingIds?: readonly FindingId[];
-  };
+  type ReviewResultExpectation =
+    | {
+        readonly reviewCorrelationId: string;
+        readonly reviewKind: "task-review" | "final-review";
+        readonly artifactChainId: string;
+        readonly taskIdentity?: TaskIdentity;
+        readonly contractId: string;
+        readonly contractDigest: string;
+        readonly reviewedRange: { readonly base: string; readonly head: string };
+        readonly requiredClauseIds: readonly string[];
+        readonly expectedFindings?: never;
+        readonly reservedFindingIds?: never;
+      }
+    | {
+        readonly reviewCorrelationId: string;
+        readonly reviewKind: "scoped-re-review";
+        readonly artifactChainId: string;
+        readonly taskIdentity?: TaskIdentity;
+        readonly contractId: string;
+        readonly contractDigest: string;
+        readonly reviewedRange: { readonly base: string; readonly head: string };
+        readonly requiredClauseIds: readonly string[];
+        readonly expectedFindings: readonly ReviewFindingTarget[];
+        readonly reservedFindingIds: readonly FindingId[];
+      };
 
   type JusticeReviewResult = {
     readonly schemaVersion: "justice-review-v1";
@@ -1591,6 +1607,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - scoped expected ID missing → `missing_expected_finding`;
 - scoped expected metadata mismatch → `expected_finding_mismatch`;
 - new breakage may not reuse a current expected ID;
+- every scoped `expectedFindings[].findingId` MUST belong to `reservedFindingIds`; otherwise the expectation/context is invalid;
 - new breakage may not reuse any historical `reservedFindingIds` ID, including deferred Minor or prior resolved IDs;
 - no summary/location/order fuzzy matching is permitted.
 - Serialization remains exactly one final fenced `justice-review-result-v1` JSON block.
@@ -1706,27 +1723,33 @@ git commit -m "feat: follow Superpowers open findings in review interop"
    - `reviewedRange.head === precedingReviewedHead`.
 2. Zero candidate → `not_found`; multiple → `ambiguous`; untrusted-only source → `untrusted`.
 3. Validate `requestedFindingIds` has no duplicates.
-4. Build the trusted lineage for collision prevention:
-   - task scope lineage key = `artifactChainId + exact TaskIdentity`;
-   - include the trusted initial task review and trusted scoped task re-reviews in that lineage up through the resolved immediate preceding review;
-   - final scope lineage key = `artifactChainId + current final-review lifecycle`;
-   - include the trusted full final review and trusted scoped final evidence in that lifecycle up through the resolved immediate preceding review;
+4. Build the trusted lineage for collision prevention.
+   - task scope key = `artifactChainId + exact TaskIdentity`;
+   - start at the resolved immediate preceding result;
+   - if it is `task-review`, it is the root;
+   - if it is `scoped-re-review`, its `reviewedRange.base` MUST equal the `reviewedRange.head` of exactly one earlier trusted review with the same task-scope key;
+   - traverse backward until one `task-review` root is reached;
+   - missing predecessor → `untrusted("task_lineage_gap")`;
+   - multiple predecessor candidates → `ambiguous`;
+   - repeated review correlation / cycle → `untrusted("task_lineage_cycle")`;
+   - final scope: the resolved immediate preceding result MUST be a trusted `final-review`; a `scoped-re-review` predecessor would imply a second final scoped review and returns `untrusted("invalid_final_lineage")`;
    - do not include unrelated tasks, other artifact chains, or another final-review lifecycle.
-5. Build a historical ID registry from every quality finding in that lineage, including deferred Minor, resolved, parked, and human-adjudicated findings.
-6. Repeated occurrences of the same ID are valid only when `severity + summary + location` are identical. Disposition/evidence refs may change. Conflicting immutable metadata → `untrusted("historical_finding_id_collision")`.
-7. Produce `reservedFindingIds` as the unique historical IDs in deterministic first-seen lineage order.
-8. Derive the quality open-set that Superpowers v6.4.2 is permitted to carry from the **immediate preceding result**:
+5. Reverse the resolved task chain into root→preceding order (or use the single full-final root for final scope).
+6. Build a historical ID registry from every quality finding in that resolved lineage, including deferred Minor, resolved, parked, and human-adjudicated findings.
+7. Repeated occurrences of the same ID are valid only when `severity + summary + location` are identical. Disposition/evidence refs may change. Conflicting immutable metadata → `untrusted("historical_finding_id_collision")`.
+8. Produce `reservedFindingIds` as the unique historical IDs in deterministic first-seen root→preceding order.
+9. Derive the quality open-set that Superpowers v6.4.2 is permitted to carry from the **immediate preceding result**:
    - task scope: findings with `disposition === "open"` and severity `critical | important`; Minor is excluded from the task fix loop;
    - final scope: findings with `disposition === "open"` of any severity because the final fix subagent receives the complete final-review findings list.
-9. The current dispatch remains the target authority, but its requested ID **set must equal** that permitted immediate open-set ID set. Set mismatch → `untrusted("requested_set_mismatch")`.
-10. `requestedFindingIds = []` is valid when the permitted quality open set is also empty; return `resolved(expectedFindings=[], reservedFindingIds=<lineage IDs>)`.
-11. For every requested ID:
+10. The current dispatch remains the target authority, but its requested ID **set must equal** that permitted immediate open-set ID set. Set mismatch → `untrusted("requested_set_mismatch")`.
+11. `requestedFindingIds = []` is valid when the permitted quality open set is also empty; return `resolved(expectedFindings=[], reservedFindingIds=<lineage IDs>)`.
+12. For every requested ID:
    - it exists exactly once in the trusted immediate preceding review;
    - task scope rejects Minor/resolved/parked/human-adjudicated targets;
    - final scope rejects resolved/parked/human-adjudicated targets;
    - project immutable ID/severity/summary/location into `ReviewFindingTarget`.
-12. Return `expectedFindings` in the current dispatch marker order and `reservedFindingIds` in deterministic first-seen lineage order.
-13. No summary/location/order similarity is used for identity.
+13. Require every expected finding ID to be present in `reservedFindingIds`, then return `expectedFindings` in current dispatch marker order and `reservedFindingIds` in deterministic first-seen root→preceding order.
+14. No summary/location/order similarity is used for identity.
 
 This supports:
 - initial Important + Minor → task scoped target contains Important only;
@@ -1756,6 +1779,9 @@ In `tests/core/review-evidence-store.test.ts`:
 - `deferred_minor_finding_id_is_reserved_but_not_expected`
 - `resolved_prior_round_finding_id_is_reserved_but_not_expected`
 - `historical_finding_id_collision_is_untrusted`
+- `task_reserved_lineage_requires_contiguous_reviewed_range_chain`
+- `ambiguous_task_lineage_predecessor_is_untrusted`
+- `second_scoped_final_predecessor_is_invalid_final_lineage`
 - `spec_only_scoped_rereview_resolves_empty_expected_findings`
 - `unknown_requested_finding_id_is_untrusted`
 - `duplicate_requested_finding_id_is_untrusted`
