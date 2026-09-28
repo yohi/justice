@@ -521,9 +521,9 @@ Each workspace also gets project-local `.omo/omo.jsonc`:
 
 The verifier must read both generated files back and assert the exact three plugin specifiers and exact model string before starting OpenCode. Package/plugin resolution failure is setup/upstream blocked.
 
-- [ ] **Step 3: Write the fixed approved smoke plan and sentinels**
+- [ ] **Step 3: Write the two fixed approved smoke plans and sentinels**
 
-In each workspace create `docs/justice-v4-compat-smoke.md` with at least two tasks. Task 1 must contain:
+In the `fresh/` workspace create `docs/justice-v4-compat-smoke.md` with at least two tasks. Task 1 must contain:
 - a real trimmed non-fenced `**Interfaces:**` line;
 - a test/assertion example;
 - an exact function signature;
@@ -531,9 +531,13 @@ In each workspace create `docs/justice-v4-compat-smoke.md` with at least two tas
 - a unique line outside every checkbox description containing `J4C_RAW_BODY_SENTINEL_642_4194`;
 - an instruction outside the checkbox summary requiring the delegated implementation worker to create `.justice-host-smoke/raw-body.txt` whose entire content is exactly `J4C_RAW_BODY_SENTINEL_642_4194`.
 
-The checkbox description itself must not contain the sentinel or the target file content, so successful file creation cannot be explained by the legacy checkbox-summary prompt.
+The checkbox description itself must not contain the sentinel or the target file content, so successful file creation cannot be explained by the legacy checkbox-summary prompt. Task 2 remains pending and contains a different sentinel so the verifier can prove it was not selected.
 
-Task 2 remains pending so the harness can also verify no Task 2 sentinel appears during Task 1 execution.
+In the independent `caller-owned/` workspace create the same plan path with case-specific content. Its Task 1 approved contract must require the delegated child to:
+- return exactly `J4C_SUBAGENT_ACCEPTED_642_4194`;
+- perform no file changes.
+
+Its checkbox description must not contain the acceptance sentinel. This prevents the caller-owned smoke from conflicting with the fresh case's file-writing task contract.
 
 - [ ] **Step 4: Run the fresh Justice-managed host case**
 
@@ -543,7 +547,7 @@ Run activation:
 
 ```bash
 opencode run --auto --format json --model "$JUSTICE_HOST_TEST_MODEL" \
-  --command justice-implement -- "--approved --plan docs/justice-v4-compat-smoke.md"
+  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke.md"
 ```
 
 Expected:
@@ -555,7 +559,7 @@ Run execution in the same workspace session:
 
 ```bash
 opencode run --auto --continue --format json --model "$JUSTICE_HOST_TEST_MODEL" \
-  "Use the task tool exactly once to execute the currently approved Justice plan task. Do not implement the task yourself. Do not provide task_id or subagent_type. Follow the injected approved task contract."
+  "Use the task tool exactly once to execute the currently approved Justice plan task. Do not implement the task yourself. Do not provide task_id, category, or subagent_type. Follow the injected approved task contract."
 ```
 
 Expected:
