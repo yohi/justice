@@ -1381,6 +1381,7 @@ git commit -m "feat: preserve finding identity across Justice reviews"
 - Test: `tests/core/review-quality-v5.test.ts`
 - Test: `tests/core/v2/review-aggregator.test.ts`
 - Test: `tests/core/v2/state-projection-review.test.ts`
+- Test: `tests/runtime/opencode-adapter-review-interop.test.ts`
 
 **Interfaces:**
 - Consumes canonical `ReviewFindingV5` from Task 2, `JusticeReviewResult` and `ReviewFindingContextProvider` from Task 7; Task 8 does not redefine them.
@@ -1406,6 +1407,9 @@ In `tests/core/review-evidence-store.test.ts`:
 - `scoped_context_ambiguous_preceding_review_is_untrusted`
 - `untrusted_preceding_review_cannot_supply_scoped_finding_context`
 
+In `tests/runtime/opencode-adapter-review-interop.test.ts`:
+- `store_backed_provider_supplies_scoped_appendix_original_finding_ids`
+
 Existing quality tests remain:
 - `not_addressed_finding_remains_blocking`
 - `parked_important_finding_remains_visible_and_blocking`
@@ -1415,7 +1419,7 @@ Also assert Minor retention, human-adjudication/clause separation, legacy-major 
 
 - [ ] **Step 2: Run RED tests**
 
-Run: `bun run vitest run tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts`
+Run: `bun run vitest run tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts tests/runtime/opencode-adapter-review-interop.test.ts`
 
 Expected: FAIL on missing store-backed finding-context resolution and current quality semantics.
 
@@ -1433,7 +1437,8 @@ Expected: PASS, including a production-wiring test proving a scoped appendix rec
 git add src/core/review-evidence-store.ts src/core/justice-plugin.ts src/core/types.ts src/core/v2/review-types.ts \
   src/core/v2/review-aggregator.ts src/core/v2/state-projection.ts src/core/review-resolution-artifact.ts \
   tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts \
-  tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
+  tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts \
+  tests/runtime/opencode-adapter-review-interop.test.ts
 git commit -m "feat: persist review evidence and scoped finding identity"
 ```
 
@@ -2152,7 +2157,7 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
 | Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
 | Task 7 | Tasks 8–9, 13 | `ReviewFindingTarget`, `ReviewFindingContextProvider`, `RecognizedReviewDispatch`, authoritative child binding, `JusticeReviewResult`, scoped finding-ID validation |
-| Task 8 | Tasks 9, 13 | `ReviewFindingV5` disposition semantics and trusted persisted review evidence |
+| Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed `ReviewFindingContextProvider`, exact preceding finding IDs, `ReviewFindingV5` disposition semantics, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
