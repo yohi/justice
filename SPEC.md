@@ -402,8 +402,8 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 **フロー:**
 
 1. `isJusticeStartCommand(input.command)` または `isJusticeImplementCommand(input.command)`（`src/core/trigger-detector.ts`）でコマンド名を判定。どちらでもなければ初期化も行わず即 return。
-2. `justice-start` の場合は `parseWorkflowStartCommandArguments(input.arguments)`、`justice-implement` の場合は `parseJusticeImplementCommandArguments(input.arguments)` を呼び出す。いずれも純粋パーサーであり、安全でない入力は `null` として扱われ例外を投げない（生引数は非echo）。
-3. `null` の場合は warn ログのみ出して return（fail-open）。パースに成功した場合のみ `ensureInitialized()` を実行する。
+2. `justice-start` の場合は `parseWorkflowStartCommandArguments(input.arguments)`、`justice-implement` の場合は `parseJusticeImplementCommandArguments(input.arguments)` を呼び出す。slash-command 経路の artifact flag は OpenCode の `@path` file-reference 記法を受理し、先頭 `@` を1文字だけ除いてから既存の相対パス安全性検証を行う。`justice-start` は明示 goal を優先するが、`--design` / `--plan` の少なくとも一方が存在する command では goal 省略を許容し、固定の安全な workflow goal を使用する。fallback marker の goal 要件は変更しない。
+3. パーサーが `null` を返した場合もホスト実行は fail-open のままだが、OpenCode が command template / `$ARGUMENTS` から事前展開した `output.parts` を破棄し、`[JUSTICE: COMMAND REJECTED]` synthetic text part 1件へ置換する。これにより raw arguments や `@path` の file parts を通常のユーザープロンプトとして残さない。PlanBridge は呼び出さず、状態も変更しない。パースに成功した場合のみ `ensureInitialized()` を実行する。
 4. `justice-start` の場合は `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
    a. `resolveBootstrapPhase(request)` — **design → plan → 成果物準備済みの順にちょうど1つのフェーズを選択**。`designPath` が指定され読めない場合は、`planPath` が読めるかどうかに関わらず常に `"design_required"` が優先される。`"plan_ready"` は計画成果物が読み取り可能であることだけを表し、レビュー、承認、マージ、実装認可を表さない。
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。

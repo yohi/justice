@@ -277,14 +277,15 @@ OpenCode の command registry は LLM の tool list とは別系統です。Just
 ```
 /justice-start ship the feature --plan docs/plans/feature.md
 /justice-start --design docs/design.md --plan docs/plans/feature.md implement the API
+/justice-start --design @docs/design.md --plan @docs/plans/feature.md
 justice-start add retry logic --plan plan.md
 ```
 
 ### 引数文法
 
-- **`<goal words...>`** (必須): 非フラグトークンの空白区切り結合。最低1語以上必要。
-- **`--design <path>`** (任意): 設計ファイルの相対パス。スペース区切り形式のみ対応（`--design=path` 形式は非対応）。
-- **`--plan <path>`** (任意): 計画ファイルの相対パス。スペース区切り形式のみ対応。
+- **`<goal words...>`** (条件付き任意): 通常は非フラグトークンの空白区切り結合。省略時でも `--design` または `--plan` があれば、Justice は固定の安全な workflow goal を使用してコマンドを継続する。artifact も goal もない入力は拒否される。
+- **`--design <path>`** (任意): 設計ファイルの相対パス。スペース区切り形式のみ対応（`--design=path` 形式は非対応）。OpenCode の file-reference 記法 `@docs/...` も受理し、Justice 内部では先頭 `@` を除いた相対パスとして扱う。
+- **`--plan <path>`** (任意): 計画ファイルの相対パス。OpenCode の `@path` 記法も同様に受理する。
 - **フラグの位置**: `--design` / `--plan` は goal の前後どちらに置いても可。
 
 **パス制約:**
@@ -292,7 +293,8 @@ justice-start add retry logic --plan plan.md
 - 絶対パス（`/` で始まる）は拒否される。
 - バックスラッシュ（`\`）を含むパスは拒否される。
 - パストラバーサル（`..`）を含むパスは拒否される。
-- 安全でないパスが指定された場合、コマンドは `null` を返し、エラーメッセージなしで処理を続行する（fail-open）。
+- `@path` は先頭の `@` を1文字だけ除いてから同じ安全性検証を行う。`@/etc/...`、`@../...`、`@@...` は拒否される。
+- 安全でないパスや不正文法が指定された場合、実行自体は fail-open だが、OpenCode が `$ARGUMENTS` から事前展開した command parts を `[JUSTICE: COMMAND REJECTED]` synthetic directive 1件へ置換し、raw arguments や file-reference parts が通常プロンプトとして残らないようにする。
 
 ### Artifact 状態表
 

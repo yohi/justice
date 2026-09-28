@@ -78,6 +78,20 @@ export function normalizeSafeRelativePath(rawPath: string): string | null {
 }
 
 /**
+ * OpenCode slash-command arguments may use `@path` to reference a workspace file.
+ * Strip exactly one leading `@` before applying the same path-safety rules Justice
+ * uses everywhere else. Nested/empty references are rejected rather than guessed.
+ */
+export function normalizeCommandArtifactPath(rawPath: string): string | null {
+  if (!rawPath.startsWith("@")) return normalizeSafeRelativePath(rawPath);
+  const referencedPath = rawPath.slice(1);
+  if (referencedPath.length === 0 || referencedPath.startsWith("@")) return null;
+  return normalizeSafeRelativePath(referencedPath);
+}
+
+const DEFAULT_REFERENCED_WORKFLOW_GOAL = "Continue the referenced Justice workflow";
+
+/**
  * コマンド名が `/justice-start` かを判定する。
  * 先頭スラッシュと前後の空白は許容するが、それ以外は完全一致を要求する。
  */
@@ -91,9 +105,11 @@ export function isJusticeStartCommand(commandName: string | undefined): boolean 
 /**
  * `/justice-start` の引数列をパースする。
  *
- * 文法: `<goal words...>` に加えて、任意の `--design <path>` / `--plan <path>` を任意の位置に置ける。
- * 未知のフラグ、値のないフラグ、重複フラグ、安全でないパス、goal 欠落はすべて null (no request) として扱い、
- * 例外は投げない。
+ * 文法: `[<goal words...>]` に加えて、任意の `--design <path>` / `--plan <path>` を任意の位置に置ける。
+ * command 経路では OpenCode の `@path` file-reference 記法を受理し、`@` を除いた相対パスへ正規化する。
+ * goal は通常は明示値を使うが、design/plan の少なくとも一方が指定された command では省略可能で、
+ * 安全な固定 goal にフォールバックする。未知のフラグ、値のないフラグ、重複フラグ、安全でないパスは
+ * null (no request) として扱い、例外は投げない。
  */
 export function parseWorkflowStartCommandArguments(
   rawArguments: string | undefined,
@@ -143,9 +159,13 @@ function applyArtifactFlagValue(
   flag: ArtifactFlag,
   rawValue: string,
   paths: ArtifactPaths,
+  source: WorkflowStartSource,
 ): ArtifactPaths | null {
   if (rawValue.startsWith("-")) return null;
-  const normalized = normalizeSafeRelativePath(rawValue);
+  const normalized =
+    source === "command"
+      ? normalizeCommandArtifactPath(rawValue)
+      : normalizeSafeRelativePath(rawValue);
   if (normalized === null) return null;
 
   if (flag === "design") {
@@ -181,7 +201,7 @@ function parseWorkflowStartArguments(
 
     if (pendingFlag !== null) {
       // フラグの値は別のフラグでなく、安全な相対パスでなければならない
-      const updatedPaths = applyArtifactFlagValue(pendingFlag, token, artifactPaths);
+      const updatedPaths = applyArtifactFlagValue(pendingFlag, token, artifactPaths, source);
       if (updatedPaths === null) return null;
       artifactPaths = updatedPaths;
       pendingFlag = null;
@@ -199,9 +219,15 @@ function parseWorkflowStartArguments(
 
   if (pendingFlag !== null) return null; // 値のないフラグ
 
-  const goal = goalWords.join(" ");
-  if (goal.length === 0) return null; // goal 欠落
+  const explicitGoal = goalWords.join(" ");
+  const hasArtifactReference =
+    artifactPaths.designPath !== null || artifactPaths.planPath !== null;
+  if (explicitGoal.length === 0 && (source !== "command" || !hasArtifactReference)) {
+    return null;
+  }
 
+  const goal =
+    explicitGoal.length > 0 ? explicitGoal : DEFAULT_REFERENCED_WORKFLOW_GOAL;
   return { source, goal, ...artifactPaths };
 }
 

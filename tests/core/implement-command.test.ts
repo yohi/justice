@@ -43,6 +43,25 @@ describe("parseJusticeImplementCommandArguments", () => {
     });
   });
 
+  it("accepts an OpenCode @path reference for --plan", () => {
+    expect(
+      parseJusticeImplementCommandArguments(
+        "--plan @docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md --approved",
+      ),
+    ).toEqual({
+      source: "command",
+      action: "approve",
+      planPath: "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
+      approved: true,
+    });
+  });
+
+  it("rejects unsafe OpenCode @path references", () => {
+    expect(parseJusticeImplementCommandArguments("--plan @/etc/passwd --approved")).toBeNull();
+    expect(parseJusticeImplementCommandArguments("--plan @../secret.md --approved")).toBeNull();
+    expect(parseJusticeImplementCommandArguments("--plan @@docs/plans/feature.md --approved")).toBeNull();
+  });
+
   it("rejects missing --plan", () => {
     expect(parseJusticeImplementCommandArguments("--approved")).toBeNull();
   });
