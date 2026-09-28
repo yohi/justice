@@ -2300,31 +2300,76 @@ In `tests/runtime/opencode-adapter-semantic-routing.test.ts`:
 - `justice_category_is_the_only_semantic_routing_signal_to_omo`
 - `justice_does_not_select_concrete_model_or_provider`
 
-- [ ] **Step 3: Remove active Justice scheduling authority and lock review-before-implementation sequencing**
+- [ ] **Step 3: Run RED focused tests and confirm expected failures**
+
+Before modifying any production source, run the authoritative Task 10 RED set:
+
+```bash
+bun run vitest run \
+  tests/core/workflow-activation-v5.test.ts \
+  tests/core/superpowers-ownership-v5.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts \
+  tests/unit/core/execution-role-classifier.test.ts \
+  tests/runtime/opencode-adapter-semantic-routing.test.ts
+```
+
+Expected: **FAIL before production changes** because the `master @ 080bcdb25b192962789ff5d67139e56487381de4` production baseline does not yet provide the v5 activation-state contract, Justice-without-progression ownership contract, review-before-implementation sequencing contract, semantic-classification contract, or provenance-aware v5 routing behavior.
+
+The RED run MUST exercise the Step 1 historical boundary regressions in `tests/hooks/plan-bridge-implement.test.ts`, including:
+- `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`;
+- `task_review_never_enters_implementation_semantics`;
+- `scoped_re_review_never_enters_implementation_semantics`;
+- `final_review_never_enters_implementation_semantics`.
+
+Record the observed failure categories before starting Step 4. If any historical regression unexpectedly already passes on the master production baseline, inspect that test's contract/assertions and test seam to determine whether the baseline already satisfies that individual contract. A pre-existing PASS is not a reason to modify production merely to force RED. Production changes may begin only after the newly introduced v5 RED failures are understood and the historical regression tests are confirmed to exercise their intended paths.
+
+- [ ] **Step 4: Remove active Justice scheduling authority and lock review-before-implementation sequencing**
 
 Remove v4 active review/task progression behavior while retaining migration readers. Do not delete types needed to read prior state.
 
 Wire PlanBridge so Task 7 review recognition/translation is evaluated before implementation-task resolution/classification and before Plan-completion cleanup. A recognized review returns through the review path immediately; only a non-review call may continue into implementation semantics.
 
-- [ ] **Step 4: Implement activation bridge and activation observation**
+- [ ] **Step 5: Implement activation bridge and activation observation**
 
-Implement the AtomicPersistence-backed selection/activation store, then wire `workflow-activation.ts`, `workflow-directives.ts`, `PlanBridge`, `justice-plugin.ts`, and OpenCode `tool.execute.after` observation for the native `skill` tool (`args.name`). Persist successful current-session activation by authorization/session/method/call identity. Do not dispatch tasks from the bridge.
+Implement the AtomicPersistence-backed selection/activation store, then wire `workflow-activation.ts`, `workflow-directives.ts`, PlanBridge, `justice-plugin.ts`, and OpenCode `tool.execute.after` observation for the native `skill` tool (`args.name`). Persist successful current-session activation by authorization/session/method/call identity. Do not dispatch tasks from the bridge.
 
-- [ ] **Step 5: Implement semantic classifier and implementation translation**
+- [ ] **Step 6: Implement semantic classifier and implementation translation**
 
 Replace keyword-first `ExecutionRoleClassifier` authority with the exact structured rules above. Route only already-recognized Superpowers new-worker calls through Task 2's translator. Preserve explicit external/specialized routing and continuation.
 
-- [ ] **Step 6: Run GREEN focused tests + full suite**
+- [ ] **Step 7: Run GREEN focused tests + full suite**
 
-Run:
-- `bun run vitest run tests/core/workflow-activation-v5.test.ts tests/core/superpowers-ownership-v5.test.ts tests/unit/core/execution-role-classifier.test.ts tests/runtime/opencode-adapter-semantic-routing.test.ts`
-- existing PlanBridge/dependency/review-dispatch regressions listed in Files
-- `bun run typecheck`
-- `bun run test`
+Run the complete Task 10 focused regression set:
 
-Expected: PASS.
+```bash
+bun run vitest run \
+  tests/core/workflow-activation-v5.test.ts \
+  tests/core/superpowers-ownership-v5.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts \
+  tests/unit/core/execution-role-classifier.test.ts \
+  tests/runtime/opencode-adapter-semantic-routing.test.ts \
+  tests/core/review-dispatch-state.test.ts \
+  tests/core/review-dispatch-state-behavior.test.ts \
+  tests/core/plan-bridge-core.test.ts \
+  tests/core/dependency-analyzer.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts \
+  tests/hooks/plan-bridge-posttooluse.test.ts \
+  tests/hooks/plan-bridge.test.ts \
+  tests/integration/plan-bridge-fallback.test.ts \
+  tests/integration/plan-bridge-flow.test.ts \
+  tests/core/plan-completion-detector-v5.test.ts
+```
 
-- [ ] **Step 7: Commit**
+Then run:
+
+```bash
+bun run typecheck
+bun run test
+```
+
+Expected: PASS. The focused GREEN run MUST include the Step 1 historical PlanBridge regressions and all Task 10 activation/ownership/semantic-routing tests before the full suite.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add \
