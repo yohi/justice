@@ -640,7 +640,7 @@ Justice must not create another reviewer dispatch and must not change the caller
 
 A future supported host must provide an equivalent awaited authoritative parent lookup plus a consumed prompt/message extension point. Otherwise semantic conformance review on that host is unsupported until compatibility evidence establishes a replacement contract.
 
-### JUS5-REV-08 — Structured review result and final evidence closure
+### JUS5-REV-08 — Structured review result, finding continuity, and final evidence closure
 
 Trusted semantic review evidence must carry a versioned result containing at least:
 
@@ -652,7 +652,47 @@ Trusted semantic review evidence must carry a versioned result containing at lea
 - quality verdict/findings;
 - clause results containing `clauseId`, `SATISFIED | VIOLATED | NOT_PROVEN`, supporting evidence/reference, and a deterministic evidence scope sufficient to decide carry-forward.
 
-For Superpowers final-review progression, Justice must support a **compositional final evidence closure**:
+#### Scoped re-review finding identity continuity
+
+Justice must not fuzzy-match findings across separate reviewer dispatches.
+
+Before a scoped re-review is enriched, Justice must resolve the **trusted immediately preceding review** for the same artifact chain/scope whose reviewed head equals the scoped re-review base.
+
+Justice projects each preceding finding into:
+
+```text
+ReviewFindingTarget
+├─ findingId
+├─ severity
+├─ summary
+└─ location?
+```
+
+For task/first-final reviews, `expectedFindings` is absent.
+
+For scoped re-review, `expectedFindings` is mandatory and must be supplied from trusted preceding-review evidence. If the preceding review is missing, ambiguous, untrusted, or cannot be correlated to the scoped base revision, Justice must not inject a structured scoped-review appendix and semantic review evidence remains `NOT_PROVEN`.
+
+The scoped-review appendix must require:
+
+- each expected finding to be returned exactly once with the **same** `findingId`, severity, summary, and location;
+- Superpowers `ADDRESSED` semantics → `disposition: resolved`;
+- Superpowers `NOT ADDRESSED` semantics → `disposition: open`;
+- a new breakage to use a non-empty finding ID that does not collide with any expected/original finding ID;
+- reviewer output must never create `human_adjudicated`.
+
+Validation is fail-closed:
+
+- missing expected finding → scoped evidence invalid / original finding remains unresolved;
+- duplicate expected finding ID → invalid;
+- mismatched severity/summary/location for an expected ID → invalid;
+- new breakage ID collision with an expected/original ID → invalid;
+- duplicate new finding ID → invalid.
+
+No summary/location/order similarity heuristic may substitute for exact `findingId` continuity.
+
+#### Final evidence closure
+
+For Superpowers final-review progression, Justice supports a **compositional final evidence closure**:
 
 ```text
 full final-review result for Candidate A
@@ -666,7 +706,7 @@ trusted FinalReviewEvidenceClosure for candidate A or B
 
 Justice must not request or dispatch a second full final review after the Superpowers final fix wave.
 
-When a final fix wave exists, carry-forward authority must come from Justice-controlled deterministic diff evidence for the exact final fix range:
+When a final fix wave exists, carry-forward authority comes from Justice-controlled deterministic diff evidence for the exact final fix range:
 
 ```text
 FinalFixDiffEvidence
@@ -680,38 +720,52 @@ Required provenance:
 - `base === fullFinalReview.reviewedRange.head`;
 - `head === scopedReReview.reviewedRange.head`;
 - `head === candidateHead`;
-- the range must be a valid ancestor range;
-- `changedPaths` must be derived from exact `base..head` Git name-status evidence, not caller-supplied arbitrary paths;
+- the range is a valid ancestor range;
+- `changedPaths` is derived from exact `base..head` Git name-status evidence, not caller-supplied arbitrary paths;
 - add/modify/delete/type-change paths are included;
 - rename/copy includes **both old and new paths**;
-- malformed/unsupported status, unsafe path, Git failure, or non-ancestor range means diff evidence is unavailable and prior Candidate-A clause evidence cannot be assumed unaffected.
+- malformed/unsupported status, unsafe path, Git failure, or non-ancestor range means diff evidence is unavailable.
 
-A `SATISFIED` clause from Candidate A may carry forward to B only when trusted diff evidence proves that the exact A..B fix range does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If diff provenance, non-intersection, or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
+A `RevisionDiffResult.failed` means:
 
-Final quality findings are merged deterministically by `findingId`:
+```text
+trusted FinalFixDiffEvidence does not exist
+→ trusted FinalReviewEvidenceClosure is not constructed
+→ BuildFinalReviewEvidenceClosureResult is BLOCKED
+→ PlanComplete remains BLOCKED
+```
 
-- an open/parked full-review finding with a matching scoped `resolved` disposition is no longer unresolved;
-- matching scoped `open`, `parked`, or `NOT ADDRESSED` semantics remain unresolved;
-- omission of an original open/parked finding from the scoped re-review does **not** resolve it;
-- a new scoped Critical/Important finding becomes an unresolved blocker;
-- reviewer evidence cannot silently manufacture `human_adjudicated`; human quality adjudication remains the separate trusted human-resolution path and cannot change clause status.
+The blocked build attempt must retain exact failure provenance (candidate head, requested fix base/head, diff failure, and scoped review identity where available) without fabricating trusted diff evidence.
 
-### JUS5-REV-09 — Invalid review evidence
+A `SATISFIED` clause from Candidate A may carry forward to B only when trusted resolved diff evidence proves that A..B does not intersect its recorded evidence scope. Affected clauses must be re-proven by the scoped re-review. If diff provenance, non-intersection, or re-proof cannot be established, the clause becomes `NOT_PROVEN`.
+
+Final quality findings are merged deterministically by exact `findingId` after scoped-result identity validation:
+
+- an open/parked full-review finding with matching scoped `resolved` is no longer unresolved;
+- matching scoped `open`/parked remains unresolved;
+- omission of an original open/parked finding does **not** resolve it;
+- new scoped Critical/Important finding becomes an unresolved blocker;
+- reviewer evidence cannot silently manufacture `human_adjudicated`.
+
+### JUS5-REV-09 — Invalid review/final evidence
 
 The following must not satisfy review/conformance gates:
 
-- missing structured result;
-- malformed result;
+- missing or malformed structured result;
 - stale reviewed revision used without a valid final evidence closure;
-- wrong artifact chain;
-- wrong task/plan;
+- wrong artifact chain/task/plan;
 - untrusted provenance;
 - missing required clause result;
-- final evidence closure whose candidate head, fix range, diff provenance, carried-clause scope, scoped-delta coverage, or finding-disposition merge cannot be proven.
+- missing/ambiguous/untrusted expected-findings source for a scoped re-review;
+- missing, duplicate, conflicting, or identity-mismatched expected finding;
+- new breakage reusing an expected/original finding ID;
+- final evidence whose candidate head, fix range, diff provenance, carried-clause scope, scoped-delta coverage, or finding-disposition merge cannot be proven.
 
 Required missing/uncovered clause results become `NOT_PROVEN`.
 
-A full final review of Candidate A alone can never complete later Candidate B. Candidate B is eligible only when the current Superpowers final-review lifecycle yields a trusted closure covering B as defined by JUS5-REV-08.
+A full final review of Candidate A alone can never complete later Candidate B.
+
+A failed diff build does not produce a trusted `FinalReviewEvidenceClosure`; only the `complete` build-result branch may be passed as final completion evidence.
 
 ### JUS5-REV-10 — Quality severity and parked findings
 
