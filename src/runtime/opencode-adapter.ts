@@ -1019,19 +1019,21 @@ export class OpenCodeAdapter {
     input: CommandExecuteBeforeInput,
     output: CommandExecuteBeforeOutput,
   ): Promise<void> {
-    // The parser already rejects unknown flags, valueless/duplicated flags, unsafe paths
-    // and a missing goal. Justice stays silent rather than guessing an intent, and the raw
-    // arguments are never echoed into the log.
+    // The parser rejects unknown flags, valueless/duplicated flags, and unsafe paths.
+    // A goal may be omitted when an artifact is supplied. Raw arguments are never echoed
+    // into the log, and malformed command parts are replaced rather than appended to.
     const request = parseWorkflowStartCommandArguments(input.arguments);
     if (request === null) {
       await this.log("warn", "[Justice] /justice-start arguments rejected by parser");
-      output.parts.push(
+      output.parts.splice(
+        0,
+        output.parts.length,
         this.#buildWorkflowDirectivePart(
           input.sessionID,
           [
             "[JUSTICE: COMMAND REJECTED]",
             "`/justice-start` was invoked, but Justice rejected its arguments.",
-            "Do not treat the raw command arguments as an ordinary user request.",
+            "The original command template parts were removed; do not treat the raw command arguments as an ordinary user request.",
             "Expected: /justice-start [<goal words...>] [--design <path>] [--plan <path>].",
             "A goal may be omitted when --design or --plan is present.",
           ].join("\n"),
@@ -1061,13 +1063,15 @@ export class OpenCodeAdapter {
     const request = parseJusticeReviewGateCommandArguments(input.arguments);
     if (request === null) {
       await this.log("warn", "[Justice] /justice-review-gate arguments rejected by parser");
-      output.parts.push(
+      output.parts.splice(
+        0,
+        output.parts.length,
         this.#buildWorkflowDirectivePart(
           input.sessionID,
           [
             "[JUSTICE: COMMAND REJECTED]",
             "`/justice-review-gate` was invoked, but Justice rejected its arguments.",
-            "Do not treat the raw command arguments as an ordinary user request.",
+            "The original command template parts were removed; do not treat the raw command arguments as an ordinary user request.",
             "Expected: /justice-review-gate [--design <path>] --plan <path>.",
           ].join("\n"),
         ),
@@ -1091,13 +1095,15 @@ export class OpenCodeAdapter {
     const request = parseJusticeImplementCommandArguments(input.arguments);
     if (request === null) {
       await this.log("warn", "[Justice] /justice-implement arguments rejected by parser");
-      output.parts.push(
+      output.parts.splice(
+        0,
+        output.parts.length,
         this.#buildWorkflowDirectivePart(
           input.sessionID,
           [
             "[JUSTICE: COMMAND REJECTED]",
             "`/justice-implement` was invoked, but Justice rejected its arguments.",
-            "Do not treat the raw command arguments as an ordinary user request.",
+            "The original command template parts were removed; do not treat the raw command arguments as an ordinary user request.",
             "Expected: /justice-implement --plan <path> --approved, or /justice-implement --cancel.",
           ].join("\n"),
         ),
