@@ -34,15 +34,24 @@ function childEnv(root: string, model: string): NodeJS.ProcessEnv {
   return env;
 }
 
-type Result = { readonly exit: number | null; readonly stdout: string; readonly stderr: string; readonly timedOut: boolean; readonly overflow: boolean };
+type SpawnFailure = "none" | "not_found" | "other";
+type Result = { readonly exit: number | null; readonly stdout: string; readonly stderr: string; readonly timedOut: boolean; readonly overflow: boolean; readonly spawnFailure: SpawnFailure };
 
 function execute(args: readonly string[], cwd: string, env: NodeJS.ProcessEnv, timeout = TIMEOUT_MS): Promise<Result> {
-  return new Promise((done, reject) => {
+  return new Promise((done) => {
     const child = spawn("opencode", [...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     let stdout = "";
     let stderr = "";
     let overflow = false;
     let timedOut = false;
+    let spawnFailure: SpawnFailure = "none";
+    let finished = false;
+    const finish = (exit: number | null): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      done({ exit, stdout, stderr, timedOut, overflow, spawnFailure });
+    };
     const stop = (): void => {
       if (child.pid === undefined || child.exitCode !== null) return;
       if (process.platform === "win32") child.kill("SIGKILL");
@@ -64,13 +73,23 @@ function execute(args: readonly string[], cwd: string, env: NodeJS.ProcessEnv, t
     };
     if (child.stdout) collect(child.stdout, "stdout");
     if (child.stderr) collect(child.stderr, "stderr");
-    child.once("error", (error) => { clearTimeout(timer); reject(error); });
-    child.once("close", (exit) => { clearTimeout(timer); done({ exit, stdout, stderr, timedOut, overflow }); });
+    child.once("error", (error: Error & { readonly code?: unknown }) => {
+      spawnFailure = error.code === "ENOENT" ? "not_found" : "other";
+      finish(null);
+    });
+    child.once("close", (exit) => finish(exit));
   });
 }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function upstreamFailure(...results: readonly (Result | null)[]): boolean {
+  const signal = /failed to load plugin|plugin.{0,30}(?:load|runtime) error|provider|credential|authentication|model.{0,40}(?:unavailable|not found|not configured)|\b401\b|\b403\b|econnrefused|econnreset|getaddrinfo|network|resolution|\bnpm\b|package/iu;
+  return results.some((result) => result !== null && (
+    result.spawnFailure !== "none" || signal.test(result.stdout) || signal.test(result.stderr)
+  ));
 }
 
 function toolSucceeded(output: string): { readonly success: boolean; readonly accepted: boolean } {
@@ -155,7 +174,7 @@ async function main(): Promise<void> {
     const env = childEnv(root, model);
     await Promise.all(["home", "xdg-config", "xdg-cache", "xdg-data"].map((name) => mkdir(join(root, name))));
     const version = await execute(["--version"], root, env, 10_000);
-    if (version.exit !== 0 || version.stdout.trim() !== "1.18.29") {
+    if (version.spawnFailure !== "none" || version.exit !== 0 || version.stdout.trim() !== "1.18.29") {
       throw new Error("SETUP / UPSTREAM BLOCKED — exact OpenCode 1.18.29 unavailable; real-host capability not evaluated");
     }
     const fresh = join(root, "fresh");
@@ -182,6 +201,9 @@ async function main(): Promise<void> {
       const execution = activation.exit === 0 && !activation.timedOut && !activation.overflow
         ? await execute(["run", "--auto", "--continue", "--format", "json", "--model", model, prompt], workspace, env)
         : null;
+      if (upstreamFailure(activation, execution)) {
+        throw new Error("SETUP / UPSTREAM BLOCKED — real-host capability not evaluated");
+      }
       const tools = toolSucceeded(execution?.stdout ?? "");
       const raw = label === "Fresh delegation" ? await readFile(join(workspace, ".justice-host-smoke/raw-body.txt"), "utf8").catch(() => "") : "";
       const later = await readFile(join(workspace, ".justice-host-smoke/later-task.txt"), "utf8").then(() => true, () => false);
