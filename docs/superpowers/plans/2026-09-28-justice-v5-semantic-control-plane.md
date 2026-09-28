@@ -69,23 +69,53 @@ Existing files retain their existing responsibility unless a task below explicit
 
 ## Verified Review-Interop Baseline
 
-The architecture-critical extension point is established before implementation:
+The architecture-critical review transport is fixed before implementation.
 
-- Justice's existing runtime spike proved the task before/after + child-session correlation path on OpenCode 1.18.29.
-- The OpenCode runtime/plugin blobs that implement the observed path are byte-identical in v1.18.29 and v1.18.31:
-  - `packages/opencode/src/session/tools.ts`: `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`
-  - `packages/opencode/src/session/prompt.ts`: `0f85d44f209ba792065aeb951f0bd2e12b59fae8`
-  - `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
-  - `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
-  - v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
-- v1.18.31 source verification confirms:
-  - `tool.execute.before` receives `sessionID`, `callID`, and mutable `args`;
-  - the native task path consumes the resulting `params.prompt`;
-  - `tool.execute.after` is tied to the same parent call and TaskTool publishes child-session metadata.
-- Superpowers v6.4.2 task review, scoped re-review, and final review all use `Subagent (general-purpose)`; OpenCode V1 maps all three to the same native `task` path with `subagent_type: "general"`. Their prompt content differs, not the host execution mechanism.
-- Baseline establishment is therefore compositional: empirical 1.18.29 runtime evidence + source-identical 1.18.31 hook/task path + deterministic Superpowers v6.4.2 V1 dispatch mapping.
+### Exact OpenCode 1.18.31 source finding
 
-Task 1 locks this known contract as three-kind regression evidence. It does not decide whether the architecture is viable.
+OpenCode v1.18.31 does expose `tool.execute.before(sessionID, callID, output.args)`, but the native TaskTool path does **not** use that hook as a reliable prompt-rewrite transport. In `packages/opencode/src/session/prompt.ts`, the runtime creates `taskArgs`, triggers the hook, then invokes `taskTool.execute(taskArgs, ...)` with the original binding.
+
+Therefore Justice v5 explicitly does **not** rely on before-hook argument mutation to deliver Conformance Contract instructions.
+
+The relevant OpenCode files are byte-identical between v1.18.29 and v1.18.31:
+
+- `packages/opencode/src/session/prompt.ts`: `0f85d44f209ba792065aeb951f0bd2e12b59fae8`
+- `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
+- `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
+- v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
+
+Justice's existing real-runtime 1.18.29 spike remains valid for the unchanged parent `sessionID + callID`, child-session metadata, and session parentage surfaces.
+
+### Selected review-delivery contract
+
+OpenCode v1.18.31 TaskTool creates the child session and calls `ops.prompt(... params.prompt ...)`. During child user-message creation it invokes:
+
+```text
+chat.message(childSessionId, { message, parts: resolvedParts })
+```
+
+before those same `resolvedParts` are persisted and supplied to the child reviewer.
+
+Justice therefore uses:
+
+```text
+parent tool.execute.before
+  → observe recognized Superpowers review; create pending review correlation
+session.created/session.updated
+  → bind exactly one pending parent review call to childSessionId
+child chat.message
+  → append Justice review appendix to output.parts IN PLACE
+parent tool.execute.after
+  → corroborate same call / child metadata and capture result
+```
+
+The `chat.message` hook changes only child-message content. It does not change `subagent_type`, category, model, provider, variant, or OmO continuation state.
+
+If the child session cannot be uniquely bound to exactly one pending recognized review call before its first `chat.message`, Justice performs no injection and the semantic review remains untrusted / `NOT_PROVEN`.
+
+Superpowers v6.4.2 task review, scoped re-review, and final whole-branch review all use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. All three therefore use the selected parent-task → child-message path.
+
+Task 1 is a runtime **regression/replay gate** for this already-selected architecture. A failure is upstream/runtime compatibility drift and stops the supported-stack implementation; Task 1 is not allowed to choose an alternate review architecture.
 
 ## Canonical Cross-Task Interface Registry
 
@@ -172,7 +202,7 @@ type CorrelationMutationResult =
 
 Only `resolved`, `updated`, and `idempotent` can contribute trusted evidence. All other results are runtime-fail-open where safe but acceptance-fail-closed.
 
-### Task 7 owns review recognition and parsing results
+### Task 7 owns review recognition, child-message injection, and parsing results
 
 ```ts
 type RecognizedReviewDispatch =
@@ -201,6 +231,26 @@ type ReviewResultInvalidReason =
   | "stale_revision"
   | "contract_mismatch"
   | "missing_required_clause";
+
+type PendingReviewCorrelation = {
+  readonly reviewCorrelationId: string;
+  readonly parentSessionId: string;
+  readonly parentCallId: string;
+  readonly artifactChainId: string;
+  readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
+  readonly taskIdentity?: TaskIdentity;
+  readonly reviewedRange: { readonly base: string; readonly head: string };
+  readonly contractId: string;
+  readonly contractDigest: string;
+  readonly status: "pending_child" | "child_bound" | "ambiguous" | "terminal";
+  readonly childSessionId?: string;
+};
+
+type ReviewChildBindingResult =
+  | { readonly kind: "bound" | "idempotent"; readonly correlation: PendingReviewCorrelation }
+  | { readonly kind: "not_found"; readonly reason: string }
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] }
+  | { readonly kind: "conflict"; readonly reason: string };
 
 type ParseReviewResult =
   | { readonly kind: "valid"; readonly result: JusticeReviewResult }
@@ -338,8 +388,13 @@ type ReviewDispatchInput = {
 };
 
 type ReviewAppendixInput = {
-  readonly dispatch: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>;
+  readonly correlation: PendingReviewCorrelation & { readonly status: "child_bound"; readonly childSessionId: string };
   readonly contractPath: string;
+};
+
+type ReviewChatMessageInput = {
+  readonly childSessionId: string;
+  readonly parts: unknown[];
 };
 ```
 
@@ -394,57 +449,70 @@ type ResolveOmoEffectiveConfigInput = {
 
 ---
 
-### Task 1: Lock the Verified Review-Interop Baseline as a Regression Gate
+### Task 1: Lock the Selected Review-Interop Contract as a Runtime Regression Gate
 
 **Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, J5D-REVIEW-01..04.
 
 **Files:**
 - Create: `tests/integration/justice-v5-review-interop-host.test.ts`
 - Create: `tests/fixtures/superpowers-v6.4.2-review-prompts.ts`
-- Modify: `.github/workflows/ci.yml` — move the CI host baseline from `opencode-ai@1.18.29` to `opencode-ai@1.18.31`; this is a regression-test baseline pin, not a product allowlist.
+- Modify: `.github/workflows/ci.yml` only to pin this regression job to `opencode-ai@1.18.31`; this is test evidence, not a product allowlist.
 - Production source: **none**
 
 **Interfaces:**
-- Consumes the verified baseline documented above and in Design §14.2.
-- Produces regression evidence for the already-established OpenCode task-hook contract.
-- Does not select or discover an alternative architecture.
+- Consumes the fixed Design §14.2 contract:
+  - parent `tool.execute.before` is observation-only;
+  - child session binding is established before the child `chat.message`;
+  - Conformance Contract instructions are appended to child `output.parts` in place;
+  - parent `tool.execute.after` corroborates the same review call/result.
+- Produces runtime regression evidence only. It does not select or discover another architecture.
 
-- [ ] **Step 1: Add regression fixtures for all three Superpowers v6.4.2 review kinds**
+- [ ] **Step 1: Add the three exact Superpowers v6.4.2 reviewer fixtures**
 
-The fixture must preserve the actual distinguishing inputs for:
+Represent:
 - task review: brief/report/base/head/diff;
-- scoped re-review: findings/fix-base/head/diff;
-- final review: plan-or-requirements/base/head;
+- scoped re-review: original findings/fix-base/head/diff;
+- final whole-branch review: plan-or-requirements/base/head;
 - OpenCode V1 routing: `subagent_type: "general"`.
 
-- [ ] **Step 2: Add the baseline regression tests**
+- [ ] **Step 2: Add exact runtime regression cases**
 
-Exact tests in `tests/integration/justice-v5-review-interop-host.test.ts`:
+In `tests/integration/justice-v5-review-interop-host.test.ts`:
 
-- `observes_and_mutates_superpowers_task_review_call`
-- `observes_and_mutates_superpowers_scoped_re_review_call`
-- `observes_and_mutates_superpowers_final_review_call`
-- `preserves_subagent_type_general_when_appending_prompt_context`
+- `task_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
+- `scoped_re_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
+- `final_review_binds_parent_call_to_child_and_injects_chat_message_appendix`
+- `review_interop_preserves_original_prompt_and_subagent_type_general`
+- `review_result_is_attributed_to_same_parent_call_and_child_session`
+- `before_hook_arg_mutation_is_not_used_as_prompt_delivery`
 
-Each test asserts one existing reviewer dispatch, stable `sessionID + callID`, mutable prompt delivery to the same task execution, unchanged routing fields, and same-call result attribution.
+Assertions for each reviewer kind:
+- exactly one existing Superpowers reviewer dispatch occurs;
+- parent `sessionID + callID` are observed;
+- exactly one child session with matching parent is bound before child `chat.message`;
+- the original reviewer content remains present;
+- the appended contract marker/reference reaches the actual reviewer through child `chat.message`;
+- caller routing remains `subagent_type: "general"`; model/provider/category are not rewritten by Justice;
+- parent after-hook/result and child session are attributable to the same review correlation;
+- no duplicate Justice reviewer is created.
 
-- [ ] **Step 3: Pin and verify the CI host baseline**
+- [ ] **Step 3: Pin and verify the host-test baseline**
 
-Change the existing CI installation line to exactly:
+Change the existing CI host-test install to exactly:
 
 ```text
 bun install --global opencode-ai@1.18.31
 ```
 
-The host regression test itself must execute `opencode --version` and fail unless the fixture run is actually using `1.18.31`. This pin is test evidence only; Task 11 still implements capability-first runtime support.
+The regression file must assert `opencode --version == 1.18.31` for this baseline replay. This exact version check is local to compatibility evidence and does not replace Task 11's capability-first support policy.
 
 - [ ] **Step 4: Run the regression gate**
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected on the supported baseline: PASS for the three review kinds, same-call mutation/result attribution, and unchanged routing fields.
+Expected: all six cases PASS.
 
-A failure means **upstream compatibility drift**. STOP the supported-stack implementation and report the drift; do not choose a new architecture or introduce Justice-owned review scheduling inside this Plan.
+Failure means upstream/runtime compatibility drift. STOP implementation and return to the Design compatibility gate; do not add Justice-owned review scheduling and do not switch back to before-hook prompt mutation.
 
 - [ ] **Step 5: Commit the regression evidence**
 
@@ -951,7 +1019,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 ---
 
-### Task 7: Implement Versioned Superpowers Review Interop and Strict JusticeReviewResult Parsing
+### Task 7: Implement Versioned Superpowers Review Interop, Child-Message Injection, and Strict JusticeReviewResult Parsing
 
 **Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, J5D-REVIEW-01..04.
 
@@ -1007,7 +1075,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 Exact required tests:
 - `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
-- `injects_conformance_contract_into_same_superpowers_task_review_call`
+- `injects_conformance_contract_into_bound_child_chat_message`
 
 Also recognize all three v6.4.2 review profiles using multiple markers and concrete brief/review-package/range references. A single keyword is insufficient.
 
@@ -1025,9 +1093,9 @@ Run: `bun run vitest run tests/core/review-interop.test.ts tests/core/review-res
 
 Expected: FAIL.
 
-- [ ] **Step 4: Implement recognition, same-call appendix injection, and strict output parsing**
+- [ ] **Step 4: Implement parent review recognition, unique child binding, child `chat.message` in-place appendix injection, and strict output parsing**
 
-Use only the existing Superpowers reviewer dispatch. Do not create `sp-review` / `sp-final-review` calls.
+`tool.execute.before` is observation-only. Append review context only after `session.created/session.updated` has uniquely bound the child reviewer. Use only the existing Superpowers reviewer dispatch. Do not create `sp-review` / `sp-final-review` calls and do not depend on before-hook arg mutation.
 
 - [ ] **Step 5: Re-run Task 1 regression gate plus focused tests**
 
