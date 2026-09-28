@@ -189,7 +189,7 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-RULING-01 | Superpowers Rulings may guide execution but cannot rewrite approved Justice authority. |
 | J5D-CORR-01 | OmO `task_id` is continuation-session state and never Justice TaskIdentity. |
 | J5D-CORR-02 | Runtime execution is correlated by durable `parentSessionId + parentCallId` sidecar binding, extended with observed child session. |
-| J5D-ROUTE-01 | Justice obeys category/subagent_type XOR with provenance-aware translation: recognized Superpowers generic `general` is a compatibility placeholder translated to one Justice category, while non-Superpowers explicit routing and OmO continuation remain caller/runtime-owned. |
+| J5D-ROUTE-01 | Justice obeys category/subagent_type XOR with provenance-aware translation: recognized Superpowers generic `general` is a compatibility marker translated to one Justice category, while non-Superpowers explicit routing and OmO continuation remain caller/runtime-owned. |
 | J5D-ROUTE-02 | Semantic execution classification is deterministic from structured task/review semantics with precedence final-review > review > architecture > deep > integration > mechanical > implementation; ambiguity never fabricates a category. |
 | J5D-CAT-02 | Justice categories are semantic routing inputs only; OmO effective configuration resolves them to concrete runtime/model/provider, and Justice never selects a concrete model/provider. |
 | J5D-PROJ-01 | Requirements/Design/Plan normative sources are deterministically enumerable. |
@@ -538,7 +538,7 @@ Subagent (general-purpose)
 → task(subagent_type="general")
 ```
 
-For a recognized Superpowers **new-worker** dispatch, `general` is a harness compatibility placeholder, not a semantic execution-class choice.
+For a recognized Superpowers **new-worker** dispatch, `general` is a harness compatibility marker, not a semantic execution-class choice.
 
 Justice therefore performs:
 
@@ -994,7 +994,7 @@ tool.execute.before(parent sessionID, callID)
         ↓
 Justice recognizes review kind
 + records PendingReviewCorrelation
-+ translates generic placeholder:
++ translates generic compatibility marker:
   task/scoped → category=sp-review
   final       → category=sp-final-review
   subagent_type removed
@@ -1143,7 +1143,7 @@ Additional rules:
 - the Part is appended to the existing `output.parts` array in place;
 - missing/inconsistent message or session identities cause no injection / `NOT_PROVEN`;
 - the **child `chat.message` appendix path** never alters routing, model, provider, variant, or OmO continuation state;
-- the earlier parent `tool.execute.before` semantic-routing layer may already have translated a recognized Superpowers `subagent_type="general"` placeholder into `sp-review` / `sp-final-review`; that translation is separate from appendix delivery.
+- the earlier parent `tool.execute.before` semantic-routing layer may already have translated a recognized Superpowers `subagent_type="general"` marker into `sp-review` / `sp-final-review`; that translation is separate from appendix delivery.
 
 The appendix contains review-correlation ID, artifact-chain ID, task identity where applicable, reviewed range/candidate revision, immutable Conformance Contract path/digest, and structured-result instructions.
 
