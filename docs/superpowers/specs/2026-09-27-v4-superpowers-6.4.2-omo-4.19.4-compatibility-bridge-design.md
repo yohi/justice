@@ -704,14 +704,14 @@ For each host case, the harness:
 
 ```bash
 opencode run --auto --format json --model "$JUSTICE_HOST_TEST_MODEL" \
-  --command justice-implement -- "--approved --plan docs/justice-v4-compat-smoke.md"
+  --command justice-implement -- --approved --plan docs/justice-v4-compat-smoke.md
 ```
 
 4. continues the same isolated workspace session with `opencode run --continue ...` and a fixed prompt that requests exactly one `task()` delegation.
 
 The fresh-delegation plan places a unique sentinel only in `rawBody` (outside the checkbox summary) and requires the delegated worker to write that exact sentinel to `.justice-host-smoke/raw-body.txt`. Exact file content is the deterministic evidence that the worker received the full approved task contract.
 
-A separate caller-owned case requests exactly one `task()` with `subagent_type="explore"`, no category, and no task ID, and requires the delegated child to return a fixed acceptance sentinel. The harness checks that the task invocation completes and the sentinel is present. Exact routing-field exclusivity remains the responsibility of the adapter integration test.
+A separate caller-owned case uses a case-specific approved plan whose Task 1 contract requires the delegated child to return a fixed acceptance sentinel and perform no file changes. The parent request asks for exactly one `task()` with `subagent_type="explore"`, no category, and no task ID. The harness checks that the task invocation completes and the sentinel is present. Exact routing-field exclusivity remains the responsibility of the adapter integration test.
 
 ### PASS / BLOCKED
 
