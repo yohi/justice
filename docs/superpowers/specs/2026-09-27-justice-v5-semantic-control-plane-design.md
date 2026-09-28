@@ -1404,19 +1404,23 @@ Trusted closure range rules:
 
 #### Deterministic finding disposition merge
 
-Finding merge runs only after scoped finding identity validation above.
+Finding merge runs only after current-dispatch marker extraction and scoped finding-context validation.
 
-For every open/parked finding from the full/preceding review:
+The scoped result is authoritative only for the `expectedFindings` selected by the current Superpowers dispatch.
+
+For every expected/current-target finding:
 
 - exactly one same-ID scoped result with `resolved` → original finding resolved;
-- same-ID `open` or `parked` → remains unresolved;
-- missing same-ID result → remains unresolved and scoped evidence is invalid/fail-closed;
+- same-ID `open` → remains unresolved;
+- missing same-ID result → scoped evidence invalid/fail-closed;
 - duplicate/conflicting same-ID result → invalid/fail-closed.
+
+Findings from the preceding review that are **not** in the current target set retain their prior disposition and are not re-reviewed by Justice. This includes task-loop deferred Minor findings and already-resolved findings. A preceding open Critical/Important task finding cannot silently disappear because Task 8's requested-set consistency check would make that scoped context untrusted before parsing.
 
 For new scoped findings:
 
-- new Critical/Important + open/parked → unresolved blocker;
-- new Minor remains visible;
+- new Critical/Important + `open` → unresolved blocker and may become a later Superpowers open finding with the same marker;
+- new Minor remains deferred-visible and does not enter the task fix loop unless the current Superpowers workflow explicitly carries it;
 - ID collision with an original/expected finding is invalid.
 
 Original severity/summary/location remain authoritative for an expected finding; a scoped reviewer cannot mutate those fields to clear a blocker.
@@ -1447,7 +1451,7 @@ A final evidence build is blocked when:
 - changed-path parsing is unsafe/ambiguous;
 - scoped re-review is untrusted;
 - affected/undecidable clause lacks scoped re-proof;
-- original blocker is omitted rather than explicitly resolved;
+- an expected/current-open blocker is omitted rather than explicitly resolved;
 - duplicate/conflicting finding dispositions exist;
 - a new blocking scoped finding remains open/parked.
 
