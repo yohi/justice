@@ -422,7 +422,11 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
         modifiedPayload: { args: { category: justiceCategory } },
       });
       const output: { args: Record<string, unknown> } = {
-        args: { prompt: "caller", subagent_type: "general" },
+        args: {
+          prompt: "caller",
+          subagent_type: "general",
+          category: "sp-implementation",
+        },
       };
 
       await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "route" }, output);
