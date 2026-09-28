@@ -258,9 +258,38 @@ type CorrelationMutationResult =
 
 Only `resolved`, `updated`, and `idempotent` can contribute trusted evidence. All other results are runtime-fail-open where safe but acceptance-fail-closed.
 
-### Task 7 owns review recognition, child-message injection, and parsing results
+### Task 7 owns review recognition, finding-context continuity, child-message injection, and parsing results
 
 ```ts
+type ReviewFindingTarget = {
+  readonly findingId: string;
+  readonly severity: "critical" | "important" | "minor";
+  readonly summary: string;
+  readonly location?: string;
+};
+
+type ReviewFindingContextQuery = {
+  readonly artifactChainId: string;
+  readonly scope:
+    | { readonly kind: "task"; readonly taskIdentity: TaskIdentity }
+    | { readonly kind: "final" };
+  readonly precedingReviewedHead: string;
+};
+
+type ReviewFindingContextResult =
+  | {
+      readonly kind: "resolved";
+      readonly sourceReviewCorrelationId: string;
+      readonly expectedFindings: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
+    }
+  | { readonly kind: "not_found"; readonly reason: string }
+  | { readonly kind: "ambiguous"; readonly reviewCorrelationIds: readonly [string, string, ...string[]] }
+  | { readonly kind: "untrusted"; readonly reason: string };
+
+interface ReviewFindingContextProvider {
+  resolve(query: ReviewFindingContextQuery): Promise<ReviewFindingContextResult>;
+}
+
 type RecognizedReviewDispatch =
   | {
       readonly kind: "recognized";
@@ -286,7 +315,13 @@ type ReviewResultInvalidReason =
   | "scope_mismatch"
   | "stale_revision"
   | "contract_mismatch"
-  | "missing_required_clause";
+  | "missing_required_clause"
+  | "finding_context_unavailable"
+  | "missing_expected_finding"
+  | "duplicate_finding_id"
+  | "expected_finding_mismatch"
+  | "finding_id_collision"
+  | "forbidden_human_adjudication";
 
 type PendingReviewCorrelation = {
   readonly reviewCorrelationId: string;
@@ -298,9 +333,18 @@ type PendingReviewCorrelation = {
   readonly reviewedRange: { readonly base: string; readonly head: string };
   readonly contractId: string;
   readonly contractDigest: string;
+  readonly expectedFindings?: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
   readonly status: "pending_child" | "child_bound" | "ambiguous" | "terminal";
   readonly childSessionId?: string;
 };
+
+type PreparePendingReviewResult =
+  | { readonly kind: "ready"; readonly correlation: PendingReviewCorrelation }
+  | {
+      readonly kind: "untrusted";
+      readonly reason: "finding_context_not_found" | "finding_context_ambiguous" | "finding_context_untrusted";
+      readonly details: readonly string[];
+    };
 
 type ReviewChildBindingResult =
   | { readonly kind: "bound" | "idempotent"; readonly correlation: PendingReviewCorrelation }
@@ -323,7 +367,7 @@ type ParseReviewResult =
   | { readonly kind: "invalid"; readonly reason: ReviewResultInvalidReason; readonly details: readonly string[] };
 ```
 
-`RecognizedReviewDispatch.kind === "ambiguous"` and every invalid parse result are untrusted and acceptance-fail-closed.
+For task/first-final review, `expectedFindings` MUST be absent. For scoped re-review it MUST be a non-empty set resolved by `ReviewFindingContextProvider`. A scoped call without resolved finding context is not eligible for Justice appendix injection and remains `NOT_PROVEN`.
 
 ### Task 9 owns final-review evidence closure
 
@@ -351,15 +395,26 @@ interface RevisionDiffProvider {
   resolve(base: string, head: string): Promise<RevisionDiffResult>;
 }
 
+type ResolvedFinalFixWaveEvidence = {
+  readonly kind: "resolved";
+  readonly diffEvidence: FinalFixDiffEvidence;
+  readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
+};
+
+type FailedFinalFixWaveEvidence = {
+  readonly kind: "diff_failed";
+  readonly base: string;
+  readonly head: string;
+  readonly diffFailure: Extract<RevisionDiffResult, { readonly kind: "failed" }>;
+  readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
+};
+
 type FinalReviewEvidenceClosure = {
   readonly schemaVersion: "justice-final-review-closure-v1";
   readonly artifactChainId: string;
   readonly candidateHead: string;
   readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
-  readonly finalFixWave?: {
-    readonly diffEvidence: FinalFixDiffEvidence;
-    readonly scopedReReview: JusticeReviewResult & { readonly reviewKind: "scoped-re-review" };
-  };
+  readonly finalFixWave?: ResolvedFinalFixWaveEvidence;
   readonly carriedClauseIds: readonly string[];
   readonly reProvenClauseIds: readonly string[];
   readonly clauseResults: readonly ClauseResult[];
@@ -367,16 +422,24 @@ type FinalReviewEvidenceClosure = {
   readonly diagnostics: readonly string[];
 };
 
+type BlockedFinalReviewEvidenceAttempt = {
+  readonly schemaVersion: "justice-final-review-attempt-v1";
+  readonly artifactChainId: string;
+  readonly candidateHead: string;
+  readonly fullFinalReview: JusticeReviewResult & { readonly reviewKind: "final-review" };
+  readonly finalFixWave?: ResolvedFinalFixWaveEvidence | FailedFinalFixWaveEvidence;
+  readonly notProvenClauseIds: readonly string[];
+  readonly blockingFindingIds: readonly string[];
+  readonly reasons: readonly [string, ...string[]];
+  readonly diagnostics: readonly string[];
+};
+
 type BuildFinalReviewEvidenceClosureResult =
   | { readonly kind: "complete"; readonly closure: FinalReviewEvidenceClosure }
-  | {
-      readonly kind: "blocked";
-      readonly closure: FinalReviewEvidenceClosure;
-      readonly notProvenClauseIds: readonly string[];
-      readonly blockingFindingIds: readonly string[];
-      readonly reasons: readonly [string, ...string[]];
-    };
+  | { readonly kind: "blocked"; readonly attempt: BlockedFinalReviewEvidenceAttempt };
 ```
+
+`FinalReviewEvidenceClosure` is trusted/complete evidence only. `RevisionDiffResult.kind === "failed"` MUST create a blocked attempt with `FailedFinalFixWaveEvidence`; it MUST NOT create, populate, or synthesize a trusted closure. `PlanConformanceInput.finalReviewClosure` accepts only the complete branch.
 
 A closure may extend Candidate A to Candidate B only through the single Superpowers final fix wave + exactly one scoped re-review. The core never accepts caller-supplied arbitrary changed-file lists; exact range evidence comes from `RevisionDiffProvider`. Justice never dispatches a second full reviewer.
 
@@ -517,6 +580,7 @@ type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
 type ReviewAppendixInput = {
   readonly correlation: PendingReviewCorrelation & { readonly status: "child_bound"; readonly childSessionId: string };
   readonly contractPath: string;
+  readonly expectedFindings?: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
 };
 
 type ResolveReviewChildInput = {
@@ -1168,7 +1232,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 ---
 
-### Task 7: Implement Versioned Superpowers Review Interop, Exact SDK Child Lookup, and Strict JusticeReviewResult Parsing
+### Task 7: Implement Versioned Superpowers Review Interop, Finding-Identity Transport, Exact SDK Child Lookup, and Strict Result Parsing
 
 **Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, J5D-REVIEW-01..04.
 
@@ -1183,12 +1247,12 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 **Interfaces:**
 - Consumes `TaskIdentity` / `ReviewFindingV5` from Task 2 and `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
-- Changes `OpenCodePluginInit.client` from an app-only hand-written shape to:
+- Owns registry-defined `ReviewFindingTarget`, `ReviewFindingContextQuery`, `ReviewFindingContextResult`, `ReviewFindingContextProvider`, `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `PreparePendingReviewResult`, `ReviewChildBindingResult`, and `ParseReviewResult`.
+- Changes `OpenCodePluginInit.client` to:
   ```ts
   type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
   ```
 - `chat.message` input/output types are derived directly from `Hooks["chat.message"]`.
-- Owns registry-defined `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `ReviewChildBindingResult`, `ParseReviewResult`, and `SessionGetFieldsResult`.
 - Produces:
   ```ts
   type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
@@ -1202,6 +1266,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
     readonly contractDigest: string;
     readonly reviewedRange: { readonly base: string; readonly head: string };
     readonly requiredClauseIds: readonly string[];
+    readonly expectedFindings?: readonly [ReviewFindingTarget, ...ReviewFindingTarget[]];
   };
 
   type JusticeReviewResult = {
@@ -1222,61 +1287,37 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   ```
 - Exact signatures:
   - `recognizeSuperpowersReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`
+  - `preparePendingReviewCorrelation(dispatch, deps: { findingContextProvider: ReviewFindingContextProvider }): Promise<PreparePendingReviewResult>`
   - `resolveReviewChildFromSession(input: ResolveReviewChildInput): Promise<ReviewChildBindingResult>`
   - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
   - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
   - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
-- `resolveReviewChildFromSession` algorithm is binding:
-  ```ts
-  try {
-    const lookup = await input.client.session.get({
-      path: { id: input.childSessionId },
-    });
-
-    if (lookup.data === undefined) {
-      return {
-        kind: "lookup_failed",
-        reason: lookup.error === undefined
-          ? "missing_data"
-          : "sdk_error_response",
-      };
-    }
-
-    const childSession = lookup.data;
-    if (childSession.id !== input.childSessionId) {
-      return { kind: "conflict", reason: "child_id_mismatch" };
-    }
-    if (childSession.parentID === undefined) {
-      return { kind: "parent_missing", childSessionId: input.childSessionId };
-    }
-
-    // match exactly one compatible pending review by parentSessionId
-  } catch (error) {
-    return {
-      kind: "lookup_failed",
-      reason: "transport_error",
-      details: String(error),
-    };
-  }
-  ```
-- The fields-response wrapper itself is never treated as a Session.
-- zero compatible matches → `not_found`; multiple compatible matches → `ambiguous`; incompatible existing binding → `conflict`.
-- `buildJusticeReviewAppendixPart` MUST return exactly:
-  ```ts
-  {
-    id: `prt_justice_review_${randomUUID()}`,
-    sessionID: output.message.sessionID,
-    messageID: output.message.id,
-    type: "text",
-    text: appendix,
-    synthetic: true,
-  }
-  ```
-  and only when `input.sessionID === output.message.sessionID`.
+- `preparePendingReviewCorrelation`:
+  - task/first-final review → no finding-context lookup; `expectedFindings` absent;
+  - scoped re-review → query `ReviewFindingContextProvider` with exact artifact-chain/scope and `precedingReviewedHead = dispatch.reviewedRange.base`;
+  - only `resolved` context produces `kind: "ready"` with `expectedFindings`;
+  - missing/ambiguous/untrusted context → `kind: "untrusted"`, no trusted pending correlation, no Justice structured appendix.
+- Task 7 ships a fail-closed unavailable/default provider for production wiring until Task 8 supplies the store-backed provider. Scoped re-review through that unavailable provider remains `NOT_PROVEN`; tests inject a deterministic fake provider.
+- `resolveReviewChildFromSession` retains the exact SDK fields-response algorithm from RG-007.
+- `buildJusticeReviewAppendix` rules:
+  - non-scoped review: `expectedFindings` absent;
+  - scoped re-review: include every `ReviewFindingTarget` and instruct exact ID/severity/summary/location echo;
+  - `ADDRESSED → resolved`; `NOT ADDRESSED → open`;
+  - new breakage must use a new non-colliding ID;
+  - `human_adjudicated` is forbidden reviewer output.
+- `parseJusticeReviewResult` rules for scoped review:
+  - every expected target appears exactly once;
+  - same-ID target must preserve severity/summary/location exactly;
+  - missing expected ID → `missing_expected_finding`;
+  - duplicate ID → `duplicate_finding_id`;
+  - target metadata mismatch → `expected_finding_mismatch`;
+  - non-expected IDs are new breakage only; collision with expected set → `finding_id_collision`;
+  - any `human_adjudicated` reviewer result → `forbidden_human_adjudication`.
+- The SDK fields-response wrapper itself is never treated as a Session; transport/error/missing-data failure remains no injection / `NOT_PROVEN`.
+- Synthetic Part construction remains the exact RG-007 contract.
 - Serialization: exactly one final fenced `justice-review-result-v1` JSON block.
-- Reviewer-produced findings use `open | resolved | parked`; `human_adjudicated` can only be applied later by the trusted human resolution path.
 
-- [ ] **Step 1: Write RED recognition/adapter tests**
+- [ ] **Step 1: Write RED recognition/identity/adapter tests**
 
 In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
@@ -1288,61 +1329,49 @@ In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `session_get_transport_failure_blocks_injection`
 - `injects_conformance_contract_into_authoritatively_bound_child_chat_message`
 - `synthetic_review_part_uses_output_message_session_and_message_ids`
-
-Also recognize all three v6.4.2 review profiles using multiple markers and concrete review-package/range references.
-
-- [ ] **Step 2: Write RED structured-result tests**
+- `scoped_rereview_appendix_carries_original_finding_ids`
 
 In `tests/core/review-result.test.ts`:
 - `missing_required_clause_result_becomes_not_proven`
 - `missing_or_malformed_review_result_is_rejected`
 - `reviewer_cannot_assert_human_adjudicated_disposition`
+- `scoped_result_must_echo_expected_original_finding_id`
+- `missing_expected_original_finding_is_rejected`
+- `duplicate_original_finding_id_is_rejected`
+- `expected_finding_metadata_mismatch_is_rejected`
+- `new_breakage_cannot_reuse_original_finding_id`
 
-Also cover multiple blocks, wrong correlation/chain/task, wrong range, wrong contract digest, evidence-scope validation, and scoped re-review deltas.
-
-- [ ] **Step 3: Run RED tests**
+- [ ] **Step 2: Run RED tests**
 
 Run: `bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts`
 
 Expected: FAIL.
 
-- [ ] **Step 4: Implement the fixed review transport**
+- [ ] **Step 3: Implement the fixed review transport and provider seam**
 
-At parent `tool.execute.before`, recognize the review and add exactly one `PendingReviewCorrelation` to the current pending-review index keyed by `parentSessionId + parentCallId`.
+Implement recognition, fail-closed finding-context preparation, exact SDK child lookup, appendix generation, Part injection, and parser validation. The review-interop module accepts `ReviewFindingContextProvider`; it does not read persistence directly.
 
-At child `chat.message`:
-1. use `input.sessionID`;
-2. await the SDK fields response from `client.session.get({ path: { id: input.sessionID } })`;
-3. catch transport/runtime exceptions as `lookup_failed("transport_error")`;
-4. inspect `lookup.data`; error response or absent data is `lookup_failed`;
-5. validate `lookup.data.id` and `lookup.data.parentID`;
-6. match exactly one pending review for that parent;
-7. build/append the exact synthetic text Part to the existing `output.parts` array.
+- [ ] **Step 4: Run GREEN focused tests + Task 1 regression gate + typecheck**
 
-`session.created/session.updated` only corroborate/cache this relation. At parent `tool.execute.after`, corroborate child metadata and invalidate mismatches.
+Expected: PASS. Production scoped semantic enrichment is still fail-closed until Task 8 wires the trusted store-backed provider.
 
-Do not create `sp-review` / `sp-final-review` calls and do not modify model/provider/subagent/category routing.
-
-- [ ] **Step 5: Re-run Task 1 regression gate plus focused tests**
-
-Expected: PASS and exactly one reviewer call per Superpowers dispatch.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts \
   tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
-git commit -m "feat: consume Superpowers reviews as Justice evidence"
+git commit -m "feat: preserve finding identity across Justice reviews"
 ```
 
 ---
 
-### Task 8: Persist Structured Review Evidence and Canonicalize Quality Findings
+### Task 8: Persist Structured Review Evidence and Supply Trusted Scoped Finding Context
 
-**Requirements / Design:** JUS5-REV-08..11, JUS5-QUALITY-01..03, JUS5-ACC-03, J5D-QUALITY-01, J5D-STORAGE-01.
+**Requirements / Design:** JUS5-REV-08..11, JUS5-QUALITY-01..03, JUS5-ACC-03, J5D-QUALITY-01, J5D-STORAGE-01, J5D-REVIEW-03..04.
 
 **Files:**
 - Create: `src/core/review-evidence-store.ts`
+- Modify: `src/core/justice-plugin.ts`
 - Modify: `src/core/types.ts`
 - Modify: `src/core/v2/review-types.ts`
 - Modify: `src/core/v2/review-aggregator.ts`
@@ -1354,53 +1383,63 @@ git commit -m "feat: consume Superpowers reviews as Justice evidence"
 - Test: `tests/core/v2/state-projection-review.test.ts`
 
 **Interfaces:**
-- Consumes canonical `ReviewFindingV5` from Task 2 and `JusticeReviewResult` from Task 7; Task 8 does not redefine either.
+- Consumes canonical `ReviewFindingV5` from Task 2, `JusticeReviewResult` and `ReviewFindingContextProvider` from Task 7; Task 8 does not redefine them.
 - v5 evidence path: `.justice/v5/review-evidence.json`.
+- `ReviewEvidenceStore` implements `ReviewFindingContextProvider`.
+- Exact context resolution:
+  - query by `artifactChainId`, exact task/final scope, and `precedingReviewedHead`;
+  - only trusted persisted review results are candidates;
+  - task scope accepts the trusted immediate task-review/scoped-re-review result for the same `TaskIdentity`;
+  - final scope accepts the trusted full final-review result;
+  - exactly one candidate → `resolved`, projecting its findings to immutable `ReviewFindingTarget[]`;
+  - zero → `not_found`; multiple → `ambiguous`; untrusted-only source → `untrusted`.
+- `src/core/justice-plugin.ts` replaces Task 7's fail-closed unavailable provider with the store-backed provider. No review dispatch scheduling is added.
 - Legacy `major` deserializes only through migration as `important`.
-- A v5 human review-resolution artifact is bound to `artifactChainId`, review scope, and item keys; it may change quality disposition only and cannot set a conformance clause status.
+- A v5 human review-resolution artifact is bound to artifact chain/review scope/item keys; it may change quality disposition only and cannot set conformance clause status.
 
-- [ ] **Step 1: Write RED evidence/quality tests**
+- [ ] **Step 1: Write RED evidence/context tests**
 
-Exact required tests:
+In `tests/core/review-evidence-store.test.ts`:
+- `scoped_context_resolves_exact_trusted_preceding_review_head`
+- `scoped_context_uses_exact_original_finding_ids`
+- `scoped_context_wrong_base_is_not_found`
+- `scoped_context_ambiguous_preceding_review_is_untrusted`
+- `untrusted_preceding_review_cannot_supply_scoped_finding_context`
+
+Existing quality tests remain:
 - `not_addressed_finding_remains_blocking`
 - `parked_important_finding_remains_visible_and_blocking`
 - `parked_critical_or_important_blocks_until_trusted_disposition`
 
-Also assert:
-- Minor is non-blocking for task progression but retained for final review;
-- human quality adjudication never changes `VIOLATED/NOT_PROVEN` clauses;
-- final review must disposition carried Minor/parked findings;
-- legacy major becomes important only on migration;
-- directly observed structured output is trusted without native artifact reservation;
-- plain file fallback without secure reservation remains untrusted.
+Also assert Minor retention, human-adjudication/clause separation, legacy-major migration, trusted direct output, and untrusted plain-file fallback.
 
 - [ ] **Step 2: Run RED tests**
 
 Run: `bun run vitest run tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts`
 
-Expected: FAIL on `major` vocabulary and parked semantics.
+Expected: FAIL on missing store-backed finding-context resolution and current quality semantics.
 
-- [ ] **Step 3: Implement store, aggregation, and resolution semantics**
+- [ ] **Step 3: Implement persistence and store-backed finding context**
 
-Do not remove the Linux native provider; demote it to optional secure file-artifact capability.
+Persist trusted structured review evidence, implement `ReviewFindingContextProvider`, and wire it through `justice-plugin.ts` into Task 7 review interop. Do not make review-interop read persistence directly.
 
-- [ ] **Step 4: Run GREEN tests + typecheck**
+- [ ] **Step 4: Run GREEN tests + Task 7 scoped interop regressions + typecheck**
 
-Expected: PASS.
+Expected: PASS, including a production-wiring test proving a scoped appendix receives exact IDs from persisted trusted preceding evidence.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/review-evidence-store.ts src/core/types.ts src/core/v2/review-types.ts src/core/v2/review-aggregator.ts \
-  src/core/v2/state-projection.ts src/core/review-resolution-artifact.ts \
+git add src/core/review-evidence-store.ts src/core/justice-plugin.ts src/core/types.ts src/core/v2/review-types.ts \
+  src/core/v2/review-aggregator.ts src/core/v2/state-projection.ts src/core/review-resolution-artifact.ts \
   tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts \
   tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
-git commit -m "feat: persist v5 review and quality evidence"
+git commit -m "feat: persist review evidence and scoped finding identity"
 ```
 
 ---
 
-### Task 9: Make Conformance, Quality, and Provenance-Bound Final Review Evidence First-Class Acceptance Gates
+### Task 9: Make Conformance, Quality, and Type-Safe Final Review Evidence First-Class Acceptance Gates
 
 **Requirements / Design:** JUS5-GATE-01..02, JUS5-CONFORM-01..09, JUS5-ACC-01..04, JUS5-COMPLETE-01, JUS5-REV-08..09, J5D-GATE-01, J5D-COMPLETE-01, J5D-REVIEW-03..04.
 
@@ -1417,8 +1456,8 @@ git commit -m "feat: persist v5 review and quality evidence"
 - Test: `tests/runtime/revision-diff-provider.test.ts`
 
 **Interfaces:**
-- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ClauseEvidenceScope`, `ExecutionCorrelation`, trusted `JusticeReviewResult`, and canonical `ReviewFindingV5`.
-- Owns registry-defined `FinalFixDiffEvidence`, `RevisionDiffResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, and `BuildFinalReviewEvidenceClosureResult`.
+- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ClauseEvidenceScope`, `ExecutionCorrelation`, trusted `JusticeReviewResult`, canonical `ReviewFindingV5`, and Task 7's validated finding identity semantics.
+- Owns registry-defined `FinalFixDiffEvidence`, `RevisionDiffResult`, `RevisionDiffProvider`, `ResolvedFinalFixWaveEvidence`, `FailedFinalFixWaveEvidence`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, and `BuildFinalReviewEvidenceClosureResult`.
 - Produces:
   ```ts
   type ConformanceGateVerdict =
@@ -1447,72 +1486,44 @@ git commit -m "feat: persist v5 review and quality evidence"
   function evaluateTaskConformance(input: TaskConformanceInput): ConformanceGateVerdict;
   function evaluatePlanConformance(input: PlanConformanceInput): ConformanceGateVerdict;
   ```
-- Canonical `PlanConformanceInput` is the registry definition:
-  ```ts
-  type PlanConformanceInput = {
-    readonly artifactChain: ApprovedArtifactChain;
-    readonly contract: ConformanceContract;
-    readonly taskVerdicts: readonly ConformanceGateVerdict[];
-    readonly finalReviewClosure: FinalReviewEvidenceClosure;
-    readonly qualityFindings: readonly ReviewFindingV5[];
-    readonly candidateHead: string;
-  };
+- Canonical `PlanConformanceInput.finalReviewClosure` accepts **only** a trusted `FinalReviewEvidenceClosure` from `BuildFinalReviewEvidenceClosureResult.kind === "complete"`.
+- If the build result is `blocked`, acceptance maps directly to BLOCK using `attempt.notProvenClauseIds`, `attempt.blockingFindingIds`, and reasons. A blocked attempt is never coerced into `PlanConformanceInput`.
+- Runtime `RevisionDiffProvider` remains the sole changed-path authority:
+  - exact ancestor-checked `BASE..HEAD`;
+  - Git name-status `-z --find-renames --find-copies`;
+  - rename/copy adds old and new paths;
+  - malformed/unsafe/failure/non-ancestor → `RevisionDiffResult.failed`.
+- Diff-failure construction is exact:
+  ```text
+  base = fullFinalReview.reviewedRange.head
+  head = candidateHead
+  RevisionDiffResult.failed
+  + scopedReReview
+  → FailedFinalFixWaveEvidence
+  → BlockedFinalReviewEvidenceAttempt
+  → no FinalReviewEvidenceClosure
   ```
-  `finalReviewClosure.clauseResults` is the sole final clause-result authority. There is no parallel `finalClauseResults` or optional single-review `reviewedRange` authority.
-- Runtime `RevisionDiffProvider` is the only changed-path authority for final carry-forward:
-  1. verify `base` is an ancestor of `head`;
-  2. obtain exact name-status evidence equivalent to:
-     ```text
-     git diff --name-status -z --find-renames --find-copies BASE..HEAD
-     ```
-  3. normalize repository-relative paths;
-  4. A/M/D/T/U/B → include the single touched path;
-  5. R*/C* → include **both old and new paths**;
-  6. unknown status, malformed output, unsafe absolute/traversal path, command failure, or non-ancestor range → `RevisionDiffResult.kind = "failed"`.
-- Caller-supplied arbitrary `changedFiles` is forbidden.
-- Closure range rules:
-  - no fix wave: full final review head == `candidateHead`;
-  - fix wave: `diffEvidence.base == fullFinalReview.reviewedRange.head`;
-  - `scopedReReview.reviewedRange.base == diffEvidence.base`;
-  - `diffEvidence.head == scopedReReview.reviewedRange.head == candidateHead`.
-- Carry-forward rules:
-  - resolved diff required for carry-forward;
-  - `global` scope intersects every non-empty fix;
-  - `files(paths)` may carry only when `diffEvidence.changedPaths ∩ paths == ∅`;
-  - diff failure, missing/undecidable scope, or intersecting clause without explicit scoped re-proof → `NOT_PROVEN`.
-- Finding merge is deterministic by `findingId`:
-  - full open/parked + exactly one scoped `resolved` → resolved;
-  - full open/parked + scoped `open`/`parked`/NOT ADDRESSED semantics → unresolved;
-  - full open/parked + no matching scoped disposition → unresolved;
-  - duplicate/conflicting scoped matches → closure blocked;
-  - new scoped Critical/Important open/parked → unresolved blocker;
-  - matching original severity remains authoritative; scoped review cannot silently downgrade it.
-- reviewer output never creates `human_adjudicated`; trusted human resolution may update quality disposition separately but cannot change clause status.
+- Only `RevisionDiffResult.resolved` may construct `ResolvedFinalFixWaveEvidence` and authorize clause carry-forward.
+- Finding merge assumes Task 7 has validated exact expected finding identities:
+  - same-ID resolved → clears original blocker;
+  - same-ID open/parked → remains unresolved;
+  - missing expected finding cannot arrive as trusted scoped evidence; if encountered defensively, remains unresolved and blocks;
+  - new Critical/Important open/parked → blocker;
+  - human adjudication remains separate.
 - Justice never requests another full final review to close missing coverage.
 
 - [ ] **Step 1: Write RED gate/provenance tests**
 
-In `tests/core/conformance-gate.test.ts`:
-- `worker_success_alone_does_not_accept_task`
-- `one_violated_clause_blocks_acceptance`
-- `one_not_proven_clause_blocks_acceptance`
-- `incomplete_or_invalid_projection_blocks_acceptance`
-- `sdd_task_without_trusted_task_review_is_blocked`
-- `executing_plans_task_does_not_require_fresh_per_task_reviewer`
-- `plan_code_interface_violation_blocks_task_acceptance`
-- `passing_tests_do_not_override_plan_contract_violation`
-- `ambiguous_execution_correlation_leaves_evidence_not_proven`
-- `substantive_ruling_does_not_authorize_acceptance`
-- `parked_critical_or_important_quality_finding_blocks_acceptance`
+In `tests/core/conformance-gate.test.ts` keep existing acceptance cases.
 
-In `tests/runtime/revision-diff-provider.test.ts`:
+In `tests/runtime/revision-diff-provider.test.ts` keep:
 - `changed_file_set_is_derived_from_exact_final_fix_range`
 - `rename_marks_old_and_new_paths_as_intersecting`
 - `copy_marks_old_and_new_paths_as_intersecting`
 - `diff_resolution_rejects_non_ancestor_range`
 - `diff_resolution_rejects_unsafe_or_malformed_paths`
 
-In `tests/core/plan-completion-v5.test.ts`:
+In `tests/core/plan-completion-v5.test.ts` include:
 - `old_full_final_review_alone_cannot_complete_new_candidate_head`
 - `final_review_evidence_closure_extends_to_fix_head_only_with_scoped_delta_coverage`
 - `global_or_undecidable_clause_scope_requires_scoped_reproof_after_fix`
@@ -1520,6 +1531,8 @@ In `tests/core/plan-completion-v5.test.ts`:
 - `unaffected_file_scope_can_carry_forward_across_final_fix_wave`
 - `omitted_changed_path_cannot_cause_clause_carry_forward`
 - `diff_resolution_failure_makes_prior_unreproved_coverage_not_proven`
+- `diff_resolution_failure_cannot_construct_trusted_final_review_closure`
+- `blocked_final_evidence_preserves_fix_wave_failure_provenance`
 - `scoped_final_rereview_resolved_finding_clears_original_blocker`
 - `scoped_final_rereview_not_addressed_finding_remains_blocking`
 - `missing_scoped_disposition_does_not_silently_clear_original_blocker`
@@ -1535,24 +1548,20 @@ bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completio
 bun run vitest run tests/runtime/revision-diff-provider.test.ts
 ```
 
-Expected: FAIL because current acceptance has no v5 final evidence closure or trusted diff provider.
+Expected: FAIL because current acceptance has no type-safe v5 final evidence build.
 
-- [ ] **Step 3: Implement the runtime diff provider**
+- [ ] **Step 3: Implement runtime diff provider**
 
-The provider must produce only exact-range `RevisionDiffResult`; it must not decide clause semantics. Keep Git/process execution out of the pure conformance core.
+Provider produces exact-range `RevisionDiffResult` only; it never fabricates evidence and never decides clause semantics.
 
-- [ ] **Step 4: Implement conformance gate, final closure, and finding merge**
+- [ ] **Step 4: Implement complete/blocked final evidence build and finding merge**
 
-Use only `RevisionDiffResult.kind === "resolved"` for clause carry-forward. Merge findings exactly as specified above. Runtime remains fail-open where safe; acceptance remains fail-closed.
+- diff resolved → may produce trusted closure if all clause/finding/range conditions pass;
+- diff failed → produce blocked attempt preserving `FailedFinalFixWaveEvidence`; never construct closure;
+- merge only validated exact finding IDs from Task 7/8 flow;
+- runtime remains fail-open where safe; acceptance remains fail-closed.
 
 - [ ] **Step 5: Run GREEN focused suite + typecheck**
-
-Run:
-```bash
-bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
-bun run vitest run tests/runtime/revision-diff-provider.test.ts
-bun run typecheck
-```
 
 Expected: PASS.
 
@@ -1563,7 +1572,7 @@ git add src/core/conformance-gate.ts src/runtime/revision-diff-provider.ts \
   src/core/acceptance-decision.ts src/core/v2/gate-context.ts src/core/v2/decision-model.ts src/core/v2/state-projection.ts \
   tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts \
   tests/runtime/revision-diff-provider.test.ts
-git commit -m "feat: gate acceptance on provenance-bound final evidence"
+git commit -m "feat: gate acceptance on type-safe final evidence"
 ```
 
 ---
@@ -2005,17 +2014,17 @@ This phase belongs to the Superpowers controller, not the Task 14 implementer. I
    - run normal final verification against `FINAL_CANDIDATE_HEAD`;
    - generate the Superpowers scoped review package for exactly `FIX_BASE..FINAL_CANDIDATE_HEAD`;
    - dispatch **exactly one scoped re-review of that fix wave**.
-6. Justice ingests the original full final-review result plus, when present, the one scoped final re-review and recomputes `FinalReviewEvidenceClosure` for `FINAL_CANDIDATE_HEAD`:
+6. Justice ingests the original full final-review result plus, when present, the one scoped final re-review and calls the final-evidence builder for `FINAL_CANDIDATE_HEAD`:
    - obtain trusted `FinalFixDiffEvidence` for exactly `FIX_BASE..FINAL_CANDIDATE_HEAD` through `RevisionDiffProvider`;
    - rename/copy contributes both old and new paths to the touched set;
-   - diff resolution failure means prior Candidate-A clauses cannot be assumed unaffected;
+   - diff resolution failure produces `BlockedFinalReviewEvidenceAttempt` with exact failure provenance; it never produces a trusted closure;
    - Candidate-A clauses carry only when their evidence scope is deterministically non-intersecting with trusted changed paths;
    - affected/undecidable clauses require explicit scoped re-proof; otherwise `NOT_PROVEN`;
    - merge full→scoped finding disposition by `findingId`: explicit scoped `resolved` clears the matching original blocker; open/parked/NOT ADDRESSED or omission keeps it unresolved;
    - new scoped Critical/Important findings become blockers;
    - A's full review alone never proves B.
 7. Follow Superpowers residual adjudication rules after the one scoped re-review. **There is no second Justice-requested full review and no second Justice-requested fix wave.** If residual/load-bearing findings or missing clause coverage remain, Justice leaves `PlanComplete` BLOCKED and surfaces them to branch finishing/human review.
-8. Invoke `justice_review` in read/inspection mode as the Final Conformance Gate and require:
+8. Continue to the Final Conformance Gate only when the builder returned `kind: "complete"`; a `blocked` attempt is surfaced by `justice_review` and keeps `PlanComplete` BLOCKED. For a complete build, invoke `justice_review` in read/inspection mode and require:
    - `artifactChain.status == "AUTHORIZED"`;
    - `projection.status == "COMPLETE"`;
    - trusted `FinalReviewEvidenceClosure.candidateHead == git rev-parse HEAD`;
@@ -2142,9 +2151,9 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
 | Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
-| Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, authoritative child binding, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
+| Task 7 | Tasks 8–9, 13 | `ReviewFindingTarget`, `ReviewFindingContextProvider`, `RecognizedReviewDispatch`, authoritative child binding, `JusticeReviewResult`, scoped finding-ID validation |
 | Task 8 | Tasks 9, 13 | `ReviewFindingV5` disposition semantics and trusted persisted review evidence |
-| Task 9 | Tasks 13–14 | `RevisionDiffProvider`, `FinalFixDiffEvidence`, `FinalReviewEvidenceClosure`, deterministic finding merge, `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
+| Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
@@ -2162,7 +2171,7 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 2. **40 scenarios**
    - every Design §29 scenario has an owning task/test in the traceability table.
 3. **Type/signature consistency**
-   - `ApprovedArtifactChain`, `TaskIdentity`, `ExecutionCorrelation`, `ConformanceContract`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
+   - `ApprovedArtifactChain`, `TaskIdentity`, `ExecutionCorrelation`, `ConformanceContract`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
 4. **Ownership**
    - no task adds Justice-owned task/review/fix scheduling;
    - no task adds model/provider/retry/fallback ownership.
