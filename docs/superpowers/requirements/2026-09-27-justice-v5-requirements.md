@@ -402,6 +402,9 @@ observedAt
 ```
 
 An exact same-session persisted activation record may be reused after restart only when `authorizationId + sessionId + method` all match.
+Justice persists one current method-selection record per authorization and one current activation record per `authorizationId + sessionId`. A new explicit selection replaces the prior selection record for that authorization; a new successful skill activation replaces the prior activation record for that authorization/session.
+
+Activation evidence is acceptance-trusted only after durable persistence succeeds. Persistence/read/schema failure must not produce `already_active`; the affected methodology evidence is `NOT_PROVEN` until valid state is re-established.
 
 Cross-session recovery may recover **method selection** from trusted prior Justice execution state for the same authorization, but it never proves current-session activation:
 
