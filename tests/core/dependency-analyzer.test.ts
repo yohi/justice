@@ -6,6 +6,7 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-1",
     title: "Setup project structure",
+    rawBody: "## Task 1: Setup project structure",
     steps: [
       { id: "task-1-step-1", description: "Create directory", checked: true, lineNumber: 5 },
       { id: "task-1-step-2", description: "Init config", checked: true, lineNumber: 6 },
@@ -15,6 +16,7 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-2",
     title: "Implement core logic",
+    rawBody: "## Task 2: Implement core logic",
     steps: [
       {
         id: "task-2-step-1",
@@ -29,12 +31,14 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-3",
     title: "Add documentation",
+    rawBody: "## Task 3: Add documentation",
     steps: [{ id: "task-3-step-1", description: "Write README", checked: false, lineNumber: 15 }],
     status: "pending",
   },
   {
     id: "task-4",
     title: "Integration testing",
+    rawBody: "## Task 4: Integration testing",
     steps: [
       {
         id: "task-4-step-1",
@@ -70,6 +74,62 @@ describe("DependencyAnalyzer", () => {
   });
 
   describe("getParallelizable", () => {
+    it("runs only the first incomplete task when a real Interfaces block is present", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n**Interfaces:**\n- API` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2"]);
+    });
+
+    it("advances to the next incomplete task after the first completes", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, status: "completed" as const, rawBody: `${task.rawBody}\n**Interfaces:**\n- API` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-3"]);
+    });
+
+    it("ignores Interfaces text inside fenced code blocks", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`\n**Interfaces:**\n\`\`\`` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("ignores fence-like lines with trailing text inside an unclosed code fence", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`\n\`\`\`lang\n**Interfaces:**` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("does not enter conservative mode for prose containing the word Interfaces", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\nDiscuss Interfaces here` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("preserves legacy explicit dependency parallelization without Interfaces", () => {
+      const tasks = makeTasks().filter((task) => task.id === "task-1" || task.id === "task-2" || task.id === "task-3");
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
     it("should identify independent tasks that can run in parallel", () => {
       const tasks = makeTasks();
       const parallel = analyzer.getParallelizable(tasks);
@@ -83,7 +143,7 @@ describe("DependencyAnalyzer", () => {
     });
 
     it("should return empty array when all tasks are completed", () => {
-      const tasks: PlanTask[] = [{ id: "task-1", title: "Done", steps: [], status: "completed" }];
+      const tasks: PlanTask[] = [{ id: "task-1", title: "Done", rawBody: "## Task 1: Done", steps: [], status: "completed" }];
       const parallel = analyzer.getParallelizable(tasks);
       expect(parallel).toHaveLength(0);
     });
@@ -93,6 +153,7 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
+          rawBody: "## Task 1: A",
           steps: [
             { id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 },
           ],
@@ -101,6 +162,7 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-2",
           title: "B",
+          rawBody: "## Task 2: B",
           steps: [
             { id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 },
           ],
@@ -128,6 +190,7 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
+          rawBody: "## Task 1: A",
           steps: [
             { id: "s1", description: "do A (depends: task-2)", checked: false, lineNumber: 1 },
           ],
@@ -136,6 +199,7 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-2",
           title: "B",
+          rawBody: "## Task 2: B",
           steps: [
             { id: "s2", description: "do B (depends: task-1)", checked: false, lineNumber: 2 },
           ],
@@ -150,6 +214,7 @@ describe("DependencyAnalyzer", () => {
         {
           id: "task-1",
           title: "A",
+          rawBody: "## Task 1: A",
           steps: [
             { id: "s1", description: "do A (depends: task-999)", checked: false, lineNumber: 1 },
           ],

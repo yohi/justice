@@ -183,10 +183,11 @@ describe("Justice workflow bootstrap integration flow", () => {
     const task = await callTaskTool(adapter, sessionId, "c-plan-ready", "実装を進めてください");
     const prompt = task.args.prompt as string;
 
-    expect(prompt).toContain("Task Delegation Context");
-    expect(prompt).toContain("**Task ID**: task-1");
-    expect(prompt).toContain("**Category**: sp-implementation");
-    expect(prompt).toContain("- 🔄 Setup (1/2 steps)");
+    expect(prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
+    expect(prompt).toContain("## Task 1: Setup");
+    expect(prompt).toContain("- [ ] Setup project structure");
+    expect(prompt).toContain("**CALLER CONTEXT**");
+    expect(task.args.category).toBe("sp-implementation");
     expect(prompt).toContain("実装を進めてください");
     expect(task.args.load_skills).toEqual([
       "test-driven-development",
@@ -339,6 +340,8 @@ describe("Justice workflow bootstrap integration flow", () => {
     const ready = await callTaskTool(adapter, "s-ready", "c-ready", "実装を進めてください");
 
     expect(blocked.args.prompt).toBe("実装を進めてください");
-    expect(ready.args.prompt).toContain("**Category**: sp-implementation");
+    expect(ready.args.prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
+    expect(ready.args.prompt).toContain("**JUSTICE EXECUTION CONSTRAINTS**");
+    expect(ready.args.category).toBe("sp-implementation");
   });
 });

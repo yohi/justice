@@ -6,6 +6,7 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-1",
     title: "Setup",
+    rawBody: "## Task 1: Setup",
     status: "completed",
     steps: [
       { id: "s1", description: "Init", checked: true, lineNumber: 1 },
@@ -15,6 +16,7 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-2",
     title: "Implement",
+    rawBody: "## Task 2: Implement",
     status: "in_progress",
     steps: [
       { id: "s3", description: "Write tests", checked: true, lineNumber: 3 },
@@ -24,6 +26,7 @@ const makeTasks = (): PlanTask[] => [
   {
     id: "task-3",
     title: "Deploy",
+    rawBody: "## Task 3: Deploy",
     status: "pending",
     steps: [
       { id: "s5", description: "Build", checked: false, lineNumber: 5 },

@@ -72,7 +72,7 @@ describe("OpenCodeAdapter reflection flow", () => {
     );
 
     // Then
-    expect(before.args.task_id).toBe("task-1");
+    expect(before.args).not.toHaveProperty("task_id");
     // Success no longer writes plan.md (Task 3.7): checkbox progress awaits a
     // durable accepted TaskAcceptanceDecision from the review flow.
     expect(mockFs.writtenFiles["plan.md"]).toContain("- [ ] Init");

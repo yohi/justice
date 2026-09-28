@@ -335,6 +335,23 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     },
   );
 
+  it.each(["sp-review", "sp-final-review"] as const)(
+    "forces %s to run in the foreground when the adapter is in no-op mode",
+    async (category) => {
+      const adapter = new OpenCodeAdapter(
+        fakeInit({ project: { root: undefined }, directory: undefined, worktree: undefined }),
+      );
+      const args: Record<string, unknown> = { subagent_type: category, runInBackground: true };
+
+      await adapter.onToolExecuteBefore(
+        { tool: "task", sessionID: "s", callID: "no-op-review-call" },
+        { args },
+      );
+
+      expect(args.run_in_background).toBe(false);
+    },
+  );
+
   it("(a) forwards a non-task tool (bash) as PreToolUse with callId and toolInput", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

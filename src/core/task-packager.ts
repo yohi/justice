@@ -19,6 +19,13 @@ export function resolveTaskIdFromToolInput(
   return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
 }
 
+export function resolveOmoContinuationTaskId(
+  toolInput: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const taskId = toolInput.task_id ?? toolInput.taskId;
+  return typeof taskId === "string" && taskId.startsWith("ses_") ? taskId : undefined;
+}
+
 export function resolveTaskIdFromModifiedPayload(payload: unknown): string | undefined {
   if (
     typeof payload !== "object" ||
@@ -30,7 +37,7 @@ export function resolveTaskIdFromModifiedPayload(payload: unknown): string | und
     return undefined;
   }
   const args = payload.args as Record<string, unknown>;
-  const taskId = args.task_id ?? args.taskId;
+  const taskId = args.justice_task_id ?? args.task_id ?? args.taskId;
   return typeof taskId === "string" && taskId.startsWith("task-") ? taskId : undefined;
 }
 
@@ -96,6 +103,35 @@ export function normalizeTaskToolInputInPlace(toolInput: Record<string, unknown>
   for (const [key, value] of Object.entries(normalized)) {
     Reflect.set(toolInput, key, value);
   }
+}
+
+export function normalizeTaskToolInputForJusticeInPlace(toolInput: Record<string, unknown>): void {
+  const routingFields = new Map<string, unknown>();
+  for (const key of ["subagent_type", "category"]) {
+    if (key in toolInput) routingFields.set(key, toolInput[key]);
+  }
+  const normalized = normalizeTaskToolInput(toolInput);
+  for (const [key, value] of routingFields) normalized[key] = value;
+  replaceTaskToolInput(toolInput, normalized);
+}
+
+export function normalizeTaskToolInputForOmoWireInPlace(toolInput: Record<string, unknown>): void {
+  const continuationTaskId = resolveOmoContinuationTaskId(toolInput);
+  const normalized = normalizeTaskToolInput(toolInput);
+  delete normalized.task_id;
+  delete normalized.taskId;
+  if (continuationTaskId !== undefined) normalized.task_id = continuationTaskId;
+  replaceTaskToolInput(toolInput, normalized);
+}
+
+function replaceTaskToolInput(
+  toolInput: Record<string, unknown>,
+  normalized: Record<string, unknown>,
+): void {
+  for (const key of Object.keys(toolInput)) {
+    if (!(key in normalized)) Reflect.deleteProperty(toolInput, key);
+  }
+  for (const [key, value] of Object.entries(normalized)) Reflect.set(toolInput, key, value);
 }
 
 export function enrichTaskToolInput(

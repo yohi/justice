@@ -287,9 +287,12 @@ describe("PlanBridge", () => {
       if (response.action !== "inject") {
         throw new Error("expected inject response");
       }
-      expect(response.injectedContext).toContain("All steps are already completed.");
-      expect(response.injectedContext).toContain("**PREVIOUS LEARNINGS**:");
+      expect(response.injectedContext).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
+      expect(response.injectedContext).toContain("## Task 1: Deep existing task");
+      expect(response.injectedContext).toContain("**PREVIOUS LEARNINGS**");
       expect(response.injectedContext).toContain("Keep the existing parser contract unchanged.");
+      expect(response.injectedContext.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"))
+        .toBeLessThan(response.injectedContext.indexOf("**PREVIOUS LEARNINGS**"));
     });
   });
 
@@ -390,16 +393,50 @@ describe("PlanBridge", () => {
       }
       expect(response.modifiedPayload).toEqual({
         args: {
-          prompt: "do something",
-          task_id: "task-1",
+          prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
+          justice_task_id: "task-1",
           load_skills: [
             "domain-skill",
             "test-driven-development",
             "verification-before-completion",
           ],
-          category: "sp-implementation",
+          subagent_type: "deep",
         },
       });
+      const modifiedArgs = response.modifiedPayload?.args;
+      expect(modifiedArgs?.prompt).toContain("- [ ] Setup project structure");
+      expect(modifiedArgs?.prompt).toContain("**JUSTICE EXECUTION CONSTRAINTS**");
+      expect(modifiedArgs?.prompt.match(/do something/g)).toHaveLength(1);
+      expect(modifiedArgs?.prompt?.indexOf("**TASK CONTRACT FROM APPROVED PLAN**"))
+        .toBeLessThan(modifiedArgs?.prompt?.indexOf("**CALLER CONTEXT**"));
+      expect(modifiedArgs?.prompt?.indexOf("**CALLER CONTEXT**"))
+        .toBeLessThan(modifiedArgs?.prompt?.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
+    });
+
+    it("keeps caller-owned routing and does not inject a Justice category", async () => {
+      const reader = createMockFileReader({ "docs/plans/sample-plan.md": samplePlanContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-owned-route", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-owned-route",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "caller request", task_id: "task-1", subagent_type: "general" },
+        },
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject response");
+      expect(response.modifiedPayload?.args.subagent_type).toBe("general");
+      expect(response.modifiedPayload?.args).not.toHaveProperty("category");
+      expect(response.modifiedPayload?.args.prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
     });
 
     it("uses category-only worker routing when implementation directive adds test-driven-development", async () => {
@@ -503,8 +540,8 @@ describe("PlanBridge", () => {
       }
       expect(response.modifiedPayload).toEqual({
         args: {
-          prompt: "do something",
-          task_id: "task-1",
+          prompt: expect.stringContaining("**TASK CONTRACT FROM APPROVED PLAN**"),
+          justice_task_id: "task-1",
           load_skills: ["test-driven-development", "verification-before-completion"],
           category: "sp-implementation",
         },

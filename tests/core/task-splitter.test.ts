@@ -10,6 +10,7 @@ describe("TaskSplitter", () => {
       const task: PlanTask = {
         id: "task-1",
         title: "Implement feature",
+        rawBody: "## Task 1: Implement feature",
         status: "failed",
         steps: [
           { id: "s1", description: "Setup", checked: false, lineNumber: 1 },
@@ -27,6 +28,7 @@ describe("TaskSplitter", () => {
       const task: PlanTask = {
         id: "task-2",
         title: "Build module",
+        rawBody: "## Task 2: Build module",
         status: "failed",
         steps: [
           { id: "s1", description: "Write code", checked: false, lineNumber: 1 },
@@ -45,6 +47,7 @@ describe("TaskSplitter", () => {
       const task: PlanTask = {
         id: "task-3",
         title: "Refactor",
+        rawBody: "## Task 3: Refactor",
         status: "failed",
         steps: [
           { id: "s1", description: "Part 1", checked: false, lineNumber: 1 },
@@ -60,6 +63,7 @@ describe("TaskSplitter", () => {
       const task: PlanTask = {
         id: "task-4",
         title: "Fix bug",
+        rawBody: "## Task 4: Fix bug",
         status: "failed",
         steps: [{ id: "s1", description: "Fix it", checked: false, lineNumber: 1 }],
       };
@@ -74,6 +78,7 @@ describe("TaskSplitter", () => {
       const task: PlanTask = {
         id: "task-5",
         title: "Format test",
+        rawBody: "## Task 5: Format test",
         status: "failed",
         steps: [{ id: "s1", description: "Do something", checked: false, lineNumber: 1 }],
       };

@@ -5,6 +5,7 @@ import type { WorkflowDirectiveStage } from "./workflow-directives";
 export interface PlanTask {
   readonly id: string;
   readonly title: string;
+  readonly rawBody: string;
   readonly steps: PlanStep[];
   readonly status: PlanTaskStatus;
 }

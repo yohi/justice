@@ -6,6 +6,7 @@ function makeTask(title: string, steps: string[] = []): PlanTask {
   return {
     id: "t1",
     title,
+    rawBody: `## Task 1: ${title}`,
     steps: steps.map((description, i) => ({
       id: `t1-step-${i + 1}`,
       description,

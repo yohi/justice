@@ -2,6 +2,7 @@ import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
 const CHECKBOX_ANY_REGEX = /^(\s*-\s+\[)([ xX])(\]\s+.+)$/;
+const FENCE_OPEN_REGEX = /^ {0,3}(`{3,}|~{3,})/;
 
 export class PlanParser {
   /**
@@ -10,9 +11,16 @@ export class PlanParser {
   parse(content: string): PlanTask[] {
     if (!content.trim()) return [];
 
-    const lines = content.split("\n");
+    const lines = content.split(/\r?\n/);
     const tasks: PlanTask[] = [];
-    let currentTask: { title: string; taskNum: number; steps: PlanStep[] } | null = null;
+    let currentTask: {
+      title: string;
+      taskNum: number;
+      steps: PlanStep[];
+      startOffset: number;
+    } | null = null;
+    let lineStartOffset = 0;
+    let fence: { readonly character: string; readonly length: number } | null = null;
 
     for (let i = 0; i < lines.length; i++) {
       // eslint-disable-next-line security/detect-object-injection
@@ -21,20 +29,37 @@ export class PlanParser {
 
       const lineNumber = i + 1; // 1-indexed
 
-      const taskMatch = line.match(TASK_HEADING_REGEX);
+      const openingFence = line.match(FENCE_OPEN_REGEX)?.[1];
+      if (fence) {
+        const { character, length } = fence;
+        const closingFence = openingFence?.[0] === character ? openingFence : undefined;
+        const closingLine = line.trim();
+        if (
+          closingFence !== undefined &&
+          closingFence.length >= length &&
+          closingLine.length >= length &&
+          [...closingLine].every((fenceCharacter) => fenceCharacter === character)
+        ) {
+          fence = null;
+        }
+      } else if (openingFence !== undefined) {
+        fence = { character: openingFence[0] ?? "`", length: openingFence.length };
+      }
+
+      const taskMatch = fence ? null : line.match(TASK_HEADING_REGEX);
       if (taskMatch?.[1] !== undefined && taskMatch[2] !== undefined) {
         if (currentTask) {
-          tasks.push(this.buildTask(currentTask));
+          tasks.push(
+            this.buildTask(currentTask, content.slice(currentTask.startOffset, lineStartOffset)),
+          );
         }
         currentTask = {
           taskNum: parseInt(taskMatch[1], 10),
           title: taskMatch[2].trim(),
           steps: [],
+          startOffset: lineStartOffset,
         };
-        continue;
-      }
-
-      if (currentTask) {
+      } else if (currentTask) {
         const checkboxMatch = line.match(CHECKBOX_ANY_REGEX);
         if (checkboxMatch?.[2] !== undefined && checkboxMatch[3] !== undefined) {
           const stepNum = currentTask.steps.length + 1;
@@ -46,10 +71,13 @@ export class PlanParser {
           });
         }
       }
+
+      const lineEnding = content.slice(lineStartOffset + line.length).startsWith("\r\n") ? 2 : 1;
+      lineStartOffset += line.length + lineEnding;
     }
 
     if (currentTask) {
-      tasks.push(this.buildTask(currentTask));
+      tasks.push(this.buildTask(currentTask, content.slice(currentTask.startOffset)));
     }
 
     return tasks;
@@ -136,10 +164,14 @@ export class PlanParser {
     return tasks.find((t) => t.status === "pending" || t.status === "in_progress");
   }
 
-  private buildTask(raw: { title: string; taskNum: number; steps: PlanStep[] }): PlanTask {
+  private buildTask(
+    raw: { title: string; taskNum: number; steps: PlanStep[] },
+    rawBody: string,
+  ): PlanTask {
     return {
       id: `task-${raw.taskNum}`,
       title: raw.title,
+      rawBody,
       steps: raw.steps,
       status: this.deriveStatus(raw.steps),
     };

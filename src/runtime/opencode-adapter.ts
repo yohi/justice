@@ -13,7 +13,11 @@ import {
 } from "../core/trigger-detector";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
-import { normalizeTaskToolInputInPlace, resolveTaskIdFromToolInput } from "../core/task-packager";
+import {
+  normalizeTaskToolInputForJusticeInPlace,
+  normalizeTaskToolInputForOmoWireInPlace,
+  resolveTaskIdFromToolInput,
+} from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
 import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
@@ -646,23 +650,27 @@ export class OpenCodeAdapter {
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<HookResponse> {
+    const isTask = input.tool === "task";
+    const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
     try {
-    if (input.tool === "task") {
-      this.#rememberReviewCategory(input, output.args);
-      normalizeTaskToolInputInPlace(output.args);
-      const category = output.args.category;
-      if (category === "sp-review" || category === "sp-final-review") {
-        output.args.run_in_background = false;
+      if (isTask) {
+        this.#rememberReviewCategory(input, output.args);
+        normalizeTaskToolInputForJusticeInPlace(output.args);
       }
-    }
-      if (this.#noOp) return PROCEED;
+      if (this.#noOp) {
+        this.#finalizeTaskToolInput(isTask, input, output.args);
+        return PROCEED;
+      }
 
       // Forward every tool except justice_* query tools, which must not perturb
       // the canonical Observation Log (D50).
       if (input.tool.startsWith("justice_")) return PROCEED;
       await this.ensureInitialized();
       const justice = this.#justice;
-      if (!justice) return PROCEED;
+      if (!justice) {
+        this.#finalizeTaskToolInput(isTask, input, output.args);
+        return PROCEED;
+      }
 
       const response = await justice.handleEvent({
         type: "PreToolUse",
@@ -676,35 +684,57 @@ export class OpenCodeAdapter {
       });
 
       if (response.action !== "inject") {
-        this.#rememberReviewCategory(input, output.args);
+        this.#finalizeTaskToolInput(isTask, input, output.args);
         return response;
       }
 
-      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
-      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
-
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
-      if (!modified?.args) return response;
+      const modifiedPrompt = modified?.args?.prompt;
+      if (isTask && typeof modifiedPrompt === "string") {
+        output.args.prompt = modifiedPrompt;
+      } else {
+        output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
+      }
+      if (!modified?.args) {
+        this.#finalizeTaskToolInput(isTask, input, output.args);
+        return response;
+      }
 
       for (const [key, value] of Object.entries(modified.args)) {
-        if (key === "prompt") continue;
+        if (
+          key === "prompt" ||
+          (isTask && (key === "task_id" || key === "taskId" || key === "justice_task_id"))
+        ) continue;
         // eslint-disable-next-line security/detect-object-injection
         output.args[key] = value;
       }
 
-      if (input.tool === "task") {
-      normalizeTaskToolInputInPlace(output.args);
-      const category = output.args.category;
-      if (category === "sp-review" || category === "sp-final-review") {
-        output.args.run_in_background = false;
-      }
-      this.#rememberReviewCategory(input, output.args);
-      }
+      this.#finalizeTaskToolInput(isTask, input, output.args);
       return response;
     } catch (err) {
+      if (isTask) normalizeTaskToolInputForOmoWireInPlace(output.args);
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
       return PROCEED;
     }
+  }
+
+  #finalizeTaskToolInput(
+    isTask: boolean,
+    input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
+    args: Record<string, unknown>,
+  ): void {
+    if (!isTask) return;
+    const subagentType = args.subagent_type;
+    const category = args.category ?? subagentType;
+    normalizeTaskToolInputForOmoWireInPlace(args);
+    if (typeof subagentType === "string") {
+      args.subagent_type = subagentType;
+      delete args.category;
+    }
+    if (category === "sp-review" || category === "sp-final-review") {
+      args.run_in_background = false;
+    }
+    this.#rememberReviewCategory(input, args);
   }
 
   /**
@@ -835,7 +865,6 @@ export class OpenCodeAdapter {
   ): void {
     if (input.tool !== "task") return;
     const rawCategory = args.category ?? args.subagent_type;
-    normalizeTaskToolInputInPlace(args);
     const category = rawCategory;
     if (category !== "sp-review" && category !== "sp-final-review") return;
     this.#reviewCategoriesByCallId.set(relationKey(input.sessionID, input.callID), {
