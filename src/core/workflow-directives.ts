@@ -27,7 +27,7 @@ export type CanonicalWorkflowSkill =
 
 export type WorkflowNextAction =
   | "invoke_skill"
-  | "request_review"
+  | "run_review_gate"
   | "await_human_approval"
   | "delegate_task";
 
@@ -48,9 +48,9 @@ const GUIDANCE = {
   plan_required:
     "`writing-plans` を使い、設計を検証可能なタスク、依存関係、完了条件に分解してください。\n計画が承認されるまで実装コードを変更しません。",
   plan_review_required:
-    "設計・計画だけを含むPRを利用可能な連携で準備し、AIレビューを依頼してください。\n指摘は修正して同じレビューを再実行し、人間による明示的な承認とマージを待ってください。\nJusticeはPR作成、承認、マージを観測できません。確認されるまで task() を呼びません。",
+    "Design と Implementation Plan の Review Gate を開始するには、利用者が `/justice-review-gate --design <designPath> --plan <planPath>` を実行してください。\nこの段階から `requesting-code-review` / `code-review` Skill、CodeRabbit CLI、`justice_review` を直接 Review Gate executor として起動しません。\nGate が `review_clear` になり、人間による明示的な承認とマージが確認されるまで実装 task() を開始しません。",
   review_remediation:
-    "未解決のレビュー指摘を修正し、同じレビューを再実行してください。\n`justice_review` の解決記録は、人間が承認した項目だけに使用してください。",
+    "`receiving-code-review` を使って未解決のレビュー指摘を検討・修正してください。修正後の再レビューは、同じ Design / Implementation Plan を指定して `/justice-review-gate --design <designPath> --plan <planPath>` を再実行してください。\n`justice_review` の解決記録は、人間が承認した項目だけに使用してください。",
   review_clear:
     "レビュー指摘がない完全スナップショットを観測しました。既存の承認フローに進んでください。\nこの結果から、PR作成、人間の承認、またはマージ済みとは推測しません。",
   implementation:
@@ -87,8 +87,8 @@ export function resolveWorkflowDirective(input: WorkflowDirectiveInput): Workflo
       return {
         stage: input.stage,
         marker: "[JUSTICE: PLAN REVIEW REQUIRED]",
-        requiredSkills: ["requesting-code-review"],
-        nextAction: "request_review",
+        requiredSkills: [],
+        nextAction: "run_review_gate",
         authority: "artifact_ready",
         guidance: GUIDANCE.plan_review_required,
       };

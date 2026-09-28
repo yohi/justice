@@ -8,7 +8,7 @@ describe("resolveWorkflowDirective", () => {
   it.each([
     ["design_required", ["brainstorming"], "invoke_skill", "artifact_ready"],
     ["plan_required", ["writing-plans"], "invoke_skill", "artifact_ready"],
-    ["plan_review_required", ["requesting-code-review"], "request_review", "artifact_ready"],
+    ["plan_review_required", [], "run_review_gate", "artifact_ready"],
     ["review_remediation", ["receiving-code-review"], "invoke_skill", "artifact_ready"],
     ["review_clear", [], "await_human_approval", "external_unverified"],
     [
@@ -61,7 +61,6 @@ describe("formatWorkflowDirective", () => {
   });
 
   it.each([
-    ["plan_review_required", "requesting-code-review"],
     ["review_remediation", "receiving-code-review"],
     ["implementation_arm", "subagent-driven-development"],
   ] as const)("exposes %s as a required skill marker", (stage, requiredSkill) => {
@@ -72,6 +71,20 @@ describe("formatWorkflowDirective", () => {
     expect(directive).toContain(`[JUSTICE: REQUIRED SKILLS: ${requiredSkill}]`);
   });
 
+  it("routes plan review readiness to the explicit justice-review-gate command", () => {
+    const directive = formatWorkflowDirective({ stage: "plan_review_required" });
+
+    expect(directive).toContain("/justice-review-gate --design <designPath> --plan <planPath>");
+    expect(directive).not.toContain("[JUSTICE: REQUIRED SKILLS: requesting-code-review]");
+    expect(directive).toContain("requesting-code-review");
+    expect(directive).toContain("直接 Review Gate executor として起動しません");
+  });
+  it("routes review remediation back through the explicit review Gate", () => {
+    const directive = formatWorkflowDirective({ stage: "review_remediation" });
+
+    expect(directive).toContain("[JUSTICE: REQUIRED SKILLS: receiving-code-review]");
+    expect(directive).toContain("/justice-review-gate --design <designPath> --plan <planPath>");
+  });
   it("states that Justice cannot verify external approval or merge status for implementation", () => {
     // When
     const directive = formatWorkflowDirective({ stage: "implementation" });
