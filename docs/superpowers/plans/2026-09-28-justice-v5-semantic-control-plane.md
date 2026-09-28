@@ -882,7 +882,6 @@ git commit -m "feat: persist Justice execution correlation"
 - Modify: `src/core/justice-plugin.ts`
 - Modify: `src/core/types.ts` only for hook payload/event types.
 - Test: `tests/runtime/opencode-adapter-execution-correlation.test.ts`
-- Test: existing adapter child-session relation tests.
 
 **Interfaces:**
 - Consumes: `ExecutionCorrelationStore`, `resolveSuperpowersImplementationTask`, active `ApprovedArtifactChain`.
@@ -913,9 +912,19 @@ Expected: FAIL on durable binding and `task_id` preservation.
 
 Keep the existing fail-open hook exception boundary. Remove any use of semantic `task_id` as correlation authority.
 
-- [ ] **Step 4: Run GREEN tests + existing adapter suite + typecheck**
+- [ ] **Step 4: Run GREEN tests + exact existing adapter regressions + typecheck**
 
-Expected: PASS.
+Run:
+```bash
+bun run vitest run \
+  tests/runtime/opencode-adapter-execution-correlation.test.ts \
+  tests/runtime/opencode-adapter.test.ts \
+  tests/runtime/opencode-adapter-capability.test.ts \
+  tests/runtime/opencode-adapter-v2.test.ts
+bun run typecheck
+```
+
+The three pre-existing adapter files are regression-run inputs only; Task 6 does not plan to modify them. Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1093,7 +1102,7 @@ git commit -m "feat: persist v5 review and quality evidence"
 - Modify: `src/core/v2/decision-model.ts`
 - Modify: `src/core/v2/state-projection.ts`
 - Test: `tests/core/conformance-gate.test.ts`
-- Test: existing acceptance-decision tests.
+- Test: `tests/core/acceptance-decision.test.ts`
 - Test: `tests/core/plan-completion-v5.test.ts`
 
 **Interfaces:**
@@ -1155,7 +1164,7 @@ Expected: PASS.
 ```bash
 git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts \
   src/core/v2/decision-model.ts src/core/v2/state-projection.ts \
-  tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+  tests/core/conformance-gate.test.ts tests/core/acceptance-decision.test.ts tests/core/plan-completion-v5.test.ts
 git commit -m "feat: gate acceptance on v5 conformance"
 ```
 
@@ -1173,7 +1182,17 @@ git commit -m "feat: gate acceptance on v5 conformance"
 - Modify: `src/core/dependency-analyzer.ts`
 - Modify: `src/core/plan-completion-detector.ts`
 - Modify: `src/core/execution-role-classifier.ts`
-- Test: existing review-dispatch / plan-bridge / dependency tests.
+- Test: `tests/core/review-dispatch-state.test.ts`
+- Test: `tests/core/review-dispatch-state-behavior.test.ts`
+- Test: `tests/core/plan-bridge-core.test.ts`
+- Test: `tests/core/dependency-analyzer.test.ts`
+- Test: `tests/unit/core/execution-role-classifier.test.ts`
+- Test: `tests/hooks/plan-bridge-authorization.test.ts`
+- Test: `tests/hooks/plan-bridge-implement.test.ts`
+- Test: `tests/hooks/plan-bridge-posttooluse.test.ts`
+- Test: `tests/hooks/plan-bridge.test.ts`
+- Test: `tests/integration/plan-bridge-fallback.test.ts`
+- Test: `tests/integration/plan-bridge-flow.test.ts`
 - Create: `tests/core/superpowers-ownership-v5.test.ts`
 - Create: `tests/core/plan-completion-detector-v5.test.ts`
 
@@ -1218,7 +1237,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts src/core/execution-role-classifier.ts tests/core/superpowers-ownership-v5.test.ts tests/core/plan-completion-detector-v5.test.ts
+git add \
+  src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts \
+  src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts src/core/execution-role-classifier.ts \
+  tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts \
+  tests/core/plan-bridge-core.test.ts tests/core/dependency-analyzer.test.ts tests/unit/core/execution-role-classifier.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge-implement.test.ts \
+  tests/hooks/plan-bridge-posttooluse.test.ts tests/hooks/plan-bridge.test.ts \
+  tests/integration/plan-bridge-fallback.test.ts tests/integration/plan-bridge-flow.test.ts \
+  tests/core/superpowers-ownership-v5.test.ts tests/core/plan-completion-detector-v5.test.ts
 git commit -m "refactor: return workflow orchestration to Superpowers"
 ```
 
@@ -1236,7 +1263,9 @@ git commit -m "refactor: return workflow orchestration to Superpowers"
 - Modify: `src/runtime/doctor-cli.ts`
 - Modify: `src/runtime/doctor-cli-helpers.ts`
 - Test: `tests/core/omo-effective-config.test.ts`
-- Test: existing doctor-config/controller-routing/doctor-cli tests.
+- Test: `tests/core/justice-doctor-config.test.ts`
+- Test: `tests/core/controller-routing.test.ts`
+- Test: `tests/runtime/doctor-cli.test.ts`
 - Create: `tests/runtime/doctor-v5.test.ts`
 
 **Interfaces:**
@@ -1305,7 +1334,8 @@ Expected: PASS.
 ```bash
 git add src/core/omo-effective-config.ts src/core/doctor-config.ts src/core/doctor-categories.ts \
   src/core/controller-routing.ts src/runtime/doctor-cli.ts src/runtime/doctor-cli-helpers.ts \
-  tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts
+  tests/core/omo-effective-config.test.ts tests/core/justice-doctor-config.test.ts \
+  tests/core/controller-routing.test.ts tests/runtime/doctor-cli.test.ts tests/runtime/doctor-v5.test.ts
 git commit -m "feat: diagnose OmO v5 effective configuration"
 ```
 
@@ -1321,7 +1351,8 @@ git commit -m "feat: diagnose OmO v5 effective configuration"
 - Modify: `src/core/workflow-router.ts`
 - Modify: `src/core/controller-routing.ts`
 - Modify: `src/core/types.ts`
-- Test: existing error-classifier/provider-pattern tests.
+- Test: `tests/core/error-classifier.test.ts`
+- Test: `tests/core/provider-error-patterns.test.ts`
 - Create: `tests/core/omo-v5-upstream-drift.test.ts`
 
 **Interfaces:**
@@ -1354,7 +1385,9 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/provider-error-patterns.ts src/core/error-classifier.ts src/core/workflow-router.ts src/core/controller-routing.ts src/core/types.ts tests/core/omo-v5-upstream-drift.test.ts
+git add src/core/provider-error-patterns.ts src/core/error-classifier.ts src/core/workflow-router.ts \
+  src/core/controller-routing.ts src/core/types.ts tests/core/error-classifier.test.ts \
+  tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
 git commit -m "chore: synchronize Justice with OmO v5 contracts"
 ```
 
@@ -1453,7 +1486,7 @@ git commit -m "feat: expose Justice v5 recovery and gate state"
 - Modify: `SPEC.md`
 - Modify: `docs/agents/upstream-drift.md`
 - Modify: `docs/reports/upstream-compatibility-audit.md`
-- Modify: other documentation only when it contains a directly stale OmO/Superpowers contract.
+- No other tracked documentation is in Task 14 scope. If another stale contract is discovered, stop for artifact reconciliation before editing it.
 - No release-version edit.
 
 **Interfaces:**
