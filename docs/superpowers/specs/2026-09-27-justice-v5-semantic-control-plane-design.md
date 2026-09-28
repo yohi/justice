@@ -1111,81 +1111,149 @@ ClauseEvidenceScope =
 
 #### Scoped re-review finding identity continuity
 
-Justice never fuzzy-matches findings between separate reviewer calls.
+Justice never fuzzy-matches findings between separate reviewer calls and never derives the current scoped target set by projecting every finding from a preceding review.
 
-Before enriching a scoped re-review, Justice resolves the trusted immediately preceding review that the scoped review is verifying.
+The exact transport marker is:
 
 ```text
-ReviewFindingTarget
-├─ findingId
-├─ severity
-├─ summary
-└─ location?
+[[justice-finding:<findingId>]]
 ```
 
-The lookup contract is:
+where `findingId` must match:
+
+```text
+^jf_[0-9a-f]{16}$
+```
+
+Every Justice-tracked quality finding in a task/final review and every new breakage in a scoped review must have:
+
+1. exactly one human-readable marker on that finding line;
+2. the same ID in the machine `ReviewFindingV5.findingId`;
+3. an ID unique within that review result.
+
+Human-marker/machine-ID mismatch, orphan markers, malformed markers, or duplicate IDs make the structured review evidence invalid.
+
+This transport relies on a verified Superpowers v6.4.2 workflow property: the controller sends the current open findings verbatim to the fix implementer and to the scoped re-review. Justice uses that verbatim transport without taking ownership of which findings stay open.
+
+##### Current-dispatch target set
+
+For a recognized scoped re-review, Justice extracts marker IDs only from:
+
+```text
+## The Findings Under Verification
+...
+## The Fix
+```
+
+The start and end headings above are exact boundaries. Markers elsewhere in the reviewer prompt do not contribute to the current target set.
+
+```text
+ScopedFindingMarkerExtraction =
+  resolved(requestedFindingIds[])
+  | invalid(reason)
+```
+
+Extraction rules:
+
+- preserve marker first-appearance order;
+- `requestedFindingIds` may be empty;
+- duplicate IDs are invalid;
+- malformed Justice marker syntax inside the findings section is invalid;
+- no summary/location/order matching is performed.
+
+This current dispatch is the authority for **which Justice quality findings this scoped review is verifying**.
+
+Therefore:
+
+- Minor findings that Superpowers deferred and omitted from the loop do not re-enter `requestedFindingIds`;
+- an ADDRESSED finding removed from the next open-findings list does not reappear merely because it exists in persisted evidence;
+- a NOT ADDRESSED finding continues with the same marker because Superpowers carries its line forward verbatim;
+- new Critical/Important breakage may enter a later round with the new stable marker created in the scoped result;
+- spec/clause-only scoped re-review is represented by `requestedFindingIds = []`.
+
+An empty marker set is a valid scoped target set and is different from extraction/context failure.
+
+##### Trusted metadata lookup
+
+The context lookup contract is:
 
 ```text
 ReviewFindingContextQuery
 ├─ artifactChainId
 ├─ scope: task | final
-├─ taskIdentity?              # required for task scope, absent for final scope
-└─ precedingReviewedHead      # scoped re-review base SHA
+├─ taskIdentity?               # task scope only
+├─ precedingReviewedHead       # scoped base SHA
+└─ requestedFindingIds[]
 ```
 
-A trusted context exists only when exactly one trusted preceding result matches:
+Justice first resolves the exact trusted preceding review by artifact chain, scope, task identity where applicable, and `reviewedRange.head === precedingReviewedHead`.
 
-- same `artifactChainId`;
-- same task identity for task scope, or final-review scope for final scope;
-- preceding result `reviewedRange.head === precedingReviewedHead`;
-- preceding result is itself trusted.
-
-For task fix rounds the preceding result may be a trusted task review or the trusted immediately preceding scoped re-review. For the final fix wave it is the trusted full final review.
+It then looks up **only** the IDs in `requestedFindingIds`.
 
 ```text
 ReviewFindingContextResult =
-  resolved(expectedFindings, sourceReviewCorrelationId)
+  resolved(expectedFindings[], sourceReviewCorrelationId)
   | not_found
   | ambiguous
   | untrusted
 ```
 
+`resolved(expectedFindings=[])` is valid when `requestedFindingIds=[]`.
+
+For each non-empty requested ID:
+
+- exactly one finding with that ID must exist in the trusted preceding review;
+- its immutable metadata is projected into `ReviewFindingTarget`;
+- an explicitly `resolved`, deferred Minor, or `human_adjudicated` stored finding requested as a current open target is inconsistent and yields `untrusted`;
+- unknown/duplicate requested ID yields `untrusted`.
+
+For task fix rounds, the preceding trusted result may be the initial task review or the immediately preceding scoped re-review. For the final one-fix-wave path, it is the trusted full final review.
+
 Task/first-final reviews have no `expectedFindings`.
 
-A scoped re-review requires `resolved` context. Otherwise Justice does not inject the structured scoped-review appendix and semantic review evidence remains `NOT_PROVEN`.
-
-The scoped appendix includes the exact `ReviewFindingTarget[]` and requires:
-
-- every expected finding exactly once;
-- exact `findingId`, severity, summary, and location echo;
-- `ADDRESSED` → `disposition: resolved`;
-- `NOT ADDRESSED` → `disposition: open`;
-- any new breakage uses a non-empty ID not present in the expected/original ID set;
-- reviewer output never emits `human_adjudicated`.
-
-Structured-result validation is deterministic:
-
-- missing expected ID → invalid scoped evidence; original finding remains unresolved;
-- duplicate expected ID → invalid;
-- same ID but severity/summary/location mismatch → invalid;
-- any non-expected ID is treated only as new breakage;
-- a new-breakage ID collision with an expected ID → invalid;
-- duplicate new ID → invalid.
-
-No summary/location/order similarity heuristic is an authority for identity.
+Scoped re-review always has an `expectedFindings` value when context resolution succeeds; the array may be empty.
 
 Architecture ownership:
 
 ```text
-review-interop module (Task 7)
-  owns ReviewFindingTarget / context-provider interface
-  accepts expectedFindings as input
-        ↑
-Justice evidence coordination (Task 8)
-  resolves expectedFindings from trusted preceding persisted review evidence
+review recognition / marker extraction (Task 7)
+  current scoped dispatch → requestedFindingIds
+        ↓
+review evidence store (Task 8)
+  requested IDs + exact preceding trusted review
+  → expectedFindings metadata
+        ↓
+review interop (Task 7)
+  appendix + result expectation
 ```
 
-This avoids a Task 7↔Task 8 cycle: Task 7 defines and tests the input contract with a provider seam; Task 8 supplies the production store-backed provider. Until that provider returns `resolved`, scoped semantic evidence remains fail-closed.
+The evidence store never decides the current open set. It resolves metadata only for IDs selected by the current Superpowers dispatch.
+
+##### Scoped appendix/result validation
+
+For non-scoped review, Justice requires every machine quality finding to have a matching human marker/ID.
+
+For scoped re-review:
+
+- the appendix includes exactly the resolved `expectedFindings` array, even when empty;
+- every expected finding must appear exactly once in the scoped verdicts with the same ID/severity/summary/location and marker;
+- `ADDRESSED` maps to `resolved`;
+- `NOT ADDRESSED` maps to `open`;
+- new breakage gets a fresh `jf_<16 lowercase hex>` ID and matching marker;
+- new breakage may not reuse an expected/original ID;
+- reviewer output may not emit `human_adjudicated`.
+
+When `expectedFindings=[]`, the appendix is still injected and the structured result is still required to return the Conformance Contract clause results. This is the supported spec/clause-only scoped re-review path.
+
+Invalid cases include:
+
+- missing/duplicate expected ID;
+- expected metadata or marker mismatch;
+- duplicate/malformed/orphan marker;
+- new-breakage ID collision;
+- requested/context identity inconsistency.
+
+No similarity heuristic is an authority for finding identity.
 
 #### Final fix diff provenance
 
