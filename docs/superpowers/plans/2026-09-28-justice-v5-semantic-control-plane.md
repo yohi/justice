@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild Justice as the fail-closed semantic nervous system between Superpowers v6.4.2 and OmO v5 OpenCode edition, with zero unresolved semantic drift at PlanComplete.
 
-**Architecture:** Superpowers remains the workflow/review scheduler, OmO remains the runtime/model/provider authority, and Justice owns durable authorization, semantic correlation, normative projection, evidence, conformance, quality, and acceptance. v5 introduces an exact Requirements→Design→Plan artifact chain, sidecar execution correlation keyed by OpenCode parent session/call, deterministic Conformance Contracts, and review interop that enriches the existing Superpowers reviewer call instead of dispatching another reviewer.
+**Architecture:** Superpowers owns WHAT (method selection and workflow/review progression), Justice owns the activation bridge plus SEMANTIC HOW (execution classification, provenance-aware category translation, correlation/evidence/acceptance), and OmO owns CONCRETE HOW (agent/runtime/model/provider/reasoning/retry/fallback). Justice activates only an authoritative selected Superpowers method, translates recognized Superpowers generic workers into one semantic `sp-*` category, and never becomes either a scheduler or a concrete model/provider resolver.
 
 **Tech Stack:** TypeScript 6.x, Bun, Vitest 4.x, Effect, Zod, YAML, OpenCode plugin hooks, existing AtomicPersistence and Observation Log infrastructure.
 
@@ -14,8 +14,11 @@
 
 ## Global Constraints
 
-- Superpowers owns task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
-- OmO owns agent runtime, model/provider selection, retry, fallback, and continuation `task_id=ses_...`. Justice MUST NOT seize those responsibilities.
+- Superpowers owns execution-method selection, task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
+- Justice owns activation of the authoritatively selected supported Superpowers execution method and semantic Superpowers→OmO category translation; activation does not grant progression ownership.
+- OmO owns concrete agent/runtime/category resolution, model/provider/reasoning selection, retry, fallback, and continuation `task_id=ses_...`. Justice MUST NOT seize those responsibilities.
+- Recognized Superpowers `subagent_type="general"` on a new worker is a compatibility placeholder and MUST be translated to exactly one authoritative Justice category; non-Superpowers explicit subagent routing and OmO continuations remain preserved.
+- Justice MUST NOT select a concrete model/provider. Ambiguous semantic classification is untrusted/`NOT_PROVEN`, not a reason to fabricate a category or model.
 - Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
 - Runtime execution may fail open where safe; Authorization / Accepted / Verified / Complete MUST fail closed when required proof is missing.
 - Human implementation approval binds one exact Requirements→Design→Plan `ApprovedArtifactChain`.
@@ -58,6 +61,7 @@ New focused modules:
 - `src/core/conformance-projector.ts` — Requirements/Design/Plan projection and completeness validation.
 - `src/core/execution-correlation.ts` — durable parent-session/call ↔ semantic task ↔ child-session sidecar state.
 - `src/core/superpowers-dispatch-resolver.ts` — resolve implementation TaskIdentity from Superpowers task-brief artifacts.
+- `src/core/workflow-activation.ts` — resolve authoritative Superpowers execution-method activation intent without owning methodology progression.
 - `src/core/review-interop.ts` — versioned Superpowers reviewer recognition and prompt appendix construction.
 - `src/core/review-result.ts` — strict JusticeReviewResult parsing and stale/scope validation.
 - `src/core/review-evidence-store.ts` — durable v5 structured review/conformance evidence.
@@ -109,6 +113,9 @@ Justice uses:
 parent tool.execute.before
   → observe recognized Superpowers review
   → persist PendingReviewCorrelation(parentSessionId + parentCallId)
+  → classify task/scoped review as review; final as final-review
+  → translate subagent_type="general" to category=sp-review/sp-final-review
+  → remove subagent_type; preserve XOR
 
 TaskTool creates child session
 
@@ -142,13 +149,13 @@ text      = rendered Justice review appendix
 synthetic = true
 ```
 
-`input.sessionID` must equal `output.message.sessionID`. Justice never removes/replaces original reviewer parts and never changes subagent/category/model/provider/variant.
+`input.sessionID` must equal `output.message.sessionID`. The child `chat.message` appendix layer never removes/replaces original reviewer parts and never changes routing/model/provider/variant. Any recognized `general`→`sp-review` / `sp-final-review` translation already happened on the parent `tool.execute.before` routing layer.
 
 ### Before-hook mutation statement
 
 OpenCode executes the same `args/taskArgs` object after `tool.execute.before`, so an in-place property mutation can be observable by the executor. Justice v5 **does not use that path by design** for review delivery; it uses the awaited child `chat.message` + authoritative session lookup contract above. Do not describe before-hook in-place mutation as source-impossible.
 
-Superpowers v6.4.2 task review, scoped re-review, and final whole-branch review all use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`.
+Superpowers v6.4.2 task review, scoped re-review, final whole-branch review, and ordinary SDD implementer templates use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. For recognized new-worker calls Justice treats this exact `general` value as the harness placeholder to be semantically translated, not as an explicit specialized subagent choice.
 
 Task 1 is a runtime regression/replay gate for this already-selected architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
 
@@ -178,6 +185,63 @@ type ReviewFindingV5 = {
   readonly disposition: "open" | "resolved" | "parked" | "human_adjudicated";
   readonly evidenceRefs: readonly string[];
 };
+
+type SuperpowersExecutionMethod =
+  | "subagent-driven-development"
+  | "executing-plans";
+
+type SemanticExecutionClass =
+  | "mechanical"
+  | "implementation"
+  | "integration"
+  | "deep"
+  | "architecture"
+  | "review"
+  | "final-review";
+
+type SemanticClassificationResult =
+  | {
+      readonly kind: "classified";
+      readonly executionClass: SemanticExecutionClass;
+      readonly category: SpCategory;
+      readonly reasons: readonly [string, ...string[]];
+    }
+  | {
+      readonly kind: "ambiguous";
+      readonly reason:
+        | "missing_semantic_context"
+        | "unsupported_semantic_context"
+        | "conflicting_authoritative_context";
+      readonly details: readonly string[];
+    };
+
+type TaskRoutingProvenance =
+  | {
+      readonly kind: "superpowers";
+      readonly role: "implementation" | "task-review" | "scoped-re-review" | "final-review";
+    }
+  | { readonly kind: "external" }
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+
+type SuperpowersRoutingTranslationResult =
+  | {
+      readonly kind: "category";
+      readonly executionClass: SemanticExecutionClass;
+      readonly category: SpCategory;
+    }
+  | { readonly kind: "preserve_explicit_category"; readonly category: SpCategory | TaskCategory }
+  | { readonly kind: "preserve_explicit_subagent"; readonly subagentType: string }
+  | { readonly kind: "continuation"; readonly taskId: string }
+  | { readonly kind: "unrouted" }
+  | {
+      readonly kind: "untrusted";
+      readonly reason:
+        | "invalid_both"
+        | "ambiguous_provenance"
+        | "semantic_classification_ambiguous"
+        | "unexpected_superpowers_generic_shape";
+      readonly details: readonly string[];
+    };
 ```
 
 `FindingId` has the runtime canonical form `^jf_[0-9a-f]{16}$`; the template-literal type is only the static prefix guard, and every review parser/marker extractor MUST validate the full regex. `TaskIdentity` equality uses all six fields. `normalizedHeading` is exactly the existing `CanonicalTaskSnapshot.title` (the Task heading text after the existing trim). `semanticDigest` is exactly the matching existing `CanonicalTaskSnapshot.digest` (`sha256:<lowercase hex>`) produced by `buildCanonicalSnapshot`; Justice v5 does not invent a second task canonicalization algorithm. The existing canonical snapshot normalizes CRLF→LF and checkbox progress `[x]/[X] → [ ]` inside the uniquely matched approved task section while preserving substantive task text. Checkbox-only progress therefore preserves identity; any substantive task-body change that changes the canonical task body changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
@@ -694,6 +758,76 @@ type PlanConformanceInput = {
   readonly candidateHead: string;
 };
 ```
+
+**Task 10**
+
+```ts
+type WorkflowActivationSource =
+  | "explicit"
+  | "recovered"
+  | "observed_superpowers";
+
+type WorkflowActivationInput = {
+  readonly sessionId: string;
+  readonly authorizationId: string;
+  readonly explicitMethod?: SuperpowersExecutionMethod;
+  readonly recovered?: {
+    readonly authorizationId: string;
+    readonly method: SuperpowersExecutionMethod;
+  };
+  readonly observedSuperpowersMethod?: SuperpowersExecutionMethod;
+  readonly capabilities: {
+    readonly nativeSkillInvocation: boolean;
+    readonly subagentExecution: boolean;
+  };
+};
+
+type WorkflowActivationDecision =
+  | {
+      readonly kind: "activate";
+      readonly method: SuperpowersExecutionMethod;
+      readonly source: WorkflowActivationSource;
+      readonly requiredSkill: SuperpowersExecutionMethod;
+    }
+  | {
+      readonly kind: "method_selection_required";
+      readonly reason: "no_authoritative_method";
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly method: SuperpowersExecutionMethod;
+      readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable";
+    };
+
+type SemanticExecutionInput =
+  | {
+      readonly kind: "implementation";
+      readonly task: ParsedSuperpowersTask;
+      readonly crossTaskDependencies: readonly string[];
+    }
+  | {
+      readonly kind: "review";
+      readonly reviewKind: "task-review" | "scoped-re-review" | "final-review";
+    };
+
+function resolveWorkflowActivation(
+  input: WorkflowActivationInput,
+): WorkflowActivationDecision;
+
+function classifySemanticExecution(
+  input: SemanticExecutionInput,
+): SemanticClassificationResult;
+```
+
+Activation source precedence is exact: explicit → trusted same-authorization recovery → observed Superpowers selection → `method_selection_required`. Justice does not infer a default method from task shape. Capability failure returns `unavailable`; it never silently substitutes another method or direct OmO execution.
+
+Classifier precedence is exact:
+
+```text
+final-review > review > architecture > deep > integration > mechanical > implementation
+```
+
+Implementation classification consumes the full `ParsedSuperpowersTask` plus cross-task dependencies. Keywords are supporting signals only; explicit review kind and structured architecture/integration obligations are authoritative.
 
 **Task 11**
 
