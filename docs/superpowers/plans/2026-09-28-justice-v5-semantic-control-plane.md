@@ -1871,7 +1871,7 @@ Any tracked change outside the single Superpowers final fix wave invalidates the
 
 ---
 
-## Contract Traceability## Contract Traceability
+## Contract Traceability
 
 ### Requirements → Task mapping
 
