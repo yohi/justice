@@ -1477,16 +1477,16 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
-| Task 2 | Tasks 5–12 | `TaskIdentity`, `TaskCategory`, routing target vocabulary |
-| Task 3 | Tasks 4–14 | `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, schema names |
-| Task 4 | Tasks 7–9, 13–14 | `ConformanceContract`, clause IDs, projection status/version |
-| Task 5 | Tasks 6–9, 13 | `ExecutionCorrelation` key/status and durable lookup |
-| Task 6 | Task 7 | observed parent call + child relation available to review recognition |
-| Task 7 | Tasks 8–9, 13 | `JusticeReviewResult`, review kind, range, clause-result semantics |
-| Task 8 | Tasks 9, 13 | canonical finding severity/disposition |
-| Task 9 | Tasks 13–14 | task/plan acceptance reasons and completion state |
-| Task 11 | Tasks 12–14 | configured/applied/observed doctor vocabulary |
-| Task 13 | Task 14 | v5 recovery/control-plane view semantics |
+| Task 2 | Tasks 5–12 | `TaskIdentity`, `ReviewFindingV5`, `TaskCategory`, `TaskRoutingTarget` |
+| Task 3 | Tasks 4–14 | `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
+| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseResult`, `ConformanceContract` |
+| Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
+| Task 6 | Task 7 | durable parent-call/child-session observation available to `RecognizedReviewDispatch` |
+| Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
+| Task 8 | Tasks 9, 13 | `ReviewFindingV5` disposition semantics and trusted persisted review evidence |
+| Task 9 | Tasks 13–14 | `ConformanceGateVerdict`, task/plan acceptance reasons, exact candidate revision |
+| Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
+| Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
 
@@ -1508,7 +1508,7 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
    - no task adds model/provider/retry/fallback ownership.
 5. **TDD**
    - production behavior changes have RED then GREEN steps;
-   - Task 1 is a compatibility gate and must stop the plan if the supported extension point is not proven.
+   - Task 1 is a regression gate for the pre-established baseline; failure is upstream compatibility drift, not architecture discovery.
 6. **Persistence**
    - v4 state is recognized without becoming v5 authority;
    - unknown/newer state is preserved and blocks affected acceptance.
