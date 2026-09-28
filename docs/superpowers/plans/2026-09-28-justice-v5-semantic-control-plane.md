@@ -12,6 +12,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-justice-v5-semantic-control-plane-design.md`
 
+**Implementation Baseline:** `master @ 080bcdb25b192962789ff5d67139e56487381de4`
+
+**Historical Compatibility Reference:** Justice `v4.2.0` is a side-branch historical compatibility/regression reference only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.2.0` before implementing this Plan. Carry forward only regression contracts explicitly incorporated below.
+
 ## Global Constraints
 
 - Superpowers owns execution-method selection, task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
@@ -39,6 +43,7 @@
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
 - Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
+- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.2.0` is not a merge/cherry-pick prerequisite and does not replace this base.
 
 ## Review Focus
 
@@ -47,6 +52,29 @@
 - **Continuation collision:** an OmO `ses_...` continuation is unrelated to the current Justice task; Task 5/6 must prove it cannot rebind semantic identity without a trusted child relation.
 - **Config precedence:** user, ancestor project, nearest project, harness, and profile layers disagree; Task 11 must prove doctor reports the exact effective value and its sources.
 - **Upgrade recovery:** v4 state and unknown/newer state coexist with v5 files; Task 13 must prove neither can silently satisfy v5 acceptance.
+
+## Historical Regression Evidence — Justice v4.2.0
+
+Justice `v4.2.0` was released from the v4 side branch and is **not** the v5 implementation base. Its implementation is non-normative for v5; only explicitly named regression contracts are retained:
+
+- `821343eba1223371ae0a7a20e02e7370db900306` — completed-plan final review must be recognized before implementation-task exhaustion / plan-completion cleanup can suppress the review path;
+- `4759d777aab9c80b897c55392bcc0f5833d79d7b` — task/scoped/final review workers must remain outside implementation semantics and implementation-worker enrichment;
+- `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — recognized Superpowers review semantic routing must survive the OpenCode generic `subagent_type="general"` compatibility marker.
+
+The v4 implementations themselves are **not** normative. In particular, do not carry forward:
+
+- DependencyAnalyzer-owned execution ordering;
+- Justice-owned task/review/fix progression;
+- PlanBridge reconstruction of worker prompts from Plan task bodies;
+- hardcoded SDD methodology selection;
+- `justice_task_id` / semantic identity overloading of OmO `task_id`;
+- external both-target normalization as a general caller contract.
+
+Where historical v4 behavior conflicts with the current Superpowers=WHAT / Justice=SEMANTIC HOW / OmO=CONCRETE HOW architecture, this v5 Plan wins.
+
+The v4.2.0 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
+
+Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.2.0 behavior-compatibility gate.
 
 ---
 
@@ -1740,6 +1768,7 @@ In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `superpowers_scoped_rereview_maps_to_sp_review`
 - `superpowers_final_review_maps_to_sp_final_review`
 - `recognized_superpowers_review_translation_preserves_category_subagent_xor`
+- `recognized_superpowers_review_semantic_routing_survives_generic_marker_translation`
 - `review_appendix_path_does_not_rewrite_semantic_routing`
 - `child_chat_message_resolves_parent_with_awaited_session_get_before_injection`
 - `delayed_session_event_does_not_block_or_enable_review_injection`
@@ -1765,6 +1794,15 @@ In `tests/core/review-result.test.ts`:
 - `new_breakage_cannot_reuse_resolved_prior_round_finding_id`
 - `historical_reserved_id_does_not_become_current_expected_target`
 - `orphan_or_malformed_human_finding_marker_is_rejected`
+
+Historical review-routing regression assertions for `recognized_superpowers_review_semantic_routing_survives_generic_marker_translation`:
+
+- use the existing Superpowers reviewer dispatch; Justice creates no additional reviewer;
+- recognized task/scoped review remains semantic `review → sp-review`;
+- recognized final review remains semantic `final-review → sp-final-review`;
+- the generic `subagent_type="general"` marker is removed and category/subagent_type XOR remains valid;
+- external/ambiguous both-target input remains a routing-contract violation; this regression does not legalize the v4.2.0 external both-target normalization behavior;
+- original Superpowers review prompt/content is preserved; only the existing Justice review appendix path may enrich reviewer content.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -2186,6 +2224,17 @@ Justice does not infer SDD vs inline from task complexity. If selected SDD lacks
 - `PlanBridge` preserves original Superpowers task semantics and does not reconstruct worker prompts or dispatch workers/reviewers.
 - `PlanCompletionDetector` recognizes current artifact paths/contracts and removes obsolete reviewer-persona markers as authority.
 
+**Historical review/implementation boundary regression contract:**
+- for every incoming Superpowers `task` call, Task 7 review recognition/classification runs **before** implementation task resolution, implementation semantic classification, and plan-completion cleanup;
+- if Task 7 recognizes `task-review | scoped-re-review | final-review`, PlanBridge returns through the review path and MUST NOT enter the implementation-worker enrichment pipeline;
+- final-review recognition is independent of whether any implementation task remains incomplete;
+- when all implementation tasks are already complete, a recognized whole-branch final reviewer is still correlated/routed as `final-review → sp-final-review` before any active-Plan completion cleanup can suppress recognition;
+- review workers never receive the approved implementation-task contract, implementation-only Justice context/markers, or implementation-only TDD/verification skill injection;
+- review workers never call the implementation-form `classifySemanticExecution({ kind: "implementation", ... })` or `resolveSuperpowersImplementationTask`;
+- PlanBridge never reconstructs a Superpowers review prompt as an implementation prompt; original review prompt/content remains intact, with Justice review appendix enrichment occurring only through Task 7's existing review-interop path;
+- recognized review routing uses the existing Superpowers reviewer dispatch exactly once; Justice never dispatches a replacement/duplicate reviewer;
+- these ordering/non-leakage assertions are historical v4.2.0 regression coverage only and do not restore v4 scheduling, prompt reconstruction, hardcoded SDD selection, or external both-target normalization.
+
 - [ ] **Step 1: Write RED activation/ownership tests**
 
 In `tests/core/workflow-activation-v5.test.ts`:
@@ -2213,6 +2262,19 @@ In `tests/core/superpowers-ownership-v5.test.ts`:
 - `all_tasks_accepted_never_dispatches_sp_final_review`
 - `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
 
+In `tests/hooks/plan-bridge-implement.test.ts` add the historical boundary regressions:
+- `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`
+- `task_review_never_enters_implementation_semantics`
+- `scoped_re_review_never_enters_implementation_semantics`
+- `final_review_never_enters_implementation_semantics`
+
+Exact assertions:
+- completed approved Plan + all implementation tasks complete + existing Superpowers whole-branch reviewer → recognized `final-review`, semantic `final-review`, `category="sp-final-review"`, no `subagent_type="general"`, no implementation task selection/classifier path, and no cleanup before review recognition/correlation;
+- task/scoped review → `sp-review`; final review → `sp-final-review`;
+- all three review kinds bypass implementation task-contract enrichment, implementation-only context/markers, implementation-only TDD/verification skill injection, and implementation prompt reconstruction;
+- original Superpowers review prompt/content is preserved, with Justice appendix enrichment only through Task 7 review interop;
+- the existing Superpowers reviewer dispatch count remains exactly one and Justice emits no reviewer dispatch.
+
 - [ ] **Step 2: Write RED semantic-classification/routing tests**
 
 In `tests/unit/core/execution-role-classifier.test.ts`:
@@ -2238,9 +2300,11 @@ In `tests/runtime/opencode-adapter-semantic-routing.test.ts`:
 - `justice_category_is_the_only_semantic_routing_signal_to_omo`
 - `justice_does_not_select_concrete_model_or_provider`
 
-- [ ] **Step 3: Remove active Justice scheduling authority**
+- [ ] **Step 3: Remove active Justice scheduling authority and lock review-before-implementation sequencing**
 
 Remove v4 active review/task progression behavior while retaining migration readers. Do not delete types needed to read prior state.
+
+Wire PlanBridge so Task 7 review recognition/translation is evaluated before implementation-task resolution/classification and before Plan-completion cleanup. A recognized review returns through the review path immediately; only a non-review call may continue into implementation semantics.
 
 - [ ] **Step 4: Implement activation bridge and activation observation**
 
@@ -2787,7 +2851,17 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 
 ## Interface Dependency Scan for Execution Pre-Flight
 
-The executor must record these rows in the Superpowers ledger before Task 1:
+The executor must record these rows in the Superpowers ledger before Task 1.
+
+Implementation checkout precondition:
+
+```text
+git rev-parse HEAD == 080bcdb25b192962789ff5d67139e56487381de4
+branch lineage base == master
+v4.2.0 merge/cherry-pick prerequisite == false
+```
+
+Justice `v4.2.0` is consulted only for the historical regression contracts explicitly listed in this Plan:
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
@@ -2800,10 +2874,12 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
 | Task 10 | Task 14 | `WorkflowMethodSelection`, persisted `WorkflowMethodSelectionEvidence`, current-session `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticClassificationResult`, implementation semantic-category translation, Superpowers ownership invariants |
-
-Methodology persistence authority is exclusive: Task 10 selection/activation recovery uses `WorkflowActivationStateStore` only. `ExecutionCorrelation.executionMethod` may remain execution correlation/evidence, but neither `ExecutionCorrelation` nor its store is a methodology selection/activation recovery authority.
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
+
+Methodology persistence authority is exclusive: Task 10 selection/activation recovery uses `WorkflowActivationStateStore` only. `ExecutionCorrelation.executionMethod` may remain execution correlation/evidence, but neither `ExecutionCorrelation` nor its store is a methodology selection/activation recovery authority.
+
+Historical regression evidence does not create a producer/consumer dependency on the v4.2.0 implementation. The three referenced v4.2.0 commits are test/audit evidence only; Task 7/10 implement the current v5 contracts above.
 
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
 
