@@ -1291,7 +1291,9 @@ Justice treats **OmO v5 effective configuration resolution** as configured-state
 
 ### 24.1 File-layer precedence
 
-When Justice cannot consume a compatible OmO effective-config API and must inspect the filesystem, it follows the OmO v5 loader order:
+For the v5.0.1 OpenCode baseline, Justice uses filesystem resolution that reproduces the audited OmO loader semantics. The upstream `@oh-my-opencode/omo-config-core` package is a private workspace package, not a supported Justice runtime dependency/API, so v5 does not dynamically choose between importing it and a local resolver.
+
+The resolver follows the OmO v5 loader order:
 
 ```text
 lowest
