@@ -410,11 +410,15 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
    c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
    d. workflow-start のたびにメモリ内のアーム補助状態をクリアする。同じ plan パスでの再開も例外ではないが、永続化された Plan 認可は失効させない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
-5. `justice-review-gate` の場合は Design / Plan の両方を必須とし、`PlanBridge.handleReviewGateStart(sessionId, request)` で双方の read-only 可読性を検証する。両方読める場合のみ Plan を active context に設定して `[JUSTICE: REVIEW GATE REQUESTED]` を返し、Superpowers `requesting-code-review` に Design + Plan を1つの plan-level/final review として扱わせる。source/test/CI/config の変更と実装開始は禁止する。いずれかが読めない場合は active plan をクリアし `[JUSTICE: REVIEW GATE BLOCKED]` を返す。
-6. Review Gate 実行後の verdict は新しい独自経路を作らず、既存の trusted `code_review` complete snapshot ingestion を使う。findings があれば `review_remediation`、complete zero-finding snapshot なら `review_clear` を注入する。`justice_review` は引き続き review state の query / human-approved resolve 専用であり Gate 開始には使わない。
-7. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
-8. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階、`justice-review-gate` はレビュー開始/blocked、`justice-implement` は Plan 単位の実装許可を示す。
-9. `plan_ready` / `review_clear` のいずれも人間承認・マージを意味しない。`/justice-implement --plan <planPath> --approved` により active Plan を明示承認した場合のみ、その Plan に含まれる `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
+5. `justice-review-gate` の場合は Design / Plan の両方を必須とし、`PlanBridge.handleReviewGateStart(sessionId, request)` で双方の read-only 可読性を検証する。両方読める場合のみ Plan を active context に設定し、ランダム Gate ID、正規化済み review scope、Design/Plan 内容の SHA-256 digest、Justice が生成した reviewer prompt 全文を session 単位の pending Gate として保持する。いずれかが読めない場合は active plan をクリアし `[JUSTICE: REVIEW GATE BLOCKED]` を返す。
+6. `/justice-review-gate` 自体を pre-implementation review の Controller entrypoint とし、`[JUSTICE: REVIEW GATE REQUESTED]` 後に `requesting-code-review` または別 review Skill を起動しない。実 reviewer は Justice marker と Gate ID を含む exact reviewer prompt を使う単一 foreground `task()` とし、PreToolUse で Justice が `category="sp-final-review"` / `run_in_background=false` を強制する。別 Skill `code-review`、CodeRabbit CLI、`justice_review` は Design/Plan Gate executor として使用しない。
+7. `JusticePlugin` は marked plan-review task を通常の mandatory `sp-final-review` claim より先に `PlanBridge.handlePlanReviewGatePreToolUse()` へルーティングする。matching user-invoked pending Gate と exact reviewer prompt が存在する場合だけ callId を claim する。pending Gate のない forged marker は `[JUSTICE: REVIEW GATE CLAIM BLOCKED]` となり、post-authorization mandatory-review authorization/correlation 境界を迂回しない。
+8. matching call の PostToolUse は `PlanBridge.handlePlanReviewGatePostToolUse()` が mandatory review completion より先に処理する。reviewer 出力は strict JSON (`schemaVersion=1`, exact Gate ID, exact reviewScope, `complete=true`, findings[]) でなければならない。Justice は completion 時に Design/Plan を再読込して digest を再計算し、レビュー中に成果物が変わっていれば stale result として `[JUSTICE: REVIEW GATE BLOCKED]` を返して pending state を破棄する。
+9. valid reviewer result は `ObservationHandler.handlePlanReviewGateResult()` が exact Gate scope の complete `review_observed` として永続化する。findings があれば `review_remediation`、complete zero findings なら `review_clear` を注入する。この pre-implementation Gate result は generic host `code_review` tool の存在に依存しない。`justice_review` は引き続き review state query / human-approved resolve 専用である。
+10. malformed / incomplete / Gate ID 不一致 / scope 不一致 / reviewer error / digest stale の各結果は `[JUSTICE: REVIEW GATE BLOCKED]` として terminal に扱い、当該 pending Gate / call claim を破棄してユーザーに `/justice-review-gate` の再実行を要求する。
+11. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
+12. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階、`justice-review-gate` はレビュー開始/blocked、`justice-implement` は Plan 単位の実装許可を示す。
+13. `plan_ready` / `review_clear` のいずれも人間承認・マージを意味しない。`/justice-implement --plan <planPath> --approved` により active Plan を明示承認した場合のみ、その Plan に含まれる `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
 注入した policy の `directiveStage`、その policy が推奨する
@@ -422,6 +426,7 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 実行コンテキスト・表示用フィールドであり、いずれも PR 承認・マージ・実装認可を
 表現しない。
 
+**Design/Plan Review Gate executor と mandatory review の分離:** pre-implementation Gate の `sp-final-review` は model routing category を再利用するが、実装後の mandatory Final Review と同じ authorization/correlation state machine は使用しない。前者の authority は user-invoked `/justice-review-gate` が生成した pending Gate ID + exact prompt + artifact digests であり、後者の authority は `ApprovedPlanBinding`、`final_review_pending` lifecycle、`ReviewDispatchSlot` である。JusticePlugin の PreToolUse/PostToolUse routing は plan-review marker を先に判定することで両 protocol を明示的に分離する。
 **実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の PR・レビュー機能と `task()` 呼び出しはエージェントが既存の権限で実行する。Justice は PR を作成せず、レビューを承認せず、PR をマージせず、PR 作成・承認・マージ状態を推測しない。人間が承認・マージ判断を保持する — Justice はここでも「神経系」であり「手足」ではない。
 
 **Gate との関係:** `workflow_started`/`design_requested`/`plan_requested`/`plan_activated` レコードは `evidence` フィールドを一切持たない audit-only レコードであり（§15.3）、`state-projection.ts` が `ProjectedState.tasks[].evidence` への投影対象から明示的に除外する。したがって Gate の PASS 判定にこれらのレコードが算入される経路は構造的に存在しない（FF-008 が自明に成立）。
@@ -439,7 +444,7 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 レビュー本文からスキル名を導出しない。
 
 `formatWorkflowDirective()` の出力は、stage marker の直後に required skills が
-空でない場合だけ `[JUSTICE: REQUIRED SKILLS: <skill>, ...]` を1行で付加する。
+空でない場合だけ `[JUSTICE: REQUIRED SKILLS: <skill>, ...]` を1行で付加する。`plan_review_required` は skill を要求せず、`nextAction=run_review_gate` と `/justice-review-gate` の明示実行だけを次手とする。
 この行も synthetic guidance の表示用 marker であり、実際のスキル起動を意味しない。
 
 directive 本文は HookResponse の synthetic guidance としてのみ扱い、Observation Log
@@ -450,8 +455,8 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 |---|---|---|---|---|
 | `design_required` | `brainstorming` | `invoke_skill` | `artifact_ready` | 設計成果物の作成 |
 | `plan_required` | `writing-plans` | `invoke_skill` | `artifact_ready` | 計画成果物の作成 |
-| `plan_review_required` | `requesting-code-review` | `request_review` | `artifact_ready` | 設計・計画 PR のレビューと人間承認待ち |
-| `review_remediation` | `receiving-code-review` | `invoke_skill` | `artifact_ready` | 指摘修正と同一レビューの再実行 |
+| `plan_review_required` | なし | `run_review_gate` | `artifact_ready` | `/justice-review-gate` による Design / Implementation Plan Review Gate の明示開始待ち |
+| `review_remediation` | `receiving-code-review` | `invoke_skill` | `artifact_ready` | 指摘を検討・修正した後、同じ Design/Plan で `/justice-review-gate` を再実行 |
 | `review_clear` | なし | `await_human_approval` | `external_unverified` | 完全な指摘なしスナップショットの観測 |
 | `implementation` | `test-driven-development`, `verification-before-completion` | `delegate_task` | `external_unverified` | 読み取り可能な plan context での実装委譲 |
 | `implementation_unauthorized` | なし | `await_human_approval` | `external_unverified` | active plan に対する認可不在または失効済み認可の委譲への安全側通知 |

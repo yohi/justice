@@ -14,6 +14,7 @@ import type {
   WorkflowBootstrapPhase,
   WorkflowStartRequest,
   ReviewPendingCommittedHandler,
+  ReviewArtifactFindingV1,
   TaskExecutionRef,
 } from "../core/types";
 import type { ApprovedPlanBinding } from "../core/plan-authorization";
@@ -314,6 +315,65 @@ export class ObservationHandler {
       return;
     }
     this.reviewGateScopes.set(sessionId, reviewScope);
+  }
+  async handlePlanReviewGateResult(input: {
+    readonly sessionId: string;
+    readonly reviewScope: string;
+    readonly findings: readonly ReviewArtifactFindingV1[];
+  }): Promise<HookResponse> {
+    try {
+      const expectedScope = this.reviewGateScopes.get(input.sessionId);
+      if (expectedScope === undefined || expectedScope !== input.reviewScope) {
+        return {
+          action: "inject",
+          injectedContext: "[JUSTICE: REVIEW GATE BLOCKED] review scope mismatch",
+        };
+      }
+      const agentId = this.options.sessionStateProvider.getAgentId(input.sessionId);
+      const shardId: ShardId = {
+        agentId,
+        sessionId: input.sessionId,
+        writerId: this.options.writerId,
+      };
+      const items: readonly ReviewItem[] = input.findings.map((finding) => ({
+        ...finding,
+        evidenceId: finding.itemKey,
+        status: "open" as const,
+      }));
+      await this.options.logStore.append(
+        shardId,
+        buildReviewObservedRecord(
+          {
+            schemaVersion: 1,
+            timestamp: new Date().toISOString(),
+            agentId,
+            sessionId: input.sessionId,
+            writerId: this.options.writerId,
+            recordType: "observation",
+          },
+          input.reviewScope,
+          items,
+          true,
+        ),
+      );
+      this.scheduleProjectionRefresh();
+      return {
+        action: "inject",
+        injectedContext:
+          items.length > 0
+            ? formatWorkflowDirective({ stage: "review_remediation" })
+            : formatWorkflowDirective({ stage: "review_clear" }),
+      };
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: plan review gate result failed, degrading to blocked",
+        error,
+      );
+      return {
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW GATE BLOCKED] failed to record review result",
+      };
+    }
   }
 
   async advanceFinalizationAfterAllTasksAccepted(

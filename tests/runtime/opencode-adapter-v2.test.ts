@@ -335,6 +335,37 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     },
   );
 
+  it("lets a marked plan review override an explicit specialized subagent with sp-final-review", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+      modifiedPayload: {
+        args: {
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1",
+          subagent_type: undefined,
+          category: "sp-final-review",
+          run_in_background: false,
+        },
+      },
+    });
+    const args: Record<string, unknown> = {
+      prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1",
+      subagent_type: "explore",
+      runInBackground: true,
+    };
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "s", callID: "plan-review-call" },
+      { args },
+    );
+
+    expect(args).not.toHaveProperty("subagent_type");
+    expect(args.category).toBe("sp-final-review");
+    expect(args.run_in_background).toBe(false);
+  });
   it.each(["sp-review", "sp-final-review"] as const)(
     "forces %s to run in the foreground when the adapter is in no-op mode",
     async (category) => {

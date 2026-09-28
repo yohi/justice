@@ -216,8 +216,9 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
  (1b) /justice-review-gate ─────────────>│                               │
          │                          Design + Plan 可読性確認               │
          │                                │─────────────────────────────>│
-         │                                │                 requesting-code-review
-         │                                │<──────── code_review snapshot ┤
+         │                                │─────────────────────────────>│
+         │                                │          marked sp-final-review task()
+         │                                │<──────── structured Gate result ┤
          │                          remediation / clear                    │
          │                                │                               │
   (2) PR を確認・承認・マージ <──────────────────────────────────────────────┤
@@ -247,7 +248,7 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 | # | フェーズ | 主体 | 詳細 |
 |---|---------|------|------|
 | (1) | 設計・計画の準備 | 人間 + エージェント | 「`/justice-start` コマンド」セクション参照 |
-| (1b) | Design / Implementation Plan Review Gate | 人間 + エージェント + Justice | `/justice-review-gate --design <path> --plan <path>` で明示開始。既存 `code_review` snapshot が remediation / clear を決める |
+| (1b) | Design / Implementation Plan Review Gate | 人間 + エージェント + Justice | `/justice-review-gate --design <path> --plan <path>` で明示開始。Justice が Gate ID / scope / digest と marked `sp-final-review` executor contract を固定し、structured result から remediation / clear を決める |
 | (2) | 設計・計画の承認 | **人間のみ** | Gate clear 後も Justice は PR 作成・承認・マージを検証できない |
 | (3) | 実装委譲とフィードバック | エージェント + Justice | 「`/justice-implement` コマンド」セクション参照 |
 | (4) | 実装の承認 | **人間のみ** | 「Quality Control Plane (v2.0)」セクションの `justice_review` ツール参照 |
@@ -257,7 +258,7 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 ## `/justice-start` コマンド
 
-ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、設計・計画 PR の自動レビュー、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を自動注入します。利用者が入力するのは目標と成果物パスだけで、PR 作成やレビュー依頼の定型プロンプトをコピーしたり入力したりする必要はありません。
+ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、`/justice-review-gate` の実行、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を注入します。`plan_review_required` に到達してもレビュー Skill を自動起動せず、Review Gate の開始は必ず `/justice-review-gate` という一意の入口を通ります。
 
 ### 有効化（OpenCode側の設定）
 
@@ -404,11 +405,14 @@ OpenCode の file-reference 記法も利用できます。
 ```
 
 - `--design` と `--plan` はともに必須。
-- 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入し、Superpowers `requesting-code-review` を要求する。
-- Design と Plan は別々ではなく **1つの plan-level/final review** としてレビューする。
-- Gate 中は source / test / CI/config を変更せず、実装を開始しない。
-- 実際の review evidence は既存 `code_review` complete snapshot 経路に入り、findings があれば `review_remediation`、完全な指摘ゼロなら `review_clear` に遷移する。
-- `justice_review` は既存 review state の参照・resolve 用であり、Review Gate の開始コマンドではない。
+- 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入する。この時点で Justice はランダムな Gate ID、正規化済み review scope、Design/Plan の SHA-256 digest、reviewer prompt 全文を pending state として固定する。
+- `/justice-review-gate` 自体を review-controller entrypoint とし、実行後に `requesting-code-review` や別の review Skill を起動しない。
+- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として直ちに実行する。Justice が runtime で `category="sp-final-review"` と `run_in_background=false` を強制するため、LLM が別 category を選んでも executor routing は変わらない。
+- `code-review` Skill、CodeRabbit CLI、`justice_review` をこの Gate の executor として使用しない。`justice_review` は既存 review state の参照・人間承認済み resolve 用のまま。
+- reviewer は prose ではなく、Gate ID / reviewScope / `complete` / findings を含む strict JSON を返す。Justice は PostToolUse でこれを検証し、review 中に Design/Plan digest が変わっていないことも再確認する。
+- complete findings があれば exact Gate scope の `review_observed` を永続化して `review_remediation`、complete zero findings なら同じ scope で `review_clear` に遷移する。remediation 後の再レビューも同じ Design/Plan を指定して `/justice-review-gate` を再実行する。
+- malformed / incomplete / scope不一致 / Gate ID不一致 / review中の成果物変更 / reviewer実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` とし、pending Gate を破棄して再実行を要求する。
+- marker だけを偽装しても、対応する user-invoked pending Gate がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できない。
 - `review_clear` は READY のためのレビュー条件を満たしたことを示すだけで、人間の承認・マージを意味しない。実装開始には引き続き `/justice-implement --approved` が必要。
 
 成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。

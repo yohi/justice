@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   type ApprovedPlanBinding,
   type AuthorizationReviewBoundary,
@@ -26,6 +27,11 @@ import type { ObservationHandler } from "./observation-handler";
 import type { TelemetryStore } from "../core/telemetry-store";
 import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
 import type { ReviewGateRequest } from "../core/review-gate-command";
+import {
+  REVIEW_GATE_EXECUTION_MARKER,
+  extractReviewGateIdFromTaskPrompt,
+  parseReviewGateWorkerResult,
+} from "../core/review-gate-execution";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
@@ -135,6 +141,17 @@ export interface ReviewGateStartResult {
   readonly guidance: string;
 }
 
+type PendingPlanReviewGate = {
+  readonly gateId: string;
+  readonly designPath: string;
+  readonly planPath: string;
+  readonly reviewScope: string;
+  readonly designDigest: string;
+  readonly planDigest: string;
+  readonly reviewerPrompt: string;
+  callId?: string;
+};
+
 /** phase から「次に読み込むべきスキル」への写像 (plan_ready は追加スキル不要)。 */
 const NEXT_SKILL_BY_PHASE: ReadonlyMap<WorkflowBootstrapPhase, WorkflowNextSkill> = new Map<
   WorkflowBootstrapPhase,
@@ -163,6 +180,11 @@ export class PlanBridge {
   private readonly cancelledImplementationSessions = new Set<string>();
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
+  private readonly pendingPlanReviewGates = new Map<string, PendingPlanReviewGate>();
+  private readonly planReviewGateCalls = new Map<
+    string,
+    { readonly sessionId: string; readonly gateId: string }
+  >();
   private readonly lastCompletionInputs: Map<
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
@@ -425,6 +447,10 @@ export class PlanBridge {
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
+    this.pendingPlanReviewGates.delete(sessionId);
+    for (const [callId, claim] of this.planReviewGateCalls) {
+      if (claim.sessionId === sessionId) this.planReviewGateCalls.delete(callId);
+    }
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
   }
@@ -496,6 +522,10 @@ export class PlanBridge {
     request: ReviewGateRequest,
   ): Promise<ReviewGateStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    // Supersede the session's pending Gate, but keep any already-claimed call mapping
+    // until its PostToolUse arrives. That stale completion must be recognized and blocked
+    // rather than falling through to the mandatory-review protocol.
+    this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
 
     const designReadable = await this.isArtifactReadable(request.designPath);
@@ -529,14 +559,53 @@ export class PlanBridge {
       };
     }
 
+    const designContent = await this.readPlanFile(request.designPath);
+    const planContent = await this.readPlanFile(planPath);
+    if (designContent === null || planContent === null) {
+      this.setActivePlan(sessionId, null);
+      return {
+        dispatched: false,
+        designPath: request.designPath,
+        planPath,
+        directiveStage: "plan_review_required",
+        guidance: [
+          "---",
+          "[JUSTICE: REVIEW GATE BLOCKED]",
+          "",
+          "Review Gate artifacts became unreadable before dispatch. Rerun /justice-review-gate.",
+          "---",
+        ].join("\n"),
+      };
+    }
+
     this.setActivePlan(sessionId, planPath);
     const reviewScope = JSON.stringify([request.designPath, planPath]);
-    this.observationHandler?.setReviewGateScope(sessionId, reviewScope);
-    const directive = resolveWorkflowDirective({
-      stage: "plan_review_required",
+    const gateId = randomUUID();
+
+
+    const reviewerPrompt = [
+      REVIEW_GATE_EXECUTION_MARKER,
+      `Gate-ID: ${gateId}`,
+      `Review-Scope: ${reviewScope}`,
+      `Design: ${request.designPath}`,
+      `Implementation-Plan: ${planPath}`,
+      "",
+      "Review ONLY the Design and Implementation Plan together as one pre-implementation plan review.",
+      "Do not modify files. Do not run implementation. Do not invoke CodeRabbit CLI or another Skill named code-review.",
+      "Return exactly one JSON object and no prose:",
+      '{"schemaVersion":1,"gateId":"<exact Gate-ID>","reviewScope":["<exact Design path>","<exact Implementation Plan path>"],"complete":true,"findings":[{"itemKey":"RG-001","severity":"critical|major|minor","summary":"...","location":"path:line or section"}]}',
+      "Use findings: [] only when the review is complete and no actionable findings remain.",
+    ].join("\n");
+    this.pendingPlanReviewGates.set(sessionId, {
+      gateId,
       designPath: request.designPath,
       planPath,
+      reviewScope,
+      designDigest: createHash("sha256").update(designContent).digest("hex"),
+      planDigest: createHash("sha256").update(planContent).digest("hex"),
+      reviewerPrompt,
     });
+    this.observationHandler?.setReviewGateScope(sessionId, reviewScope);
 
     return {
       dispatched: true,
@@ -547,24 +616,179 @@ export class PlanBridge {
         "---",
         "[JUSTICE: REVIEW GATE REQUESTED]",
         "",
+        `**Gate ID**: ${gateId}`,
         `**Design**: ${request.designPath}`,
         `**Implementation Plan**: ${planPath}`,
         `**Review scope**: \`${reviewScope}\``,
         "",
-        directive.guidance,
+        "**Deterministic executor contract**:",
+        "- This `/justice-review-gate` invocation is the explicit review-controller entrypoint; do NOT invoke another review Skill first.",
+        "- Invoke exactly one foreground `task()` reviewer using the exact prompt below. Justice forces its runtime category to `sp-final-review` and foreground execution.",
+        "- Do NOT invoke another Skill named `code-review`.",
+        "- Do NOT use CodeRabbit CLI as this Gate executor.",
+        "- Do NOT call `justice_review` to start or execute this Gate; `justice_review` is query/resolve only.",
+        "- No other review path may substitute for this marked reviewer execution.",
         "",
-        "**Review Gate contract**:",
-        "- Invoke Superpowers `requesting-code-review` now.",
-        "- Review the Design and Implementation Plan together as one plan-level/final review.",
-        "- Do not modify source code, test code, CI/config, or start implementation while running this Gate.",
-        "- The review executor must produce a complete review snapshot through the existing `code_review` path.",
-        "- Open findings transition to `review_remediation`; a complete zero-finding snapshot transitions to `review_clear`.",
-        "- This command requests review only. It does not itself mean READY, human approval, or merge completion.",
+        "```text",
+        reviewerPrompt,
+        "```",
+        "",
+        "- Justice accepts the result only for this pending Gate ID/scope and only if Design/Plan digests are unchanged.",
+        "- Findings transition to `review_remediation`; a complete zero-finding result transitions to `review_clear`.",
+        "- This command does not itself mean READY, human approval, or merge completion.",
         "- `/justice-implement --approved` remains the explicit implementation authorization boundary.",
         "---",
       ].join("\n"),
     };
   }
+
+  async handlePlanReviewGatePreToolUse(
+    event: Extract<HookEvent, { readonly type: "PreToolUse" }>,
+  ): Promise<HookResponse | null> {
+    if (event.payload.toolName !== "task") return null;
+    const gateId = extractReviewGateIdFromTaskPrompt(event.payload.toolInput.prompt);
+    if (gateId === undefined) return null;
+
+    const pending = this.pendingPlanReviewGates.get(event.sessionId);
+    if (pending === undefined || pending.gateId !== gateId) {
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE CLAIM BLOCKED] no matching user-invoked pending Gate",
+      };
+    }
+    const callId = event.callId;
+    if (callId === undefined || callId.trim().length === 0) {
+      return {
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW GATE CLAIM BLOCKED] callId missing",
+      };
+    }
+    if (pending.callId !== undefined && pending.callId !== callId) {
+      return {
+        action: "inject",
+        injectedContext: "[JUSTICE: REVIEW GATE CLAIM BLOCKED] Gate already claimed",
+      };
+    }
+
+    if (event.payload.toolInput.prompt !== pending.reviewerPrompt) {
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE CLAIM BLOCKED] reviewer prompt does not match the pending Gate contract",
+      };
+    }
+
+    pending.callId = callId;
+    this.planReviewGateCalls.set(callId, { sessionId: event.sessionId, gateId });
+    return {
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+      modifiedPayload: {
+        args: {
+          ...normalizeTaskToolInput(event.payload.toolInput),
+          subagent_type: undefined,
+          category: "sp-final-review",
+          run_in_background: false,
+        },
+      },
+    };
+  }
+
+  async handlePlanReviewGatePostToolUse(
+    event: Extract<HookEvent, { readonly type: "PostToolUse" }>,
+  ): Promise<HookResponse | null> {
+    if (event.payload.toolName !== "task") return null;
+    const callId = event.callId;
+    if (callId === undefined) return null;
+    const claimed = this.planReviewGateCalls.get(callId);
+    if (claimed === undefined || claimed.sessionId !== event.sessionId) return null;
+
+    const pending = this.pendingPlanReviewGates.get(event.sessionId);
+    const clearPending = (): void => {
+      this.planReviewGateCalls.delete(callId);
+      const current = this.pendingPlanReviewGates.get(event.sessionId);
+      if (current === undefined || current.gateId === claimed.gateId) {
+        this.pendingPlanReviewGates.delete(event.sessionId);
+        this.observationHandler?.setReviewGateScope(event.sessionId, null);
+      }
+    };
+    if (pending === undefined || pending.gateId !== claimed.gateId || pending.callId !== callId) {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] pending Gate state mismatch; rerun /justice-review-gate",
+      };
+    }
+
+    if (event.payload.error === true) {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] reviewer execution failed; rerun /justice-review-gate",
+      };
+    }
+
+    const result = parseReviewGateWorkerResult(event.payload.toolResult);
+    if (
+      result === undefined ||
+      result.complete !== true ||
+      result.gateId !== pending.gateId ||
+      JSON.stringify(result.reviewScope) !== pending.reviewScope
+    ) {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] malformed or incomplete reviewer result; rerun /justice-review-gate",
+      };
+    }
+
+    let designContent: string | null;
+    let planContent: string | null;
+    try {
+      designContent = await this.readPlanFile(pending.designPath);
+      planContent = await this.readPlanFile(pending.planPath);
+    } catch {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] Design/Plan could not be revalidated; rerun /justice-review-gate",
+      };
+    }
+    const currentDesignDigest =
+      designContent === null ? null : createHash("sha256").update(designContent).digest("hex");
+    const currentPlanDigest =
+      planContent === null ? null : createHash("sha256").update(planContent).digest("hex");
+    if (currentDesignDigest !== pending.designDigest || currentPlanDigest !== pending.planDigest) {
+      clearPending();
+      return {
+        action: "inject",
+        injectedContext:
+          "[JUSTICE: REVIEW GATE BLOCKED] Design/Plan changed during review; rerun /justice-review-gate",
+      };
+    }
+
+    const response = await this.observationHandler?.handlePlanReviewGateResult({
+      sessionId: event.sessionId,
+      reviewScope: pending.reviewScope,
+      findings: result.findings,
+    });
+    clearPending();
+    return (
+      response ?? {
+        action: "inject",
+        injectedContext:
+          result.findings.length > 0
+            ? formatWorkflowDirective({ stage: "review_remediation" })
+            : formatWorkflowDirective({ stage: "review_clear" }),
+      }
+    );
+  }
+
   private resolveBootstrapDirectiveStage(phase: WorkflowBootstrapPhase): WorkflowDirectiveStage {
     switch (phase) {
       case "design_required":

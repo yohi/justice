@@ -160,6 +160,86 @@ describe("ObservationHandler review observations", () => {
     expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
   });
 
+  it("records deterministic plan review Gate findings under the exact Gate scope", async () => {
+    const { handler, logStore } = createHandler();
+    const reviewScope = JSON.stringify(["docs/design.md", "docs/plan.md"]);
+    handler.setReviewGateScope("session-plan-gate", reviewScope);
+
+    const response = await handler.handlePlanReviewGateResult({
+      sessionId: "session-plan-gate",
+      reviewScope,
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "major",
+          summary: "Plan omits failure handling",
+          location: "docs/plan.md:42",
+        },
+      ],
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review remediation injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW REMEDIATION]");
+    expect(await logStore.readAll()).toMatchObject([
+      {
+        kind: "review_observed",
+        reviewScope,
+        isCompleteSnapshot: true,
+        items: [
+          {
+            itemKey: "RG-001",
+            evidenceId: "RG-001",
+            severity: "major",
+            summary: "Plan omits failure handling",
+            location: "docs/plan.md:42",
+            status: "open",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("records a complete zero-finding plan review Gate as review clear", async () => {
+    const { handler, logStore } = createHandler();
+    const reviewScope = JSON.stringify(["docs/design.md", "docs/plan.md"]);
+    handler.setReviewGateScope("session-plan-gate-clear", reviewScope);
+
+    const response = await handler.handlePlanReviewGateResult({
+      sessionId: "session-plan-gate-clear",
+      reviewScope,
+      findings: [],
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected review clear injection");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW CLEAR]");
+    expect(await logStore.readAll()).toMatchObject([
+      {
+        kind: "review_observed",
+        reviewScope,
+        isCompleteSnapshot: true,
+        items: [],
+      },
+    ]);
+  });
+
+  it("blocks a deterministic plan review result with a mismatched Gate scope", async () => {
+    const { handler, logStore } = createHandler();
+    handler.setReviewGateScope("session-plan-gate-mismatch", "expected-scope");
+
+    const response = await handler.handlePlanReviewGateResult({
+      sessionId: "session-plan-gate-mismatch",
+      reviewScope: "other-scope",
+      findings: [],
+    });
+
+    expect(response).toMatchObject({
+      action: "inject",
+      injectedContext: expect.stringContaining("REVIEW GATE BLOCKED"),
+    });
+    expect(await logStore.readAll()).toEqual([]);
+  });
   it("deduplicates review deliveries by call, result, and snapshot while allowing corrections", async () => {
     // Given
     const { handler } = createHandler();

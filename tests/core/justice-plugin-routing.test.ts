@@ -86,6 +86,45 @@ describe("JusticePlugin routing guard", () => {
     expect(response).toEqual({ action: "inject", injectedContext: "plan pre" });
   });
 
+  it("routes a marked pre-implementation plan review before mandatory review claiming", async () => {
+    const plugin = createPlugin();
+    const planBridge = plugin.getPlanBridge();
+    const observation = plugin.getObservationHandler();
+    const special = vi.spyOn(planBridge, "handlePlanReviewGatePreToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+      modifiedPayload: {
+        args: {
+          category: "sp-final-review",
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1",
+          run_in_background: false,
+        },
+      },
+    });
+    const implementationRoute = vi.spyOn(planBridge, "handlePreToolUse");
+    const observationRoute = vi.spyOn(observation, "handlePreToolUse");
+
+    const response = await plugin.handleEvent({
+      type: "PreToolUse",
+      sessionId: "s-plan-review",
+      callId: "plan-review-call",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          category: "sp-final-review",
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1",
+        },
+      },
+    } as PreToolUseEvent);
+
+    expect(special).toHaveBeenCalledOnce();
+    expect(implementationRoute).not.toHaveBeenCalled();
+    expect(observationRoute).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+    });
+  });
   it("keeps a mandatory review task out of the implementation PlanBridge route", async () => {
     const plugin = createPlugin();
     const observation = plugin.getObservationHandler();
@@ -104,6 +143,35 @@ describe("JusticePlugin routing guard", () => {
     expect(planSpy).not.toHaveBeenCalled();
   });
 
+  it("routes a claimed plan review completion before mandatory review completion", async () => {
+    const plugin = createPlugin();
+    const planBridge = plugin.getPlanBridge();
+    const special = vi.spyOn(planBridge, "handlePlanReviewGatePostToolUse").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: REVIEW CLEAR]",
+    });
+    const normalPost = vi.spyOn(planBridge, "handlePostToolUse");
+    const feedback = vi.spyOn(plugin.getTaskFeedback(), "handlePostToolUse");
+    const observation = vi.spyOn(plugin.getObservationHandler(), "handlePostToolUse");
+
+    const response = await plugin.handleEvent({
+      type: "PostToolUse",
+      sessionId: "s-plan-review",
+      callId: "plan-review-call",
+      payload: {
+        toolName: "task",
+        toolInput: { category: "sp-final-review" },
+        toolResult: "{}",
+        error: false,
+      },
+    } as PostToolUseEvent);
+
+    expect(special).toHaveBeenCalledOnce();
+    expect(normalPost).not.toHaveBeenCalled();
+    expect(feedback).not.toHaveBeenCalled();
+    expect(observation).not.toHaveBeenCalled();
+    expect(response).toEqual({ action: "inject", injectedContext: "[JUSTICE: REVIEW CLEAR]" });
+  });
   it("invokes observation handler, plan-bridge and task-feedback for a task PostToolUse", async () => {
     const plugin = createPlugin();
     const observation = plugin.getObservationHandler();

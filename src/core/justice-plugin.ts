@@ -704,6 +704,14 @@ export class JusticePlugin {
           event.sessionId !== undefined
             ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
             : undefined;
+        const planReviewGateResponse =
+          event.payload.toolName === "task"
+            ? await this.planBridge.handlePlanReviewGatePreToolUse(event).catch((err: unknown) => {
+                this.options.logger?.warn("plan review gate pre-tool-use failed", err);
+                return null;
+              })
+            : null;
+        if (planReviewGateResponse !== null) return planReviewGateResponse;
         const reviewCategory = resolveMandatoryReviewCategory(event);
         if (reviewCategory !== undefined && event.callId !== undefined) {
           const calls = this.reviewCallsBySession.get(event.sessionId) ?? new Set<string>();
@@ -783,6 +791,13 @@ export class JusticePlugin {
       case "PostToolUse": {
         try {
           if (event.payload.toolName === "task") {
+            const planReviewGateResponse = await this.planBridge
+              .handlePlanReviewGatePostToolUse(event)
+              .catch((err: unknown) => {
+                this.options.logger?.warn("plan review gate post-tool-use failed", err);
+                return null;
+              });
+            if (planReviewGateResponse !== null) return planReviewGateResponse;
             const reviewResponse = await this.routeReviewTaskPostToolUse(event);
             if (reviewResponse !== undefined) {
               return this.mergePostToolUseWithReviewDeliveries(event.sessionId, reviewResponse);
