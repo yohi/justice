@@ -157,6 +157,72 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
   });
 
+  it("routes a Superpowers task reviewer through sp-review", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-review", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-review",
+      callId: "call-review",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          description: "Review Task 1 (spec + quality)",
+          prompt: "You are reviewing one task's implementation: verify the task requirements.",
+          subagent_type: "general",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: { category: "sp-review", run_in_background: false },
+    });
+    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+  });
+
+  it("routes the Superpowers whole-branch code reviewer through sp-final-review", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-final-review", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-final-review",
+      callId: "call-final-review",
+      payload: {
+        toolName: "task",
+        toolInput: {
+          prompt: [
+            "You are a Senior Code Reviewer with expertise in software architecture.",
+            "## Git Range to Review",
+            "**Base:** abc",
+            "**Head:** def",
+          ].join("\n"),
+          subagent_type: "general",
+        },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: { category: "sp-final-review", run_in_background: false },
+    });
+    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+  });
+
   it("preserves explicit specialized routing for an authorized task", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
