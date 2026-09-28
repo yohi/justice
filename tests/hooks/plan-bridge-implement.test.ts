@@ -45,6 +45,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(result.armed).toBe(true);
     expect(result.planPath).toBe("plan.md");
     expect(result.directiveStage).toBe("implementation_arm");
+    expect(result.guidance).toContain("[JUSTICE: REQUIRED SKILLS: subagent-driven-development]");
     expect(bridge.isImplementationArmed("session-1")).toBe(true);
   });
 
@@ -127,6 +128,60 @@ describe("PlanBridge.handleImplementationArm", () => {
     }
     expect(response.injectedContext).toContain("[JUSTICE: IMPLEMENTATION]");
     expect(bridge.isImplementationArmed("session-1")).toBe(true);
+  });
+
+  it("treats Superpowers general routing as a compatibility placeholder for an authorized task", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-general", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-general",
+      callId: "call-general",
+      payload: {
+        toolName: "task",
+        toolInput: { prompt: "implement it", subagent_type: "general" },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: { category: "sp-implementation" },
+    });
+    expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
+  });
+
+  it("preserves explicit specialized routing for an authorized task", async () => {
+    const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
+    const bridge = createBridge({ "plan.md": simplePlan });
+    await bridge.handleImplementationArm("session-explore", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    const response = await bridge.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "session-explore",
+      callId: "call-explore",
+      payload: {
+        toolName: "task",
+        toolInput: { prompt: "inspect first", subagent_type: "explore" },
+      },
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("expected inject response");
+    expect(response.modifiedPayload).toMatchObject({
+      args: { subagent_type: "explore" },
+    });
+    expect(response.modifiedPayload?.args).not.toHaveProperty("category");
   });
 
   it("injects an unauthorized directive when the active plan is not armed", async () => {
