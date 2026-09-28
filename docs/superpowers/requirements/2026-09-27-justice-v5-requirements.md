@@ -257,6 +257,7 @@ Justice must distinguish caller provenance before applying the OmO XOR contract.
 - a non-Superpowers caller's explicit `subagent_type` remains caller-owned and is preserved;
 - an explicit caller `category` remains caller-owned and is preserved/validated;
 - a **recognized Superpowers new-worker dispatch** using the OpenCode V1 generic compatibility placeholder `subagent_type="general"` is not treated as a semantic subagent choice; Justice removes that placeholder and emits exactly one authoritative Justice semantic category;
+- a recognized Superpowers explicit specialized non-generic `subagent_type` (for example `explore`) remains an explicit specialized route and is preserved without Justice category replacement;
 - an OmO continuation `task_id=ses_...` remains continuation-owned and must not receive a newly selected worker category;
 - an ambiguous/untrusted Superpowers provenance must not be translated as trusted semantic routing.
 
@@ -627,6 +628,7 @@ The boundary is provenance-aware:
 - **non-Superpowers explicit `subagent_type`**: preserve it; do not add/replace it with a Justice category;
 - **explicit `category`**: preserve/validate it; do not add `subagent_type`;
 - **recognized Superpowers new-worker `subagent_type="general"`**: treat `general` as the OpenCode compatibility placeholder, remove `subagent_type`, and emit the authoritative Justice semantic category from JUS5-CAT-06..09;
+- **recognized Superpowers explicit specialized non-generic `subagent_type`**: preserve the specialized route and do not add a Justice category;
 - **neither target on a recognized new worker**: Justice may emit the same authoritative semantic category;
 - **both targets supplied by an external/ambiguous caller**: Justice must not choose between them; record a routing-contract violation and do not treat that call as trusted acceptance evidence;
 - **continuation `task_id=ses_...`**: preserve continuation routing and do not inject a new semantic worker category;
