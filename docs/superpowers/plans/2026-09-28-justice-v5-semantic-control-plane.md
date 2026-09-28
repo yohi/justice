@@ -827,7 +827,7 @@ type WorkflowActivationDecision =
   | {
       readonly kind: "unavailable";
       readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
-      readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable";
+      readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable" | "activation_state_unavailable";
     }
   | {
       readonly kind: "conflict";
@@ -836,11 +836,22 @@ type WorkflowActivationDecision =
       readonly evidence?: WorkflowActivationEvidence;
     };
 
+type WorkflowActivationStateMutationResult =
+  | { readonly kind: "saved" | "idempotent" }
+  | { readonly kind: "persistence_failed"; readonly reason: string };
+
+type WorkflowActivationStateLookupResult<T> =
+  | { readonly kind: "resolved"; readonly value: T | null }
+  | { readonly kind: "untrusted"; readonly reason: "read_failed" | "schema_mismatch"; readonly details: readonly string[] };
+
 interface WorkflowActivationStateStore {
-  recordSelection(evidence: WorkflowMethodSelectionEvidence): Promise<void>;
-  recordActivation(evidence: WorkflowActivationEvidence): Promise<void>;
-  findLatestSelection(authorizationId: string): Promise<WorkflowMethodSelectionEvidence | null>;
-  findCurrentActivation(authorizationId: string, sessionId: string): Promise<WorkflowActivationEvidence | null>;
+  setSelection(evidence: WorkflowMethodSelectionEvidence): Promise<WorkflowActivationStateMutationResult>;
+  setActivation(evidence: WorkflowActivationEvidence): Promise<WorkflowActivationStateMutationResult>;
+  findSelection(authorizationId: string): Promise<WorkflowActivationStateLookupResult<WorkflowMethodSelectionEvidence>>;
+  findCurrentActivation(
+    authorizationId: string,
+    sessionId: string,
+  ): Promise<WorkflowActivationStateLookupResult<WorkflowActivationEvidence>>;
 }
 
 type SemanticExecutionInput =
@@ -880,9 +891,9 @@ explicit current selection
 > selection_required
 ```
 
-`WorkflowMethodSelectionEvidence` may be recovered across sessions for the same authorization, but it restores only the selected method. It never proves current-session activation.
+`WorkflowMethodSelectionEvidence` is one current record per authorization and may be recovered across sessions, but it restores only the selected method. A new explicit selection atomically replaces that record. It never proves current-session activation.
 
-`WorkflowActivationEvidence` is current-session proof. It is trusted only when `authorizationId + sessionId + method` match the active selection and it originated from successful `tool.execute.after` observation of the native `skill` tool with `args.name === method` and `callID === skillCallId`.
+`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, it originated from successful `tool.execute.after` observation of the native `skill` tool with `args.name === method` and `callID === skillCallId`, and `setActivation` returned `saved | idempotent`.
 
 Decision rules are exact:
 
@@ -918,6 +929,8 @@ recovered selection from prior session
 ```
 
 Same-session restart may reuse persisted ActivationEvidence only for the exact matching authorization/session/method.
+
+Any store `untrusted` lookup or `persistence_failed` mutation is `activation_state_unavailable`: it cannot produce trusted recovered selection or `already_active`; methodology evidence remains `NOT_PROVEN` until valid state is re-established.
 
 Classifier precedence remains exact:
 
@@ -2104,11 +2117,11 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 
 **Interfaces — activation bridge:**
 - Implement registry-defined `resolveWorkflowMethodSelection(input): WorkflowMethodSelection` and `resolveWorkflowActivation(input): WorkflowActivationDecision` in `workflow-activation.ts`.
-- `workflow-activation.ts` owns `.justice/v5/workflow-activation-state.json` through existing AtomicPersistence and implements the registry-defined `WorkflowActivationStateStore`.
+- `workflow-activation.ts` owns `.justice/v5/workflow-activation-state.json` through existing AtomicPersistence and implements the registry-defined `WorkflowActivationStateStore`. The file stores exactly one current selection per authorization and at most one current activation per authorization/session.
 - Extend `ImplementationArmRequest.action="approve"` with optional `executionMethod?: SuperpowersExecutionMethod` representing explicit user/command selection.
-- On explicit selection, persist `WorkflowMethodSelectionEvidence` with current `authorizationId`, current controller `sessionId`, selected method, and selection time.
-- `findLatestSelection(authorizationId)` may return a selection from another session. That recovery avoids re-asking which method was selected, but never proves current-session activation.
-- `findCurrentActivation(authorizationId, sessionId)` is the only persistence lookup that can satisfy `already_active` after restart.
+- On explicit selection, atomically replace the authorization's selection record with `WorkflowMethodSelectionEvidence` containing current `authorizationId`, current controller `sessionId`, selected method, and selection time. `persistence_failed` makes activation state unavailable.
+- `findSelection(authorizationId)` may return the one current selection record from another session. That recovery avoids re-asking which method was selected, but never proves current-session activation. An `untrusted` lookup is not equivalent to no selection; surface activation state unavailable.
+- `findCurrentActivation(authorizationId, sessionId)` is the only persistence lookup that can satisfy `already_active` after restart, and only a `resolved` exact matching value is eligible.
 - Extend `ImplementationArmResult` with `selection: WorkflowMethodSelection` and `activation: WorkflowActivationDecision`.
 - Extend `CanonicalWorkflowSkill` with `subagent-driven-development | executing-plans`.
 - Extend `WorkflowDirectiveInput` with `activation?: WorkflowActivationDecision`.
@@ -2119,7 +2132,7 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
   - `method_selection_required` → `requiredSkills=[]`, `nextAction="await_method_selection"`;
   - `unavailable | conflict` → `requiredSkills=[]`, `nextAction="report_activation_blocked"`;
   - implementation stages no longer use `delegate_task` as a Justice-owned progression action.
-- OpenCode activation observation is exact: successful controller `tool.execute.after` for tool `skill`, with `args.name === selected method`; use hook `sessionID` + `callID` plus active `authorizationId` to persist `WorkflowActivationEvidence`.
+- OpenCode activation observation is exact: successful controller `tool.execute.after` for tool `skill`, with `args.name === selected method`; use hook `sessionID` + `callID` plus active `authorizationId` to persist `WorkflowActivationEvidence`. The activation is trusted only after `setActivation` returns `saved | idempotent`; persistence failure is fail-closed for methodology evidence.
 - A worker call is trusted as selected-method execution only when `resolveWorkflowActivation` returns `already_active` for that same authorization/session/method.
 - Same-session persisted activation may satisfy `already_active` after restart; cross-session activation evidence is never reused.
 - Cross-session selection recovery flow is always: recovered selection → `needs_activation` → fresh current-session skill invocation → activation evidence.
@@ -2190,6 +2203,8 @@ In `tests/core/workflow-activation-v5.test.ts`:
 - `missing_authoritative_method_requires_method_selection`
 - `selected_method_capability_failure_does_not_silently_switch_method`
 - `superpowers_activation_failure_cannot_be_trusted_as_authorized_implementation`
+- `activation_state_persistence_failure_cannot_produce_already_active`
+- `activation_state_schema_failure_is_not_treated_as_missing_selection`
 
 In `tests/core/superpowers-ownership-v5.test.ts`:
 - `justice_activation_does_not_own_superpowers_task_progression`
