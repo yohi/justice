@@ -276,48 +276,64 @@ git commit -m "test: lock Justice v5 review interop baseline"
 - Modify: `src/core/types.ts`
 - Modify: `src/core/task-packager.ts`
 - Modify: `src/core/omo-category-mapper.ts`
-- Test: `tests/core/task-packager.test.ts` or create `tests/core/v5-task-routing-contract.test.ts`
-- Test: existing category-mapper/type tests or create `tests/core/omo-category-mapper-v5.test.ts`
+- Test: `tests/core/v5-task-routing-contract.test.ts`
+- Test: `tests/core/omo-category-mapper-v5.test.ts`
 
 **Interfaces:**
+- Produces the registry-defined `TaskIdentity` and `ReviewFindingV5` in `src/core/types.ts`.
 - Produces:
-  - `TaskCategory = "visual-engineering" | "ultrabrain" | "deep-low" | "deep-high" | "artistry" | "quick" | "unspecified-low" | "unspecified-high" | "writing"`
-  - `TaskIdentity` as an internal semantic identity type with no wire `task_id` alias.
-  - `TaskRoutingTarget`:
-    ```ts
-    type TaskRoutingTarget =
-      | { readonly kind: "category"; readonly category: SpCategory | TaskCategory }
-      | { readonly kind: "subagent"; readonly subagentType: string }
-      | { readonly kind: "continuation"; readonly taskId: string }
-      | { readonly kind: "unrouted" }
-      | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
-    ```
-  - `inspectTaskRoutingTarget(input: Readonly<Record<string, unknown>>) -> TaskRoutingTarget`
-- Changes:
-  - `normalizeTaskToolInput(InPlace)` preserves legitimate OmO `task_id`.
-  - `enrichTaskToolInput` no longer writes a Justice semantic ID into `task_id`.
+  ```ts
+  type TaskCategory =
+    | "visual-engineering"
+    | "ultrabrain"
+    | "deep-low"
+    | "deep-high"
+    | "artistry"
+    | "quick"
+    | "unspecified-low"
+    | "unspecified-high"
+    | "writing";
+
+  type TaskRoutingTarget =
+    | { readonly kind: "category"; readonly category: SpCategory | TaskCategory }
+    | { readonly kind: "subagent"; readonly subagentType: string }
+    | { readonly kind: "continuation"; readonly taskId: string }
+    | { readonly kind: "unrouted" }
+    | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
+
+  function inspectTaskRoutingTarget(
+    input: Readonly<Record<string, unknown>>,
+  ): TaskRoutingTarget;
+  ```
+- `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO `task_id=ses_...`.
+- `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
 - Consumes: none.
 
-- [ ] **Step 1: Write RED routing-contract tests**
+- [ ] **Step 1: Write RED routing/domain tests**
 
-Test names/assertions:
+Exact tests:
 
-- `preserves_omo_continuation_task_id`: `ses_123` survives normalization unchanged.
-- `never_serializes_justice_task_identity_as_task_id`: semantic `task-1` is absent from normalized OmO args.
-- `reports_category_subagent_type_as_invalid_both`: no Justice-side tie-break.
-- `preserves_explicit_subagent_type_without_category_injection`.
-- `preserves_explicit_category_without_subagent_type_injection`.
-- `does_not_inject_category_into_continuation`.
-- `does_not_emit_legacy_deep`.
-- `recognizes_deep_low_deep_high_artistry`.
+In `tests/core/v5-task-routing-contract.test.ts`:
+- `preserves_omo_continuation_task_id`
+- `never_serializes_justice_task_identity_as_task_id`
+- `reports_category_subagent_type_as_invalid_both`
+- `preserves_explicit_subagent_type_without_category_injection`
+- `preserves_explicit_category_without_subagent_type_injection`
+- `does_not_inject_category_into_continuation`
+- `justice_does_not_select_model_or_provider`
+
+In `tests/core/omo-category-mapper-v5.test.ts`:
+- `does_not_emit_legacy_deep`
+- `recognizes_deep_low_deep_high_artistry`
+- `custom_sp_categories_coexist_with_omo_v5_categories`
 
 - [ ] **Step 2: Run RED tests**
 
 Run: `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
 
-Expected: FAIL on legacy `deep`, semantic `task_id` enrichment, and missing target inspection.
+Expected: FAIL on legacy `deep`, semantic `task_id` enrichment, and missing target inspection/domain types.
 
-- [ ] **Step 3: Implement the exact types and normalization boundary**
+- [ ] **Step 3: Implement the exact registry types and normalization boundary**
 
 Do not select model/provider/reasoning/fallback. Do not normalize an invalid both-target call into a trusted routing decision.
 
@@ -332,7 +348,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/types.ts src/core/task-packager.ts src/core/omo-category-mapper.ts tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
+git add src/core/types.ts src/core/task-packager.ts src/core/omo-category-mapper.ts \
+  tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
 git commit -m "refactor: separate Justice identity from OmO task routing"
 ```
 
@@ -342,13 +359,28 @@ git commit -m "refactor: separate Justice identity from OmO task routing"
 
 **Requirements / Design:** JUS5-AUTH-01..09, JUS5-PERSIST-01..05, J5D-CHAIN-01..02, J5D-RULING-01, J5D-PERSIST-01.
 
+**Baseline direct-consumer scan:** At master `080bcdb25b192962789ff5d67139e56487381de4`, the old `binding.planPath / binding.planFingerprint / binding.canonicalSnapshot` authority fields are directly consumed outside `plan-authorization.ts` by exactly the production files listed below. Task 3 changes those consumers only mechanically; semantic behavior belongs to later tasks.
+
 **Files:**
 - Create: `src/core/artifact-chain.ts`
-- Modify: `src/core/plan-authorization.ts`
 - Create: `src/core/v5-persistence.ts`
-- Test: create `tests/core/artifact-chain.test.ts`
-- Test: modify/create authorization tests under `tests/core/plan-authorization*.test.ts`
-- Test: create `tests/core/v5-persistence.test.ts`
+- Modify: `src/core/plan-authorization.ts`
+- Modify mechanically: `src/core/acceptance-decision.ts`
+- Modify mechanically: `src/core/review-dispatch-state.ts`
+- Modify mechanically: `src/core/justice-plugin.ts`
+- Modify mechanically: `src/hooks/plan-bridge.ts`
+- Test: `tests/core/artifact-chain.test.ts`
+- Test: `tests/core/v5-persistence.test.ts`
+- Test: `tests/core/plan-authorization.test.ts`
+- Test fixture migration: `tests/core/acceptance-decision.test.ts`
+- Test fixture migration: `tests/core/review-dispatch-state.test.ts`
+- Test fixture migration: `tests/core/review-dispatch-state-behavior.test.ts`
+- Test fixture migration: `tests/core/justice-plugin.test.ts`
+- Test fixture migration: `tests/hooks/plan-bridge-authorization.test.ts`
+- Test fixture migration: `tests/hooks/plan-bridge-implement.test.ts`
+- Test fixture migration: `tests/hooks/plan-bridge-posttooluse.test.ts`
+- Test fixture migration: `tests/hooks/plan-bridge.test.ts`
+- Test fixture migration: `tests/integration/plan-authorization-handoff.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -372,33 +404,31 @@ git commit -m "refactor: separate Justice identity from OmO task routing"
     readonly projectionSchema: "justice-conformance-v1";
     readonly approvedAt: string;
   };
-  ```
-- Evolves `ApprovedPlanBinding` to contain one `artifactChain: ApprovedArtifactChain` instead of duplicated plan-only authority fields.
-- Changes `ApprovePlanInput` to:
-  ```ts
+
   type ApprovePlanInput = {
     readonly sessionId: string;
     readonly artifactChain: ApprovedArtifactChain;
   };
   ```
+- `ApprovedPlanBinding` contains one `artifactChain: ApprovedArtifactChain`; the removed top-level plan-only fields are not duplicated as compatibility state.
 - v5 authoritative authorization file: `.justice/v5/authorizations.json`.
 - v4 `.justice/authorizations.json` remains untouched/historical.
 - Produces `classifyPriorJusticeState(raw) -> PriorStateClassification` for `justice-plan-v1`, PersistedEnvelope v1, ReviewSnapshot v1, and legacy human review resolutions.
 
 - [ ] **Step 1: Write RED artifact-chain and migration tests**
 
-Cover:
-- checkbox-only Plan snapshot progress does not change semantic Plan fingerprint.
-- Plan interface/signature/assertion/global-constraint change invalidates the chain.
-- Requirements fingerprint change stales Design + Plan.
-- Design fingerprint change stales Plan.
-- new explicit approval creates a new `chainId`.
-- v4 plan-only authorization is recognized but never returned as active v5 authority.
-- unknown/newer/malformed state is preserved/classified incompatible, not rewritten.
+Exact required tests:
+- `preserves_authorization_for_checkbox_only_plan_progress`
+- `invalidates_chain_when_plan_contract_changes`
+- `design_change_stales_bound_plan_authority`
+- `requirements_change_stales_design_and_plan_authority`
+- `reapproval_creates_new_artifact_chain_id`
+- `v4_plan_authorization_is_not_promoted_to_v5_authority`
+- `unknown_or_newer_authoritative_state_is_preserved_not_rewritten`
 
 - [ ] **Step 2: Run RED tests**
 
-Run: `bun run vitest run tests/core/artifact-chain.test.ts tests/core/plan-authorization*.test.ts tests/core/v5-persistence.test.ts`
+Run: `bun run vitest run tests/core/artifact-chain.test.ts tests/core/plan-authorization.test.ts tests/core/v5-persistence.test.ts`
 
 Expected: FAIL because current authorization is plan-only and reads the v4 file as authority.
 
@@ -406,22 +436,50 @@ Expected: FAIL because current authorization is plan-only and reads the v4 file 
 
 Reuse `AtomicPersistence`. Preserve the existing authorization review boundary/locking semantics. Do not fabricate Requirements/Design lineage during migration.
 
-- [ ] **Step 4: Update direct consumers of `ApprovedPlanBinding` to compile against `binding.artifactChain.plan`**
+- [ ] **Step 4: Mechanically migrate every baseline direct consumer**
 
-Mechanical compile-only changes are allowed here only where the type migration requires them; behavior changes belong to later tasks.
+Only these substitutions are allowed in the four consumer files in this task:
 
-- [ ] **Step 5: Run focused tests + typecheck**
+```text
+binding.planPath          → binding.artifactChain.plan.path
+binding.planFingerprint   → binding.artifactChain.plan.fingerprint
+binding.canonicalSnapshot → binding.artifactChain.plan.canonicalSnapshot
+```
+
+Update the listed test fixtures to construct/read the new binding shape. Do not change acceptance, review scheduling, PlanBridge, or plugin semantics in this task.
+
+- [ ] **Step 5: Run all directly affected tests + typecheck**
 
 Run:
-- `bun run vitest run tests/core/artifact-chain.test.ts tests/core/plan-authorization*.test.ts tests/core/v5-persistence.test.ts`
-- `bun run typecheck`
+```bash
+bun run vitest run \
+  tests/core/artifact-chain.test.ts \
+  tests/core/v5-persistence.test.ts \
+  tests/core/plan-authorization.test.ts \
+  tests/core/acceptance-decision.test.ts \
+  tests/core/review-dispatch-state.test.ts \
+  tests/core/review-dispatch-state-behavior.test.ts \
+  tests/core/justice-plugin.test.ts \
+  tests/hooks/plan-bridge-authorization.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts \
+  tests/hooks/plan-bridge-posttooluse.test.ts \
+  tests/hooks/plan-bridge.test.ts \
+  tests/integration/plan-authorization-handoff.test.ts
+bun run typecheck
+```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit the complete atomic migration**
 
 ```bash
-git add src/core/artifact-chain.ts src/core/plan-authorization.ts src/core/v5-persistence.ts tests/core/artifact-chain.test.ts tests/core/plan-authorization*.test.ts tests/core/v5-persistence.test.ts
+git add \
+  src/core/artifact-chain.ts src/core/v5-persistence.ts src/core/plan-authorization.ts \
+  src/core/acceptance-decision.ts src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts \
+  tests/core/artifact-chain.test.ts tests/core/v5-persistence.test.ts tests/core/plan-authorization.test.ts \
+  tests/core/acceptance-decision.test.ts tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts \
+  tests/core/justice-plugin.test.ts tests/hooks/plan-bridge-authorization.test.ts tests/hooks/plan-bridge-implement.test.ts \
+  tests/hooks/plan-bridge-posttooluse.test.ts tests/hooks/plan-bridge.test.ts tests/integration/plan-authorization-handoff.test.ts
 git commit -m "feat: bind authorization to approved artifact chains"
 ```
 
@@ -441,6 +499,7 @@ git commit -m "feat: bind authorization to approved artifact chains"
 - Test: `tests/core/conformance-contract.test.ts`
 
 **Interfaces:**
+- Owns the registry-defined `ProjectionDiagnosticCode`, `ProjectionDiagnostic`, `ProjectionResult<T>`, and `ClauseResult`.
 - Produces:
   ```ts
   type ProjectionStatus = "COMPLETE" | "INCOMPLETE" | "INVALID";
@@ -466,27 +525,24 @@ git commit -m "feat: bind authorization to approved artifact chains"
     readonly digest: string;
   };
   ```
-- Produces:
-  - `parseSuperpowersPlan(markdown: string) -> ParsedSuperpowersPlan`
-  - `projectRequirementsClauses(markdown, ref) -> ProjectionResult`
-  - `projectDesignClauses(markdown, ref) -> ProjectionResult`
-  - `projectPlanClauses(markdown, ref) -> ProjectionResult`
-  - `buildConformanceContract(chain, sources) -> ConformanceContract`
-- Plan parser must recognize Goal, Architecture, Tech Stack, Spec, Global Constraints, Review Focus, Task Files, Interfaces/Consumes/Produces, signatures, exact values, test assertions, and Expected lines.
+- Exact producer signatures:
+  - `parseSuperpowersPlan(markdown: string): ProjectionResult<ParsedSuperpowersPlan>`
+  - `projectRequirementsClauses(markdown: string, ref: ArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
+  - `projectDesignClauses(markdown: string, ref: ArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
+  - `projectPlanClauses(markdown: string, ref: PlanArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
+  - `buildConformanceContract(chain: ApprovedArtifactChain, sources: ProjectedSources): ConformanceContract`
+- Plan parser recognizes Goal, Architecture, Tech Stack, Spec, Global Constraints, Review Focus, Task Files, Interfaces/Consumes/Produces, signatures, exact values, test assertions, and Expected lines.
 
 - [ ] **Step 1: Write RED parser/projection tests**
 
-Assertions:
-- every `JUS5-*` heading produces deterministic source identity + `/0` and ordered bullet suffixes.
-- Design projection enumerates exactly `INV-01..06` + `J5D-*` registry rows; prose containing MUST outside the registry is not auto-enumerated.
-- Plan projection enumerates all required structural units.
-- a structural unit containing several obligations stays one clause and requires all to be proven.
-- duplicate IDs → INVALID.
-- missing Requirements/Design/Plan source → INVALID.
-- ambiguous task/section structure → INCOMPLETE or INVALID, never COMPLETE.
-- source fingerprint mismatch → INVALID.
-- unsupported Plan structure cannot disappear silently.
-- projection schema is embedded in contract identity.
+Include exact test:
+- `projection_failures_never_return_complete` — duplicate ID, missing source, ambiguous source, unsupported Plan structure, parser failure, source revision mismatch, and unmappable normative unit each produce `INCOMPLETE` or `INVALID`, never `COMPLETE`.
+
+Also assert:
+- every `JUS5-*` heading produces deterministic source identity + suffixes;
+- Design projection enumerates exactly `INV-01..06` + `J5D-*`;
+- structural multi-obligation units stay one clause;
+- projection schema participates in contract identity.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -509,7 +565,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/conformance-contract.ts src/core/superpowers-plan-parser.ts src/core/conformance-projector.ts src/core/plan-parser.ts tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts tests/core/conformance-contract.test.ts
+git add src/core/conformance-contract.ts src/core/superpowers-plan-parser.ts src/core/conformance-projector.ts src/core/plan-parser.ts \
+  tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts tests/core/conformance-contract.test.ts
 git commit -m "feat: project versioned conformance contracts"
 ```
 
@@ -527,6 +584,8 @@ git commit -m "feat: project versioned conformance contracts"
 - Test: `tests/core/superpowers-dispatch-resolver.test.ts`
 
 **Interfaces:**
+- Consumes the registry-defined `TaskIdentity`.
+- Owns the registry-defined `TaskIdentityResolution` and `CorrelationMutationResult`.
 - Produces:
   ```ts
   type ExecutionCorrelation = {
@@ -550,38 +609,40 @@ git commit -m "feat: project versioned conformance contracts"
   ```
 - Store path: `.justice/v5/execution-correlations.json`.
 - `ExecutionCorrelationStore` methods:
-  - `bindPending(input) -> Promise<ExecutionCorrelation | null>`
-  - `attachChild(key, childSessionId) -> Promise<CorrelationMutationResult>`
-  - `attachContinuation(key, sesId) -> Promise<CorrelationMutationResult>`
-  - `markTerminal(key) -> Promise<CorrelationMutationResult>`
-  - `findByCall(key) -> Promise<ExecutionCorrelation | null>`
-  - `findTrustedByChildSession(childSessionId) -> Promise<ExecutionCorrelation | null>`
-- `resolveSuperpowersImplementationTask(input) -> Promise<TaskIdentityResolution>`:
-  - extracts exactly one Superpowers task-brief reference from the dispatch prompt;
+  - `bindPending(input: BindPendingInput): Promise<CorrelationMutationResult>`
+  - `attachChild(key: ExecutionCorrelationKey, childSessionId: string): Promise<CorrelationMutationResult>`
+  - `attachContinuation(key: ExecutionCorrelationKey, sesId: string): Promise<CorrelationMutationResult>`
+  - `markTerminal(key: ExecutionCorrelationKey): Promise<CorrelationMutationResult>`
+  - `findByCall(key: ExecutionCorrelationKey): Promise<ExecutionCorrelation | null>`
+  - `findTrustedByChildSession(childSessionId: string): Promise<ExecutionCorrelation | null>`
+- `resolveSuperpowersImplementationTask(input: ResolveTaskIdentityInput): Promise<TaskIdentityResolution>`:
+  - extracts exactly one Superpowers task-brief reference;
   - reads `task-N-brief.md`;
-  - canonicalizes the full brief;
-  - matches its digest against exactly one task in the active authorized Plan snapshot;
+  - canonicalizes the full task section with checkbox state normalized away;
+  - constructs the registry-defined `TaskIdentity`;
+  - matches `semanticDigest` against exactly one task in the active authorized Plan snapshot;
   - task number/path alone is insufficient trust.
 
 - [ ] **Step 1: Write RED correlation-store tests**
 
 Cover:
-- same `parentSessionId+parentCallId` is idempotent.
-- conflicting semantic task for same call becomes untrusted.
-- child relation is accepted only when parent relation agrees.
-- unrelated `ses_...` cannot rebind semantic task.
-- trusted child continuation can reattach.
-- persistence failure yields no trusted correlation.
-- recovery uses the durable file, not an ephemeral map.
+- same `parentSessionId+parentCallId` is idempotent;
+- conflicting semantic task for same call → `untrusted`;
+- child relation accepted only when parent relation agrees;
+- unrelated `ses_...` cannot rebind semantic task;
+- trusted child continuation can reattach;
+- persistence failure → `persistence_failed`;
+- recovery uses durable file, not an ephemeral map.
 
-- [ ] **Step 2: Write RED task-brief resolver tests**
+- [ ] **Step 2: Write RED task-brief/identity tests**
 
-Cover:
-- valid `task-N-brief.md` full body digest resolves one authorized TaskIdentity.
-- task number matches but brief body is stale → untrusted.
-- multiple/missing brief references → untrusted.
-- brief from another Plan workspace → untrusted.
-- checkbox-only Plan progress still matches the same task digest.
+Exact tests:
+- `task_identity_is_stable_for_checkbox_only_progress`
+- `task_identity_changes_for_substantive_task_body_change`
+- `valid_task_brief_resolves_one_authorized_task_identity`
+- `stale_task_brief_digest_is_untrusted`
+- `multiple_or_missing_task_brief_reference_is_untrusted`
+- `brief_from_other_plan_workspace_is_untrusted`
 
 - [ ] **Step 3: Run RED tests**
 
@@ -600,7 +661,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/execution-correlation.ts src/core/superpowers-dispatch-resolver.ts src/core/types.ts tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
+git add src/core/execution-correlation.ts src/core/superpowers-dispatch-resolver.ts src/core/types.ts \
+  tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
 git commit -m "feat: persist Justice execution correlation"
 ```
 
@@ -670,14 +732,23 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - Test: `tests/runtime/opencode-adapter-review-interop.test.ts`
 
 **Interfaces:**
+- Consumes `TaskIdentity` and `ReviewFindingV5` from Task 2.
+- Consumes `ClauseResult` and `ConformanceContract` from Task 4.
+- Owns the registry-defined `RecognizedReviewDispatch` and `ParseReviewResult`.
 - Produces:
   ```ts
   type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
 
-  type RecognizedReviewDispatch =
-    | { readonly kind: "recognized"; readonly reviewKind: ReviewKindV5; readonly profile: "superpowers-6.4.2"; ... }
-    | { readonly kind: "not_review" }
-    | { readonly kind: "ambiguous"; readonly reasons: readonly string[] };
+  type ReviewResultExpectation = {
+    readonly reviewCorrelationId: string;
+    readonly reviewKind: ReviewKindV5;
+    readonly artifactChainId: string;
+    readonly taskIdentity?: TaskIdentity;
+    readonly contractId: string;
+    readonly contractDigest: string;
+    readonly reviewedRange: { readonly base: string; readonly head: string };
+    readonly requiredClauseIds: readonly string[];
+  };
 
   type JusticeReviewResult = {
     readonly schemaVersion: "justice-review-v1";
@@ -692,34 +763,28 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
     readonly clauses: readonly ClauseResult[];
   };
   ```
-- Serialization contract: reviewer appends exactly one final fenced block:
-  ```text
-  ```justice-review-result-v1
-  { strict JSON matching JusticeReviewResult }
-  ```
-  ```
-- `recognizeSuperpowersReviewDispatch(input) -> RecognizedReviewDispatch`
-- `buildJusticeReviewAppendix(input) -> string`
-- `parseJusticeReviewResult(output) -> ParseReviewResult`
-- The appendix carries a read-only workspace-relative Conformance Contract path + digest; it does not alter model/provider/subagent/category.
+- Serialization: exactly one final fenced `justice-review-result-v1` JSON block.
+- Exact signatures:
+  - `recognizeSuperpowersReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`
+  - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
+  - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
+- Appendix carries a read-only workspace-relative Conformance Contract path + digest and never changes model/provider/subagent/category.
 
-- [ ] **Step 1: Write RED recognition tests for all three v6.4.2 review profiles**
+- [ ] **Step 1: Write RED recognition/adapter tests**
 
-Use Task 1's fixture strings. Require multiple markers plus concrete brief/review-package/range references. A single keyword must not classify a review.
+Exact required tests:
+- `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
+- `injects_conformance_contract_into_same_superpowers_task_review_call`
+
+Also recognize all three v6.4.2 review profiles using multiple markers and concrete brief/review-package/range references. A single keyword is insufficient.
 
 - [ ] **Step 2: Write RED structured-result tests**
 
-Cover:
-- valid exact result.
-- missing fenced block.
-- multiple blocks.
-- malformed JSON/schema.
-- wrong correlation ID.
-- wrong chain/task.
-- stale base/head.
-- wrong contract digest.
-- missing required clause result → caller can convert to NOT_PROVEN.
-- scoped re-review result may contain only affected finding/clause delta.
+Exact required tests:
+- `missing_required_clause_result_becomes_not_proven`
+- `missing_or_malformed_review_result_is_rejected`
+
+Also cover multiple result blocks, wrong correlation/chain/task, stale base/head, wrong contract digest, and scoped re-review deltas.
 
 - [ ] **Step 3: Run RED tests**
 
@@ -727,18 +792,19 @@ Run: `bun run vitest run tests/core/review-interop.test.ts tests/core/review-res
 
 Expected: FAIL.
 
-- [ ] **Step 4: Implement recognition, appendix injection, and same-call output parsing**
+- [ ] **Step 4: Implement recognition, same-call appendix injection, and strict output parsing**
 
 Use only the existing Superpowers reviewer dispatch. Do not create `sp-review` / `sp-final-review` calls.
 
-- [ ] **Step 5: Re-run Task 1's real-host gate plus focused unit tests**
+- [ ] **Step 5: Re-run Task 1 regression gate plus focused tests**
 
-Expected: PASS and exactly one reviewer call per Superpowers dispatch.
+Expected: PASS and exactly one reviewer call per Superpowers dispatch. Failure of Task 1's established baseline is upstream compatibility drift, not an implementation-time architecture choice.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
+git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts \
+  tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
 git commit -m "feat: consume Superpowers reviews as Justice evidence"
 ```
 
@@ -756,38 +822,34 @@ git commit -m "feat: consume Superpowers reviews as Justice evidence"
 - Modify: `src/core/v2/state-projection.ts`
 - Modify: `src/core/review-resolution-artifact.ts`
 - Test: `tests/core/review-evidence-store.test.ts`
-- Test: existing review aggregator/projection tests.
 - Test: `tests/core/review-quality-v5.test.ts`
+- Test: `tests/core/v2/review-aggregator.test.ts`
+- Test: `tests/core/v2/state-projection-review.test.ts`
 
 **Interfaces:**
+- Consumes canonical `ReviewFindingV5` from Task 2 and `JusticeReviewResult` from Task 7; Task 8 does not redefine either.
 - v5 evidence path: `.justice/v5/review-evidence.json`.
-- Canonical finding:
-  ```ts
-  type ReviewFindingV5 = {
-    readonly findingId: string;
-    readonly severity: "critical" | "important" | "minor";
-    readonly summary: string;
-    readonly location?: string;
-    readonly disposition: "open" | "resolved" | "parked" | "human_adjudicated";
-    readonly evidenceRefs: readonly string[];
-  };
-  ```
 - Legacy `major` deserializes only through migration as `important`.
-- A v5 human review-resolution artifact must be bound to `artifactChainId`, review scope, and item keys; it resolves quality disposition only and cannot set clause status.
+- A v5 human review-resolution artifact is bound to `artifactChainId`, review scope, and item keys; it may change quality disposition only and cannot set a conformance clause status.
 
 - [ ] **Step 1: Write RED evidence/quality tests**
 
-Cover:
-- Critical/Important open → blocking.
-- Minor → non-blocking task progression but retained for final review.
-- parked Critical/Important remains blocking.
-- human quality adjudication changes finding disposition but not `VIOLATED/NOT_PROVEN` clauses.
-- final review must disposition carried Minor/parked findings.
-- legacy major becomes important only on migration.
-- directly observed structured output is trusted without native artifact reservation.
+Exact required tests:
+- `not_addressed_finding_remains_blocking`
+- `parked_important_finding_remains_visible_and_blocking`
+- `parked_critical_or_important_blocks_until_trusted_disposition`
+
+Also assert:
+- Minor is non-blocking for task progression but retained for final review;
+- human quality adjudication never changes `VIOLATED/NOT_PROVEN` clauses;
+- final review must disposition carried Minor/parked findings;
+- legacy major becomes important only on migration;
+- directly observed structured output is trusted without native artifact reservation;
 - plain file fallback without secure reservation remains untrusted.
 
 - [ ] **Step 2: Run RED tests**
+
+Run: `bun run vitest run tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts`
 
 Expected: FAIL on `major` vocabulary and parked semantics.
 
@@ -802,7 +864,10 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/review-evidence-store.ts src/core/types.ts src/core/v2/review-types.ts src/core/v2/review-aggregator.ts src/core/v2/state-projection.ts src/core/review-resolution-artifact.ts tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts
+git add src/core/review-evidence-store.ts src/core/types.ts src/core/v2/review-types.ts src/core/v2/review-aggregator.ts \
+  src/core/v2/state-projection.ts src/core/review-resolution-artifact.ts \
+  tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts \
+  tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts
 git commit -m "feat: persist v5 review and quality evidence"
 ```
 
