@@ -421,6 +421,7 @@ Exact required tests:
 - `preserves_authorization_for_checkbox_only_plan_progress`
 - `invalidates_chain_when_plan_contract_changes`
 - `design_change_stales_bound_plan_authority`
+- `design_plan_mismatch_stales_downstream_authority`
 - `requirements_change_stales_design_and_plan_authority`
 - `reapproval_creates_new_artifact_chain_id`
 - `v4_plan_authorization_is_not_promoted_to_v5_authority`
@@ -682,18 +683,21 @@ git commit -m "feat: persist Justice execution correlation"
 **Interfaces:**
 - Consumes: `ExecutionCorrelationStore`, `resolveSuperpowersImplementationTask`, active `ApprovedArtifactChain`.
 - Produces new/updated observation events with `parentSessionId`, `parentCallId`, optional `childSessionId`, and semantic correlation ID.
-- Existing adapter in-memory maps become caches only; recovery reads the durable store.
+- Existing adapter in-memory maps are caches only; recovery authority is the durable `ExecutionCorrelationStore`.
 
 - [ ] **Step 1: Write RED adapter tests**
 
-Cover:
-- PreToolUse on an authorized implementation call persists correlation before execution.
-- PostToolUse metadata + `session.created/session.updated` attach the same child session.
-- conflicting metadata/event parentage marks relation untrusted.
-- legitimate `ses_...` is preserved in args.
-- invalid both-target routing is observed but not trusted.
-- no extra task/reviewer call is created.
-- persistence failure returns PROCEED but leaves evidence untrusted/NOT_PROVEN.
+Exact required tests in `tests/runtime/opencode-adapter-execution-correlation.test.ts`:
+- `persists_execution_correlation_before_authorized_task_execution`
+- `attaches_child_session_from_post_tool_and_session_observation`
+- `conflicting_child_parent_observations_mark_correlation_untrusted`
+- `preserves_omo_continuation_session_id_in_task_args`
+- `invalid_both_target_routing_is_not_trusted`
+- `does_not_create_extra_task_or_reviewer_dispatch`
+- `correlation_persistence_failure_proceeds_runtime_but_not_evidence`
+- `recovers_task_call_from_durable_parent_session_parent_call_binding`
+
+The recovery test must instantiate a fresh adapter/plugin state with empty ephemeral relation maps and prove semantic resolution from the persisted `parentSessionId + parentCallId` binding.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -712,7 +716,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/opencode-adapter.ts src/core/justice-plugin.ts src/core/types.ts tests/runtime/opencode-adapter-execution-correlation.test.ts
+git add src/runtime/opencode-adapter.ts src/core/justice-plugin.ts src/core/types.ts \
+  tests/runtime/opencode-adapter-execution-correlation.test.ts
 git commit -m "feat: bind OpenCode calls to Justice task identity"
 ```
 
@@ -888,36 +893,50 @@ git commit -m "feat: persist v5 review and quality evidence"
 - Test: `tests/core/plan-completion-v5.test.ts`
 
 **Interfaces:**
+- Consumes `ApprovedArtifactChain`, `ConformanceContract`, `ClauseResult`, `ExecutionCorrelation`, trusted review evidence, and canonical `ReviewFindingV5`.
 - Produces:
   ```ts
   type ConformanceGateVerdict =
     | { readonly verdict: "PASS"; readonly satisfiedClauseIds: readonly string[] }
-    | { readonly verdict: "BLOCK"; readonly violated: readonly string[]; readonly notProven: readonly string[]; readonly diagnostics: readonly string[] };
+    | {
+        readonly verdict: "BLOCK";
+        readonly violated: readonly string[];
+        readonly notProven: readonly string[];
+        readonly diagnostics: readonly string[];
+      };
 
-  evaluateTaskConformance(input: TaskConformanceInput): ConformanceGateVerdict;
-  evaluatePlanConformance(input: PlanConformanceInput): ConformanceGateVerdict;
+  function evaluateTaskConformance(input: TaskConformanceInput): ConformanceGateVerdict;
+  function evaluatePlanConformance(input: PlanConformanceInput): ConformanceGateVerdict;
   ```
-- Completion candidate includes exact HEAD/reviewed range; a post-review mutation invalidates review evidence.
-- SDD task acceptance requires trusted task review; executing-plans does not require a per-task reviewer but leaves semantic clauses NOT_PROVEN until the final review proves them.
+- Completion candidate contains exact candidate HEAD and reviewed range. Any post-review candidate mutation invalidates the review/conformance evidence.
+- SDD task acceptance requires trusted task review.
+- `executing-plans` does not require a fresh per-task reviewer; semantic clauses that are not otherwise proven remain `NOT_PROVEN` until the final review.
 
 - [ ] **Step 1: Write RED gate tests**
 
-Cover:
-- worker success alone does not accept.
-- all required clauses SATISFIED + required quality/review → PASS.
-- one VIOLATED → BLOCK.
-- one NOT_PROVEN → BLOCK.
-- projection INCOMPLETE/INVALID → BLOCK.
-- stale review range after HEAD mutation → BLOCK.
-- SDD missing task review → BLOCK.
-- executing-plans missing per-task review is not itself a failure.
-- final whole-branch review can prove deferred inline semantic clauses.
-- parked Critical/Important → BLOCK.
-- zero drift + zero missing proof + zero blocking quality → PlanComplete.
+In `tests/core/conformance-gate.test.ts`:
+- `worker_success_alone_does_not_accept_task`
+- `one_violated_clause_blocks_acceptance`
+- `one_not_proven_clause_blocks_acceptance`
+- `incomplete_or_invalid_projection_blocks_acceptance`
+- `sdd_task_without_trusted_task_review_is_blocked`
+- `executing_plans_task_does_not_require_fresh_per_task_reviewer`
+- `plan_code_interface_violation_blocks_task_acceptance`
+- `passing_tests_do_not_override_plan_contract_violation`
+- `ambiguous_execution_correlation_leaves_evidence_not_proven`
+- `substantive_ruling_does_not_authorize_acceptance`
+- `parked_critical_or_important_quality_finding_blocks_acceptance`
+
+In `tests/core/plan-completion-v5.test.ts`:
+- `post_review_head_change_invalidates_completion_evidence`
+- `final_review_can_prove_inline_semantic_clauses`
+- `zero_drift_zero_missing_evidence_zero_blocking_quality_allows_completion`
 
 - [ ] **Step 2: Run RED tests**
 
-Expected: FAIL because current acceptance is review/gate oriented but has no v5 conformance contract.
+Run: `bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts`
+
+Expected: FAIL because current acceptance has no v5 conformance contract.
 
 - [ ] **Step 3: Implement conformance gate and wire it into acceptance decisions**
 
@@ -930,7 +949,9 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts src/core/v2/decision-model.ts src/core/v2/state-projection.ts tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+git add src/core/conformance-gate.ts src/core/acceptance-decision.ts src/core/v2/gate-context.ts \
+  src/core/v2/decision-model.ts src/core/v2/state-projection.ts \
+  tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
 git commit -m "feat: gate acceptance on v5 conformance"
 ```
 
@@ -1017,44 +1038,48 @@ git commit -m "refactor: return workflow orchestration to Superpowers"
 **Interfaces:**
 - Produces:
   ```ts
-  type OmoConfigSource = { readonly path: string; readonly layer: "user" | "project"; readonly precedence: number; readonly format: "jsonc" | "json" };
+  type OmoConfigSource = {
+    readonly path: string;
+    readonly layer: "user" | "project";
+    readonly precedence: number;
+    readonly format: "jsonc" | "json";
+  };
 
   type OmoEffectiveConfigResult =
-    | { readonly kind: "resolved"; readonly sources: readonly OmoConfigSource[]; readonly profile?: string; readonly config: Readonly<Record<string, unknown>>; readonly diagnostics: readonly string[] }
+    | {
+        readonly kind: "resolved";
+        readonly sources: readonly OmoConfigSource[];
+        readonly profile?: string;
+        readonly config: Readonly<Record<string, unknown>>;
+        readonly diagnostics: readonly string[];
+      }
     | { readonly kind: "unsupported"; readonly reason: string; readonly diagnostics: readonly string[] };
   ```
-- `resolveOmoEffectiveConfig({ cwd, homeDir, env, readFile, fileExists })`.
-- Doctor capability result explicitly reports:
-  - OpenCode version metadata;
-  - required hook/call capabilities;
-  - review-interop supported;
-  - child-session relation observable;
-  - secure review-artifact available;
-  - configured/applied/observed controller status separately.
-- Remove exact `SUPPORTED_OPENCODE_VERSION === "1.18.29"` gate. Version is metadata; capabilities are authority.
+- `resolveOmoEffectiveConfig({ cwd, homeDir, env, readFile, fileExists }): OmoEffectiveConfigResult | Promise<OmoEffectiveConfigResult>`.
+- Doctor capability result reports OpenCode version metadata, required hook/call capabilities, review-interop support, child-session relation observability, secure review-artifact capability, and configured/applied/observed controller status separately.
+- Remove exact `SUPPORTED_OPENCODE_VERSION === "1.18.29"` authority. Version is metadata; capabilities are authority.
 
-- [ ] **Step 1: Write RED config precedence tests**
+- [ ] **Step 1: Write RED effective-config tests**
 
-Cover:
-- `~/.omo/omo.jsonc` wins over its same-layer `.json` fallback.
-- farthest project → nearest project merge order.
-- home is not double-counted.
-- `[opencode]` overrides shared base.
-- selected profile base overrides harness base where specified.
-- selected profile `[opencode]` is highest effective-view layer.
-- explicit profile → `OMO_PROFILE` → `OCX_PROFILE` → OpenCode profile-dir inference.
-- invalid/unreadable source produces diagnostics, not fabricated configured state.
+In `tests/core/omo-effective-config.test.ts` include:
+- `resolves_user_project_harness_profile_precedence`
+- `jsonc_wins_over_same_layer_json_fallback`
+- `home_directory_is_not_double_counted_as_project_layer`
+- `invalid_source_produces_diagnostic_not_fabricated_config`
+
+The precedence test must cover user → farthest ancestor → nearest project, shared base → `[opencode]` → selected profile base → selected profile `[opencode]`, and profile source order explicit → `OMO_PROFILE` → `OCX_PROFILE` → OpenCode profile-directory inference.
 
 - [ ] **Step 2: Write RED doctor capability tests**
 
-Cover:
-- OpenCode 1.18.31 with required capabilities is supported.
-- a different patch with same capabilities is not rejected solely by version.
-- expected version with missing mutable task hook is unsupported.
-- source/configured/applied/observed values are printed separately.
-- secure artifact capability and review interop capability are independent.
+In `tests/runtime/doctor-v5.test.ts`:
+- `compatible_patch_with_required_capabilities_is_supported`
+- `missing_required_host_capability_is_reported_unsupported`
+- `doctor_separates_source_configured_applied_and_observed_values`
+- `secure_artifact_and_review_interop_capabilities_are_independent`
 
 - [ ] **Step 3: Run RED tests**
+
+Run: `bun run vitest run tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts`
 
 Expected: FAIL on exact 1.18.29 gate and single-file assumptions.
 
@@ -1062,10 +1087,10 @@ Expected: FAIL on exact 1.18.29 gate and single-file assumptions.
 
 Prefer an OmO effective-config API if a compatible public API is available; otherwise use the exact resolver above. Do not silently switch semantics.
 
-- [ ] **Step 5: Run GREEN tests + integration doctor smoke**
+- [ ] **Step 5: Run GREEN tests + build**
 
 Run:
-- focused tests
+- `bun run vitest run tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts`
 - `bun run typecheck`
 - `bun run build`
 
@@ -1074,7 +1099,9 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/omo-effective-config.ts src/core/doctor-config.ts src/core/doctor-categories.ts src/core/controller-routing.ts src/runtime/doctor-cli.ts src/runtime/doctor-cli-helpers.ts tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts
+git add src/core/omo-effective-config.ts src/core/doctor-config.ts src/core/doctor-categories.ts \
+  src/core/controller-routing.ts src/runtime/doctor-cli.ts src/runtime/doctor-cli-helpers.ts \
+  tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts
 git commit -m "feat: diagnose OmO v5 effective configuration"
 ```
 
@@ -1143,33 +1170,53 @@ git commit -m "chore: synchronize Justice with OmO v5 contracts"
 - Test: `tests/core/v5-recovery.test.ts`
 
 **Interfaces:**
+- Consumes canonical `TaskIdentity`, `ProjectionStatus`, `ExecutionCorrelation`, review evidence, and acceptance state.
 - `justice_review` read result includes:
   ```ts
   type JusticeReviewV5View = {
-    readonly artifactChain: { readonly chainId?: string; readonly status: "AUTHORIZED" | "STALE" | "UNAVAILABLE" };
-    readonly projection: { readonly status: ProjectionStatus; readonly diagnostics: readonly string[] };
-    readonly tasks: readonly { readonly taskIdentity: string; readonly acceptance: string; readonly missingEvidence: readonly string[]; readonly drift: readonly string[]; readonly blockingFindings: readonly string[] }[];
-    readonly planCompletion: { readonly status: "BLOCKED" | "READY" | "COMPLETE"; readonly reasons: readonly string[] };
+    readonly artifactChain: {
+      readonly chainId?: string;
+      readonly status: "AUTHORIZED" | "STALE" | "UNAVAILABLE";
+    };
+    readonly projection: {
+      readonly status: ProjectionStatus;
+      readonly diagnostics: readonly string[];
+    };
+    readonly tasks: readonly {
+      readonly taskIdentity: TaskIdentity;
+      readonly acceptance: string;
+      readonly missingEvidence: readonly string[];
+      readonly drift: readonly string[];
+      readonly blockingFindings: readonly string[];
+    }[];
+    readonly planCompletion: {
+      readonly status: "BLOCKED" | "READY" | "COMPLETE";
+      readonly reasons: readonly string[];
+    };
     readonly recoveryDiagnostics: readonly string[];
   };
   ```
-- Human `resolve` action remains a quality-resolution path only; it cannot manufacture clause satisfaction.
+- Human `resolve` remains quality-resolution only and cannot manufacture clause satisfaction.
 - Recovery loads v5 chain/correlation/evidence stores, then classifies v4/unknown state and reports conflicts.
 - Superpowers ledger disagreement is surfaced, never silently overwritten.
 
 - [ ] **Step 1: Write RED recovery/view tests**
 
-Cover:
-- v4 authorization appears historical/untrusted, not AUTHORIZED.
-- v4 review-dispatch state never resumes a review.
-- v4 raw observation cannot satisfy v5 acceptance.
-- unknown/newer schema is preserved and reported; acceptance blocked.
-- durable ExecutionCorrelation survives restart; adapter ephemeral map absence does not break recovery.
-- Justice/Superpowers complete-state conflict is surfaced.
-- `justice_review` explains exact missing clause/evidence/drift/finding.
-- human quality resolution does not change conformance clause status.
+In `tests/core/v5-recovery.test.ts`:
+- `recovers_plan_task_review_correlation_after_restart`
+- `does_not_recorrelate_completed_work_to_different_plan_after_recovery`
+- `surfaces_superpowers_justice_state_conflict`
+- `v4_review_dispatch_state_does_not_resume_or_satisfy_v5_review_gate`
+- `unknown_newer_schema_is_preserved_and_acceptance_fails_closed`
+- `v4_raw_observation_cannot_satisfy_v5_acceptance`
+
+In `tests/runtime/justice-review-v5.test.ts`:
+- `justice_review_explains_missing_evidence_drift_and_blocking_findings`
+- `human_quality_resolution_does_not_change_conformance_clause_status`
 
 - [ ] **Step 2: Run RED tests**
+
+Run: `bun run vitest run tests/core/v5-recovery.test.ts tests/runtime/justice-review-v5.test.ts`
 
 Expected: FAIL on current review-summary-only view and v4 authority assumptions.
 
@@ -1184,13 +1231,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/justice-tools.ts src/core/justice-plugin.ts src/core/v5-persistence.ts src/core/v2/state-projection.ts src/runtime/doctor-cli.ts tests/runtime/justice-review-v5.test.ts tests/core/v5-recovery.test.ts
+git add src/runtime/justice-tools.ts src/core/justice-plugin.ts src/core/v5-persistence.ts \
+  src/core/v2/state-projection.ts src/runtime/doctor-cli.ts \
+  tests/runtime/justice-review-v5.test.ts tests/core/v5-recovery.test.ts
 git commit -m "feat: expose Justice v5 recovery and gate state"
 ```
 
 ---
 
-### Task 14: Close the 40-Scenario E2E Matrix and Synchronize User/Upstream Documentation
+### Task 14: Close Cross-Component E2E Coverage and Synchronize User/Upstream Documentation
 
 **Requirements / Design:** all JUS5/J5D contracts; Design §29 required verification scenarios.
 
@@ -1205,44 +1254,50 @@ git commit -m "feat: expose Justice v5 recovery and gate state"
 
 **Interfaces:**
 - Consumes every interface produced by Tasks 2–13.
-- Produces one end-to-end acceptance fixture that can assert an `ApprovedArtifactChain` from authorization through implementation/review evidence to `PlanComplete`.
-- Produces the current documented stack:
+- Produces end-to-end evidence from `ApprovedArtifactChain` through execution/review evidence to `PlanComplete`.
+- Produces current documented stack:
   - OmO v5 OpenCode edition;
   - Superpowers v6.4.2;
   - capability-first OpenCode support;
-  - `omo.jsonc` effective config;
+  - effective `omo.jsonc` configuration;
   - Superpowers owns orchestration;
   - Justice owns semantic evidence/conformance/acceptance.
 
-- [ ] **Step 1: Add/complete the integration cases listed in the traceability table below**
+- [ ] **Step 1: Write the missing cross-component E2E cases**
 
-Do not create duplicate tests if an earlier focused test already provides the exact E2E evidence; reference the focused test in the table and add only missing cross-component cases here.
+In `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` implement exactly:
+- `sdd_task_reaches_acceptance_through_existing_superpowers_review`
+- `scoped_re_review_resolves_blocking_finding_and_allows_acceptance`
+- `executing_plans_requires_final_review_and_final_conformance`
+- `implementation_discovered_design_change_requires_reconciliation_before_resume`
+- `complete_evidence_allows_plan_complete`
 
-- [ ] **Step 2: Run the v5 integration suite RED if any scenario is still uncovered**
+Do not duplicate focused tests whose exact evidence is already named in the traceability table.
+
+- [ ] **Step 2: Run the E2E file and verify RED for uncovered cross-component behavior**
 
 Run: `bun run vitest run tests/integration/justice-v5-semantic-control-plane.integration.test.ts`
 
-Expected: any remaining unimplemented cross-component behavior fails explicitly.
+Expected: remaining cross-component behavior fails explicitly until wiring is complete.
 
-- [ ] **Step 3: Make only the smallest integration/wiring changes needed to satisfy uncovered cross-component cases**
+- [ ] **Step 3: Make only the smallest integration/wiring changes required by those exact E2E cases**
 
-If the required fix changes an architecture contract rather than wiring, STOP and return to Design review instead of ruling around it.
+If a fix changes an architecture contract rather than wiring, STOP and return to artifact reconciliation instead of ruling around the Design.
 
 - [ ] **Step 4: Update user/upstream documentation**
 
-Required documentation corrections:
+Required corrections:
 - Superpowers upstream: `obra/superpowers`.
 - OmO upstream: `code-yeongyu/oh-my-openagent`.
-- Current OmO config: effective `omo.jsonc` system.
-- Remove Justice-owned review scheduling language.
-- Explain `justice_review` as evidence/gate inspection.
-- Record audited baselines and exact SHAs/tags in upstream compatibility audit.
-- Explain v4 persistent-state authority migration.
-- Do not claim OmO Native support.
+- current OmO config: effective `omo.jsonc` system.
+- remove Justice-owned review scheduling language.
+- explain `justice_review` as evidence/gate inspection.
+- record audited baselines and exact tags/SHAs in compatibility audit.
+- explain v4 persistent-state authority migration.
+- record the verified OpenCode 1.18.31 review-interop baseline evidence from Design §14.2.
+- do not claim OmO Native support.
 
-- [ ] **Step 5: Run final verification**
-
-Run in order:
+- [ ] **Step 5: Run Task 14 verification before committing**
 
 ```bash
 bun run typecheck
@@ -1253,23 +1308,67 @@ bun run build
 git diff --check
 ```
 
-Expected: all PASS; output contains no new warnings attributable to this change.
+Expected: all PASS and no new warnings attributable to v5.
 
-- [ ] **Step 6: Verify the candidate revision has no stale review evidence**
-
-After the final code commit, the final whole-branch review must run against that exact candidate HEAD. Any code change after final review invalidates the review and requires a new review/conformance result.
-
-- [ ] **Step 7: Commit documentation/integration closure**
+- [ ] **Step 6: Commit every Task 14 tracked change**
 
 ```bash
-git add tests/integration/justice-v5-semantic-control-plane.integration.test.ts README.md SPEC.md docs/agents/upstream-drift.md docs/reports/upstream-compatibility-audit.md
+git add tests/integration/justice-v5-semantic-control-plane.integration.test.ts \
+  README.md SPEC.md docs/agents/upstream-drift.md docs/reports/upstream-compatibility-audit.md
 git commit -m "docs: complete Justice v5 compatibility migration"
 ```
 
+If Step 3 required a directly related tracked wiring file, it MUST be explicitly added to Task 14's Files block by artifact reconciliation before implementation; the worker must not silently expand the commit scope.
+
+- [ ] **Step 7: Confirm committed candidate state**
+
+Run:
+```bash
+test -z "$(git status --porcelain)"
+git rev-parse HEAD
+```
+
+Expected: clean working tree and one recorded `CANDIDATE_HEAD`. Task 14 ends here. The implementer does not dispatch the final whole-branch reviewer.
+
 ---
 
+## Controller-Owned Finalization After Task 14
 
-## Contract Traceability
+This phase belongs to the Superpowers controller, not the Task 14 implementer.
+
+1. Record:
+   ```bash
+   MERGE_BASE=$(git merge-base master HEAD)
+   CANDIDATE_HEAD=$(git rev-parse HEAD)
+   test -z "$(git status --porcelain)"
+   ```
+2. Run final verification against that clean committed `CANDIDATE_HEAD`:
+   ```bash
+   bun run typecheck
+   bun run lint
+   bun run test
+   bun run test:integration
+   bun run build
+   git diff --check "$MERGE_BASE..$CANDIDATE_HEAD"
+   test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
+   test -z "$(git status --porcelain)"
+   ```
+3. Dispatch the Superpowers final whole-branch reviewer for exactly `MERGE_BASE..CANDIDATE_HEAD`.
+4. Run the Justice Final Conformance Gate against the same `CANDIDATE_HEAD`.
+5. After both gates pass, **do not modify or commit any tracked file** before completion/branch finishing.
+6. If the final review or Final Conformance Gate produces a finding that requires a fix:
+   - make the fix through the normal Superpowers fix flow;
+   - commit the fix;
+   - record a new `CANDIDATE_HEAD`;
+   - rerun final verification;
+   - rerun the full final whole-branch review;
+   - rerun the Final Conformance Gate from scratch against the new exact HEAD.
+
+No review or conformance evidence from an older candidate HEAD is reusable as final completion evidence.
+
+---
+
+## Contract Traceability## Contract Traceability
 
 ### Requirements → Task mapping
 
@@ -1325,50 +1424,50 @@ git commit -m "docs: complete Justice v5 compatibility migration"
 
 ## Required Verification Scenario Traceability
 
-The numbering below is the Design §29 numbering. A scenario is not complete because a nearby test exists; the named test must assert the listed behavior.
+The numbering below is Design §29. Every row fixes the owning task, exact test file, exact test name, and evidence level. A scenario is incomplete until that named test asserts the listed behavior.
 
-| # | Required scenario | Owning task / test |
-|---|---|---|
-| 1 | checkbox-only plan updates preserve authorization | Task 3 — `plan_authorization_preserves_checkbox_progress` |
-| 2 | interface/signature/assertion/global-constraint changes invalidate authorization | Task 3 — `artifact_chain_invalidates_substantive_plan_change` |
-| 3 | substantive Design change invalidates downstream Plan authority | Task 3 — `design_change_stales_plan_chain` |
-| 4 | new human approval establishes new authorization lineage | Task 3 — `reapproval_creates_new_chain_id` |
-| 5 | implementation → Superpowers task review → Justice evidence → acceptance | Task 14 E2E — `sdd_task_reaches_acceptance_through_existing_review` |
-| 6 | Justice does not duplicate-dispatch reviewer | Task 1 + 7 adapter test |
-| 7 | Needs fixes → fix → scoped re-review → ADDRESSED → acceptance | Task 14 — `scoped_re_review_can_resolve_blocking_finding` |
-| 8 | NOT ADDRESSED remains blocking | Task 8/9 — `not_addressed_remains_blocking` |
-| 9 | round-cap/deferred findings remain visible | Task 8 — `parked_findings_remain_visible_and_blocking_when_important` |
-| 10 | executing-plans lacks per-task reviewer without failure | Task 9 — `inline_task_does_not_require_fresh_reviewer` |
-| 11 | inline final review/conformance still enforced | Task 14 — `inline_requires_final_review_and_conformance` |
-| 12 | Plan interface differs from code → task block | Task 9 — `plan_code_interface_violation_blocks` |
-| 13 | Design invariant differs from Plan → downstream authorization block | Task 3/4 — `design_plan_violation_stales_chain` |
-| 14 | implementation-discovered Design change requires reconciliation before resume | Task 3/9 E2E |
-| 15 | code works/tests pass but violates Plan → acceptance blocked | Task 9 — `passing_tests_do_not_override_plan_violation` |
-| 16 | reviewer omits required normative clause → NOT_PROVEN | Task 7/9 — `missing_clause_result_becomes_not_proven` |
-| 17 | final review approves old revision, code changes afterward → completion blocked | Task 9 Review Focus test |
-| 18 | all clauses SATISFIED, no blocking quality → completion permitted | Task 9 + 14 E2E |
-| 19 | Justice does not emit canonical `deep` | Task 2 |
-| 20 | custom `sp-*` coexist with OmO v5 routing | Task 2/12 |
-| 21 | Justice does not directly select model/provider | Task 2/7 |
-| 22 | compatible OpenCode patch not rejected solely by version | Task 11 |
-| 23 | missing required host capability reported accurately | Task 11 |
-| 24 | compaction retains plan/task/review correlation | Task 13 |
-| 25 | completed work not re-correlated to another Plan after recovery | Task 13 |
-| 26 | Justice/Superpowers state conflict surfaced | Task 13 |
-| 27 | OmO `task_id=ses_...` preserved, never replaced with TaskIdentity | Task 2/6 |
-| 28 | task call recoverably correlated by durable parent-session/parent-call sidecar | Task 5/6 |
-| 29 | `category + subagent_type` not silently resolved by Justice | Task 2 |
-| 30 | missing/ambiguous execution correlation leaves evidence NOT_PROVEN | Task 5/9 |
-| 31 | Requirements change stales Design + Plan chain | Task 3 |
-| 32 | substantive Ruling can continue execution but cannot authorize acceptance | Task 3/9 |
-| 33 | duplicate/missing/ambiguous projection becomes INCOMPLETE/INVALID | Task 4 |
-| 34 | v6.4.2 task reviewer gets Conformance Contract through same dispatch | Task 1/7 |
-| 35 | missing/malformed structured review result blocks | Task 7/9 |
-| 36 | parked Important/Critical blocks until trusted disposition/human quality adjudication | Task 8/9 |
-| 37 | effective config honors user/project + harness/profile precedence | Task 11 Review Focus test |
-| 38 | v4 plan-only authorization not auto-promoted | Task 3/13 |
-| 39 | v4 review-dispatch state cannot resume/satisfy v5 gate | Task 10/13 |
-| 40 | unknown/newer persistence preserved and acceptance fail-closed | Task 13 Review Focus test |
+| # | Required scenario | Task | Exact test file | Exact test name | Type |
+|---:|---|---:|---|---|---|
+| 1 | checkbox-only Plan updates preserve authorization | 3 | `tests/core/artifact-chain.test.ts` | `preserves_authorization_for_checkbox_only_plan_progress` | unit |
+| 2 | interface/signature/assertion/global-constraint changes invalidate authorization | 3 | `tests/core/artifact-chain.test.ts` | `invalidates_chain_when_plan_contract_changes` | unit |
+| 3 | substantive Design change invalidates downstream Plan authority | 3 | `tests/core/artifact-chain.test.ts` | `design_change_stales_bound_plan_authority` | unit |
+| 4 | new human approval establishes new authorization lineage | 3 | `tests/core/artifact-chain.test.ts` | `reapproval_creates_new_artifact_chain_id` | unit |
+| 5 | implementation → Superpowers task review → Justice evidence → acceptance | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `sdd_task_reaches_acceptance_through_existing_superpowers_review` | E2E |
+| 6 | Justice does not duplicate-dispatch reviewer | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review` | integration |
+| 7 | Needs fixes → fix → scoped re-review → ADDRESSED → acceptance | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `scoped_re_review_resolves_blocking_finding_and_allows_acceptance` | E2E |
+| 8 | NOT ADDRESSED remains blocking | 8 | `tests/core/review-quality-v5.test.ts` | `not_addressed_finding_remains_blocking` | unit |
+| 9 | round-cap/deferred findings remain visible | 8 | `tests/core/review-quality-v5.test.ts` | `parked_important_finding_remains_visible_and_blocking` | unit |
+| 10 | executing-plans lacks per-task reviewer without failure | 9 | `tests/core/conformance-gate.test.ts` | `executing_plans_task_does_not_require_fresh_per_task_reviewer` | unit |
+| 11 | inline final review/conformance still enforced | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `executing_plans_requires_final_review_and_final_conformance` | E2E |
+| 12 | Plan interface differs from code → task block | 9 | `tests/core/conformance-gate.test.ts` | `plan_code_interface_violation_blocks_task_acceptance` | unit |
+| 13 | Design invariant differs from Plan → downstream authorization block | 3 | `tests/core/artifact-chain.test.ts` | `design_plan_mismatch_stales_downstream_authority` | unit |
+| 14 | implementation-discovered Design change requires reconciliation before resume | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `implementation_discovered_design_change_requires_reconciliation_before_resume` | E2E |
+| 15 | code works/tests pass but violates Plan → acceptance blocked | 9 | `tests/core/conformance-gate.test.ts` | `passing_tests_do_not_override_plan_contract_violation` | unit |
+| 16 | reviewer omits required normative clause → NOT_PROVEN | 7 | `tests/core/review-result.test.ts` | `missing_required_clause_result_becomes_not_proven` | unit |
+| 17 | final review approves old revision, code changes afterward → completion blocked | 9 | `tests/core/plan-completion-v5.test.ts` | `post_review_head_change_invalidates_completion_evidence` | unit |
+| 18 | all clauses SATISFIED, no blocking quality → completion permitted | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `complete_evidence_allows_plan_complete` | E2E |
+| 19 | Justice does not emit canonical `deep` | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `does_not_emit_legacy_deep` | unit |
+| 20 | custom `sp-*` coexist with OmO v5 routing | 2 | `tests/core/omo-category-mapper-v5.test.ts` | `custom_sp_categories_coexist_with_omo_v5_categories` | unit |
+| 21 | Justice does not directly select model/provider | 2 | `tests/core/v5-task-routing-contract.test.ts` | `justice_does_not_select_model_or_provider` | unit |
+| 22 | compatible OpenCode patch not rejected solely by version | 11 | `tests/runtime/doctor-v5.test.ts` | `compatible_patch_with_required_capabilities_is_supported` | integration |
+| 23 | missing required host capability reported accurately | 11 | `tests/runtime/doctor-v5.test.ts` | `missing_required_host_capability_is_reported_unsupported` | integration |
+| 24 | compaction/restart retains plan/task/review correlation | 13 | `tests/core/v5-recovery.test.ts` | `recovers_plan_task_review_correlation_after_restart` | integration |
+| 25 | completed work not re-correlated to another Plan after recovery | 13 | `tests/core/v5-recovery.test.ts` | `does_not_recorrelate_completed_work_to_different_plan_after_recovery` | integration |
+| 26 | Justice/Superpowers state conflict surfaced | 13 | `tests/core/v5-recovery.test.ts` | `surfaces_superpowers_justice_state_conflict` | integration |
+| 27 | OmO `task_id=ses_...` preserved, never replaced with TaskIdentity | 2 | `tests/core/v5-task-routing-contract.test.ts` | `preserves_omo_continuation_task_id` | unit |
+| 28 | task call recoverably correlated by durable parent-session/parent-call sidecar | 6 | `tests/runtime/opencode-adapter-execution-correlation.test.ts` | `recovers_task_call_from_durable_parent_session_parent_call_binding` | integration |
+| 29 | `category + subagent_type` not silently resolved by Justice | 2 | `tests/core/v5-task-routing-contract.test.ts` | `reports_category_subagent_type_as_invalid_both` | unit |
+| 30 | missing/ambiguous execution correlation leaves evidence NOT_PROVEN | 9 | `tests/core/conformance-gate.test.ts` | `ambiguous_execution_correlation_leaves_evidence_not_proven` | unit |
+| 31 | Requirements change stales Design + Plan chain | 3 | `tests/core/artifact-chain.test.ts` | `requirements_change_stales_design_and_plan_authority` | unit |
+| 32 | substantive Ruling can continue execution but cannot authorize acceptance | 9 | `tests/core/conformance-gate.test.ts` | `substantive_ruling_does_not_authorize_acceptance` | unit |
+| 33 | duplicate/missing/ambiguous projection becomes INCOMPLETE/INVALID | 4 | `tests/core/conformance-projector.test.ts` | `projection_failures_never_return_complete` | unit |
+| 34 | v6.4.2 task reviewer gets Conformance Contract through same dispatch | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `injects_conformance_contract_into_same_superpowers_task_review_call` | integration |
+| 35 | missing/malformed structured review result blocks | 7 | `tests/core/review-result.test.ts` | `missing_or_malformed_review_result_is_rejected` | unit |
+| 36 | parked Important/Critical blocks until trusted disposition/human quality adjudication | 8 | `tests/core/review-quality-v5.test.ts` | `parked_critical_or_important_blocks_until_trusted_disposition` | unit |
+| 37 | effective config honors user/project + harness/profile precedence | 11 | `tests/core/omo-effective-config.test.ts` | `resolves_user_project_harness_profile_precedence` | unit |
+| 38 | v4 plan-only authorization not auto-promoted | 3 | `tests/core/v5-persistence.test.ts` | `v4_plan_authorization_is_not_promoted_to_v5_authority` | unit |
+| 39 | v4 review-dispatch state cannot resume/satisfy v5 gate | 13 | `tests/core/v5-recovery.test.ts` | `v4_review_dispatch_state_does_not_resume_or_satisfy_v5_review_gate` | integration |
+| 40 | unknown/newer persistence preserved and acceptance fail-closed | 13 | `tests/core/v5-recovery.test.ts` | `unknown_newer_schema_is_preserved_and_acceptance_fails_closed` | integration |
 
 ---
 
