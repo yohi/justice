@@ -256,11 +256,12 @@ Event:loop-*     → LoopDetectionHandler
 Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
                     → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
 
-config                  → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-implement` to `Config.command`)
-command.execute.before  → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (execution only; `justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
+config                              → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-implement` to `Config.command`)
+experimental.chat.system.transform  → safe `justice-*` command names only  (LLM visibility only; no tool capability or execution authority)
+command.execute.before              → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (execution only; `justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
 ```
 
-> **Registration vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start` and `justice-implement` definitions when absent, leaving any existing definitions untouched. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow bootstrap or implementation-arm logic.
+> **Registration vs. visibility vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start` and `justice-implement` definitions when absent, leaving any existing definitions untouched. `experimental.chat.system.transform` exposes only syntactically safe `justice-*` command names from the resolved command map so the LLM does not confuse absence from its tool list with absence from OpenCode. Descriptions/templates are never promoted into system context, and this hook grants no execution capability. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow bootstrap or implementation-arm logic. `/justice-implement --approved` remains an explicit user authorization boundary.
 
 ### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 

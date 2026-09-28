@@ -29,6 +29,32 @@ const justiceCommandDefinitions = {
 export const JUSTICE_COMMAND_DEFINITIONS: Readonly<typeof justiceCommandDefinitions> =
   Object.freeze(justiceCommandDefinitions);
 
+const JUSTICE_COMMAND_NAME_PATTERN = /^justice-[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+export function listJusticeCommandNames(
+  config: CommandRegistrationTarget,
+): readonly string[] {
+  return Object.keys(config.command ?? {})
+    .filter((name) => JUSTICE_COMMAND_NAME_PATTERN.test(name))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function buildJusticeCommandSystemContext(
+  config: CommandRegistrationTarget,
+): string | undefined {
+  const names = listJusticeCommandNames(config);
+  if (names.length === 0) return undefined;
+
+  return [
+    "[JUSTICE: AVAILABLE USER SLASH COMMANDS]",
+    "The OpenCode host has registered the following Justice slash commands:",
+    ...names.map((name) => `- /${name}`),
+    "These are user-invoked slash commands, not model-callable tools. Their absence from your tool list does not mean they are unavailable.",
+    "Do not claim to have executed them. If execution is required, the user must invoke the slash command.",
+    "`/justice-implement --approved` is an explicit user authorization boundary; never infer or supply approval on the user's behalf.",
+  ].join("\n");
+}
+
 export type CommandRegistrationLogger = (
   level: "info" | "warn" | "error",
   message: string,

@@ -6,7 +6,11 @@ import {
   type OpenCodePluginInit,
 } from "./runtime/opencode-adapter";
 import { debugLog } from "./runtime/debug";
-import { registerJusticeCommands } from "./runtime/command-registration";
+import {
+  buildJusticeCommandSystemContext,
+  registerJusticeCommands,
+  type CommandRegistrationTarget,
+} from "./runtime/command-registration";
 import type { HookResponse, ReviewArtifactWriteSkipReason } from "./core/types";
 
 class ReviewArtifactWriteCancelled extends Error {
@@ -56,10 +60,13 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
     (init as unknown as { __justiceTestAdapter?: OpenCodeAdapter }).__justiceTestAdapter ??
     new OpenCodeAdapter(init as unknown as OpenCodePluginInit, adapterOptions);
 
+  let resolvedCommandConfig: CommandRegistrationTarget | undefined;
+
   debugLog("Plugin factory invoked, adapter created.");
   return {
     tool: adapter.getTools(),
     config: async (config): Promise<void> => {
+      resolvedCommandConfig = config;
       try {
         await registerJusticeCommands(config, async (level, message, ...args) =>
           adapter.log(level, message, ...args),
@@ -85,6 +92,18 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
     },
     "chat.params": async (input): Promise<void> => {
       await adapter.onChatParams(input);
+    },
+    "experimental.chat.system.transform": async (_input, output): Promise<void> => {
+      try {
+        if (!resolvedCommandConfig) return;
+        const context = buildJusticeCommandSystemContext(resolvedCommandConfig);
+        if (context !== undefined) output.system.push(context);
+      } catch (error) {
+        await adapter.log(
+          "warn",
+          `[Justice] Failed to expose slash commands to LLM context: ${safeErrorMessage(error)}`,
+        );
+      }
     },
     "tool.execute.before": async (input, output): Promise<void> => {
       const response = await adapter.onToolExecuteBefore(
