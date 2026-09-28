@@ -524,6 +524,7 @@ Routing decisions are provenance-aware.
 #### Non-Superpowers / explicit caller routing
 
 - explicit `subagent_type` from a non-Superpowers caller is preserved;
+- recognized Superpowers explicit specialized non-generic `subagent_type` (for example `explore`) is also preserved and is not category-translated;
 - explicit `category` is preserved/validated;
 - external both-target input is a routing-contract violation;
 - Justice does not invent precedence between explicit external targets.
